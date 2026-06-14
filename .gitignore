@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.log
+
+# Virtualenvs
+env/
+venv/
+.venv/
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# AWS / deploy artifacts
+*.zip
+.aws-sam/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,9 @@
+# Service-specific dependencies (common deps provided by Lambda Layer)
+# LLM access goes through AWS Bedrock via boto3 (bundled with Lambda runtime)
+fpdf2>=2.7.0
+python-docx>=1.1.0
+pypdf>=4.0.0
+boto3>=1.34.0
+# Gmail integration: encrypt OAuth refresh tokens at rest
+cryptography>=42.0.0
+# aws-xray-sdk is in the shared layer
