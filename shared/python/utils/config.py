@@ -173,3 +173,38 @@ class GmailOAuthConfig(object, metaclass=GmailOAuthConfigMeta):
     GMAIL_TOKEN_ENCRYPTION_KEY can be any string — it's hashed to a Fernet key.
     """
     pass
+
+
+class AppUrlsConfigMeta(type):
+    @property
+    def FRONTEND_URL(cls):
+        """Base URL of the JobPilot frontend.
+
+        Used to build password-reset links and the social-sign-in redirect
+        landing page (``${FRONTEND_URL}/oauth/callback#token=...``). Falls back
+        to the first ALLOWED_ORIGINS entry, then localhost:5173 for dev.
+        """
+        explicit = _get_config_value('FRONTEND_URL', '')
+        if explicit:
+            return explicit.rstrip('/')
+        origins = os.getenv('ALLOWED_ORIGINS', '')
+        if origins:
+            first = origins.split(',')[0].strip()
+            if first:
+                return first.rstrip('/')
+        return 'http://localhost:5173'
+
+    @property
+    def BACKEND_PUBLIC_URL(cls):
+        """Public base URL of this backend (e.g. https://api.jobpilot.app).
+
+        Used as the OAuth redirect_uri host for social sign-in callbacks, which
+        are server-side routes (``/api/auth/oauth/<provider>/callback``). Falls
+        back to localhost:5000 for dev.
+        """
+        return _get_config_value('BACKEND_PUBLIC_URL', 'http://localhost:5000').rstrip('/')
+
+
+class AppUrlsConfig(object, metaclass=AppUrlsConfigMeta):
+    """Shared frontend/backend URL configuration for auth + OAuth flows."""
+    pass

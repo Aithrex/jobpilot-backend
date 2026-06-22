@@ -30,14 +30,31 @@ def _resets_at() -> datetime:
 
 
 def get_user_limit(email: str) -> int:
-    """Return the user's daily tailor limit. Admin-set overrides win;
-    otherwise DEFAULT_DAILY_LIMIT applies."""
+    """Return the user's daily tailor limit.
+
+    Precedence: an admin-set per-user override (`users.daily_tailor_limit`)
+    wins; otherwise the limit comes from the user's freemium plan via
+    `entitlements_service.quota(plan, "tailor")`; DEFAULT_DAILY_LIMIT is the
+    final fallback if entitlements is unavailable. Tailoring is metered HERE
+    (tailor_usage), not in feature_usage, to avoid double counting — this hook
+    just resolves the per-plan number.
+    """
     if not email:
         return DEFAULT_DAILY_LIMIT
     db = DBConnect().get_db()
-    user = db.users.find_one({"email": email}, {"daily_tailor_limit": 1})
+    user = db.users.find_one({"email": email}, {"daily_tailor_limit": 1, "plan": 1})
     if user and isinstance(user.get("daily_tailor_limit"), int) and user["daily_tailor_limit"] >= 0:
         return user["daily_tailor_limit"]
+    # Fall back to the plan-based tailor quota.
+    try:
+        from services import entitlements_service
+        plan = (user or {}).get("plan")
+        plan = plan if plan in entitlements_service.VALID_PLANS else entitlements_service.DEFAULT_PLAN
+        limit = entitlements_service.quota(plan, "tailor")
+        if isinstance(limit, int) and limit >= 0:
+            return limit
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("entitlements tailor-quota lookup failed for %s: %s", email, e)
     return DEFAULT_DAILY_LIMIT
 
 

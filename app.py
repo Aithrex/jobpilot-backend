@@ -79,6 +79,14 @@ def create_app():
             response.headers['Cache-Control'] = 'no-store'
         return response
 
+    # In-house authentication (issues + validates JWTs). Brought in-house when
+    # JobPilot was split from the portfolio monorepo, whose auth service stayed
+    # behind. REQUIRES a matching "ANY /api/auth/{proxy+}" route in
+    # infrastructure/terraform/lambda.tf — without it the gateway returns the
+    # SPA index.html for /api/auth/* and login silently 404s at the edge.
+    from blueprints.auth import auth_bp
+    app.register_blueprint(auth_bp, url_prefix='/api/auth')
+
     # Register blueprints — jobs and resume only
     from blueprints.jobs import jobs_bp
     app.register_blueprint(jobs_bp, url_prefix='/api/jobs')
@@ -104,6 +112,16 @@ def create_app():
     # returns the SPA index.html for /api/apply/* instead of hitting this Lambda.
     from blueprints.apply import apply_bp
     app.register_blueprint(apply_bp, url_prefix='/api/apply')
+
+    # Freemium plan/billing + product admin. Both are top-level prefixes and so
+    # REQUIRE matching "ANY /api/billing/{proxy+}" and "ANY /api/admin/{proxy+}"
+    # routes in infrastructure/terraform/lambda.tf (same edge-404 caveat as
+    # /api/auth and /api/apply above).
+    from blueprints.billing import billing_bp
+    app.register_blueprint(billing_bp, url_prefix='/api/billing')
+
+    from blueprints.admin import admin_bp
+    app.register_blueprint(admin_bp, url_prefix='/api/admin')
 
     # Health check endpoint
     @app.route('/api/health')

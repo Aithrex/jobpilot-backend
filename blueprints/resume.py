@@ -1540,7 +1540,9 @@ def mock_evaluate(record_id):
             '  "strengths": ["2-4 concrete things the answer did well"],\n'
             '  "improvements": ["2-4 concrete improvements with examples"],\n'
             '  "missing_points": ["bullets the interviewer expected but did not hear"],\n'
-            '  "model_answer": "A concise, strong ideal answer tailored to this candidate (<=150 words)"\n'
+            '  "model_answer": "A concise, strong ideal answer tailored to this candidate (<=150 words)",\n'
+            '  "dimensions": {"relevance": 0-100, "clarity": 0-100, "specificity": 0-100, "structure": 0-100, "technical_accuracy": 0-100},\n'
+            '  "weak_spot_tags": ["2-4 short tags for what was weak, e.g. \\"no metrics\\", \\"no STAR structure\\", \\"too vague\\", \\"rambling\\""]\n'
             "}"
         )
 
@@ -1551,12 +1553,23 @@ def mock_evaluate(record_id):
             "improvements": list,
             "missing_points": list,
             "model_answer": str,
+            "dimensions": dict,
+            "weak_spot_tags": list,
         }
 
         from services.gemini_client import gemini_json, GEMINI_PRO
         result = gemini_json(
             prompt, max_tokens=6000, temperature=0.3, model=GEMINI_PRO, schema=schema
         )
+        # Pillar D — persist every evaluation so the Interview Pattern Coach can
+        # aggregate weak spots across roles (previously scored-and-discarded).
+        try:
+            from services import interview_coach_service
+            interview_coach_service.record_attempt(
+                user_email, record_id, job_title, category, question, user_answer, result or {}
+            )
+        except Exception as _cap_err:
+            logger.warning("interview attempt capture failed: %s", _cap_err)
         return jsonify({"evaluation": result}), 200
     except Exception as e:
         logger.exception("Mock evaluate error: %s", e)
@@ -3271,3 +3284,328 @@ def beta_ab_telemetry():
     except Exception as e:
         logger.exception("ab-telemetry error: %s", e)
         return jsonify({"ok": False, "error": "Failed to load telemetry"}), 500
+
+
+# ==================================================================
+# Pillar B — Learning Hub (/api/resume/learning/*)
+#   AI study plans for any topic + the skill→job loop. Plan generation is a
+#   PRO async job (poll GET /api/resume/job/<id>); the rest are sync.
+# ==================================================================
+def _user_skill_context(user_email):
+    """Cheap skills + target-role context for plan generation (no resume parse):
+    onboarding preferences + already-earned learning skills."""
+    db = DBConnect().get_db()
+    prefs = db.user_preferences.find_one({"user_email": user_email}) or {}
+    user = db.users.find_one({"email": user_email}, {"earned_skills": 1}) or {}
+    skills = list(prefs.get("current_skills") or [])
+    skills += [e.get("skill") for e in (user.get("earned_skills") or []) if e.get("skill")]
+    roles = prefs.get("target_roles") or []
+    target_role = roles[0] if roles else None
+    # de-dupe, keep order
+    seen, uniq = set(), []
+    for s in skills:
+        if s and s.lower() not in seen:
+            seen.add(s.lower()); uniq.append(s)
+    return uniq, target_role
+
+
+@resume_bp.route("/learning/plan", methods=["POST"])
+@jwt_required()
+def learning_plan_create():
+    user_email = get_jwt_identity()
+    from services import entitlements_service, learning_service
+    from services.resume_service import get_resume_service, ResumeService
+
+    body = request.get_json(silent=True) or {}
+    topic = InputSanitizer.sanitize_string(str(body.get("topic") or ""), max_length=200)
+    if not topic:
+        return jsonify({"error": "A topic is required"}), 400
+
+    plan_tier = entitlements_service.get_plan(user_email)
+    # Active-path cap (structural, not time-windowed).
+    cap = entitlements_service.quota(plan_tier, "active_learning_paths")
+    if cap is not None and learning_service.count_active_paths(user_email) >= cap:
+        return entitlements_service.upgrade_required_response(user_email, "learning")
+    # Metered generation count.
+    allowed, usage = entitlements_service.check_and_increment(user_email, "learning_plan_generate")
+    if not allowed:
+        return entitlements_service.upgrade_required_response(user_email, "learning", usage)
+
+    skills, pref_role = _user_skill_context(user_email)
+    target_role = InputSanitizer.sanitize_string(str(body.get("target_role") or ""), 120) or pref_role
+    try:
+        weeks = max(3, min(int(body.get("weeks") or 6), 12))
+    except (TypeError, ValueError):
+        weeks = 6
+    payload = {
+        "user_email": user_email,
+        "topic": topic,
+        "target_role": target_role,
+        "current_skills": skills,
+        "weeks": weeks,
+        "include_capstone": plan_tier == entitlements_service.PREMIUM_PLUS,
+    }
+    svc = get_resume_service()
+    job_id = svc.create_job("learning_plan", payload, user_email=user_email)
+    ResumeService.invoke_async(job_id, "learning_plan", payload)
+    return jsonify({"job_id": job_id}), 202
+
+
+@resume_bp.route("/learning/paths", methods=["GET"])
+@jwt_required()
+def learning_paths_list():
+    from services import learning_service
+    return jsonify({"paths": learning_service.list_paths(get_jwt_identity())}), 200
+
+
+@resume_bp.route("/learning/paths/<path_id>", methods=["GET"])
+@jwt_required()
+def learning_path_get(path_id):
+    from services import learning_service
+    data = learning_service.get_path(get_jwt_identity(), path_id)
+    if not data:
+        return jsonify({"error": "Path not found"}), 404
+    return jsonify(data), 200
+
+
+@resume_bp.route("/learning/paths/<path_id>", methods=["DELETE"])
+@jwt_required()
+def learning_path_delete(path_id):
+    from services import learning_service
+    ok = learning_service.delete_path(get_jwt_identity(), path_id)
+    return jsonify({"ok": ok}), (200 if ok else 404)
+
+
+@resume_bp.route("/learning/paths/<path_id>/module/<int:week>/complete", methods=["POST"])
+@jwt_required()
+def learning_module_complete(path_id, week):
+    from services import learning_service
+    try:
+        result = learning_service.complete_module(get_jwt_identity(), path_id, week)
+        return jsonify(result), 200
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 404
+    except Exception as e:
+        logger.exception("module complete error: %s", e)
+        return jsonify({"error": "Could not record progress"}), 500
+
+
+@resume_bp.route("/learning/paths/<path_id>/quiz", methods=["POST"])
+@jwt_required()
+def learning_quiz(path_id):
+    user_email = get_jwt_identity()
+    from services import entitlements_service, learning_service
+    allowed, usage = entitlements_service.check_and_increment(user_email, "quiz")
+    if not allowed:
+        return entitlements_service.upgrade_required_response(user_email, "quiz", usage)
+    body = request.get_json(silent=True) or {}
+    try:
+        week = int(body.get("week"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "week is required"}), 400
+    try:
+        return jsonify(learning_service.generate_quiz(user_email, path_id, week)), 200
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 404
+    except Exception as e:
+        logger.exception("quiz error: %s", e)
+        return jsonify({"error": "Could not generate quiz"}), 500
+
+
+# ==================================================================
+# Pillar D — Interview Pattern Coach + ATS/salary trifecta
+#   (/api/resume/interview/coach|attempts|fit, /api/resume/salary)
+# ==================================================================
+@resume_bp.route("/interview/coach", methods=["GET"])
+@jwt_required()
+def interview_coach():
+    user_email = get_jwt_identity()
+    from services import entitlements_service, interview_coach_service
+    full = entitlements_service.feature_allowed(user_email, "interview_analytics_trends")
+    predictive = entitlements_service.feature_allowed(user_email, "interview_analytics_predictive")
+    try:
+        return jsonify(interview_coach_service.coach_summary(user_email, full=full, predictive=predictive)), 200
+    except Exception as e:
+        logger.exception("coach error: %s", e)
+        return jsonify({"error": "Could not build coaching summary"}), 500
+
+
+@resume_bp.route("/interview/attempts", methods=["GET"])
+@jwt_required()
+def interview_attempts():
+    user_email = get_jwt_identity()
+    from services import interview_coach_service
+    try:
+        limit = max(1, min(int(request.args.get("limit", 50)), 200))
+    except (TypeError, ValueError):
+        limit = 50
+    return jsonify({"attempts": interview_coach_service.get_attempts(user_email, limit=limit)}), 200
+
+
+@resume_bp.route("/interview/fit", methods=["POST"])
+@jwt_required()
+def interview_fit():
+    user_email = get_jwt_identity()
+    from services import entitlements_service, interview_coach_service
+    if not entitlements_service.feature_allowed(user_email, "interview_fit"):
+        return entitlements_service.upgrade_required_response(user_email, "interview_fit")
+    body = request.get_json(silent=True) or {}
+    record_id = InputSanitizer.sanitize_string(str(body.get("record_id") or ""), 80)
+    if not record_id:
+        return jsonify({"error": "record_id is required"}), 400
+    try:
+        return jsonify(interview_coach_service.interview_fit(user_email, record_id)), 200
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 404
+    except Exception as e:
+        logger.exception("fit error: %s", e)
+        return jsonify({"error": "Could not assess interview fit"}), 500
+
+
+@resume_bp.route("/salary", methods=["POST"])
+@jwt_required()
+def salary_estimate():
+    user_email = get_jwt_identity()
+    from services import entitlements_service, interview_coach_service
+    allowed, usage = entitlements_service.check_and_increment(user_email, "salary")
+    if not allowed:
+        return entitlements_service.upgrade_required_response(user_email, "salary", usage)
+    body = request.get_json(silent=True) or {}
+    role = InputSanitizer.sanitize_string(str(body.get("role") or ""), 160)
+    if not role:
+        return jsonify({"error": "role is required"}), 400
+    level = InputSanitizer.sanitize_string(str(body.get("level") or ""), 60)
+    location = InputSanitizer.sanitize_string(str(body.get("location") or ""), 120)
+    with_pct = entitlements_service.feature_allowed(user_email, "salary_percentiles")
+    try:
+        return jsonify(interview_coach_service.salary_benchmark(role, level, location, with_percentiles=with_pct)), 200
+    except Exception as e:
+        logger.exception("salary error: %s", e)
+        return jsonify({"error": "Could not estimate salary"}), 500
+
+
+# ==================================================================
+# Pillar C — Hackathons/Webinars + AI post drafting
+#   (/api/resume/events/*, /api/resume/posts)
+# ==================================================================
+@resume_bp.route("/events", methods=["GET"])
+@jwt_required()
+def events_list():
+    user_email = get_jwt_identity()
+    from services import event_scraper
+    type_filter = (request.args.get("type") or "").strip().lower() or None
+    if type_filter not in (None, "hackathon", "webinar"):
+        type_filter = None
+    try:
+        events = event_scraper.list_events(user_email, type_filter=type_filter)
+        return jsonify({"events": events}), 200
+    except Exception as e:
+        logger.exception("events list error: %s", e)
+        return jsonify({"error": "Could not load events"}), 500
+
+
+@resume_bp.route("/events/refresh", methods=["POST"])
+@jwt_required()
+def events_refresh():
+    """Trigger a best-effort scrape of public event sources (idempotent upsert)."""
+    user_email = get_jwt_identity()
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"events_refresh:{client_ip}", max_requests=4, window_seconds=3600):
+        return jsonify({"error": "Refreshed recently — try again later."}), 429
+    import os
+    from services.resume_service import get_resume_service, ResumeService
+    # Only run the LLM 30% of legitimacy scoring when Bedrock is actually
+    # reachable (Lambda via SSM, or explicit AWS creds) — otherwise score
+    # heuristically so the scrape stays fast instead of retrying a dead model.
+    use_llm = os.getenv("USE_SSM_SECRETS", "false").lower() == "true" or bool(os.getenv("AWS_ACCESS_KEY_ID"))
+    payload = {"sources": None, "limit": 40, "use_llm": use_llm}
+    svc = get_resume_service()
+    job_id = svc.create_job("event_scrape", payload, user_email=user_email)
+    ResumeService.invoke_async(job_id, "event_scrape", payload)
+    return jsonify({"job_id": job_id}), 202
+
+
+@resume_bp.route("/events/<event_id>", methods=["GET"])
+@jwt_required()
+def event_detail(event_id):
+    from services import event_scraper
+    ev = event_scraper.get_event(get_jwt_identity(), event_id)
+    if not ev:
+        return jsonify({"error": "Event not found"}), 404
+    return jsonify(ev), 200
+
+
+@resume_bp.route("/events/<event_id>/relation", methods=["POST"])
+@jwt_required()
+def event_relation(event_id):
+    user_email = get_jwt_identity()
+    from services import event_scraper
+    body = request.get_json(silent=True) or {}
+    relation = (body.get("relation") or "").strip().lower()
+    outcome = InputSanitizer.sanitize_string(str(body.get("outcome") or ""), 500)
+    notes = InputSanitizer.sanitize_string(str(body.get("notes") or ""), 1000)
+    try:
+        return jsonify(event_scraper.set_relation(user_email, event_id, relation, outcome, notes)), 200
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+
+
+@resume_bp.route("/events/draft-post", methods=["POST"])
+@jwt_required()
+def events_draft_post():
+    user_email = get_jwt_identity()
+    from services import entitlements_service
+    from services.resume_service import get_resume_service, ResumeService
+    allowed, usage = entitlements_service.check_and_increment(user_email, "post_draft")
+    if not allowed:
+        return entitlements_service.upgrade_required_response(user_email, "post_draft", usage)
+    body = request.get_json(silent=True) or {}
+    payload = {
+        "user_email": user_email,
+        "event_id": InputSanitizer.sanitize_string(str(body.get("event_id") or ""), 80) or None,
+        "achievement": InputSanitizer.sanitize_string(str(body.get("achievement") or ""), 2000),
+        "audience": (body.get("audience") or "general"),
+        "relation": (body.get("relation") or "attended"),
+    }
+    if not payload["event_id"] and not payload["achievement"]:
+        return jsonify({"error": "Provide an event_id or an achievement to write about"}), 400
+    svc = get_resume_service()
+    job_id = svc.create_job("post_draft", payload, user_email=user_email)
+    ResumeService.invoke_async(job_id, "post_draft", payload)
+    return jsonify({"job_id": job_id}), 202
+
+
+@resume_bp.route("/posts", methods=["GET"])
+@jwt_required()
+def posts_list():
+    from services import post_drafting_service
+    return jsonify({"posts": post_drafting_service.list_drafts(get_jwt_identity())}), 200
+
+
+# ==================================================================
+# Pillar A — Personalized "Recommended for you" feed (/api/resume/recommendations)
+# ==================================================================
+@resume_bp.route("/recommendations", methods=["GET"])
+@jwt_required()
+def recommendations():
+    user_email = get_jwt_identity()
+    from services import recommendations_service
+    try:
+        return jsonify({"recommendations": recommendations_service.get_recommendations(user_email)}), 200
+    except Exception as e:
+        logger.exception("recommendations error: %s", e)
+        return jsonify({"recommendations": []}), 200
+
+
+@resume_bp.route("/overview", methods=["GET"])
+@jwt_required()
+def overview():
+    """Cross-feature dashboard snapshot — the interconnection layer."""
+    user_email = get_jwt_identity()
+    from services import overview_service
+    try:
+        return jsonify(overview_service.get_overview(user_email)), 200
+    except Exception as e:
+        logger.exception("overview error: %s", e)
+        return jsonify({}), 200

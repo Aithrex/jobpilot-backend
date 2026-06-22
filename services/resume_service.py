@@ -363,6 +363,25 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result = svc.extract_jd(payload["job_description"])
             svc.complete_job(job_id, {"jd_analysis": result})
 
+        elif job_type == "learning_plan":
+            # Pillar B — generate an end-to-end study plan (PRO). Stores the
+            # learning_paths/learning_progress docs and returns the new path.
+            from services import learning_service
+            result = learning_service.build_plan_job(payload)
+            svc.complete_job(job_id, result)
+
+        elif job_type == "event_scrape":
+            # Pillar C — pull public event sources, score legitimacy, upsert.
+            from services import event_scraper
+            result = event_scraper.run_scrape(payload)
+            svc.complete_job(job_id, result)
+
+        elif job_type == "post_draft":
+            # Pillar C — AI LinkedIn post drafting (PRO).
+            from services import post_drafting_service
+            result = post_drafting_service.draft_post(payload)
+            svc.complete_job(job_id, result)
+
         elif job_type == "upload_parse":
             user_email = payload.get("user_email", "")
             content_hash = payload.get("content_hash", "")
