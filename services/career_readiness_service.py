@@ -147,15 +147,17 @@ def compute_readiness(email: str) -> Dict:
     top_gaps = skills.get("top_gaps", []) or []
     gap_pressure = sum(int(g.get("count", 1) or 1) for g in top_gaps)
 
-    # 1) Foundation — résumé + goal + skills are set up.
+    # 1) Foundation — résumé + goal + skills + a linked professional presence.
     foundation = 0
     if resume.get("has_base"):
-        foundation += 45
+        foundation += 40
     if onboarding_complete:
         foundation += 15
     if target_role:
-        foundation += 15
-    foundation += min(have_count, 5) * 5
+        foundation += 12
+    foundation += min(have_count, 5) * 4
+    if prefs.get("linkedin_url"):
+        foundation += 13  # linking LinkedIn (via the audit) completes the profile
     foundation = _clamp(foundation)
 
     # 2) Skills — coverage vs the gaps for their target roles.
