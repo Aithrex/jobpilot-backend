@@ -1549,6 +1549,12 @@ class JobService:
             reverse=True,
         )
         prepared: List[Dict[str, Any]] = []
+        # Scam-shield engine (deterministic, no LLM). Imported once; runs only on
+        # the final ≤MAX_RETURNED_JOBS set so it adds no measurable latency.
+        try:
+            from services.job_legitimacy_service import assess_job
+        except Exception:
+            assess_job = None
         for job in balanced[:MAX_RETURNED_JOBS]:
             item = dict(job)
             description = str(item.get("description") or "")
@@ -1560,6 +1566,12 @@ class JobService:
             matched = item.get("matched_skills")
             if isinstance(matched, list) and len(matched) > 20:
                 item["matched_skills"] = matched[:20]
+            # Attach trust assessment; must never break search if it errors.
+            if assess_job is not None:
+                try:
+                    item.update(assess_job(item))
+                except Exception:
+                    pass
             prepared.append(item)
         return prepared
 

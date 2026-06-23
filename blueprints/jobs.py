@@ -611,6 +611,48 @@ def analyze():
 
 
 # ------------------------------------------------------------------
+# POST /api/jobs/trust-check   (scam-shield deep scan, on-demand)
+# ------------------------------------------------------------------
+
+@jobs_bp.route("/trust-check", methods=["POST"])
+@jwt_required()
+def trust_check():
+    """Deep scam / ghost-job scan of a single posting (heuristics + FLASH).
+
+    Body: { "job": {title, company, description, salary, source, apply_link, location} }
+    Returns: { trust_score, trust_band, trust_flags, trust_reasons, llm_rationale?, advice? }
+
+    Safety is FREE: rate-limited but never entitlement-gated. Protecting a student
+    from an employment scam must not sit behind a paywall — it's the whole point.
+    """
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"jobs_trust:{client_ip}", max_requests=20, window_seconds=60):
+        return jsonify({"error": "Rate limit exceeded — try again in a minute"}), 429
+
+    data = request.get_json(silent=True) or {}
+    job = data.get("job")
+    if not job or not isinstance(job, dict):
+        return jsonify({"error": "Job data is required"}), 400
+
+    safe = {
+        "title": InputSanitizer.sanitize_string(str(job.get("title") or ""), max_length=200),
+        "company": InputSanitizer.sanitize_string(str(job.get("company") or ""), max_length=200),
+        "location": InputSanitizer.sanitize_string(str(job.get("location") or ""), max_length=200),
+        "salary": InputSanitizer.sanitize_string(str(job.get("salary") or ""), max_length=120),
+        "source": InputSanitizer.sanitize_string(str(job.get("source") or ""), max_length=60),
+        "apply_link": str(job.get("apply_link") or "")[:600],
+        "description": InputSanitizer.sanitize_string(str(job.get("description") or ""), max_length=8000),
+    }
+    try:
+        from services.job_legitimacy_service import deep_scan
+        return jsonify(deep_scan(safe, use_llm=True)), 200
+    except Exception as e:
+        logger.error(f"Job trust-check error: {e}")
+        return jsonify({"error": "Scan failed"}), 500
+
+
+# ------------------------------------------------------------------
 # POST /api/jobs/tailor-resume
 # ------------------------------------------------------------------
 

@@ -3609,3 +3609,84 @@ def overview():
     except Exception as e:
         logger.exception("overview error: %s", e)
         return jsonify({}), 200
+
+
+@resume_bp.route("/career-readiness", methods=["GET"])
+@jwt_required()
+def career_readiness():
+    """Career Readiness Score (the Compass spine) — one honest 0-100 score
+    synthesizing the cross-surface overview + the onboarding goal, with a single
+    next best step. Deterministic, no LLM. Degrades to {} so the dashboard never
+    breaks on it."""
+    user_email = get_jwt_identity()
+    from services import career_readiness_service
+    try:
+        return jsonify(career_readiness_service.compute_readiness(user_email)), 200
+    except Exception as e:
+        logger.exception("career-readiness error: %s", e)
+        return jsonify({}), 200
+
+
+@resume_bp.route("/github/link", methods=["POST"])
+@jwt_required()
+def github_link():
+    """Link & analyze a PUBLIC GitHub profile (proof-of-skill). Username/URL only —
+    no OAuth, no config. Free, rate-limited (each call hits GitHub). Stores a cached
+    snapshot that feeds the Career Readiness 'Proof of skill' dimension."""
+    from utils.security import get_rate_limiter, get_client_ip
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"github_link:{get_client_ip(request)}", max_requests=10, window_seconds=120):
+        return jsonify({"error": "Rate limit exceeded — try again shortly"}), 429
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    raw = InputSanitizer.sanitize_string(str(data.get("username") or ""), max_length=120)
+    if not raw:
+        return jsonify({"error": "A GitHub username or profile URL is required"}), 400
+    from services import github_profile_service
+    try:
+        snap = github_profile_service.link_and_store(user_email, raw)
+        return jsonify({"linked": True, "profile": snap}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 503
+    except Exception as e:
+        logger.exception("github link error: %s", e)
+        return jsonify({"error": "Failed to analyze GitHub profile"}), 500
+
+
+@resume_bp.route("/github", methods=["GET"])
+@jwt_required()
+def github_get():
+    """Return the cached GitHub proof snapshot for the user (or linked=False)."""
+    user_email = get_jwt_identity()
+    from services import github_profile_service
+    try:
+        snap = github_profile_service.get_stored(user_email)
+        return jsonify({"linked": bool(snap), "profile": snap}), 200
+    except Exception as e:
+        logger.exception("github get error: %s", e)
+        return jsonify({"linked": False, "profile": None}), 200
+
+
+@resume_bp.route("/linkedin/audit", methods=["POST"])
+@jwt_required()
+def linkedin_audit():
+    """AI LinkedIn self-audit. LinkedIn's API exposes no profile data, so we use
+    the user's REAL résumé + target role to produce honest, specific optimization
+    guidance (+ a ready-to-paste headline/About). Free, rate-limited (one FLASH call)."""
+    from utils.security import get_rate_limiter, get_client_ip
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"linkedin_audit:{get_client_ip(request)}", max_requests=10, window_seconds=120):
+        return jsonify({"error": "Rate limit exceeded — try again shortly"}), 429
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    url = InputSanitizer.sanitize_string(str(data.get("linkedin_url") or ""), max_length=300)
+    from services import linkedin_audit_service
+    try:
+        return jsonify(linkedin_audit_service.audit(user_email, url)), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        logger.exception("linkedin audit error: %s", e)
+        return jsonify({"error": "Audit failed"}), 500
