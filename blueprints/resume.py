@@ -3690,3 +3690,215 @@ def linkedin_audit():
     except Exception as e:
         logger.exception("linkedin audit error: %s", e)
         return jsonify({"error": "Audit failed"}), 500
+
+
+# ==================================================================
+# Connect & act — OAuth data-integrations (GitHub repos, LinkedIn posts)
+# ------------------------------------------------------------------
+# Lets a logged-in user connect their GitHub/LinkedIn accounts so JobPilot can
+# act on their behalf. These mirror gmail_service's encrypted-token data-provider
+# pattern and are kept fully separate from the sign-in OAuth in oauth_service.py.
+# Endpoints live under the already-edge-routed /api/resume prefix.
+#
+# Auth nuance: /authorize is @jwt_required and stashes user_email in a CSRF
+# state doc; the /callback is PUBLIC (browser redirect, no JWT) and resolves the
+# user via that state doc.
+# ==================================================================
+
+_CONNECT_PROVIDERS = {"github", "linkedin"}
+
+
+def _connect_service(provider: str):
+    if provider == "github":
+        from services import github_connect_service
+        return github_connect_service
+    if provider == "linkedin":
+        from services import linkedin_connect_service
+        return linkedin_connect_service
+    return None
+
+
+@resume_bp.route("/connect/<provider>/authorize", methods=["GET"])
+@jwt_required()
+def connect_authorize(provider):
+    """Begin the connect-OAuth flow. Returns {authorize_url} or 503 if the
+    provider's credentials are not configured for this deployment."""
+    if provider not in _CONNECT_PROVIDERS:
+        return jsonify({"error": "unknown_provider"}), 404
+    svc = _connect_service(provider)
+    if not svc.is_configured():
+        return jsonify({"error": "provider_not_configured", "provider": provider}), 503
+    user_email = get_jwt_identity()
+    try:
+        return jsonify({"authorize_url": svc.build_authorize_url(user_email)}), 200
+    except Exception as e:
+        logger.exception("connect authorize failed for %s: %s", provider, e)
+        return jsonify({"error": "authorize_failed"}), 500
+
+
+@resume_bp.route("/connect/<provider>/callback", methods=["GET"])
+def connect_callback(provider):
+    """PUBLIC OAuth callback (browser redirect, no JWT). Resolves the user via
+    the CSRF state doc, exchanges the code, stores the connection, then redirects
+    back to the frontend app."""
+    from flask import redirect
+    from utils.config import AppUrlsConfig
+
+    def _back(fragment: str):
+        return redirect(f"{AppUrlsConfig.FRONTEND_URL}/app?{fragment}")
+
+    if provider not in _CONNECT_PROVIDERS:
+        return _back("connect_error=unknown_provider")
+    if request.args.get("error"):
+        return _back(f"connect_error={InputSanitizer.sanitize_string(str(request.args.get('error')), max_length=80)}")
+    code = request.args.get("code")
+    state = request.args.get("state")
+    if not code or not state:
+        return _back("connect_error=invalid_request")
+    svc = _connect_service(provider)
+    try:
+        svc.handle_callback(code, state)
+        return _back(f"connected={provider}")
+    except RuntimeError as e:
+        if str(e) == "invalid_state":
+            return _back("connect_error=invalid_state")
+        logger.warning("connect callback failed for %s: %s", provider, e)
+        return _back("connect_error=connect_failed")
+    except Exception as e:
+        logger.exception("connect callback error for %s: %s", provider, e)
+        return _back("connect_error=connect_failed")
+
+
+@resume_bp.route("/connect/status", methods=["GET"])
+@jwt_required()
+def connect_status():
+    """Connection status for both providers."""
+    user_email = get_jwt_identity()
+    out = {"github": {"connected": False}, "linkedin": {"connected": False}}
+    for provider in _CONNECT_PROVIDERS:
+        try:
+            out[provider] = _connect_service(provider).get_status(user_email)
+        except Exception as e:
+            logger.warning("connect status failed for %s: %s", provider, e)
+    return jsonify(out), 200
+
+
+@resume_bp.route("/connect/<provider>/disconnect", methods=["POST"])
+@jwt_required()
+def connect_disconnect(provider):
+    if provider not in _CONNECT_PROVIDERS:
+        return jsonify({"error": "unknown_provider"}), 404
+    user_email = get_jwt_identity()
+    try:
+        _connect_service(provider).disconnect(user_email)
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        logger.exception("connect disconnect error for %s: %s", provider, e)
+        return jsonify({"error": "disconnect_failed"}), 500
+
+
+@resume_bp.route("/connect/github/publish", methods=["POST"])
+@jwt_required()
+def connect_github_publish():
+    """Human-approved action: scaffold a small real project grounded in the
+    user's skills and publish it to a new public GitHub repo. Returns {repo_url}."""
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"connect_gh_publish:{get_client_ip(request)}", max_requests=5, window_seconds=600):
+        return jsonify({"error": "Rate limit exceeded — try again shortly"}), 429
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    name = InputSanitizer.sanitize_string(str(data.get("name") or ""), max_length=80)
+    description = InputSanitizer.sanitize_string(str(data.get("description") or ""), max_length=300)
+    kind = InputSanitizer.sanitize_string(str(data.get("kind") or ""), max_length=60)
+    if not name:
+        return jsonify({"error": "A repository name is required"}), 400
+
+    from services import github_connect_service
+    if not github_connect_service.is_configured():
+        return jsonify({"error": "provider_not_configured", "provider": "github"}), 503
+    if not github_connect_service.get_status(user_email).get("connected"):
+        return jsonify({"error": "Connect your GitHub account first"}), 400
+
+    try:
+        files = _scaffold_project_files(user_email, name, description, kind)
+        result = github_connect_service.publish_project(user_email, name, description, files)
+        return jsonify(result), 200
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.exception("github publish error: %s", e)
+        return jsonify({"error": "Failed to publish project"}), 500
+
+
+@resume_bp.route("/connect/linkedin/post", methods=["POST"])
+@jwt_required()
+def connect_linkedin_post():
+    """Human-approved action: publish a post to the connected LinkedIn account."""
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"connect_li_post:{get_client_ip(request)}", max_requests=5, window_seconds=600):
+        return jsonify({"error": "Rate limit exceeded — try again shortly"}), 429
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    text = InputSanitizer.sanitize_string(str(data.get("text") or ""), max_length=3000)
+    if not text:
+        return jsonify({"error": "Post text is required"}), 400
+
+    from services import linkedin_connect_service
+    if not linkedin_connect_service.is_configured():
+        return jsonify({"error": "provider_not_configured", "provider": "linkedin"}), 503
+    if not linkedin_connect_service.get_status(user_email).get("connected"):
+        return jsonify({"error": "Connect your LinkedIn account first"}), 400
+
+    try:
+        result = linkedin_connect_service.create_post(user_email, text)
+        return jsonify(result), 200
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.exception("linkedin post error: %s", e)
+        return jsonify({"error": "Failed to publish post"}), 500
+
+
+def _scaffold_project_files(user_email: str, name: str, description: str, kind: str) -> dict:
+    """Build a small, real, grounded starter project (README + a starter file)
+    from the user's actual skills. No fabrication — README states it's a starter
+    scaffold the user will build on."""
+    skills = []
+    try:
+        from services.resume_parser import ResumeParser
+        from schemas.resume_schemas import flatten_skills
+        resume = ResumeParser().ensure_structured_resume(user_email=user_email)
+        if resume and resume.get("structured"):
+            skills = [str(s) for s in (flatten_skills(resume["structured"]) or [])][:12]
+    except Exception as e:
+        logger.warning("scaffold: could not load skills for %s: %s", user_email, e)
+
+    skills_line = ", ".join(skills) if skills else "the candidate's core skills"
+    desc = description or f"A starter project scaffolded by JobPilot for {name}."
+    is_python = any(s.lower() in ("python", "django", "flask", "fastapi", "pandas") for s in skills) or "python" in kind.lower()
+
+    readme = (
+        f"# {name}\n\n"
+        f"{desc}\n\n"
+        "## About\n\n"
+        "This repository was scaffolded via JobPilot's GitHub integration as a "
+        "starting point. It is intentionally minimal — extend it with your own work.\n\n"
+        f"## Relevant skills\n\n{skills_line}\n\n"
+        "## Getting started\n\n"
+        + ("```bash\npython main.py\n```\n" if is_python else "```bash\nnode index.js\n```\n")
+    )
+    files = {"README.md": readme}
+    if is_python:
+        files["main.py"] = (
+            '"""Starter entry point — replace with your project code."""\n\n\n'
+            "def main() -> None:\n"
+            f'    print("Welcome to {name}")\n\n\n'
+            'if __name__ == "__main__":\n'
+            "    main()\n"
+        )
+    else:
+        files["index.js"] = (
+            "// Starter entry point — replace with your project code.\n"
+            f'console.log("Welcome to {name}");\n'
+        )
+    return files
