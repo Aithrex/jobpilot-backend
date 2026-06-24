@@ -1,0 +1,286 @@
+"""Production-readiness MongoDB index migration for JobPilot (`portfolio_db`).
+
+The codebase defines almost no indexes in-repo, so virtually every recurring
+filter/sort is a COLLSCAN — the #1 latent perf risk flagged by the audit. This
+ONE idempotent script creates an index for every confirmed hot access pattern
+(plus the new connect-OAuth / per-provider collections added this session, incl.
+a TTL on the short-lived CSRF-state collection).
+
+Each spec below was derived by READING the query that uses it; the call site is
+cited in the comment next to the spec. We only index fields actually used in
+find/sort, only set `unique=True` where the calling code guarantees uniqueness
+(UUID keys or upsert-on-key), and only set a TTL where a doc carries a real
+expiry timestamp it should be reaped at.
+
+Safety / idempotency:
+  * `create_index` is idempotent BY NAME — re-running with the same name + keys +
+    options is a no-op. Every spec passes an explicit `name=` and `background=True`.
+  * Each creation is wrapped in try/except and logged as created / exists / FAILED;
+    one failure never aborts the rest.
+  * `--dry-run` logs exactly what it WOULD ensure, touching nothing.
+  * Some indexes are ALSO created opportunistically by app code at runtime
+    (`scripts/migrate_users_v2.py`, `services/job_service.py:241-243`). We re-assert
+    them here with matching keys/options so a fresh DB is fully covered up front;
+    a matching re-assert is a no-op, a conflicting one is caught and logged.
+
+Requires a LIVE MongoDB connection (singleton `utils.db_connect.DBConnect`).
+
+Usage:
+    python scripts/migrate_indexes.py            # apply (idempotent, safe to re-run)
+    python scripts/migrate_indexes.py --dry-run  # preview only, no writes
+"""
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+# Mirror run_local.py path wiring so `utils.*` resolve from the shared layer.
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "shared" / "python"))
+sys.path.insert(0, str(ROOT))
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+except ImportError:
+    pass
+
+from pymongo import ASCENDING, DESCENDING  # noqa: E402
+from pymongo.errors import OperationFailure, PyMongoError  # noqa: E402
+from utils.db_connect import DBConnect  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Index specs: (collection, keys, options)
+#   options always carries `name`; `background` is injected below.
+#   The trailing comment cites the query that justifies the index.
+# ---------------------------------------------------------------------------
+INDEX_SPECS = [
+    # === users (identity = email; OAuth subject lookups) ===================
+    # oauth_service.upsert_user: users.find_one({"email": email}); usage_service,
+    # overview_service, tech_chronicle all key on email. (also in migrate_users_v2)
+    ("users", [("email", ASCENDING)], {"unique": True, "name": "email_unique"}),
+    # oauth_service.upsert_user:329-338 find_one({f"oauth_identities.{p}.subject"}).
+    # Sparse: only users with that provider linked carry the field.
+    ("users", [("oauth_identities.google.subject", ASCENDING)],
+     {"sparse": True, "name": "oauth_google_subject"}),
+    ("users", [("oauth_identities.github.subject", ASCENDING)],
+     {"sparse": True, "name": "oauth_github_subject"}),
+    ("users", [("oauth_identities.linkedin.subject", ASCENDING)],
+     {"sparse": True, "name": "oauth_linkedin_subject"}),
+    ("users", [("oauth_identities.microsoft.subject", ASCENDING)],
+     {"sparse": True, "name": "oauth_microsoft_subject"}),
+    ("users", [("oauth_identities.apple.subject", ASCENDING)],
+     {"sparse": True, "name": "oauth_apple_subject"}),
+
+    # === user_resumes (canonical resume collection) =======================
+    # resume_parser.get_structured_resume:1210 find({user_email, structured:exists})
+    # sort([(parsed_at,-1)]); ensure_structured_resume also filters by user_email.
+    ("user_resumes", [("user_email", ASCENDING), ("parsed_at", DESCENDING)],
+     {"name": "user_email_parsed_at"}),
+
+    # === resume_jobs (async-job polling backbone) =========================
+    # resume_service: insert/find/update_one({job_id}); get_job adds user_email scope.
+    # job_id is a uuid4 → unique is safe and protects polling correctness.
+    ("resume_jobs", [("job_id", ASCENDING)], {"unique": True, "name": "job_id_unique"}),
+    ("resume_jobs", [("user_email", ASCENDING)], {"name": "user_email_idx"}),
+
+    # === usage counters (atomic $inc upserts) =============================
+    # usage_service:65 tailor_usage.find_one({email, date}); :90 $inc upsert on it.
+    ("tailor_usage", [("email", ASCENDING), ("date", ASCENDING)],
+     {"unique": True, "name": "email_date_unique"}),
+    # feature_usage real doc shape is {user_email, date, feature} — confirmed at
+    # entitlements_service.py:241 (find_one) and :273 ($inc upsert). Matches the
+    # existing migrate_users_v2 index name so this is a clean no-op re-assert.
+    ("feature_usage", [("user_email", ASCENDING), ("date", ASCENDING), ("feature", ASCENDING)],
+     {"unique": True, "name": "user_date_feature_unique"}),
+
+    # === saved_jobs =======================================================
+    # job_service:241 already creates saved_jobs.job_id unique (dedup). The HOT
+    # READ path is {user_email}: overview_service:57/98, recommendations:63/128,
+    # beta_features:232, daily_pipeline:146 — none indexed. Add it.
+    ("saved_jobs", [("user_email", ASCENDING)], {"name": "user_email_idx"}),
+    # Re-assert the dedup index with PyMongo's default name so it matches the
+    # runtime-created one (job_service.create_index("job_id", unique=True)).
+    ("saved_jobs", [("job_id", ASCENDING)], {"unique": True, "name": "job_id_1"}),
+
+    # === tailoring_records (application history) ===========================
+    # record_id is a uuid4, queried as {record_id}/{record_id,user_email}
+    # (resume.py:1611, admin.py:292, job_service:2100); list path is
+    # {user_email} sort updated_at/created_at desc (overview:37, admin:210/308).
+    ("tailoring_records", [("record_id", ASCENDING)], {"unique": True, "name": "record_id_unique"}),
+    ("tailoring_records", [("user_email", ASCENDING), ("updated_at", DESCENDING)],
+     {"name": "user_email_updated_at"}),
+
+    # === learning ==========================================================
+    # learning_service.count_active_paths:164 / overview:63,72 find({user_email,status}).
+    ("learning_paths", [("user_email", ASCENDING), ("status", ASCENDING)],
+     {"name": "user_email_status"}),
+    # learning_service.get_path:186 find_one({user_email, path_id}).
+    ("learning_paths", [("user_email", ASCENDING), ("path_id", ASCENDING)],
+     {"name": "user_email_path_id"}),
+    # learning_service:139 update_one({user_email, path_id}, upsert) — one doc per
+    # (user, path) → unique is safe and dedups progress rows.
+    ("learning_progress", [("user_email", ASCENDING), ("path_id", ASCENDING)],
+     {"unique": True, "name": "user_email_path_id_unique"}),
+
+    # === interview_attempts ===============================================
+    # interview_coach_service:87/137/188 find({user_email}) sort answered_at desc.
+    ("interview_attempts", [("user_email", ASCENDING), ("answered_at", DESCENDING)],
+     {"name": "user_email_answered_at"}),
+
+    # === events + per-user relations ======================================
+    # event_scraper:227 update_one({dedup_key}, upsert) — dedup key is unique.
+    ("events", [("dedup_key", ASCENDING)], {"unique": True, "name": "dedup_key_unique"}),
+    # event_scraper.get_event:291 / set_relation guard:308 find_one({event_id}).
+    ("events", [("event_id", ASCENDING)], {"name": "event_id_idx"}),
+    # event_scraper.list_events:273-278 find({status, legitimacy_band}) sort
+    # legitimacy_score desc; recommendations:153 same shape. equality->equality->sort.
+    ("events", [("status", ASCENDING), ("legitimacy_band", ASCENDING),
+                ("legitimacy_score", DESCENDING)],
+     {"name": "status_band_score"}),
+    # event_scraper:225 sets expires_at (~120d out). TTL reaps stale events.
+    ("events", [("expires_at", ASCENDING)], {"expireAfterSeconds": 0, "name": "ttl_expires"}),
+    # event_scraper.set_relation:310 update_one({user_email, event_id}, upsert);
+    # get_relations:280 find({user_email}); :295 find_one({user_email, event_id}).
+    ("user_events", [("user_email", ASCENDING), ("event_id", ASCENDING)],
+     {"unique": True, "name": "user_email_event_id_unique"}),
+
+    # === apply (extension) =================================================
+    # apply.py:92/128 application_profiles find_one/update_one({user_email}) — one per user.
+    ("application_profiles", [("user_email", ASCENDING)],
+     {"unique": True, "name": "user_email_unique"}),
+    # apply.py:200 insert {user_email,...}; :231-243 find({user_email}[+company]) sort created_at desc.
+    ("application_answers", [("user_email", ASCENDING), ("created_at", DESCENDING)],
+     {"name": "user_email_created_at"}),
+
+    # === feedback ==========================================================
+    # feedback.py:81 my_feedback find({email}) sort created_at desc (user field is `email`).
+    ("feedback", [("email", ASCENDING), ("created_at", DESCENDING)],
+     {"name": "email_created_at"}),
+    # admin.py:229 find(query incl. status) sort created_at desc.
+    ("feedback", [("status", ASCENDING), ("created_at", DESCENDING)],
+     {"name": "status_created_at"}),
+
+    # === gmail_connections ================================================
+    # gmail_service:259 update_one({user_email}, upsert); :267 find_one({user_email}).
+    ("gmail_connections", [("user_email", ASCENDING)],
+     {"unique": True, "name": "user_email_unique"}),
+
+    # === password reset / login state (time-bounded) ======================
+    # auth.py:412 find_one({token_hash}); :377 insert with expires_at.
+    # (also asserted in migrate_users_v2 — re-assert with matching names.)
+    ("password_reset_tokens", [("token_hash", ASCENDING)],
+     {"unique": True, "name": "token_hash_unique"}),
+    ("password_reset_tokens", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expires"}),
+    # oauth_service:202 find_one_and_delete({state}); state docs carry expires_at.
+    ("oauth_login_states", [("state", ASCENDING)], {"unique": True, "name": "state_unique"}),
+    ("oauth_login_states", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expires"}),
+
+    # === tech_chronicle_cache =============================================
+    # tech_chronicle.py:78 find_one({kind}); :93 update_one({kind}, upsert). Freshness
+    # is enforced in-app via generated_at, so NO TTL here — just unique on kind.
+    ("tech_chronicle_cache", [("kind", ASCENDING)], {"unique": True, "name": "kind_unique"}),
+
+    # === NEW THIS SESSION: connect-OAuth + per-provider snapshots ==========
+    # github/linkedin connect:116 insert {state, provider, expires_at};
+    # :137 find_one_and_delete({state, provider}). TTL reaps un-consumed states.
+    ("connect_oauth_states", [("state", ASCENDING), ("provider", ASCENDING)],
+     {"name": "state_provider"}),
+    ("connect_oauth_states", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expires"}),
+    # *_connect_service.handle_callback:197 update_one({user_email}, upsert);
+    # get_status:212 find_one({user_email}) — one connection per user.
+    ("github_connections", [("user_email", ASCENDING)],
+     {"unique": True, "name": "user_email_unique"}),
+    ("linkedin_connections", [("user_email", ASCENDING)],
+     {"unique": True, "name": "user_email_unique"}),
+    # github_profile_service:166 update_one({user_email}, upsert); :175/187 find_one({user_email}).
+    ("github_profiles", [("user_email", ASCENDING)],
+     {"unique": True, "name": "user_email_unique"}),
+]
+
+
+def _fmt(keys, opts):
+    key_str = ", ".join(f"{k}:{'desc' if d == DESCENDING else 'asc'}" for k, d in keys)
+    flags = []
+    if opts.get("unique"):
+        flags.append("unique")
+    if opts.get("sparse"):
+        flags.append("sparse")
+    if "expireAfterSeconds" in opts:
+        flags.append(f"TTL={opts['expireAfterSeconds']}s")
+    suffix = f" [{', '.join(flags)}]" if flags else ""
+    return f"{{{key_str}}}{suffix}"
+
+
+def run(db, dry_run: bool):
+    created = defaultdict(int)
+    existed = defaultdict(int)
+    failed = defaultdict(int)
+
+    for coll, keys, opts in INDEX_SPECS:
+        opts = {**opts, "background": True}
+        name = opts["name"]
+        label = f"{coll}.{name} -> {_fmt(keys, opts)}"
+
+        if dry_run:
+            print(f"  [would-ensure] {label}")
+            created[coll] += 0  # register collection in summary
+            continue
+
+        try:
+            existing = set(db[coll].index_information().keys())
+            db[coll].create_index(keys, **opts)
+            if name in existing:
+                existed[coll] += 1
+                print(f"  [exists]   {label}")
+            else:
+                created[coll] += 1
+                print(f"  [created]  {label}")
+        except (OperationFailure, PyMongoError) as e:
+            failed[coll] += 1
+            print(f"  [FAILED]   {label}: {e}")
+
+    return created, existed, failed
+
+
+def main():
+    dry_run = "--dry-run" in sys.argv
+    db = DBConnect().get_db()
+    mode = "DRY RUN" if dry_run else "APPLY"
+    print(f"== migrate_indexes ({mode}) on db '{db.name}' (LIVE Mongo connection) ==")
+    print(f"   {len(INDEX_SPECS)} index spec(s) across "
+          f"{len({c for c, _, _ in INDEX_SPECS})} collection(s)\n")
+
+    created, existed, failed = run(db, dry_run)
+
+    print("\n== Summary by collection ==")
+    all_colls = sorted({c for c, _, _ in INDEX_SPECS})
+    total_specs = total_created = total_existed = total_failed = 0
+    for coll in all_colls:
+        n_specs = sum(1 for c, _, _ in INDEX_SPECS if c == coll)
+        c, e, f = created[coll], existed[coll], failed[coll]
+        total_specs += n_specs
+        total_created += c
+        total_existed += e
+        total_failed += f
+        if dry_run:
+            print(f"  {coll:<24} would ensure {n_specs}")
+        else:
+            print(f"  {coll:<24} specs={n_specs} created={c} exists={e} failed={f}")
+
+    print(f"\n  TOTAL specs={total_specs}", end="")
+    if not dry_run:
+        print(f" created={total_created} exists={total_existed} failed={total_failed}")
+    else:
+        print(" (dry run — nothing written)")
+
+    print("\nDone." + ("  (dry run — no indexes created)" if dry_run else ""))
+    if not dry_run and total_failed:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
