@@ -81,22 +81,20 @@ resource "aws_iam_role_policy" "inline" {
   policy = data.aws_iam_policy_document.inline.json
 }
 
-# Optional: S3 access for résumé files, only when a bucket is provided.
+# S3 access for résumé files (bucket created in s3_resumes.tf).
 data "aws_iam_policy_document" "s3" {
-  count = var.resume_s3_bucket == "" ? 0 : 1
   statement {
     sid     = "ResumeS3"
     actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
     resources = [
-      "arn:aws:s3:::${var.resume_s3_bucket}",
-      "arn:aws:s3:::${var.resume_s3_bucket}/*",
+      aws_s3_bucket.resumes.arn,
+      "${aws_s3_bucket.resumes.arn}/*",
     ]
   }
 }
 
 resource "aws_iam_role_policy" "s3" {
-  count  = var.resume_s3_bucket == "" ? 0 : 1
   name   = "${var.project}-backend-s3-${var.environment}"
   role   = aws_iam_role.lambda_exec.id
-  policy = data.aws_iam_policy_document.s3[0].json
+  policy = data.aws_iam_policy_document.s3.json
 }

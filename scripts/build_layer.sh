@@ -41,7 +41,23 @@ python -m pip install \
   --target "$PYDIR"
 
 echo ">> Zipping -> build/layer.zip"
-( cd "$OUT" && zip -qr "$ROOT/build/layer.zip" python -x '*__pycache__*' )
+if command -v zip >/dev/null 2>&1; then
+  ( cd "$OUT" && zip -qr "$ROOT/build/layer.zip" python -x '*__pycache__*' )
+else
+  # Portable fallback (no `zip` binary, e.g. Windows Git-Bash)
+  python - "$OUT" "$ROOT/build/layer.zip" <<'PYZIP'
+import os, sys, zipfile
+base, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for root, dirs, files in os.walk(os.path.join(base, "python")):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for f in files:
+            if f.endswith(".pyc"):
+                continue
+            full = os.path.join(root, f)
+            z.write(full, os.path.relpath(full, base))
+PYZIP
+fi
 
 SIZE=$(du -h "$ROOT/build/layer.zip" | cut -f1)
 echo ">> Done: build/layer.zip ($SIZE)"

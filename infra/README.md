@@ -62,11 +62,34 @@ fans `/api/<prefix>` to the right Lambda:
 | `/api/resume` (+ `/api/resume/feedback`), `/api/tech-chronicle` | resume |
 | `/api/billing` | billing |
 
-## Redeploy after code changes
+## CI/CD (auto-deploy on push to `main`)
+
+`.github/workflows/deploy.yml` deploys on every push: it detects which
+`services/<svc>/` changed, rebuilds + republishes the **shared layer** when
+`shared/**` changed (then redeploys all 4 to pick up the new layer version),
+smoke-tests `create_app()`, and ships changed services via
+`aws lambda update-function-code`. **Terraform owns infra; CI owns code** — the
+function `lifecycle { ignore_changes = [source_code_hash, layers] }` keeps the
+two from fighting.
+
+Required GitHub Actions secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
+(deploy IAM user with `lambda:UpdateFunctionCode/Configuration`,
+`lambda:PublishLayerVersion`, `lambda:GetFunction`). See
+`../../jobpilot-frontend/infra/README.md` for the full cross-repo runbook +
+the Cloudflare DNS records.
+
+## Cost allocation tags
+
+All resources are tagged `Project=jobpilot` / `Environment=prod` (+ `ManagedBy`,
+`Component`) via provider `default_tags`. Activate `Project` and `Environment`
+as cost-allocation tags once in the AWS Billing console to filter costs by them.
+
+## Redeploy manually (outside CI)
 
 ```bash
-bash scripts/build_layer.sh && bash scripts/package.sh   # only what changed
-cd infra/terraform && terraform apply                    # source_code_hash picks up new zips
+bash scripts/build_layer.sh && bash scripts/package.sh
+cd infra/terraform && terraform apply    # first time / infra changes only
+# code-only redeploys go through CI, or: aws lambda update-function-code ...
 ```
 
 ## Notes

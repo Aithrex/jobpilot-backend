@@ -1,0 +1,148 @@
+name: Deploy Backend to AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: backend-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT: jobpilot
+  ENVIRONMENT: prod
+  PY_VERSION: "3.12"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  detect-changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.resolve.outputs.services }}
+      any: ${{ steps.resolve.outputs.any }}
+      shared: ${{ steps.filter.outputs.shared }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            shared:  ['shared/**', 'infra/**', '.github/workflows/**']
+            auth:    ['services/auth/**']
+            jobs:    ['services/jobs/**']
+            resume:  ['services/resume/**']
+            billing: ['services/billing/**']
+      - id: resolve
+        run: |
+          MANUAL=${{ github.event_name == 'workflow_dispatch' }}
+          SHARED=${{ steps.filter.outputs.shared }}
+          declare -a S=()
+          # A shared-layer or manual change => redeploy ALL services (layer version bump).
+          if [ "$MANUAL" = "true" ] || [ "$SHARED" = "true" ]; then
+            S=(auth jobs resume billing)
+          else
+            [ "${{ steps.filter.outputs.auth }}" = "true" ]    && S+=(auth)
+            [ "${{ steps.filter.outputs.jobs }}" = "true" ]    && S+=(jobs)
+            [ "${{ steps.filter.outputs.resume }}" = "true" ]  && S+=(resume)
+            [ "${{ steps.filter.outputs.billing }}" = "true" ] && S+=(billing)
+          fi
+          if [ ${#S[@]} -gt 0 ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "${S[@]}" | jq -R . | jq -sc . | sed 's/^/services=/' >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo "services=[]" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---------------------------------------------------------------------------
+  deploy-layer:
+    name: Build & publish shared layer
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.shared == 'true' || github.event_name == 'workflow_dispatch'
+    outputs:
+      layer_arn: ${{ steps.publish.outputs.layer_arn }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Build layer
+        run: bash scripts/build_layer.sh "${{ env.PY_VERSION }}"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: publish
+        name: Publish layer version
+        run: |
+          ARN=$(aws lambda publish-layer-version \
+            --layer-name "${PROJECT}-shared-${ENVIRONMENT}" \
+            --zip-file fileb://build/layer.zip \
+            --compatible-runtimes "python${PY_VERSION}" \
+            --query 'LayerVersionArn' --output text)
+          echo "layer_arn=${ARN}" >> "$GITHUB_OUTPUT"
+          echo "Published $ARN"
+
+  # ---------------------------------------------------------------------------
+  deploy-services:
+    name: Deploy ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, deploy-layer]
+    # deploy-layer may be skipped (no shared change); only fail if it actually failed.
+    if: needs.detect-changes.outputs.any == 'true' && !cancelled() && needs.deploy-layer.result != 'failure'
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Smoke test (import create_app)
+        run: |
+          python -m pip install --quiet -r shared/python/requirements.txt
+          cd "services/${{ matrix.service }}"
+          PYTHONPATH="${GITHUB_WORKSPACE}/shared/python:${PWD}" \
+            python -c "import app; app.create_app(); print('${{ matrix.service }}: import OK')"
+
+      - name: Package
+        run: bash scripts/package.sh "${{ matrix.service }}"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update function code
+        run: |
+          FN="${PROJECT}-${{ matrix.service }}-${ENVIRONMENT}"
+          aws lambda update-function-code \
+            --function-name "$FN" \
+            --zip-file "fileb://build/${{ matrix.service }}.zip" \
+            --publish --no-cli-pager
+          aws lambda wait function-updated --function-name "$FN"
+
+      - name: Point function at new layer (only if layer was republished)
+        if: needs.deploy-layer.result == 'success' && needs.deploy-layer.outputs.layer_arn != ''
+        run: |
+          FN="${PROJECT}-${{ matrix.service }}-${ENVIRONMENT}"
+          aws lambda update-function-configuration \
+            --function-name "$FN" \
+            --layers "${{ needs.deploy-layer.outputs.layer_arn }}" --no-cli-pager
+          aws lambda wait function-updated --function-name "$FN"
+
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    needs: [deploy-services]
+    if: always() && needs.deploy-services.result == 'success'
+    steps:
+      - name: Health check via the edge
+        run: curl -fsS https://aspirely.me/api/health || echo "health check pending (edge/DNS not live yet)"
