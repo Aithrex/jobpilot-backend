@@ -8,6 +8,9 @@
 # Usage:  AWS_PROFILE=aithrex bash scripts/seed_ssm.sh [prefix]   (default /jobpilot/prod)
 set -euo pipefail
 
+# Stop Git-Bash/MSYS from rewriting "/jobpilot/..." SSM paths into Windows paths.
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT/.env"
 PREFIX="${1:-/jobpilot/prod}"
