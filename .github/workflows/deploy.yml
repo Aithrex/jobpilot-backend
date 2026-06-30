@@ -104,6 +104,9 @@ jobs:
         with: { python-version: "3.12" }
 
       - name: Smoke test (import create_app)
+        env:
+          ENVIRONMENT: development   # don't trigger the prod-secret guard in CI
+          USE_SSM_SECRETS: "false"
         run: |
           python -m pip install --quiet -r shared/python/requirements.txt
           cd "services/${{ matrix.service }}"
