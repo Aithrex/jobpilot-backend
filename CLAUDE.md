@@ -2,10 +2,12 @@
 
 Flask API for the JobPilot AI career platform — MongoDB + **Claude-on-Bedrock**, deployed to **AWS Lambda**. The frontend is a **separate repo** (`jobpilot-frontend`).
 
+Split into **4 independently-deployed Lambda microservices** under `services/<svc>/` (**auth · jobs · resume · billing**), each with its own `app.py` (Flask factory), `lambda_handler.py`, `requirements.txt`, and `blueprints/`. Shared business logic + framework live in the **`shared/python` Lambda layer** (mounted `/opt/python`). `from services.X` / `from blueprints.X` resolve across a service's local dir AND the shared layer via **PEP 420 namespace packages** (so NO `__init__.py` in any `services/`/`blueprints/` dir — adding one breaks the merge). `local.py` stitches all four into one Flask app for local dev.
+
 ## Commands (run from this directory)
-- `python run_local.py` — local Flask dev server (port 5000; wires `shared/python` onto `sys.path`). **Needs MongoDB running + AWS creds / Bedrock access.**
+- `python run_local.py` (or `python local.py`) — local gateway: runs all 4 services as ONE Flask app on port 5000; wires `shared/python` + each `services/<svc>` onto `sys.path`. **Needs MongoDB + AWS creds / Bedrock access.**
 - `python scripts/check_bedrock.py` — verify Bedrock creds + Claude model access (run before first use).
-- `pip install -r requirements.txt` — service deps (framework/db/auth come from the **`shared/python` layer**).
+- `pip install -r shared/python/requirements.txt` — layer deps (Flask/pymongo/boto3/fpdf2/docx/pypdf/crypto/PyJWT/lxml/requests…). Per-service `requirements.txt` hold only service-unique extras.
 - _No tests configured yet_ (pytest + mongomock + moto + a fake LLM provider recommended — see the `qa-test-engineer` agent).
 
 ## Hard invariants (breaking these breaks login, billing, AI integrity, or prod)
@@ -17,17 +19,20 @@ Flask API for the JobPilot AI career platform — MongoDB + **Claude-on-Bedrock*
 6. **New `/api/<prefix>`** needs an external (Terraform) edge route or it 404s in prod (no `.tf` in this repo).
 
 ## Stack
-Flask (factory `app.py::create_app()`) · MongoDB `portfolio_db` via **raw PyMongo** (NO ORM, NO migration framework, **NO indexes defined in-repo → most queries are COLLSCAN**) · Claude on AWS Bedrock · AWS Lambda (`lambda_handler.py` + apig-wsgi) / local `run_local.py` · PyJWT + flask-jwt-extended · bcrypt (12 rounds) · boto3 (S3/SES/SSM/Bedrock) · fpdf2/python-docx/pypdf · cryptography.
+Flask (per-service factory `services/<svc>/app.py::create_app()`) · MongoDB `portfolio_db` via **raw PyMongo** (NO ORM, NO migration framework, **NO indexes defined in-repo → most queries are COLLSCAN**) · Claude on AWS Bedrock · AWS Lambda (4× `services/<svc>/lambda_handler.py` + apig-wsgi) / local `run_local.py`→`local.py` gateway · PyJWT + flask-jwt-extended · bcrypt (12 rounds) · boto3 (S3/SES/SSM/Bedrock) · fpdf2/python-docx/pypdf · cryptography.
 
-## Architecture (thin blueprints → fat services → shared layer)
-- **`app.py`** — registers 8 blueprints under `/api/<x>`, CORS (`ALLOWED_ORIGINS`, credentials), JWT, security-header hook.
-- **`blueprints/`** (routes, thin): `auth` (JWT mint, OAuth, reset), `resume` (core async APIs), `jobs`, `apply` (extension), `feedback`, `billing` (stub), `admin` (`@admin_required`, server `users.is_admin`), `tech_chronicle`.
-- **`services/`** (logic, 45+): `resume_service.py` (async orchestrator), parser/tailor/scorer/renderer, `entitlements_service.py`, `usage_service.py`, `oauth_service.py`, `s3_service.py`, `email_service.py`, `gmail_service.py`, `llm_providers/`.
-- **`schemas/resume_schemas.py`** — JSON schemas for LLM output (PARSED/TAILORED_RESUME, JD_ANALYSIS, ATS_SCORES).
-- **`shared/python/`** (Lambda layer, mounted `/opt/python`): `utils/db_connect.py` (Mongo singleton), `utils/config.py` (+SSM), `utils/security.py`, `models/user.py` (password rules: 8+ chars, upper/lower/digit/special, bcrypt).
+## Architecture (4 Lambdas · thin blueprints → fat shared services → shared layer)
+Each `services/<svc>/` is its own deployable Lambda: `app.py` (factory, registers only its blueprints + CORS/JWT/security-header hook), `lambda_handler.py` (apig-wsgi; **only `resume` has the async-job self-invoke branch**), `requirements.txt`, `blueprints/`, and (auth/jobs/resume) a local `services/` of domain-only logic.
+- **auth** → blueprints `auth` (JWT mint, OAuth, reset), `admin` (`@admin_required`); local services `oauth_service`, `email_service`. Edge: `ANY /api/auth/{proxy+}`, `ANY /api/admin/{proxy+}`.
+- **jobs** → blueprints `jobs`, `apply` (extension); local services `jd_fetcher`, `jd_match_scorer`, `filter_suggester_service`, `answer_generator`. Edge: `ANY /api/jobs/{proxy+}`, `ANY /api/apply/{proxy+}`.
+- **resume** → blueprints `resume` (core async APIs), `feedback` (**mounted `/api/resume/feedback`** to ride the resume route — FE calls it there), `tech_chronicle`; local services: career-copilot, interview-coach, overview, career-readiness, job-intelligence, beta-features, recommendations, streak, github_*, linkedin_*. Edge: `ANY /api/resume/{proxy+}`, `ANY /api/tech-chronicle/{proxy+}`.
+- **billing** → blueprint `billing` (entitlements surface). Edge: `ANY /api/billing/{proxy+}`.
+- **`shared/python/`** = the Lambda layer (mounted `/opt/python`), shared by all 4: `services/` (33 cross-domain services incl. `resume_service` async orchestrator + its parser/tailor/scorer/renderer tree, `job_service`, `entitlements_service`, `usage_service`, `s3_service`, `gmail_service`, `gemini_client`, `llm_providers/`), `schemas/resume_schemas.py` (LLM output: PARSED/TAILORED_RESUME, JD_ANALYSIS, ATS_SCORES), `utils/` (`db_connect` Mongo singleton, `config` +SSM, `security`), `models/user.py` (pw rules: 8+ chars, upper/lower/digit/special, bcrypt), `requirements.txt`.
+
+> **Coupling note:** `jobs.py` uses `resume_service` and `resume_service` uses `job_service` — both live in the shared layer precisely because the jobs↔resume domains are circularly coupled. Keep cross-domain services in `shared/python/services/`; a shared service must NOT import a domain-local one.
 
 ## Config & data
-Config via `shared/python/utils/config.py`; secrets via **AWS SSM** in prod (`USE_SSM_SECRETS=true`), `.env` locally (see `.env.example`). Résumé collection is **`user_resumes`** (not `base_resumes`). Résumé files → **S3**. Keep cold starts lean: reuse boto3/Mongo clients at module scope, no heavy import-time work. The `apply` blueprint and a couple of prefixes have dedicated API Gateway routes.
+Config via `shared/python/utils/config.py`; secrets via **AWS SSM** in prod (`USE_SSM_SECRETS=true`), `.env` locally (see `.env.example`). Résumé collection is **`user_resumes`** (not `base_resumes`). Résumé files → **S3**. Keep cold starts lean: reuse boto3/Mongo clients at module scope, no heavy import-time work. **Every top-level `/api/<prefix>` needs a matching Terraform route to the right Lambda** (the 4-way split means routing now fans out per service — see the edge routes per service above). The deploy path now lives **in-repo**: `infra/terraform/` (HTTP API + 4 Lambdas + shared layer + IAM) and `scripts/build_layer.sh` + `scripts/package.sh`; see `infra/README.md`. (A separate external edge — CloudFront `/api/*` → this API — may still front prod.)
 
 ## Agents
 `.claude/agents/` holds a scoped subagent suite (`orchestrator`, `backend-engineer`, `database-engineer`, `data-scientist`, `security-engineer`, `performance-engineer`, `staff-engineer`, `qa-test-engineer`, `devops-engineer`). Start with **`orchestrator`** for fuzzy asks; see `.claude/agents/README.md`.
