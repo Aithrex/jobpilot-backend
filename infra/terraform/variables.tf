@@ -57,6 +57,18 @@ variable "log_level" {
   default = "INFO"
 }
 
+variable "db_name" {
+  type        = string
+  default     = "portfolio_db"
+  description = "MongoDB database name (DB_NAME env var)."
+}
+
+variable "frontend_url" {
+  type        = string
+  default     = "https://aspirely.me"
+  description = "Public site URL (FRONTEND_URL / BACKEND_PUBLIC_URL env vars; same origin)."
+}
+
 # Per-service sizing. resume runs long async LLM work, so it gets the most.
 variable "service_config" {
   type = map(object({

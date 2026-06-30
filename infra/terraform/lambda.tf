@@ -24,11 +24,27 @@ resource "aws_lambda_function" "service" {
     variables = {
       ENVIRONMENT     = var.environment
       USE_SSM_SECRETS = "true"
-      SSM_PATH_PREFIX = var.ssm_path_prefix
       ALLOWED_ORIGINS = var.allowed_origins
       BEDROCK_REGION  = var.bedrock_region
       LOG_LEVEL       = var.log_level
       # AWS_REGION is injected by the Lambda runtime (reserved — do not set).
+
+      # Non-secret config
+      DB_NAME            = var.db_name
+      RESUME_S3_BUCKET   = aws_s3_bucket.resumes.bucket
+      FRONTEND_URL       = var.frontend_url
+      BACKEND_PUBLIC_URL = var.frontend_url
+
+      # SSM parameter PATHS (utils/ssm_config reads these env vars, then fetches
+      # the SecureString values at those paths). Seed them with scripts/seed_ssm.sh.
+      SSM_MONGODB_URI              = "${var.ssm_path_prefix}/mongodb-uri"
+      SSM_JWT_SECRET               = "${var.ssm_path_prefix}/jwt-secret-key"
+      SSM_IPINFO_TOKEN             = "${var.ssm_path_prefix}/ipinfo-token"
+      SSM_GEMINI_API_KEY           = "${var.ssm_path_prefix}/gemini-api-key"
+      SSM_JSEARCH_API_KEY          = "${var.ssm_path_prefix}/jsearch-api-key"
+      SSM_APIFY_API_KEY            = "${var.ssm_path_prefix}/apify-api-key"
+      SSM_JOB_SEARCH_PASSWORD_HASH = "${var.ssm_path_prefix}/job-search-password-hash"
+      SSM_GITHUB_PAT               = "${var.ssm_path_prefix}/github-pat"
     }
   }
 
