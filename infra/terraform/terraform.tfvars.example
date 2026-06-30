@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored by *.tfvars
+# rules in your infra; never commit real values.
+
+project          = "jobpilot"
+environment      = "prod"
+aws_region       = "us-east-1"
+runtime          = "python3.12"
+
+# CORS origin(s) for the SPA
+allowed_origins  = "https://aspirely.me"
+
+# Where the app reads secrets in prod (USE_SSM_SECRETS=true). Create these
+# SecureString params before deploy: e.g. /jobpilot/prod/MONGODB_URI,
+# /jobpilot/prod/JWT_SECRET_KEY, /jobpilot/prod/GMAIL_TOKEN_ENCRYPTION_KEY, ...
+ssm_path_prefix  = "/jobpilot/prod"
+
+bedrock_region   = "us-east-1"
+
+# Set to the résumé-files bucket to grant S3 access (leave "" to skip).
+resume_s3_bucket = ""

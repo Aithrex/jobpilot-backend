@@ -21,6 +21,15 @@ venv/
 *.zip
 .aws-sam/
 
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+
 # Editor / OS
 .vscode/
 .idea/
