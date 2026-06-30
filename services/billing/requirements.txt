@@ -1,0 +1,4 @@
+# billing microservice — service-specific deps only.
+# All common + heavy deps (Flask, pymongo, boto3, fpdf2, python-docx, pypdf,
+# cryptography, PyJWT, lxml, requests, apig-wsgi, aws-xray-sdk) are provided by
+# the shared Lambda layer (shared/python/requirements.txt). None unique here.
