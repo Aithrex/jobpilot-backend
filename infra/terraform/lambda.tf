@@ -36,6 +36,15 @@ resource "aws_lambda_function" "service" {
     aws_iam_role_policy_attachment.basic,
     aws_lambda_layer_version.shared,
   ]
+
+  # CI/CD owns CODE; Terraform owns INFRA. The GitHub Actions pipeline updates
+  # function code (aws lambda update-function-code) and the layer version
+  # (publish-layer-version + update-function-configuration) on every push to
+  # main, so Terraform must NOT revert those on the next apply. The initial
+  # `terraform apply` still seeds working code from build/<svc>.zip + the layer.
+  lifecycle {
+    ignore_changes = [source_code_hash, layers]
+  }
 }
 
 # Let API Gateway invoke each function.
