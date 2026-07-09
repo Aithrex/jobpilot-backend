@@ -276,3 +276,21 @@ def get_graph():
     user_email = get_jwt_identity()
     from services.voicegraph import store
     return jsonify(store.get_graph(user_email)), 200
+
+
+# ------------------------------------------------------------------
+# GET /api/resume/voice-graph/voice — the measured voice profile ("how you write")
+# ------------------------------------------------------------------
+@voice_graph_bp.route("/voice", methods=["GET"])
+@jwt_required()
+def get_voice_profile():
+    gated = _gate()
+    if gated:
+        return gated
+    user_email = get_jwt_identity()
+    from services.voicegraph import style
+    try:
+        return jsonify(style.get_profile(user_email)), 200
+    except Exception as e:
+        logger.error("voicegraph: voice profile failed: %s", e)
+        return jsonify({"error": "Failed to compute voice profile."}), 500
