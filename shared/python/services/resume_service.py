@@ -392,6 +392,19 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             )
             svc.complete_job(job_id, result)
 
+        elif job_type == "vg_authored_resume":
+            # Voice Graph — authored mode (§6.12.5/§6.12.6, the flagship). The user's
+            # frozen facts (Pass A) re-said in their measured voice. A RUNTIME
+            # entailment gate + anti-pattern filter guarantee no fact is added or
+            # dropped; zero survivors falls back to the fact verbatim. Nothing here
+            # trusts LLM output — the builder gates it. Imported lazily (LLM-touching).
+            from services.voicegraph.authored import build_authored_resume
+            result = build_authored_resume(
+                payload.get("user_email", ""),
+                style_dial=payload.get("style_dial", "balanced"),
+            )
+            svc.complete_job(job_id, result)
+
         elif job_type == "upload_parse":
             user_email = payload.get("user_email", "")
             content_hash = payload.get("content_hash", "")

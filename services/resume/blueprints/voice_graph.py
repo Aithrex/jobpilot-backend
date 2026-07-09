@@ -324,6 +324,49 @@ def build_raw_resume_route():
         return jsonify({"error": "Failed to build resume."}), 500
 
 
+@voice_graph_bp.route("/resume/authored", methods=["POST"])
+@jwt_required()
+def build_authored_resume_route():
+    """Authored mode (§6.12.5/§6.12.6) — grounded facts re-said in the user's voice.
+
+    Metered (`authored_resume`): gate the flag, require consent, then charge the
+    quota BEFORE enqueuing any LLM work. The heavy build (generation + RUNTIME
+    entailment gate) runs async; the FE polls GET /api/resume/job/<id>.
+    """
+    gated = _gate()
+    if gated:
+        return gated
+    if _rate_limited("authored", max_requests=15):
+        return jsonify({"error": "Rate limit exceeded. Try again shortly."}), 429
+
+    user_email = get_jwt_identity()
+    if not consent_svc.is_granted(user_email):
+        return jsonify({"error": "consent_required",
+                        "message": "Grant Voice Graph consent before building an authored resume."}), 403
+
+    data = request.get_json(force=True, silent=True) or {}
+    style_dial = data.get("style_dial", "balanced")
+    if style_dial not in ("closest", "balanced", "polished"):
+        style_dial = "balanced"
+
+    # Gate spend BEFORE the LLM work (CLAUDE.md invariant #3).
+    from services import entitlements_service as ent
+    allowed, usage = ent.check_and_increment(user_email, "authored_resume")
+    if not allowed:
+        return ent.upgrade_required_response(user_email, "authored_resume", usage)
+
+    try:
+        from services.resume_service import get_resume_service, ResumeService
+        job_payload = {"user_email": user_email, "style_dial": style_dial}
+        job_id = get_resume_service().create_job("vg_authored_resume", job_payload, user_email=user_email)
+        ResumeService.invoke_async(job_id, "vg_authored_resume", job_payload)
+    except Exception as e:
+        logger.error("voicegraph: failed to enqueue authored resume: %s", e)
+        return jsonify({"error": "Failed to start authored resume build. Please try again."}), 500
+
+    return jsonify({"job_id": job_id}), 202
+
+
 @voice_graph_bp.route("/resume", methods=["GET"])
 @jwt_required()
 def list_authored_resumes():
