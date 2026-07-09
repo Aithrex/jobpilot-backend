@@ -232,6 +232,10 @@ INDEX_SPECS = [
     # === Sponsorship intel (§6.3) — upsert/lookup key is the normalized employer.
     ("sponsorship_signals", [("employer_norm", ASCENDING)],
      {"unique": True, "name": "employer_norm_unique"}),
+
+    # === LinkedIn archive importer (§2.1) — one archive doc per user.
+    ("linkedin_archives", [("user_email", ASCENDING)],
+     {"unique": True, "name": "user_email_unique"}),
 ]
 
 

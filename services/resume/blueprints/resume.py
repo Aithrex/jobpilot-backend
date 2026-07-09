@@ -1717,6 +1717,76 @@ def six_seconds():
 
 
 # ------------------------------------------------------------------
+# LinkedIn archive importer + Referral Finder (§2.1 / §6.11.3)
+# ------------------------------------------------------------------
+@resume_bp.route("/linkedin-archive", methods=["POST"])
+@jwt_required()
+def linkedin_archive_upload():
+    user_email = get_jwt_identity()
+    if get_rate_limiter().is_rate_limited(f"li_archive:{get_client_ip(request)}", max_requests=5, window_seconds=3600):
+        return jsonify({"error": "Rate limit exceeded. Max 5 imports per hour."}), 429
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    f = request.files["file"]
+    if not f.filename or not f.filename.lower().endswith(".zip"):
+        return jsonify({"error": "Upload your LinkedIn data export (.zip)"}), 400
+    zip_bytes = f.read()
+    if len(zip_bytes) > 30 * 1024 * 1024:
+        return jsonify({"error": "File too large (max 30 MB)"}), 400
+    from services import linkedin_archive_service as li
+    try:
+        parsed = li.parse_archive(zip_bytes)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    summary = li.save_archive(user_email, parsed)
+    diff = li.diff_against_resume(user_email, parsed)
+    return jsonify({"summary": summary, "diff": diff}), 200
+
+
+@resume_bp.route("/linkedin-archive/diff", methods=["GET"])
+@jwt_required()
+def linkedin_archive_diff():
+    user_email = get_jwt_identity()
+    from services import linkedin_archive_service as li
+    arc = li.get_archive(user_email)
+    if not arc:
+        return jsonify({"error": "no_archive", "message": "No LinkedIn archive imported yet."}), 404
+    return jsonify(li.diff_against_resume(user_email, arc)), 200
+
+
+@resume_bp.route("/referrals", methods=["GET"])
+@jwt_required()
+def referrals():
+    user_email = get_jwt_identity()
+    from services import entitlements_service as ent
+    if not ent.feature_allowed(user_email, "referral_finder"):
+        return ent.upgrade_required_response(user_email, "referral_finder")
+    company = InputSanitizer.sanitize_string(request.args.get("company", ""), max_length=200)
+    if not company.strip():
+        return jsonify({"error": "company query param required"}), 400
+    from services import referral_finder_service as rf
+    return jsonify({"company": company, "referrals": rf.find_referrals(user_email, company)}), 200
+
+
+@resume_bp.route("/referrals/draft", methods=["POST"])
+@jwt_required()
+def referrals_draft():
+    user_email = get_jwt_identity()
+    from services import entitlements_service as ent
+    if not ent.feature_allowed(user_email, "referral_finder"):
+        return ent.upgrade_required_response(user_email, "referral_finder")
+    body = request.get_json(silent=True) or {}
+    referral, job = body.get("referral") or {}, body.get("job") or {}
+    if not referral.get("position"):
+        return jsonify({"error": "referral.position required"}), 400
+    from services.resume_service import get_resume_service, ResumeService
+    payload = {"user_email": user_email, "referral": referral, "job": job}
+    job_id = get_resume_service().create_job("referral_draft", payload, user_email=user_email)
+    ResumeService.invoke_async(job_id, "referral_draft", payload)
+    return jsonify({"job_id": job_id}), 202
+
+
+# ------------------------------------------------------------------
 # POST /api/resume/download — Generate PDF or DOCX
 # ------------------------------------------------------------------
 

@@ -176,6 +176,7 @@ PLAN_FEATURES: Dict[str, set] = {
         "salary_percentiles",
         "salary_negotiation",
         "post_history",
+        "referral_finder",     # LinkedIn-archive-powered warm referrals (§6.11.3)
     },
 }
 

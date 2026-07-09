@@ -413,6 +413,18 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result = build_six_seconds(payload.get("user_email", ""))
             svc.complete_job(job_id, result)
 
+        elif job_type == "referral_draft":
+            # Referral Finder (§6.11.3) — draft a warm referral ask (PRO). The
+            # service sends the LLM only a role + the sender's own facts; the
+            # connection's name never enters the prompt (third-party PII boundary).
+            from services.referral_finder_service import draft_ask
+            message = draft_ask(
+                payload.get("user_email", ""),
+                payload.get("referral") or {},
+                payload.get("job") or {},
+            )
+            svc.complete_job(job_id, {"message": message})
+
         elif job_type == "upload_parse":
             user_email = payload.get("user_email", "")
             content_hash = payload.get("content_hash", "")
