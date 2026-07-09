@@ -1699,6 +1699,24 @@ def get_job(job_id):
 
 
 # ------------------------------------------------------------------
+# POST /api/resume/six-seconds — Recruiter's Six Seconds (§6.11.2)
+# ------------------------------------------------------------------
+@resume_bp.route("/six-seconds", methods=["POST"])
+@jwt_required()
+def six_seconds():
+    user_email = get_jwt_identity()
+    from services import entitlements_service
+    from services.resume_service import get_resume_service, ResumeService
+    allowed, usage = entitlements_service.check_and_increment(user_email, "six_seconds")
+    if not allowed:
+        return entitlements_service.upgrade_required_response(user_email, "six_seconds", usage)
+    payload = {"user_email": user_email}
+    job_id = get_resume_service().create_job("six_seconds", payload, user_email=user_email)
+    ResumeService.invoke_async(job_id, "six_seconds", payload)
+    return jsonify({"job_id": job_id}), 202
+
+
+# ------------------------------------------------------------------
 # POST /api/resume/download — Generate PDF or DOCX
 # ------------------------------------------------------------------
 

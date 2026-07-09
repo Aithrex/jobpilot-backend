@@ -405,6 +405,14 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             )
             svc.complete_job(job_id, result)
 
+        elif job_type == "six_seconds":
+            # Recruiter's Six Seconds (§6.11.2) — deterministic F-pattern gaze plus
+            # a grounded, honest six-second recruiter read (PRO). The service loads
+            # the resume and never fabricates; output is advisory, never written back.
+            from services.recruiter_gaze_service import build_six_seconds
+            result = build_six_seconds(payload.get("user_email", ""))
+            svc.complete_job(job_id, result)
+
         elif job_type == "upload_parse":
             user_email = payload.get("user_email", "")
             content_hash = payload.get("content_hash", "")
