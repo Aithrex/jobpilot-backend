@@ -275,6 +275,10 @@ INDEX_SPECS = [
     # === Learning §6.6 — cached differentiation analysis (reload without re-spend).
     ("differentiation_analyses", [("user_email", ASCENDING)],
      {"unique": True, "name": "user_email_unique"}),
+    # scheduled_posts: the auto-post 30-min hold; the scheduler scans due ones.
+    ("scheduled_posts", [("status", ASCENDING), ("scheduled_for", ASCENDING)],
+     {"name": "status_scheduled_for"}),
+    ("scheduled_posts", [("user_email", ASCENDING)], {"name": "by_user"}),
 ]
 
 

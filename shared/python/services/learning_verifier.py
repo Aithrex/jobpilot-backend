@@ -498,6 +498,8 @@ def verify_task(user_email: str, path_id: str, task_ref: str, proof: Dict) -> Di
         _record_verification(user_email, path_id, task_ref, result, gap)
     except Exception as e:  # pragma: no cover - persistence is best-effort
         logger.warning("verify_task: could not persist result for %s/%s: %s", user_email, path_id, e)
+    # Let the UI offer "Share this win" the instant a task verifies (no extra call).
+    result["post_draft_available"] = (result.get("status") == STATUS_VERIFIED)
     return result
 
 

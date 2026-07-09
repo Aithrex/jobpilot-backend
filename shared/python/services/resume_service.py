@@ -389,6 +389,16 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result = learning_verifier.build_verify_job(payload)
             svc.complete_job(job_id, result)
 
+        elif job_type == "learning_completion_post":
+            # Learning loop payoff — draft a LinkedIn post for a VERIFIED task
+            # (grounded in the real repo; bandit + cringe filter apply). publish.py
+            # refuses if the task isn't verified.
+            from services.learning import publish
+            result = publish.draft_completion_post(
+                payload.get("user_email", ""), payload.get("path_id", ""), payload.get("task_ref", "")
+            )
+            svc.complete_job(job_id, result)
+
         elif job_type == "event_scrape":
             # Pillar C — pull public event sources, score legitimacy, upsert.
             from services import event_scraper

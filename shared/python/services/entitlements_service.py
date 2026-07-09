@@ -74,6 +74,7 @@ FEATURE_PERIODS = {
     "six_seconds": PERIOD_DAY,         # Recruiter's Six Seconds — §6.11.2
     "differentiation_analysis": PERIOD_DAY,  # Learning §6.6 — market-gap analysis
     "task_verify": PERIOD_DAY,               # Learning §6.6 — proof-of-work verification
+    "completion_post": PERIOD_MONTH,         # Learning §6.6 — verified-win LinkedIn post
 }
 
 PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
@@ -93,6 +94,7 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "six_seconds": 3,             # Recruiter's Six Seconds — §6.11.2
         "differentiation_analysis": 1,  # Learning §6.6
         "task_verify": 5,
+        "completion_post": 1,
         # Structural caps (checked against live state, not time-windowed):
         "batch_tailor_max": 0,        # batch tailoring disabled on free
         "active_learning_paths": 1,
@@ -114,6 +116,7 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "six_seconds": 30,
         "differentiation_analysis": 10,
         "task_verify": 50,
+        "completion_post": 8,
         "batch_tailor_max": 10,
         "active_learning_paths": 5,
         "writing_samples": 5,
@@ -134,6 +137,7 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "six_seconds": 100,
         "differentiation_analysis": 100,
         "task_verify": None,
+        "completion_post": None,
         "batch_tailor_max": 25,
         "active_learning_paths": None,
         "writing_samples": 50,        # soft cap; effectively unlimited for a real user
@@ -185,6 +189,7 @@ PLAN_FEATURES: Dict[str, set] = {
         "salary_negotiation",
         "post_history",
         "referral_finder",     # LinkedIn-archive-powered warm referrals (§6.11.3)
+        "auto_post",           # Learning §6.6 — auto-publish a verified-win post
     },
 }
 

@@ -1,0 +1,4 @@
+# learning microservice (ADR-003) — service-specific deps only.
+# All common + heavy deps (Flask, pymongo, boto3, cryptography, PyJWT, requests,
+# apig-wsgi, aws-xray-sdk) are provided by the shared Lambda layer
+# (shared/python/requirements.txt). None unique here.

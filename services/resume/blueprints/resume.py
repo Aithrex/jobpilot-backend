@@ -3696,6 +3696,71 @@ def learning_task_verify(path_id, task_ref):
     return jsonify({"job_id": job_id}), 202
 
 
+# --- completion loop: GitHub sync -> verified -> LinkedIn post (auto/manual) ---
+@resume_bp.route("/learning/paths/<path_id>/task/<task_ref>/github", methods=["POST"])
+@jwt_required()
+def learning_task_github(path_id, task_ref):
+    user_email = get_jwt_identity()
+    task_ref = InputSanitizer.sanitize_string(task_ref, max_length=64)
+    from services.learning import github_sync
+    try:
+        return jsonify(github_sync.ensure_task_repo(user_email, path_id, task_ref)), 200
+    except Exception as e:
+        logger.error("learning github sync error: %s", e)
+        return jsonify({"error": "Failed to sync GitHub repo"}), 500
+
+
+@resume_bp.route("/learning/paths/<path_id>/task/<task_ref>/post", methods=["POST"])
+@jwt_required()
+def learning_task_post(path_id, task_ref):
+    user_email = get_jwt_identity()
+    task_ref = InputSanitizer.sanitize_string(task_ref, max_length=64)
+    from services import entitlements_service
+    from services.learning import publish
+    from services.resume_service import get_resume_service, ResumeService
+    # Never draft a post for unverified work (checked before any LLM spend).
+    if not publish.is_task_verified(user_email, path_id, task_ref):
+        return jsonify({"error": "not_verified", "message": "Verify this task before sharing it."}), 400
+    allowed, usage = entitlements_service.check_and_increment(user_email, "completion_post")
+    if not allowed:
+        return entitlements_service.upgrade_required_response(user_email, "completion_post", usage)
+    payload = {"user_email": user_email, "path_id": path_id, "task_ref": task_ref}
+    job_id = get_resume_service().create_job("learning_completion_post", payload, user_email=user_email)
+    ResumeService.invoke_async(job_id, "learning_completion_post", payload)
+    return jsonify({"job_id": job_id}), 202
+
+
+@resume_bp.route("/learning/posts/<draft_id>/publish", methods=["POST"])
+@jwt_required()
+def learning_post_publish(draft_id):
+    user_email = get_jwt_identity()
+    draft_id = InputSanitizer.sanitize_string(draft_id, max_length=64)
+    body = request.get_json(silent=True) or {}
+    mode = (body.get("mode") or "manual").strip().lower()
+    try:
+        variant_index = int(body.get("variant_index") or 0)
+    except (TypeError, ValueError):
+        variant_index = 0
+    from services import entitlements_service
+    from services.learning import publish
+    if mode == "auto" and not entitlements_service.feature_allowed(user_email, "auto_post"):
+        return entitlements_service.upgrade_required_response(user_email, "auto_post")
+    try:
+        return jsonify(publish.publish_completion_post(user_email, draft_id, variant_index, mode)), 200
+    except Exception as e:
+        logger.error("learning post publish error: %s", e)
+        return jsonify({"error": "Failed to publish post"}), 500
+
+
+@resume_bp.route("/learning/posts/<schedule_id>/cancel", methods=["POST"])
+@jwt_required()
+def learning_post_cancel(schedule_id):
+    user_email = get_jwt_identity()
+    schedule_id = InputSanitizer.sanitize_string(schedule_id, max_length=64)
+    from services.learning import publish
+    return jsonify(publish.cancel_scheduled_post(user_email, schedule_id)), 200
+
+
 @resume_bp.route("/learning/paths", methods=["GET"])
 @jwt_required()
 def learning_paths_list():
