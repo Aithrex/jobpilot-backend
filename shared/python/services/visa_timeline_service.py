@@ -88,6 +88,15 @@ def normalize_profile(raw: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "h1b_lottery_filed": bool(raw.get("h1b_lottery_filed", False)),
         "current_employer_e_verified": bool(raw.get("current_employer_e_verified", False)),
+        # Cumulative days unemployed on OPT so far (self-reported by the student
+        # / their SEVIS record). Nullable — we NEVER guess this number. Bounded
+        # to a sane range so a typo can't produce an absurd countdown.
+        "unemployment_days_used": (
+            int(raw["unemployment_days_used"])
+            if isinstance(raw.get("unemployment_days_used"), (int, float))
+            and 0 <= int(raw["unemployment_days_used"]) <= 400
+            else None
+        ),
         # User-editable note (free text) — surfaces in the dashboard.
         "notes": (raw.get("notes") or "").strip()[:1000],
     }
@@ -303,3 +312,95 @@ def compute_timeline(profile: Dict[str, Any], today: Optional[date] = None) -> L
 
 def serialize_timeline(milestones: List[Milestone]) -> List[Dict[str, Any]]:
     return [asdict(m) for m in milestones]
+
+
+# ---------------------------------------------------------------------------
+# OPT Clock — the single most anxiety-defining fact for an F-1 student.
+#
+# A narrow, calm projection of the profile that answers ONE question:
+# "How much unemployment runway do I have left on OPT before I fall out of
+# status?" 90 cumulative days on standard post-completion OPT; 150 cumulative
+# days once on the STEM 24-month extension.
+#
+# Hard rules:
+#   · We NEVER invent unemployment_days_used. If the student hasn't told us,
+#     it's null and every derived number is null too — the UI asks.
+#   · No fabricated dates: opt_ead_start/end/stem come straight from the
+#     profile; None when unknown.
+# ---------------------------------------------------------------------------
+
+OPT_UNEMPLOYMENT_LIMIT_PRE_STEM = 90    # standard post-completion OPT
+OPT_UNEMPLOYMENT_LIMIT_STEM = 150       # cumulative once on STEM 24-month ext.
+
+# Runway thresholds (days) that drive the calm/watch/urgent treatment.
+OPT_CLOCK_URGENT_AT = 20
+OPT_CLOCK_WATCH_AT = 45
+
+OPT_CLOCK_DISCLAIMER = "This is not legal advice. Confirm every date with your DSO."
+
+
+def opt_unemployment_limit(profile: Dict[str, Any]) -> int:
+    """90 days on standard OPT; 150 once the student is on the STEM extension."""
+    status = profile.get("visa_status") or "Other"
+    return OPT_UNEMPLOYMENT_LIMIT_STEM if status == "F1-STEM-OPT" else OPT_UNEMPLOYMENT_LIMIT_PRE_STEM
+
+
+def compute_opt_clock(profile: Dict[str, Any], today: Optional[date] = None) -> Dict[str, Any]:
+    """Return a calm, precise OPT unemployment-clock payload for the UI.
+
+    All numbers are either grounded in the saved profile or explicitly null —
+    nothing here is estimated. The caller (blueprint) does no math of its own.
+    """
+    today = today or date.today()
+
+    status = profile.get("visa_status") or "Other"
+    opt_start = _parse_iso(profile.get("opt_start_date"))
+    opt_end = _parse_iso(profile.get("opt_end_date"))
+    stem_end = _parse_iso(profile.get("stem_extension_end_date"))
+    stem_eligible = bool(profile.get("stem_degree"))
+
+    used = profile.get("unemployment_days_used")
+    used = int(used) if isinstance(used, (int, float)) else None
+
+    limit = opt_unemployment_limit(profile)
+    days_remaining = (limit - used) if used is not None else None
+
+    # A profile is "present" for OPT-clock purposes once the student is on OPT
+    # or has told us at least one OPT EAD date. Otherwise the UI shows a gentle
+    # prompt rather than a broken zero-state.
+    has_profile = bool(
+        status in ("F1-OPT", "F1-STEM-OPT") or opt_start or opt_end
+    )
+
+    # The 2-3 dates that actually matter, in chronological order of relevance.
+    key_dates: List[Dict[str, str]] = []
+    if opt_start:
+        key_dates.append({"label": "OPT EAD start", "date": opt_start.isoformat()})
+    if opt_end:
+        key_dates.append({"label": "OPT EAD end", "date": opt_end.isoformat()})
+    if stem_end and (status == "F1-STEM-OPT" or stem_eligible):
+        key_dates.append({"label": "STEM OPT end", "date": stem_end.isoformat()})
+
+    # Status band drives a restrained visual treatment — never an alarm.
+    if days_remaining is None:
+        status_band = "ok"
+    elif days_remaining <= OPT_CLOCK_URGENT_AT:
+        status_band = "urgent"
+    elif days_remaining <= OPT_CLOCK_WATCH_AT:
+        status_band = "watch"
+    else:
+        status_band = "ok"
+
+    return {
+        "has_profile": has_profile,
+        "opt_ead_start": opt_start.isoformat() if opt_start else None,
+        "opt_ead_end": opt_end.isoformat() if opt_end else None,
+        "stem_eligible": stem_eligible,
+        "stem_ead_end": stem_end.isoformat() if stem_end else None,
+        "unemployment_days_used": used,
+        "unemployment_days_limit": limit,
+        "days_remaining": days_remaining,
+        "key_dates": key_dates,
+        "status_band": status_band,
+        "disclaimer": OPT_CLOCK_DISCLAIMER,
+    }

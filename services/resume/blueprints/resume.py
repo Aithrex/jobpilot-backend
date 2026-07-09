@@ -3238,6 +3238,30 @@ def get_visa_timeline():
         return jsonify({"error": "Failed to compute timeline"}), 500
 
 
+@resume_bp.route("/opt-clock", methods=["GET"])
+@jwt_required()
+def get_opt_clock():
+    """OPT Clock — a calm, precise projection of the F-1 student's unemployment
+    runway on OPT (90 days pre-STEM / 150 on the STEM extension).
+
+    Reuses the visa_timeline engine for all math; this route only loads the
+    saved profile and serializes. `unemployment_days_used` (and therefore
+    `days_remaining`, `status_band`) may be null when the student hasn't told
+    us their count yet — the UI asks rather than guessing. We never invent
+    numbers or dates.
+    """
+    user_email = get_jwt_identity()
+    try:
+        from services.visa_timeline_service import normalize_profile, compute_opt_clock
+        db = DBConnect().get_db()
+        doc = db.visa_profiles.find_one({"user_email": user_email}) or {}
+        profile = normalize_profile(doc)
+        return jsonify(compute_opt_clock(profile)), 200
+    except Exception as e:
+        logger.exception("opt-clock error: %s", e)
+        return jsonify({"error": "Failed to compute OPT clock"}), 500
+
+
 
 # ------------------------------------------------------------------
 # Beta Lab features — Morning brief, JD reverse-search, A/B telemetry.
