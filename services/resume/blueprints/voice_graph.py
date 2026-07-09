@@ -170,8 +170,15 @@ def save_sample():
 
     finalize = bool(data.get("finalize", False))
 
+    # Was this sample already finalized? (Avoids re-enqueuing extraction on repeat
+    # finalize calls.) Only relevant when updating an existing sample.
+    prior_ready = False
+    if finalize and isinstance(sample_id, str):
+        existing = sample_svc.get_sample(user_email, sample_id)
+        prior_ready = bool(existing and existing.get("status") == "ready")
+
     # Plan cap only applies when a NEW sample is being finalized into "ready".
-    if finalize:
+    if finalize and not prior_ready:
         limit, capped = _sample_cap(user_email)
         if capped:
             current_ready = sample_svc.count_ready(user_email, exclude_sample_id=sample_id if isinstance(sample_id, str) else None)
@@ -199,7 +206,18 @@ def save_sample():
         logger.error("voicegraph: save_sample failed: %s", e)
         return jsonify({"error": "Failed to save writing sample. Please try again."}), 500
 
-    # VG Step 2 will enqueue graph extraction here when finalize and status=='ready'.
+    # A newly-finalized sample kicks off async graph extraction (§6.12.3). The FE
+    # can poll /api/resume/job/<extraction_job_id> to reveal the graph when ready.
+    if finalize and not prior_ready and result.get("status") == "ready":
+        try:
+            from services.resume_service import get_resume_service, ResumeService
+            job_payload = {"sample_id": result["sample_id"], "user_email": user_email}
+            job_id = get_resume_service().create_job("vg_extract", job_payload, user_email=user_email)
+            ResumeService.invoke_async(job_id, "vg_extract", job_payload)
+            result["extraction_job_id"] = job_id
+        except Exception as e:
+            logger.warning("voicegraph: failed to enqueue extraction: %s", e)
+
     return jsonify(result), 200
 
 
@@ -244,3 +262,17 @@ def delete_sample(sample_id):
     if not ok:
         return jsonify({"error": "sample_not_found"}), 404
     return jsonify({"deleted": True, "sample_id": sample_id}), 200
+
+
+# ------------------------------------------------------------------
+# GET /api/resume/voice-graph/graph — the user's knowledge graph (reveal)
+# ------------------------------------------------------------------
+@voice_graph_bp.route("/graph", methods=["GET"])
+@jwt_required()
+def get_graph():
+    gated = _gate()
+    if gated:
+        return gated
+    user_email = get_jwt_identity()
+    from services.voicegraph import store
+    return jsonify(store.get_graph(user_email)), 200

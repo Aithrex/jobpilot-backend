@@ -382,6 +382,16 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result = post_drafting_service.draft_post(payload)
             svc.complete_job(job_id, result)
 
+        elif job_type == "vg_extract":
+            # Voice Graph — extract a grounded knowledge graph from a finalized
+            # writing sample (§6.12.3). Grounding, span-verification, scrubbing and
+            # persistence all live in the service; nothing here trusts LLM output.
+            from services.voicegraph.extract import extract_graph_from_sample
+            result = extract_graph_from_sample(
+                payload.get("user_email", ""), payload.get("sample_id", "")
+            )
+            svc.complete_job(job_id, result)
+
         elif job_type == "upload_parse":
             user_email = payload.get("user_email", "")
             content_hash = payload.get("content_hash", "")
