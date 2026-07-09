@@ -1838,6 +1838,60 @@ def pipeline_cohort():
 
 
 # ------------------------------------------------------------------
+# Signal loop — post performance metrics feed the bandit (§6.7 / §2.2)
+# ------------------------------------------------------------------
+@resume_bp.route("/posts/<post_id>/metrics", methods=["POST"])
+@jwt_required()
+def record_post_metrics(post_id):
+    user_email = get_jwt_identity()
+    post_id = InputSanitizer.sanitize_string(post_id, max_length=120)
+    body = request.get_json(silent=True) or {}
+    from services import post_metrics_service
+    result = post_metrics_service.record_metric(
+        user_email, post_id, body.get("source", "user_reported"),
+        body.get("metrics") or {}, spec=body.get("spec"),
+    )
+    return jsonify(result), 200
+
+
+@resume_bp.route("/posts/<post_id>/metrics", methods=["GET"])
+@jwt_required()
+def get_post_metrics(post_id):
+    get_jwt_identity()
+    post_id = InputSanitizer.sanitize_string(post_id, max_length=120)
+    from services import post_metrics_service
+    return jsonify({"post_id": post_id, "reward": post_metrics_service.reward_for(post_id)}), 200
+
+
+# ------------------------------------------------------------------
+# Notification preferences (§2.5) — per-channel + per-event toggles
+# ------------------------------------------------------------------
+@resume_bp.route("/notifications/prefs", methods=["GET"])
+@jwt_required()
+def get_notification_prefs():
+    from services.notifications import service as notify
+    return jsonify(notify.get_prefs(get_jwt_identity())), 200
+
+
+@resume_bp.route("/notifications/prefs", methods=["PUT"])
+@jwt_required()
+def update_notification_prefs():
+    from services.notifications import service as notify
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(notify.set_prefs(get_jwt_identity(), body)), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@resume_bp.route("/notifications/unsubscribe", methods=["POST"])
+@jwt_required()
+def unsubscribe_notifications():
+    from services.notifications import service as notify
+    return jsonify(notify.set_unsubscribed(get_jwt_identity(), True)), 200
+
+
+# ------------------------------------------------------------------
 # POST /api/resume/download — Generate PDF or DOCX
 # ------------------------------------------------------------------
 

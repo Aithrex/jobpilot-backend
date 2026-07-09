@@ -62,6 +62,18 @@ def draft_post(payload: Dict) -> Dict:
     relation = (payload.get("relation") or "attended").lower()
     achievement = (payload.get("achievement") or "").strip()
 
+    # Bandit (§6.7): pick a post archetype to bias generation. The cringe
+    # guardrail below runs regardless of reward, so the bandit can never converge
+    # on engagement bait.
+    spec = {}
+    archetype_hint = ""
+    try:
+        from services import post_bandit_service
+        spec = post_bandit_service.pick_variant_spec()
+        archetype_hint = post_bandit_service.describe_spec(spec)
+    except Exception:
+        pass
+
     # Event context (optional).
     event_ctx = ""
     won_proven = False
@@ -102,11 +114,28 @@ def draft_post(payload: Dict) -> Dict:
         "line breaks ok, 1 light emoji max), and 3-5 relevant hashtags. Vary structure across the three "
         "(e.g. story, lessons-learned list, bold-claim+proof).\n\n"
         f"{event_ctx}\n{('Achievement: ' + achievement) if achievement else ''}\n{resume_ctx}\n\n"
+        f"{archetype_hint}\n\n"
         f"{integrity}\n\n"
         'Return strict JSON: {"variants": [{"angle": "...", "hook": "...", "text": "...", "hashtags": ["..."]}]}'
     )
     res = gemini_json(prompt, max_tokens=2500, temperature=0.7, model=GEMINI_PRO, schema=POST_SCHEMA) or {}
     variants = res.get("variants") or []
+
+    # Cringe guardrail (§6.7): drop engagement-bait/cringe variants before they
+    # reach the user, regardless of any bandit reward. If everything is filtered we
+    # keep the originals rather than return an empty draft.
+    try:
+        from services import cringe_classifier
+        filtered = cringe_classifier.filter_variants(variants)
+        if filtered:
+            variants = filtered
+    except Exception:
+        pass
+    # Tag each variant with the archetype spec so post_metrics can attribute reward.
+    if spec:
+        for v in variants:
+            if isinstance(v, dict):
+                v["spec"] = spec
 
     draft_id = str(uuid.uuid4())
     _db().post_drafts.insert_one({
@@ -116,6 +145,7 @@ def draft_post(payload: Dict) -> Dict:
         "audience": audience,
         "relation": relation,
         "variants": variants,
+        "spec": spec,
         "status": "draft",
         "created_at": _now(),
     })

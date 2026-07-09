@@ -240,6 +240,20 @@ INDEX_SPECS = [
     # === Pipeline intel (§6.8) — ghosts() filters {user_email, application.status}.
     ("tailoring_records", [("user_email", ASCENDING), ("application.status", ASCENDING)],
      {"name": "user_email_app_status"}),
+
+    # === Signal loop (§6.7) — bandit arms + post performance metrics.
+    ("bandit_arms", [("arm_id", ASCENDING)], {"unique": True, "name": "arm_id_unique"}),
+    ("post_metrics", [("post_id", ASCENDING), ("recorded_at", DESCENDING)],
+     {"name": "post_id_recorded_at"}),
+
+    # === Notifications (§2.5) — prefs, per-day cap log (unique is REQUIRED for the
+    # atomic proactive-cap reserve), and the channel consent ledger.
+    ("notification_prefs", [("user_email", ASCENDING)],
+     {"unique": True, "name": "user_email_unique"}),
+    ("notification_log", [("user_email", ASCENDING), ("day", ASCENDING)],
+     {"unique": True, "name": "user_email_day_unique"}),
+    ("notification_consents", [("user_email", ASCENDING), ("scope", ASCENDING)],
+     {"unique": True, "name": "user_email_scope_unique"}),
 ]
 
 
