@@ -252,8 +252,30 @@ def set_unsubscribed(user_email: str, unsubscribed: bool = True) -> Dict[str, An
     return get_prefs(email)
 
 
+_PUSH_HOSTS = (
+    "push.apple.com", "fcm.googleapis.com", "android.googleapis.com",
+    "notify.windows.com", "push.services.mozilla.com",
+)
+
+
+def _allowed_push_endpoint(endpoint: str) -> bool:
+    """SSRF guard: only accept HTTPS endpoints on known push-service hosts, so a
+    stored subscription can't point the server at an internal/link-local address."""
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(endpoint)
+        host = (p.hostname or "").lower()
+        if p.scheme != "https" or not host:
+            return False
+        return any(host == h or host.endswith("." + h) for h in _PUSH_HOSTS)
+    except Exception:
+        return False
+
+
 def _clean_subscription(sub: Dict[str, Any]) -> Dict[str, Any]:
     endpoint = InputSanitizer.sanitize_string(str(sub.get("endpoint") or ""), 1000)
+    if endpoint and not _allowed_push_endpoint(endpoint):
+        endpoint = ""  # reject non-push-service / private-range endpoints (SSRF)
     keys = sub.get("keys") if isinstance(sub.get("keys"), dict) else {}
     return {
         "endpoint": endpoint,

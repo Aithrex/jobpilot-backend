@@ -114,12 +114,14 @@ def record_metric(user_email: str, post_id: str, source: str,
         raise ValueError(f"source must be one of {' | '.join(VALID_SOURCES)}")
 
     clean = _clean_metrics(metrics)
+    # A client-supplied `spec` is deliberately IGNORED — the bandit spec is read
+    # server-side from the user's own post_drafts (see _spec_for), so a caller can
+    # never inject a chosen archetype to poison the shared bandit.
     doc = {
         "post_id": post_id,
         "user_email": user_email,
         "source": source,
         "metrics": clean,
-        "spec": spec if isinstance(spec, dict) and spec else None,
         "recorded_at": _now(),
     }
     _db().post_metrics.insert_one(doc)
@@ -127,19 +129,22 @@ def record_metric(user_email: str, post_id: str, source: str,
         "post_id": post_id,
         "source": source,
         "metrics": clean,
-        "reward": reward_for(post_id),
+        "reward": reward_for(post_id, user_email),
     }
 
 
 # --------------------------------------------------------------------------
 # Reward
 # --------------------------------------------------------------------------
-def _best_metrics(post_id: str) -> Dict[str, int]:
+def _best_metrics(post_id: str, _bm_user_email: Optional[str] = None) -> Dict[str, int]:
     """Latest metrics for a post, preferring the more trustworthy source.
 
     Takes the most-recent doc per source (docs sorted newest-first), then prefers
     extension_observed over user_reported."""
-    docs = list(_db().post_metrics.find({"post_id": str(post_id)}).sort("recorded_at", -1))
+    _q = {"post_id": str(post_id)}
+    if _bm_user_email:
+        _q["user_email"] = _bm_user_email
+    docs = list(_db().post_metrics.find(_q).sort("recorded_at", -1))
     latest_by_source: Dict[str, Dict[str, int]] = {}
     for d in docs:
         s = d.get("source")
@@ -167,25 +172,31 @@ def _normalize(m: Dict[str, int]) -> float:
     return max(0.0, min(1.0, reward))
 
 
-def reward_for(post_id: str) -> float:
-    """Normalized engagement reward in [0,1] for a post (0.0 if no metrics yet)."""
+def reward_for(post_id: str, user_email: Optional[str] = None) -> float:
+    """Normalized engagement reward in [0,1] for a post (0.0 if no metrics yet).
+    Scoped to `user_email` when given so foreign metric rows can't inflate it."""
     post_id = str(post_id or "")
     if not post_id:
         return 0.0
-    docs_exist = _db().post_metrics.find_one({"post_id": post_id}, {"_id": 1})
-    if not docs_exist:
+    q = {"post_id": post_id}
+    if user_email:
+        q["user_email"] = user_email
+    if not _db().post_metrics.find_one(q, {"_id": 1}):
         return 0.0
-    return _normalize(_best_metrics(post_id))
+    return _normalize(_best_metrics(post_id, user_email))
 
 
 def _spec_for(post_id: str) -> Optional[Dict[str, str]]:
-    """The bandit spec associated with a post (most recent non-null), or None."""
-    doc = _db().post_metrics.find_one(
-        {"post_id": str(post_id), "spec": {"$ne": None}},
-        sort=[("recorded_at", -1)],
-    )
+    """The bandit spec for a post, read from the SERVER-authored post_drafts doc
+    (tamper-proof — never from client-submitted metrics)."""
+    doc = _db().post_drafts.find_one({"draft_id": str(post_id)}, {"spec": 1})
     spec = (doc or {}).get("spec")
     return spec if isinstance(spec, dict) and spec else None
+
+
+def _owner_for(post_id: str) -> Optional[str]:
+    doc = _db().post_drafts.find_one({"draft_id": str(post_id)}, {"user_email": 1})
+    return (doc or {}).get("user_email")
 
 
 # --------------------------------------------------------------------------
@@ -200,10 +211,12 @@ def update_bandit_for(post_id: str) -> Dict[str, Any]:
     from services import post_bandit_service
 
     post_id = str(post_id or "")
-    reward = reward_for(post_id)
     spec = _spec_for(post_id)
     if not spec:
-        return {"post_id": post_id, "reward": reward, "applied": False, "reason": "no_spec"}
+        return {"post_id": post_id, "reward": 0.0, "applied": False, "reason": "no_spec"}
+    # Owner-scoped reward: only the post owner's own metric rows count, so a foreign
+    # writer cannot inflate the reward that trains the shared bandit.
+    reward = reward_for(post_id, _owner_for(post_id))
     res = post_bandit_service.update(spec, reward, post_id=post_id)
     return {
         "post_id": post_id,

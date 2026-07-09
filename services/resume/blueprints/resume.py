@@ -1772,6 +1772,8 @@ def referrals():
 @jwt_required()
 def referrals_draft():
     user_email = get_jwt_identity()
+    if get_rate_limiter().is_rate_limited(f"referral_draft:{user_email}", max_requests=30, window_seconds=3600):
+        return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
     from services import entitlements_service as ent
     if not ent.feature_allowed(user_email, "referral_finder"):
         return ent.upgrade_required_response(user_email, "referral_finder")
@@ -1844,12 +1846,15 @@ def pipeline_cohort():
 @jwt_required()
 def record_post_metrics(post_id):
     user_email = get_jwt_identity()
+    if get_rate_limiter().is_rate_limited(f"post_metrics:{user_email}", max_requests=60, window_seconds=3600):
+        return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
     post_id = InputSanitizer.sanitize_string(post_id, max_length=120)
     body = request.get_json(silent=True) or {}
     from services import post_metrics_service
+    # `spec` is not accepted from the client — the bandit spec is read server-side.
     result = post_metrics_service.record_metric(
         user_email, post_id, body.get("source", "user_reported"),
-        body.get("metrics") or {}, spec=body.get("spec"),
+        body.get("metrics") or {},
     )
     return jsonify(result), 200
 
@@ -1857,10 +1862,10 @@ def record_post_metrics(post_id):
 @resume_bp.route("/posts/<post_id>/metrics", methods=["GET"])
 @jwt_required()
 def get_post_metrics(post_id):
-    get_jwt_identity()
+    user_email = get_jwt_identity()
     post_id = InputSanitizer.sanitize_string(post_id, max_length=120)
     from services import post_metrics_service
-    return jsonify({"post_id": post_id, "reward": post_metrics_service.reward_for(post_id)}), 200
+    return jsonify({"post_id": post_id, "reward": post_metrics_service.reward_for(post_id, user_email)}), 200
 
 
 # ------------------------------------------------------------------

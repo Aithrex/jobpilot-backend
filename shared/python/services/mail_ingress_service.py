@@ -463,8 +463,10 @@ def classify(from_domain: str, subject: str, body_text: str) -> Dict[str, Any]:
     # hallucination. We don't reject outright (the status may still be right),
     # but we drop the fake quote and cap confidence below the auto-apply bar so
     # a fabricated sentence can NEVER trigger a silent status change.
-    if status and evidence and not _locate(evidence, body_text):
-        logger.info("mail-ingress: ungrounded evidence quote — capping confidence")
+    if status and (not evidence or not _locate(evidence, body_text)):
+        # Missing OR ungrounded evidence: a status can NEVER silently auto-transition
+        # without a real, grounded quote from the email body.
+        logger.info("mail-ingress: missing/ungrounded evidence — capping confidence")
         evidence = ""
         confidence = min(confidence, _UNGROUNDED_CONFIDENCE_CAP)
 

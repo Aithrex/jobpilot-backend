@@ -260,6 +260,12 @@ def update_quota(email):
 @admin_bp.route("/user/<path:email>", methods=["GET"])
 @admin_required
 def user_detail(email):
+    # This legacy route returns full PII; audit every reveal so it can't bypass the
+    # §6.9 audited-access control (admins are trusted, but access is attributable).
+    try:
+        ops.write_audit(get_jwt_identity(), "view_user_pii", email)
+    except Exception:
+        pass
     db = _db()
     u = db.users.find_one({"email": email})
     if not u:

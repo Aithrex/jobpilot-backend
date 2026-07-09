@@ -128,7 +128,8 @@ def _record_fields() -> Dict[str, int]:
         "application.applied_at": 1,
         "application.updated_at": 1,
         "application.interview_dates": 1,
-        "application.recruiter_email": 1,
+        # recruiter_email intentionally NOT projected — it is third-party PII the
+        # cohort math never uses, and it must not enter the cross-user scan.
         "ats_scores.overall": 1,
     }
 
