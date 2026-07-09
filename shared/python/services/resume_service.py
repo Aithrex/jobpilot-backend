@@ -1042,6 +1042,18 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result["used_user_apify_key"] = bool(user_key)
             svc.complete_job(job_id, result)
 
+        elif job_type == "account_purge":
+            # GDPR Art.17 / CCPA erasure (AUDIT-P1-004). Heavy cross-store
+            # cascade — deletes every user-keyed doc across ~50 collections,
+            # purges the user's S3 objects, best-effort revokes Gmail/GitHub/
+            # LinkedIn tokens. Idempotent + fail-soft per store, so Lambda's
+            # at-least-once redelivery is safe. exclude_job_id keeps THIS job
+            # row alive so the client can still poll its completion.
+            from services.account_service import hard_purge
+            user_email = payload["user_email"]
+            result = hard_purge(user_email, exclude_job_id=job_id)
+            svc.complete_job(job_id, result)
+
         else:
             svc.fail_job(job_id, f"Unknown job type: {job_type}")
 

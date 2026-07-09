@@ -221,6 +221,11 @@ def login():
     if not user:
         return invalid
 
+    if user.get("is_deleted"):
+        # Account is soft-deleted and pending erasure (AUDIT-P1-004). Refuse
+        # re-auth so it can't be resurrected mid-purge. 403, never 401.
+        return jsonify({"error": "This account has been closed."}), 403
+
     if _is_locked(user):
         return jsonify({"error": "Account temporarily locked due to failed attempts. Try again later."}), 429
 
@@ -308,6 +313,46 @@ def update_preferences():
 @jwt_required()
 def verify():
     return jsonify({"email": get_jwt_identity(), "valid": True}), 200
+
+
+@auth_bp.route("/account", methods=["DELETE"])
+@jwt_required()
+def delete_account():
+    """Erase the caller's account — GDPR Art.17 / CCPA (AUDIT-P1-004).
+
+    Requires an explicit {"confirm": "DELETE"} body. Soft-deletes synchronously
+    (flags the users doc + clears reset tokens) so the client can log out at
+    once, then enqueues the async hard purge on the resume Lambda. The client
+    polls GET /api/resume/job/<job_id>. A missing/wrong confirmation is a 400 —
+    never 401 (401 is reserved for a genuinely bad token, enforced by
+    @jwt_required).
+    """
+    email = get_jwt_identity()
+    data = request.get_json(force=True, silent=True) or {}
+    if str(data.get("confirm", "")).strip() != "DELETE":
+        return jsonify({
+            "error": "confirmation_required",
+            "message": 'Send {"confirm": "DELETE"} to erase your account.',
+        }), 400
+
+    from services import account_service
+    from services.resume_service import get_resume_service, ResumeService
+
+    # Phase 1: neutralize now (login-blocking flag + kill pending reset tokens).
+    account_service.soft_delete(email)
+
+    # Phase 2: enqueue the heavy purge. invoke_async rewrites -auth- -> -resume-,
+    # so this runs on the resume Lambda (the only one wired for long jobs).
+    payload = {"user_email": email}
+    job_id = get_resume_service().create_job("account_purge", payload, email)
+    ResumeService.invoke_async(job_id, "account_purge", payload)
+
+    logger.info("account deletion requested; purge job %s enqueued", job_id)
+    return jsonify({
+        "deleted": True,
+        "job_id": job_id,
+        "message": "Your account is being erased.",
+    }), 200
 
 
 # ---------------------------------------------------------------------------
