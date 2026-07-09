@@ -38,6 +38,14 @@ below blocks the code that ships around it.
 | Mail-ingress Track A (§2.4) | A receiving domain `inbox.<domain>` (MX → SES inbound) + an SES receipt rule → SNS → a signature-verified `POST /api/mail-inbound/ses` Lambda (new prefix = external Terraform route). Set `MAIL_INGRESS_DOMAIN` + flip `MAIL_INGRESS_ENABLED=true`. Nightly `purge_expired()` schedule. Default OFF → the 3 FE routes 404. |
 | Billing / Stripe (§6.10) | Add `stripe>=9.0.0` and `PyYAML>=6.0` to `shared/python/requirements.txt`; package `config/` into the layer (or set `PLANS_YAML_PATH`) — until then `plan_catalog` falls back to the entitlements matrix (still correct). Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PRO/CAREER`, and `BILLING_ENFORCEMENT=true`; register `POST /api/billing/webhook` in Stripe for `checkout.session.completed` / `customer.subscription.*` / `invoice.payment_failed`. Dark until then (503). |
 
+## Learning loop (§6.6) — gates
+
+| Step | What |
+|---|---|
+| Auto-post scheduler | `learning/publish.py` schedules a verified-win LinkedIn post 30 min out (cancellable). Nothing fires it yet — add an EventBridge daily/5-min rule → a worker that calls `publish.send_scheduled_post` for `scheduled_posts` where `status=="scheduled" and scheduled_for<=now`. Until then, auto-post = scheduled-but-not-sent (honest, never a surprise). Manual publish works today. |
+| Extract the `learning` Lambda (optional, ADR-003) | The `services/learning/` skeleton is deploy-ready + inert. To make it its own service: (1) add `learning: ['services/learning/**']` to `.github/workflows/deploy.yml` filters + the resolve step; (2) add `learning = { routes = ["/api/learning"], memory = 1024, timeout = 60 }` to `infra/terraform/variables.tf` `service_config` (the `for_each` auto-creates the function + `ANY /api/learning` + `/{proxy+}` routes); `terraform apply`. Keep async learning routes proxied via resume, or give the learning handler its own self-invoke branch. |
+| Indexes | `python scripts/migrate_indexes.py` also creates `differentiation_analyses`, `scheduled_posts`, and the graph/learning indexes. |
+
 ## Deploy note
 Both repos auto-deploy `main` on push. Backend deploy is path-scoped: `shared/**`
 redeploys all four Lambdas; `services/<svc>/**` redeploys that one. The only
