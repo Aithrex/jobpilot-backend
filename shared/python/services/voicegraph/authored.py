@@ -355,15 +355,15 @@ def _gen_candidates(bullet_text: str, profile: Dict[str, Any],
     instructions = _GEN_INSTRUCTIONS.format(
         k=K_CANDIDATES, banned=banned_str, max_words=MAX_WORDS,
     )
+    # Instructions in `system`; only untrusted data (fact + style + samples) in user.
     prompt = (
-        f"{instructions}\n\n"
         f"<fact>\n{bullet_text}\n</fact>\n\n"
         f"<style>\n{description}\nVerbs this person actually uses: {verbs}\n</style>\n\n"
         f"<writing_samples>\n{samples_blob}\n</writing_samples>"
     )
     try:
         out = gemini_json(
-            prompt=prompt, model=GEMINI_PRO, temperature=0.5,
+            prompt=prompt, system=instructions, model=GEMINI_PRO, temperature=0.5,
             max_tokens=_GEN_MAX_TOKENS, schema=_GEN_SCHEMA,
         ) or {}
     except Exception as e:
@@ -399,13 +399,12 @@ def _judge_entailment(bullet_text: str, candidates: List[str]) -> List[str]:
         return []
     numbered = "\n".join(f"[{i}] {c}" for i, c in enumerate(candidates))
     prompt = (
-        f"{_JUDGE_INSTRUCTIONS}\n\n"
         f"<original>\n{bullet_text}\n</original>\n\n"
         f"<candidates>\n{numbered}\n</candidates>"
     )
     try:
         out = gemini_json(
-            prompt=prompt, model=GEMINI_PRO, temperature=0.0,
+            prompt=prompt, system=_JUDGE_INSTRUCTIONS, model=GEMINI_PRO, temperature=0.0,
             max_tokens=_JUDGE_MAX_TOKENS, schema=_JUDGE_SCHEMA,
         ) or {}
     except Exception as e:

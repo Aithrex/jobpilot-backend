@@ -162,6 +162,7 @@ class ClaudeProvider(LLMProvider):
         max_retries: int = 2,
         schema: Optional[dict] = None,
         parts: Optional[list] = None,
+        system: Optional[str] = None,
     ) -> dict:
         model = model or self.PRO
 
@@ -179,6 +180,10 @@ class ClaudeProvider(LLMProvider):
             "temperature": temperature,
             "messages": [{"role": "user", "content": content_blocks}],
         }
+        # Trusted instructions belong in the system prompt; untrusted data stays in
+        # the user message. Guarded so existing callers (system=None) are unchanged.
+        if system:
+            body["system"] = system
 
         if schema is not None:
             # Force structured output by giving Claude a single tool whose

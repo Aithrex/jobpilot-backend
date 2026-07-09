@@ -67,8 +67,9 @@ _INSTRUCTIONS = _INSTRUCTIONS.format(
 )
 
 
-def _build_prompt(text: str) -> str:
-    return f"{_INSTRUCTIONS}\n\n<writing_sample>\n{text}\n</writing_sample>"
+def _build_data(text: str) -> str:
+    # Only untrusted data goes in the user message; instructions live in `system`.
+    return f"<writing_sample>\n{text}\n</writing_sample>"
 
 
 def _clampf(v: Any, default: float = 0.5) -> float:
@@ -161,7 +162,8 @@ def extract_graph_from_sample(user_email: str, sample_id: str) -> Dict[str, Any]
     built = None
     for _ in range(2):
         raw = gemini_json(
-            prompt=_build_prompt(text),
+            prompt=_build_data(text),
+            system=_INSTRUCTIONS,
             model=GEMINI_PRO,
             temperature=0.0,
             max_tokens=_MAX_TOKENS,

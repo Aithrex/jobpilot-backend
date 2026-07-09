@@ -28,11 +28,14 @@ def gemini_json(
     max_retries: int = 2,
     schema: dict = None,
     parts: list = None,
+    system: str = None,
 ) -> dict:
     """Primary entry point used by all service modules.
 
     Routes to the active provider's `json()` implementation. Signature is
-    preserved from the original Gemini-only version so callers don't change.
+    preserved from the original Gemini-only version so callers don't change;
+    the optional `system` puts trusted instructions out of the untrusted-data
+    user message (defense in depth against prompt injection).
     """
     return _provider.json(
         prompt=prompt,
@@ -42,6 +45,7 @@ def gemini_json(
         max_retries=max_retries,
         schema=schema,
         parts=parts,
+        system=system,
     )
 
 
