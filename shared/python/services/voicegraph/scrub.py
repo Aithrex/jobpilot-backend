@@ -63,3 +63,34 @@ def scrub_node(node: dict) -> dict:
         node["label"] = scrub_collaborator_label(node.get("label", ""), node.get("role", ""))
     node.pop("role", None)  # role is folded into label; never stored separately
     return node
+
+
+# Personal relationship words that are very unlikely to precede a technology or
+# product name — kept deliberately conservative to avoid redacting "lead Kafka"
+# or "partner API". "<role> <Name>" -> "<role>".
+_REL_WORDS = (
+    "manager|teammate|colleague|co-?worker|boss|professor|mentor|mentee|classmate|"
+    "roommate|supervisor|coach|instructor|dean|friend|manager's|teacher"
+)
+_REL_NAME = re.compile(r"\b(" + _REL_WORDS + r")\s+([A-Z][a-z]+)\b")
+
+
+def scrub_thirdparty_names(text: str):
+    """Redact a third-party's given name in outward-facing generated content
+    (§6.12.3 rule 2). Best-effort and high-precision: only drops a Title-case name
+    that immediately follows a clearly-personal relationship word. Returns
+    (scrubbed_text, changed). We deliberately do NOT touch the user's own stored
+    writing sample — only the bullets that leave the product."""
+    if not text:
+        return text, False
+    changed = {"v": False}
+
+    def _repl(m):
+        role, name = m.group(1), m.group(2)
+        if _looks_like_person_name(name):
+            changed["v"] = True
+            return role
+        return m.group(0)
+
+    out = _REL_NAME.sub(_repl, text)
+    return out, changed["v"]

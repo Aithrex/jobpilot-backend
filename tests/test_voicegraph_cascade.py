@@ -73,6 +73,9 @@ def test_cascade_keeps_co_evidenced():
     _MOCK_DB.style_profiles.insert_one({"user_email": USER, "version": 1})
     _MOCK_DB.authored_resumes.insert_one({"resume_id": "res1", "user_email": USER,
                                           "provenance_mode": "authored"})
+    _MOCK_DB.merge_candidates.insert_one({"candidate_id": "c1", "user_email": USER,
+                                          "node_id": b, "resume_value": "Kafka",
+                                          "status": "pending"})
     consent.grant(USER, ip="127.0.0.1")
 
     summary = privacy.revoke_cascade(USER)
@@ -89,9 +92,23 @@ def test_cascade_keeps_co_evidenced():
     # generated resume FROZEN, not deleted
     r = _MOCK_DB.authored_resumes.find_one({"resume_id": "res1"})
     assert r is not None and r.get("frozen") is True, "generated resume must be frozen, not deleted"
+    # merge candidates deleted (they held plaintext writing-derived labels)
+    assert _MOCK_DB.merge_candidates.count_documents({"user_email": USER}) == 0, \
+        "merge_candidates must be deleted on revoke"
     # consent revoked
     assert consent.is_granted(USER) is False
-    print("revocation cascade (co-evidenced survival + freeze): PASS", summary)
+    print("revocation cascade (co-evidenced survival + freeze + candidates): PASS", summary)
+
+
+def test_thirdparty_name_scrub():
+    from services.voicegraph.scrub import scrub_thirdparty_names
+    out, changed = scrub_thirdparty_names("My manager Sarah rewrote the auth flow.")
+    assert changed and "Sarah" not in out and "manager" in out, out
+    out2, changed2 = scrub_thirdparty_names("I used React and Redis with the lead Kafka stream.")
+    assert not changed2 and "React" in out2 and "Kafka" in out2, "must not redact tech terms"
+    out3, changed3 = scrub_thirdparty_names("My teammate Priya caught the race condition.")
+    assert changed3 and "Priya" not in out3, out3
+    print("third-party name scrub (redact names, keep tech): PASS")
 
 
 def test_entity_resolution():
@@ -128,5 +145,6 @@ if __name__ == "__main__":
     test_evidence_required()
     test_cascade_keeps_co_evidenced()
     test_entity_resolution()
+    test_thirdparty_name_scrub()
     print("ALL VOICE GRAPH TESTS PASSED")
     sys.exit(0)

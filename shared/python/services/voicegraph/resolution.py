@@ -147,6 +147,10 @@ def resolve_candidate(user_email: str, candidate_id: str, accept: bool) -> bool:
     if not c:
         return False
     if accept:
+        # The node may have been removed by a re-extraction since the candidate was
+        # created; don't resurrect evidence for a node that no longer exists.
+        if not store.get_node(user_email, c["node_id"]):
+            return False
         val = c.get("resume_value", "")
         store.add_evidence(user_email, "node", c["node_id"], [{
             "source": "resume", "source_id": "parsed_resume",

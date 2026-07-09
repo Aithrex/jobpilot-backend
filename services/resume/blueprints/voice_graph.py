@@ -40,11 +40,12 @@ def _gate():
     return None
 
 
-def _rate_limited(bucket: str, max_requests: int, window_seconds: int = 300) -> bool:
+def _rate_limited(bucket: str, user_email: str, max_requests: int, window_seconds: int = 300) -> bool:
+    # Key on the authenticated user, not the client IP: X-Forwarded-For is
+    # attacker-controllable behind the edge, so an IP key is trivially bypassable.
     try:
-        ip = get_client_ip(request)
         return get_rate_limiter().is_rate_limited(
-            f"voicegraph_{bucket}:{ip}", max_requests=max_requests, window_seconds=window_seconds
+            f"voicegraph_{bucket}:{user_email}", max_requests=max_requests, window_seconds=window_seconds
         )
     except Exception:
         return False
@@ -111,9 +112,9 @@ def grant_consent():
     gated = _gate()
     if gated:
         return gated
-    if _rate_limited("consent", max_requests=20):
-        return jsonify({"error": "Rate limit exceeded. Try again shortly."}), 429
     user_email = get_jwt_identity()
+    if _rate_limited("consent", user_email, max_requests=20):
+        return jsonify({"error": "Rate limit exceeded. Try again shortly."}), 429
     ip = get_client_ip(request)
     result = consent_svc.grant(user_email, ip=ip)
     return jsonify(result), 200
@@ -143,11 +144,11 @@ def save_sample():
     gated = _gate()
     if gated:
         return gated
+    user_email = get_jwt_identity()
     # Autosave fires often; keep this bucket generous (~1/sec sustained).
-    if _rate_limited("save", max_requests=300):
+    if _rate_limited("save", user_email, max_requests=300):
         return jsonify({"error": "Rate limit exceeded. Try again shortly."}), 429
 
-    user_email = get_jwt_identity()
     if not consent_svc.is_granted(user_email):
         return jsonify({"error": "consent_required",
                         "message": "Grant Voice Graph consent before saving a writing sample."}), 403
@@ -210,15 +211,25 @@ def save_sample():
 
     # A newly-finalized sample kicks off async graph extraction (§6.12.3). The FE
     # can poll /api/resume/job/<extraction_job_id> to reveal the graph when ready.
+    # Extraction is a metered LLM call, so cap it per plan/day BEFORE enqueuing
+    # (finalize itself is never blocked — the sample is saved regardless).
     if finalize and not prior_ready and result.get("status") == "ready":
         try:
-            from services.resume_service import get_resume_service, ResumeService
-            job_payload = {"sample_id": result["sample_id"], "user_email": user_email}
-            job_id = get_resume_service().create_job("vg_extract", job_payload, user_email=user_email)
-            ResumeService.invoke_async(job_id, "vg_extract", job_payload)
-            result["extraction_job_id"] = job_id
-        except Exception as e:
-            logger.warning("voicegraph: failed to enqueue extraction: %s", e)
+            from services import entitlements_service as ent
+            extract_allowed, _ = ent.check_and_increment(user_email, "graph_extract")
+        except Exception:
+            extract_allowed = True  # never block a finalize on a metering blip
+        if extract_allowed:
+            try:
+                from services.resume_service import get_resume_service, ResumeService
+                job_payload = {"sample_id": result["sample_id"], "user_email": user_email}
+                job_id = get_resume_service().create_job("vg_extract", job_payload, user_email=user_email)
+                ResumeService.invoke_async(job_id, "vg_extract", job_payload)
+                result["extraction_job_id"] = job_id
+            except Exception as e:
+                logger.warning("voicegraph: failed to enqueue extraction: %s", e)
+        else:
+            result["extraction_skipped"] = "daily_quota"
 
     return jsonify(result), 200
 
@@ -339,9 +350,9 @@ def build_raw_resume_route():
     gated = _gate()
     if gated:
         return gated
-    if _rate_limited("resume", max_requests=30):
-        return jsonify({"error": "Rate limit exceeded. Try again shortly."}), 429
     user_email = get_jwt_identity()
+    if _rate_limited("resume", user_email, max_requests=30):
+        return jsonify({"error": "Rate limit exceeded. Try again shortly."}), 429
     if not consent_svc.is_granted(user_email):
         return jsonify({"error": "consent_required"}), 403
     from services.voicegraph import raw_resume

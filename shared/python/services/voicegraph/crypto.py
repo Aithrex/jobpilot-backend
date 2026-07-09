@@ -13,8 +13,11 @@ ciphertext stays decryptable across restarts).
 """
 import base64
 import hashlib
+import logging
 
 from utils.config import _get_config_value
+
+logger = logging.getLogger(__name__)
 
 
 def _encryption_key() -> bytes:
@@ -29,6 +32,13 @@ def _encryption_key() -> bytes:
         )
     if len(raw) == 44 and raw.endswith("="):
         return raw.encode("utf-8")
+    # Not a proper Fernet key. We still derive one deterministically so existing
+    # ciphertext stays readable, but a passphrase-style value has weak entropy at
+    # rest — the key MUST be a Fernet.generate_key() output in production.
+    logger.warning(
+        "voicegraph crypto: encryption key is not a 44-char Fernet key; deriving "
+        "via SHA-256. Set a Fernet.generate_key() value for at-rest strength."
+    )
     digest = hashlib.sha256(raw.encode("utf-8")).digest()
     return base64.urlsafe_b64encode(digest)
 

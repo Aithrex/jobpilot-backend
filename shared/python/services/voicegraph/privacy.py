@@ -37,11 +37,21 @@ def revoke_cascade(user_email: str) -> Dict[str, Any]:
         logger.warning("voicegraph revoke: style delete failed: %s", e)
         style_deleted = 0
 
-    # 4. Freeze (do NOT delete) already-generated resumes — the user's asset.
+    # 4. Delete entity-resolution merge candidates — they hold writing-derived
+    #    labels and resume values in plaintext, so they must go too.
+    try:
+        candidates_deleted = DBConnect().get_db().merge_candidates.delete_many(
+            {"user_email": user_email}
+        ).deleted_count
+    except Exception as e:
+        logger.warning("voicegraph revoke: merge_candidates delete failed: %s", e)
+        candidates_deleted = 0
+
+    # 5. Freeze (do NOT delete) already-generated resumes — the user's asset.
     from services.voicegraph import raw_resume
     frozen = raw_resume.freeze_all_for_user(user_email)
 
-    # 5. Flip the consent ledger row.
+    # 6. Flip the consent ledger row.
     consent_svc.revoke(user_email)
 
     summary = {
@@ -49,6 +59,7 @@ def revoke_cascade(user_email: str) -> Dict[str, Any]:
         "graph_edges_removed": graph_counts.get("edges_removed", 0),
         "samples_deleted": samples_deleted,
         "style_profiles_deleted": style_deleted,
+        "merge_candidates_deleted": candidates_deleted,
         "resumes_frozen": frozen,
     }
     logger.info("voicegraph revoke cascade for user: %s", summary)

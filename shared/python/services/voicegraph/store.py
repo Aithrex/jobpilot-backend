@@ -154,8 +154,14 @@ def purge_by_source(user_email: str, source: str, source_id: str = "") -> Dict[s
     removed_nodes = 0
     removed_edges = 0
     for nid in affected_nodes:
-        if _evidence().count_documents({"target_type": "node", "target_id": nid}) == 0:
+        if _evidence().count_documents(
+                {"user_email": user_email, "target_type": "node", "target_id": nid}) == 0:
             _nodes().delete_one({"node_id": nid, "user_email": user_email})
+            # drop any entity-resolution candidates pointing at this now-gone node
+            try:
+                _db().merge_candidates.delete_many({"user_email": user_email, "node_id": nid})
+            except Exception:
+                pass
             # drop edges dangling off a removed node (and their evidence)
             dangling = list(_edges().find(
                 {"user_email": user_email, "$or": [{"src_id": nid}, {"dst_id": nid}]},
@@ -165,9 +171,10 @@ def purge_by_source(user_email: str, source: str, source_id: str = "") -> Dict[s
                 affected_edges.add(e["edge_id"])
             removed_nodes += 1
     for eid in affected_edges:
-        if _evidence().count_documents({"target_type": "edge", "target_id": eid}) == 0:
+        if _evidence().count_documents(
+                {"user_email": user_email, "target_type": "edge", "target_id": eid}) == 0:
             res = _edges().delete_one({"edge_id": eid, "user_email": user_email})
-            _evidence().delete_many({"target_type": "edge", "target_id": eid})
+            _evidence().delete_many({"user_email": user_email, "target_type": "edge", "target_id": eid})
             removed_edges += res.deleted_count
 
     return {"nodes_removed": removed_nodes, "edges_removed": removed_edges}

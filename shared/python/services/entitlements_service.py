@@ -70,6 +70,7 @@ FEATURE_PERIODS = {
     "post_draft": PERIOD_MONTH,
     "learning_plan_generate": PERIOD_DAY,
     "authored_resume": PERIOD_MONTH,   # Voice Graph — §6.12.10
+    "graph_extract": PERIOD_DAY,       # Voice Graph — meter LLM extraction spend
 }
 
 PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
@@ -85,6 +86,7 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "post_draft": 1,
         "learning_plan_generate": 1,
         "authored_resume": 1,         # Voice Graph — §6.12.10 (raw mode is always free)
+        "graph_extract": 5,           # Voice Graph — LLM extractions per day
         # Structural caps (checked against live state, not time-windowed):
         "batch_tailor_max": 0,        # batch tailoring disabled on free
         "active_learning_paths": 1,
@@ -102,6 +104,7 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "post_draft": 8,
         "learning_plan_generate": 10,
         "authored_resume": 10,
+        "graph_extract": 30,
         "batch_tailor_max": 10,
         "active_learning_paths": 5,
         "writing_samples": 5,
@@ -117,10 +120,11 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "salary": None,
         "post_draft": None,
         "learning_plan_generate": None,
-        "authored_resume": None,
+        "authored_resume": 100,       # soft cap to deter runaway Bedrock cost; effectively unlimited
+        "graph_extract": 200,
         "batch_tailor_max": 25,
         "active_learning_paths": None,
-        "writing_samples": None,
+        "writing_samples": 50,        # soft cap; effectively unlimited for a real user
     },
 }
 

@@ -519,6 +519,9 @@ def build_authored_resume(user_email: str, style_dial: str = _DEFAULT_DIAL) -> D
     ]
 
     # --- assemble in place: replace ONLY the bullets, keep every immutable field ---
+    # Scrub third-party names out of every outward-facing bullet (§6.12.3 rule 2),
+    # regardless of mode (verbatim / passthrough / voice-matched).
+    from services.voicegraph.scrub import scrub_thirdparty_names
     evidence_map: List[Dict[str, Any]] = []
     exp = scaffold.get("experience", []) or []
     proj = scaffold.get("projects", []) or []
@@ -526,11 +529,12 @@ def build_authored_resume(user_email: str, style_dial: str = _DEFAULT_DIAL) -> D
         ev = r["evidence"]
         sec, ei, bi = ev["section"], ev["exp_index"], ev["bullet_index"]
         target = exp if sec == "experience" else proj
+        bullet_text, redacted = scrub_thirdparty_names(r["text"])
         try:
-            target[ei]["bullets"][bi] = r["text"]
+            target[ei]["bullets"][bi] = bullet_text
         except (IndexError, KeyError, TypeError):
             logger.warning("authored: could not place bullet %s/%s/%s", sec, ei, bi)
-        evidence_map.append({"bullet": r["text"], **ev})
+        evidence_map.append({"bullet": bullet_text, "redacted": redacted, **ev})
 
     # Overall voice distance = mean over final bullets (only meaningful with a profile).
     if profile:

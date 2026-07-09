@@ -149,6 +149,25 @@ def build_raw_resume(user_email: str) -> Dict[str, Any]:
     scaffold = _parsed_scaffold(user_email)
     skills = _skills_from_graph(user_email)
 
+    # Scrub third-party names out of the outward-facing bullets (§6.12.3 rule 2).
+    # The provenance span still points at the user's ORIGINAL sentence (their own
+    # data, shown only back to them); only the exported bullet is redacted.
+    from services.voicegraph.scrub import scrub_thirdparty_names
+    bullet_texts = []
+    provenance = []
+    for b in bullets:
+        scrubbed, redacted = scrub_thirdparty_names(b["text"])
+        bullet_texts.append(scrubbed)
+        provenance.append({
+            "bullet": scrubbed,
+            "mode": "verbatim",
+            "source": "writing_sample",
+            "source_id": b["source_id"],
+            "char_start": b["char_start"],
+            "char_end": b["char_end"],
+            "redacted": redacted,
+        })
+
     structured = {
         "contact": scaffold["contact"],
         "summary": "",  # raw mode never writes a summary (no fabrication)
@@ -159,21 +178,12 @@ def build_raw_resume(user_email: str) -> Dict[str, Any]:
             "location": "",
             "dates": "",
             "type": "",
-            "bullets": [b["text"] for b in bullets],
+            "bullets": bullet_texts,
         }],
         "education": scaffold["education"],
         "projects": [],
         "certifications": [],
     }
-
-    provenance = [{
-        "bullet": b["text"],
-        "mode": "verbatim",
-        "source": "writing_sample",
-        "source_id": b["source_id"],
-        "char_start": b["char_start"],
-        "char_end": b["char_end"],
-    } for b in bullets]
 
     resume_id = str(uuid4())
     _col().insert_one({
