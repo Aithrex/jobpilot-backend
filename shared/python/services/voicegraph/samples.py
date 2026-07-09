@@ -167,6 +167,26 @@ def delete_sample(user_email: str, sample_id: str) -> bool:
     return res is not None
 
 
+def delete_all_samples(user_email: str) -> int:
+    """Delete every writing sample for a user (revocation cascade, VG Step 8)."""
+    res = _col().delete_many({"user_email": user_email})
+    return res.deleted_count
+
+
+def sample_span_text(user_email: str, sample_id: str, char_start: int, char_end: int) -> str:
+    """Return the exact source substring for a provenance report. Owner-scoped."""
+    doc = _col().find_one({"sample_id": sample_id, "user_email": user_email})
+    if not doc:
+        return ""
+    try:
+        text = decrypt(doc.get("text_enc", ""))
+    except Exception:
+        return ""
+    if 0 <= char_start < char_end <= len(text):
+        return text[char_start:char_end]
+    return ""
+
+
 def count_ready(user_email: str, exclude_sample_id: Optional[str] = None) -> int:
     q: Dict[str, Any] = {"user_email": user_email, "status": _STATUS_READY}
     if exclude_sample_id:

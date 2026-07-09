@@ -204,6 +204,50 @@ def list_resumes(user_email: str) -> List[Dict[str, Any]]:
     return out
 
 
+def freeze_all_for_user(user_email: str, reason: str = "voice_graph_revoked") -> int:
+    """Freeze (never delete) a user's generated resumes on consent revocation.
+    They are the user's asset; we keep them but relabel them as frozen (§6.12.8)."""
+    res = _col().update_many(
+        {"user_email": user_email},
+        {"$set": {"frozen": True, "frozen_reason": reason, "revoked_at": _now()}},
+    )
+    return res.modified_count
+
+
+def provenance_report(user_email: str, resume_id: str) -> Optional[Dict[str, Any]]:
+    """The private provenance report (§6.12.6): for every bullet, its mode and the
+    exact source sentence it came from. Robust to both raw and authored evidence
+    maps."""
+    d = _col().find_one({"resume_id": resume_id, "user_email": user_email})
+    if not d:
+        return None
+    from services.voicegraph import samples as sample_svc
+    entries = d.get("evidence_map") or []
+    report = []
+    for e in entries:
+        mode = e.get("mode", "generated")
+        bullet = e.get("bullet") or e.get("final") or ""
+        source_text = ""
+        sid = e.get("source_id")
+        cs, ce = e.get("char_start"), e.get("char_end")
+        if sid and isinstance(cs, int) and isinstance(ce, int):
+            source_text = sample_svc.sample_span_text(user_email, sid, cs, ce)
+        if not source_text:
+            source_text = e.get("source_bullet") or e.get("source") or bullet
+        report.append({
+            "bullet": bullet,
+            "mode": mode,                 # verbatim | voice-matched | passthrough | generated
+            "source_sentence": source_text,
+        })
+    return {
+        "resume_id": resume_id,
+        "mode": d.get("provenance_mode"),
+        "frozen": bool(d.get("frozen", False)),
+        "voice_distance": d.get("voice_distance"),
+        "bullets": report,
+    }
+
+
 def get_resume(user_email: str, resume_id: str) -> Optional[Dict[str, Any]]:
     d = _col().find_one({"resume_id": resume_id, "user_email": user_email})
     if not d:

@@ -126,10 +126,12 @@ def revoke_consent():
     if gated:
         return gated
     user_email = get_jwt_identity()
-    # NOTE: the full data-deletion cascade (samples + graph nodes whose only
-    # evidence is a writing sample) lands in VG Step 8. This flips the ledger row.
-    result = consent_svc.revoke(user_email)
-    return jsonify(result), 200
+    # Full data-deletion cascade (§6.12.8): delete samples + voice profile, drop
+    # graph nodes whose only evidence is a writing sample, freeze generated resumes,
+    # and flip the consent ledger.
+    from services.voicegraph import privacy
+    summary = privacy.revoke_cascade(user_email)
+    return jsonify({"consent": consent_svc.status(user_email), "cascade": summary}), 200
 
 
 # ------------------------------------------------------------------
@@ -390,3 +392,20 @@ def get_authored_resume(resume_id):
     if not doc:
         return jsonify({"error": "resume_not_found"}), 404
     return jsonify(doc), 200
+
+
+# ------------------------------------------------------------------
+# GET /api/resume/voice-graph/resume/<id>/provenance — per-bullet source report
+# ------------------------------------------------------------------
+@voice_graph_bp.route("/resume/<resume_id>/provenance", methods=["GET"])
+@jwt_required()
+def resume_provenance(resume_id):
+    gated = _gate()
+    if gated:
+        return gated
+    user_email = get_jwt_identity()
+    from services.voicegraph import raw_resume
+    report = raw_resume.provenance_report(user_email, resume_id)
+    if not report:
+        return jsonify({"error": "resume_not_found"}), 404
+    return jsonify(report), 200
