@@ -1584,6 +1584,13 @@ class JobService:
                     item = _spons_attach(item, _spons_cache)
                 except Exception:
                     pass
+            # Visa-aware discover flags (§6.3): reuse the already-attached
+            # sponsorship signal so no extra lookup; explainable, never guessed.
+            try:
+                from services.discover_filters_service import annotate as _visa_annotate
+                item = _visa_annotate(item, signal=item.get("sponsorship"))
+            except Exception:
+                pass
             prepared.append(item)
         return prepared
 
