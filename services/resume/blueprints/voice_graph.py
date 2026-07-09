@@ -281,6 +281,36 @@ def get_graph():
 
 
 # ------------------------------------------------------------------
+# Entity resolution — merge candidates the user confirms or rejects (§6.12.3)
+# ------------------------------------------------------------------
+@voice_graph_bp.route("/merge-candidates", methods=["GET"])
+@jwt_required()
+def list_merge_candidates():
+    gated = _gate()
+    if gated:
+        return gated
+    user_email = get_jwt_identity()
+    from services.voicegraph import resolution
+    return jsonify({"candidates": resolution.list_candidates(user_email)}), 200
+
+
+@voice_graph_bp.route("/merge-candidates/<candidate_id>", methods=["POST"])
+@jwt_required()
+def resolve_merge_candidate(candidate_id):
+    gated = _gate()
+    if gated:
+        return gated
+    user_email = get_jwt_identity()
+    data = request.get_json(force=True, silent=True) or {}
+    accept = bool(data.get("accept", False))
+    from services.voicegraph import resolution
+    ok = resolution.resolve_candidate(user_email, candidate_id, accept)
+    if not ok:
+        return jsonify({"error": "candidate_not_found"}), 404
+    return jsonify({"resolved": True, "accepted": accept}), 200
+
+
+# ------------------------------------------------------------------
 # GET /api/resume/voice-graph/voice — the measured voice profile ("how you write")
 # ------------------------------------------------------------------
 @voice_graph_bp.route("/voice", methods=["GET"])

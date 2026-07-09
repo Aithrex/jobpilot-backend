@@ -111,6 +111,27 @@ def add_edge(user_email: str, src_id: str, dst_id: str, rel: str,
     return edge_id
 
 
+def add_evidence(user_email: str, target_type: str, target_id: str,
+                 evidence: List[Dict[str, Any]]) -> int:
+    """Append evidence to an existing node/edge (entity resolution co-evidence).
+    Returns the number of evidence rows written."""
+    ev = [e for e in (evidence or []) if _valid_evidence(e)]
+    if ev:
+        _write_evidence(user_email, target_type, target_id, ev)
+    return len(ev)
+
+
+def set_node_confirmed(user_email: str, node_id: str, confirmed: bool = True) -> None:
+    _nodes().update_one(
+        {"node_id": node_id, "user_email": user_email},
+        {"$set": {"user_confirmed": bool(confirmed)}},
+    )
+
+
+def get_node(user_email: str, node_id: str) -> Optional[Dict[str, Any]]:
+    return _nodes().find_one({"node_id": node_id, "user_email": user_email})
+
+
 def purge_by_source(user_email: str, source: str, source_id: str = "") -> Dict[str, int]:
     """Remove evidence rows from a given source, then delete any node/edge that has
     no remaining evidence (orphans). Nodes/edges still backed by other sources

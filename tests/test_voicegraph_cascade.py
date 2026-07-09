@@ -94,8 +94,39 @@ def test_cascade_keeps_co_evidenced():
     print("revocation cascade (co-evidenced survival + freeze): PASS", summary)
 
 
+def test_entity_resolution():
+    _reset()
+    from services.voicegraph import resolution
+    # isolate from the resume parser: feed fixed resume records
+    resolution._resume_records = lambda user_email: {
+        "skills": ["Kafka", "PostgreSQL"], "orgs": [], "roles": [], "projects": [],
+    }
+    ev = lambda q: [{"source": "writing_sample", "source_id": "s1",
+                     "char_start": 0, "char_end": len(q), "quote": q}]
+    n_kafka = store.add_node(USER, "Skill", "kafka", evidence=ev("kafka"))
+    n_pg = store.add_node(USER, "Skill", "postgres", evidence=ev("postgres"))
+    n_redis = store.add_node(USER, "Skill", "redis", evidence=ev("redis"))
+
+    summary = resolution.resolve_entities(USER)
+
+    # exact (kafka == Kafka) auto-merges: confirmed + resume co-evidence
+    k = store.get_node(USER, n_kafka)
+    assert k["user_confirmed"] is True, "exact match must auto-confirm"
+    k_sources = {e["source"] for e in _MOCK_DB.graph_evidence.find({"target_id": n_kafka})}
+    assert "resume" in k_sources, "auto-merge must add resume co-evidence"
+    # postgres ~ PostgreSQL is ambiguous -> pending candidate, NOT auto-merged
+    assert store.get_node(USER, n_pg)["user_confirmed"] is False
+    cands = resolution.list_candidates(USER)
+    assert any(c["node_id"] == n_pg for c in cands), "ambiguous match must be surfaced, not guessed"
+    # redis has no resume match -> nothing
+    assert store.get_node(USER, n_redis)["user_confirmed"] is False
+    assert not any(c["node_id"] == n_redis for c in cands)
+    print("entity resolution (auto-merge / surface-ambiguous / ignore): PASS", summary)
+
+
 if __name__ == "__main__":
     test_evidence_required()
     test_cascade_keeps_co_evidenced()
-    print("ALL VOICE GRAPH CASCADE TESTS PASSED")
+    test_entity_resolution()
+    print("ALL VOICE GRAPH TESTS PASSED")
     sys.exit(0)

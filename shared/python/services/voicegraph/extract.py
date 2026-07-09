@@ -195,6 +195,16 @@ def extract_graph_from_sample(user_email: str, sample_id: str) -> Dict[str, Any]
         store.add_edge(user_email, src, dst, e["rel"], e["evidence"], confidence=e["confidence"])
         edge_count += 1
 
-    logger.info("voicegraph: extracted %d nodes, %d edges from sample %s",
-                len(temp_nodes), edge_count, sample_id)
-    return {"nodes": len(temp_nodes), "edges": edge_count, "sample_id": sample_id}
+    # Entity resolution: co-evidence graph nodes against the parsed resume so
+    # resume-backed nodes survive a consent revocation and gain confirmed status.
+    try:
+        from services.voicegraph import resolution
+        merged = resolution.resolve_entities(user_email)
+    except Exception as e:
+        logger.warning("voicegraph: entity resolution failed: %s", e)
+        merged = {"auto_merged": 0, "pending": 0}
+
+    logger.info("voicegraph: extracted %d nodes, %d edges from sample %s (merged %s)",
+                len(temp_nodes), edge_count, sample_id, merged)
+    return {"nodes": len(temp_nodes), "edges": edge_count, "sample_id": sample_id,
+            "resolution": merged}

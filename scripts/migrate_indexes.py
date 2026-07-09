@@ -224,6 +224,10 @@ INDEX_SPECS = [
     ("authored_resumes", [("user_email", ASCENDING), ("created_at", DESCENDING)],
      {"name": "user_email_created_at"}),
     ("authored_resumes", [("resume_id", ASCENDING)], {"unique": True, "name": "resume_id_unique"}),
+    # merge_candidates: entity-resolution suggestions awaiting user confirmation.
+    ("merge_candidates", [("user_email", ASCENDING), ("status", ASCENDING)],
+     {"name": "user_email_status"}),
+    ("merge_candidates", [("candidate_id", ASCENDING)], {"unique": True, "name": "candidate_id_unique"}),
 ]
 
 
