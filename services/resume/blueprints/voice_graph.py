@@ -379,10 +379,11 @@ def build_authored_resume_route():
     gated = _gate()
     if gated:
         return gated
-    if _rate_limited("authored", max_requests=15):
-        return jsonify({"error": "Rate limit exceeded. Try again shortly."}), 429
 
     user_email = get_jwt_identity()
+    if _rate_limited("authored", user_email, max_requests=15):
+        return jsonify({"error": "Rate limit exceeded. Try again shortly."}), 429
+
     if not consent_svc.is_granted(user_email):
         return jsonify({"error": "consent_required",
                         "message": "Grant Voice Graph consent before building an authored resume."}), 403
