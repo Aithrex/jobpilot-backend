@@ -10,6 +10,12 @@ generated content. We do NOT rewrite the user's own encrypted writing sample —
 that is their private asset, shown only back to them, and `raw` mode depends on
 their literal words. So scrubbing happens at graph-insert time and at
 content-generation time, not at sample storage time.
+
+Scope (do not overstate): this scrubs THIRD-PARTY given names only. It does NOT
+redact the résumé owner's own SSN / phone / email — that is prompt-side
+redaction in utils.llm_safety.redact_pii_for_model, applied at each LLM ingress.
+The commit abdf729 message ("PII scrub") refers to this third-party name-scrub
+alone; it was never an SSN/phone control.
 """
 import re
 

@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 # Immutable field definitions
 # ---------------------------------------------------------------------------
 
+# These are the fields the guard PRESERVES in the rendered résumé / structured
+# record — the tailored output must carry the candidate's REAL name/phone/etc.
+# This is NOT a model-prompt control and redacts nothing sent to the LLM.
+# Prompt-side PII redaction (SSN/phone) lives in
+# utils.llm_safety.redact_pii_for_model, applied at each LLM ingress. Keep
+# `phone` here — removing it would let the LLM rewrite the real phone number.
 IMMUTABLE_CONTACT_FIELDS = ("name", "email", "phone", "linkedin", "github", "location", "portfolio")
 IMMUTABLE_EXPERIENCE_FIELDS = ("company", "title", "dates", "location")
 IMMUTABLE_EDUCATION_FIELDS = ("degree", "institution", "dates", "location", "gpa", "coursework")

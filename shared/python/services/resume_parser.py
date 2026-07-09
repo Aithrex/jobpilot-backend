@@ -42,8 +42,16 @@ from schemas.resume_schemas import (
     flatten_skills,
     extract_job_titles,
 )
+from utils.llm_safety import redact_pii_for_model, wrap_untrusted, guarded_system
 
 logger = logging.getLogger(__name__)
+
+# Trusted instruction anchor for the parser. The PDF/text parts are untrusted
+# data; this keeps extraction from following instructions embedded in a résumé.
+_PARSE_SYSTEM = guarded_system(
+    "You are a strict resume parser. Extract only what the attached document "
+    "actually contains; never infer, synthesize, or fabricate."
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -425,6 +433,7 @@ class ResumeParser:
             max_tokens=6000 if use_slim else 24000,
             temperature=0.2,  # Low temp for factual extraction
             model=GEMINI_FLASH,
+            system=_PARSE_SYSTEM,  # trusted anchor; PDF/text parts are untrusted data
         )
 
         t_gemini = time.perf_counter()
@@ -556,7 +565,12 @@ class ResumeParser:
         # could pass `prompt=` instead, but the caller path here always uses
         # parts. Build a single text part using the provider's PDF helper
         # with empty bytes — providers degrade to text-only when no PDF.
-        prompt = prompt_template + f"=== RESUME TEXT ===\n{raw_text[:_MAX_TEXT_CHARS]}"
+        # SSN stripped (parsing never needs it); phone kept (we extract contact.phone).
+        # Tag as untrusted data so instructions embedded in the résumé aren't followed.
+        prompt = prompt_template + "\n" + wrap_untrusted(
+            "resume_document",
+            redact_pii_for_model(raw_text[:_MAX_TEXT_CHARS], redact_phone=False),
+        )
         return provider.build_pdf_parts(
             prompt_text=prompt,
             pdf_bytes=b"",

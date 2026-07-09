@@ -263,8 +263,9 @@ class ResumeService:
         """
         from services.gemini_client import gemini_json, GEMINI_PRO
         from schemas.resume_schemas import JD_ANALYSIS_SCHEMA, validate_and_coerce
+        from utils.llm_safety import redact_pii_for_model, wrap_untrusted, guarded_system
 
-        prompt = (
+        instructions = (
             "You are an expert recruiter and ATS specialist.\n"
             "Extract structured information from the following job description.\n"
             "Return a JSON object with EXACTLY these keys:\n"
@@ -278,11 +279,18 @@ class ResumeService:
             '- "qualifications": list of strings (degree, years of experience, etc.)\n'
             '- "experience_years": string (e.g. "3-5 years" or "Entry level")\n'
             '- "industry": string (e.g. "Cloud Computing", "FinTech")\n'
-            '- "keywords": list of strings (ATS-critical keywords from the JD)\n\n'
-            f"=== JOB DESCRIPTION ===\n{jd_text[:5000]}"
+            '- "keywords": list of strings (ATS-critical keywords from the JD)\n'
         )
+        # JD text is fully attacker-influenced: tag as untrusted data + redact PII.
+        prompt = wrap_untrusted("job_description", redact_pii_for_model(jd_text[:5000]))
 
-        result = gemini_json(prompt, max_tokens=12000, model=GEMINI_PRO, schema=JD_ANALYSIS_SCHEMA)
+        result = gemini_json(
+            prompt,
+            max_tokens=12000,
+            model=GEMINI_PRO,
+            schema=JD_ANALYSIS_SCHEMA,
+            system=guarded_system(instructions),
+        )
         validated = validate_and_coerce(result, JD_ANALYSIS_SCHEMA)
 
         # Normalize extracted keywords to canonical forms
