@@ -35,6 +35,8 @@ below blocks the code that ships around it.
 | Extension (§6.4) | Live-browser testing of adapter selector accuracy per ATS (Workday wizard, Ashby, new/classic Greenhouse), Review-Card isolation, CAPTCHA detection. Optional: a `POST /api/apply/field-map` endpoint to enable the (default-off) LLM field disambiguation. |
 | Referral Finder (§6.11.3) | None — Premium+ gated; works off the user's own uploaded LinkedIn archive. |
 | Pipeline cohort (§6.8) | Computes on-read now (bounded scan). At scale, add a nightly `pipeline_cohort_stats` aggregation job. |
+| Mail-ingress Track A (§2.4) | A receiving domain `inbox.<domain>` (MX → SES inbound) + an SES receipt rule → SNS → a signature-verified `POST /api/mail-inbound/ses` Lambda (new prefix = external Terraform route). Set `MAIL_INGRESS_DOMAIN` + flip `MAIL_INGRESS_ENABLED=true`. Nightly `purge_expired()` schedule. Default OFF → the 3 FE routes 404. |
+| Billing / Stripe (§6.10) | Add `stripe>=9.0.0` and `PyYAML>=6.0` to `shared/python/requirements.txt`; package `config/` into the layer (or set `PLANS_YAML_PATH`) — until then `plan_catalog` falls back to the entitlements matrix (still correct). Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PRO/CAREER`, and `BILLING_ENFORCEMENT=true`; register `POST /api/billing/webhook` in Stripe for `checkout.session.completed` / `customer.subscription.*` / `invoice.payment_failed`. Dark until then (503). |
 
 ## Deploy note
 Both repos auto-deploy `main` on push. Backend deploy is path-scoped: `shared/**`
