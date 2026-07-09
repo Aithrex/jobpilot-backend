@@ -254,6 +254,15 @@ INDEX_SPECS = [
      {"unique": True, "name": "user_email_day_unique"}),
     ("notification_consents", [("user_email", ASCENDING), ("scope", ASCENDING)],
      {"unique": True, "name": "user_email_scope_unique"}),
+
+    # === Mail-ingress Track A (§2.4) — unique addresses, dedup + 30d TTL purge.
+    ("mail_ingress_addresses", [("user_email", ASCENDING)], {"unique": True, "name": "user_email_unique"}),
+    ("mail_ingress_addresses", [("ingress_local", ASCENDING)], {"unique": True, "name": "ingress_local_unique"}),
+    ("email_ingress", [("message_id", ASCENDING)], {"unique": True, "name": "message_id_unique"}),
+    ("email_ingress", [("user_email", ASCENDING)], {"name": "by_user"}),
+    ("email_ingress", [("purge_after", ASCENDING)], {"expireAfterSeconds": 0, "name": "ttl_purge_after"}),
+    ("mail_ingress_suggestions", [("suggestion_id", ASCENDING)], {"unique": True, "name": "suggestion_id_unique"}),
+    ("mail_ingress_suggestions", [("user_email", ASCENDING)], {"name": "by_user"}),
 ]
 
 

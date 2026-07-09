@@ -1892,6 +1892,55 @@ def unsubscribe_notifications():
 
 
 # ------------------------------------------------------------------
+# Mail-ingress Track A (§2.4) — forward recruiting mail to a unique address.
+# The inbound SES webhook is a separate, Terraform-gated top-level prefix.
+# ------------------------------------------------------------------
+@resume_bp.route("/mail-ingress/provision", methods=["POST"])
+@jwt_required()
+def mail_ingress_provision():
+    from services import mail_ingress_service as mi
+    if not mi.mail_ingress_enabled():
+        return jsonify({"error": "Not found"}), 404
+    try:
+        return jsonify(mi.provision_address(get_jwt_identity())), 200
+    except Exception as e:
+        logger.error("mail-ingress provision error: %s", e)
+        return jsonify({"error": "Failed to provision ingress address"}), 500
+
+
+@resume_bp.route("/mail-ingress/suggestions", methods=["GET"])
+@jwt_required()
+def mail_ingress_suggestions():
+    from services import mail_ingress_service as mi
+    if not mi.mail_ingress_enabled():
+        return jsonify({"error": "Not found"}), 404
+    include_resolved = request.args.get("include_resolved", "false").lower() == "true"
+    try:
+        return jsonify({"suggestions": mi.list_suggestions(get_jwt_identity(), include_resolved)}), 200
+    except Exception as e:
+        logger.error("mail-ingress suggestions error: %s", e)
+        return jsonify({"error": "Failed to load suggestions"}), 500
+
+
+@resume_bp.route("/mail-ingress/suggestions/<suggestion_id>", methods=["POST"])
+@jwt_required()
+def mail_ingress_resolve(suggestion_id):
+    from services import mail_ingress_service as mi
+    if not mi.mail_ingress_enabled():
+        return jsonify({"error": "Not found"}), 404
+    action = ((request.get_json(silent=True) or {}).get("action") or "").strip().lower()
+    if action not in ("confirm", "reject"):
+        return jsonify({"error": "action must be 'confirm' or 'reject'"}), 400
+    try:
+        return jsonify({"suggestion": mi.resolve_suggestion(get_jwt_identity(), suggestion_id, action)}), 200
+    except LookupError:
+        return jsonify({"error": "Suggestion not found"}), 404
+    except Exception as e:
+        logger.error("mail-ingress resolve error: %s", e)
+        return jsonify({"error": "Failed to resolve suggestion"}), 500
+
+
+# ------------------------------------------------------------------
 # POST /api/resume/download — Generate PDF or DOCX
 # ------------------------------------------------------------------
 
