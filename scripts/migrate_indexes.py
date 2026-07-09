@@ -220,6 +220,10 @@ INDEX_SPECS = [
      {"name": "target_idx"}),
     # style_profiles: one active profile per user (versioned in-doc).
     ("style_profiles", [("user_email", ASCENDING)], {"unique": True, "name": "user_email_unique"}),
+    # authored_resumes: raw/authored resume versions with provenance.
+    ("authored_resumes", [("user_email", ASCENDING), ("created_at", DESCENDING)],
+     {"name": "user_email_created_at"}),
+    ("authored_resumes", [("resume_id", ASCENDING)], {"unique": True, "name": "resume_id_unique"}),
 ]
 
 

@@ -294,3 +294,56 @@ def get_voice_profile():
     except Exception as e:
         logger.error("voicegraph: voice profile failed: %s", e)
         return jsonify({"error": "Failed to compute voice profile."}), 500
+
+
+# ------------------------------------------------------------------
+# POST /api/resume/voice-graph/resume/raw — zero-model resume (free, all tiers)
+# GET  .../resume        — list authored resumes
+# GET  .../resume/<id>   — one authored resume + provenance
+# ------------------------------------------------------------------
+@voice_graph_bp.route("/resume/raw", methods=["POST"])
+@jwt_required()
+def build_raw_resume_route():
+    gated = _gate()
+    if gated:
+        return gated
+    if _rate_limited("resume", max_requests=30):
+        return jsonify({"error": "Rate limit exceeded. Try again shortly."}), 429
+    user_email = get_jwt_identity()
+    if not consent_svc.is_granted(user_email):
+        return jsonify({"error": "consent_required"}), 403
+    from services.voicegraph import raw_resume
+    try:
+        result = raw_resume.build_raw_resume(user_email)
+        return jsonify(result), 200
+    except ValueError:
+        return jsonify({"error": "no_ready_samples",
+                        "message": "Write and finalize at least one sample first, then we can build a resume from your own words."}), 400
+    except Exception as e:
+        logger.error("voicegraph: raw resume failed: %s", e)
+        return jsonify({"error": "Failed to build resume."}), 500
+
+
+@voice_graph_bp.route("/resume", methods=["GET"])
+@jwt_required()
+def list_authored_resumes():
+    gated = _gate()
+    if gated:
+        return gated
+    user_email = get_jwt_identity()
+    from services.voicegraph import raw_resume
+    return jsonify({"resumes": raw_resume.list_resumes(user_email)}), 200
+
+
+@voice_graph_bp.route("/resume/<resume_id>", methods=["GET"])
+@jwt_required()
+def get_authored_resume(resume_id):
+    gated = _gate()
+    if gated:
+        return gated
+    user_email = get_jwt_identity()
+    from services.voicegraph import raw_resume
+    doc = raw_resume.get_resume(user_email, resume_id)
+    if not doc:
+        return jsonify({"error": "resume_not_found"}), 404
+    return jsonify(doc), 200
