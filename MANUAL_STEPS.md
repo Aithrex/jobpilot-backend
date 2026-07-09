@@ -25,6 +25,17 @@ below blocks the code that ships around it.
 | Gmail OAuth Track B (§2.4) | Google OAuth verification + CASA Tier 2 assessment. Behind `GMAIL_OAUTH_ENABLED`. |
 | LinkedIn posting (§2.2) | "Share on LinkedIn" product approval for `w_member_social`. (Connect flow already built.) |
 
+## Compass epics shipped this build — their human gates
+
+| Epic | Human step |
+|---|---|
+| Sponsorship intel (§6.3) | Run `python scripts/ingest_sponsorship.py --lca <DOL LCA file> --uscis <USCIS hub csv>` (files downloaded out-of-band: DOL OFLC LCA disclosure + USCIS H-1B Employer Data Hub). Run `migrate_indexes.py` first. Until then every job's sponsorship badge is `null` (honest "no data"), not wrong. |
+| Notifications / digests (§2.5) | Email works today (reuses SES). WhatsApp (`WHATSAPP_ENABLED` + Meta verification + template approval), SMS (`TWILIO_ENABLED` + Twilio), web-push (`WEBPUSH_ENABLED` + VAPID keys + `pywebpush` in requirements + a FE service worker) are built behind flags. The morning/evening **digest scheduler** is an EventBridge rule → Lambda (host it where `email_service` is importable, e.g. the auth Lambda, or promote `email_service` to the shared layer). |
+| Signal bandit (§6.7) | The nightly bandit posterior update (`post_metrics_service.nightly_update()`) needs an EventBridge daily schedule → Lambda (idempotent per post; safe to double-fire). |
+| Extension (§6.4) | Live-browser testing of adapter selector accuracy per ATS (Workday wizard, Ashby, new/classic Greenhouse), Review-Card isolation, CAPTCHA detection. Optional: a `POST /api/apply/field-map` endpoint to enable the (default-off) LLM field disambiguation. |
+| Referral Finder (§6.11.3) | None — Premium+ gated; works off the user's own uploaded LinkedIn archive. |
+| Pipeline cohort (§6.8) | Computes on-read now (bounded scan). At scale, add a nightly `pipeline_cohort_stats` aggregation job. |
+
 ## Deploy note
 Both repos auto-deploy `main` on push. Backend deploy is path-scoped: `shared/**`
 redeploys all four Lambdas; `services/<svc>/**` redeploys that one. The only
