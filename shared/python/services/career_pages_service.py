@@ -713,14 +713,18 @@ def _apply_career_sponsorship(jobs: List[Dict[str, Any]]) -> None:
         if not info:
             continue
         tier, approvals = info
+        # ESTIMATE from a curated employer tier list — NOT live per-employer USCIS
+        # data. Label it so the "honest sponsorship" promise is never overstated.
         if tier in ("high", "medium"):
             job["sponsorship"] = "likely"
             job["h1b_sponsor"] = True
+            job["sponsor_source"] = "estimate"
             job["sponsor_note"] = (
-                f"{job['company']} ≈{approvals:,} H-1B approvals/yr (recent USCIS data)")
+                f"Est.: {job['company']} historically files ~{approvals:,} H-1Bs/yr")
         elif tier == "low":
             job["sponsorship"] = "rare"
-            job["sponsor_note"] = f"{job['company']} files few H-1Bs (≈{approvals}/yr)"
+            job["sponsor_source"] = "estimate"
+            job["sponsor_note"] = f"Est.: {job['company']} files few H-1Bs (~{approvals}/yr)"
 
 
 # ----------------------------------------------------------------------

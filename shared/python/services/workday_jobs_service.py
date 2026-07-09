@@ -728,19 +728,27 @@ def _attach_sponsorship(jobs: List[Dict[str, Any]]) -> None:
         tier_info = H1B_SPONSORS.get(job.get("tenant") or "")
         tier = tier_info[0] if tier_info else None
         if m:
+            # Direct evidence from the JD itself — the highest-fidelity signal.
             job["sponsorship"] = "refused"
             job["h1b_sponsor"] = False
+            job["sponsor_source"] = "jd_text"
             job["sponsor_note"] = f'JD states: "…{m.group(0)[:70]}…"'
         elif tier in ("high", "medium"):
             job["sponsorship"] = "likely"
             job["h1b_sponsor"] = True
+            # ESTIMATE from a curated employer tier list — NOT live per-employer
+            # USCIS data (that honest path needs the human sponsorship ingest).
+            # Label it as an estimate so we never overstate the source.
+            job["sponsor_source"] = "estimate"
             job["sponsor_note"] = (
-                f"{job['company']} ≈{tier_info[1]:,} H-1B approvals/yr (recent USCIS data)")
+                f"Est.: {job['company']} historically files ~{tier_info[1]:,} H-1Bs/yr")
         elif tier == "low":
             job["sponsorship"] = "rare"
-            job["sponsor_note"] = f"{job['company']} files few H-1Bs (≈{tier_info[1]}/yr)"
+            job["sponsor_source"] = "estimate"
+            job["sponsor_note"] = f"Est.: {job['company']} files few H-1Bs (~{tier_info[1]}/yr)"
         else:
             job["sponsorship"] = "unknown"
+            job["sponsor_source"] = "none"
 
 
 def _load_resume_profile(user_email: str) -> Tuple[List[str], Optional[int]]:
