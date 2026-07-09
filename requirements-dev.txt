@@ -1,0 +1,5 @@
+# Dev/CI-only dependencies for the offline test + eval suite
+# (.github/workflows/tests.yml runs: PYTHONPATH=shared/python pytest tests evals -q).
+# Runtime dependencies live in shared/python/requirements.txt — do not add them here.
+pytest>=8.0
+mongomock>=4.1
