@@ -10,24 +10,17 @@ Runs fully offline (mongomock via conftest/_vg_support; no Bedrock, no live
 Mongo). It asserts the route does NOT 500 and reaches the consent gate.
 """
 import sys
-from pathlib import Path
 
 import pytest
 
-# The resume Lambda's app package lives under services/resume/ (not on the path
-# the shared-layer conftest wires). Add it the way run_local.py / the deploy
-# gate do, before importing the Flask factory.
-_RESUME_SVC = Path(__file__).resolve().parent.parent / "services" / "resume"
-if str(_RESUME_SVC) not in sys.path:
-    sys.path.insert(0, str(_RESUME_SVC))
+from _vg_support import load_service_app
 
 
 @pytest.fixture()
 def client():
-    import app as resume_app  # services/resume/app.py
-    flask_app = resume_app.create_app()
-    flask_app.config["TESTING"] = True
-    return flask_app
+    # Load under a unique module name so it can't collide with another service's
+    # app.py when the whole suite runs in one pytest process.
+    return load_service_app("resume")
 
 
 def _token(flask_app, identity="regression@aspirely.me"):

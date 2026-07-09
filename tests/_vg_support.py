@@ -89,6 +89,28 @@ def mock_db():
     return db
 
 
+def load_service_app(svc: str):
+    """Build a service Lambda's Flask app for a route-level test.
+
+    Each service has its own top-level ``app.py``. A plain ``import app`` caches
+    under the shared name ``app`` in ``sys.modules`` — so when the whole suite
+    runs in ONE pytest process, the second service's ``import app`` returns the
+    first service's module and its routes 404. Load each ``app.py`` under a
+    unique module name via importlib so route tests are order-independent.
+    """
+    import importlib.util
+
+    svc_dir = REPO_ROOT / "services" / svc
+    if str(svc_dir) not in sys.path:
+        sys.path.insert(0, str(svc_dir))
+    spec = importlib.util.spec_from_file_location(f"_svcapp_{svc}", svc_dir / "app.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    flask_app = mod.create_app()
+    flask_app.config["TESTING"] = True
+    return flask_app
+
+
 # --- 4. FakeLLM -------------------------------------------------------------
 class FakeLLM:
     """Deterministic stand-in for ``services.gemini_client.gemini_json``.

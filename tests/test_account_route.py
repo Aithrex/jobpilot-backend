@@ -6,21 +6,17 @@ must be a 400 (never 401, never 500), returning BEFORE any purge is enqueued.
 Offline: mongomock via conftest; the 400 path never reaches AWS.
 """
 import sys
-from pathlib import Path
 
 import pytest
 
-_AUTH_SVC = Path(__file__).resolve().parent.parent / "services" / "auth"
-if str(_AUTH_SVC) not in sys.path:
-    sys.path.insert(0, str(_AUTH_SVC))
+from _vg_support import load_service_app
 
 
 @pytest.fixture()
 def client():
-    import app as auth_app  # services/auth/app.py
-    flask_app = auth_app.create_app()
-    flask_app.config["TESTING"] = True
-    return flask_app
+    # Load under a unique module name so it can't collide with the resume
+    # service's app.py when the whole suite runs in one pytest process.
+    return load_service_app("auth")
 
 
 def _token(flask_app, identity="deleteme@aspirely.me"):
