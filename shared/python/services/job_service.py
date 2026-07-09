@@ -1555,6 +1555,13 @@ class JobService:
             from services.job_legitimacy_service import assess_job
         except Exception:
             assess_job = None
+        # H-1B sponsorship intel (§6.3) — one bulk lookup for the whole page.
+        try:
+            from services.sponsorship_service import bulk_signals as _spons_bulk, attach_signal as _spons_attach
+            _spons_cache = _spons_bulk([j.get("company", "") for j in balanced[:MAX_RETURNED_JOBS]])
+        except Exception:
+            _spons_attach = None
+            _spons_cache = {}
         for job in balanced[:MAX_RETURNED_JOBS]:
             item = dict(job)
             description = str(item.get("description") or "")
@@ -1570,6 +1577,11 @@ class JobService:
             if assess_job is not None:
                 try:
                     item.update(assess_job(item))
+                except Exception:
+                    pass
+            if _spons_attach is not None:
+                try:
+                    item = _spons_attach(item, _spons_cache)
                 except Exception:
                     pass
             prepared.append(item)

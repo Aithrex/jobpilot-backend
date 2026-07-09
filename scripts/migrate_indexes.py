@@ -228,6 +228,10 @@ INDEX_SPECS = [
     ("merge_candidates", [("user_email", ASCENDING), ("status", ASCENDING)],
      {"name": "user_email_status"}),
     ("merge_candidates", [("candidate_id", ASCENDING)], {"unique": True, "name": "candidate_id_unique"}),
+
+    # === Sponsorship intel (§6.3) — upsert/lookup key is the normalized employer.
+    ("sponsorship_signals", [("employer_norm", ASCENDING)],
+     {"unique": True, "name": "employer_norm_unique"}),
 ]
 
 

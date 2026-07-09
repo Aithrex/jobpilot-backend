@@ -15,6 +15,32 @@ from utils.security import InputSanitizer, get_rate_limiter, get_client_ip
 jobs_bp = Blueprint("jobs", __name__)
 logger = logging.getLogger(__name__)
 
+
+# ------------------------------------------------------------------
+# H-1B sponsorship intel (§6.3) — honest, sourced, never a prediction
+# ------------------------------------------------------------------
+@jobs_bp.route("/sponsorship", methods=["GET"])
+@jwt_required()
+def sponsorship():
+    company = InputSanitizer.sanitize_string(request.args.get("company", ""), max_length=200)
+    if not company:
+        return jsonify({"error": "Query parameter 'company' is required"}), 400
+    from services.sponsorship_service import get_signal
+    return jsonify({"company": company, "sponsorship": get_signal(company)}), 200
+
+
+@jobs_bp.route("/sponsorship/bulk", methods=["POST"])
+@jwt_required()
+def sponsorship_bulk():
+    data = request.get_json(silent=True) or {}
+    raw = data.get("companies")
+    if not isinstance(raw, list):
+        return jsonify({"error": "Body must be {\"companies\": [\"...\"]}"}), 400
+    companies = [InputSanitizer.sanitize_string(str(c), max_length=200) for c in raw[:200] if c]
+    from services.sponsorship_service import bulk_signals
+    return jsonify({"signals": bulk_signals(companies)}), 200
+
+
 DEFAULT_JOB_FILTERS = {
     "query": "software engineer new grad entry level h1b sponsor",
     "location": "United States",
