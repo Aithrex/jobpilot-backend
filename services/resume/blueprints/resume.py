@@ -1787,6 +1787,57 @@ def referrals_draft():
 
 
 # ------------------------------------------------------------------
+# Pipeline Intelligence — funnel, ghost detection, cohort benchmark (§6.8)
+# ------------------------------------------------------------------
+@resume_bp.route("/pipeline/funnel", methods=["GET"])
+@jwt_required()
+def pipeline_funnel():
+    user_email = get_jwt_identity()
+    try:
+        from services.pipeline_intel_service import funnel
+        return jsonify(funnel(user_email)), 200
+    except Exception as e:
+        logger.error("pipeline/funnel error: %s", e)
+        return jsonify({"error": "Failed to load pipeline funnel"}), 500
+
+
+@resume_bp.route("/pipeline/ghosts", methods=["GET"])
+@jwt_required()
+def pipeline_ghosts():
+    user_email = get_jwt_identity()
+    try:
+        from services.pipeline_intel_service import ghosts
+        return jsonify({"ghosts": ghosts(user_email)}), 200
+    except Exception as e:
+        logger.error("pipeline/ghosts error: %s", e)
+        return jsonify({"error": "Failed to load ghosted applications"}), 500
+
+
+@resume_bp.route("/pipeline/ghosts/mark", methods=["POST"])
+@jwt_required()
+def pipeline_mark_ghosts():
+    user_email = get_jwt_identity()
+    try:
+        from services.pipeline_intel_service import mark_ghosted
+        return jsonify(mark_ghosted(user_email)), 200
+    except Exception as e:
+        logger.error("pipeline/ghosts/mark error: %s", e)
+        return jsonify({"error": "Failed to mark ghosted applications"}), 500
+
+
+@resume_bp.route("/pipeline/cohort", methods=["GET"])
+@jwt_required()
+def pipeline_cohort():
+    user_email = get_jwt_identity()
+    try:
+        from services.pipeline_intel_service import cohort_benchmark
+        return jsonify(cohort_benchmark(user_email)), 200
+    except Exception as e:
+        logger.error("pipeline/cohort error: %s", e)
+        return jsonify({"error": "Failed to compute cohort benchmark"}), 500
+
+
+# ------------------------------------------------------------------
 # POST /api/resume/download — Generate PDF or DOCX
 # ------------------------------------------------------------------
 

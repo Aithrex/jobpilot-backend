@@ -236,6 +236,10 @@ INDEX_SPECS = [
     # === LinkedIn archive importer (§2.1) — one archive doc per user.
     ("linkedin_archives", [("user_email", ASCENDING)],
      {"unique": True, "name": "user_email_unique"}),
+
+    # === Pipeline intel (§6.8) — ghosts() filters {user_email, application.status}.
+    ("tailoring_records", [("user_email", ASCENDING), ("application.status", ASCENDING)],
+     {"name": "user_email_app_status"}),
 ]
 
 
