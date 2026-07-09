@@ -12,6 +12,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from services import entitlements_service
+from services import stripe_service
 
 billing_bp = Blueprint("billing", __name__)
 logger = logging.getLogger(__name__)
@@ -37,3 +38,35 @@ def upgrade():
         "requested_tier": tier or None,
         "message": "Billing is coming soon — your plan hasn't changed.",
     }), 200
+
+
+# ------------------------------------------------------------------
+# Stripe (§6.10) — dark behind BILLING_ENFORCEMENT; degrade to 503 with no keys.
+# ------------------------------------------------------------------
+@billing_bp.route("/catalog", methods=["GET"])
+@jwt_required()
+def catalog():
+    return jsonify(stripe_service.plan_catalog()), 200
+
+
+@billing_bp.route("/checkout", methods=["POST"])
+@jwt_required()
+def checkout():
+    d = request.get_json(force=True, silent=True) or {}
+    plan = (d.get("plan") or d.get("tier") or "").strip().lower()
+    body, status = stripe_service.create_checkout_session(get_jwt_identity(), plan)
+    return jsonify(body), status
+
+
+@billing_bp.route("/portal", methods=["POST"])
+@jwt_required()
+def portal():
+    body, status = stripe_service.create_portal_session(get_jwt_identity())
+    return jsonify(body), status
+
+
+@billing_bp.route("/webhook", methods=["POST"])  # UNAUTHENTICATED — verified by Stripe signature
+def webhook():
+    sig = request.headers.get("Stripe-Signature", "")
+    body, status = stripe_service.handle_webhook(request.get_data(), sig)
+    return jsonify(body), status

@@ -1,0 +1,48 @@
+# JobPilot plan catalog — Compass §6.10 (Stripe billing "bones").
+#
+# This is the BILLING-FACING catalog only: slugs, display, monthly price, and
+# which Stripe Price the checkout should use. It is DATA, not enforcement.
+#
+# The single source of truth for what a plan is ALLOWED to do (feature gates +
+# metered limits) remains services/entitlements_service.py (PLAN_FEATURES /
+# PLAN_LIMITS). `entitlement_plan` maps each §6.10 billing slug to the canonical
+# entitlements plan id (free / premium / premium_plus) so that
+# entitlements_service.set_plan() is NEVER handed a value outside VALID_PLANS.
+#
+# Prices mirror entitlements_service.PLAN_META today (premium = 19.99,
+# premium_plus = 39.99). CONFIRM the exact §6.10 pricing with product before
+# charging a real card.
+#
+# Stripe Price ids are resolved at runtime from env (see `stripe_price_env`) so
+# no billing identifier is committed to the repo. Create the Stripe Products /
+# Prices first, then set the env vars (SSM in prod).
+#
+# Everything stays dark until BILLING_ENFORCEMENT=true AND real Stripe keys are
+# configured. If this file is absent or unreadable, stripe_service falls back to
+# the entitlements PLAN_META/PLAN_LIMITS matrix — nothing crashes.
+
+version: 1
+currency: usd
+
+plans:
+  free:
+    label: Free
+    entitlement_plan: free
+    price_monthly: 0.0
+    purchasable: false
+    stripe_price_env: null
+
+  pro:
+    label: Pro
+    entitlement_plan: premium
+    price_monthly: 19.99
+    purchasable: true
+    # Env var that holds the Stripe recurring Price id (e.g. price_123...).
+    stripe_price_env: STRIPE_PRICE_PRO
+
+  career:
+    label: Career
+    entitlement_plan: premium_plus
+    price_monthly: 39.99
+    purchasable: true
+    stripe_price_env: STRIPE_PRICE_CAREER

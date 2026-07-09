@@ -218,7 +218,17 @@ def get_plan(email: str) -> str:
         logger.warning("get_plan failed for %s: %s", email, e)
         return DEFAULT_PLAN
     plan = (doc or {}).get("plan")
-    return plan if plan in VALID_PLANS else DEFAULT_PLAN
+    plan = plan if plan in VALID_PLANS else DEFAULT_PLAN
+    # Admin per-user override escape hatch (§6.10) wins over the stored plan.
+    # Defensive: any lookup/shape error simply ignores the override.
+    try:
+        ov = db.entitlement_overrides.find_one({"user_email": email}, {"overrides": 1})
+        ov_plan = ((ov or {}).get("overrides") or {}).get("plan")
+        if ov_plan in VALID_PLANS:
+            return ov_plan
+    except Exception:
+        pass
+    return plan
 
 
 def quota(email_or_plan: str, feature: str) -> Optional[int]:

@@ -17,6 +17,8 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from utils.db_connect import DBConnect
 from services import usage_service
+from services import admin_metrics_service as ops
+from services import stripe_service as billing
 
 admin_bp = Blueprint("admin", __name__)
 logger = logging.getLogger(__name__)
@@ -56,6 +58,79 @@ def admin_required(fn):
             return jsonify({"error": "forbidden", "message": "Admin access required."}), 403
         return fn(*args, **kwargs)
     return wrapper
+
+
+# ------------------------------------------------------------------
+# Ops cockpit (§6.9) — health, redacted-by-default users, content ratings,
+# audited PII reveal, per-user entitlement overrides.
+# ------------------------------------------------------------------
+@admin_bp.route("/ops/health", methods=["GET"])
+@admin_required
+def ops_health():
+    try:
+        hours = int(request.args.get("window_hours", 24))
+    except (TypeError, ValueError):
+        hours = 24
+    return jsonify(ops.ops_health(hours)), 200
+
+
+@admin_bp.route("/ops/user-search", methods=["GET"])
+@admin_required
+def ops_user_search():
+    return jsonify(ops.user_search(request.args.get("q", ""))), 200
+
+
+@admin_bp.route("/ops/user/<path:email>", methods=["GET"])
+@admin_required
+def ops_user_detail(email):
+    unredact = request.args.get("unredact") in ("1", "true", "yes")
+    return jsonify(ops.user_detail(email, redact=not unredact, actor=get_jwt_identity())), 200
+
+
+@admin_bp.route("/ops/content-samples", methods=["GET"])
+@admin_required
+def ops_content_samples():
+    return jsonify(ops.content_samples(request.args.get("kind", ""))), 200
+
+
+@admin_bp.route("/ops/rate-sample", methods=["POST"])
+@admin_required
+def ops_rate_sample():
+    d = request.get_json(force=True, silent=True) or {}
+    res = ops.rate_sample(d.get("kind"), d.get("sample_id"), d.get("rating"), get_jwt_identity(), d.get("notes"))
+    return jsonify(res), (200 if res.get("ok") else 400)
+
+
+@admin_bp.route("/ops/plan-distribution", methods=["GET"])
+@admin_required
+def ops_plan_distribution():
+    return jsonify(ops.plan_distribution()), 200
+
+
+@admin_bp.route("/ops/quota-breaches", methods=["GET"])
+@admin_required
+def ops_quota_breaches():
+    return jsonify(ops.quota_breaches()), 200
+
+
+@admin_bp.route("/ops/audit", methods=["GET"])
+@admin_required
+def ops_audit():
+    return jsonify({"audit": ops.recent_audit()}), 200
+
+
+@admin_bp.route("/ops/override/<path:email>", methods=["GET"])
+@admin_required
+def ops_get_override(email):
+    return jsonify(billing.get_override(email)), 200
+
+
+@admin_bp.route("/ops/override/<path:email>", methods=["PUT"])
+@admin_required
+def ops_set_override(email):
+    d = request.get_json(force=True, silent=True) or {}
+    res = billing.set_override(email, d.get("overrides"), actor=get_jwt_identity())
+    return jsonify(res), (400 if res.get("error") else 200)
 
 
 # ---------------------------------------------------------------------------

@@ -263,6 +263,14 @@ INDEX_SPECS = [
     ("email_ingress", [("purge_after", ASCENDING)], {"expireAfterSeconds": 0, "name": "ttl_purge_after"}),
     ("mail_ingress_suggestions", [("suggestion_id", ASCENDING)], {"unique": True, "name": "suggestion_id_unique"}),
     ("mail_ingress_suggestions", [("user_email", ASCENDING)], {"name": "by_user"}),
+
+    # === Admin cockpit + Stripe billing bones (§6.9/§6.10).
+    # stripe_events unique is a CORRECTNESS requirement (webhook idempotency).
+    ("stripe_events", [("event_id", ASCENDING)], {"unique": True, "name": "event_id_unique"}),
+    ("entitlement_overrides", [("user_email", ASCENDING)], {"unique": True, "name": "user_email_unique"}),
+    ("audit_log", [("at", DESCENDING)], {"name": "at_desc"}),
+    ("audit_log", [("target", ASCENDING), ("at", DESCENDING)], {"name": "target_at"}),
+    ("eval_ratings", [("kind", ASCENDING), ("sample_id", ASCENDING)], {"name": "kind_sample"}),
 ]
 
 
