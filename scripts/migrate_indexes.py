@@ -271,6 +271,10 @@ INDEX_SPECS = [
     ("audit_log", [("at", DESCENDING)], {"name": "at_desc"}),
     ("audit_log", [("target", ASCENDING), ("at", DESCENDING)], {"name": "target_at"}),
     ("eval_ratings", [("kind", ASCENDING), ("sample_id", ASCENDING)], {"name": "kind_sample"}),
+
+    # === Learning §6.6 — cached differentiation analysis (reload without re-spend).
+    ("differentiation_analyses", [("user_email", ASCENDING)],
+     {"unique": True, "name": "user_email_unique"}),
 ]
 
 

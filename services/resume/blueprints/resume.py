@@ -3588,6 +3588,39 @@ def learning_plan_create():
     from services.resume_service import get_resume_service, ResumeService
 
     body = request.get_json(silent=True) or {}
+
+    # §6.6 differentiation-driven plan (practical, verified, adaptive depth). If a
+    # chosen differentiator is supplied, build from it instead of a free-text topic.
+    diff = body.get("differentiator")
+    if diff and isinstance(diff, dict) and diff.get("gap"):
+        from services import differentiation_service
+        if getattr(differentiation_service, "LEARNING_DIFF_ENABLED", True):
+            plan_tier = entitlements_service.get_plan(user_email)
+            cap = entitlements_service.quota(plan_tier, "active_learning_paths")
+            if cap is not None and learning_service.count_active_paths(user_email) >= cap:
+                return entitlements_service.upgrade_required_response(user_email, "learning")
+            allowed, usage = entitlements_service.check_and_increment(user_email, "learning_plan_generate")
+            if not allowed:
+                return entitlements_service.upgrade_required_response(user_email, "learning", usage)
+            try:
+                days = int(body.get("days") or 14)
+            except (TypeError, ValueError):
+                days = 14
+            payload = {
+                "user_email": user_email,
+                "differentiator": {
+                    "gap": InputSanitizer.sanitize_string(str(diff.get("gap")), 120),
+                    "why_recruiters_care": InputSanitizer.sanitize_string(str(diff.get("why_recruiters_care") or ""), 500),
+                    "market_frequency": diff.get("market_frequency"),
+                },
+                "days": 7 if days <= 7 else 14,
+                "level": InputSanitizer.sanitize_string(str(body.get("level") or "auto"), 16),
+            }
+            svc = get_resume_service()
+            job_id = svc.create_job("learning_plan", payload, user_email=user_email)
+            ResumeService.invoke_async(job_id, "learning_plan", payload)
+            return jsonify({"job_id": job_id}), 202
+
     topic = InputSanitizer.sanitize_string(str(body.get("topic") or ""), max_length=200)
     if not topic:
         return jsonify({"error": "A topic is required"}), 400
@@ -3619,6 +3652,47 @@ def learning_plan_create():
     svc = get_resume_service()
     job_id = svc.create_job("learning_plan", payload, user_email=user_email)
     ResumeService.invoke_async(job_id, "learning_plan", payload)
+    return jsonify({"job_id": job_id}), 202
+
+
+# ------------------------------------------------------------------
+# §6.6 — differentiation analysis + verified proof-of-work
+# ------------------------------------------------------------------
+@resume_bp.route("/learning/differentiators", methods=["POST"])
+@jwt_required()
+def learning_differentiators():
+    user_email = get_jwt_identity()
+    from services import entitlements_service, differentiation_service
+    from services.resume_service import get_resume_service, ResumeService
+    if not getattr(differentiation_service, "LEARNING_DIFF_ENABLED", True):
+        return jsonify({"error": "not_available"}), 404
+    allowed, usage = entitlements_service.check_and_increment(user_email, "differentiation_analysis")
+    if not allowed:
+        return entitlements_service.upgrade_required_response(user_email, "differentiation_analysis", usage)
+    job_id = get_resume_service().create_job("learning_differentiators", {"user_email": user_email}, user_email=user_email)
+    ResumeService.invoke_async(job_id, "learning_differentiators", {"user_email": user_email})
+    return jsonify({"job_id": job_id}), 202
+
+
+@resume_bp.route("/learning/paths/<path_id>/task/<task_ref>/verify", methods=["POST"])
+@jwt_required()
+def learning_task_verify(path_id, task_ref):
+    user_email = get_jwt_identity()
+    from services import entitlements_service
+    from services.resume_service import get_resume_service, ResumeService
+    task_ref = InputSanitizer.sanitize_string(task_ref, max_length=64)
+    body = request.get_json(silent=True) or {}
+    proof = {
+        "url": InputSanitizer.sanitize_string(str(body.get("url") or ""), 500),
+        "text": InputSanitizer.sanitize_string(str(body.get("text") or ""), 20000),
+        "type": InputSanitizer.sanitize_string(str(body.get("type") or ""), 32),
+    }
+    allowed, usage = entitlements_service.check_and_increment(user_email, "task_verify")
+    if not allowed:
+        return entitlements_service.upgrade_required_response(user_email, "task_verify", usage)
+    payload = {"user_email": user_email, "path_id": path_id, "task_ref": task_ref, "proof": proof}
+    job_id = get_resume_service().create_job("learning_verify", payload, user_email=user_email)
+    ResumeService.invoke_async(job_id, "learning_verify", payload)
     return jsonify({"job_id": job_id}), 202
 
 

@@ -364,10 +364,29 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             svc.complete_job(job_id, {"jd_analysis": result})
 
         elif job_type == "learning_plan":
-            # Pillar B — generate an end-to-end study plan (PRO). Stores the
-            # learning_paths/learning_progress docs and returns the new path.
+            # Pillar B — generate an end-to-end study plan (PRO). A chosen
+            # differentiator (§6.6) builds a practical, verified, adaptive-depth
+            # plan; otherwise the classic topic-driven plan.
             from services import learning_service
-            result = learning_service.build_plan_job(payload)
+            if payload.get("differentiator"):
+                from services import differentiation_service
+                result = differentiation_service.build_differentiation_plan_job(payload)
+            else:
+                result = learning_service.build_plan_job(payload)
+            svc.complete_job(job_id, result)
+
+        elif job_type == "learning_differentiators":
+            # §6.6 Step 1 — derive 2-4 scarce, closeable, in-demand gaps from the
+            # user's real matched-JD market + resume evidence (code-level reject filter).
+            from services import differentiation_service
+            result = differentiation_service.build_differentiators_job(payload)
+            svc.complete_job(job_id, result)
+
+        elif job_type == "learning_verify":
+            # §6.6 Step 3 — verify proof-of-work (GitHub existence + commit-window +
+            # acceptance criteria) → verified | needs_work(coach) | unverifiable.
+            from services import learning_verifier
+            result = learning_verifier.build_verify_job(payload)
             svc.complete_job(job_id, result)
 
         elif job_type == "event_scrape":
