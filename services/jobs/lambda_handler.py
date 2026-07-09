@@ -44,6 +44,16 @@ def handler(event, context):
             'request_id': getattr(context, 'aws_request_id', 'local') if context else 'local',
         }
 
+        # ── Async job invocation (this Lambda invoking itself) ──
+        # ResumeService.invoke_async self-invokes AWS_LAMBDA_FUNCTION_NAME, so
+        # async jobs kicked off from jobs routes (/search, /batch-search,
+        # /pipeline, /workday/search, /career-pages/search) land HERE, not on
+        # the resume Lambda. process_async_job lives in the shared layer.
+        if event.get("async_job"):
+            from services.resume_service import process_async_job
+            process_async_job(event)
+            return {"statusCode": 200, "body": "OK"}
+
         if os.getenv('ENVIRONMENT') != 'prod':
             logger.info(
                 f"Incoming request: "

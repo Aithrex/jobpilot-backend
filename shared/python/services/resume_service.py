@@ -201,21 +201,37 @@ class ResumeService:
             logger.info(f"Async job {job_id} ({job_type}) dispatched to background thread")
             return
 
+        import re
+
         import boto3
 
-        client = boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "us-east-1"))
-        client.invoke(
-            FunctionName=func_name,
-            InvocationType="Event",  # async — returns immediately
-            Payload=json.dumps(
-                {
-                    "async_job": True,
-                    "job_id": job_id,
-                    "job_type": job_type,
-                    "payload": payload,
-                }
-            ),
+        # Async jobs always target the RESUME Lambda — the only function
+        # provisioned for long work (300s / 1536MB; auth=30s, jobs=60s,
+        # billing=15s would kill a fan-out mid-run). Function names follow
+        # {project}-{service}-{env} and the SelfInvoke IAM statement grants
+        # invoke on {project}-*-{env}, so cross-service dispatch is allowed.
+        target = os.environ.get("ASYNC_JOB_FUNCTION_NAME") or re.sub(
+            r"-(auth|jobs|billing)-", "-resume-", func_name
         )
+
+        client = boto3.client("lambda", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+        event_payload = json.dumps(
+            {
+                "async_job": True,
+                "job_id": job_id,
+                "job_type": job_type,
+                "payload": payload,
+            }
+        )
+        try:
+            client.invoke(FunctionName=target, InvocationType="Event", Payload=event_payload)
+        except Exception:  # noqa: BLE001 — name-derivation miss: fall back to self-invoke
+            if target == func_name:
+                raise
+            logger.warning(
+                f"Async dispatch to {target} failed; falling back to self-invoke {func_name}"
+            )
+            client.invoke(FunctionName=func_name, InvocationType="Event", Payload=event_payload)
         logger.info(f"Async job {job_id} ({job_type}) dispatched to Lambda")
 
     # ------------------------------------------------------------------
@@ -957,6 +973,24 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                     partial_cb=_stream_partial,
                     **common,
                 )
+            svc.complete_job(job_id, result)
+
+        elif job_type == "workday_jobs":
+            from services.workday_jobs_service import run_workday_jobs_search
+
+            def _stream_workday_partial(partial: dict) -> None:
+                svc.update_job_partial(job_id, partial)
+
+            result = run_workday_jobs_search(payload, partial_cb=_stream_workday_partial)
+            svc.complete_job(job_id, result)
+
+        elif job_type == "career_pages":
+            from services.career_pages_service import run_career_pages_search
+
+            def _stream_career_partial(partial: dict) -> None:
+                svc.update_job_partial(job_id, partial)
+
+            result = run_career_pages_search(payload, partial_cb=_stream_career_partial)
             svc.complete_job(job_id, result)
 
         elif job_type == "daily_pipeline":

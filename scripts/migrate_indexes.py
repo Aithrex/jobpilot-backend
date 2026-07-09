@@ -272,6 +272,27 @@ INDEX_SPECS = [
     ("audit_log", [("target", ASCENDING), ("at", DESCENDING)], {"name": "target_at"}),
     ("eval_ratings", [("kind", ASCENDING), ("sample_id", ASCENDING)], {"name": "kind_sample"}),
 
+    # === Workday Jobs / Career Pages live-search caches ====================
+    # Both services ALSO create these lazily at runtime (workday_jobs_service
+    # ._get_cache_collection / career_pages_service._get_cache_collection) —
+    # re-asserted here with MATCHING names/options so a fresh DB is covered
+    # up front and the runtime call is a no-op.
+    # workday_jobs_service._read_cache/_write_cache: find_one/update_one on
+    # {cache_key} (upsert key → unique). Runtime create_index("cache_key",
+    # unique=True) yields PyMongo's default name "cache_key_1" — match it.
+    ("workday_jobs_cache", [("cache_key", ASCENDING)],
+     {"unique": True, "name": "cache_key_1"}),
+    # TTL reaper on cached_at (CACHE_TTL_SECONDS = 6h); freshness horizon is
+    # enforced in-app at 3h via the $gte cutoff in _read_cache.
+    ("workday_jobs_cache", [("cached_at", ASCENDING)],
+     {"expireAfterSeconds": 6 * 3600, "name": "workday_jobs_cache_ttl"}),
+    # career_pages_service._read_cache: find_one({cache_key}); upsert on it.
+    # Runtime creates it unnamed → default "cache_key_1"; not unique in the
+    # legacy service, kept identical here.
+    ("career_pages_cache", [("cache_key", ASCENDING)], {"name": "cache_key_1"}),
+    ("career_pages_cache", [("cached_at", ASCENDING)],
+     {"expireAfterSeconds": 6 * 3600, "name": "career_pages_cache_ttl"}),
+
     # === Learning §6.6 — cached differentiation analysis (reload without re-spend).
     ("differentiation_analyses", [("user_email", ASCENDING)],
      {"unique": True, "name": "user_email_unique"}),
