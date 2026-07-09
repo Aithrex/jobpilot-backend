@@ -29,13 +29,55 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from utils.security import InputSanitizer, get_rate_limiter, get_client_ip
 from utils.db_connect import DBConnect
-from services.usage_service import check_and_increment as _quota_check_and_increment
+from services import entitlements_service
 
 apply_bp = Blueprint("apply", __name__)
 logger = logging.getLogger(__name__)
 
 # Cap the stored vault so a malformed/oversized client payload can't bloat Mongo.
 _MAX_VAULT_BYTES = 256 * 1024
+
+# Server-side backstop for the extension's client-side fill cap
+# (jobpilot-frontend/extension/lib/ratelimit.js — 40/hr, 150/day, self-labeled
+# "not a security boundary"). Enforced per AUTHENTICATED USER here so a tampered
+# or bypassed client can't spray-and-pray. Uses the same in-process rate limiter
+# as the per-IP answer budget below — best-effort per Lambda container (API
+# Gateway throttling remains the primary global limit), matching the documented
+# behavior of RateLimiter.
+_MAX_FILLS_PER_HOUR = 40
+_MAX_FILLS_PER_DAY = 150
+
+
+def _fill_cap_response(scope: str, limit: int):
+    """429 in the standard quota shape when a per-user fill cap is hit."""
+    return (
+        jsonify({
+            "error": "fill_limit_exceeded",
+            "message": (
+                f"You've reached your {scope} autofill limit ({limit}). "
+                "Slow, tailored applications convert — take a short break."
+            ),
+            "usage": {"scope": scope, "limit": limit},
+        }),
+        429,
+    )
+
+
+def _fill_cap_exceeded(user_email: str):
+    """Per-user rolling fill cap (hour + day). Returns a 429 response tuple if
+    exceeded, else None. Backs the extension's client-only courtesy limit with a
+    real server boundary. Hour is checked first so an hour-blocked request does
+    not also consume a day slot."""
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(
+        f"apply_fill_hour:{user_email}", max_requests=_MAX_FILLS_PER_HOUR, window_seconds=3600
+    ):
+        return _fill_cap_response("hourly", _MAX_FILLS_PER_HOUR)
+    if limiter.is_rate_limited(
+        f"apply_fill_day:{user_email}", max_requests=_MAX_FILLS_PER_DAY, window_seconds=86400
+    ):
+        return _fill_cap_response("daily", _MAX_FILLS_PER_DAY)
+    return None
 
 
 def _quota_exceeded_response(usage: dict):
@@ -166,7 +208,15 @@ def generate_answer():
 
     try:
         user_email = get_jwt_identity()
-        allowed, usage = _quota_check_and_increment(user_email, 1)
+
+        # Server-side fill cap (per authenticated user) — gate before any spend.
+        fill_capped = _fill_cap_exceeded(user_email)
+        if fill_capped is not None:
+            return fill_capped
+
+        # Meter the DEDICATED autoapply_answer bucket, not the tailor bucket —
+        # so the extension has its own quota and we don't double-count tailor.
+        allowed, usage = entitlements_service.check_and_increment(user_email, "autoapply_answer")
         if not allowed:
             return _quota_exceeded_response(usage)
 

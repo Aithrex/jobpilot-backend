@@ -1927,7 +1927,7 @@ def mail_ingress_suggestions():
         return jsonify({"error": "Failed to load suggestions"}), 500
 
 
-@resume_bp.route("/mail-ingress/suggestions/<suggestion_id>", methods=["POST"])
+@resume_bp.route("/mail-ingress/suggestions/<suggestion_id>/resolve", methods=["POST"])
 @jwt_required()
 def mail_ingress_resolve(suggestion_id):
     from services import mail_ingress_service as mi
@@ -3250,7 +3250,9 @@ def gmail_status():
         logger.exception("gmail import failed: %s", e)
         return jsonify({"error": "Gmail integration unavailable"}), 500
 
-    configured = gmail_service.gmail_configured()
+    # `configured` reflects BOTH creds AND the GMAIL_OAUTH_ENABLED kill-switch,
+    # so the FE hides the connect UI when the readonly scope is disabled.
+    configured = gmail_service.gmail_configured() and gmail_service.gmail_oauth_enabled()
     conn = gmail_service.get_connection(user_email) if configured else None
     pending = 0
     if conn:
@@ -3271,6 +3273,9 @@ def gmail_status():
 def gmail_auth_url():
     user_email = get_jwt_identity()
     from services import gmail_service
+    # Kill-switch: block the gmail.readonly consent flow independent of creds.
+    if not gmail_service.gmail_oauth_enabled():
+        return jsonify({"error": "Gmail integration is disabled"}), 503
     if not gmail_service.gmail_configured():
         return jsonify({"error": "Gmail OAuth is not configured on the server"}), 503
     try:
@@ -3292,6 +3297,9 @@ def gmail_callback():
         return jsonify({"error": "code and state are required"}), 400
 
     from services import gmail_service
+    # Kill-switch: refuse to complete a readonly-scope grant when disabled.
+    if not gmail_service.gmail_oauth_enabled():
+        return jsonify({"error": "Gmail integration is disabled"}), 503
     issued_to = gmail_service.consume_state(state)
     if not issued_to or issued_to != user_email:
         return jsonify({"error": "Invalid or expired OAuth state"}), 400
@@ -3313,8 +3321,11 @@ def gmail_sync():
     if limiter.is_rate_limited(f"gmail_sync:{user_email}:{client_ip}", max_requests=6, window_seconds=300):
         return jsonify({"error": "Sync rate limit hit. Try again in a few minutes."}), 429
 
-    # Quick guard so we don't bother dispatching when the user isn't linked.
+    # Kill-switch: no readonly-scope reads when the flag is off.
     from services import gmail_service
+    if not gmail_service.gmail_oauth_enabled():
+        return jsonify({"error": "Gmail integration is disabled"}), 503
+    # Quick guard so we don't bother dispatching when the user isn't linked.
     if not gmail_service.get_connection(user_email):
         return jsonify({"error": "Gmail is not connected"}), 400
 

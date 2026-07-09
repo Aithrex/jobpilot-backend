@@ -117,6 +117,29 @@ def gmail_configured() -> bool:
     return bool(_client_id() and _client_secret() and _redirect_uri())
 
 
+_FLAG_TRUE = {"1", "true", "yes", "on"}
+_FLAG_FALSE = {"0", "false", "no", "off"}
+
+
+def gmail_oauth_enabled() -> bool:
+    """`GMAIL_OAUTH_ENABLED` kill-switch for the `gmail.readonly` scope (Track B,
+    §2.4). INDEPENDENT of credential presence: even with valid Google OAuth creds
+    configured, the readonly scope stays disabled until this flag is on — so a
+    single env var disables mail sync/consent without unsetting secrets.
+
+    Unset → ON in dev, OFF in prod (the scope needs Google verification + CASA
+    Tier 2 before go-live — see MANUAL_STEPS.md), mirroring how
+    `VOICE_GRAPH_ENABLED` / `MAIL_INGRESS_ENABLED` are read.
+    """
+    import os
+    raw = (_get_config_value("GMAIL_OAUTH_ENABLED", "") or "").strip().lower()
+    if raw in _FLAG_TRUE:
+        return True
+    if raw in _FLAG_FALSE:
+        return False
+    return os.getenv("ENVIRONMENT", "development").strip().lower() == "development"
+
+
 # ---------------------------------------------------------------------------
 # Mongo collections (created on first use)
 # ---------------------------------------------------------------------------

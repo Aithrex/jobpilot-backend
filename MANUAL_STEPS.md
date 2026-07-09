@@ -22,7 +22,7 @@ below blocks the code that ships around it.
 | WhatsApp digest (§2.5) | Meta Business verification + WhatsApp Cloud API + template approval (days). Notifications fall back to email/push until then. |
 | SMS (§2.5) | Twilio account + number + keys. |
 | Mail-ingress Track A (§2.4) | A receiving domain (e.g. inbox.<domain>) with SES inbound + MX records + an S3/Lambda hook. |
-| Gmail OAuth Track B (§2.4) | Google OAuth verification + CASA Tier 2 assessment. Behind `GMAIL_OAUTH_ENABLED`. |
+| Gmail OAuth Track B (§2.4) | Google OAuth verification + CASA Tier 2 assessment. Behind `GMAIL_OAUTH_ENABLED` (kill-switch in `gmail_service.gmail_oauth_enabled()`; default OFF in prod, ON in dev; gates the `gmail.readonly` consent/callback/sync routes independent of credential presence). Flip to `true` only after the CASA assessment passes. |
 | LinkedIn posting (§2.2) | "Share on LinkedIn" product approval for `w_member_social`. (Connect flow already built.) |
 
 ## Compass epics shipped this build — their human gates
