@@ -96,11 +96,17 @@ def create_app():
     from blueprints.tech_chronicle import tech_chronicle_bp
     app.register_blueprint(tech_chronicle_bp, url_prefix='/api/tech-chronicle')
 
+    # Voice Graph — mounted UNDER /api/resume so it rides the existing
+    # "ANY /api/resume/{proxy+}" edge route (no new Terraform route). Gated by
+    # VOICE_GRAPH_ENABLED (default off in prod → routes 404).
+    from blueprints.voice_graph import voice_graph_bp
+    app.register_blueprint(voice_graph_bp, url_prefix='/api/resume/voice-graph')
+
     @app.route('/api/health')
     def health():
         return {'status': 'healthy', 'service': 'resume-service', 'version': '2.0.0'}, 200
 
-    logger.info("Resume service initialized (resume, feedback, tech_chronicle registered)")
+    logger.info("Resume service initialized (resume, feedback, tech_chronicle, voice_graph registered)")
     return app
 
 

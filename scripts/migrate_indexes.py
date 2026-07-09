@@ -199,6 +199,27 @@ INDEX_SPECS = [
     # github_profile_service:166 update_one({user_email}, upsert); :175/187 find_one({user_email}).
     ("github_profiles", [("user_email", ASCENDING)],
      {"unique": True, "name": "user_email_unique"}),
+
+    # === Voice Graph (addendum §6.12) =====================================
+    # writing_samples: samples.list find({user_email}) sort updated_at desc;
+    # get/save/delete filter {sample_id, user_email}. sample_id is a uuid4.
+    ("writing_samples", [("user_email", ASCENDING), ("updated_at", DESCENDING)],
+     {"name": "user_email_updated_at"}),
+    ("writing_samples", [("sample_id", ASCENDING)], {"unique": True, "name": "sample_id_unique"}),
+    # consents: per-scope ledger, upsert/find {user_email, scope} — one row per pair.
+    ("consents", [("user_email", ASCENDING), ("scope", ASCENDING)],
+     {"unique": True, "name": "user_email_scope_unique"}),
+    # graph_nodes / graph_edges / graph_evidence (populated in VG Step 2) — index
+    # now so per-user traversal never COLLSCANs.
+    ("graph_nodes", [("user_email", ASCENDING)], {"name": "user_email_idx"}),
+    ("graph_nodes", [("node_id", ASCENDING)], {"unique": True, "name": "node_id_unique"}),
+    ("graph_edges", [("user_email", ASCENDING)], {"name": "user_email_idx"}),
+    ("graph_edges", [("edge_id", ASCENDING)], {"unique": True, "name": "edge_id_unique"}),
+    ("graph_evidence", [("user_email", ASCENDING)], {"name": "user_email_idx"}),
+    ("graph_evidence", [("target_type", ASCENDING), ("target_id", ASCENDING)],
+     {"name": "target_idx"}),
+    # style_profiles: one active profile per user (versioned in-doc).
+    ("style_profiles", [("user_email", ASCENDING)], {"unique": True, "name": "user_email_unique"}),
 ]
 
 

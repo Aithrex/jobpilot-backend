@@ -101,6 +101,8 @@ def create_app():
     app.register_blueprint(feedback_bp, url_prefix='/api/resume/feedback')
     from blueprints.tech_chronicle import tech_chronicle_bp
     app.register_blueprint(tech_chronicle_bp, url_prefix='/api/tech-chronicle')
+    from blueprints.voice_graph import voice_graph_bp
+    app.register_blueprint(voice_graph_bp, url_prefix='/api/resume/voice-graph')
 
     # billing service
     from blueprints.billing import billing_bp

@@ -69,6 +69,7 @@ FEATURE_PERIODS = {
     "salary": PERIOD_DAY,
     "post_draft": PERIOD_MONTH,
     "learning_plan_generate": PERIOD_DAY,
+    "authored_resume": PERIOD_MONTH,   # Voice Graph — §6.12.10
 }
 
 PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
@@ -83,9 +84,11 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "salary": 3,
         "post_draft": 1,
         "learning_plan_generate": 1,
+        "authored_resume": 1,         # Voice Graph — §6.12.10 (raw mode is always free)
         # Structural caps (checked against live state, not time-windowed):
         "batch_tailor_max": 0,        # batch tailoring disabled on free
         "active_learning_paths": 1,
+        "writing_samples": 1,         # Voice Graph — count of finalized samples
     },
     PREMIUM: {
         "tailor": 30,
@@ -98,8 +101,10 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "salary": None,
         "post_draft": 8,
         "learning_plan_generate": 10,
+        "authored_resume": 10,
         "batch_tailor_max": 10,
         "active_learning_paths": 5,
+        "writing_samples": 5,
     },
     PREMIUM_PLUS: {
         "tailor": 100,               # soft cap to deter abuse; effectively unlimited
@@ -112,8 +117,10 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "salary": None,
         "post_draft": None,
         "learning_plan_generate": None,
+        "authored_resume": None,
         "batch_tailor_max": 25,
         "active_learning_paths": None,
+        "writing_samples": None,
     },
 }
 
@@ -132,6 +139,7 @@ _CORE = {
     "learning",
     "post_draft",
     "salary",
+    "voice_graph",     # capture + raw-mode resume available on every tier (§6.12.10)
 }
 
 PLAN_FEATURES: Dict[str, set] = {
