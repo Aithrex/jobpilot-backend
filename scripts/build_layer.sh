@@ -3,6 +3,7 @@
 #
 # The layer contains BOTH:
 #   1. the shared CODE  (utils/ models/ services/ schemas/)  -> /opt/python/...
+#      plus the repo-root config/ (plans.yaml)                -> /opt/python/config/
 #   2. the installed DEPS (pymongo, fpdf2, cryptography, ...) -> /opt/python/...
 # At runtime Lambda mounts the layer at /opt/python, which is on sys.path, so
 # `from utils.config import ...` and `from services.resume_service import ...`
@@ -27,8 +28,27 @@ echo ">> Copying shared code (utils, models, services, schemas)"
 for d in utils models services schemas; do
   cp -r "$ROOT/shared/python/$d" "$PYDIR/$d"
 done
+
+# Package the repo-root config/ (plans.yaml) into the layer at python/config/.
+# stripe_service._plans_yaml_candidates() probes <services-dir>/../config/plans.yaml;
+# the layer mounts services at /opt/python/services, so that candidate resolves to
+# /opt/python/config/plans.yaml — exactly where this copy lands in the zip
+# (python/config/plans.yaml). Do NOT move it: the other candidates (cwd=/var/task,
+# /opt/config) never hit at Lambda runtime.
+echo ">> Copying plan catalog (config/ -> python/config/)"
+cp -r "$ROOT/config" "$PYDIR/config"
+
 # Strip bytecode caches from the copied code
 find "$PYDIR" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
+# http_ece (pywebpush's dep) publishes NO wheel on PyPI, only an sdist, which
+# the cross-platform --only-binary=:all: install below cannot consume. It is
+# pure Python, so build a universal (py*-none-any) wheel locally and expose it
+# via --find-links so the main resolve succeeds.
+WHEELS="$ROOT/build/wheels"
+echo ">> Building universal wheel for sdist-only pure-python dep (http_ece)"
+mkdir -p "$WHEELS"
+python -m pip wheel http_ece --no-deps -w "$WHEELS"
 
 echo ">> Installing dependencies (Linux/manylinux wheels, cp${PYVER//./})"
 python -m pip install \
@@ -37,6 +57,7 @@ python -m pip install \
   --implementation cp \
   --python-version "$PYVER" \
   --only-binary=:all: \
+  --find-links "$WHEELS" \
   --upgrade \
   --target "$PYDIR"
 
