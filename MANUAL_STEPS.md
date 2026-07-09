@@ -14,6 +14,21 @@ below blocks the code that ships around it.
 | Model tier | Extraction/authored use PRO (Sonnet 4.6), the top wired Bedrock tier. The addendum names Opus (`claude-opus-4-8`); to use it, enable that model in Bedrock and add a tier id — see ADR-002. | Optional upgrade |
 | Ship gate | Human blind panel (`recruiter-panel`): authored must beat assisted and beat the original before flipping the prod flag (§6.12.9). | Before go-live |
 
+## Opt-in auto-submit (§ guardrailed apply) — current build
+
+The shipped default is the **never-submit Review Card**: the extension fills a form
+and stops. Auto-submit is inert until an operator flips it, and even then only ever
+fires with explicit, per-application user approval (undo window + single-use,
+expiring approval record). Backend is complete behind the flag; the WhatsApp
+approval channel's carrier plumbing is the human gate below.
+
+| Step | What | Status |
+|---|---|---|
+| Master kill-switch | Set `AUTO_SUBMIT_ENABLED=true` on the **jobs** Lambda env/SSM to expose the feature. Default is OFF in prod (every `/api/apply/auto-submit/*` route 404s), ON in local dev — same resolution as `VOICE_GRAPH_ENABLED` / `MAIL_INGRESS_ENABLED` / `GMAIL_OAUTH_ENABLED` (`auto_submit_service.auto_submit_enabled()`). | Human toggle when ready |
+| Per-user opt-in | Separate from the master flag: each user must set `auto_submit_enabled=true` via `PUT /api/apply/auto-submit/settings` (default False). BOTH must be true to auto-submit. | User action |
+| Indexes | Run `python scripts/migrate_indexes.py` to create indexes for `auto_submit_settings`, `auto_submit_approvals`, `auto_submit_audit` (specs added this session). Until then those queries COLLSCAN (fine at low volume). | Run once |
+| **WhatsApp approval channel** | The backend hook `auto_submit_service.create_whatsapp_approval(user_email, application_id, answers)` creates an `approved` record with `source: whatsapp`, carrying the SAME guardrails as in-app (master flag + per-user opt-in + undo window + single-use expiry). The **Twilio / WhatsApp Cloud API send + receive is NOT built** and is not faked: it needs a Meta Business verification + WhatsApp Cloud API number + an approved message template (days), and Twilio (account + number + keys) if SMS-backed. The inbound reply handler is a NEW top-level prefix (e.g. `POST /api/whatsapp-inbound`) that needs an **external Terraform edge route** + Twilio/Meta signature verification; only after verifying an approving reply does it call `create_whatsapp_approval(...)`. Until wired, auto-submit approvals arrive `in_app` only. | Meta/Twilio account + verification + template approval + edge route |
+
 ## Anticipated gates for later epics (built behind flags as we reach them)
 
 | Epic | Human gate |

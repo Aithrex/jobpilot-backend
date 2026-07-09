@@ -30,6 +30,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from utils.security import InputSanitizer, get_rate_limiter, get_client_ip
 from utils.db_connect import DBConnect
 from services import entitlements_service
+from services import auto_submit_service
 
 apply_bp = Blueprint("apply", __name__)
 logger = logging.getLogger(__name__)
@@ -306,3 +307,205 @@ def list_answers():
     except Exception as e:
         logger.exception("apply/answers error: %s", e)
         return jsonify({"error": "Failed to load answer history"}), 500
+
+
+# ==================================================================
+# OPT-IN AUTO-SUBMIT (§ guardrailed) — all gated by AUTO_SUBMIT_ENABLED.
+#
+# The shipped default is the never-submit Review Card. Auto-submit only ever
+# happens when the master flag is ON *and* the user opted in *and* an eligible,
+# single-use, past-undo, unexpired approval exists for that exact application.
+# The extension NEVER submits without seeing such a record via .../pending.
+# All business/consent failures are 400/403/404/409/429 — never 401.
+# ==================================================================
+_MAX_AUTO_SUBMIT_ANSWERS_BYTES = 128 * 1024
+
+
+def _auto_submit_disabled():
+    """404 when the master kill-switch is off — the feature is invisible in prod
+    until an operator flips AUTO_SUBMIT_ENABLED, mirroring the other flagged
+    features (voice_graph / mail_ingress / gmail_oauth)."""
+    if not auto_submit_service.auto_submit_enabled():
+        return jsonify({"error": "not_found"}), 404
+    return None
+
+
+def _auto_submit_error(e: "auto_submit_service.AutoSubmitError"):
+    """Map a typed service error to its HTTP status + JSON body (never 401)."""
+    return jsonify({"error": e.error, "message": e.message}), e.status
+
+
+# ------------------------------------------------------------------
+# GET/PUT /api/apply/auto-submit/settings — the per-user opt-in
+# ------------------------------------------------------------------
+@apply_bp.route("/auto-submit/settings", methods=["GET"])
+@jwt_required()
+def auto_submit_get_settings():
+    disabled = _auto_submit_disabled()
+    if disabled is not None:
+        return disabled
+    user_email = get_jwt_identity()
+    try:
+        return jsonify(auto_submit_service.get_settings(user_email)), 200
+    except Exception as e:
+        logger.exception("apply/auto-submit settings GET error: %s", e)
+        return jsonify({"error": "Failed to load auto-submit settings"}), 500
+
+
+@apply_bp.route("/auto-submit/settings", methods=["PUT"])
+@jwt_required()
+def auto_submit_put_settings():
+    disabled = _auto_submit_disabled()
+    if disabled is not None:
+        return disabled
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    enabled = data.get("auto_submit_enabled")
+    if not isinstance(enabled, bool):
+        return jsonify({"error": "auto_submit_enabled (boolean) is required"}), 400
+    try:
+        return jsonify(auto_submit_service.set_settings(user_email, enabled)), 200
+    except Exception as e:
+        logger.exception("apply/auto-submit settings PUT error: %s", e)
+        return jsonify({"error": "Failed to save auto-submit settings"}), 500
+
+
+# ------------------------------------------------------------------
+# POST /api/apply/auto-submit/approve — create/approve an approval record
+# ------------------------------------------------------------------
+@apply_bp.route("/auto-submit/approve", methods=["POST"])
+@jwt_required()
+def auto_submit_approve():
+    disabled = _auto_submit_disabled()
+    if disabled is not None:
+        return disabled
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+
+    # Sanitize the application identifier BEFORE it ever reaches a Mongo filter.
+    application_id = InputSanitizer.sanitize_string(
+        data.get("application_id") or data.get("job_id") or "", max_length=256
+    )
+    if not application_id:
+        return jsonify({"error": "application_id is required"}), 400
+
+    # The application PAGE url — the extension matches an eligible approval to the
+    # current tab by normalized host+path, so store it on the record. Optional
+    # (in-app approvals may pass only an id); sanitized, capped.
+    application_url = InputSanitizer.sanitize_string(
+        data.get("url") or data.get("application_url") or "", max_length=2000
+    ) or None
+
+    answers = data.get("answers")
+    if not isinstance(answers, (list, dict)):
+        return jsonify({"error": "answers (object or array of reviewed values) is required"}), 400
+    try:
+        import json as _json
+        if len(_json.dumps(answers, default=str)) > _MAX_AUTO_SUBMIT_ANSWERS_BYTES:
+            return jsonify({"error": "answers payload too large"}), 413
+    except (TypeError, ValueError):
+        return jsonify({"error": "answers is not serializable"}), 400
+
+    try:
+        # Opt-in gate first (403) so a non-opted-in user never consumes quota.
+        if not auto_submit_service.user_opted_in(user_email):
+            return jsonify({
+                "error": "auto_submit_opt_in_required",
+                "message": "Turn on auto-submit in settings before approving an application.",
+            }), 403
+
+        # Idempotent no-op: a live approval already covers this application — do
+        # NOT re-charge quota or the fill cap.
+        existing = auto_submit_service.get_active_approval(user_email, application_id)
+        if existing is not None:
+            return jsonify({"approval": existing, "created": False}), 200
+
+        # Respect the SAME server-side fill cap the autofill path uses — an
+        # approved auto-submit is a real application action.
+        fill_capped = _fill_cap_exceeded(user_email)
+        if fill_capped is not None:
+            return fill_capped
+
+        # Per-plan daily auto-submit cap (abuse/safety) — meter BEFORE creating.
+        allowed, usage = entitlements_service.check_and_increment(user_email, "auto_submit")
+        if not allowed:
+            return _quota_exceeded_response(usage)
+
+        record, created = auto_submit_service.create_approval(
+            user_email, application_id, answers, source="in_app", url=application_url
+        )
+        return jsonify({"approval": record, "created": created, "usage": usage}), 201
+    except auto_submit_service.AutoSubmitError as e:
+        return _auto_submit_error(e)
+    except Exception as e:
+        logger.exception("apply/auto-submit approve error: %s", e)
+        return jsonify({"error": "Failed to create approval"}), 500
+
+
+# ------------------------------------------------------------------
+# POST /api/apply/auto-submit/cancel — undo within the window
+# ------------------------------------------------------------------
+@apply_bp.route("/auto-submit/cancel", methods=["POST"])
+@jwt_required()
+def auto_submit_cancel():
+    disabled = _auto_submit_disabled()
+    if disabled is not None:
+        return disabled
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    application_id = InputSanitizer.sanitize_string(
+        data.get("application_id") or data.get("job_id") or "", max_length=256
+    )
+    if not application_id:
+        return jsonify({"error": "application_id is required"}), 400
+    try:
+        record = auto_submit_service.cancel_approval(user_email, application_id)
+        return jsonify({"approval": record}), 200
+    except auto_submit_service.AutoSubmitError as e:
+        return _auto_submit_error(e)
+    except Exception as e:
+        logger.exception("apply/auto-submit cancel error: %s", e)
+        return jsonify({"error": "Failed to cancel approval"}), 500
+
+
+# ------------------------------------------------------------------
+# GET /api/apply/auto-submit/pending — the eligible-to-submit queue
+# ------------------------------------------------------------------
+@apply_bp.route("/auto-submit/pending", methods=["GET"])
+@jwt_required()
+def auto_submit_pending():
+    disabled = _auto_submit_disabled()
+    if disabled is not None:
+        return disabled
+    user_email = get_jwt_identity()
+    try:
+        return jsonify(auto_submit_service.list_pending_eligible(user_email)), 200
+    except Exception as e:
+        logger.exception("apply/auto-submit pending error: %s", e)
+        return jsonify({"error": "Failed to load pending approvals"}), 500
+
+
+# ------------------------------------------------------------------
+# POST /api/apply/auto-submit/mark-submitted — extension reports the click
+# ------------------------------------------------------------------
+@apply_bp.route("/auto-submit/mark-submitted", methods=["POST"])
+@jwt_required()
+def auto_submit_mark_submitted():
+    disabled = _auto_submit_disabled()
+    if disabled is not None:
+        return disabled
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    application_id = InputSanitizer.sanitize_string(
+        data.get("application_id") or data.get("job_id") or "", max_length=256
+    )
+    if not application_id:
+        return jsonify({"error": "application_id is required"}), 400
+    try:
+        record = auto_submit_service.mark_submitted(user_email, application_id)
+        return jsonify({"approval": record}), 200
+    except auto_submit_service.AutoSubmitError as e:
+        return _auto_submit_error(e)
+    except Exception as e:
+        logger.exception("apply/auto-submit mark-submitted error: %s", e)
+        return jsonify({"error": "Failed to mark submitted"}), 500

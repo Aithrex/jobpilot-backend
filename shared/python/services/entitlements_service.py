@@ -63,6 +63,7 @@ FEATURE_PERIODS = {
     "ats_scores": PERIOD_DAY,
     "cover_letter": PERIOD_DAY,
     "autoapply_answer": PERIOD_DAY,
+    "auto_submit": PERIOD_DAY,         # opt-in auto-submit — daily abuse/safety cap
     "quiz": PERIOD_DAY,
     "practice_question": PERIOD_DAY,
     "mock_evaluate": PERIOD_DAY,
@@ -83,6 +84,7 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "ats_scores": 5,
         "cover_letter": 2,
         "autoapply_answer": 10,
+        "auto_submit": 5,             # opt-in auto-submit — conservative on free
         "quiz": 3,
         "practice_question": 5,
         "mock_evaluate": 2,
@@ -105,6 +107,7 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "ats_scores": None,
         "cover_letter": None,
         "autoapply_answer": 100,
+        "auto_submit": 50,
         "quiz": 20,
         "practice_question": 30,
         "mock_evaluate": 15,
@@ -126,6 +129,7 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "ats_scores": None,
         "cover_letter": None,
         "autoapply_answer": None,
+        "auto_submit": None,          # soft cap; effectively unlimited
         "quiz": None,
         "practice_question": None,
         "mock_evaluate": None,

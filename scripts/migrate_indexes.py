@@ -153,6 +153,32 @@ INDEX_SPECS = [
     ("application_answers", [("user_email", ASCENDING), ("created_at", DESCENDING)],
      {"name": "user_email_created_at"}),
 
+    # === opt-in auto-submit (guardrailed apply) ============================
+    # auto_submit_service: settings upsert/find {user_email} — one doc per user.
+    ("auto_submit_settings", [("user_email", ASCENDING)],
+     {"unique": True, "name": "user_email_unique"}),
+    # approval_id is a uuid4, queried on transitions; unique protects single-use.
+    ("auto_submit_approvals", [("approval_id", ASCENDING)],
+     {"unique": True, "name": "approval_id_unique"}),
+    # get_active_approval / cancel / mark_submitted / list_pending_eligible all
+    # filter {user_email, application_id, status} (equality->equality->equality).
+    ("auto_submit_approvals",
+     [("user_email", ASCENDING), ("application_id", ASCENDING), ("status", ASCENDING)],
+     {"name": "user_app_status"}),
+    # Partial-unique DEDUP guard: at most ONE live (approved/pending) approval per
+    # (user, application) — the real backstop for idempotent re-approve under
+    # concurrent Lambdas (the service also check-then-inserts). Partial filter so
+    # terminal records (submitted/cancelled/expired) don't collide.
+    ("auto_submit_approvals",
+     [("user_email", ASCENDING), ("application_id", ASCENDING)],
+     {"unique": True, "name": "active_approval_unique",
+      "partialFilterExpression": {"status": {"$in": ["approved", "pending"]}}}),
+    # Audit log: per-user history sorted by time; plus per-application scan.
+    ("auto_submit_audit", [("user_email", ASCENDING), ("at", DESCENDING)],
+     {"name": "user_email_at"}),
+    ("auto_submit_audit", [("application_id", ASCENDING), ("at", DESCENDING)],
+     {"name": "application_id_at"}),
+
     # === feedback ==========================================================
     # feedback.py:81 my_feedback find({email}) sort created_at desc (user field is `email`).
     ("feedback", [("email", ASCENDING), ("created_at", DESCENDING)],
