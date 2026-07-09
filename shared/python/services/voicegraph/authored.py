@@ -185,7 +185,7 @@ def _sentences_with_offsets(text: str) -> List[Tuple[str, int, int]]:
 def _parsed_scaffold(user_email: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     try:
         from services.resume_parser import ResumeParser
-        doc = ResumeParser().get_structured_resume(user_email=user_email)
+        doc = ResumeParser(DBConnect().get_db()).get_structured_resume(user_email=user_email)
         structured = (doc or {}).get("structured") or {}
         return structured.get("contact", {}) or {}, structured.get("education", []) or []
     except Exception as e:
@@ -227,7 +227,7 @@ def _pass_a(user_email: str) -> Optional[Tuple[Dict[str, Any], List[Dict[str, An
     # --- primary: parsed résumé ------------------------------------------------
     try:
         from services.resume_parser import ResumeParser
-        doc = ResumeParser().get_structured_resume(user_email=user_email)
+        doc = ResumeParser(DBConnect().get_db()).get_structured_resume(user_email=user_email)
     except Exception as e:
         logger.info("authored: parsed resume lookup failed (%s)", e)
         doc = None

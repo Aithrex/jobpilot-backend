@@ -395,11 +395,12 @@ def draft_outreach_route():
     try:
         from services.resume_parser import ResumeParser
         from services.gemini_client import gemini_json, GEMINI_FLASH
+        from utils.db_connect import DBConnect
         # Pull the candidate's parsed resume so the draft references real
         # bullets / projects instead of generic platitudes. If they haven't
         # uploaded a resume yet the endpoint still works — falls back to a
         # generic "I'm interested" template.
-        parser = ResumeParser()
+        parser = ResumeParser(DBConnect().get_db())
         resume = parser.ensure_structured_resume(user_email=user_email) if user_email else None
         structured = (resume or {}).get("structured") or {}
         contact = structured.get("contact") or {}

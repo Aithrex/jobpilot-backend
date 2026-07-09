@@ -34,25 +34,20 @@ the ATS roundtrip locally. The legacy plain-python entrypoint still works:
 | Injection (§9.4) — writing samples wrapped as untrusted data, never in the `system` channel; an "obeyed" injection cannot mint ungrounded facts (span verification kills it); injected text can only enter as verbatim-quoted evidence; generation + judge keep the same trust boundary; scrub redacts third-party names, keeps tech terms; Collaborator nodes role-only | `evals/test_injection.py` | **partially-covered + gap** — the code-level contract (channel separation + span verification + scrub) is fully pinned; whether the *live model* resists a novel jailbreak is inherently runtime-only. The design assumes the model can be fooled and blocks the damage in code. |
 | Evidence invariant + revocation cascade (§6.12.3/§6.12.8) — co-evidenced nodes survive revoke, sample-only rows die, resumes frozen not deleted, merge candidates purged | `tests/test_voicegraph_cascade.py` (pre-existing, now also CI-collected) | **automated-offline** |
 
-## Known gap surfaced by the suite (needs a code fix — out of eval scope)
+## Known gap surfaced by the suite — FIXED
 
-`ResumeParser.__init__(self, db)` requires a `db` handle, but the Voice Graph
-modules call `ResumeParser()` with **no arguments** and swallow the resulting
-`TypeError`:
+The suite surfaced that `ResumeParser()` was constructed with **no arguments**
+(its `__init__` requires a `db` handle) at seven call sites, with the
+`TypeError` swallowed by defensive fallbacks — so the parsed-resume Pass A
+path, resume co-evidence in `resolution._resume_records`, the six-seconds
+resume lookup, the outreach draft grounding, and the LinkedIn audit endpoint
+either silently degraded or hard-failed.
 
-- `shared/python/services/voicegraph/authored.py` lines ~188 and ~230
-- `shared/python/services/voicegraph/raw_resume.py` line ~131
-- `shared/python/services/voicegraph/resolution.py` line ~58
-
-Consequence in prod today: the parsed-resume Pass A path silently falls back
-to sample sentences, and `resolution._resume_records` always returns empty —
-so **resume co-evidence (the thing that lets nodes survive a consent
-revocation) never happens against a real parsed resume**. The evals exercise
-the real downstream logic by stubbing the parser at its import boundary;
-they do NOT mask the bug. Fix belongs to `backend-engineer` (production code
-under `shared/python` — off-limits to this eval task). After the fix, drop
-the stubs in `evals/test_entailment.py` only if the real path is exercised
-some other deterministic way.
+**Status: fixed in-repo** — every site now constructs `ResumeParser(db)` with
+a real database handle (`DBConnect().get_db()` or the module's `_db()`
+helper); `grep -rn "ResumeParser()"` over `shared/` and `services/` returns
+zero no-arg constructions. The evals still stub the parser at its import
+boundary for determinism; that stubbing is now belt-and-braces, not a mask.
 
 ## Human gates before flipping `VOICE_GRAPH_ENABLED` in prod
 

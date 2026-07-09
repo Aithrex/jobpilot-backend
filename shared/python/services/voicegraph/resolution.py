@@ -55,7 +55,7 @@ def _sim(a: str, b: str) -> float:
 def _resume_records(user_email: str) -> Dict[str, List[str]]:
     try:
         from services.resume_parser import ResumeParser
-        doc = ResumeParser().get_structured_resume(user_email=user_email)
+        doc = ResumeParser(DBConnect().get_db()).get_structured_resume(user_email=user_email)
         s = (doc or {}).get("structured") or {}
     except Exception as e:
         logger.info("voicegraph resolution: no parsed resume (%s)", e)

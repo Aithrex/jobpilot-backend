@@ -128,7 +128,7 @@ def _parsed_scaffold(user_email: str) -> Dict[str, Any]:
     """Contact + education from the parsed resume, if one exists. Best-effort."""
     try:
         from services.resume_parser import ResumeParser
-        doc = ResumeParser().get_structured_resume(user_email=user_email)
+        doc = ResumeParser(DBConnect().get_db()).get_structured_resume(user_email=user_email)
         structured = (doc or {}).get("structured") or {}
         return {
             "contact": structured.get("contact", {}) or {},

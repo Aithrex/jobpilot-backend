@@ -37,7 +37,7 @@ def audit(user_email: str, linkedin_url: str = "") -> Dict:
     target_roles = prefs.get("target_roles") or []
     target_role = target_roles[0] if target_roles else "your target role"
 
-    resume = ResumeParser().ensure_structured_resume(user_email=user_email)
+    resume = ResumeParser(_db()).ensure_structured_resume(user_email=user_email)
     if not resume or not resume.get("structured"):
         raise ValueError("Upload a résumé first so we can tailor your LinkedIn audit.")
     s = resume["structured"]

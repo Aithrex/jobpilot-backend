@@ -356,8 +356,9 @@ def build_six_seconds(user_email: str) -> Dict[str, Any]:
     the user has no parsed resume yet.
     """
     from services.resume_parser import ResumeParser
+    from utils.db_connect import DBConnect
 
-    resume = ResumeParser().get_structured_resume(user_email=user_email)
+    resume = ResumeParser(DBConnect().get_db()).get_structured_resume(user_email=user_email)
     if not resume or not resume.get("structured"):
         return {"error": "no_resume"}
 

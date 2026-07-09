@@ -4277,7 +4277,7 @@ def _scaffold_project_files(user_email: str, name: str, description: str, kind: 
     try:
         from services.resume_parser import ResumeParser
         from schemas.resume_schemas import flatten_skills
-        resume = ResumeParser().ensure_structured_resume(user_email=user_email)
+        resume = ResumeParser(DBConnect().get_db()).ensure_structured_resume(user_email=user_email)
         if resume and resume.get("structured"):
             skills = [str(s) for s in (flatten_skills(resume["structured"]) or [])][:12]
     except Exception as e:
