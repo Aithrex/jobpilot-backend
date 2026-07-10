@@ -118,26 +118,32 @@ def get_all_secrets() -> Dict[str, str]:
     
     try:
         ssm = _get_ssm_client()
-        response = ssm.get_parameters(
-            Names=param_names,
-            WithDecryption=True
-        )
-        
+
         # Build reverse mapping
         path_to_key = {v: k for k, v in param_mappings.items() if v}
-        
-        for param in response.get('Parameters', []):
-            key = path_to_key.get(param['Name'])
-            if key:
-                secrets[key] = param['Value']
-                logger.debug(f"Loaded secret: {key}")
-        
-        # Log any invalid parameters
-        for invalid in response.get('InvalidParameters', []):
-            logger.warning(f"Invalid SSM parameter: {invalid}")
-        
+
+        # SSM GetParameters accepts at most 10 names per call — batch to stay
+        # under the limit (exceeding it fails the WHOLE call, which would leave
+        # every secret — including JWT_SECRET_KEY — unresolved and crash init).
+        for start in range(0, len(param_names), 10):
+            batch = param_names[start:start + 10]
+            response = ssm.get_parameters(
+                Names=batch,
+                WithDecryption=True
+            )
+
+            for param in response.get('Parameters', []):
+                key = path_to_key.get(param['Name'])
+                if key:
+                    secrets[key] = param['Value']
+                    logger.debug(f"Loaded secret: {key}")
+
+            # Log any invalid parameters
+            for invalid in response.get('InvalidParameters', []):
+                logger.warning(f"Invalid SSM parameter: {invalid}")
+
         return secrets
-        
+
     except Exception as e:
         logger.error(f"Failed to get SSM parameters: {str(e)}")
         return secrets
