@@ -86,7 +86,7 @@ class EmailChannel(Channel):
         if not to_email:
             return False
         block = payload.get("email") if isinstance(payload.get("email"), dict) else {}
-        subject = str(block.get("subject") or payload.get("title") or "JobPilot update")
+        subject = str(block.get("subject") or payload.get("title") or "Aspirely update")
         html_body = str(block.get("html") or payload.get("html") or _fallback_html(payload))
         text_body = block.get("text") or payload.get("text") or None
         try:
@@ -100,7 +100,7 @@ class EmailChannel(Channel):
 
 
 def _fallback_html(payload: Dict[str, Any]) -> str:
-    title = str(payload.get("title") or "JobPilot")
+    title = str(payload.get("title") or "Aspirely")
     line = str(payload.get("summary_line") or payload.get("text") or "")
     return (
         '<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:520px;margin:auto">'
@@ -257,7 +257,7 @@ class PushChannel(Channel):
         return _cfg("VAPID_PRIVATE_KEY")
 
     def _vapid_subject(self) -> str:
-        return _cfg("VAPID_SUBJECT", "mailto:no-reply@jobpilot.app")
+        return _cfg("VAPID_SUBJECT", "mailto:no-reply@aspirely.me")
 
     def available(self) -> bool:
         return bool(_flag_enabled("WEBPUSH_ENABLED") and self._vapid_private())
@@ -269,7 +269,7 @@ class PushChannel(Channel):
         push = payload.get("push") if isinstance(payload.get("push"), dict) else {}
         import json
         message = json.dumps({
-            "title": str(push.get("title") or payload.get("title") or "JobPilot"),
+            "title": str(push.get("title") or payload.get("title") or "Aspirely"),
             "body": str(push.get("body") or payload.get("summary_line") or ""),
             "url": str(push.get("url") or payload.get("cta_url") or ""),
         })

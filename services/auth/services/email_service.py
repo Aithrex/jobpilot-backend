@@ -17,7 +17,7 @@ from utils.config import _get_config_value
 
 logger = logging.getLogger(__name__)
 
-APP_NAME = "JobPilot"
+APP_NAME = "Aspirely"
 
 
 def _ses_region() -> str:

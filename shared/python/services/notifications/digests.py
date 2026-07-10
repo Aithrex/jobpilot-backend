@@ -213,7 +213,7 @@ def build_evening_summary(user_email: str) -> Dict[str, Any]:
     if opt and opt.get("days_remaining") is not None:
         bits.append(f"OPT runway {opt['days_remaining']}d")
     summary_line = " · ".join(bits)
-    title = "Your day on JobPilot"
+    title = "Your day on Aspirely"
 
     return {
         "event": EVENING_SUMMARY_EVENT,

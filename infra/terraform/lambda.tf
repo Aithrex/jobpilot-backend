@@ -34,6 +34,9 @@ resource "aws_lambda_function" "service" {
       RESUME_S3_BUCKET   = aws_s3_bucket.resumes.bucket
       FRONTEND_URL       = var.frontend_url
       BACKEND_PUBLIC_URL = var.frontend_url
+      # Transactional + notification email sender (SES). Friendly-from; the
+      # aspirely.me domain must be a verified SES identity for sends to succeed.
+      SES_FROM_ADDRESS = "Aspirely <no-reply@aspirely.me>"
 
       # SSM parameter PATHS (utils/ssm_config reads these env vars, then fetches
       # the SecureString values at those paths). Seed them with scripts/seed_ssm.sh.
