@@ -61,6 +61,7 @@ resource "aws_lambda_function" "service" {
       # dark in prod behind GMAIL_OAUTH_ENABLED (unset = OFF) until Google
       # verification + CASA Tier 2 clears. Redirect URI is non-secret (plain env).
       GOOGLE_OAUTH_REDIRECT_URI      = "${var.frontend_url}/oauth/gmail/callback"
+      GMAIL_OAUTH_ENABLED            = "true" # ON in prod. App is in Google "Testing", so only added test users can complete the gmail.readonly flow; stays test-user-gated until OAuth verification + CASA Tier 2 pass.
       SSM_GOOGLE_OAUTH_CLIENT_ID     = "${var.ssm_path_prefix}/google-oauth-client-id"
       SSM_GOOGLE_OAUTH_CLIENT_SECRET = "${var.ssm_path_prefix}/google-oauth-client-secret"
       SSM_GMAIL_TOKEN_ENCRYPTION_KEY = "${var.ssm_path_prefix}/gmail-token-encryption-key"
