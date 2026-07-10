@@ -32,6 +32,11 @@ declare -A MAP=(
   [GITHUB_PAT]="github-pat"
   [GOOGLE_SIGNIN_CLIENT_ID]="google-signin-client-id"
   [GOOGLE_SIGNIN_CLIENT_SECRET]="google-signin-client-secret"
+  [GITHUB_CONNECT_CLIENT_ID]="github-connect-client-id"
+  [GITHUB_CONNECT_CLIENT_SECRET]="github-connect-client-secret"
+  [LINKEDIN_CONNECT_CLIENT_ID]="linkedin-connect-client-id"
+  [LINKEDIN_CONNECT_CLIENT_SECRET]="linkedin-connect-client-secret"
+  [INTEGRATION_TOKEN_ENCRYPTION_KEY]="integration-token-encryption-key"
 )
 
 get_val() {

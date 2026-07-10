@@ -98,6 +98,11 @@ def get_all_secrets() -> Dict[str, str]:
         'GITHUB_PAT': os.getenv('SSM_GITHUB_PAT'),
         'GOOGLE_SIGNIN_CLIENT_ID': os.getenv('SSM_GOOGLE_SIGNIN_CLIENT_ID'),
         'GOOGLE_SIGNIN_CLIENT_SECRET': os.getenv('SSM_GOOGLE_SIGNIN_CLIENT_SECRET'),
+        'GITHUB_CONNECT_CLIENT_ID': os.getenv('SSM_GITHUB_CONNECT_CLIENT_ID'),
+        'GITHUB_CONNECT_CLIENT_SECRET': os.getenv('SSM_GITHUB_CONNECT_CLIENT_SECRET'),
+        'LINKEDIN_CONNECT_CLIENT_ID': os.getenv('SSM_LINKEDIN_CONNECT_CLIENT_ID'),
+        'LINKEDIN_CONNECT_CLIENT_SECRET': os.getenv('SSM_LINKEDIN_CONNECT_CLIENT_SECRET'),
+        'INTEGRATION_TOKEN_ENCRYPTION_KEY': os.getenv('SSM_INTEGRATION_TOKEN_ENCRYPTION_KEY'),
         'GOOGLE_OAUTH_CLIENT_ID': os.getenv('SSM_GOOGLE_OAUTH_CLIENT_ID'),
         'GOOGLE_OAUTH_CLIENT_SECRET': os.getenv('SSM_GOOGLE_OAUTH_CLIENT_SECRET'),
         'GOOGLE_OAUTH_REDIRECT_URI': os.getenv('SSM_GOOGLE_OAUTH_REDIRECT_URI'),
@@ -237,6 +242,26 @@ class SSMConfig:
     @property
     def GOOGLE_SIGNIN_CLIENT_SECRET(self) -> Optional[str]:
         return self._get('GOOGLE_SIGNIN_CLIENT_SECRET', 'GOOGLE_SIGNIN_CLIENT_SECRET')
+
+    @property
+    def GITHUB_CONNECT_CLIENT_ID(self) -> Optional[str]:
+        return self._get('GITHUB_CONNECT_CLIENT_ID', 'GITHUB_CONNECT_CLIENT_ID')
+
+    @property
+    def GITHUB_CONNECT_CLIENT_SECRET(self) -> Optional[str]:
+        return self._get('GITHUB_CONNECT_CLIENT_SECRET', 'GITHUB_CONNECT_CLIENT_SECRET')
+
+    @property
+    def LINKEDIN_CONNECT_CLIENT_ID(self) -> Optional[str]:
+        return self._get('LINKEDIN_CONNECT_CLIENT_ID', 'LINKEDIN_CONNECT_CLIENT_ID')
+
+    @property
+    def LINKEDIN_CONNECT_CLIENT_SECRET(self) -> Optional[str]:
+        return self._get('LINKEDIN_CONNECT_CLIENT_SECRET', 'LINKEDIN_CONNECT_CLIENT_SECRET')
+
+    @property
+    def INTEGRATION_TOKEN_ENCRYPTION_KEY(self) -> Optional[str]:
+        return self._get('INTEGRATION_TOKEN_ENCRYPTION_KEY', 'INTEGRATION_TOKEN_ENCRYPTION_KEY')
 
     @property
     def GMAIL_TOKEN_ENCRYPTION_KEY(self) -> Optional[str]:

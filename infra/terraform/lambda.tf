@@ -49,6 +49,14 @@ resource "aws_lambda_function" "service" {
       # Gmail-readonly GOOGLE_OAUTH_* pair. Gates provider_configured("google").
       SSM_GOOGLE_SIGNIN_CLIENT_ID     = "${var.ssm_path_prefix}/google-signin-client-id"
       SSM_GOOGLE_SIGNIN_CLIENT_SECRET = "${var.ssm_path_prefix}/google-signin-client-secret"
+      # "Connect GitHub / LinkedIn" data-integration OAuth (resume Lambda,
+      # /api/resume/connect/*). Separate creds from social sign-in; tokens are
+      # Fernet-encrypted at rest with INTEGRATION_TOKEN_ENCRYPTION_KEY.
+      SSM_GITHUB_CONNECT_CLIENT_ID         = "${var.ssm_path_prefix}/github-connect-client-id"
+      SSM_GITHUB_CONNECT_CLIENT_SECRET     = "${var.ssm_path_prefix}/github-connect-client-secret"
+      SSM_LINKEDIN_CONNECT_CLIENT_ID       = "${var.ssm_path_prefix}/linkedin-connect-client-id"
+      SSM_LINKEDIN_CONNECT_CLIENT_SECRET   = "${var.ssm_path_prefix}/linkedin-connect-client-secret"
+      SSM_INTEGRATION_TOKEN_ENCRYPTION_KEY = "${var.ssm_path_prefix}/integration-token-encryption-key"
     }
   }
 
