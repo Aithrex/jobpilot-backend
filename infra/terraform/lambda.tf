@@ -45,6 +45,10 @@ resource "aws_lambda_function" "service" {
       SSM_APIFY_API_KEY            = "${var.ssm_path_prefix}/apify-api-key"
       SSM_JOB_SEARCH_PASSWORD_HASH = "${var.ssm_path_prefix}/job-search-password-hash"
       SSM_GITHUB_PAT               = "${var.ssm_path_prefix}/github-pat"
+      # Google sign-in (social login) OAuth 2.0 Web client — separate from the
+      # Gmail-readonly GOOGLE_OAUTH_* pair. Gates provider_configured("google").
+      SSM_GOOGLE_SIGNIN_CLIENT_ID     = "${var.ssm_path_prefix}/google-signin-client-id"
+      SSM_GOOGLE_SIGNIN_CLIENT_SECRET = "${var.ssm_path_prefix}/google-signin-client-secret"
     }
   }
 

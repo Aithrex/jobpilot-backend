@@ -30,6 +30,8 @@ declare -A MAP=(
   [APIFY_API_KEY]="apify-api-key"
   [JOB_SEARCH_PASSWORD_HASH]="job-search-password-hash"
   [GITHUB_PAT]="github-pat"
+  [GOOGLE_SIGNIN_CLIENT_ID]="google-signin-client-id"
+  [GOOGLE_SIGNIN_CLIENT_SECRET]="google-signin-client-secret"
 )
 
 get_val() {
