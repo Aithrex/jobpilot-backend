@@ -38,6 +38,7 @@ approval channel's carrier plumbing is the human gate below.
 | SMS (§2.5) | Twilio account + number + keys. |
 | Mail-ingress Track A (§2.4) | A receiving domain (e.g. inbox.<domain>) with SES inbound + MX records + an S3/Lambda hook. |
 | Gmail OAuth Track B (§2.4) | Google OAuth verification + CASA Tier 2 assessment. Behind `GMAIL_OAUTH_ENABLED` (kill-switch in `gmail_service.gmail_oauth_enabled()`; default OFF in prod, ON in dev; gates the `gmail.readonly` consent/callback/sync routes independent of credential presence). Flip to `true` only after the CASA assessment passes. |
+| **Google sign-in (login)** | Fully built end-to-end (`oauth_service.py` provider `google` + `/api/auth/oauth/google/authorize` + `/oauth/callback`). It only ADVERTISES + works once you set **`GOOGLE_SIGNIN_CLIENT_ID`** + **`GOOGLE_SIGNIN_CLIENT_SECRET`** (a Google Cloud OAuth 2.0 Web client; authorized redirect URI = the app's `/oauth/callback`) in the backend config (SSM in prod, `.env` locally). `provider_configured("google")` gates it; until set, `/authorize` 503s and the FE's "Continue with Google" button shows an honest "being set up" toast. This is SEPARATE from the Gmail-readonly creds above. |
 | LinkedIn posting (§2.2) | "Share on LinkedIn" product approval for `w_member_social`. (Connect flow already built.) |
 
 ## Compass epics shipped this build — their human gates
