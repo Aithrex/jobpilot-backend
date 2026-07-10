@@ -231,6 +231,14 @@ class SSMConfig:
         return self._get('GOOGLE_OAUTH_REDIRECT_URI', 'GOOGLE_OAUTH_REDIRECT_URI')
 
     @property
+    def GOOGLE_SIGNIN_CLIENT_ID(self) -> Optional[str]:
+        return self._get('GOOGLE_SIGNIN_CLIENT_ID', 'GOOGLE_SIGNIN_CLIENT_ID')
+
+    @property
+    def GOOGLE_SIGNIN_CLIENT_SECRET(self) -> Optional[str]:
+        return self._get('GOOGLE_SIGNIN_CLIENT_SECRET', 'GOOGLE_SIGNIN_CLIENT_SECRET')
+
+    @property
     def GMAIL_TOKEN_ENCRYPTION_KEY(self) -> Optional[str]:
         return self._get('GMAIL_TOKEN_ENCRYPTION_KEY', 'GMAIL_TOKEN_ENCRYPTION_KEY')
 
