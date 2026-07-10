@@ -57,6 +57,13 @@ resource "aws_lambda_function" "service" {
       SSM_LINKEDIN_CONNECT_CLIENT_ID       = "${var.ssm_path_prefix}/linkedin-connect-client-id"
       SSM_LINKEDIN_CONNECT_CLIENT_SECRET   = "${var.ssm_path_prefix}/linkedin-connect-client-secret"
       SSM_INTEGRATION_TOKEN_ENCRYPTION_KEY = "${var.ssm_path_prefix}/integration-token-encryption-key"
+      # Gmail read-only (Track B, /api/resume/gmail/*). Restricted scope — stays
+      # dark in prod behind GMAIL_OAUTH_ENABLED (unset = OFF) until Google
+      # verification + CASA Tier 2 clears. Redirect URI is non-secret (plain env).
+      GOOGLE_OAUTH_REDIRECT_URI      = "${var.frontend_url}/oauth/gmail/callback"
+      SSM_GOOGLE_OAUTH_CLIENT_ID     = "${var.ssm_path_prefix}/google-oauth-client-id"
+      SSM_GOOGLE_OAUTH_CLIENT_SECRET = "${var.ssm_path_prefix}/google-oauth-client-secret"
+      SSM_GMAIL_TOKEN_ENCRYPTION_KEY = "${var.ssm_path_prefix}/gmail-token-encryption-key"
     }
   }
 

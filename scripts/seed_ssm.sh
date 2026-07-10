@@ -37,6 +37,9 @@ declare -A MAP=(
   [LINKEDIN_CONNECT_CLIENT_ID]="linkedin-connect-client-id"
   [LINKEDIN_CONNECT_CLIENT_SECRET]="linkedin-connect-client-secret"
   [INTEGRATION_TOKEN_ENCRYPTION_KEY]="integration-token-encryption-key"
+  [GOOGLE_OAUTH_CLIENT_ID]="google-oauth-client-id"
+  [GOOGLE_OAUTH_CLIENT_SECRET]="google-oauth-client-secret"
+  [GMAIL_TOKEN_ENCRYPTION_KEY]="gmail-token-encryption-key"
 )
 
 get_val() {
