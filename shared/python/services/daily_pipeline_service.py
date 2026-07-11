@@ -2018,15 +2018,24 @@ def run_pipeline(
     hide_companies: Optional[List[str]] = None,
     hide_title_patterns: Optional[List[str]] = None,
     max_per_company: int = 4,
+    skip_apify: bool = False,
 ) -> Dict[str, Any]:
     """Run the full daily pipeline and return tier-grouped JSON.
 
     apify_token: when provided (e.g. a per-user BYO key), it overrides the
     shared SSM/env token. None falls back to _get_apify_token().
+
+    skip_apify: when True, run ONLY the free direct sources (ATS boards +
+    Workday CXS) — no Apify actors, no shared-token fallback, and no error if
+    no token is configured. Used by the free scheduled morning-digest path so a
+    daily run never spends Apify credits.
     """
-    token = (apify_token or "").strip() or _get_apify_token()
-    if not token:
-        raise RuntimeError("APIFY_API_KEY/APIFY_TOKEN is not configured")
+    if skip_apify:
+        token = ""
+    else:
+        token = (apify_token or "").strip() or _get_apify_token()
+        if not token:
+            raise RuntimeError("APIFY_API_KEY/APIFY_TOKEN is not configured")
 
     li_kw = [k.strip() for k in (linkedin_keywords or DEFAULT_LINKEDIN_KEYWORD_SETS) if k and k.strip()]
     wd_titles = [t.strip() for t in (workday_titles or DEFAULT_WORKDAY_TITLES) if t and t.strip()]
@@ -2048,8 +2057,19 @@ def run_pipeline(
     ats_enabled = True
     indeed_enabled = include_indeed
 
+    # Role-aware search text for the FREE direct Workday CXS fetch. The paid
+    # path keeps its historical generic query; the Apify-free (scheduled) path
+    # searches the user's actual target role so non-SWE users get relevant
+    # enterprise postings instead of a fixed "software engineer" query.
+    wd_direct_search = "software engineer"
+    if skip_apify:
+        _wd_terms = [t for t in ((custom_role_terms or []) + (workday_titles or [])) if t and str(t).strip()]
+        if _wd_terms:
+            wd_direct_search = str(_wd_terms[0]).strip()
+
     with ThreadPoolExecutor(max_workers=4) as pool:
-        f_apify = pool.submit(
+        # Apify LinkedIn+Workday scrape — skipped entirely on the free path.
+        f_apify = None if skip_apify else pool.submit(
             _scrape_in_parallel,
             token=token,
             linkedin_keywords=li_kw or DEFAULT_LINKEDIN_KEYWORD_SETS,
@@ -2067,7 +2087,7 @@ def run_pipeline(
             experience_level="any",
             employment_type="",
             location=location,
-        ) if indeed_enabled else None
+        ) if (indeed_enabled and not skip_apify) else None
         f_ats = pool.submit(_scrape_ats_direct) if ats_enabled else None
         # Direct Workday CXS — free, no Apify, covers tenants the Apify
         # actor's index misses (Yahoo / Adobe / NVIDIA / Mastercard / ...).
@@ -2076,10 +2096,13 @@ def run_pipeline(
         # Apify Workday actor's daily index didn't include them.
         f_wd_direct = pool.submit(
             _scrape_workday_direct,
-            search_text="software engineer",
+            search_text=wd_direct_search,
             location=location,
         )
-        linkedin_items, workday_items, errors, actor_diagnostics = f_apify.result()
+        if f_apify is not None:
+            linkedin_items, workday_items, errors, actor_diagnostics = f_apify.result()
+        else:
+            linkedin_items, workday_items, errors, actor_diagnostics = [], [], [], {}
         indeed_items = f_indeed.result() if f_indeed is not None else []
         ats_items = f_ats.result() if f_ats is not None else []
         wd_direct_items = f_wd_direct.result()

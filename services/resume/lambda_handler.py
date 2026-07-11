@@ -48,6 +48,13 @@ def handler(event, context):
             'request_id': getattr(context, 'aws_request_id', 'local') if context else 'local',
         }
 
+        # ── Scheduled job (EventBridge -> this Lambda) ──
+        if event.get("scheduled_job"):
+            from services.scheduled_jobs import dispatch_scheduled
+            result = dispatch_scheduled(event["scheduled_job"])
+            logger.info("scheduled_job %s -> %s", event.get("scheduled_job"), result)
+            return {"statusCode": 200, "body": "OK"}
+
         # ── Async job invocation (this Lambda invoking itself) ──
         if event.get("async_job"):
             from services.resume_service import process_async_job

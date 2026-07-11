@@ -53,8 +53,8 @@ _TIME_RE = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
 # cap / quiet hours, and whether they are on by default. Digests are proactive;
 # transactional events (e.g. an interview reminder the user asked for) are not.
 EVENTS: Dict[str, Dict[str, Any]] = {
-    "daily_digest":     {"proactive": True,  "default_on": True,  "label": "Morning job digest"},
-    "evening_summary":  {"proactive": True,  "default_on": True,  "label": "Evening summary"},
+    "daily_digest":     {"proactive": True,  "default_on": False, "label": "Morning job digest"},
+    "evening_summary":  {"proactive": True,  "default_on": False, "label": "Evening summary"},
     "match_alert":      {"proactive": True,  "default_on": False, "label": "New strong-match alert"},
     "application_nudge":{"proactive": True,  "default_on": True,  "label": "Follow-up reminders"},
     "visa_cliff":       {"proactive": True,  "default_on": True,  "label": "Visa / OPT deadline alerts"},

@@ -1015,7 +1015,10 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             from services.job_service import get_job_service
 
             user_email = payload.get("user_email", "")
-            user_key = get_job_service().get_user_apify_key(user_email) if user_email else None
+            # Free scheduled path (morning digest): skip Apify entirely — do NOT
+            # fetch the user's BYO key, so a daily run never spends credits.
+            skip_apify = bool(payload.get("skip_apify"))
+            user_key = None if skip_apify else (get_job_service().get_user_apify_key(user_email) if user_email else None)
 
             result = run_pipeline(
                 linkedin_keywords=payload.get("linkedin_keywords"),
@@ -1037,10 +1040,26 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 hide_companies=payload.get("hide_companies") or [],
                 hide_title_patterns=payload.get("hide_title_patterns") or [],
                 max_per_company=int(payload.get("max_per_company", 4) or 4),
+                skip_apify=skip_apify,
             )
             # Surface which token tier was used so the UI can display it.
             result["used_user_apify_key"] = bool(user_key)
             svc.complete_job(job_id, result)
+
+            # Scheduled morning-digest path: once the pipeline result is
+            # persisted, build + send the daily digest for this user. A
+            # digest-send failure must never fail the (already-completed)
+            # pipeline job, so it is fully isolated.
+            if payload.get("send_digest") and user_email:
+                try:
+                    from services.notifications import digests, service as notify
+                    payload_dg = digests.build_daily_digest(user_email)
+                    notify.send(user_email, "daily_digest", payload_dg)
+                except Exception as dg_err:
+                    logger.warning(
+                        f"daily_pipeline {job_id}: digest send failed for "
+                        f"{user_email}: {dg_err}"
+                    )
 
         elif job_type == "account_purge":
             # GDPR Art.17 / CCPA erasure (AUDIT-P1-004). Heavy cross-store
