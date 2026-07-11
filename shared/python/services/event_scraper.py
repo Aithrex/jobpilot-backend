@@ -242,7 +242,8 @@ def scrape_devpost(limit: int = 40) -> List[Dict]:
                 "tags": themes,
                 "location": (h.get("displayed_location") or {}).get("location"),
                 "prize_pool": prize,
-                "entry_fee": "Free",  # Devpost hackathons are free to enter
+                # NOTE: leave entry_fee unset — the legitimacy engine treats a
+                # truthy entry_fee as a REAL fee (fee+prize = pay-to-win flag).
                 "thumbnail": h.get("thumbnail_url"),
             })
     except Exception as e:
@@ -299,12 +300,17 @@ def scrape_confstech(limit: int = 40) -> List[Dict]:
             if not url or not c.get("name") or not start or start < today or url in seen:
                 continue
             seen.add(url)
+            # Organizer proxy from the event's own domain (rustconf.com …) —
+            # confs.tech has no organizer field, and a blank org red-flags it.
+            from urllib.parse import urlparse
+            host = (urlparse(url).hostname or "").lower()
+            org = host[4:] if host.startswith("www.") else host
             out.append({
                 "source": "confstech",
                 "external_id": url,
                 "type": "webinar",
                 "title": c.get("name"),
-                "org": None,
+                "org": org or None,
                 "description": f"Online tech event ({topic}).",
                 "url": url,
                 "start_date": start,
@@ -312,7 +318,6 @@ def scrape_confstech(limit: int = 40) -> List[Dict]:
                 "tags": [topic],
                 "location": "Online",
                 "prize_pool": None,
-                "entry_fee": "Free",
                 "thumbnail": None,
             })
     out.sort(key=lambda e: e.get("start_date") or "")
