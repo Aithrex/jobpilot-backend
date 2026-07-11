@@ -44,6 +44,17 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: Optional[
     from_addr = _from_address()
     text_body = text_body or _strip_html(html_body)
 
+    # Skip addresses SES has told us are hard-bounced or complaining — mailing
+    # them again hurts our sending reputation. Best-effort: a suppression-store
+    # error must never block a legitimate send, so we swallow and proceed.
+    try:
+        from services import email_suppression
+        if email_suppression.is_suppressed(to_email):
+            logger.info("[email:suppressed] skipping To=%s", to_email)
+            return False
+    except Exception:
+        pass
+
     if not from_addr:
         logger.info(
             "[email:dev-fallback] (SES not configured) To=%s | Subject=%s\n%s",

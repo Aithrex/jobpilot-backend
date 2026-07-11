@@ -38,6 +38,9 @@ resource "aws_lambda_function" "service" {
       # aspirely.me domain must be a verified SES identity for sends to succeed.
       SES_FROM_ADDRESS = "Aspirely <no-reply@aspirely.me>"
       SES_REPLY_TO     = "support@aithrex.tech"
+      # Expected SNS topic for SES bounce/complaint feedback — the webhook
+      # (POST /api/auth/ses-notifications) rejects messages from any other topic.
+      SES_SNS_TOPIC_ARN = aws_sns_topic.ses_notifications.arn
 
       # SSM parameter PATHS (utils/ssm_config reads these env vars, then fetches
       # the SecureString values at those paths). Seed them with scripts/seed_ssm.sh.

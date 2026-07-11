@@ -474,6 +474,91 @@ def reset_password():
 
 
 # ---------------------------------------------------------------------------
+# SES bounce / complaint webhook (SNS → this endpoint).
+#
+# PUBLIC (no @jwt_required) — SNS delivers here. It is the single dangerous
+# consequence of a forged POST (suppress a victim's address, blocking their
+# password resets), so we verify the SNS signature (utils.sns_message) before
+# trusting any field, and we NEVER return 5xx on a parse error (SNS treats
+# non-2xx as failure and retries). Only a failed signature / wrong topic ->
+# 403; everything else -> 200. A matching Terraform edge route is required for
+# this to be reachable in prod.
+# ---------------------------------------------------------------------------
+@auth_bp.route("/ses-notifications", methods=["POST"])
+def ses_notifications():
+    from utils.sns_message import verify_sns_message, expected_topic_arn
+
+    msg = request.get_json(force=True, silent=True) or {}
+    if not msg:
+        # Empty/garbage body — ack so SNS doesn't retry-storm us.
+        return ("", 200)
+
+    # 1. Cryptographic authenticity. A forged message is a 403 (never trusted).
+    if not verify_sns_message(msg):
+        logger.warning("[ses-webhook] rejected: SNS signature verification failed")
+        return ("forbidden", 403)
+
+    # 2. Bind to our topic (if configured) so a valid signature from an
+    #    unrelated topic can't drive suppressions.
+    topic = expected_topic_arn()
+    if topic and msg.get("TopicArn") != topic:
+        logger.warning("[ses-webhook] rejected: TopicArn mismatch")
+        return ("forbidden", 403)
+
+    try:
+        import json as _json
+        from utils.sns_message import SNS_HOST_RE
+        from services import email_suppression
+
+        msg_type = msg.get("Type")
+
+        if msg_type == "SubscriptionConfirmation":
+            sub_url = msg.get("SubscribeURL", "")
+            # Same SSRF guard as SigningCertURL — only ever GET a real AWS SNS host.
+            from urllib.parse import urlparse
+            parts = urlparse(sub_url)
+            host = (parts.hostname or "").lower()
+            if parts.scheme != "https" or not SNS_HOST_RE.match(host):
+                logger.warning("[ses-webhook] refusing to confirm: bad SubscribeURL host")
+                return ("", 200)
+            import requests
+            requests.get(sub_url, timeout=5)
+            logger.info("[ses-webhook] SNS subscription confirmed")
+            return ("", 200)
+
+        if msg_type == "Notification":
+            event = _json.loads(msg.get("Message") or "{}")
+            notification_type = event.get("notificationType") or event.get("eventType")
+
+            if notification_type == "Bounce":
+                bounce = event.get("bounce", {})
+                if bounce.get("bounceType") == "Permanent":
+                    subtype = bounce.get("bounceSubType", "")
+                    for r in bounce.get("bouncedRecipients", []):
+                        addr = r.get("emailAddress")
+                        if addr:
+                            email_suppression.add_suppression(addr, "bounce", subtype)
+
+            elif notification_type == "Complaint":
+                complaint = event.get("complaint", {})
+                feedback = complaint.get("complaintFeedbackType", "")
+                for r in complaint.get("complainedRecipients", []):
+                    addr = r.get("emailAddress")
+                    if addr:
+                        email_suppression.add_suppression(addr, "complaint", feedback)
+
+            return ("", 200)
+
+        # Unknown/other type (e.g. UnsubscribeConfirmation) — ack and ignore.
+        return ("", 200)
+    except Exception as e:
+        # Never 5xx on a parse issue: SNS would retry-storm. We already proved
+        # authenticity above, so acking a malformed body is safe.
+        logger.warning("[ses-webhook] error handling notification: %s", e)
+        return ("", 200)
+
+
+# ---------------------------------------------------------------------------
 # Social sign-in routes (Continue with Google / GitHub / LinkedIn / …).
 # Implemented in services/oauth_service.py and attached here so they share the
 # /api/auth prefix. Registered lazily so a missing/optional dependency can't
