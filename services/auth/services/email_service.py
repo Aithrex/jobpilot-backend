@@ -28,6 +28,12 @@ def _from_address() -> str:
     return _get_config_value("SES_FROM_ADDRESS", "")
 
 
+def _reply_to() -> str:
+    """Optional Reply-To (e.g. a monitored support alias). The From address is
+    no-reply@, so replies would otherwise bounce; this routes them somewhere real."""
+    return _get_config_value("SES_REPLY_TO", "")
+
+
 def email_configured() -> bool:
     return bool(_from_address())
 
@@ -48,17 +54,21 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: Optional[
     try:
         import boto3  # bundled in the Lambda runtime
         client = boto3.client("ses", region_name=_ses_region())
-        client.send_email(
-            Source=from_addr,
-            Destination={"ToAddresses": [to_email]},
-            Message={
+        params = {
+            "Source": from_addr,
+            "Destination": {"ToAddresses": [to_email]},
+            "Message": {
                 "Subject": {"Data": subject, "Charset": "UTF-8"},
                 "Body": {
                     "Html": {"Data": html_body, "Charset": "UTF-8"},
                     "Text": {"Data": text_body, "Charset": "UTF-8"},
                 },
             },
-        )
+        }
+        reply_to = _reply_to()
+        if reply_to:
+            params["ReplyToAddresses"] = [reply_to]
+        client.send_email(**params)
         return True
     except Exception as e:
         # Log the content so a dev/ops can still recover the link if SES is down.
