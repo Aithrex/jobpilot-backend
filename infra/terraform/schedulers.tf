@@ -14,6 +14,7 @@ locals {
     digest_hourly  = { expression = "rate(1 hour)", desc = "Hourly digest fan-out (per-user local 7am/7pm)" }
     bandit_nightly = { expression = "cron(0 3 * * ? *)", desc = "Nightly signal-bandit update (03:00 UTC)" }
     learning_due   = { expression = "rate(10 minutes)", desc = "Send due scheduled LinkedIn posts" }
+    events_refresh = { expression = "cron(0 6 * * ? *)", desc = "Refresh hackathon/webinar catalog (Devpost + confs.tech, 06:00 UTC)" }
   }
 }
 

@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 HTTP_TIMEOUT = 15
 UA = "JobPilot/1.0 (+https://jobpilot.app) events-aggregator"
 
-TRUSTED_SOURCES = {"devpost", "mlh", "unstop", "hackerearth"}
+TRUSTED_SOURCES = {"devpost", "mlh", "unstop", "hackerearth", "confstech"}
 SUSPICIOUS_PHRASES = [
     "guaranteed job", "100% placement", "pay to win", "registration fee",
     "entry fee", "certificate fee", "pay ₹", "paid certificate", "earn money fast",
@@ -167,6 +167,46 @@ def score_legitimacy(ev: Dict, use_llm: bool = True) -> Dict:
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
+_MONTHS = "Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"
+
+
+def _parse_devpost_range(raw: Optional[str]) -> tuple:
+    """Best-effort parse of Devpost's human date range ("May 19 - Aug 17, 2026")
+    into (start_iso, end_iso). Returns (None, None) if it can't be read."""
+    try:
+        raw = (raw or "").strip()
+        if not raw:
+            return (None, None)
+        ym = re.search(r"\b(20\d{2})\b", raw)
+        year = ym.group(1) if ym else None
+
+        def _one(s: str, borrow_month: Optional[str] = None) -> Optional[str]:
+            s = s.strip().rstrip(",").strip()
+            # "Jul 09 - 10, 2026": the end ("10") has no month — borrow the start's.
+            if borrow_month and not re.match(rf"^({_MONTHS})", s, re.I):
+                s = f"{borrow_month} {s}"
+            if not re.search(r"\b20\d{2}\b", s) and year:
+                s = f"{s}, {year}"
+            for fmt in ("%b %d, %Y", "%B %d, %Y"):
+                try:
+                    return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+                except ValueError:
+                    continue
+            return None
+
+        parts = [p.strip() for p in raw.split(" - ")]
+        if len(parts) == 2:
+            m = re.match(rf"^({_MONTHS})", parts[0], re.I)
+            start_month = m.group(1) if m else None
+            return (_one(parts[0]), _one(parts[1], borrow_month=start_month))
+        if len(parts) == 1:
+            d = _one(parts[0])
+            return (d, d)
+    except Exception:
+        pass
+    return (None, None)
+
+
 def scrape_devpost(limit: int = 40) -> List[Dict]:
     """Fetch open hackathons from Devpost's public listing API."""
     out: List[Dict] = []
@@ -186,6 +226,7 @@ def scrape_devpost(limit: int = 40) -> List[Dict]:
             prize = h.get("prize_amount")
             if isinstance(prize, str):
                 prize = re.sub(r"<[^>]+>", "", prize).strip()
+            _start_iso, _end_iso = _parse_devpost_range(h.get("submission_period_dates"))
             out.append({
                 "source": "devpost",
                 "external_id": str(h.get("id") or ""),
@@ -194,11 +235,14 @@ def scrape_devpost(limit: int = 40) -> List[Dict]:
                 "org": h.get("organization_name"),
                 "description": re.sub(r"<[^>]+>", " ", h.get("tagline") or "")[:1000],
                 "url": h.get("url"),
+                # Keep the human range for display; add parsed end + deadline.
                 "start_date": (h.get("submission_period_dates") or ""),
-                "end_date": None,
+                "end_date": _end_iso,
+                "deadline": _end_iso,
                 "tags": themes,
                 "location": (h.get("displayed_location") or {}).get("location"),
                 "prize_pool": prize,
+                "entry_fee": "Free",  # Devpost hackathons are free to enter
                 "thumbnail": h.get("thumbnail_url"),
             })
     except Exception as e:
@@ -206,7 +250,76 @@ def scrape_devpost(limit: int = 40) -> List[Dict]:
     return out
 
 
-SOURCES = {"devpost": scrape_devpost}
+# confs.tech open dataset topics (github tech-conferences/conference-data).
+# A missing topic file just 404s and contributes nothing.
+_CONFSTECH_TOPICS = [
+    "general", "javascript", "python", "data", "devops",
+    "security", "golang", "rust", "java", "ux", "ai",
+]
+
+
+def scrape_confstech(limit: int = 40) -> List[Dict]:
+    """Fetch upcoming ONLINE tech events from the free confs.tech open dataset,
+    surfaced as webinars/virtual events. In-person and past events are skipped.
+    Free + keyless (raw GitHub JSON); a source that's down contributes nothing."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    out: List[Dict] = []
+    seen: set = set()
+    today = _now().strftime("%Y-%m-%d")
+    years = [str(_now().year), str(_now().year + 1)]
+    base = "https://raw.githubusercontent.com/tech-conferences/conference-data/main/conferences"
+    combos = [(y, t) for y in years for t in _CONFSTECH_TOPICS]
+
+    def _fetch(yt):
+        y, t = yt
+        try:
+            resp = requests.get(
+                f"{base}/{y}/{t}.json",
+                headers={"User-Agent": UA, "Accept": "application/json"},
+                timeout=10,
+            )
+            return (t, resp.json() or []) if resp.status_code == 200 else (t, [])
+        except Exception:
+            return (t, [])
+
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(_fetch, combos))
+    except Exception as e:
+        logger.warning("confstech scrape error: %s", e)
+        return out
+
+    for topic, items in results:
+        for c in (items or []):
+            if not c.get("online"):
+                continue
+            url = (c.get("url") or "").strip()
+            start = (c.get("startDate") or "").strip()  # ISO — lexicographic compare is valid
+            if not url or not c.get("name") or not start or start < today or url in seen:
+                continue
+            seen.add(url)
+            out.append({
+                "source": "confstech",
+                "external_id": url,
+                "type": "webinar",
+                "title": c.get("name"),
+                "org": None,
+                "description": f"Online tech event ({topic}).",
+                "url": url,
+                "start_date": start,
+                "end_date": (c.get("endDate") or start),
+                "tags": [topic],
+                "location": "Online",
+                "prize_pool": None,
+                "entry_fee": "Free",
+                "thumbnail": None,
+            })
+    out.sort(key=lambda e: e.get("start_date") or "")
+    return out[:limit]
+
+
+SOURCES = {"devpost": scrape_devpost, "confstech": scrape_confstech}
 
 
 # ---------------------------------------------------------------------------

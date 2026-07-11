@@ -229,6 +229,23 @@ def run_learning_due() -> Dict[str, Any]:
     return {"sent": sent, "failed": failed}
 
 
+def run_events_refresh() -> Dict[str, Any]:
+    """Refresh the global hackathon/webinar catalog from the free sources
+    (Devpost + confs.tech). use_llm=False keeps it free — the legitimacy score
+    rides the deterministic heuristic + source trust for these curated sources."""
+    try:
+        from services import event_scraper
+        result = event_scraper.run_scrape({
+            "sources": ["devpost", "confstech"],
+            "use_llm": False,
+        })
+        logger.info("[scheduled] run_events_refresh -> %s", result)
+        return result if isinstance(result, dict) else {"ok": True}
+    except Exception as e:
+        logger.warning("[scheduled] run_events_refresh failed: %s", e)
+        return {"error": "events_refresh_failed"}
+
+
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
@@ -245,6 +262,8 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             return {"job": name, "result": run_bandit_nightly()}
         if name == "learning_due":
             return {"job": name, "result": run_learning_due()}
+        if name == "events_refresh":
+            return {"job": name, "result": run_events_refresh()}
         logger.warning("[scheduled] unknown job: %s", name)
         return {"error": "unknown job", "name": name}
     except Exception as e:
