@@ -79,6 +79,7 @@ def _user_tz_now(user_email: str) -> datetime:
 def build_daily_digest(user_email: str, top_n: int = TOP_N_MATCHES) -> Dict[str, Any]:
     matches = _safe(lambda: _top_matches(user_email, top_n), [])
     matches = _attach_sponsorship(matches)
+    hackathons = _safe(lambda: _new_hackathons(), [])
 
     count = len(matches)
     companies = ", ".join(m["company"] for m in matches if m.get("company"))[:120]
@@ -88,6 +89,9 @@ def build_daily_digest(user_email: str, top_n: int = TOP_N_MATCHES) -> Dict[str,
         f"{count} new match{'es' if count != 1 else ''} today"
         + (f": {companies}" if companies else "")
     )
+    if hackathons:
+        hn = len(hackathons)
+        summary_line += f" · {hn} new hackathon{'s' if hn != 1 else ''} this week"
 
     return {
         "event": DAILY_DIGEST_EVENT,
@@ -97,12 +101,14 @@ def build_daily_digest(user_email: str, top_n: int = TOP_N_MATCHES) -> Dict[str,
         "cta_url": cta_url,
         "match_count": count,
         "matches": matches,
+        "hackathon_count": len(hackathons),
+        "hackathons": hackathons,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         # pre-rendered per-channel blocks
         "email": {
             "subject": title,
-            "html": _daily_email_html(title, matches, cta_url),
-            "text": _daily_email_text(title, matches, cta_url),
+            "html": _daily_email_html(title, matches, cta_url, hackathons),
+            "text": _daily_email_text(title, matches, cta_url, hackathons),
         },
         "sms": {"body": _clip(summary_line + f" — {cta_url}", 300)},
         "push": {"title": title, "body": summary_line, "url": cta_url},
@@ -150,7 +156,46 @@ def _attach_sponsorship(matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return _safe(_run, matches)
 
 
-def _daily_email_html(title: str, matches: List[Dict[str, Any]], cta_url: str) -> str:
+def _has_prize(h: Dict[str, Any]) -> bool:
+    """True only for a real cash prize — suppresses Devpost's '$0'/'$' placeholders."""
+    p = str(h.get("prize_pool") or "").strip()
+    if not p:
+        return False
+    digits = "".join(ch for ch in p if ch.isdigit())
+    return bool(digits) and int(digits) > 0
+
+
+def _new_hackathons(days: int = 7, limit: int = 3) -> List[Dict[str, Any]]:
+    """Vetted hackathons first added to the catalog in the last `days`, strongest
+    first. Global (not per-user) — a light 'what's new' nudge in the digest."""
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    cur = (
+        _db().events.find(
+            {
+                "type": "hackathon",
+                "status": "active",
+                "legitimacy_band": {"$in": ["verified", "credible"]},
+                "first_seen": {"$gte": since},
+            },
+            {"_id": 0, "title": 1, "org": 1, "url": 1, "start_date": 1, "prize_pool": 1},
+        )
+        .sort("legitimacy_score", -1)
+        .limit(max(0, limit))
+    )
+    out: List[Dict[str, Any]] = []
+    for e in cur:
+        out.append({
+            "title": str(e.get("title") or "").strip(),
+            "org": str(e.get("org") or "").strip(),
+            "url": str(e.get("url") or "").strip(),
+            "start_date": str(e.get("start_date") or "").strip(),
+            "prize_pool": e.get("prize_pool"),
+        })
+    return out
+
+
+def _daily_email_html(title: str, matches: List[Dict[str, Any]], cta_url: str,
+                      hackathons: Optional[List[Dict[str, Any]]] = None) -> str:
     rows = ""
     for m in matches:
         badge = ""
@@ -167,10 +212,33 @@ def _daily_email_html(title: str, matches: List[Dict[str, Any]], cta_url: str) -
         )
     if not rows:
         rows = '<li style="color:#666">No new matches today — your saved filters are still watching.</li>'
+
+    hk_html = ""
+    if hackathons:
+        events_url = _app_url("/?tab=events")
+        hk_items = ""
+        for h in hackathons:
+            prize = f' · {h.get("prize_pool")}' if _has_prize(h) else ""
+            hlink = h.get("url") or events_url
+            hk_items += (
+                '<li style="margin:0 0 8px;line-height:1.4">'
+                f'<a href="{hlink}" style="color:#111;font-weight:600;text-decoration:none">'
+                f'{h.get("title") or "Hackathon"}</a> '
+                f'<span style="color:#888">{h.get("org") or ""}{prize}</span></li>'
+            )
+        n = len(hackathons)
+        hk_html = (
+            f'<h3 style="margin:22px 0 8px">🏆 {n} new vetted hackathon{"s" if n != 1 else ""} this week</h3>'
+            f'<ul style="padding-left:18px;margin:0 0 8px">{hk_items}</ul>'
+            f'<p style="margin:0 0 20px"><a href="{events_url}" style="color:#4f46e5;'
+            'font-weight:600;text-decoration:none">See all vetted events →</a></p>'
+        )
+
     return (
         '<div style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:560px;margin:auto">'
         f'<h2 style="margin:0 0 12px">{title}</h2>'
         f'<ul style="padding-left:18px;margin:0 0 20px">{rows}</ul>'
+        f'{hk_html}'
         f'<p><a href="{cta_url}" style="background:#4f46e5;color:#fff;padding:10px 18px;'
         'border-radius:8px;text-decoration:none;font-weight:600">Open your matches</a></p>'
         '<p style="color:#aaa;font-size:12px;margin-top:24px">You can change what you get or '
@@ -178,7 +246,8 @@ def _daily_email_html(title: str, matches: List[Dict[str, Any]], cta_url: str) -
     )
 
 
-def _daily_email_text(title: str, matches: List[Dict[str, Any]], cta_url: str) -> str:
+def _daily_email_text(title: str, matches: List[Dict[str, Any]], cta_url: str,
+                      hackathons: Optional[List[Dict[str, Any]]] = None) -> str:
     lines = [title, ""]
     for m in matches:
         sp = (m.get("sponsorship") or {}).get("band")
@@ -188,6 +257,14 @@ def _daily_email_text(title: str, matches: List[Dict[str, Any]], cta_url: str) -
             lines.append(f"  {m['apply_url']}")
     if not matches:
         lines.append("No new matches today — your saved filters are still watching.")
+    if hackathons:
+        n = len(hackathons)
+        lines += ["", f"{n} new vetted hackathon{'s' if n != 1 else ''} this week:"]
+        for h in hackathons:
+            prize = f" — {h.get('prize_pool')}" if _has_prize(h) else ""
+            lines.append(f"- {h.get('title')} ({h.get('org')}){prize}")
+            if h.get("url"):
+                lines.append(f"  {h['url']}")
     lines += ["", f"Open your matches: {cta_url}",
               "", "Change preferences or unsubscribe: Settings → Notifications."]
     return "\n".join(lines)
