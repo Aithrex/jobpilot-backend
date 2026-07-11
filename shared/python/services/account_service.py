@@ -99,6 +99,20 @@ CASCADE_COLLECTIONS: List[Tuple[str, str]] = [
     ("saved_jobs", "user_email"),
     ("application_answers", "user_email"),
     ("application_profiles", "user_email"),
+    # --- auto-apply Tranche 1 (ledger / approval loop / credential vault) ---
+    ("applications", "user_email"),
+    ("approval_tokens", "user_email"),
+    ("ats_credentials", "user_email"),
+    ("ats_credential_audit", "user_email"),
+    # --- auto-apply Tranche 2/3 (answers cache, verify freezes, answer library);
+    #     skill_market_stats is cross-user aggregate data, NOT user-keyed — excluded ---
+    ("auto_apply_answers", "user_email"),
+    ("auto_apply_freezes", "user_email"),
+    ("application_answer_library", "user_email"),
+    # --- opt-in auto-submit (were missing — user-keyed, must be erased too) ---
+    ("auto_submit_settings", "user_email"),
+    ("auto_submit_approvals", "user_email"),
+    ("auto_submit_audit", "user_email"),
     ("job_activity_log", "user_email"),
     ("job_filter_preferences", "user_email"),
     ("pipeline_filter_presets", "user_email"),

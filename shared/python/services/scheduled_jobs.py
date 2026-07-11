@@ -246,6 +246,46 @@ def run_events_refresh() -> Dict[str, Any]:
         return {"error": "events_refresh_failed"}
 
 
+def run_apply_hourly() -> Dict[str, Any]:
+    """Hourly auto-apply sweep: enqueue eligible applications, send the evening
+    summary (self-filtered by local hour), and reconcile the Oracle verify
+    freezes. Every leg is isolated so one failure never aborts the others.
+    """
+    result: Dict[str, Any] = {}
+    from services import apply_scheduler
+
+    try:
+        result["hourly"] = apply_scheduler.run_apply_hourly()
+    except Exception as e:
+        logger.error("[scheduled] apply_hourly hourly sweep failed: %s", e, exc_info=True)
+        result["hourly"] = {"error": "apply_hourly_failed"}
+
+    try:
+        result["evening"] = apply_scheduler.run_apply_evening_summary()
+    except Exception as e:
+        logger.error("[scheduled] apply_hourly evening summary failed: %s", e, exc_info=True)
+        result["evening"] = {"error": "apply_evening_failed"}
+
+    # Reconcile the Oracle re-check: drive due verify-freezes in this same sweep.
+    # Wrapped per-freeze so one bad record never kills the sweep.
+    rechecked = 0
+    recheck_errors = 0
+    try:
+        from services import auto_apply_service
+        for w in auto_apply_service.due_verify_waits(limit=200):
+            try:
+                auto_apply_service.recheck_verify(w["application_id"], w["user_email"])
+                rechecked += 1
+            except Exception as e:
+                recheck_errors += 1
+                logger.warning("[scheduled] apply_hourly recheck_verify failed: %s", e)
+    except Exception as e:
+        logger.error("[scheduled] apply_hourly verify sweep failed: %s", e, exc_info=True)
+    result["verify_recheck"] = {"rechecked": rechecked, "errors": recheck_errors}
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
@@ -264,6 +304,17 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             return {"job": name, "result": run_learning_due()}
         if name == "events_refresh":
             return {"job": name, "result": run_events_refresh()}
+        if name == "apply_hourly":
+            return {"job": name, "result": run_apply_hourly()}
+        if name == "trend_aggregate":
+            # System/cron recompute of the cross-user market trend aggregate.
+            # This bridges an EventBridge scheduled trigger to the resume
+            # `_process_job` job type of the same name (system actor, no
+            # user_email; the payload is ignored). Never exposed on a user route.
+            from services.resume_service import get_resume_service, ResumeService
+            job_id = get_resume_service().create_job("trend_aggregate", {}, "system@internal")
+            ResumeService.invoke_async(job_id, "trend_aggregate", {})
+            return {"job": name, "enqueued": job_id}
         logger.warning("[scheduled] unknown job: %s", name)
         return {"error": "unknown job", "name": name}
     except Exception as e:

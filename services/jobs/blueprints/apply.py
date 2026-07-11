@@ -24,13 +24,18 @@ issues from /api/auth and sends it as a Bearer token):
 import logging
 from datetime import datetime
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, redirect, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from utils.security import InputSanitizer, get_rate_limiter, get_client_ip
 from utils.db_connect import DBConnect
 from services import entitlements_service
 from services import auto_submit_service
+from services import autonomy_service
+from services import application_ledger_service
+from services import approval_token_service
+from services import ats_credential_service
+from services import today_inbox_service
 
 apply_bp = Blueprint("apply", __name__)
 logger = logging.getLogger(__name__)
@@ -346,7 +351,11 @@ def auto_submit_get_settings():
         return disabled
     user_email = get_jwt_identity()
     try:
-        return jsonify(auto_submit_service.get_settings(user_email)), 200
+        settings = auto_submit_service.get_settings(user_email)
+        # Merge the per-user autonomy threshold (confidence gate for hands-off
+        # submit). Kept in a separate store, surfaced on the same settings blob.
+        settings["autonomy_threshold"] = autonomy_service.get_autonomy_threshold(user_email)
+        return jsonify(settings), 200
     except Exception as e:
         logger.exception("apply/auto-submit settings GET error: %s", e)
         return jsonify({"error": "Failed to load auto-submit settings"}), 500
@@ -363,8 +372,26 @@ def auto_submit_put_settings():
     enabled = data.get("auto_submit_enabled")
     if not isinstance(enabled, bool):
         return jsonify({"error": "auto_submit_enabled (boolean) is required"}), 400
+
+    # Optional autonomy threshold — confidence gate in [0, 1]. Validate BEFORE
+    # persisting the opt-in so a bad value never half-applies. bool is a subclass
+    # of int/float, so reject it explicitly.
+    threshold = data.get("autonomy_threshold")
+    if threshold is not None:
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+            return jsonify({"error": "autonomy_threshold must be a number in [0, 1]"}), 400
+        if not (0.0 <= float(threshold) <= 1.0):
+            return jsonify({"error": "autonomy_threshold must be a number in [0, 1]"}), 400
+
     try:
-        return jsonify(auto_submit_service.set_settings(user_email, enabled)), 200
+        result = auto_submit_service.set_settings(user_email, enabled)
+        if threshold is not None:
+            result["autonomy_threshold"] = autonomy_service.set_autonomy_threshold(
+                user_email, float(threshold)
+            )
+        else:
+            result["autonomy_threshold"] = autonomy_service.get_autonomy_threshold(user_email)
+        return jsonify(result), 200
     except Exception as e:
         logger.exception("apply/auto-submit settings PUT error: %s", e)
         return jsonify({"error": "Failed to save auto-submit settings"}), 500
@@ -509,3 +536,316 @@ def auto_submit_mark_submitted():
     except Exception as e:
         logger.exception("apply/auto-submit mark-submitted error: %s", e)
         return jsonify({"error": "Failed to mark submitted"}), 500
+
+
+# ==================================================================
+# AUTO-APPLY LEDGER (Tranche 1 §1) — enqueue a job into the applications ledger.
+#
+# The dedup gate + the unique (user_email, job_identity) index make a duplicate
+# application STRUCTURALLY impossible. All business failures are 400/404/409 —
+# never 401. Long work (form recon / answer resolution) is NOT done here: this
+# only writes the ledger row; the Tranche 2 gather job does the rest.
+# ==================================================================
+@apply_bp.route("/queue", methods=["POST"])
+@jwt_required()
+def queue_application():
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+
+    # Sanitize every untrusted field BEFORE it reaches the ledger / a Mongo
+    # filter (job_identity is derived from company+title+jd_text).
+    company = InputSanitizer.sanitize_string(data.get("company", "") or "", max_length=300)
+    title = InputSanitizer.sanitize_string(data.get("title", "") or "", max_length=300)
+    jd_text = InputSanitizer.sanitize_string(data.get("jd_text", "") or "", max_length=20000)
+    if not company or not title:
+        return jsonify({"error": "company and title are required"}), 400
+
+    source = InputSanitizer.sanitize_string(data.get("source", "") or "", max_length=40) or "manual"
+    apply_url = InputSanitizer.sanitize_string(data.get("apply_url", "") or "", max_length=2000)
+
+    try:
+        # Fast pre-enqueue dedup: if a live/handled (or user-skipped) ledger row
+        # already covers this (user, posting), do NOT re-offer it.
+        identity = application_ledger_service.normalized_job_identity(company, title, jd_text)
+        skip, existing = application_ledger_service.dedup_gate(user_email, identity)
+        if skip:
+            return jsonify({
+                "application": existing,
+                "skipped": True,
+                "reason": "already_handled",
+            }), 200
+
+        # create_application re-sanitizes ats_family/tenant/posting_closes_at and
+        # resolves the insert-conflict race deterministically (unique index).
+        record, outcome = application_ledger_service.create_application(
+            user_email,
+            company=company,
+            title=title,
+            jd_text=jd_text,
+            source=source,
+            apply_url=apply_url,
+            ats_family=data.get("ats_family"),
+            tenant=data.get("tenant"),
+            posting_closes_at=data.get("posting_closes_at"),
+        )
+
+        # TODO(Tranche 2 §6): enqueue auto_apply_gather here (recon form → map
+        # fields → resolve answers → compute confidence → transition the row).
+        # The job_type/_process_job branch does NOT exist yet — enqueuing it now
+        # would fail — so Tranche 1 stops at the created ledger row.
+        return jsonify({"application": record, "outcome": outcome}), 201
+    except application_ledger_service.ApplicationLedgerError as e:
+        return jsonify({"error": e.error, "message": e.message}), e.status
+    except Exception as e:
+        logger.exception("apply/queue error: %s", e)
+        return jsonify({"error": "Failed to queue application"}), 500
+
+
+# ==================================================================
+# ATS CREDENTIAL VAULT (Tranche 1 §4) — server-managed ATS logins.
+#
+# The password is ALWAYS server-generated: the client never sends one (a PUT
+# carrying a password is rejected). Reveal is a single, audited plaintext egress
+# gated by a FRESH account-password re-auth + tight rate limit. Every route is
+# @jwt_required and user_email-scoped; typed CredentialError maps to
+# 400/403/404/409/429/503 — never 401.
+# ==================================================================
+def _credential_error(e: "ats_credential_service.CredentialError"):
+    return jsonify({"error": e.error, "message": e.message}), e.status
+
+
+@apply_bp.route("/credentials", methods=["GET"])
+@jwt_required()
+def list_ats_credentials():
+    """Metadata only — the encrypted password_blob NEVER leaves the service."""
+    user_email = get_jwt_identity()
+    try:
+        return jsonify({"credentials": ats_credential_service.list_credentials(user_email)}), 200
+    except ats_credential_service.CredentialError as e:
+        return _credential_error(e)
+    except Exception as e:
+        logger.exception("apply/credentials list error: %s", e)
+        return jsonify({"error": "Failed to load credentials"}), 500
+
+
+@apply_bp.route("/credentials", methods=["PUT"])
+@jwt_required()
+def put_ats_credential():
+    """Create or rotate a credential. The vault generates the password — reject
+    ANY client-supplied secret so a phished/reused personal password can't land."""
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+
+    if any(k in data for k in ("password", "secret", "password_blob")):
+        return jsonify({
+            "error": "password_not_accepted",
+            "message": "The vault generates and manages the password; do not send one.",
+        }), 400
+
+    try:
+        result = ats_credential_service.store_or_rotate(
+            user_email,
+            data.get("ats_family"),
+            data.get("tenant", ""),
+            data.get("username", ""),
+        )
+        return jsonify(result), 200
+    except ats_credential_service.CredentialError as e:
+        return _credential_error(e)
+    except Exception as e:
+        logger.exception("apply/credentials put error: %s", e)
+        return jsonify({"error": "Failed to store credential"}), 500
+
+
+@apply_bp.route("/credentials/reveal", methods=["POST"])
+@jwt_required()
+def reveal_ats_credential():
+    """Reveal-on-demand: fresh bcrypt re-auth against the account password, a
+    tight per-user rate limit, and a hard-required audit write in the service."""
+    user_email = get_jwt_identity()
+
+    # Tight rate limit — a reveal is a sensitive plaintext egress.
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(
+        f"cred_reveal:{user_email}", max_requests=5, window_seconds=300
+    ):
+        return jsonify({
+            "error": "rate_limited",
+            "message": "Too many reveal attempts. Try again in a few minutes.",
+        }), 429
+
+    data = request.get_json(silent=True) or {}
+    password = data.get("password")
+    if not password or not isinstance(password, str):
+        return jsonify({
+            "error": "reauth_required",
+            "message": "Your account password is required to reveal a stored credential.",
+        }), 400
+
+    # Fresh re-auth against users.password_hash (never logged).
+    from models.user import User
+    try:
+        db = DBConnect().get_db()
+        user = db.users.find_one({"email": user_email}, {"password_hash": 1})
+    except Exception as e:
+        logger.exception("apply/credentials reveal reauth lookup error: %s", e)
+        return jsonify({"error": "Failed to reveal credential"}), 500
+    if not user or not user.get("password_hash") or not User.verify_password(password, user["password_hash"]):
+        # 403 (not 401): a failed re-auth is a business failure, not a missing JWT.
+        return jsonify({
+            "error": "reauth_failed",
+            "message": "Password verification failed.",
+        }), 403
+
+    try:
+        return jsonify(ats_credential_service.reveal(
+            user_email, data.get("ats_family"), data.get("tenant", "")
+        )), 200
+    except ats_credential_service.CredentialError as e:
+        return _credential_error(e)
+    except Exception as e:
+        logger.exception("apply/credentials reveal error: %s", e)
+        return jsonify({"error": "Failed to reveal credential"}), 500
+
+
+@apply_bp.route("/credentials/reset", methods=["POST"])
+@jwt_required()
+def reset_ats_credential():
+    """User-initiated reset (Tranche 1 stub): rotates the stored secret NOW and
+    flags pending_ats_reset for the Tranche 2 Oracle forgot-password flow."""
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    try:
+        return jsonify(ats_credential_service.request_reset(
+            user_email, data.get("ats_family"), data.get("tenant", "")
+        )), 200
+    except ats_credential_service.CredentialError as e:
+        return _credential_error(e)
+    except Exception as e:
+        logger.exception("apply/credentials reset error: %s", e)
+        return jsonify({"error": "Failed to reset credential"}), 500
+
+
+# ==================================================================
+# EMAIL MAGIC-LINK APPROVAL (Tranche 1 §2) — PUBLIC route.
+#
+# Authorization is the signed, single-use token (verified via
+# approval_token_service.verify_and_claim), NOT a JWT — same trust model as the
+# SES/Stripe webhooks. Deliberately NO @jwt_required: a 401 here would wrongly
+# trip the FE force-logout. All failures return a self-contained HTML page with
+# 403/409/503 — NEVER 401. Every action is idempotent.
+# ==================================================================
+def _approve_link_page(title: str, message: str, status: int = 200) -> Response:
+    """A tiny, self-contained (no external assets) confirmation page. Title and
+    message are STATIC strings here — no untrusted input is interpolated."""
+    html = (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        f"<title>{title}</title></head>"
+        "<body style='font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;"
+        "max-width:480px;margin:64px auto;padding:0 20px;text-align:center;color:#1a1a2e'>"
+        f"<h2 style='margin:0 0 12px'>{title}</h2>"
+        f"<p style='color:#444;line-height:1.5'>{message}</p>"
+        "</body></html>"
+    )
+    return Response(html, status=status, mimetype="text/html")
+
+
+_APPROVE_LINK_ERRORS = {
+    "invalid_link": ("Link not valid",
+                     "This approval link isn't valid. It may have been altered, "
+                     "or replaced by a newer email."),
+    "link_expired": ("Link expired",
+                     "This approval link has expired. Open the app to review your matches."),
+    "link_already_used": ("Already done",
+                          "You've already used this link — no further action was taken."),
+    "approval_links_unavailable": ("Temporarily unavailable",
+                                   "Approval links are briefly unavailable. Please try again "
+                                   "shortly, or open the app."),
+}
+
+
+def _app_applications_url() -> str:
+    """The in-app applications view a `review` link (or a re-clicked one) lands on."""
+    from utils.config import AppUrlsConfig
+    return f"{AppUrlsConfig.FRONTEND_URL}/applications"
+
+
+@apply_bp.route("/approve-link", methods=["GET"])
+def approve_link():
+    token = request.args.get("token", "")
+    try:
+        claim = approval_token_service.verify_and_claim(token)
+    except approval_token_service.TokenAlreadyUsed as e:
+        # Idempotent: the link already did its job. A re-clicked `review` still
+        # 302s into the app; other actions get a friendly "already done" page.
+        if (e.payload or {}).get("action") == "review":
+            return redirect(_app_applications_url(), code=302)
+        title, message = _APPROVE_LINK_ERRORS["link_already_used"]
+        return _approve_link_page(title, message, status=e.status)
+    except approval_token_service.ApprovalTokenError as e:
+        title, message = _APPROVE_LINK_ERRORS.get(
+            e.error, ("Link problem", "This link could not be used.")
+        )
+        return _approve_link_page(title, message, status=e.status)
+
+    action = claim.get("action")
+    user_email = claim.get("user_email")
+    application_ids = claim.get("application_ids") or []
+
+    try:
+        if action == "review":
+            return redirect(_app_applications_url(), code=302)
+
+        if action in ("approve_all", "approve_one"):
+            moved = application_ledger_service.approve_to_ready(user_email, application_ids)
+            return _approve_link_page(
+                "Approved",
+                f"{moved} application{'s' if moved != 1 else ''} queued to apply — "
+                "we'll take it from here.",
+                status=200,
+            )
+
+        if action == "skip":
+            application_ledger_service.user_skip(user_email, application_ids)
+            return _approve_link_page(
+                "Skipped",
+                "Got it — we won't nudge you about these again.",
+                status=200,
+            )
+
+        # Unreachable: verify_and_claim only returns whitelisted actions.
+        return _approve_link_page("Link problem", "This link could not be used.", status=400)
+    except application_ledger_service.ApplicationLedgerError as e:
+        status = e.status if e.status in (403, 409, 503) else 409
+        return _approve_link_page(
+            "Link problem", "We couldn't complete that action. Please open the app.", status=status
+        )
+    except Exception as e:
+        logger.exception("apply/approve-link action error: %s", e)
+        return _approve_link_page(
+            "Something went wrong",
+            "We couldn't complete that action. Please open the app.",
+            status=503,
+        )
+
+
+# ==================================================================
+# TODAY INBOX — the unified "N items need you today" feed.
+#
+# Read-only aggregator over four pending-decision surfaces (ledger needs_input,
+# auto-submit approvals, Gmail suggestions, batch "did you apply?"). Each source
+# is guarded + error-isolated inside the service, so a disabled feature or a
+# failing source contributes nothing and never 500s the feed. No entitlement
+# spend, no LLM. Scoped to the JWT identity. Rides the existing /api/apply/*
+# edge route (jobs Lambda) — no new Terraform route needed.
+# ==================================================================
+@apply_bp.route("/today-inbox", methods=["GET"])
+@jwt_required()
+def today_inbox():
+    user_email = get_jwt_identity()
+    try:
+        return jsonify(today_inbox_service.get_today_inbox(user_email)), 200
+    except Exception as e:
+        logger.exception("apply/today-inbox error: %s", e)
+        return jsonify({"error": "Failed to load today inbox"}), 500

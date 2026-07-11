@@ -72,6 +72,14 @@ resource "aws_lambda_function" "service" {
       SSM_GOOGLE_OAUTH_CLIENT_ID     = "${var.ssm_path_prefix}/google-oauth-client-id"
       SSM_GOOGLE_OAUTH_CLIENT_SECRET = "${var.ssm_path_prefix}/google-oauth-client-secret"
       SSM_GMAIL_TOKEN_ENCRYPTION_KEY = "${var.ssm_path_prefix}/gmail-token-encryption-key"
+
+      # DRAFT — requires terraform plan + human review before apply.
+      # Auto-apply Tranche 1. CREDENTIALS_KMS_KEY_ID is a plain identifier (NOT a
+      # secret) — the CMK the credential vault (kms_cipher.py) envelope-encrypts
+      # under. APPROVAL_LINK_SECRET is the dedicated HMAC secret for signed
+      # approve-links (§2), read as a SecureString via SSM_APPROVAL_LINK_SECRET.
+      CREDENTIALS_KMS_KEY_ID    = aws_kms_key.credentials.arn
+      SSM_APPROVAL_LINK_SECRET  = "${var.ssm_path_prefix}/approval-link-secret"
     }
   }
 

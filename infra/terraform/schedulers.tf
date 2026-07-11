@@ -15,6 +15,14 @@ locals {
     bandit_nightly = { expression = "cron(0 3 * * ? *)", desc = "Nightly signal-bandit update (03:00 UTC)" }
     learning_due   = { expression = "rate(10 minutes)", desc = "Send due scheduled LinkedIn posts" }
     events_refresh = { expression = "cron(0 6 * * ? *)", desc = "Refresh hackathon/webinar catalog (Devpost + confs.tech, 06:00 UTC)" }
+    # DRAFT — human review. Hourly auto-apply sweep: enqueue eligible applications,
+    # send the evening summary (self-filtered by local hour), reconcile Oracle
+    # verify-freezes. Routes to scheduled_jobs.dispatch_scheduled("apply_hourly").
+    apply_hourly   = { expression = "rate(1 hour)", desc = "Auto-apply hourly sweep + evening summary + verify re-check" }
+    # DRAFT — human review. Nightly cross-user skill-market recompute. Option (a)
+    # is wired: scheduled_jobs.dispatch_scheduled("trend_aggregate") enqueues the
+    # resume `_process_job` job of the same name (system actor, payload {}).
+    trend_aggregate = { expression = "cron(0 4 * * ? *)", desc = "Nightly cross-user market trend recompute (04:00 UTC)" }
   }
 }
 

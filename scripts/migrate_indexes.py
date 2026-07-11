@@ -179,6 +179,30 @@ INDEX_SPECS = [
     ("auto_submit_audit", [("application_id", ASCENDING), ("at", DESCENDING)],
      {"name": "application_id_at"}),
 
+    # === auto-apply Tranche 1 ==============================================
+    # applications ledger (Tranche 1 §1)
+    ("applications", [("user_email", ASCENDING), ("job_identity", ASCENDING)], {"unique": True, "name": "user_email_job_identity_unique"}),
+    ("applications", [("user_email", ASCENDING), ("status", ASCENDING)], {"name": "user_email_status"}),
+    ("applications", [("posting_closes_at", ASCENDING)], {"sparse": True, "name": "posting_closes_at_sparse"}),
+    ("applications", [("application_id", ASCENDING)], {"unique": True, "name": "application_id_unique"}),
+    # approval tokens (Tranche 1 §2)
+    ("approval_tokens", [("jti", ASCENDING)], {"unique": True, "name": "jti_unique"}),
+    ("approval_tokens", [("exp", ASCENDING)], {"expireAfterSeconds": 0, "name": "ttl_exp"}),
+    # ATS credential vault (Tranche 1 §4)
+    ("ats_credentials", [("user_email", ASCENDING), ("ats_family", ASCENDING), ("tenant", ASCENDING)], {"unique": True, "name": "user_family_tenant_unique"}),
+    ("ats_credential_audit", [("user_email", ASCENDING), ("at", DESCENDING)], {"name": "user_email_at"}),
+
+    # === auto-apply Tranche 2/3 ============================================
+    # cross-user trend signal
+    ("skill_market_stats", [("role", ASCENDING), ("window", ASCENDING)], {"name": "role_window"}),
+    ("skill_market_stats", [("role", ASCENDING), ("skill", ASCENDING), ("window", ASCENDING)], {"unique": True, "name": "role_skill_window_unique"}),
+    # auto-apply engine
+    ("auto_apply_answers", [("user_email", ASCENDING), ("application_id", ASCENDING)], {"unique": True, "name": "user_application_unique"}),
+    ("auto_apply_freezes", [("user_email", ASCENDING), ("application_id", ASCENDING)], {"unique": True, "name": "user_application_unique"}),
+    ("auto_apply_freezes", [("status", ASCENDING), ("next_check_at", ASCENDING)], {"name": "status_next_check"}),
+    # self-growing answer library
+    ("application_answer_library", [("user_email", ASCENDING), ("norm_key", ASCENDING)], {"unique": True, "name": "user_email_norm_key_unique"}),
+
     # === feedback ==========================================================
     # feedback.py:81 my_feedback find({email}) sort created_at desc (user field is `email`).
     ("feedback", [("email", ASCENDING), ("created_at", DESCENDING)],

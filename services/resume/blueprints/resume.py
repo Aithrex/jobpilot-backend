@@ -3779,6 +3779,24 @@ def learning_paths_list():
     return jsonify({"paths": learning_service.list_paths(get_jwt_identity())}), 200
 
 
+@resume_bp.route("/learning/trends", methods=["GET"])
+@jwt_required()
+def learning_trends():
+    """Market-demand-ranked learning topics for this user (deterministic, no LLM
+    spend). Rides the existing /api/resume/* edge — no Terraform change."""
+    from services import trend_signal_service
+    user_email = get_jwt_identity()
+    try:
+        window = int(request.args.get("window", 90))
+    except (TypeError, ValueError):
+        window = 90
+    try:
+        return jsonify(trend_signal_service.trending_for_user(user_email, window=window)), 200
+    except Exception as e:
+        logger.exception("learning trends error: %s", e)
+        return jsonify({"error": "Could not load learning trends"}), 500
+
+
 @resume_bp.route("/learning/paths/<path_id>", methods=["GET"])
 @jwt_required()
 def learning_path_get(path_id):

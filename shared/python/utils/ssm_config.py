@@ -107,6 +107,10 @@ def get_all_secrets() -> Dict[str, str]:
         'GOOGLE_OAUTH_CLIENT_SECRET': os.getenv('SSM_GOOGLE_OAUTH_CLIENT_SECRET'),
         'GOOGLE_OAUTH_REDIRECT_URI': os.getenv('SSM_GOOGLE_OAUTH_REDIRECT_URI'),
         'GMAIL_TOKEN_ENCRYPTION_KEY': os.getenv('SSM_GMAIL_TOKEN_ENCRYPTION_KEY'),
+        # Auto-apply Tranche 1 §2 — dedicated HMAC secret for signed approval
+        # magic-links (NEVER the JWT secret). Fetched in the same batched
+        # GetParameters call below (the loop chunks to the 10-per-call limit).
+        'APPROVAL_LINK_SECRET': os.getenv('SSM_APPROVAL_LINK_SECRET'),
     }
     
     # Filter out empty values
@@ -272,6 +276,10 @@ class SSMConfig:
     @property
     def GMAIL_TOKEN_ENCRYPTION_KEY(self) -> Optional[str]:
         return self._get('GMAIL_TOKEN_ENCRYPTION_KEY', 'GMAIL_TOKEN_ENCRYPTION_KEY')
+
+    @property
+    def APPROVAL_LINK_SECRET(self) -> Optional[str]:
+        return self._get('APPROVAL_LINK_SECRET', 'APPROVAL_LINK_SECRET')
 
     @property
     def ALLOWED_ORIGINS(self) -> str:

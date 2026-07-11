@@ -1073,6 +1073,39 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result = hard_purge(user_email, exclude_job_id=job_id)
             svc.complete_job(job_id, result)
 
+        elif job_type == "trend_aggregate":
+            # System/cron job — recomputes cross-user skill-market statistics.
+            # No user scoping (payload may be {}). Cheap-ish aggregation but a
+            # duplicate run is harmless (idempotent upserts), so no guard.
+            from services import trend_signal_service
+            result = trend_signal_service.build_trend_aggregate_job(payload)
+            svc.complete_job(job_id, result)
+
+        elif job_type == "auto_apply_gather":
+            # Idempotency guard — Lambda async invocations are at-least-once,
+            # so AWS may retry the same job. Re-gathering could re-issue answer
+            # resolution / executor probes. Bail if already completed.
+            existing = svc.get_job(job_id, user_email=payload.get("user_email", ""))
+            if existing and existing.get("status") == "completed":
+                logger.info(f"Skipping auto_apply_gather job {job_id}: already completed")
+                return
+
+            from services.auto_apply_service import gather
+            result = gather(payload["application_id"], payload["user_email"])
+            svc.complete_job(job_id, result)
+
+        elif job_type == "auto_apply_submit":
+            # Idempotency guard — a duplicate submit could double-apply to the
+            # same posting. Bail if this job already completed.
+            existing = svc.get_job(job_id, user_email=payload.get("user_email", ""))
+            if existing and existing.get("status") == "completed":
+                logger.info(f"Skipping auto_apply_submit job {job_id}: already completed")
+                return
+
+            from services.auto_apply_service import submit
+            result = submit(payload["application_id"], payload["user_email"])
+            svc.complete_job(job_id, result)
+
         else:
             svc.fail_job(job_id, f"Unknown job type: {job_type}")
 

@@ -73,6 +73,19 @@ data "aws_iam_policy_document" "inline" {
     actions   = ["lambda:InvokeFunction"]
     resources = ["arn:aws:lambda:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:function:${var.project}-*-${var.environment}"]
   }
+
+  # DRAFT — requires terraform plan + human review before apply.
+  # ATS credential vault (auto-apply Tranche 1 §4): envelope encryption of
+  # ats_credentials.password_blob under the DEDICATED credentials CMK
+  # (kms_credentials.tf). GenerateDataKey wraps a fresh DEK on store/rotate;
+  # Decrypt unwraps it on reveal. Scoped to THIS key ARN only — separate from
+  # the SSM-only KmsDecrypt statement above (which is ViaService-restricted to
+  # ssm), so a reveal is an auditable, revocable CloudTrail event on this key.
+  statement {
+    sid       = "AtsCredentialVault"
+    actions   = ["kms:GenerateDataKey", "kms:Decrypt"]
+    resources = [aws_kms_key.credentials.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "inline" {

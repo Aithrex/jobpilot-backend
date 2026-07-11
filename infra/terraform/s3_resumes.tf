@@ -32,3 +32,47 @@ resource "aws_s3_bucket_lifecycle_configuration" "resumes" {
     }
   }
 }
+
+# ============================================================================
+# DRAFT — requires terraform plan + human review before apply.
+# ============================================================================
+# SSE-KMS default encryption (auto-apply Tranche 1 §4 hardening). Uses the
+# AWS-managed aws/s3 KMS key (kms_master_key_id omitted) so no extra key policy
+# is needed; substitute a dedicated CMK ARN here if résumé objects warrant one.
+# bucket_key_enabled = true amortizes KMS calls to cut per-object cost/throttle.
+resource "aws_s3_bucket_server_side_encryption_configuration" "resumes" {
+  bucket = aws_s3_bucket.resumes.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "aws:kms"
+    }
+    bucket_key_enabled = true
+  }
+}
+
+# DRAFT — requires terraform plan + human review before apply.
+# TLS-only: deny any request made over plaintext HTTP (aws:SecureTransport
+# false). This is a restrictive Deny (not a public grant), so it is compatible
+# with block_public_policy = true on the public-access-block above.
+data "aws_iam_policy_document" "resumes_tls_only" {
+  statement {
+    sid       = "DenyInsecureTransport"
+    effect    = "Deny"
+    actions   = ["s3:*"]
+    resources = [aws_s3_bucket.resumes.arn, "${aws_s3_bucket.resumes.arn}/*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "resumes_tls_only" {
+  bucket = aws_s3_bucket.resumes.id
+  policy = data.aws_iam_policy_document.resumes_tls_only.json
+}
