@@ -2057,17 +2057,23 @@ def run_pipeline(
     ats_enabled = True
     indeed_enabled = include_indeed
 
-    # Role-aware search text for the FREE direct Workday CXS fetch. The paid
-    # path keeps its historical generic query; the Apify-free (scheduled) path
-    # searches the user's actual target role so non-SWE users get relevant
-    # enterprise postings instead of a fixed "software engineer" query.
-    wd_direct_search = "software engineer"
+    # Direct Workday CXS search term(s). The paid path keeps its historical
+    # single generic query; the Apify-free (scheduled) path searches EACH of the
+    # user's target roles (deduped, capped) so a multi-role user gets full
+    # enterprise Workday coverage — not just their first role.
+    wd_direct_terms = ["software engineer"]
     if skip_apify:
-        _wd_terms = [t for t in ((custom_role_terms or []) + (workday_titles or [])) if t and str(t).strip()]
-        if _wd_terms:
-            wd_direct_search = str(_wd_terms[0]).strip()
+        _seen_terms, _terms = set(), []
+        for t in ((custom_role_terms or []) + (workday_titles or [])):
+            s = str(t or "").strip()
+            if s and s.lower() not in _seen_terms:
+                _seen_terms.add(s.lower())
+                _terms.append(s)
+        if _terms:
+            wd_direct_terms = _terms[:5]  # cap fan-out — each term hits every Workday tenant
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    _pool_workers = max(4, len(wd_direct_terms) + 2)
+    with ThreadPoolExecutor(max_workers=_pool_workers) as pool:
         # Apify LinkedIn+Workday scrape — skipped entirely on the free path.
         f_apify = None if skip_apify else pool.submit(
             _scrape_in_parallel,
@@ -2094,18 +2100,26 @@ def run_pipeline(
         # This is the whole reason the direct fetcher exists; without it
         # the pipeline would silently lose Yahoo's postings whenever the
         # Apify Workday actor's daily index didn't include them.
-        f_wd_direct = pool.submit(
-            _scrape_workday_direct,
-            search_text=wd_direct_search,
-            location=location,
-        )
+        # One CXS search per target role; merged + deduped (by apply_link) below.
+        f_wd_directs = [
+            pool.submit(_scrape_workday_direct, search_text=term, location=location)
+            for term in wd_direct_terms
+        ]
         if f_apify is not None:
             linkedin_items, workday_items, errors, actor_diagnostics = f_apify.result()
         else:
             linkedin_items, workday_items, errors, actor_diagnostics = [], [], [], {}
         indeed_items = f_indeed.result() if f_indeed is not None else []
         ats_items = f_ats.result() if f_ats is not None else []
-        wd_direct_items = f_wd_direct.result()
+        wd_direct_items, _wd_seen = [], set()
+        for _f in f_wd_directs:
+            for _item in (_f.result() or []):
+                _u = str(_item.get("apply_link") or "").strip().lower()
+                if _u and _u in _wd_seen:
+                    continue
+                if _u:
+                    _wd_seen.add(_u)
+                wd_direct_items.append(_item)
 
     # Source-4 fallback: only fire for companies that returned 0 postings from
     # Source 5 (direct API). When APIFY_ATS_ACTOR is unset, _ats_apify_fallback
