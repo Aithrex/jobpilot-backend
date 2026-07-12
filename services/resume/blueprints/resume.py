@@ -280,8 +280,6 @@ def rewrite_bullet():
             else ""
         )
 
-        from services.gemini_client import gemini_json, GEMINI_FLASH
-
         prompt = (
             "Rewrite this resume bullet to be more impactful and ATS-optimized.\n\n"
             f"{role_ctx}{keyword_ctx}"
