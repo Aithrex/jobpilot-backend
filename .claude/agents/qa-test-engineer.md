@@ -20,7 +20,7 @@ There is **no test suite** in this repo. Part of your job is standing one up cle
 - **moto** to mock boto3 (S3/SES/SSM) without hitting AWS.
 - **Bedrock has no moto coverage** → wrap LLM calls behind `services/llm_providers.get_provider()` (already the abstraction) and inject a **fake provider** returning canned/schema-valid JSON; never call real Bedrock in tests.
 - **responses**/`requests-mock` for the external JD/job fetchers.
-- Flask **`app.test_client()`** for route-level tests; mint a valid JWT in a fixture for authed requests. Wire `shared/python` onto `sys.path` in `conftest.py` exactly as `run_local.py` does.
+- Flask **`app.test_client()`** for route-level tests; mint a valid JWT in a fixture for authed requests. Wire `shared/python` onto `sys.path` in `conftest.py` exactly as `local.py` does.
 - Layout: top-level `tests/` mirroring `blueprints/` + `services/`; scripts `pytest`, `pytest --cov`.
 
 ## Highest-value targets (test these first)

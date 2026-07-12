@@ -41,7 +41,7 @@
 | | Value |
 |---|---|
 | Prod API base | `https://aspirely.me/api` |
-| Local dev API | `http://<your-mac-ip>:5000/api` (run `python run_local.py` in `jobpilot-backend`) |
+| Local dev API | `http://<your-mac-ip>:5000/api` (run `python local.py` in `jobpilot-backend`) |
 | Transport | HTTPS only, JSON in/out (`Content-Type: application/json`), except file uploads (multipart) |
 | Content encoding | UTF-8 |
 | Timezone | All timestamps are ISO-8601 UTC (`...Z`). Render in the user's local tz. |

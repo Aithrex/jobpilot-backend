@@ -21,7 +21,7 @@ Usage:
 import sys
 from pathlib import Path
 
-# Mirror run_local.py path wiring so `utils.*` / `models.*` resolve.
+# Mirror local.py path wiring so `utils.*` / `models.*` resolve.
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "shared" / "python"))
 sys.path.insert(0, str(ROOT))

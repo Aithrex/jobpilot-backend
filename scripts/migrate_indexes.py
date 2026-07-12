@@ -33,7 +33,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-# Mirror run_local.py path wiring so `utils.*` resolve from the shared layer.
+# Mirror local.py path wiring so `utils.*` resolve from the shared layer.
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "shared" / "python"))
 sys.path.insert(0, str(ROOT))

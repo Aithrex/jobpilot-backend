@@ -1,7 +1,7 @@
 """Local development gateway — runs ALL four microservices as ONE Flask app.
 
 Usage:
-    python local.py        (or: python run_local.py)
+    python local.py
 
 All routes are served at http://localhost:5000/api/*.
 

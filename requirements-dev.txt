@@ -3,3 +3,7 @@
 # Runtime dependencies live in shared/python/requirements.txt — do not add them here.
 pytest>=8.0
 mongomock>=4.1
+
+# Ops scripts (not runtime): scripts/ingest_sponsorship.py reads .xlsx via openpyxl
+# (guarded import; sponsorship_service.py only reads the resulting Mongo collection).
+openpyxl>=3.1

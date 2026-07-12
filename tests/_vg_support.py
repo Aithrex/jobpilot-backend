@@ -6,7 +6,7 @@ pytest process).
 
 Responsibilities, in order:
   1. sys.path bootstrap — wires ``shared/python`` (the Lambda layer) onto the
-     path the same way ``run_local.py`` does, so ``services.*`` / ``utils.*`` /
+     path the same way ``local.py`` does, so ``services.*`` / ``utils.*`` /
      ``schemas.*`` resolve without needing PYTHONPATH.
   2. Offline env — no SSM, no AWS, and a deterministic Fernet key so
      ``services.voicegraph.crypto`` can encrypt/decrypt writing samples without
@@ -25,7 +25,7 @@ import os
 import sys
 from pathlib import Path
 
-# --- 1. sys.path bootstrap (mirror run_local.py) ---------------------------
+# --- 1. sys.path bootstrap (mirror local.py) ---------------------------
 _TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = _TESTS_DIR.parent
 _SHARED = REPO_ROOT / "shared" / "python"
