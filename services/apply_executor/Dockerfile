@@ -1,3 +1,6 @@
+# CI note: building/pushing this image needs ECR perms on the CI deployer —
+# see infra/terraform/apply_executor.tf (aws_iam_user_policy.ci_ecr).
+#
 # Container-image Lambda for the auto-apply browser fleet (Playwright + Chromium).
 # Built + pushed to ECR by CI (see infra/APPLY_EXECUTOR_DEPLOY.md); Terraform
 # points the Lambda at the :prod image tag.

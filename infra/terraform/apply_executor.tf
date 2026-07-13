@@ -110,6 +110,41 @@ resource "aws_iam_role_policy" "resume_invoke_executor" {
   })
 }
 
+# The CI (GitHub Actions) deployer needs ECR auth + push to build/push the
+# apply-executor container image (the four zip Lambdas + layer never needed ECR).
+# The CI user is managed outside this stack, so attach ONLY this inline policy by
+# name. Applied via CLI 2026-07-12 to unblock the failed deploy run; captured here
+# as code (a `terraform apply` adopts it — PutUserPolicy is create-or-replace).
+resource "aws_iam_user_policy" "ci_ecr" {
+  name = "jobpilot-ci-ecr"
+  user = "jobpilot-ci-deployer"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "EcrAuthToken"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Sid    = "EcrPushApplyExecutor"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:PutImage",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+        ]
+        Resource = aws_ecr_repository.apply_executor.arn
+      },
+    ]
+  })
+}
+
 output "apply_executor_ecr_url" {
   value = aws_ecr_repository.apply_executor.repository_url
 }
