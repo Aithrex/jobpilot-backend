@@ -2,7 +2,7 @@
 Resume document renderer — PDF (fpdf2) and DOCX (python-docx) generation.
 
 Template-based rendering with zero AI involvement.
-Format: A4, 0.4in margins, Times font, tight spacing.
+Format: A4, 0.5in margins, Calibri-style font (Carlito embedded in PDF), adaptive density.
 Section order: Summary → Experience → Projects → Technical Skills → Education.
 """
 import io
@@ -20,7 +20,7 @@ class ResumeRenderer:
     # changes live here in the renderer, not the content, so without a version
     # tag a cache "hit" would keep serving a PDF rendered by the OLD code.
     # Including this in the cache key forces a re-render after any format fix.
-    RENDER_VERSION = "2026-06-06.2"
+    RENDER_VERSION = "2026-07-13.3"
 
     @staticmethod
     def _contact_display(key: str, value: str) -> tuple:
@@ -105,20 +105,27 @@ class ResumeRenderer:
     # one page for typical 2-experience + up-to-3-project resumes. The Pass 2
     # distribution + tier fallback (10pt-tight → 9.5pt → 9pt) still handle
     # the densest layouts automatically.
-    _MARGIN_LR = 11.0          # ~0.43 inch — wider text column, fewer wraps
-    _MARGIN_TOP = 11.5         # slightly under 12mm to add usable height
-    _MARGIN_BOTTOM = 11.5      # symmetric with top
+    _MARGIN_LR = 12.7          # 0.5 inch — the industry-standard margin floor
+    _MARGIN_TOP = 12.7         # 0.5 inch
+    _MARGIN_BOTTOM = 12.7      # 0.5 inch
     _PAGE_H = 297.0            # A4 height mm
-    _AVAIL_H = _PAGE_H - _MARGIN_TOP - _MARGIN_BOTTOM  # ~276.8mm usable
+    _AVAIL_H = _PAGE_H - _MARGIN_TOP - _MARGIN_BOTTOM  # ~271.6mm usable
 
-    # Font sizes
+    # Font family: Carlito — the SIL-OFL, metric-identical twin of Calibri
+    # (the Word-default font recruiters have read resumes in for 16 years).
+    # Embedded from shared/python/services/fonts/ at render time; the DOCX
+    # renderer names "Calibri" directly (present on recipients' machines,
+    # same metrics). Falls back to Helvetica if the TTFs are missing.
+    _FONT_FAMILY = "Carlito"
+
+    # Font sizes. Section/company/role-title sizes are DERIVED per render as
+    # body_size + 1pt so the hierarchy scales with the adaptive density tier
+    # (11pt body → 12pt headers; 9pt body → 10pt headers) instead of headers
+    # staying fixed while the body moves.
     _NAME_SIZE = 19.0          # large centered name
     _CONTACT_SIZE = 10.0       # contact line
     _BODY_SIZE = 11.0          # body base (overridden by adaptive tier)
-    _SECTION_TITLE_SIZE = 11.0 # bold UPPERCASE section header
-    _COMPANY_SIZE = 11.0       # bold company name
-    _JOB_TITLE_SIZE = 11.0     # italic role title — matches company size for a
-                               # clean hierarchy (was 10.5pt, looked subordinate)
+    _HEADING_DELTA = 1.0       # section/company/title size = body_size + this
     _BULLET_INDENT = 5.05      # ~0.199in
 
     # Line heights
@@ -151,13 +158,62 @@ class ResumeRenderer:
                                # extra 0.5mm read as dead space under the title)
 
     # Spacing ceilings — how much Pass 2 may inflate on sparse pages.
-    # Sparse pages (1 exp + 1 proj) get a relaxed look; dense pages stay
-    # near the floor because Pass 2 distributes any slack proportionally.
-    _MAX_SECTION_GAP = 2.8
-    _MAX_ENTRY_GAP = 2.4
-    _MAX_POST_HEADER = 1.8
-    _MAX_HEADER_GAP = 0.8
-    _MAX_SKILL_GAP = 0.9
+    # Raised from the original micro-ceilings (2.8/2.4/1.8/0.8/0.9): those
+    # could absorb only ~15mm of slack, so any resume that measured short
+    # left a visible dead band at the bottom of the page. Combined with the
+    # up-tier font ladder, these let a sparse page reach ~90%+ visual fill
+    # while dense pages stay near the floors (Pass 2 is proportional).
+    _MAX_SECTION_GAP = 4.5     # ≈13pt before a section header
+    _MAX_ENTRY_GAP = 3.5
+    _MAX_POST_HEADER = 2.5
+    _MAX_HEADER_GAP = 1.2
+    _MAX_SKILL_GAP = 1.4
+
+    # Up-tier ladder: (body_size, lh, lh_s, max_fill). A bigger font must be
+    # JUSTIFIED by emptiness — each rung is taken only when the content at
+    # that size still leaves max_fill headroom for Pass-2 gap distribution.
+    # Without the threshold, a borderline page picked the largest size that
+    # barely fit, rendering oversized text with zero breathing room (and
+    # Helvetica runs optically larger than Times at equal pt, so 11pt is
+    # reserved for genuinely sparse pages). Content-rich resumes stay at the
+    # professional 10pt base; denser still → generate_pdf's shrink tiers.
+    _UP_TIERS = (
+        (11.0, 4.00, 3.60, 0.78),
+        (10.5, 3.70, 3.35, 0.88),
+    )
+    _BASE_TIER = (10.0, 3.40, 3.08)
+
+    def _measure_min(self, tailored: Dict[str, Any], body_size: float,
+                     lh: float, lh_s: float) -> float:
+        """Content height (mm) at minimum gaps for the given density tier."""
+        _, height = self._render_pdf(
+            tailored,
+            section_gap=self._MIN_SECTION_GAP,
+            entry_gap=self._MIN_ENTRY_GAP,
+            post_header=self._MIN_POST_HEADER,
+            header_gap=self._MIN_HEADER_GAP,
+            skill_gap=self._MIN_SKILL_GAP,
+            body_size=body_size, lh=lh, lh_s=lh_s,
+            measure_only=True,
+        )
+        return height
+
+    def _choose_up_tier(
+        self, tailored: Dict[str, Any]
+    ) -> "tuple[float, float, float, float]":
+        """Pick the largest up-tier whose min-gap fill stays UNDER that
+        rung's max_fill threshold (bigger font ⇒ more emptiness required).
+
+        Returns (body_size, lh, lh_s, min_height). Falls through to the 10pt
+        base tier (possibly overflowing — generate_pdf's shrink tiers take it
+        from there).
+        """
+        for body_size, lh, lh_s, max_fill in self._UP_TIERS:
+            height = self._measure_min(tailored, body_size, lh, lh_s)
+            if height <= self._AVAIL_H * max_fill:
+                return body_size, lh, lh_s, height
+        body_size, lh, lh_s = self._BASE_TIER
+        return body_size, lh, lh_s, self._measure_min(tailored, body_size, lh, lh_s)
 
     def _count_spacing_slots(self, tailored: Dict[str, Any]) -> Dict[str, int]:
         """Count the number of each spacing slot type in the resume."""
@@ -188,6 +244,24 @@ class ResumeRenderer:
             "skill_rows": skill_rows,
         }
 
+    def _register_fonts(self, pdf) -> None:
+        """Embed the Carlito family (Calibri metrics, SIL OFL) into the PDF.
+
+        Falls back to core Helvetica when the TTFs are unavailable so a
+        missing font file degrades the look, never the render.
+        """
+        import os
+
+        fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+        try:
+            pdf.add_font(self._FONT_FAMILY, "", os.path.join(fonts_dir, "Carlito-Regular.ttf"))
+            pdf.add_font(self._FONT_FAMILY, "B", os.path.join(fonts_dir, "Carlito-Bold.ttf"))
+            pdf.add_font(self._FONT_FAMILY, "I", os.path.join(fonts_dir, "Carlito-Italic.ttf"))
+            pdf.add_font(self._FONT_FAMILY, "BI", os.path.join(fonts_dir, "Carlito-BoldItalic.ttf"))
+        except Exception:
+            # Instance attribute shadows the class constant for this renderer.
+            self._FONT_FAMILY = "Helvetica"
+
     def _render_pdf(
         self,
         tailored: Dict[str, Any],
@@ -215,9 +289,13 @@ class ResumeRenderer:
         name = self._title_case_name(name)
         ml = self._MARGIN_LR
         mt = self._MARGIN_TOP
+        # Section/company/role-title size scales with the density tier so the
+        # visual hierarchy holds at every body size (11 → 12pt headers, etc).
+        heading_size = body_size + self._HEADING_DELTA
 
         pdf = FPDF(format="A4")
         pdf.set_auto_page_break(auto=False)
+        self._register_fonts(pdf)
         # ATS hint: enterprise screeners (Workday, iCIMS) sometimes flag
         # PDFs with empty Document Information as low-confidence — populating
         # Title/Author/Subject also makes the file readable when recruiters
@@ -235,7 +313,7 @@ class ResumeRenderer:
         # Name in Title Case (centered, bold). Section headers below still
         # use uppercase, but the candidate's name itself reads more naturally
         # as "Harshith Siddardha Manne" than as ALL CAPS.
-        pdf.set_font("Times", "B", self._NAME_SIZE)
+        pdf.set_font(self._FONT_FAMILY, "B", self._NAME_SIZE)
         pdf.cell(w, 6.5, name, align="C", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(0.5)  # \nameskip = \smallskip
 
@@ -251,7 +329,7 @@ class ResumeRenderer:
                 contact_fields.append((sanitize(display), href))
 
         if contact_fields:
-            pdf.set_font("Times", "", self._CONTACT_SIZE)
+            pdf.set_font(self._FONT_FAMILY, "", self._CONTACT_SIZE)
             pdf.set_text_color(0, 0, 0)
             sep = " | "
             sep_w = pdf.get_string_width(sep)
@@ -299,7 +377,7 @@ class ResumeRenderer:
         # ── Helper: section header — LaTeX: \sectionskip, UPPERCASE title, \hrule 0.5pt ──
         def section_header(title: str):
             pdf.ln(section_gap)
-            pdf.set_font("Times", "B", self._SECTION_TITLE_SIZE)
+            pdf.set_font(self._FONT_FAMILY, "B", heading_size)
             pdf.cell(w, 4.5, title.upper(), new_x="LMARGIN", new_y="NEXT")
             pdf.ln(0.5)  # \sectionlineskip = \medskip (small gap before rule)
             ry = pdf.get_y()
@@ -315,7 +393,7 @@ class ResumeRenderer:
             else:
                 pdf.ln(self._BULLET_GAP)      # constant gap between bullets
             indent = self._BULLET_INDENT
-            pdf.set_font("Times", "", body_size)
+            pdf.set_font(self._FONT_FAMILY, "", body_size)
             x_start = pdf.l_margin + indent
             y_center = pdf.get_y() + lh / 2
 
@@ -335,7 +413,7 @@ class ResumeRenderer:
         summary = tailored.get("summary", "")
         if summary:
             section_header("Summary")
-            pdf.set_font("Times", "", body_size)
+            pdf.set_font(self._FONT_FAMILY, "", body_size)
             safe_summary = sanitize(summary)
             # Detect the lead descriptor phrase: everything up to the first
             # connective ("with", "who", "experienced", "skilled",
@@ -375,13 +453,13 @@ class ResumeRenderer:
                 company_line = f"{company}, {location}" if location else company
 
                 # Company bold + dates right — LaTeX: \textbf{COMPANY} \hfill {dates}
-                pdf.set_font("Times", "B", self._COMPANY_SIZE)
+                pdf.set_font(self._FONT_FAMILY, "B", heading_size)
                 if dates:
-                    pdf.set_font("Times", "", body_size)
+                    pdf.set_font(self._FONT_FAMILY, "", body_size)
                     date_w = pdf.get_string_width(dates) + 2
-                    pdf.set_font("Times", "B", self._COMPANY_SIZE)
+                    pdf.set_font(self._FONT_FAMILY, "B", heading_size)
                     pdf.cell(w - date_w, 4.5, company_line)
-                    pdf.set_font("Times", "", body_size)
+                    pdf.set_font(self._FONT_FAMILY, "", body_size)
                     pdf.cell(date_w, 4.5, dates, align="R",
                              new_x="LMARGIN", new_y="NEXT")
                 else:
@@ -391,7 +469,7 @@ class ResumeRenderer:
                 # Job title italic — LaTeX: \fontsize{12}{14}\selectfont\textit{title}
                 title = sanitize(exp.get("title", ""))
                 if title:
-                    pdf.set_font("Times", "I", self._JOB_TITLE_SIZE)
+                    pdf.set_font(self._FONT_FAMILY, "I", heading_size)
                     pdf.cell(w, self._JOB_TITLE_CELL_H, title,
                              new_x="LMARGIN", new_y="NEXT")
 
@@ -407,15 +485,15 @@ class ResumeRenderer:
             section_header("Projects")
             for i, proj in enumerate(projects):
                 # Project name bold — LaTeX: \textbf{Project Name}
-                pdf.set_font("Times", "B", self._COMPANY_SIZE)
+                pdf.set_font(self._FONT_FAMILY, "B", heading_size)
                 proj_name = sanitize(proj.get("name", ""))
                 proj_dates = sanitize(proj.get("dates", ""))
                 if proj_dates:
-                    pdf.set_font("Times", "", body_size)
+                    pdf.set_font(self._FONT_FAMILY, "", body_size)
                     date_w = pdf.get_string_width(proj_dates) + 2
-                    pdf.set_font("Times", "B", self._COMPANY_SIZE)
+                    pdf.set_font(self._FONT_FAMILY, "B", heading_size)
                     pdf.cell(w - date_w, 4.5, proj_name)
-                    pdf.set_font("Times", "", body_size)
+                    pdf.set_font(self._FONT_FAMILY, "", body_size)
                     pdf.cell(date_w, 4.5, proj_dates, align="R",
                              new_x="LMARGIN", new_y="NEXT")
                 else:
@@ -442,7 +520,7 @@ class ResumeRenderer:
                     continue
                 # Bold category + regular skills in one multi_cell via markdown.
                 # multi_cell wraps all lines to the left margin.
-                pdf.set_font("Times", "", body_size)
+                pdf.set_font(self._FONT_FAMILY, "", body_size)
                 sk = ", ".join(skill_list) if isinstance(skill_list, list) else str(skill_list)
                 line = f"**{sanitize(category)}:** {sanitize(sk)}"
                 pdf.multi_cell(w, lh_skill, line, markdown=True,
@@ -505,7 +583,7 @@ class ResumeRenderer:
                         left_parts.append(f"GPA: {gpa}")
                     left_text = " | ".join(left_parts)
 
-                    pdf.set_font("Times", "", body_size)
+                    pdf.set_font(self._FONT_FAMILY, "", body_size)
                     if dates:
                         date_w = pdf.get_string_width(dates) + 2
                         pdf.cell(w - date_w, lh_s, left_text)
@@ -532,29 +610,14 @@ class ResumeRenderer:
         avail = self._AVAIL_H
         slots = self._count_spacing_slots(tailored)
 
-        # --- Pass 1: measure with minimum spacing at the base render font size (10pt) ---
-        # User requested 10pt body to match reference resume's font size.
-        # Combined with tighter margins (0.25"/0.4" top/bottom) and lh=3.4
-        # (~96% of nominal 11.4pt-at-10pt-body line spacing — comparable to
-        # the reference LaTeX template's 0.92 linespread), the candidate's
-        # 5/3/3 experience + 5 project bullets + 5-6 skill categories fits
-        # at 10pt with a few mm of leftover. Auto-shrink fallback to 9.5pt
-        # → 9pt remains for cases where content grows (extra creative
-        # project, longer bullets, etc).
-        body_size = 10.0
-        lh = 3.4
-        lh_s = 3.08
-
-        _, min_height = self._render_pdf(
-            tailored,
-            section_gap=self._MIN_SECTION_GAP,
-            entry_gap=self._MIN_ENTRY_GAP,
-            post_header=self._MIN_POST_HEADER,
-            header_gap=self._MIN_HEADER_GAP,
-            skill_gap=self._MIN_SKILL_GAP,
-            body_size=body_size, lh=lh, lh_s=lh_s,
-            measure_only=True,
-        )
+        # --- Pass 1: choose the LARGEST presentation that fits (up-tiers) ---
+        # Bidirectional density: sparse resumes (e.g. an experienced 2-role
+        # resume with no generated projects) used to render at a fixed 10pt
+        # and leave a ~40mm dead band at the bottom of the page. The up-tier
+        # ladder scales the body font and leading UP first (11pt airy →
+        # 10.5pt) and only then falls back to the 10pt base + the shrink
+        # tiers below. 11pt is the ceiling — 12pt body reads as padding.
+        body_size, lh, lh_s, min_height = self._choose_up_tier(tailored)
 
         # --- Overflow protection: tiered fallback (10pt-tight → 10pt-ultra → 9.5pt → 9pt) ---
         # Body font size is what recruiters notice most — keep it at 10pt
@@ -659,8 +722,8 @@ class ResumeRenderer:
     # DOCX generation (python-docx) — mirrors the PDF renderer's layout
     # ------------------------------------------------------------------
 
-    # Usable page height in pt (A4 297mm - 0.4in*2 margins ≈ 277mm ≈ 785pt).
-    _DOCX_AVAIL_PT = 785.0
+    # Usable page height in pt (A4 297mm - 0.5in*2 margins ≈ 271.6mm ≈ 770pt).
+    _DOCX_AVAIL_PT = 770.0
 
     def _estimate_docx_height_pt(
         self,
@@ -680,11 +743,12 @@ class ResumeRenderer:
         is derived by dividing text length by a characters-per-line constant
         based on body_size (smaller font ⇒ more chars/line).
         """
-        # Usable width in mm * (chars per mm at given pt). Times at 10pt
+        # Usable width in mm * (chars per mm at given pt). Arial at 10pt
         # averages ~2.1 chars/mm in our 197mm-wide text box → ~414 chars/line.
-        # Scale inversely with font size.
+        # Scale inversely with font size. Calibri/Carlito is narrower than
+        # Arial but wider than the old Times metrics.
         scale = 10.0 / max(body_size, 6.0)
-        chars_per_line = 95 * scale  # rough but stable
+        chars_per_line = 92 * scale  # rough but stable
         h = 0.0
 
         def para(text: str, size: float = None, bullet: bool = False) -> float:
@@ -774,15 +838,15 @@ class ResumeRenderer:
         from docx.oxml.ns import qn
         from docx.oxml import OxmlElement
 
-        FONT = "Times New Roman"
+        FONT = "Calibri"
         doc = Document()
 
-        # A4 page, 0.5in L/R margins (match PDF _MARGIN_LR = 12.7mm), 0.3in top.
+        # A4 page, 0.5in margins all around (mirrors the PDF's 12.7mm).
         for section in doc.sections:
             section.page_width = Mm(210)
             section.page_height = Mm(297)
-            section.top_margin = Inches(0.3)
-            section.bottom_margin = Inches(0.6)
+            section.top_margin = Inches(0.5)
+            section.bottom_margin = Inches(0.5)
             section.left_margin = Inches(0.5)
             section.right_margin = Inches(0.5)
 
@@ -803,7 +867,7 @@ class ResumeRenderer:
             run.font.size = Pt(size_pt)
             run.bold = bold
             run.italic = italic
-            # Ensure Times font for East Asian fallback (prevents font swap in Word)
+            # Pin the font for every script class (prevents font swap in Word)
             rPr = run._element.get_or_add_rPr()
             rFonts = rPr.find(qn("w:rFonts"))
             if rFonts is None:
@@ -1048,11 +1112,16 @@ class ResumeRenderer:
         max_skill_gap = 4.0
         max_header_gap = 10.0
 
-        # Try decreasing font sizes until content fits
-        for body_size, title_size, header_size in (
-            (10.0, 17.0, 11.0),
-            (9.5, 16.5, 10.5),
-            (9.0, 16.0, 10.0),
+        # Bidirectional ladder (mirrors the PDF's thresholded up-tiers): a
+        # bigger font must be justified by emptiness — up-tiers are taken
+        # only when content leaves headroom for gap distribution; otherwise
+        # fall to the 10pt base and, past that, the shrink tiers.
+        for body_size, title_size, header_size, max_fill in (
+            (11.0, 18.0, 12.0, 0.78),
+            (10.5, 17.5, 11.5, 0.88),
+            (10.0, 17.0, 11.0, 1.00),
+            (9.5, 16.5, 10.5, 1.00),
+            (9.0, 16.0, 10.0, 1.00),
         ):
             min_h = self._estimate_docx_height_pt(
                 tailored,
@@ -1063,7 +1132,7 @@ class ResumeRenderer:
                 skill_gap=min_skill_gap,
                 header_gap=min_header_gap,
             )
-            if min_h <= avail:
+            if min_h <= avail * max_fill:
                 break
 
         # Count slots for fill distribution

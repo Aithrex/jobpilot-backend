@@ -365,6 +365,23 @@ def _attach_verification(
         }
 
 
+def _project_policy(
+    structured: Dict[str, Any], fact_store: Dict[str, Any] | None
+) -> Dict[str, Any]:
+    """Experience-first project-generation policy for this candidate."""
+    from services.project_generator import project_generation_policy
+
+    gh_evidence = [
+        f.get("display", "")
+        for f in ((fact_store or {}).get("facts") or [])
+        if f.get("source") == "github"
+    ]
+    policy = project_generation_policy(structured, gh_evidence)
+    policy["github_evidence"] = gh_evidence
+    logger.info("Project generation policy: %s", policy["reason"])
+    return policy
+
+
 def _finalize_tailored_result(
     svc,
     job_id: str,
@@ -374,6 +391,7 @@ def _finalize_tailored_result(
     user_email: str = "",
     fact_store: Dict[str, Any] | None = None,
     preserve_project_names: set | None = None,
+    allow_project_generation: bool = True,
 ) -> Dict[str, Any]:
     """Shared post-tailor pipeline for tailor / regenerate / extract_and_tailor.
 
@@ -395,6 +413,7 @@ def _finalize_tailored_result(
     result = svc.augmenter.augment(
         result, structured, jd_analysis,
         preserve_project_names=preserve_project_names,
+        allow_project_generation=allow_project_generation,
     )
     _consume_projects_diagnostic(result)
 
@@ -663,12 +682,18 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             fact_store = build_fact_store(
                 user_email=user_email, structured_resume=structured
             )
+            gen_policy = _project_policy(structured, fact_store)
             result = svc.tailor.tailor(
                 structured, payload["jd_analysis"], fact_store=fact_store
             )
             result = _finalize_tailored_result(
                 svc, job_id, result, structured, payload["jd_analysis"],
                 user_email, fact_store=fact_store,
+                # Augmenter's internal generation can't ground in evidence —
+                # only free generation (early-career) may run there.
+                allow_project_generation=(
+                    gen_policy["allow"] and not gen_policy["evidence_only"]
+                ),
             )
             svc.complete_job(job_id, {"tailored_resume": result})
 
@@ -695,8 +720,12 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             # Same post-tailor pipeline as initial tailor (augment refills the
             # page after feedback that shrinks content; verification re-runs
             # so the sidecar always describes the version it rides on).
+            gen_policy = _project_policy(structured, None)
             result = _finalize_tailored_result(
-                svc, job_id, result, structured, payload["jd_analysis"], user_email
+                svc, job_id, result, structured, payload["jd_analysis"], user_email,
+                allow_project_generation=(
+                    gen_policy["allow"] and not gen_policy["evidence_only"]
+                ),
             )
             svc.complete_job(job_id, {"tailored_resume": result})
 
@@ -841,6 +870,13 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 user_email=user_email, structured_resume=structured
             )
 
+            # Experience-first policy: experienced candidates get generated
+            # projects ONLY from confirmed GitHub evidence (real repos) — the
+            # page budget belongs to their real experience otherwise.
+            gen_policy = _project_policy(structured, fact_store)
+            if projects_needed > 0 and not gen_policy["allow"]:
+                projects_needed = 0
+
             svc.update_job_progress(job_id, "tailoring", 25)
             executor = ThreadPoolExecutor(max_workers=2)
             try:
@@ -850,12 +886,8 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 future_projects = None
                 if projects_needed > 0:
                     # Confirmed GitHub repos ground generated projects in the
-                    # candidate's REAL public work instead of pure inference.
-                    gh_evidence = [
-                        f.get("display", "")
-                        for f in (fact_store.get("facts") or [])
-                        if f.get("source") == "github"
-                    ]
+                    # candidate's REAL public work; in evidence_only mode
+                    # (experienced candidates) every project MUST be one.
                     future_projects = executor.submit(
                         svc.project_generator.generate_batch,
                         projects_needed,
@@ -864,7 +896,8 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                         structured.get("projects", []),
                         5,      # bullets_per_project (default)
                         None,   # rejections_sink
-                        gh_evidence or None,
+                        gen_policy["github_evidence"] or None,
+                        gen_policy["evidence_only"],
                     )
 
                 # Wait for tailor (the longer call). Fail loudly if tailor errors.
@@ -928,6 +961,11 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 svc, job_id, result, structured, jd_analysis, user_email,
                 fact_store=fact_store,
                 preserve_project_names=preserve_names or None,
+                # Fallback generation in the augmenter is free-generation only
+                # — allowed just for early-career candidates.
+                allow_project_generation=(
+                    gen_policy["allow"] and not gen_policy["evidence_only"]
+                ),
             )
             svc.complete_job(
                 job_id,

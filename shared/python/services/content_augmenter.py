@@ -80,6 +80,7 @@ class ContentAugmenter:
         original: Dict[str, Any],
         jd_analysis: Dict[str, Any],
         preserve_project_names: set | None = None,
+        allow_project_generation: bool = True,
     ) -> Dict[str, Any]:
         """Run all augmentation phases on a tailored resume.
 
@@ -93,6 +94,10 @@ class ContentAugmenter:
                 projects) that aren't in the original resume but must
                 survive. Without this, the strip silently discarded
                 pre-injected projects and forced Phase 1 to regenerate them.
+            allow_project_generation: experience-first policy gate (see
+                project_generator.project_generation_policy). False for
+                experienced candidates — Phase 1 is skipped and the page
+                budget goes to their real experience bullets instead.
 
         Returns:
             The augmented tailored resume dict.
@@ -166,10 +171,19 @@ class ContentAugmenter:
             len(tailored.get("experience", [])),
         )
 
-        # Phase 1: ALWAYS try project generation if under cap, regardless of fill.
-        # Uses batch generation (single LLM call for all needed projects).
+        # Phase 1: project generation — gated by the experience-first policy.
+        # Early-career resumes are expected to carry projects; experienced
+        # resumes get their page budget spent on real experience instead
+        # (generated filler projects read as padding to recruiters and evict
+        # experience bullets in the one-page allocation).
         projects = tailored.get("projects", [])
-        if len(projects) < _MAX_PROJECTS:
+        if not allow_project_generation:
+            logger.warning(
+                "ContentAugmenter Phase 1 SKIPPED by experience-first policy — "
+                "page budget goes to experience bullets"
+            )
+            diag["deep_project_skip"] = True
+        elif len(projects) < _MAX_PROJECTS:
             t0 = time.time()
             tailored = self._augment_projects(tailored, original, jd_analysis)
             fill = self._measure_fill(tailored)
