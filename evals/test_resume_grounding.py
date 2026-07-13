@@ -19,7 +19,7 @@ hallucinated span that survives extraction.
 """
 import pytest
 
-from services.gemini_client import GEMINI_PRO
+from services.claude_client import CLAUDE_PRO
 from services.voicegraph import extract, resolution, samples, store
 
 USER = "grounding-eval@example.com"
@@ -228,6 +228,6 @@ def test_every_persisted_row_is_grounded_and_unknown_types_dropped(
 
     # extraction ran at PRO tier, temperature 0, with the closed schema
     call = fake_llm.calls[0]
-    assert call["model"] == GEMINI_PRO
+    assert call["model"] == CLAUDE_PRO
     assert call["temperature"] == 0.0
     assert call["schema"] is not None

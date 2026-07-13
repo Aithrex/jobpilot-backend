@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List
 
-from services.gemini_client import gemini_json, GEMINI_PRO
+from services.claude_client import claude_json, CLAUDE_PRO
 
 logger = logging.getLogger(__name__)
 
@@ -325,10 +325,10 @@ def six_second_impression(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
     rendered = _render_resume(structured)
     data = f"<resume>\n{rendered}\n</resume>"
 
-    res = gemini_json(
+    res = claude_json(
         prompt=data,
         system=_SYSTEM,
-        model=GEMINI_PRO,
+        model=CLAUDE_PRO,
         temperature=_TEMPERATURE,
         max_tokens=_MAX_TOKENS,
         schema=SIX_SECOND_SCHEMA,

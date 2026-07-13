@@ -40,7 +40,7 @@ Codebase-aware Claude Code subagents for `jobpilot-backend` (Flask · MongoDB/Py
   1. **Auth error contract** — auth *failures* return **400/409/403/429, NEVER 401** (401 = `@jwt_required` missing/bad token only; FE force-logs-out on any 401). Auth success payloads are **flat**; reset field is `new_password`. JWT identity = email; `JWT_SECRET_KEY` must match the legacy portfolio value.
   2. **Long work = async job** — `create_job` → `{job_id}` → extend `_process_job` (`elif job_type==…`) → client polls `/api/resume/job/<id>`. Never inline.
   3. **Gate spend** — `entitlements_service.require_feature`/`check_and_increment` **before** any LLM call; tailor quota in `usage_service`/`tailor_usage` (no double-count).
-  4. **AI only via the provider abstraction** (`services/llm_providers.get_provider()`; legacy `gemini_client` facade → Claude). Tier: Haiku 4.5 (FLASH, 8k) for extraction, Sonnet 4.6 (PRO, 16k+) for tailoring/scoring. **Never fabricate resume facts** — IntegrityGuard enforces this.
+  4. **AI only via the provider abstraction** (`services/llm_providers.get_provider()`; legacy `claude_client` facade → Claude). Tier: Haiku 4.5 (FLASH, 8k) for extraction, Sonnet 4.6 (PRO, 16k+) for tailoring/scoring. **Never fabricate resume facts** — IntegrityGuard enforces this.
   5. **Sanitize untrusted input** (`InputSanitizer`) before every Mongo filter; atomic `$inc` for counters.
   6. **New `/api/<prefix>`** needs an external (Terraform, not in this repo) edge route or it 404s in prod.
 

@@ -20,7 +20,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from services.gemini_client import gemini_json, GEMINI_PRO
+from services.claude_client import claude_json, CLAUDE_PRO
 
 from services.voicegraph import samples, store
 from services.voicegraph.scrub import scrub_node
@@ -161,10 +161,10 @@ def extract_graph_from_sample(user_email: str, sample_id: str) -> Dict[str, Any]
 
     built = None
     for _ in range(2):
-        raw = gemini_json(
+        raw = claude_json(
             prompt=_build_data(text),
             system=_INSTRUCTIONS,
-            model=GEMINI_PRO,
+            model=CLAUDE_PRO,
             temperature=0.0,
             max_tokens=_MAX_TOKENS,
             schema=GRAPH_EXTRACT_SCHEMA,

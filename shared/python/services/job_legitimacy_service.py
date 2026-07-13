@@ -208,7 +208,7 @@ def assess_batch(items: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, Any]]
 # Deep scan (on-demand): heuristics + a cheap FLASH second opinion.
 # ---------------------------------------------------------------------------
 def _llm_scan(job: Dict[str, Any]):
-    from services.gemini_client import gemini_json, GEMINI_FLASH
+    from services.claude_client import claude_json, CLAUDE_FLASH
     prompt = (
         "You are a job-scam analyst protecting a student / international job seeker — "
         "a prime target for employment fraud. Assess how SAFE and REAL this posting is. "
@@ -224,8 +224,8 @@ def _llm_scan(job: Dict[str, Any]):
         '"confidence": 0-100, "rationale": "one short sentence", '
         '"advice": "one specific, actionable safety tip for the applicant"}'
     )
-    res = gemini_json(
-        prompt, max_tokens=300, temperature=0.0, model=GEMINI_FLASH,
+    res = claude_json(
+        prompt, max_tokens=300, temperature=0.0, model=CLAUDE_FLASH,
         schema={"verdict": str, "confidence": int, "rationale": str, "advice": str},
     )
     return res or None

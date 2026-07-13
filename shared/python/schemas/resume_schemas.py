@@ -80,34 +80,48 @@ JD_ANALYSIS_SCHEMA = {
     "keywords": [str],
 }
 
-# Matches ATSScores
+# Matches ATSScores (v2 — honest rubric).
+#
+# schema_version 2 replaced the LLM-simulated per-vendor "scanner scores"
+# and the ai_screener block with a fully deterministic rubric + real
+# parse-compat checklists. Old records persisted in `tailoring_records`
+# keep the v1 shape forever; the frontend branches on `schema_version`.
+#
+# Legacy alias keys (keyword_match, skills_alignment, format_score, …) are
+# kept 1-2 releases so unmigrated consumers (BatchTailor, NudgeBar,
+# pipeline_intel_service) read sensible values.
+_ATS_VENDORS = ("workday", "greenhouse", "lever", "icims", "taleo", "smartrecruiters")
+
+_VENDOR_COMPAT_SPEC = {
+    "status": str,  # "pass" | "warn" | "fail"
+    "checks": [{"id": str, "label": str, "status": str}],
+}
+
 ATS_SCORES_SCHEMA = {
+    "schema_version": int,  # 2
     "overall": int,
-    "keyword_match": int,
-    "keyword_frequency": int,
-    "skills_alignment": int,
-    "experience_relevance": int,
-    "quantifiable_impact": int,
-    "bullet_quality": int,
-    "format_score": int,
+    # v2 rubric dimensions (weights: 30/15/15/15/10/8/7)
+    "hard_skill_match": int,
+    "title_alignment": int,
+    "quantified_impact": int,
+    "ats_parseability": int,       # real PDF round-trip score, never hardcoded
     "section_completeness": int,
-    "scanners": {
-        "workday": int,
-        "greenhouse": int,
-        "lever": int,
-        "icims": int,
-        "taleo": int,
-        "smartrecruiters": int,
-    },
-    "ai_screener": {
-        "overall": int,
-        "relevance": int,
-        "seniority_fit": int,
-        "culture_fit": int,
-    },
+    "recency_relevance": int,
+    "readability": int,
+    "experience_relevance": int,   # FLASH-judged, informational — NOT in overall
+    "vendor_compat": {v: dict(_VENDOR_COMPAT_SPEC) for v in _ATS_VENDORS},
     "suggestions": [str],
-    "missing_keywords": [str],
     "strengths": [str],
+    "missing_keywords": [str],
+    "found_keywords": [str],
+    "render_error": str,           # "" when the PDF rendered fine
+    # ---- legacy aliases (deprecated; do not build new UI on these) ----
+    "keyword_match": int,          # = hard_skill_match
+    "keyword_frequency": int,      # = hard_skill_match
+    "skills_alignment": int,       # = hard_skill_match
+    "quantifiable_impact": int,    # = quantified_impact
+    "bullet_quality": int,         # = readability
+    "format_score": int,           # = ats_parseability
 }
 
 

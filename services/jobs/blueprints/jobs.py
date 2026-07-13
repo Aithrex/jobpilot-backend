@@ -394,7 +394,7 @@ def draft_outreach_route():
     user_email = get_jwt_identity()
     try:
         from services.resume_parser import ResumeParser
-        from services.gemini_client import gemini_json, GEMINI_FLASH
+        from services.claude_client import claude_json, CLAUDE_FLASH
         from utils.db_connect import DBConnect
         # Pull the candidate's parsed resume so the draft references real
         # bullets / projects instead of generic platitudes. If they haven't
@@ -444,9 +444,9 @@ def draft_outreach_route():
             'Return JSON: { "subject": "...", "body": "..." }. No markdown, no commentary.'
         )
 
-        result = gemini_json(
+        result = claude_json(
             prompt=prompt,
-            model=GEMINI_FLASH,
+            model=CLAUDE_FLASH,
             temperature=0.5,
             schema={"subject": str, "body": str},
             max_tokens=800,

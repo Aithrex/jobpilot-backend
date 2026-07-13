@@ -9,7 +9,7 @@ extract_jd` and asserts, on the captured outbound payload, that:
     data, not an instruction),
   * a trusted `system=` anchor is present.
 
-Offline: gemini_json is monkeypatched, so no Bedrock. Mongo is mongomock via
+Offline: claude_json is monkeypatched, so no Bedrock. Mongo is mongomock via
 conftest/_vg_support.
 """
 import pytest
@@ -29,12 +29,12 @@ _VALID_JD = {
 def captured(monkeypatch):
     calls = []
 
-    def fake_gemini_json(prompt=None, system=None, **kw):
+    def fake_claude_json(prompt=None, system=None, **kw):
         calls.append({"prompt": prompt, "system": system, "kw": kw})
         return dict(_VALID_JD)
 
-    import services.gemini_client as gc
-    monkeypatch.setattr(gc, "gemini_json", fake_gemini_json)
+    import services.claude_client as cc
+    monkeypatch.setattr(cc, "claude_json", fake_claude_json)
     return calls
 
 

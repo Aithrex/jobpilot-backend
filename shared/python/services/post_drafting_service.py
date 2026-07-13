@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from utils.db_connect import DBConnect
-from services.gemini_client import gemini_json, GEMINI_PRO
+from services.claude_client import claude_json, CLAUDE_PRO
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +118,7 @@ def draft_post(payload: Dict) -> Dict:
         f"{integrity}\n\n"
         'Return strict JSON: {"variants": [{"angle": "...", "hook": "...", "text": "...", "hashtags": ["..."]}]}'
     )
-    res = gemini_json(prompt, max_tokens=2500, temperature=0.7, model=GEMINI_PRO, schema=POST_SCHEMA) or {}
+    res = claude_json(prompt, max_tokens=2500, temperature=0.7, model=CLAUDE_PRO, schema=POST_SCHEMA) or {}
     variants = res.get("variants") or []
 
     # Cringe guardrail (§6.7): drop engagement-bait/cringe variants before they

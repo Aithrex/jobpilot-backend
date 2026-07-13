@@ -18,7 +18,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 
 from utils.db_connect import DBConnect
-from services.gemini_client import gemini_json, GEMINI_FLASH
+from services.claude_client import claude_json, CLAUDE_FLASH
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +165,7 @@ def coach_summary(user_email: str, full: bool = False, predictive: bool = False)
             f"By category: {stats.get('by_category')}\n\n"
             'Return strict JSON: {"narrative": "...", "drills": [{"title": "...", "why": "..."}]}'
         )
-        res = gemini_json(prompt, max_tokens=900, temperature=0.4, model=GEMINI_FLASH,
+        res = claude_json(prompt, max_tokens=900, temperature=0.4, model=CLAUDE_FLASH,
                           schema={"narrative": str, "drills": list})
         narrative = (res or {}).get("narrative")
         if predictive:
@@ -196,7 +196,7 @@ def interview_fit(user_email: str, record_id: str) -> Dict:
         'Return strict JSON: {"fit_score": 0-100, "verdict": "one sentence", '
         '"focus_areas": ["2-4 things to prep"], "likely_questions": ["3-5 questions they should rehearse"]}'
     )
-    res = gemini_json(prompt, max_tokens=1200, temperature=0.4, model=GEMINI_FLASH,
+    res = claude_json(prompt, max_tokens=1200, temperature=0.4, model=CLAUDE_FLASH,
                       schema={"fit_score": int, "verdict": str, "focus_areas": list, "likely_questions": list})
     return res or {}
 
@@ -226,7 +226,7 @@ def salary_benchmark(role: str, level: str = "", location: str = "",
     schema = {"currency": str, "low": int, "median": int, "high": int, "confidence": str, "notes": str}
     if with_percentiles:
         schema["percentiles"] = dict
-    res = gemini_json(prompt, max_tokens=600, temperature=0.3, model=GEMINI_FLASH, schema=schema) or {}
+    res = claude_json(prompt, max_tokens=600, temperature=0.3, model=CLAUDE_FLASH, schema=schema) or {}
 
     doc = {
         "bench_key": bench_key, "role_family": role_family, "level": level, "location": location,

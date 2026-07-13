@@ -121,7 +121,7 @@ def build_morning_brief(user_email: str) -> Dict[str, Any]:
     # so the briefing is always populated even when LLM is rate-limited.
     headline = ""
     try:
-        from services.gemini_client import gemini_json, GEMINI_FLASH
+        from services.claude_client import claude_json, CLAUDE_FLASH
         prompt = (
             "You are a calm, sharp career coach speaking to an international "
             "graduate student grinding through a daily job search. Write ONE "
@@ -135,8 +135,8 @@ def build_morning_brief(user_email: str) -> Dict[str, Any]:
             'Return JSON: { "headline": "..." }. Pick the single thread that '
             "should dominate today and make it concrete (mention numbers)."
         )
-        out = gemini_json(
-            prompt=prompt, model=GEMINI_FLASH, temperature=0.5,
+        out = claude_json(
+            prompt=prompt, model=CLAUDE_FLASH, temperature=0.5,
             schema={"headline": str}, max_tokens=120,
         )
         if isinstance(out, dict) and isinstance(out.get("headline"), str):
@@ -195,7 +195,7 @@ def find_similar_roles(
     # Step 1: extract skill signature
     seed_tokens: List[str] = []
     try:
-        from services.gemini_client import gemini_json, GEMINI_FLASH
+        from services.claude_client import claude_json, CLAUDE_FLASH
         prompt = (
             "Extract the top 15 technical skill / tool / concept tokens from this "
             "job description, focused on what a candidate would put on a resume. "
@@ -203,9 +203,9 @@ def find_similar_roles(
             "1-2 words each, no soft skills, no company names, no locations.\n\n"
             f"JD:\n{seed_jd_text[:6000]}"
         )
-        result = gemini_json(
+        result = claude_json(
             prompt=prompt,
-            model=GEMINI_FLASH,
+            model=CLAUDE_FLASH,
             temperature=0.2,
             schema={"tokens": [str]},
             max_tokens=400,
@@ -327,7 +327,7 @@ def ab_telemetry(user_email: str) -> Dict[str, Any]:
         tagged = [v for v in variants if v["variant"] != "untagged" and v["total"] >= 3]
         if len(tagged) >= 2:
             try:
-                from services.gemini_client import gemini_json, GEMINI_FLASH
+                from services.claude_client import claude_json, CLAUDE_FLASH
                 prompt = (
                     "You are a senior career coach analyzing this student's "
                     "resume A/B test results. In 2-3 short sentences, give a "
@@ -336,8 +336,8 @@ def ab_telemetry(user_email: str) -> Dict[str, Any]:
                     f"Variants: {tagged}\n\n"
                     'Return JSON: { "insight": "..." }.'
                 )
-                out = gemini_json(
-                    prompt=prompt, model=GEMINI_FLASH, temperature=0.4,
+                out = claude_json(
+                    prompt=prompt, model=CLAUDE_FLASH, temperature=0.4,
                     schema={"insight": str}, max_tokens=200,
                 )
                 if isinstance(out, dict) and isinstance(out.get("insight"), str):

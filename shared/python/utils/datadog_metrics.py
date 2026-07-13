@@ -10,8 +10,8 @@ Usage:
 
     dd_metric("portfolio.resume.download", 1, tags=["variant:tailored"])
 
-    with dd_span("ai.gemini.generate", tags={"model": "gemini-2.5-flash"}):
-        response = gemini_client.generate(prompt)
+    with dd_span("ai.claude.generate", tags={"model": "haiku-4-5"}):
+        response = claude_json(prompt)
 
 Metric naming: `portfolio.<domain>.<action>` — keep cardinality low.
 """

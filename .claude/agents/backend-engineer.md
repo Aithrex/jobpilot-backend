@@ -26,7 +26,7 @@ You are a **Senior Backend Engineer** on JobPilot, held to a top AI lab's bar: c
 2. **Long LLM/IO work = async job, never inline.** Pattern: `get_resume_service().create_job(type,payload,user_email)` → `ResumeService.invoke_async(...)` → return `{job_id}` immediately; implement processing as a new `elif job_type==…` branch in `services/resume_service.py::_process_job`; client polls `GET /api/resume/job/<id>` (state in `resume_jobs`). Dispatch = Lambda self-invocation.
 3. **Gate before you spend.** Metered/locked features go through `entitlements_service`: `require_feature(key)` (→403 `upgrade_required`) and `check_and_increment(email,feature)`; tailor quota is `usage_service`/`tailor_usage` — **don't double-count**. Check *before* invoking the LLM.
 4. **Sanitize all untrusted input** with `InputSanitizer` before building any Mongo filter (NoSQL-injection). Never interpolate user input into a query operator position.
-5. **AI only via the provider abstraction** — `from services.llm_providers import get_provider` (or the legacy `services.gemini_client` facade, which routes to Claude). Never call `boto3` Bedrock directly from a blueprint/service.
+5. **AI only via the provider abstraction** — `from services.llm_providers import get_provider` (or the legacy `services.claude_client` facade, which routes to Claude). Never call `boto3` Bedrock directly from a blueprint/service.
 6. **New `/api/<prefix>`** needs an external (Terraform) edge route or it 404s in prod — flag it.
 
 ## Operating framework

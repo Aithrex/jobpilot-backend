@@ -88,7 +88,9 @@ _MIN_APPS_PER_PEER = 3
 _COHORT_SCAN_CAP = 50000
 
 # ATS threshold used by the (non-leaky) strongest-predictor probe.
-_STRONG_ATS = 80
+# 75, not 80: scorer v2 is honest (deterministic rubric, real parseability)
+# and lands ~10 points below the old coaxed scores; 75-80 is the target band.
+_STRONG_ATS = 75
 # Each arm of a predictor comparison needs this much support to be trustworthy.
 _MIN_PREDICTOR_SUPPORT = 8
 
@@ -607,11 +609,11 @@ def draft_followup(application: Dict[str, Any]) -> str:
         "Write the follow-up email body now."
     )
     try:
-        from services.gemini_client import gemini_json, GEMINI_PRO
-        result = gemini_json(
+        from services.claude_client import claude_json, CLAUDE_PRO
+        result = claude_json(
             prompt=prompt,
             system=_FOLLOWUP_SYSTEM,
-            model=GEMINI_PRO,
+            model=CLAUDE_PRO,
             max_tokens=600,
             temperature=0.5,
             schema={"email": str},

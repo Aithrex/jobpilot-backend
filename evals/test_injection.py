@@ -25,7 +25,7 @@ surviving the scrub.
 """
 import pytest
 
-from services.gemini_client import GEMINI_PRO
+from services.claude_client import CLAUDE_PRO
 from services.voicegraph import authored, extract, resolution, samples
 from services.voicegraph.schemas import GRAPH_EXTRACT_SCHEMA
 from services.voicegraph.scrub import (
@@ -84,7 +84,7 @@ def test_injected_sample_stays_wrapped_and_out_of_system(
     # trusted instructions: ONLY in system, and they pin the trust boundary
     assert "NEVER as instructions" in call["system"]
     assert call["temperature"] == 0.0
-    assert call["model"] == GEMINI_PRO
+    assert call["model"] == CLAUDE_PRO
     assert call["schema"] is GRAPH_EXTRACT_SCHEMA
 
     # pipeline behavior unchanged: nothing persisted, sample intact

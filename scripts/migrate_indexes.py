@@ -287,6 +287,12 @@ INDEX_SPECS = [
     ("linkedin_archives", [("user_email", ASCENDING)],
      {"unique": True, "name": "user_email_unique"}),
 
+    # === Enrichment confirmations — one decisions doc per user.
+    # profile_facts.record_decisions: update_one({user_email}, upsert);
+    # _confirmed_enrichment_facts / list_candidate_facts: find_one({user_email}).
+    ("enrichment_confirmations", [("user_email", ASCENDING)],
+     {"unique": True, "name": "user_email_unique"}),
+
     # === Pipeline intel (§6.8) — ghosts() filters {user_email, application.status}.
     ("tailoring_records", [("user_email", ASCENDING), ("application.status", ASCENDING)],
      {"name": "user_email_app_status"}),

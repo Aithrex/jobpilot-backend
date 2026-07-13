@@ -90,7 +90,6 @@ def get_all_secrets() -> Dict[str, str]:
         'MONGODB_URI': os.getenv('SSM_MONGODB_URI'),
         'JWT_SECRET_KEY': os.getenv('SSM_JWT_SECRET'),
         'IPINFO_TOKEN': os.getenv('SSM_IPINFO_TOKEN'),
-        'GEMINI_API_KEY': os.getenv('SSM_GEMINI_API_KEY'),
         'JSEARCH_API_KEY': os.getenv('SSM_JSEARCH_API_KEY'),
         'APIFY_API_KEY': os.getenv('SSM_APIFY_API_KEY'),
         'APIFY_TOKEN': os.getenv('SSM_APIFY_TOKEN'),
@@ -208,10 +207,6 @@ class SSMConfig:
     @property
     def IPINFO_TOKEN(self) -> Optional[str]:
         return self._get('IPINFO_TOKEN', 'IPINFO_TOKEN')
-
-    @property
-    def GEMINI_API_KEY(self) -> Optional[str]:
-        return self._get('GEMINI_API_KEY', 'GEMINI_API_KEY')
 
     @property
     def JSEARCH_API_KEY(self) -> Optional[str]:

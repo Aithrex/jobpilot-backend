@@ -25,7 +25,6 @@ declare -A MAP=(
   [MONGO_URI]="mongodb-uri"
   [JWT_SECRET_KEY]="jwt-secret-key"
   [IPINFO_TOKEN]="ipinfo-token"
-  [GEMINI_API_KEY]="gemini-api-key"
   [JSEARCH_API_KEY]="jsearch-api-key"
   [APIFY_API_KEY]="apify-api-key"
   [JOB_SEARCH_PASSWORD_HASH]="job-search-password-hash"

@@ -42,7 +42,7 @@ from uuid import uuid4
 
 from utils.db_connect import DBConnect
 
-from services.gemini_client import gemini_json, GEMINI_PRO
+from services.claude_client import claude_json, CLAUDE_PRO
 
 from services.voicegraph import samples as sample_svc
 from services.voicegraph import store
@@ -362,8 +362,8 @@ def _gen_candidates(bullet_text: str, profile: Dict[str, Any],
         f"<writing_samples>\n{samples_blob}\n</writing_samples>"
     )
     try:
-        out = gemini_json(
-            prompt=prompt, system=instructions, model=GEMINI_PRO, temperature=0.5,
+        out = claude_json(
+            prompt=prompt, system=instructions, model=CLAUDE_PRO, temperature=0.5,
             max_tokens=_GEN_MAX_TOKENS, schema=_GEN_SCHEMA,
         ) or {}
     except Exception as e:
@@ -403,8 +403,8 @@ def _judge_entailment(bullet_text: str, candidates: List[str]) -> List[str]:
         f"<candidates>\n{numbered}\n</candidates>"
     )
     try:
-        out = gemini_json(
-            prompt=prompt, system=_JUDGE_INSTRUCTIONS, model=GEMINI_PRO, temperature=0.0,
+        out = claude_json(
+            prompt=prompt, system=_JUDGE_INSTRUCTIONS, model=CLAUDE_PRO, temperature=0.0,
             max_tokens=_JUDGE_MAX_TOKENS, schema=_JUDGE_SCHEMA,
         ) or {}
     except Exception as e:

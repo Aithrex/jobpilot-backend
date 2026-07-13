@@ -24,7 +24,7 @@ def _db():
 
 def audit(user_email: str, linkedin_url: str = "") -> Dict:
     from services.resume_parser import ResumeParser
-    from services.gemini_client import gemini_json, GEMINI_FLASH
+    from services.claude_client import claude_json, CLAUDE_FLASH
     from schemas.resume_schemas import flatten_skills
 
     if linkedin_url:
@@ -62,8 +62,8 @@ def audit(user_email: str, linkedin_url: str = "") -> Dict:
         'Experience|Skills|Featured|...", "status": "good|improve|missing", '
         '"tip": "one specific action"}]}'
     )
-    res = gemini_json(
-        prompt, model=GEMINI_FLASH, temperature=0.4, max_tokens=1200,
+    res = claude_json(
+        prompt, model=CLAUDE_FLASH, temperature=0.4, max_tokens=1200,
         schema={"score": int, "headline": str, "about": str, "sections": list},
     )
     if not res:

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from utils.db_connect import DBConnect
-from services.gemini_client import gemini_json, GEMINI_PRO, GEMINI_FLASH
+from services.claude_client import claude_json, CLAUDE_PRO, CLAUDE_FLASH
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ Make it progressive (each week builds on the last), practical, and honest — on
 Also return a short `title` for the whole plan, a one-paragraph `summary`, and `target_skills` (the full set of skills the plan builds).
 
 Return STRICT JSON matching the schema."""
-    plan = gemini_json(prompt=prompt, model=GEMINI_PRO, max_tokens=8000, temperature=0.4, schema=PLAN_SCHEMA)
+    plan = claude_json(prompt=prompt, model=CLAUDE_PRO, max_tokens=8000, temperature=0.4, schema=PLAN_SCHEMA)
     return plan or {}
 
 
@@ -340,5 +340,5 @@ Concepts: {concepts}
 
 Each question: a clear stem, exactly 4 options, the index (0-3) of the correct answer, and a one-line explanation.
 Make them test real understanding, not trivia. Return STRICT JSON."""
-    quiz = gemini_json(prompt=prompt, model=GEMINI_FLASH, max_tokens=2000, temperature=0.5, schema=QUIZ_SCHEMA)
+    quiz = claude_json(prompt=prompt, model=CLAUDE_FLASH, max_tokens=2000, temperature=0.5, schema=QUIZ_SCHEMA)
     return quiz or {"questions": []}

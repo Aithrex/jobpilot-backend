@@ -495,7 +495,7 @@ def _tool_search_resume(user_email: str, query: str, **_) -> Dict[str, Any]:
 
 def _tool_analyze_jd(jd_text: str, **_) -> Dict[str, Any]:
     """Extract required skills, company, role title, keywords from a JD."""
-    from services.gemini_client import gemini_json, GEMINI_FLASH, LLMRetriesExhaustedError
+    from services.claude_client import claude_json, CLAUDE_FLASH, LLMRetriesExhaustedError
 
     prompt = (
         "Analyze this job description and extract structured information.\n\n"
@@ -505,8 +505,8 @@ def _tool_analyze_jd(jd_text: str, **_) -> Dict[str, Any]:
         "responsibilities_summary (3 bullets), culture_signals (list)."
     )
     try:
-        return gemini_json(
-            prompt=prompt, model=GEMINI_FLASH, max_tokens=3000, temperature=0.2,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_FLASH, max_tokens=3000, temperature=0.2,
             schema={
                 "company": str, "role_title": str, "seniority_level": str,
                 "required_skills": [str], "preferred_skills": [str], "keywords": [str],
@@ -520,7 +520,7 @@ def _tool_analyze_jd(jd_text: str, **_) -> Dict[str, Any]:
 
 def _tool_tailor_bullets(resume_section: str, jd_keywords: str, **_) -> Dict[str, Any]:
     """Rewrite resume bullets with impact metrics aligned to JD keywords."""
-    from services.gemini_client import gemini_json, GEMINI_PRO, GEMINI_FLASH, LLMRetriesExhaustedError
+    from services.claude_client import claude_json, CLAUDE_PRO, CLAUDE_FLASH, LLMRetriesExhaustedError
 
     prompt = (
         "Rewrite these resume bullet points to better align with the target role keywords "
@@ -531,8 +531,8 @@ def _tool_tailor_bullets(resume_section: str, jd_keywords: str, **_) -> Dict[str
         "keyword_coverage (list of keywords addressed), improvement_summary."
     )
     try:
-        return gemini_json(
-            prompt=prompt, model=GEMINI_PRO, max_tokens=4000, temperature=0.3,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_PRO, max_tokens=4000, temperature=0.3,
             schema={
                 "tailored_bullets": [{"original": str, "rewritten": str, "changes_made": str}],
                 "keyword_coverage": [str],
@@ -540,8 +540,8 @@ def _tool_tailor_bullets(resume_section: str, jd_keywords: str, **_) -> Dict[str
             },
         )
     except (ValueError, LLMRetriesExhaustedError):
-        return gemini_json(
-            prompt=prompt, model=GEMINI_FLASH, max_tokens=4000, temperature=0.35,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_FLASH, max_tokens=4000, temperature=0.35,
             schema={
                 "tailored_bullets": [{"original": str, "rewritten": str, "changes_made": str}],
                 "keyword_coverage": [str],
@@ -552,7 +552,7 @@ def _tool_tailor_bullets(resume_section: str, jd_keywords: str, **_) -> Dict[str
 
 def _tool_draft_cold_email(recipient_context: str, tone: str = "professional", word_limit: str = "120", **_) -> Dict[str, Any]:
     """Generate a cold outreach email."""
-    from services.gemini_client import gemini_json, GEMINI_PRO, GEMINI_FLASH, LLMRetriesExhaustedError
+    from services.claude_client import claude_json, CLAUDE_PRO, CLAUDE_FLASH, LLMRetriesExhaustedError
 
     prompt = (
         f"Draft a cold outreach email.\n\n"
@@ -563,20 +563,20 @@ def _tool_draft_cold_email(recipient_context: str, tone: str = "professional", w
         "Return JSON: subject, body, cta, personalization_notes, word_count."
     )
     try:
-        return gemini_json(
-            prompt=prompt, model=GEMINI_PRO, max_tokens=2000, temperature=0.4,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_PRO, max_tokens=2000, temperature=0.4,
             schema={"subject": str, "body": str, "cta": str, "personalization_notes": str, "word_count": int},
         )
     except (ValueError, LLMRetriesExhaustedError):
-        return gemini_json(
-            prompt=prompt, model=GEMINI_FLASH, max_tokens=2000, temperature=0.45,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_FLASH, max_tokens=2000, temperature=0.45,
             schema={"subject": str, "body": str, "cta": str, "personalization_notes": str, "word_count": int},
         )
 
 
 def _tool_draft_linkedin_message(recipient_context: str, char_limit: str = "300", **_) -> Dict[str, Any]:
     """Generate a LinkedIn connection note."""
-    from services.gemini_client import gemini_json, GEMINI_FLASH
+    from services.claude_client import claude_json, CLAUDE_FLASH
 
     prompt = (
         f"Write a LinkedIn connection note.\n\n"
@@ -585,15 +585,15 @@ def _tool_draft_linkedin_message(recipient_context: str, char_limit: str = "300"
         "Rules: personal, specific, no 'I'd love to pick your brain', reference their work.\n\n"
         "Return JSON: message, char_count, hook_used."
     )
-    return gemini_json(
-        prompt=prompt, model=GEMINI_FLASH, max_tokens=1000, temperature=0.4,
+    return claude_json(
+        prompt=prompt, model=CLAUDE_FLASH, max_tokens=1000, temperature=0.4,
         schema={"message": str, "char_count": int, "hook_used": str},
     )
 
 
 def _tool_draft_followup(original_message: str, days_since: str = "3", tone: str = "friendly", **_) -> Dict[str, Any]:
     """Generate a follow-up message."""
-    from services.gemini_client import gemini_json, GEMINI_FLASH
+    from services.claude_client import claude_json, CLAUDE_FLASH
 
     prompt = (
         f"Write a follow-up to this message sent {days_since} days ago.\n\n"
@@ -602,15 +602,15 @@ def _tool_draft_followup(original_message: str, days_since: str = "3", tone: str
         "don't guilt-trip, keep shorter than original.\n\n"
         "Return JSON: subject (if email), body, value_add, word_count."
     )
-    return gemini_json(
-        prompt=prompt, model=GEMINI_FLASH, max_tokens=1500, temperature=0.4,
+    return claude_json(
+        prompt=prompt, model=CLAUDE_FLASH, max_tokens=1500, temperature=0.4,
         schema={"subject": str, "body": str, "value_add": str, "word_count": int},
     )
 
 
 def _tool_generate_interview_plan(role: str, company: str, focus_areas: str = "", **_) -> Dict[str, Any]:
     """Generate a structured interview preparation plan."""
-    from services.gemini_client import gemini_json, GEMINI_PRO, GEMINI_FLASH, LLMRetriesExhaustedError
+    from services.claude_client import claude_json, CLAUDE_PRO, CLAUDE_FLASH, LLMRetriesExhaustedError
 
     prompt = (
         f"Create a structured interview prep plan.\n\n"
@@ -620,8 +620,8 @@ def _tool_generate_interview_plan(role: str, company: str, focus_areas: str = ""
         "day_of_tips (list of strings)."
     )
     try:
-        return gemini_json(
-            prompt=prompt, model=GEMINI_PRO, max_tokens=4000, temperature=0.3,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_PRO, max_tokens=4000, temperature=0.3,
             schema={
                 "role": str, "company": str, "prep_timeline_days": int,
                 "sections": [{"section_name": str, "priority": str, "tasks": [{"task": str, "time_estimate": str, "resources": str}]}],
@@ -629,8 +629,8 @@ def _tool_generate_interview_plan(role: str, company: str, focus_areas: str = ""
             },
         )
     except (ValueError, LLMRetriesExhaustedError):
-        return gemini_json(
-            prompt=prompt, model=GEMINI_FLASH, max_tokens=4000, temperature=0.35,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_FLASH, max_tokens=4000, temperature=0.35,
             schema={
                 "role": str, "company": str, "prep_timeline_days": int,
                 "sections": [{"section_name": str, "priority": str, "tasks": [{"task": str, "time_estimate": str, "resources": str}]}],
@@ -641,7 +641,7 @@ def _tool_generate_interview_plan(role: str, company: str, focus_areas: str = ""
 
 def _tool_generate_star_answer(question: str, resume_context: str = "", **_) -> Dict[str, Any]:
     """Generate a STAR-format answer grounded in the user's resume."""
-    from services.gemini_client import gemini_json, GEMINI_PRO, GEMINI_FLASH, LLMRetriesExhaustedError
+    from services.claude_client import claude_json, CLAUDE_PRO, CLAUDE_FLASH, LLMRetriesExhaustedError
 
     prompt = (
         f"Generate a STAR-format behavioral interview answer.\n\n"
@@ -651,8 +651,8 @@ def _tool_generate_star_answer(question: str, resume_context: str = "", **_) -> 
         "delivery_time_seconds (int), coaching_tip."
     )
     try:
-        return gemini_json(
-            prompt=prompt, model=GEMINI_PRO, max_tokens=3000, temperature=0.35,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_PRO, max_tokens=3000, temperature=0.35,
             schema={
                 "question": str, "situation": str, "task": str,
                 "action": [str], "result": str,
@@ -660,8 +660,8 @@ def _tool_generate_star_answer(question: str, resume_context: str = "", **_) -> 
             },
         )
     except (ValueError, LLMRetriesExhaustedError):
-        return gemini_json(
-            prompt=prompt, model=GEMINI_FLASH, max_tokens=3000, temperature=0.4,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_FLASH, max_tokens=3000, temperature=0.4,
             schema={
                 "question": str, "situation": str, "task": str,
                 "action": [str], "result": str,
@@ -672,7 +672,7 @@ def _tool_generate_star_answer(question: str, resume_context: str = "", **_) -> 
 
 def _tool_scaffold_project(idea: str, stack: str = "", timeline: str = "2 weeks", **_) -> Dict[str, Any]:
     """Generate a project spec with milestones."""
-    from services.gemini_client import gemini_json, GEMINI_PRO, GEMINI_FLASH, LLMRetriesExhaustedError
+    from services.claude_client import claude_json, CLAUDE_PRO, CLAUDE_FLASH, LLMRetriesExhaustedError
 
     prompt = (
         f"Create a project scaffold/spec.\n\n"
@@ -682,8 +682,8 @@ def _tool_scaffold_project(idea: str, stack: str = "", timeline: str = "2 weeks"
         "folder_structure (list of path strings), readme_outline (list of section headings)."
     )
     try:
-        return gemini_json(
-            prompt=prompt, model=GEMINI_PRO, max_tokens=4000, temperature=0.35,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_PRO, max_tokens=4000, temperature=0.35,
             schema={
                 "name": str, "description": str, "tech_stack": [str],
                 "milestones": [{"title": str, "deliverable": str, "duration": str}],
@@ -691,8 +691,8 @@ def _tool_scaffold_project(idea: str, stack: str = "", timeline: str = "2 weeks"
             },
         )
     except (ValueError, LLMRetriesExhaustedError):
-        return gemini_json(
-            prompt=prompt, model=GEMINI_FLASH, max_tokens=4000, temperature=0.4,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_FLASH, max_tokens=4000, temperature=0.4,
             schema={
                 "name": str, "description": str, "tech_stack": [str],
                 "milestones": [{"title": str, "deliverable": str, "duration": str}],
@@ -703,7 +703,7 @@ def _tool_scaffold_project(idea: str, stack: str = "", timeline: str = "2 weeks"
 
 def _tool_generate_ppt_outline(topic: str, audience: str = "general", slide_count: str = "10", **_) -> Dict[str, Any]:
     """Generate a slide-by-slide presentation outline with speaker notes."""
-    from services.gemini_client import gemini_json, GEMINI_PRO, GEMINI_FLASH, LLMRetriesExhaustedError
+    from services.claude_client import claude_json, CLAUDE_PRO, CLAUDE_FLASH, LLMRetriesExhaustedError
 
     prompt = (
         f"Create a presentation outline.\n\n"
@@ -713,8 +713,8 @@ def _tool_generate_ppt_outline(topic: str, audience: str = "general", slide_coun
         "theme_suggestion."
     )
     try:
-        return gemini_json(
-            prompt=prompt, model=GEMINI_PRO, max_tokens=5000, temperature=0.35,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_PRO, max_tokens=5000, temperature=0.35,
             schema={
                 "title": str, "subtitle": str,
                 "slides": [{"title": str, "bullets": [str], "speaker_notes": str, "layout_hint": str}],
@@ -722,8 +722,8 @@ def _tool_generate_ppt_outline(topic: str, audience: str = "general", slide_coun
             },
         )
     except (ValueError, LLMRetriesExhaustedError):
-        return gemini_json(
-            prompt=prompt, model=GEMINI_FLASH, max_tokens=5000, temperature=0.4,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_FLASH, max_tokens=5000, temperature=0.4,
             schema={
                 "title": str, "subtitle": str,
                 "slides": [{"title": str, "bullets": [str], "speaker_notes": str, "layout_hint": str}],
@@ -734,7 +734,7 @@ def _tool_generate_ppt_outline(topic: str, audience: str = "general", slide_coun
 
 def _tool_generate_pdf_onepager(content_type: str, context: str = "", **_) -> Dict[str, Any]:
     """Generate structured one-pager content (executive summary, project brief, etc)."""
-    from services.gemini_client import gemini_json, GEMINI_PRO, GEMINI_FLASH, LLMRetriesExhaustedError
+    from services.claude_client import claude_json, CLAUDE_PRO, CLAUDE_FLASH, LLMRetriesExhaustedError
 
     prompt = (
         f"Create a one-pager document.\n\n"
@@ -742,8 +742,8 @@ def _tool_generate_pdf_onepager(content_type: str, context: str = "", **_) -> Di
         "Return JSON: title, sections (list of {heading, body}), footer_note."
     )
     try:
-        return gemini_json(
-            prompt=prompt, model=GEMINI_PRO, max_tokens=4000, temperature=0.3,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_PRO, max_tokens=4000, temperature=0.3,
             schema={
                 "title": str,
                 "sections": [{"heading": str, "body": str}],
@@ -751,8 +751,8 @@ def _tool_generate_pdf_onepager(content_type: str, context: str = "", **_) -> Di
             },
         )
     except (ValueError, LLMRetriesExhaustedError):
-        return gemini_json(
-            prompt=prompt, model=GEMINI_FLASH, max_tokens=4000, temperature=0.35,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_FLASH, max_tokens=4000, temperature=0.35,
             schema={
                 "title": str,
                 "sections": [{"heading": str, "body": str}],
@@ -763,7 +763,7 @@ def _tool_generate_pdf_onepager(content_type: str, context: str = "", **_) -> Di
 
 def _tool_quiz_me(topic: str, difficulty: str = "medium", count: str = "5", **_) -> Dict[str, Any]:
     """Generate quiz questions with answers."""
-    from services.gemini_client import gemini_json, GEMINI_FLASH
+    from services.claude_client import claude_json, CLAUDE_FLASH
 
     prompt = (
         f"Generate quiz questions.\n\n"
@@ -771,8 +771,8 @@ def _tool_quiz_me(topic: str, difficulty: str = "medium", count: str = "5", **_)
         "Return JSON: topic, difficulty, "
         "questions (list of {question, options (list of 4 strings), correct_index (int 0-3), explanation})."
     )
-    return gemini_json(
-        prompt=prompt, model=GEMINI_FLASH, max_tokens=4000, temperature=0.4,
+    return claude_json(
+        prompt=prompt, model=CLAUDE_FLASH, max_tokens=4000, temperature=0.4,
         schema={
             "topic": str, "difficulty": str,
             "questions": [{"question": str, "options": [str], "correct_index": int, "explanation": str}],
@@ -782,7 +782,7 @@ def _tool_quiz_me(topic: str, difficulty: str = "medium", count: str = "5", **_)
 
 def _tool_evaluate_answer(question: str, user_answer: str, rubric: str = "", **_) -> Dict[str, Any]:
     """Score a user's answer and provide feedback."""
-    from services.gemini_client import gemini_json, GEMINI_FLASH
+    from services.claude_client import claude_json, CLAUDE_FLASH
 
     prompt = (
         f"Evaluate this answer.\n\n"
@@ -792,8 +792,8 @@ def _tool_evaluate_answer(question: str, user_answer: str, rubric: str = "", **_
         "Return JSON: score (int 1-10), strengths (list), improvements (list), "
         "model_answer, overall_feedback."
     )
-    return gemini_json(
-        prompt=prompt, model=GEMINI_FLASH, max_tokens=2000, temperature=0.3,
+    return claude_json(
+        prompt=prompt, model=CLAUDE_FLASH, max_tokens=2000, temperature=0.3,
         schema={
             "score": int, "strengths": [str], "improvements": [str],
             "model_answer": str, "overall_feedback": str,
@@ -998,15 +998,15 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
 
 # ---------------------------------------------------------------------------
 # Function-calling declarations (built from registry)
-# Format follows the legacy Gemini function-declaration shape; the provider
+# Legacy declaration shape ({"name","description","parameters"}); the provider
 # abstraction translates these to Claude/Bedrock tool-use blocks at runtime.
 # ---------------------------------------------------------------------------
 
 def _build_function_declarations() -> List[Dict[str, Any]]:
     """Build function declarations from the tool registry.
 
-    Schema mirrors the legacy Gemini function-calling format; the provider
-    abstraction translates these to Claude/Bedrock tool-use blocks.
+    Uses the legacy declaration shape; the provider abstraction translates
+    these to Claude/Bedrock tool-use blocks.
     """
     decls = []
     for name, spec in TOOL_REGISTRY.items():
@@ -1075,13 +1075,12 @@ def _run_orchestrator(
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """ReAct-style tool-calling loop.
 
-    Delegates to the active LLM provider's `tool_call()` implementation so
-    the orchestrator works on both Gemini (function calling) and Claude
-    (tool use on Bedrock).
+    Delegates to the active LLM provider's `tool_call()` implementation
+    (Claude tool use on Bedrock).
 
     Returns (final_reply_text, pipeline_log).
     """
-    from services.gemini_client import get_active_provider
+    from services.claude_client import get_active_provider
 
     provider = get_active_provider()
 
@@ -1650,7 +1649,7 @@ def start_playground_track(user_email: str, track_id: Optional[str], custom_topi
         return {"ok": False, "error": "Provide track_id or custom_topic"}
 
     if custom_topic and custom_topic.strip():
-        from services.gemini_client import gemini_json, GEMINI_PRO, GEMINI_FLASH, LLMRetriesExhaustedError
+        from services.claude_client import claude_json, CLAUDE_PRO, CLAUDE_FLASH, LLMRetriesExhaustedError
         topic = custom_topic.strip()[:500]
         prompt = (
             f"You design a progressive learning + practice path (basic to advanced) for: {topic}\n"
@@ -1659,16 +1658,16 @@ def start_playground_track(user_email: str, track_id: Optional[str], custom_topi
             "body (2-4 sentences, actionable). No markdown in strings."
         )
         try:
-            plan = gemini_json(
-                prompt=prompt, model=GEMINI_PRO, max_tokens=4096, temperature=0.4,
+            plan = claude_json(
+                prompt=prompt, model=CLAUDE_PRO, max_tokens=4096, temperature=0.4,
                 schema={
                     "title": str,
                     "steps": [{"title": str, "type": str, "xp": int, "body": str}],
                 },
             )
         except (ValueError, LLMRetriesExhaustedError):
-            plan = gemini_json(
-                prompt=prompt, model=GEMINI_FLASH, max_tokens=4096, temperature=0.4,
+            plan = claude_json(
+                prompt=prompt, model=CLAUDE_FLASH, max_tokens=4096, temperature=0.4,
                 schema={
                     "title": str,
                     "steps": [{"title": str, "type": str, "xp": int, "body": str}],
@@ -1773,7 +1772,7 @@ def complete_playground_step(user_email: str) -> Dict[str, Any]:
 
 def _generate_track_assessment(track_title: str) -> Optional[Dict[str, Any]]:
     """Generate end-of-track assessment quiz (3-5 questions)."""
-    from services.gemini_client import gemini_json, GEMINI_FLASH, LLMRetriesExhaustedError
+    from services.claude_client import claude_json, CLAUDE_FLASH, LLMRetriesExhaustedError
 
     prompt = (
         f"Generate 4 assessment questions for someone who just completed a learning track on: {track_title}\n\n"
@@ -1783,8 +1782,8 @@ def _generate_track_assessment(track_title: str) -> Optional[Dict[str, Any]]:
         "model_answer, explanation})."
     )
     try:
-        return gemini_json(
-            prompt=prompt, model=GEMINI_FLASH, max_tokens=3000, temperature=0.4,
+        return claude_json(
+            prompt=prompt, model=CLAUDE_FLASH, max_tokens=3000, temperature=0.4,
             schema={
                 "questions": [{
                     "question": str, "type": str, "options": [str],
@@ -1799,7 +1798,7 @@ def _generate_track_assessment(track_title: str) -> Optional[Dict[str, Any]]:
 
 def generate_quiz(user_email: str, topic: str, difficulty: str = "medium", count: int = 4) -> Dict[str, Any]:
     """Public API: generate quiz questions on a topic with given difficulty."""
-    from services.gemini_client import gemini_json, GEMINI_FLASH, LLMRetriesExhaustedError
+    from services.claude_client import claude_json, CLAUDE_FLASH, LLMRetriesExhaustedError
 
     count = max(3, min(int(count), 5))
     prompt = (
@@ -1810,8 +1809,8 @@ def generate_quiz(user_email: str, topic: str, difficulty: str = "medium", count
         "correct_index (int 0-3), explanation (1-2 sentences)})."
     )
     try:
-        result = gemini_json(
-            prompt=prompt, model=GEMINI_FLASH, max_tokens=3000, temperature=0.4,
+        result = claude_json(
+            prompt=prompt, model=CLAUDE_FLASH, max_tokens=3000, temperature=0.4,
             schema={
                 "questions": [{
                     "question": str, "options": [str],
@@ -1975,7 +1974,7 @@ def generate_outreach_sequence(
     resume_context: str,
 ) -> List[Dict[str, Any]]:
     """Use the LLM to generate a 3-5 step outreach sequence."""
-    from services.gemini_client import gemini_json, GEMINI_PRO, GEMINI_FLASH, LLMRetriesExhaustedError
+    from services.claude_client import claude_json, CLAUDE_PRO, CLAUDE_FLASH, LLMRetriesExhaustedError
 
     prompt = (
         f"Generate an outreach sequence for applying to {role} at {company} via {channel}.\n\n"
@@ -1986,13 +1985,13 @@ def generate_outreach_sequence(
         "Return JSON: steps (list of {step, action, template})."
     )
     try:
-        result = gemini_json(
-            prompt=prompt, model=GEMINI_PRO, max_tokens=4000, temperature=0.35,
+        result = claude_json(
+            prompt=prompt, model=CLAUDE_PRO, max_tokens=4000, temperature=0.35,
             schema={"steps": [{"step": int, "action": str, "template": str}]},
         )
     except (ValueError, LLMRetriesExhaustedError):
-        result = gemini_json(
-            prompt=prompt, model=GEMINI_FLASH, max_tokens=4000, temperature=0.4,
+        result = claude_json(
+            prompt=prompt, model=CLAUDE_FLASH, max_tokens=4000, temperature=0.4,
             schema={"steps": [{"step": int, "action": str, "template": str}]},
         )
 

@@ -19,7 +19,7 @@ missing — but **not all gaps are equal**:
 Pipeline:
   1. Deterministic gap detection (reuse KeywordGapEngine) → the SHORT list of
      JD required skills genuinely missing from the (already-tailored) resume.
-  2. If non-empty, one small LLM call (Claude via Bedrock — the `gemini_json`
+  2. If non-empty, one small LLM call (Claude via Bedrock — the `claude_json`
      name is a legacy alias) tiers each missing item with a one-line rationale.
   3. Graceful fallback: on any model error/timeout, every missing item is
      reported under "learnable" so the feature never blocks the tailor result.
@@ -139,19 +139,19 @@ def build_match_gaps(
         if not missing:
             return _empty_report(req_cov, cov)
 
-        # Model tiering (Claude via Bedrock; gemini_* names are legacy aliases).
+        # Model tiering: FLASH (Haiku on Bedrock) is enough for gap tiering.
         try:
-            from services.gemini_client import (
-                gemini_json, GEMINI_FLASH, LLMRetriesExhaustedError,
+            from services.claude_client import (
+                claude_json, CLAUDE_FLASH, LLMRetriesExhaustedError,
             )
             prompt = _build_prompt(
                 build_resume_text(tailored),
                 jd_analysis.get("job_title", ""),
                 missing,
             )
-            raw = gemini_json(
+            raw = claude_json(
                 prompt=prompt,
-                model=GEMINI_FLASH,   # cheapest/fastest Claude tier — small call
+                model=CLAUDE_FLASH,   # cheapest/fastest Claude tier — small call
                 max_tokens=1500,
                 temperature=0.2,
             )

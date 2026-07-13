@@ -1184,22 +1184,22 @@ Output strict JSON: {{"status": "...", "confidence": 0.0-1.0, "reason": "one sho
     # Temperature stays at 0.0 for deterministic output.
     result: Optional[Dict[str, Any]] = None
     try:
-        from services.gemini_client import gemini_json, GEMINI_PRO, GEMINI_FLASH
+        from services.claude_client import claude_json, CLAUDE_PRO, CLAUDE_FLASH
         try:
-            result = gemini_json(
+            result = claude_json(
                 prompt=prompt,
                 max_tokens=400,
                 temperature=0.0,
-                model=GEMINI_PRO,
+                model=CLAUDE_PRO,
                 max_retries=1,
             )
         except Exception as pro_err:
             logger.info("classify_record_thread Pro failed (%s); retrying with Flash", pro_err)
-            result = gemini_json(
+            result = claude_json(
                 prompt=prompt,
                 max_tokens=400,
                 temperature=0.0,
-                model=GEMINI_FLASH,
+                model=CLAUDE_FLASH,
                 max_retries=1,
             )
     except Exception as e:

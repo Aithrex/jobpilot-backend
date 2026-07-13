@@ -30,7 +30,7 @@ import logging
 import re
 from typing import Any, Dict, List
 
-from services.gemini_client import gemini_json, GEMINI_FLASH
+from services.claude_client import claude_json, CLAUDE_FLASH
 
 logger = logging.getLogger(__name__)
 
@@ -144,10 +144,10 @@ def is_cringe(text: str) -> Dict[str, Any]:
         return {"cringe": True, "reasons": hard[:5]}
 
     try:
-        res = gemini_json(
+        res = claude_json(
             prompt=f"<post>\n{text}\n</post>",
             system=_SYSTEM,
-            model=GEMINI_FLASH,
+            model=CLAUDE_FLASH,
             temperature=_TEMPERATURE,
             max_tokens=_MAX_TOKENS,
             schema=_SCHEMA,

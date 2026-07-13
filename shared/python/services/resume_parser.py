@@ -23,9 +23,9 @@ Output conforms to PARSED_RESUME_SCHEMA so downstream consumers
 Key design decisions:
   1. Strict extraction prompt — prevents the model from inventing or embellishing.
   2. No native schema= enforcement — PARSED_RESUME_SCHEMA uses _dict_of for skills
-     (Record<string, string[]>) which the Gemini response_schema API could not
-     handle. Instead, we rely on prompt instructions + post-call
-     validate_and_coerce(); this also works cleanly for Claude/Bedrock tool use.
+     (Record<string, string[]>), which forced-tool-use schemas don't express
+     cleanly. Instead, we rely on prompt instructions + post-call
+     validate_and_coerce().
   3. Keyword normalization — standardizes skill names ("JS" → "JavaScript") for
      accurate downstream matching in scoring and gap analysis.
   4. Single-user storage — resumes are replaced (not versioned) in MongoDB.
@@ -341,7 +341,7 @@ class ResumeParser:
         return ResumeParser.MIME_TYPES.get(ext, ResumeParser.MIME_TYPES["pdf"])
 
     # ======================================================================
-    # 2. GEMINI STRUCTURED PARSING
+    # 2. LLM STRUCTURED PARSING (Claude FLASH on Bedrock)
     # ======================================================================
 
     def parse_to_structured(
@@ -369,7 +369,7 @@ class ResumeParser:
               - structured_dict: Resume data conforming to PARSED_RESUME_SCHEMA.
               - raw_text_str: Full plain-text transcription from the LLM (or input raw_text).
         """
-        from services.gemini_client import gemini_json, GEMINI_FLASH, get_active_provider
+        from services.claude_client import claude_json, CLAUDE_FLASH, get_active_provider
         import base64
         import time
 
@@ -419,29 +419,29 @@ class ResumeParser:
         t_local = time.perf_counter()
         use_slim = bool(local_text)
 
-        # Build provider-native parts (PDF + prompt for Claude/Gemini, or
-        # text-only fallback). Provider knows its own multimodal payload shape.
+        # Build provider-native parts (PDF + prompt, or text-only fallback).
+        # Provider knows its own multimodal payload shape.
         parts = self._build_extraction_parts(
             raw_text, file_base64, mime_type, provider, base64, slim=use_slim
         )
 
         # Call the LLM (FLASH tier). Slim path needs far fewer output tokens because
         # we no longer ask for raw_text or extracted_urls.
-        result = gemini_json(
+        result = claude_json(
             prompt=None,  # Prompt is embedded in the parts
             parts=parts,
             max_tokens=6000 if use_slim else 24000,
             temperature=0.2,  # Low temp for factual extraction
-            model=GEMINI_FLASH,
+            model=CLAUDE_FLASH,
             system=_PARSE_SYSTEM,  # trusted anchor; PDF/text parts are untrusted data
         )
 
-        t_gemini = time.perf_counter()
+        t_llm = time.perf_counter()
 
         # In slim mode the model is instructed not to emit these, but be
         # defensive: pop them either way so they don't leak into the schema.
-        gemini_raw_text = result.pop("raw_text", "") or ""
-        gemini_urls = result.pop("extracted_urls", []) or []
+        llm_raw_text = result.pop("raw_text", "") or ""
+        llm_urls = result.pop("extracted_urls", []) or []
 
         # Decide on the authoritative raw_text + URL set:
         #   - Slim path: local extraction is canonical (byte-perfect text +
@@ -451,8 +451,8 @@ class ResumeParser:
             effective_raw_text = local_text
             extracted_urls = local_urls
         else:
-            effective_raw_text = gemini_raw_text if gemini_raw_text.strip() else raw_text
-            extracted_urls = gemini_urls
+            effective_raw_text = llm_raw_text if llm_raw_text.strip() else raw_text
+            extracted_urls = llm_urls
 
         # Build synthetic [Extracted Link: ...] markers — preserves the
         # contract for _backfill_contact which greps for these tokens to
@@ -501,12 +501,12 @@ class ResumeParser:
         # no actual warning.
         logger.warning(
             "RESUME_PARSE_TIMING path=%s local_extract=%s local_ms=%d "
-            "gemini_ms=%d post_ms=%d total_ms=%d local_chars=%d local_urls=%d",
+            "llm_ms=%d post_ms=%d total_ms=%d local_chars=%d local_urls=%d",
             "slim" if use_slim else "full",
             local_extract_status,
             int((t_local - t0) * 1000),
-            int((t_gemini - t_local) * 1000),
-            int((t_end - t_gemini) * 1000),
+            int((t_llm - t_local) * 1000),
+            int((t_end - t_llm) * 1000),
             int((t_end - t0) * 1000),
             len(local_text),
             len(local_urls),
@@ -520,27 +520,25 @@ class ResumeParser:
     ) -> list:
         """Build provider-native parts for the resume extraction call.
 
-        Multi-modal path (preferred): delegates to `provider.build_pdf_parts`
-        which returns either Gemini `types.Part` objects or Claude content
-        blocks depending on the active provider.
+        Multi-modal path (preferred): delegates to `provider.build_pdf_parts`,
+        which returns provider-native content blocks (Claude document blocks).
 
         Text-only fallback: returns a single text part wrapping the prompt
-        with embedded raw text. The provider's `json()` accepts this shape
-        for both Gemini and Claude (both treat single text part as the
-        equivalent of a plain `prompt=` argument).
+        with embedded raw text. The provider's `json()` treats a single text
+        part as the equivalent of a plain `prompt=` argument.
 
         Args:
             raw_text: Plain text from the resume (used for text-only fallback).
             file_base64: Optional base64-encoded file for multi-modal input.
             mime_type: MIME type of the file (e.g., application/pdf).
-            provider: The active LLMProvider instance (Gemini or Claude).
+            provider: The active LLMProvider instance.
             base64: base64 module (passed to avoid re-import).
             slim: If True, use the slim prompt (no raw_text / extracted_urls fields).
                 Caller is responsible for sourcing those locally.
 
         Returns:
             Provider-native parts list — opaque to the caller, passed back to
-            `gemini_json(parts=...)` as-is.
+            `claude_json(parts=...)` as-is.
         """
         prompt_template = _EXTRACTION_PROMPT_SLIM if slim else _EXTRACTION_PROMPT
 
