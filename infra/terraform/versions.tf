@@ -8,15 +8,16 @@ terraform {
     }
   }
 
-  # Configure a remote backend for real use (S3 + DynamoDB lock). Left local
-  # here so the skeleton runs out of the box; uncomment + fill in to share state.
-  # backend "s3" {
-  #   bucket         = "aithrex-tfstate"
-  #   key            = "jobpilot-backend/terraform.tfstate"
-  #   region         = "us-east-1"
-  #   dynamodb_table = "aithrex-tflock"
-  #   encrypt        = true
-  # }
+  # Remote state in S3 (bucket versioned + SSE + public-access-blocked). Native
+  # S3 state locking (use_lockfile) — no DynamoDB table needed on TF >= 1.10.
+  # Runs need AWS_PROFILE=aithrex (the default profile's creds are invalid).
+  backend "s3" {
+    bucket       = "aithrex-tfstate"
+    key          = "jobpilot-backend/terraform.tfstate"
+    region       = "us-east-1"
+    encrypt      = true
+    use_lockfile = true
+  }
 }
 
 provider "aws" {

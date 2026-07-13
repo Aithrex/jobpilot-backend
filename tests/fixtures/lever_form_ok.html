@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Apply - Lever Test Role</title></head>
+<body>
+<h1>Apply for Lever Test Role</h1>
+<!-- Mirrors the real Lever form: fields keyed by NAME (not id), a NATIVE
+     <select>, a file input name=resume, and a "Submit application" button. -->
+<form id="appform" onsubmit="return false">
+  <input name="name" type="text" placeholder="Full name">
+  <input name="email" type="email" placeholder="Email">
+  <input name="phone" type="tel" placeholder="Phone">
+  <input name="resume" id="resume-upload-input" type="file">
+  <select name="eeo[gender]">
+    <option value="">Select…</option>
+    <option value="Female">Female</option>
+    <option value="Male">Male</option>
+    <option value="Decline">Decline to self-identify</option>
+  </select>
+  <label><input type="checkbox" name="pronouns" value="they/them"> they/them</label>
+  <div id="err" class="field-error" aria-invalid="true" style="display:none">Required fields missing.</div>
+  <button type="button" onclick="submitApp()">Submit application</button>
+</form>
+<div id="application-confirmation" style="display:none"></div>
+<script>
+  function submitApp(){
+    var nm = document.querySelector('[name="name"]').value;
+    var em = document.querySelector('[name="email"]').value;
+    var g  = document.querySelector('[name="eeo[gender]"]').value;
+    var files = document.getElementById('resume-upload-input').files;
+    var fname = (files && files.length) ? files[0].name : '';
+    if(!nm || !em || !fname){ document.getElementById('err').style.display='block'; return; }
+    var c = document.getElementById('application-confirmation');
+    c.style.display='block';
+    c.textContent = 'Thank you for applying, ' + nm + ' (' + em + '). ' +
+                    'Attached: ' + fname + '. Gender: ' + g + '.';
+    document.getElementById('appform').style.display='none';
+  }
+</script>
+</body></html>

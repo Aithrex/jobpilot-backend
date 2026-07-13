@@ -1,0 +1,51 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Apply - Test Role</title></head>
+<body>
+<h1>Apply for Test Role</h1>
+<!-- Mirrors the real Greenhouse form: text inputs keyed by id=field-name,
+     input#resume[type=file], a react-select-style combobox (.select__input,
+     role=combobox) with role=option items, and a "Submit application" button. -->
+<form id="appform" onsubmit="return false">
+  <input id="first_name" type="text" placeholder="First Name">
+  <input id="last_name" type="text" placeholder="Last Name">
+  <input id="email" type="text" placeholder="Email">
+  <input id="phone" type="tel" placeholder="Phone">
+  <input id="resume" type="file">
+  <div class="select__control">
+    <input id="question_100" class="select__input" role="combobox" autocomplete="off"
+           onfocus="showMenu()" onclick="showMenu()">
+    <div id="menu" class="select__menu" style="display:none">
+      <div class="select__option" role="option" onclick="pick('Yes')">Yes</div>
+      <div class="select__option" role="option" onclick="pick('No')">No</div>
+    </div>
+  </div>
+  <div id="err" class="field-error" aria-invalid="true" style="display:none">
+    Please complete all required fields.
+  </div>
+  <button type="button" onclick="submitApp()">Submit application</button>
+</form>
+<div id="application-confirmation" style="display:none"></div>
+<script>
+  function showMenu(){ document.getElementById('menu').style.display='block'; }
+  function pick(v){
+    document.getElementById('question_100').value = v;
+    document.getElementById('menu').style.display='none';
+  }
+  function submitApp(){
+    var fn = document.getElementById('first_name').value;
+    var em = document.getElementById('email').value;
+    var q  = document.getElementById('question_100').value;
+    var files = document.getElementById('resume').files;
+    var fname = (files && files.length) ? files[0].name : '';
+    if(!fn || !em || !fname){
+      document.getElementById('err').style.display='block';
+      return;
+    }
+    var c = document.getElementById('application-confirmation');
+    c.style.display='block';
+    c.textContent = 'Thank you for applying, ' + fn + ' (' + em + '). ' +
+                    'Attached: ' + fname + '. Answer: ' + q;
+    document.getElementById('appform').style.display='none';
+  }
+</script>
+</body></html>
