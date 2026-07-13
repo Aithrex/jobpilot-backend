@@ -190,7 +190,7 @@ def _generate_tech_news() -> list:
 # Career tips — AI-generated, EVERGREEN, no fabricated stats
 # ---------------------------------------------------------------------------
 def _generate_career_intel() -> list:
-    from services.gemini_client import gemini_json, GEMINI_FLASH
+    from services.claude_client import claude_json, CLAUDE_FLASH
 
     prompt = """Generate a JSON array of 8 EVERGREEN, genuinely useful career tips for
 tech job seekers (especially students and new grads). These are advice, not news.
@@ -214,8 +214,8 @@ Return JSON: {"items": [...]}"""
         "tags": [str], "timeAgo": str, "readTime": str,
     }]}
     try:
-        result = gemini_json(prompt=prompt, max_tokens=14000, temperature=0.6,
-                             model=GEMINI_FLASH, schema=schema)
+        result = claude_json(prompt=prompt, max_tokens=14000, temperature=0.6,
+                             model=CLAUDE_FLASH, schema=schema)
         items = result.get("items") or []
         for it in items:
             it["timeAgo"] = ""  # evergreen — never fake a timestamp

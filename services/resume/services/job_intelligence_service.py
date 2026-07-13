@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from services.gemini_client import GEMINI_FLASH, GEMINI_PRO, gemini_json
+from services.claude_client import CLAUDE_FLASH, CLAUDE_PRO, claude_json
 from utils.db_connect import DBConnect
 
 
@@ -173,7 +173,7 @@ def generate_followup_message(user_email: str, record_id: str, channel: str = "e
         "Keep message under 130 words, specific and polite, avoid desperation."
     )
     schema = {"subject": str, "message": str, "tone": str, "next_step": str}
-    result = gemini_json(prompt=prompt, model=GEMINI_FLASH, temperature=0.35, schema=schema)
+    result = claude_json(prompt=prompt, model=CLAUDE_FLASH, temperature=0.35, schema=schema)
     record_activity(
         user_email,
         "followup_generated",
@@ -214,7 +214,7 @@ def get_funnel_analytics(user_email: str) -> Dict[str, Any]:
         "Return JSON with fields: headline, insight, action_items (array of 3 short bullets)."
     )
     schema = {"headline": str, "insight": str, "action_items": [str]}
-    insight = gemini_json(prompt=insight_prompt, model=GEMINI_FLASH, temperature=0.3, schema=schema)
+    insight = claude_json(prompt=insight_prompt, model=CLAUDE_FLASH, temperature=0.3, schema=schema)
     return {"ok": True, "counts": counts, "conversions": conversions, "insight": insight}
 
 
@@ -250,7 +250,7 @@ def analyze_rejection_patterns(user_email: str) -> Dict[str, Any]:
         "Return JSON with keys: patterns (array of {theme, evidence}), suggestions (array of 4 specific actions)."
     )
     schema = {"patterns": [{"theme": str, "evidence": str}], "suggestions": [str]}
-    result = gemini_json(prompt=prompt, model=GEMINI_PRO, temperature=0.35, schema=schema)
+    result = claude_json(prompt=prompt, model=CLAUDE_PRO, temperature=0.35, schema=schema)
     return {"ok": True, "total": len(rejected), **result}
 
 
@@ -270,7 +270,7 @@ def reframe_rejection(user_email: str, record_id: str) -> Dict[str, Any]:
         "next_actions": [str],
         "silver_lining": str,
     }
-    result = gemini_json(prompt=prompt, model=GEMINI_PRO, temperature=0.5, schema=schema)
+    result = claude_json(prompt=prompt, model=CLAUDE_PRO, temperature=0.5, schema=schema)
     record_activity(user_email, "rejection_reframed", {"record_id": record_id, "company": summary["company"]})
     return {"ok": True, "record": summary, "reframe": result}
 
@@ -293,7 +293,7 @@ def get_weekly_digest(user_email: str) -> Dict[str, Any]:
         "Return JSON with: headline, summary, wins (array), focus_for_next_week (array of 3)."
     )
     schema = {"headline": str, "summary": str, "wins": [str], "focus_for_next_week": [str]}
-    digest = gemini_json(prompt=prompt, model=GEMINI_FLASH, temperature=0.45, schema=schema)
+    digest = claude_json(prompt=prompt, model=CLAUDE_FLASH, temperature=0.45, schema=schema)
     return {"ok": True, "stats": stats, "digest": digest}
 
 
@@ -435,7 +435,7 @@ def generate_intro_message(user_email: str, contact_id: str) -> Dict[str, Any]:
         "Return JSON with: message, subject, tone."
     )
     schema = {"message": str, "subject": str, "tone": str}
-    out = gemini_json(prompt=prompt, model=GEMINI_PRO, temperature=0.45, schema=schema)
+    out = claude_json(prompt=prompt, model=CLAUDE_PRO, temperature=0.45, schema=schema)
     return {"ok": True, "contact_id": contact_id, "intro": out}
 
 
@@ -449,7 +449,7 @@ def get_networking_insights(user_email: str) -> Dict[str, Any]:
         "Return JSON with: headline, analysis, actions (array of 3 specific actions)."
     )
     schema = {"headline": str, "analysis": str, "actions": [str]}
-    insights = gemini_json(prompt=prompt, model=GEMINI_FLASH, temperature=0.35, schema=schema)
+    insights = claude_json(prompt=prompt, model=CLAUDE_FLASH, temperature=0.35, schema=schema)
     return {"ok": True, "insights": insights}
 
 
@@ -561,7 +561,7 @@ def compare_offers(user_email: str) -> Dict[str, Any]:
         "pros_cons": [{"company": str, "pros": [str], "cons": [str]}],
         "total_comp_table": [{"company": str, "total_comp": float}],
     }
-    comp = gemini_json(prompt=prompt, model=GEMINI_PRO, temperature=0.35, schema=schema)
+    comp = claude_json(prompt=prompt, model=CLAUDE_PRO, temperature=0.35, schema=schema)
     return {"ok": True, "offers": stripped, "comparison": comp}
 
 
@@ -581,5 +581,5 @@ def generate_negotiation_script(user_email: str, offer_id: str, ask: str) -> Dic
         "talking_points": [str],
         "fallback_if_denied": str,
     }
-    script = gemini_json(prompt=prompt, model=GEMINI_PRO, temperature=0.4, schema=schema)
+    script = claude_json(prompt=prompt, model=CLAUDE_PRO, temperature=0.4, schema=schema)
     return {"ok": True, "offer_id": offer_id, "script": script}

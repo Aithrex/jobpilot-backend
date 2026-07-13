@@ -861,3 +861,20 @@ def get_all_forms(keyword: str) -> Set[str]:
     forms = REVERSE_MAP.get(canonical, set()).copy()
     forms.add(canonical)
     return forms
+
+
+def get_acronym_pair(keyword: str) -> "tuple[str, str] | None":
+    """Return (short, long) when a keyword's alias group contains both an
+    acronym-style form and a spelled-out form, else None.
+
+    e.g. "AWS" → ("aws", "amazon web services"). Recruiters search both forms,
+    so the scorer rewards resumes that carry the pair ("Amazon Web Services
+    (AWS)"). Heuristic: shortest space-free form ≤6 chars vs longest
+    multi-word form ≥8 chars from the same synonym group.
+    """
+    forms = get_all_forms(keyword)
+    shorts = [f for f in forms if len(f) <= 6 and " " not in f and f.isascii()]
+    longs = [f for f in forms if " " in f and len(f) >= 8]
+    if shorts and longs:
+        return (min(shorts, key=len), max(longs, key=len))
+    return None

@@ -47,7 +47,6 @@ resource "aws_lambda_function" "service" {
       SSM_MONGODB_URI              = "${var.ssm_path_prefix}/mongodb-uri"
       SSM_JWT_SECRET               = "${var.ssm_path_prefix}/jwt-secret-key"
       SSM_IPINFO_TOKEN             = "${var.ssm_path_prefix}/ipinfo-token"
-      SSM_GEMINI_API_KEY           = "${var.ssm_path_prefix}/gemini-api-key"
       SSM_JSEARCH_API_KEY          = "${var.ssm_path_prefix}/jsearch-api-key"
       SSM_APIFY_API_KEY            = "${var.ssm_path_prefix}/apify-api-key"
       SSM_JOB_SEARCH_PASSWORD_HASH = "${var.ssm_path_prefix}/job-search-password-hash"

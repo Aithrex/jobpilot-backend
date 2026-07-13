@@ -11,6 +11,10 @@ failure (bad creds, region without model access, throttling, etc.).
 import sys
 from pathlib import Path
 
+# Windows consoles default to cp1252, which can't print the ✅/❌ markers.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "shared" / "python"))
 sys.path.insert(0, str(ROOT))
@@ -30,14 +34,25 @@ def main():
     if not has_key:
         print("Note: no AWS_ACCESS_KEY_ID in env — boto3 will fall back to ~/.aws or an IAM role.")
 
+    # Show WHICH account/identity the calls will actually run as — a silent
+    # fallback to the wrong ~/.aws default profile is the #1 local failure
+    # (Bedrock model access is per-account; the JobPilot prod account has it,
+    # an unrelated personal account does not).
     try:
-        from services.gemini_client import gemini_json, GEMINI_FLASH, GEMINI_PRO
-        print(f"FLASH model: {GEMINI_FLASH}")
-        print(f"PRO   model: {GEMINI_PRO}")
+        import boto3
+        ident = boto3.client("sts", region_name=region).get_caller_identity()
+        print(f"Caller identity: account {ident['Account']} — {ident['Arn']}")
+    except Exception as e:
+        print(f"Could not resolve caller identity (STS): {str(e)[:200]}")
+
+    try:
+        from services.claude_client import claude_json, CLAUDE_FLASH, CLAUDE_PRO
+        print(f"FLASH model: {CLAUDE_FLASH}")
+        print(f"PRO   model: {CLAUDE_PRO}")
         print("Calling FLASH with a tiny prompt…")
-        res = gemini_json(
+        res = claude_json(
             prompt='Return strict JSON: {"ok": true, "where": "bedrock"}',
-            model=GEMINI_FLASH,
+            model=CLAUDE_FLASH,
             max_tokens=64,
             temperature=0.0,
             max_retries=1,
@@ -52,7 +67,17 @@ def main():
     except Exception as e:
         msg = str(e)
         print(f"\n❌ Bedrock call failed: {msg[:300]}")
-        if "security token" in msg.lower() or "UnrecognizedClient" in msg:
+        if "use case details" in msg.lower():
+            print(
+                "→ This AWS ACCOUNT has never been granted Anthropic model access.\n"
+                "  Either (recommended) put keys from the JobPilot prod account into\n"
+                "  .env (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY — prod already has\n"
+                "  access), or enable it for THIS account: AWS console → Bedrock →\n"
+                "  Model access → Modify → select Anthropic Claude models → submit\n"
+                "  the use-case form → wait ~15 minutes → re-run this script.\n"
+                "  Check the 'Caller identity' line above to see which account you hit."
+            )
+        elif "security token" in msg.lower() or "UnrecognizedClient" in msg:
             print("→ The AWS credentials are missing/invalid. Set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in .env.")
         elif "AccessDenied" in msg or "not authorized" in msg.lower():
             print("→ Creds work but lack bedrock:InvokeModel, OR model access isn't enabled in this region.")

@@ -273,7 +273,7 @@ class ProjectGenerator:
         Returns a project dict {name, dates, bullets, tech} or None if generation
         fails validation or an error occurs.
         """
-        from services.gemini_client import gemini_json
+        from services.claude_client import claude_json
         from schemas.resume_schemas import flatten_skills, build_resume_text
 
         # Build context strings
@@ -418,7 +418,7 @@ class ProjectGenerator:
         )
 
         try:
-            from services.gemini_client import GEMINI_FLASH
+            from services.claude_client import CLAUDE_FLASH
             PROJECT_SCHEMA = {
                 "purpose": str,
                 "name": str,
@@ -430,11 +430,11 @@ class ProjectGenerator:
             # and FLASH is ~2-3x faster for structured JSON output.
             result = None
             try:
-                result = gemini_json(
+                result = claude_json(
                     prompt,
                     max_tokens=12000,
                     temperature=0.3,
-                    model=GEMINI_FLASH,
+                    model=CLAUDE_FLASH,
                     schema=PROJECT_SCHEMA
                 )
             except Exception as e:
@@ -478,6 +478,7 @@ class ProjectGenerator:
         existing_projects: list = None,
         bullets_per_project: int = 5,
         rejections_sink: list = None,
+        github_evidence: list = None,
     ) -> list:
         """Generate multiple projects in a single LLM call for speed.
 
@@ -490,13 +491,19 @@ class ProjectGenerator:
                 project for diagnostic surfacing upstream. Caller pre-allocates
                 the list; this method appends. Each dict has keys
                 {"name", "reason"}.
+            github_evidence: display strings of the candidate's CONFIRMED
+                GitHub repos (from profile_facts). When present, generated
+                projects should prefer grounding in these REAL repositories —
+                asserting only what the evidence shows (languages, topics,
+                what the description says it does; stars if notable). A repo
+                is evidence of a personal project, never employment.
 
         Returns a list of validated project dicts (may be fewer than `count`
         if some fail validation or are duplicates).
         """
         if rejections_sink is None:
             rejections_sink = []
-        from services.gemini_client import gemini_json, GEMINI_FLASH
+        from services.claude_client import claude_json, CLAUDE_FLASH
         from schemas.resume_schemas import flatten_skills, build_resume_text
 
         if count <= 0:
@@ -533,6 +540,23 @@ class ProjectGenerator:
             )
 
         experience_block = _summarize_experience_bullets(original_resume)
+
+        # Confirmed GitHub repos — REAL projects to ground generation in.
+        evidence_lines = [
+            str(e).strip() for e in (github_evidence or []) if str(e).strip()
+        ][:5]
+        github_block = ""
+        if evidence_lines:
+            from utils.llm_safety import wrap_untrusted
+            github_block = (
+                "=== CONFIRMED GITHUB REPOSITORIES (user-verified, REAL projects) ===\n"
+                "PREFER grounding generated projects in these actual repositories.\n"
+                "Assert ONLY what the evidence shows: the repo's language/topics, what\n"
+                "its description says it does, and stars when noted. Never present a\n"
+                "repo as employment, production traffic, or team leadership.\n"
+                + wrap_untrusted("github_repo_evidence", "\n".join(evidence_lines))
+                + "\n\n"
+            )
 
         # JD-required skills the candidate plausibly has (intersection of
         # JD.required_skills with candidate.skills/text). This is the
@@ -635,6 +659,7 @@ class ProjectGenerator:
             f"JD-relevant tech (broader, secondary): {relevant_tech_str}\n\n"
             f"=== CANDIDATE'S OWN SKILLS (for plausibility checks; tech must come from this list) ===\n"
             f"{skills_text[:400]}\n\n"
+            + github_block
             + (
                 "=== EXPERIENCE BULLETS (DO NOT DUPLICATE these problems/solutions in any project) ===\n"
                 f"{experience_block}\n\n"
@@ -662,9 +687,9 @@ class ProjectGenerator:
         }
 
         try:
-            result = gemini_json(
+            result = claude_json(
                 prompt, max_tokens=12000, temperature=0.3,
-                model=GEMINI_FLASH, schema=BATCH_SCHEMA,
+                model=CLAUDE_FLASH, schema=BATCH_SCHEMA,
             )
         except Exception as e:
             logger.warning("ProjectGenerator: batch generation failed: %s", e)
@@ -687,7 +712,10 @@ class ProjectGenerator:
             if not isinstance(raw, dict):
                 continue
             raw_name = (raw.get("name") if isinstance(raw, dict) else None) or "?"
-            project = self._validate_and_clean(raw, original_resume, jd_analysis, bullets_per_project)
+            project = self._validate_and_clean(
+                raw, original_resume, jd_analysis, bullets_per_project,
+                extra_grounding_text="\n".join(evidence_lines),
+            )
             if project is None:
                 logger.warning(
                     "ProjectGenerator batch: project '%s' rejected — failed validation",
@@ -731,8 +759,14 @@ class ProjectGenerator:
         original_resume: Dict[str, Any],
         jd_analysis: Dict[str, Any] = None,
         bullets_per_project: int = 5,
+        extra_grounding_text: str = "",
     ) -> Optional[Dict[str, Any]]:
         """Validate generated project against allowed tech and schema.
+
+        `extra_grounding_text` extends the tech-plausibility corpus with
+        confirmed enrichment evidence (e.g. a confirmed GitHub repo's
+        language/topics are observable facts a project may legitimately use
+        even when the uploaded resume never mentions them).
 
         Returns cleaned project or None if it fails safety checks.
         """
@@ -825,8 +859,13 @@ class ProjectGenerator:
             )
             return None
 
-        # Validate tech: only keep items that appear in the resume text or skills
-        resume_text_lower = build_resume_text(original_resume).lower()
+        # Validate tech: only keep items that appear in the resume text,
+        # skills, or confirmed enrichment evidence.
+        resume_text_lower = (
+            build_resume_text(original_resume).lower()
+            + "\n"
+            + (extra_grounding_text or "").lower()
+        )
         all_skills_lower = {s.lower() for s in flatten_skills(original_resume)}
 
         allowed_tech = []
@@ -861,7 +900,7 @@ class ProjectGenerator:
         Returns the name string or None if it fails.
         """
         try:
-            from services.gemini_client import gemini_json, GEMINI_FLASH
+            from services.claude_client import claude_json, CLAUDE_FLASH
 
             prompt = (
                 "Generate a single project name for a developer's portfolio project.\n\n"
@@ -876,8 +915,8 @@ class ProjectGenerator:
                 'Return a JSON object: {"name": "Your Project Name"}\n'
             )
 
-            result = gemini_json(
-                prompt, max_tokens=300, temperature=0.7, model=GEMINI_FLASH,
+            result = claude_json(
+                prompt, max_tokens=300, temperature=0.7, model=CLAUDE_FLASH,
                 schema={"name": str}
             )
             if isinstance(result, dict) and result.get("name", "").strip():

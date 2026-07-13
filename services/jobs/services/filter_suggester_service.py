@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List
 
-from services.gemini_client import GEMINI_FLASH, GEMINI_PRO, gemini_json
+from services.claude_client import CLAUDE_FLASH, CLAUDE_PRO, claude_json
 from services.resume_profiler import GENERIC_SWE_TITLES, INTENTS, build_profile
 
 logger = logging.getLogger(__name__)
@@ -227,7 +227,7 @@ def _synthesize_titles_from_resume(
     # BOTH calls error or return zero titles (very rare).
     def _try_model(model_name: str, label: str) -> Dict[str, Any]:
         try:
-            out = gemini_json(
+            out = claude_json(
                 prompt=prompt,
                 model=model_name,
                 temperature=0.35,
@@ -267,13 +267,13 @@ def _synthesize_titles_from_resume(
             return {}
 
     # Try Pro first.
-    result = _try_model(GEMINI_PRO, "pro")
+    result = _try_model(CLAUDE_PRO, "pro")
     if result:
         return result
     # Pro failed or returned thin — retry with Flash. Flash is faster and has
     # different rate-limit pool, so this catches Pro's quota / timeout issues.
     logger.info("synthesize: Pro returned empty; retrying with Flash for %s", primary_label)
-    result = _try_model(GEMINI_FLASH, "flash")
+    result = _try_model(CLAUDE_FLASH, "flash")
     if result:
         return result
     logger.warning("synthesize: BOTH Pro and Flash failed for %s; caller will use seed fallback", primary_label)

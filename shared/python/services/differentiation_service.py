@@ -32,7 +32,7 @@ than invent demand. `market_frequency` is RECOMPUTED in code from the JD set —
 the model's estimate is never trusted for a countable fact.
 
 Model note: §6.6 calls for Opus-tier reasoning; Opus is not wired into the
-Bedrock provider abstraction, so we use `GEMINI_PRO` (Sonnet 4.6) — the current
+Bedrock provider abstraction, so we use `CLAUDE_PRO` (Sonnet 4.6) — the current
 top tier available via `get_provider()`. Documented deviation.
 """
 from __future__ import annotations
@@ -46,7 +46,7 @@ from typing import Dict, List, Optional, Tuple
 
 from utils.db_connect import DBConnect
 from schemas.resume_schemas import flatten_skills, build_resume_text
-from services.gemini_client import gemini_json, GEMINI_PRO
+from services.claude_client import claude_json, CLAUDE_PRO
 
 logger = logging.getLogger(__name__)
 
@@ -411,10 +411,10 @@ def analyze_differentiators(user_email: str) -> Dict:
         "\n</candidate_data>"
     )
 
-    raw = gemini_json(
+    raw = claude_json(
         prompt=prompt,
         system=_DIFF_SYSTEM,
-        model=GEMINI_PRO,          # Opus not wired → PRO (Sonnet 4.6) is top tier
+        model=CLAUDE_PRO,          # Opus not wired → PRO (Sonnet 4.6) is top tier
         max_tokens=4000,
         temperature=0.25,
         schema=_DIFF_SCHEMA,
@@ -657,10 +657,10 @@ def generate_differentiation_plan(
         "know. Give target + constraints, never a walkthrough.\n\n"
         "<context>\n" + _json.dumps(context, ensure_ascii=False, default=str) + "\n</context>"
     )
-    raw = gemini_json(
+    raw = claude_json(
         prompt=prompt,
         system=_plan_system_for(level),
-        model=GEMINI_PRO,
+        model=CLAUDE_PRO,
         # Guided plans carry extra scaffold/sub-step text per task → a little more room.
         max_tokens=7000 if level == "guided" else 6000,
         temperature=0.3,

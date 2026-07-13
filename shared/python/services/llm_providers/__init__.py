@@ -1,11 +1,8 @@
 """LLM provider package — Claude on AWS Bedrock.
 
-Originally supported a `LLM_PROVIDER` env var to swap between Claude and
-Gemini providers. The Gemini implementation was removed once Google
-locked new accounts into a separate Prepaid wallet that excluded the
-$300 Cloud Billing trial credit. The abstraction stays in place so a
-future provider (OpenAI, Groq, Bedrock-Claude variants) can slot in
-without touching the 9+ caller files.
+The abstraction exists so a future provider (or a different Bedrock-Claude
+variant mix) can slot in without touching the caller files — everything
+goes through `services.claude_client` → `get_provider()`.
 """
 import logging
 from functools import lru_cache

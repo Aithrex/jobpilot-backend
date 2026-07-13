@@ -79,6 +79,7 @@ class ContentAugmenter:
         tailored: Dict[str, Any],
         original: Dict[str, Any],
         jd_analysis: Dict[str, Any],
+        preserve_project_names: set | None = None,
     ) -> Dict[str, Any]:
         """Run all augmentation phases on a tailored resume.
 
@@ -86,6 +87,12 @@ class ContentAugmenter:
             tailored: The tailored resume dict (modified in-place).
             original: The original parsed resume (for grounding).
             jd_analysis: JD analysis dict with required_skills, keywords, etc.
+            preserve_project_names: allowlist for the defensive project
+                strip — names of legitimately GENERATED projects (parallel
+                pre-injection in extract_and_tailor, GitHub-grounded
+                projects) that aren't in the original resume but must
+                survive. Without this, the strip silently discarded
+                pre-injected projects and forced Phase 1 to regenerate them.
 
         Returns:
             The augmented tailored resume dict.
@@ -118,10 +125,15 @@ class ContentAugmenter:
         # somehow failed to strip (whatever the upstream bug is, we know
         # from Phase 0 diagnostics it's bypassing the guard for this user's
         # flow). After this strip, Phase 1 below sees the correct count and
-        # ProjectGenerator can do its job.
+        # ProjectGenerator can do its job. Legitimately generated projects
+        # (parallel pre-injection, GitHub-grounded) survive via the
+        # preserve_project_names allowlist.
         _orig_proj_keys = {
             (p.get("name", "") or "").lower().strip()
             for p in original.get("projects", [])
+        }
+        _orig_proj_keys |= {
+            (n or "").lower().strip() for n in (preserve_project_names or set())
         }
         _tail_projects = tailored.get("projects", []) or []
         _real_projects = [
@@ -589,7 +601,7 @@ class ContentAugmenter:
         current_fill: float,
     ) -> Dict[str, Any]:
         """Expand experience bullets to fill the page."""
-        from services.gemini_client import gemini_json, GEMINI_FLASH
+        from services.claude_client import claude_json, CLAUDE_FLASH
         from schemas.resume_schemas import build_resume_text
         import json
 
@@ -683,9 +695,9 @@ class ContentAugmenter:
         }
 
         try:
-            result = gemini_json(
+            result = claude_json(
                 prompt, max_tokens=12000, temperature=0.4,
-                model=GEMINI_FLASH, schema=EXPANSION_SCHEMA,
+                model=CLAUDE_FLASH, schema=EXPANSION_SCHEMA,
             )
         except Exception as e:
             logger.error("ContentAugmenter: bullet expansion LLM call failed: %s", e)
@@ -734,7 +746,7 @@ class ContentAugmenter:
         jd_analysis: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Add realistic quantifiable metrics to bullets that lack them."""
-        from services.gemini_client import gemini_json, GEMINI_FLASH
+        from services.claude_client import claude_json, CLAUDE_FLASH
 
         # Collect bullets without metrics
         candidates = []
@@ -800,9 +812,9 @@ class ContentAugmenter:
         }
 
         try:
-            result = gemini_json(
+            result = claude_json(
                 prompt, max_tokens=12000, temperature=0.3,
-                model=GEMINI_FLASH, schema=IMPACT_SCHEMA,
+                model=CLAUDE_FLASH, schema=IMPACT_SCHEMA,
             )
         except Exception as e:
             logger.error("ContentAugmenter: impact injection LLM call failed: %s", e)
@@ -1039,8 +1051,21 @@ class ContentAugmenter:
         tailored: Dict[str, Any],
         jd_analysis: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Ensure each required keyword appears >= 2 times in the resume."""
-        from services.gemini_client import gemini_json, GEMINI_FLASH
+        """Strengthen how PRESENT keywords are evidenced — never introduce
+        absent ones.
+
+        Anti-stuffing alignment with the tailor prompt's 75-80% coverage
+        target:
+          - Keywords with ZERO occurrences are the tailor's Defensibility
+            call, not ours — injecting them here would fabricate claims the
+            model deliberately left out.
+          - When required-keyword coverage is already >= 80%, skip entirely:
+            the resume is in the honest band and more repetition reads as
+            stuffing to recruiters and modern ATS ranking.
+          - Only keywords appearing exactly ONCE get woven into one more
+            bullet as usage context, capped at 8.
+        """
+        from services.claude_client import claude_json, CLAUDE_FLASH
         from schemas.resume_schemas import build_resume_text
         from utils.keyword_normalizer import get_all_forms
 
@@ -1050,7 +1075,7 @@ class ContentAugmenter:
 
         resume_text = build_resume_text(tailored).lower()
 
-        under_represented = []
+        counts: Dict[str, int] = {}
         for skill in required:
             all_forms = get_all_forms(skill)
             total_count = 0
@@ -1060,16 +1085,29 @@ class ContentAugmenter:
                 else:
                     pattern = re.compile(r"(?<![a-zA-Z])" + re.escape(form) + r"(?![a-zA-Z])")
                     total_count += len(pattern.findall(resume_text))
-            if total_count < 2:
-                under_represented.append(skill)
+            counts[skill] = total_count
 
+        present = sum(1 for c in counts.values() if c >= 1)
+        required_coverage = present / len(required)
+        if required_coverage >= 0.8:
+            logger.info(
+                "ContentAugmenter ATS: required coverage %.0f%% already in the "
+                "honest band — skipping keyword hardening (anti-stuffing)",
+                required_coverage * 100,
+            )
+            return tailored
+
+        under_represented = [s for s in required if counts[s] == 1][:8]
         if not under_represented:
-            logger.info("ContentAugmenter ATS: all keywords at sufficient density")
+            logger.info(
+                "ContentAugmenter ATS: no single-occurrence keywords to "
+                "strengthen (absent keywords are never injected)"
+            )
             return tailored
 
         logger.info(
-            "ContentAugmenter ATS: %d under-represented keywords: %s",
-            len(under_represented), under_represented[:10],
+            "ContentAugmenter ATS: strengthening %d single-occurrence keywords: %s",
+            len(under_represented), under_represented,
         )
 
         # Find the most relevant bullets to weave keywords into
@@ -1092,14 +1130,20 @@ class ContentAugmenter:
         bullets_text = "\n".join(f"{i+1}. {b['text']}" for i, b in enumerate(sample))
 
         prompt = (
-            "You are integrating missing keywords into existing resume bullets.\n\n"
+            "You are strengthening how existing resume keywords are evidenced — NOT adding "
+            "new claims.\n\n"
             "RULES:\n"
-            "1. Naturally weave each keyword into a relevant bullet — do NOT just append it.\n"
-            "2. Preserve the original meaning and structure of each bullet.\n"
-            "3. Keep each bullet under 250 characters.\n"
-            "4. Only modify bullets where the keyword fits naturally.\n"
-            "5. Each keyword should be added to at least one bullet.\n\n"
-            f"Keywords to integrate: {', '.join(under_represented[:10])}\n\n"
+            "1. Each keyword below ALREADY appears once in this resume. Weave it naturally into\n"
+            "   ONE relevant bullet as usage context (what was done with it) — do NOT just\n"
+            "   append it.\n"
+            "2. Preserve the original meaning, structure, and EVERY NUMBER in each bullet.\n"
+            "3. NEVER invent facts, metrics, tools, or named products — you may only rephrase\n"
+            "   what the bullet already says so the keyword shows up in use.\n"
+            "4. Where it fits naturally, shape the bullet as 'Accomplished X, as measured by Y,\n"
+            "   by doing Z' — using only numbers already present in the bullet.\n"
+            "5. Keep each bullet under 250 characters.\n"
+            "6. Only modify bullets where the keyword fits naturally; skip any that don't.\n\n"
+            f"Keywords to strengthen: {', '.join(under_represented)}\n\n"
             f"Current bullets:\n{bullets_text}\n\n"
             "Return a JSON object:\n"
             '{"modified_bullets": [\n'
@@ -1111,9 +1155,9 @@ class ContentAugmenter:
         KEYWORD_SCHEMA = {"modified_bullets": [{"index": int, "text": str}]}
 
         try:
-            result = gemini_json(
+            result = claude_json(
                 prompt, max_tokens=24000, temperature=0.3,
-                model=GEMINI_FLASH, schema=KEYWORD_SCHEMA,
+                model=CLAUDE_FLASH, schema=KEYWORD_SCHEMA,
             )
         except Exception as e:
             logger.error("ContentAugmenter ATS keyword density: LLM call failed: %s", e)
@@ -1130,7 +1174,7 @@ class ContentAugmenter:
 
     def _fix_weak_verbs(self, tailored: Dict[str, Any]) -> Dict[str, Any]:
         """Replace weak opening verbs with strong action verbs."""
-        from services.gemini_client import gemini_json, GEMINI_FLASH
+        from services.claude_client import claude_json, CLAUDE_FLASH
 
         weak_bullets = []
         for section_key in ("experience", "projects"):
@@ -1177,9 +1221,9 @@ class ContentAugmenter:
         VERB_SCHEMA = {"fixed_bullets": [{"index": int, "text": str}]}
 
         try:
-            result = gemini_json(
+            result = claude_json(
                 prompt, max_tokens=12000, temperature=0.2,
-                model=GEMINI_FLASH, schema=VERB_SCHEMA,
+                model=CLAUDE_FLASH, schema=VERB_SCHEMA,
             )
         except Exception as e:
             logger.error("ContentAugmenter ATS weak verbs: LLM call failed: %s", e)
@@ -1200,7 +1244,7 @@ class ContentAugmenter:
         jd_analysis: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Ensure summary mentions job title and >= 3 required skills."""
-        from services.gemini_client import gemini_json, GEMINI_FLASH
+        from services.claude_client import claude_json, CLAUDE_FLASH
 
         summary = tailored.get("summary", "")
         if not summary:
@@ -1285,9 +1329,9 @@ class ContentAugmenter:
             # — a nested envelope — which got stored verbatim as the summary string
             # and showed in the rendered PDF as `{"summary": "I build..."}`. Plain
             # prompt + JSON parse + envelope unwrap below is the safe path.
-            result = gemini_json(
+            result = claude_json(
                 prompt, max_tokens=6000, temperature=0.3,
-                model=GEMINI_FLASH,
+                model=CLAUDE_FLASH,
             )
             new_summary = result.get("summary", "") if isinstance(result, dict) else ""
             # Defensive unwrap: if the model still nests {"summary": "..."} inside

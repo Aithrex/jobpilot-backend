@@ -1,8 +1,8 @@
 """Abstract LLM provider interface.
 
-Each concrete provider (Gemini, Claude) implements this interface. Callers
-import via `services.gemini_client` (kept for backward compat) which proxies
-to the active provider chosen by `LLM_PROVIDER` env var.
+Each concrete provider (currently Claude on Bedrock) implements this
+interface. Callers import via `services.claude_client`, which proxies to
+the active provider from `get_provider()`.
 
 Three public surface areas:
   1. `json(prompt, ...)` — single-shot text/multimodal call returning a dict.
@@ -23,7 +23,7 @@ class LLMProvider(ABC):
 
     Subclasses set the three model constants (FLASH / PRO / PREVIEW) to
     provider-native model IDs. Each constant maps to a tier used by callers
-    via `GEMINI_FLASH` / `GEMINI_PRO` / `GEMINI_PREVIEW` re-exports.
+    via `CLAUDE_FLASH` / `CLAUDE_PRO` / `CLAUDE_PREVIEW` re-exports.
     """
 
     # Subclasses override with provider-native model IDs.
@@ -44,7 +44,7 @@ class LLMProvider(ABC):
     ) -> dict:
         """Call the LLM and return a parsed JSON dict.
 
-        Mirrors the original `gemini_json` signature so callers don't change.
+        Mirrors the `claude_json` facade signature so callers don't change.
         """
 
     @abstractmethod
@@ -108,8 +108,9 @@ class LLMProvider(ABC):
         """
 
     def lazy_client(self):
-        """Optional — kept for backward compat with `get_gemini_client()`.
+        """Optional — backs `get_claude_client()`.
 
-        Default impl returns None; only Gemini provider needs an exposed client.
+        Default impl returns None; the Claude provider returns the boto3
+        Bedrock runtime client.
         """
         return None

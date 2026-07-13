@@ -10,9 +10,9 @@ Uses the Bedrock InvokeModel API with the Anthropic Messages API body shape:
     "tool_choice": {"type": "tool", "name": "..."}  # optional, forces tool use
   }
 
-Default models (override via env): Haiku 4.5 across all three tiers
-(FLASH / PRO / PREVIEW). Haiku 4.5 is benchmark-competitive with Gemini 2.5
-Pro on structured extraction and tailoring, so a single model is enough.
+Default models (override via env): Haiku 4.5 for FLASH/PREVIEW (fast
+structured extraction and repair) and Sonnet for PRO (tailoring, JD
+analysis, scoring).
 """
 import json
 import logging
@@ -252,7 +252,8 @@ class ClaudeProvider(LLMProvider):
         """Conversational text gen. Returns the model's reply as a string.
 
         `history` shape: [{"role": "user"|"assistant"|"model", "content": str}].
-        Gemini uses "model" for assistant turns; we map it to "assistant".
+        Some legacy callers pass "model" for assistant turns; we map it to
+        "assistant".
         """
         model = model or self.FLASH
 
@@ -334,7 +335,7 @@ class ClaudeProvider(LLMProvider):
         temperature: float = 0.35,
         max_tokens: int = 2800,
     ) -> Tuple[str, List[Dict[str, Any]]]:
-        """Multi-round tool-calling loop. Translates the caller's Gemini-style
+        """Multi-round tool-calling loop. Translates the caller's legacy
         function declarations (`{"name", "description", "parameters"}`) into
         Claude tool specs (`{"name", "description", "input_schema"}`)."""
         pipeline_log: List[Dict[str, Any]] = []

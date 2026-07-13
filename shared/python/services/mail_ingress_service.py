@@ -429,11 +429,11 @@ def classify(from_domain: str, subject: str, body_text: str) -> Dict[str, Any]:
     try:
         # Legacy facade → Claude on Bedrock (FLASH = Haiku). Instructions go in
         # `system=`; only the untrusted email is in the user turn.
-        from services.gemini_client import gemini_json, GEMINI_FLASH
-        result = gemini_json(
+        from services.claude_client import claude_json, CLAUDE_FLASH
+        result = claude_json(
             prompt=_build_email_data(from_domain, subject, body_text),
             system=_INSTRUCTIONS,
-            model=GEMINI_FLASH,
+            model=CLAUDE_FLASH,
             temperature=0.0,
             max_tokens=300,
             max_retries=1,

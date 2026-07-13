@@ -246,12 +246,12 @@ def draft_ask(user_email: str, referral: Dict[str, Any], job: Dict[str, Any]) ->
     )
 
     # Lazy import keeps the Bedrock/provider stack out of the read-path cold start.
-    from services.gemini_client import gemini_json, GEMINI_PRO
+    from services.claude_client import claude_json, CLAUDE_PRO
 
-    result = gemini_json(
+    result = claude_json(
         prompt=data,
         system=_DRAFT_INSTRUCTIONS,
-        model=GEMINI_PRO,
+        model=CLAUDE_PRO,
         temperature=0.4,
         max_tokens=600,
         schema={"message": str},

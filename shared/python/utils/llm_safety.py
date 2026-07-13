@@ -2,7 +2,7 @@
 
 Two orthogonal, defense-in-depth controls for every place we send
 attacker-influenced text (résumé, JD, user feedback, application answers) to
-Claude-on-Bedrock via ``services.gemini_client.gemini_json``:
+Claude-on-Bedrock via ``services.claude_client.claude_json``:
 
   1. ``redact_pii_for_model`` — strips SSN/ITIN (which parsing/tailoring NEVER
      needs) and, by default, phone numbers from the text that goes INTO the

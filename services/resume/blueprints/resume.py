@@ -271,7 +271,7 @@ def rewrite_bullet():
         return jsonify({"error": "Bullet too long (max 1000 chars)"}), 400
 
     try:
-        from services.gemini_client import gemini_json, GEMINI_FLASH
+        from services.claude_client import claude_json, CLAUDE_FLASH
 
         keyword_ctx = f"Target keywords: {', '.join(jd_keywords[:20])}\n" if jd_keywords else ""
         role_ctx = (
@@ -294,8 +294,8 @@ def rewrite_bullet():
         )
 
         schema = {"rewritten": str}
-        result = gemini_json(
-            prompt, max_tokens=6000, temperature=0.4, model=GEMINI_FLASH, schema=schema
+        result = claude_json(
+            prompt, max_tokens=6000, temperature=0.4, model=CLAUDE_FLASH, schema=schema
         )
         rewritten = result.get("rewritten", "").strip()
         # Strip any leading/trailing quotes the LLM may have added
@@ -348,6 +348,84 @@ def ats_scores():
     except Exception as e:
         logger.error(f"ATS scoring error: {e}")
         return jsonify({"error": "Failed to start ATS scoring. Please try again."}), 500
+
+
+# ------------------------------------------------------------------
+# POST /api/resume/verify — Re-run claim verification on an edited resume
+# ------------------------------------------------------------------
+@resume_bp.route("/verify", methods=["POST"])
+@jwt_required()
+def verify_resume():
+    """Re-check a (possibly user-edited) tailored resume against the
+    candidate's fact store — claim-guard audit + entailment pass. One FLASH
+    call; returns 202 + job_id like every other long-running resume job."""
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"resume_verify:{client_ip}", max_requests=10, window_seconds=300):
+        return jsonify({"error": "Rate limit exceeded. Try again in a few minutes."}), 429
+
+    data = request.get_json(force=True) or {}
+    tailored = data.get("tailored_resume")
+    if not tailored or not isinstance(tailored, dict):
+        return jsonify({"error": "tailored_resume is required"}), 400
+
+    try:
+        from services.resume_service import get_resume_service, ResumeService
+
+        svc = get_resume_service()
+        user_email = get_jwt_identity()
+        payload = {
+            "tailored_resume": tailored,
+            "jd_analysis": data.get("jd_analysis") or {},
+            "user_email": user_email,
+        }
+        job_id = svc.create_job("verify_resume", payload, user_email=user_email)
+        ResumeService.invoke_async(job_id, "verify_resume", payload)
+        return jsonify({"job_id": job_id}), 202
+
+    except Exception as e:
+        logger.error(f"Resume verification error: {e}")
+        return jsonify({"error": "Failed to start verification. Please try again."}), 500
+
+
+# ------------------------------------------------------------------
+# Profile facts — the enrichment confirmation surface.
+# LinkedIn-archive / GitHub facts become tailoring-eligible ONLY after the
+# user explicitly confirms them here. Confirmed facts enrich skills/summary/
+# bullets of EXISTING roles; they never create new experience entries (the
+# uploaded resume stays the structural source of truth).
+# ------------------------------------------------------------------
+@resume_bp.route("/profile-facts", methods=["GET"])
+@jwt_required()
+def profile_facts_list():
+    try:
+        from services.profile_facts import list_candidate_facts
+        return jsonify(list_candidate_facts(get_jwt_identity())), 200
+    except Exception as e:
+        logger.error(f"profile-facts list error: {e}")
+        return jsonify({"error": "Failed to load profile facts"}), 500
+
+
+@resume_bp.route("/profile-facts/confirm", methods=["POST"])
+@jwt_required()
+def profile_facts_confirm():
+    data = request.get_json(force=True) or {}
+    decisions = data.get("decisions")
+    if not isinstance(decisions, list) or not decisions:
+        return jsonify({"error": "decisions list is required"}), 400
+    try:
+        from services.profile_facts import record_decisions
+        updated = record_decisions(get_jwt_identity(), decisions)
+        return jsonify({
+            "updated": updated,
+            "note": (
+                "Confirmed facts enrich tailoring (skills, summary, bullets of "
+                "existing roles). To add a new role, update your base resume."
+            ),
+        }), 200
+    except Exception as e:
+        logger.error(f"profile-facts confirm error: {e}")
+        return jsonify({"error": "Failed to save decisions"}), 500
 
 
 # ------------------------------------------------------------------
@@ -1061,7 +1139,7 @@ def generate_interview_prep(record_id):
 
         resume_ctx = _compact_resume(tailored)
 
-        from services.gemini_client import gemini_json, GEMINI_PRO
+        from services.claude_client import claude_json, CLAUDE_PRO
 
         prompt = (
             f"You are a world-class interview coach preparing {contact_name} for "
@@ -1158,8 +1236,8 @@ def generate_interview_prep(record_id):
             "red_flags": list,
         }
 
-        result = gemini_json(
-            prompt, max_tokens=24000, temperature=0.55, model=GEMINI_PRO, schema=schema
+        result = claude_json(
+            prompt, max_tokens=24000, temperature=0.55, model=CLAUDE_PRO, schema=schema
         )
 
         pack = {
@@ -1302,9 +1380,9 @@ def practice_question(record_id):
             "Always wrap: {\"question\": { ... }}. No markdown, no preamble, no extra keys."
         )
 
-        from services.gemini_client import gemini_json, GEMINI_PRO
-        result = gemini_json(
-            prompt, max_tokens=8000, temperature=0.75, model=GEMINI_PRO
+        from services.claude_client import claude_json, CLAUDE_PRO
+        result = claude_json(
+            prompt, max_tokens=8000, temperature=0.75, model=CLAUDE_PRO
         ) or {}
         # Unwrap if the LLM still returned fields at the top level instead of under `question`.
         payload = result.get("question")
@@ -1420,12 +1498,12 @@ def interview_chat(record_id):
             "when relevant. No markdown headers; light markdown bullets are fine."
         )
 
-        from services.gemini_client import gemini_json, GEMINI_FLASH
-        result = gemini_json(
+        from services.claude_client import claude_json, CLAUDE_FLASH
+        result = claude_json(
             prompt=prompt,
             max_tokens=5000,
             temperature=0.55,
-            model=GEMINI_FLASH,
+            model=CLAUDE_FLASH,
             schema={"reply": str},
         )
         reply = ((result or {}).get("reply") or "").strip()
@@ -1555,9 +1633,9 @@ def mock_evaluate(record_id):
             "weak_spot_tags": list,
         }
 
-        from services.gemini_client import gemini_json, GEMINI_PRO
-        result = gemini_json(
-            prompt, max_tokens=6000, temperature=0.3, model=GEMINI_PRO, schema=schema
+        from services.claude_client import claude_json, CLAUDE_PRO
+        result = claude_json(
+            prompt, max_tokens=6000, temperature=0.3, model=CLAUDE_PRO, schema=schema
         )
         # Pillar D — persist every evaluation so the Interview Pattern Coach can
         # aggregate weak spots across roles (previously scored-and-discarded).
@@ -2268,6 +2346,38 @@ def upload():
 # ------------------------------------------------------------------
 # GET /api/resume/status — Check if a resume is uploaded (user-specific)
 # ------------------------------------------------------------------
+
+
+@resume_bp.route("/base-structured", methods=["GET"])
+@jwt_required()
+def base_structured():
+    """Return the user's parsed base resume as structured JSON.
+
+    Powers diff-vs-base on surfaces that didn't receive `base_resume` inside
+    a tailor job result (history browser, batch handoff, page reloads).
+    Shape-compatible with TailoredFullResume on the client.
+    """
+    user_email = get_jwt_identity()
+    try:
+        from services.resume_service import get_resume_service
+
+        resume = get_resume_service().parser.ensure_structured_resume(
+            user_email=user_email
+        )
+        if not resume or not resume.get("structured"):
+            return jsonify({"error": "No parsed resume found"}), 404
+        parsed_at = resume.get("parsed_at", "")
+        if hasattr(parsed_at, "isoformat"):
+            parsed_at = parsed_at.isoformat()
+        return jsonify({
+            "structured": resume["structured"],
+            "filename": resume.get("filename", ""),
+            "s3_key": resume.get("s3_key", ""),
+            "parsed_at": parsed_at,
+        }), 200
+    except Exception as e:
+        logger.error(f"base-structured fetch error: {e}")
+        return jsonify({"error": "Failed to load base resume"}), 500
 
 
 @resume_bp.route("/status", methods=["GET"])
@@ -3461,7 +3571,7 @@ def get_visa_timeline():
             critical = [m for m in serialized if m.get("severity") == "critical"]
             warnings = [m for m in serialized if m.get("severity") == "warning"]
             if critical or warnings:
-                from services.gemini_client import gemini_json, GEMINI_FLASH
+                from services.claude_client import claude_json, CLAUDE_FLASH
                 prompt = (
                     "You are an experienced international-student advisor. In "
                     "2-3 short sentences, give this F-1 candidate a specific, "
@@ -3475,8 +3585,8 @@ def get_visa_timeline():
                     f"Upcoming warnings: {warnings}\n\n"
                     'Return JSON: { "recommendation": "..." }.'
                 )
-                out = gemini_json(
-                    prompt=prompt, model=GEMINI_FLASH, temperature=0.3,
+                out = claude_json(
+                    prompt=prompt, model=CLAUDE_FLASH, temperature=0.3,
                     schema={"recommendation": str}, max_tokens=200,
                 )
                 if isinstance(out, dict) and isinstance(out.get("recommendation"), str):

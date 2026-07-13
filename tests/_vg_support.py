@@ -16,7 +16,7 @@ Responsibilities, in order:
      technique as tests/test_voicegraph_cascade.py; that file keeps its own
      module-level patch and both resolve dynamically, so they coexist —
      the ``mock_db`` fixture always reads whichever mock is currently live).
-  4. FakeLLM — a drop-in stand-in for ``services.gemini_client.gemini_json``
+  4. FakeLLM — a drop-in stand-in for ``services.claude_client.claude_json``
      returning canned, schema-shaped responses and recording every call.
      Real Bedrock is NEVER invoked (there is no moto for Bedrock).
 """
@@ -113,7 +113,7 @@ def load_service_app(svc: str):
 
 # --- 4. FakeLLM -------------------------------------------------------------
 class FakeLLM:
-    """Deterministic stand-in for ``services.gemini_client.gemini_json``.
+    """Deterministic stand-in for ``services.claude_client.claude_json``.
 
     Signature mirrors the real facade exactly. Configure per-eval with either:
       * ``queue(resp1, resp2, ...)``   — FIFO canned responses;
@@ -149,7 +149,7 @@ class FakeLLM:
         self._error = exc
         return self
 
-    # the gemini_json-compatible callable --------------------------------
+    # the claude_json-compatible callable --------------------------------
     def __call__(self, prompt=None, max_tokens=8192, temperature=0.3,
                  model=None, max_retries=2, schema=None, parts=None,
                  system=None):
@@ -177,18 +177,18 @@ class FakeLLM:
 
 @pytest.fixture()
 def fake_llm(monkeypatch):
-    """Patch gemini_json at EVERY import site the Voice Graph uses.
+    """Patch claude_json at EVERY import site the Voice Graph uses.
 
-    extract.py and authored.py bind ``gemini_json`` into their own module
-    namespace at import (``from services.gemini_client import gemini_json``),
+    extract.py and authored.py bind ``claude_json`` into their own module
+    namespace at import (``from services.claude_client import claude_json``),
     so patching the facade module alone would not intercept them.
     """
     fake = FakeLLM()
-    import services.gemini_client as gemini_client
+    import services.claude_client as claude_client
     from services.voicegraph import authored as vg_authored
     from services.voicegraph import extract as vg_extract
 
-    monkeypatch.setattr(gemini_client, "gemini_json", fake)
-    monkeypatch.setattr(vg_extract, "gemini_json", fake)
-    monkeypatch.setattr(vg_authored, "gemini_json", fake)
+    monkeypatch.setattr(claude_client, "claude_json", fake)
+    monkeypatch.setattr(vg_extract, "claude_json", fake)
+    monkeypatch.setattr(vg_authored, "claude_json", fake)
     return fake

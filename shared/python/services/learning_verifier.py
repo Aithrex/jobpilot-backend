@@ -38,7 +38,7 @@ from urllib.parse import urlparse
 import requests
 
 from utils.db_connect import DBConnect
-from services.gemini_client import gemini_json, GEMINI_PRO
+from services.claude_client import claude_json, CLAUDE_PRO
 
 logger = logging.getLogger(__name__)
 
@@ -195,10 +195,10 @@ def _judge(criteria: List[str], artifact_label: str, artifact_payload: Dict) -> 
         + json.dumps(artifact_payload, ensure_ascii=False, default=str)[:PATCH_MAX_CHARS + README_MAX_CHARS]
         + "\n</artifact>"
     )
-    raw = gemini_json(
+    raw = claude_json(
         prompt=prompt,
         system=_JUDGE_SYSTEM,
-        model=GEMINI_PRO,
+        model=CLAUDE_PRO,
         max_tokens=1500,
         temperature=0.1,
         schema=_JUDGE_SCHEMA,

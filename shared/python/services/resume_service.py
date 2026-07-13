@@ -163,6 +163,21 @@ class ResumeService:
         except Exception as e:
             logger.warning(f"Partial update for job {job_id} failed: {e}")
 
+    def update_job_progress(self, job_id: str, phase: str, pct: int | None = None) -> None:
+        """Write an honest sub-phase marker into the job's partial result.
+
+        Clients polling while status='processing' see {"progress": {phase,
+        pct}} and can drive a truthful stepper (no elapsed-time guessing).
+        Rides update_job_partial, whose status!=completed guard makes this
+        race-safe against complete_job; complete_job later overwrites the
+        whole `result` with the final payload.
+        """
+        progress: Dict[str, Any] = {"phase": phase}
+        if pct is not None:
+            progress["pct"] = max(0, min(100, int(pct)))
+        progress["updated_at"] = datetime.now(timezone.utc).isoformat()
+        self.update_job_partial(job_id, {"progress": progress})
+
     def fail_job(self, job_id: str, error: str, error_code: Optional[str] = None):
         """Mark a job as failed with an error message and optional machine-readable code."""
         update: Dict[str, Any] = {
@@ -261,7 +276,7 @@ class ResumeService:
         Returns:
             Validated dict conforming to JD_ANALYSIS_SCHEMA.
         """
-        from services.gemini_client import gemini_json, GEMINI_PRO
+        from services.claude_client import claude_json, CLAUDE_PRO
         from schemas.resume_schemas import JD_ANALYSIS_SCHEMA, validate_and_coerce
         from utils.llm_safety import redact_pii_for_model, wrap_untrusted, guarded_system
 
@@ -284,10 +299,10 @@ class ResumeService:
         # JD text is fully attacker-influenced: tag as untrusted data + redact PII.
         prompt = wrap_untrusted("job_description", redact_pii_for_model(jd_text[:5000]))
 
-        result = gemini_json(
+        result = claude_json(
             prompt,
             max_tokens=12000,
-            model=GEMINI_PRO,
+            model=CLAUDE_PRO,
             schema=JD_ANALYSIS_SCHEMA,
             system=guarded_system(instructions),
         )
@@ -306,6 +321,99 @@ class ResumeService:
 # ---------------------------------------------------------------------------
 # Async job processor (called by Lambda async invocation or background thread)
 # ---------------------------------------------------------------------------
+
+
+def _attach_verification(
+    result: Dict[str, Any],
+    structured: Dict[str, Any],
+    jd_analysis: Dict[str, Any],
+    user_email: str = "",
+    fact_store: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Claim-guard audit + LLM entailment pass on the FINAL tailored text.
+
+    Runs after the augmenter and normalizers so it catches invented metrics
+    regardless of which LLM pass introduced them. Returns the verification
+    sidecar; ADVISORY — any failure degrades to `status: "skipped"` and
+    never breaks the tailor job (fails open, unlike the deterministic
+    guards, which are the enforcement floor and always run upstream).
+    """
+    try:
+        from services.claim_guard import audit_resume
+        from services.profile_facts import build_fact_store, grounding_texts
+        from services.tailor_verifier import verify
+
+        if fact_store is None:
+            fact_store = build_fact_store(
+                user_email=user_email, structured_resume=structured
+            )
+        _, audit = audit_resume(
+            result,
+            structured,
+            jd_analysis,
+            extra_grounding_texts=grounding_texts(fact_store),
+        )
+        return verify(result, fact_store, claim_audit=audit)
+    except Exception as e:
+        logger.warning("Verification pass failed (fails open): %s", e)
+        return {
+            "status": "skipped",
+            "reason": str(e),
+            "model": "flash",
+            "counts": {"supported": 0, "partial": 0, "unsupported": 0, "unverified": 0},
+            "items": {},
+        }
+
+
+def _finalize_tailored_result(
+    svc,
+    job_id: str,
+    result: Dict[str, Any],
+    structured: Dict[str, Any],
+    jd_analysis: Dict[str, Any],
+    user_email: str = "",
+    fact_store: Dict[str, Any] | None = None,
+    preserve_project_names: set | None = None,
+) -> Dict[str, Any]:
+    """Shared post-tailor pipeline for tailor / regenerate / extract_and_tailor.
+
+    contact normalization → augment → date/title normalization → claim-guard
+    + entailment verification → keyword audit. Progress markers are emitted
+    at each real stage when a job_id is provided.
+    """
+    result_contact = result.get("contact", {})
+    if result_contact.get("name"):
+        from services.resume_parser import ResumeParser as _RP
+        result_contact["name"] = _RP._normalize_name(
+            " ".join(result_contact["name"].split())
+        )
+    if result_contact.get("phone"):
+        result_contact["phone"] = " ".join(result_contact["phone"].split())
+
+    if job_id:
+        svc.update_job_progress(job_id, "augmenting", 60)
+    result = svc.augmenter.augment(
+        result, structured, jd_analysis,
+        preserve_project_names=preserve_project_names,
+    )
+    _consume_projects_diagnostic(result)
+
+    from services.date_normalizer import normalize_dates
+    from services.title_normalizer import normalize_titles
+
+    result = normalize_dates(result)
+    result = normalize_titles(result)
+
+    if job_id:
+        svc.update_job_progress(job_id, "verifying", 80)
+    result["verification"] = _attach_verification(
+        result, structured, jd_analysis, user_email, fact_store=fact_store
+    )
+
+    if job_id:
+        svc.update_job_progress(job_id, "finalizing", 95)
+    _attach_ats_keyword_audit(result, jd_analysis)
+    return result
 
 
 def _attach_ats_keyword_audit(result: Dict[str, Any], jd_analysis: Dict[str, Any]) -> None:
@@ -551,31 +659,17 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                     structured = ResumeParser._backfill_education(structured, raw_text)
                     logger.info("Tailor: backfilled missing education institutions")
 
-            result = svc.tailor.tailor(structured, payload["jd_analysis"])
-
-            # Normalize contact whitespace + proper-case the name
-            # (safety net for resumes parsed before name-normalization was added).
-            result_contact = result.get("contact", {})
-            if result_contact.get("name"):
-                from services.resume_parser import ResumeParser as _RP
-                result_contact["name"] = _RP._normalize_name(
-                    " ".join(result_contact["name"].split())
-                )
-            if result_contact.get("phone"):
-                result_contact["phone"] = " ".join(result_contact["phone"].split())
-
-            # Content augmentation: page-fill, impact injection, ATS hardening
-            result = svc.augmenter.augment(result, structured, payload["jd_analysis"])
-            _consume_projects_diagnostic(result)
-
-            # Date normalization: consistent "Month YYYY – Present" format
-            from services.date_normalizer import normalize_dates
-            from services.title_normalizer import normalize_titles
-
-            result = normalize_dates(result)
-            result = normalize_titles(result)
-
-            _attach_ats_keyword_audit(result, payload["jd_analysis"])
+            from services.profile_facts import build_fact_store
+            fact_store = build_fact_store(
+                user_email=user_email, structured_resume=structured
+            )
+            result = svc.tailor.tailor(
+                structured, payload["jd_analysis"], fact_store=fact_store
+            )
+            result = _finalize_tailored_result(
+                svc, job_id, result, structured, payload["jd_analysis"],
+                user_email, fact_store=fact_store,
+            )
             svc.complete_job(job_id, {"tailored_resume": result})
 
         elif job_type == "regenerate":
@@ -598,27 +692,36 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 payload["jd_analysis"],
                 payload["user_feedback"],
             )
-
-            # Content augmentation: refill the page after user-feedback regeneration
-            # (same pipeline as initial tailor — bullet expansion, impact injection,
-            # project generation, ATS hardening). Without this, feedback that shrinks
-            # content leaves empty space on the rendered page.
-            result = svc.augmenter.augment(result, structured, payload["jd_analysis"])
-            _consume_projects_diagnostic(result)
-
-            # Date + title normalization
-            from services.date_normalizer import normalize_dates
-            from services.title_normalizer import normalize_titles
-
-            result = normalize_dates(result)
-            result = normalize_titles(result)
-
-            _attach_ats_keyword_audit(result, payload["jd_analysis"])
+            # Same post-tailor pipeline as initial tailor (augment refills the
+            # page after feedback that shrinks content; verification re-runs
+            # so the sidecar always describes the version it rides on).
+            result = _finalize_tailored_result(
+                svc, job_id, result, structured, payload["jd_analysis"], user_email
+            )
             svc.complete_job(job_id, {"tailored_resume": result})
+
+        # (verify_resume branch below reuses the same verification helper.)
+
+        elif job_type == "verify_resume":
+            # Re-run claim-guard + entailment verification on a (possibly
+            # user-edited) tailored resume — the "re-check facts" action.
+            # No tailoring, no augmentation: one FLASH verifier call.
+            user_email = payload.get("user_email", "")
+            resume = svc.parser.ensure_structured_resume(user_email=user_email)
+            if not resume or not resume.get("structured"):
+                svc.fail_job(job_id, "No parsed resume found to verify against.")
+                return
+            sidecar = _attach_verification(
+                payload["tailored_resume"],
+                resume["structured"],
+                payload.get("jd_analysis") or {},
+                user_email,
+            )
+            svc.complete_job(job_id, {"verification": sidecar})
 
         elif job_type == "cover_letter":
             import json as _json
-            from services.gemini_client import gemini_json, GEMINI_PRO
+            from services.claude_client import claude_json, CLAUDE_PRO
 
             tailored = payload["tailored_resume"]
             jd = payload["jd_analysis"]
@@ -662,7 +765,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 'Return JSON: {"cover_letter": "The full cover letter text with paragraph breaks as \\n\\n"}'
             )
 
-            result = gemini_json(prompt, max_tokens=12000, temperature=0.5, model=GEMINI_PRO)
+            result = claude_json(prompt, max_tokens=12000, temperature=0.5, model=CLAUDE_PRO)
             cover_text = result.get("cover_letter", "")
 
             svc.complete_job(job_id, {"cover_letter": cover_text})
@@ -689,6 +792,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 return
 
             # Step 1: Extract JD analysis (sequential — required input for tailor)
+            svc.update_job_progress(job_id, "extracting_jd", 5)
             jd_analysis = svc.extract_jd(jd_text)
 
             # Step 2: Load the user's structured resume (re-parsing from S3 if needed)
@@ -730,19 +834,37 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             existing_project_count = len(structured.get("projects", []))
             projects_needed = max(0, _PROJECT_CAP - existing_project_count)
 
+            # Fact store (resume + confirmed LinkedIn/GitHub facts) — built
+            # once, feeds both the tailor prompt and the verification pass.
+            from services.profile_facts import build_fact_store
+            fact_store = build_fact_store(
+                user_email=user_email, structured_resume=structured
+            )
+
+            svc.update_job_progress(job_id, "tailoring", 25)
             executor = ThreadPoolExecutor(max_workers=2)
             try:
                 future_tailor = executor.submit(
-                    svc.tailor.tailor, structured, jd_analysis
+                    svc.tailor.tailor, structured, jd_analysis, fact_store
                 )
                 future_projects = None
                 if projects_needed > 0:
+                    # Confirmed GitHub repos ground generated projects in the
+                    # candidate's REAL public work instead of pure inference.
+                    gh_evidence = [
+                        f.get("display", "")
+                        for f in (fact_store.get("facts") or [])
+                        if f.get("source") == "github"
+                    ]
                     future_projects = executor.submit(
                         svc.project_generator.generate_batch,
                         projects_needed,
                         structured,
                         jd_analysis,
                         structured.get("projects", []),
+                        5,      # bullets_per_project (default)
+                        None,   # rejections_sink
+                        gh_evidence or None,
                     )
 
                 # Wait for tailor (the longer call). Fail loudly if tailor errors.
@@ -794,30 +916,28 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 )
 
             # Step 5: Same post-tailor pipeline as the legacy `tailor` job.
-            result_contact = result.get("contact", {})
-            if result_contact.get("name"):
-                from services.resume_parser import ResumeParser as _RP
-                result_contact["name"] = _RP._normalize_name(
-                    " ".join(result_contact["name"].split())
-                )
-            if result_contact.get("phone"):
-                result_contact["phone"] = " ".join(result_contact["phone"].split())
-
-            result = svc.augmenter.augment(result, structured, jd_analysis)
-            _consume_projects_diagnostic(result)
-
-            from services.date_normalizer import normalize_dates
-            from services.title_normalizer import normalize_titles
-
-            result = normalize_dates(result)
-            result = normalize_titles(result)
-
-            _attach_ats_keyword_audit(result, jd_analysis)
+            # Pre-injected parallel projects are legitimate generated content
+            # — allowlist them so the augmenter's defensive strip (which only
+            # trusts original-resume project names) doesn't discard them.
+            preserve_names = {
+                (p.get("name") or "").strip()
+                for p in (parallel_projects or [])
+                if p.get("name")
+            }
+            result = _finalize_tailored_result(
+                svc, job_id, result, structured, jd_analysis, user_email,
+                fact_store=fact_store,
+                preserve_project_names=preserve_names or None,
+            )
             svc.complete_job(
                 job_id,
                 {
                     "tailored_resume": result,
                     "jd_analysis": jd_analysis,
+                    # Post-backfill base resume — lets the client diff the
+                    # tailored output against what the user actually has,
+                    # without a second round-trip.
+                    "base_resume": structured,
                 },
             )
 
@@ -928,16 +1048,21 @@ def _process_job(job_id: str, job_type: str, payload: dict):
         elif job_type == "ats_scores":
             # Render the PDF too so the scorer can run the parseability
             # check — extracts text via pypdf and verifies real-ATS-style
-            # parsing (contact, sections, glyph integrity).
+            # parsing (contact, sections, glyph integrity). A failed render
+            # is passed through as render_error so the scorer fails LOUDLY
+            # (parseability 0, overall capped) instead of silently skipping.
+            pdf_bytes = None
+            render_error = None
             try:
                 pdf_bytes = svc.renderer.generate_pdf(payload["tailored_resume"])
             except Exception as e:
-                logger.warning("ATS scoring: PDF render failed, parseability skipped: %s", e)
-                pdf_bytes = None
+                logger.warning("ATS scoring: PDF render failed: %s", e)
+                render_error = f"PDF render failed: {e}"
             result = svc.scorer.score(
                 payload["tailored_resume"],
                 payload["jd_analysis"],
                 pdf_bytes=pdf_bytes,
+                render_error=render_error,
             )
             svc.complete_job(job_id, {"ats_scores": result})
 
@@ -1112,7 +1237,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
         logger.info(f"Job {job_id} ({job_type}) completed successfully")
 
     except Exception as e:
-        from services.gemini_client import LLMRetriesExhaustedError
+        from services.claude_client import LLMRetriesExhaustedError
         logger.error(f"Job {job_id} ({job_type}) failed: {e}")
         code = getattr(e, "code", None) if isinstance(e, LLMRetriesExhaustedError) else None
         svc.fail_job(job_id, str(e), error_code=code)
@@ -1124,7 +1249,7 @@ def _repair_extraction(raw_text: str, invalid_output: dict, error_msg: str):
     Returns the repaired and validated dict, or None if repair fails.
     """
     import json
-    from services.gemini_client import gemini_json, GEMINI_PREVIEW
+    from services.claude_client import claude_json, CLAUDE_PREVIEW
     from schemas.resume_schemas import PARSED_RESUME_SCHEMA, validate_and_coerce
 
     repair_prompt = (
@@ -1139,7 +1264,7 @@ def _repair_extraction(raw_text: str, invalid_output: dict, error_msg: str):
     )
 
     try:
-        result = gemini_json(repair_prompt, max_tokens=24000, temperature=0.2, model=GEMINI_PREVIEW)
+        result = claude_json(repair_prompt, max_tokens=24000, temperature=0.2, model=CLAUDE_PREVIEW)
         validated = validate_and_coerce(result, PARSED_RESUME_SCHEMA)
         logger.info("Repair extraction succeeded via Preview model")
         return validated

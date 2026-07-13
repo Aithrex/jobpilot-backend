@@ -98,18 +98,6 @@ class IPInfoConfig(object):
         return _get_config_value('IPINFO_TOKEN', '')
 
 
-class GeminiConfig(object):
-    """Configuration for Google Gemini AI API
-
-    Free tier: 15 RPM, 1,500 RPD, 1M TPM
-    """
-
-    @classmethod
-    @property
-    def GEMINI_API_KEY(cls):
-        return _get_config_value('GEMINI_API_KEY', '')
-
-
 class JSearchConfig(object):
     """Configuration for JSearch (RapidAPI) job search API"""
 

@@ -124,7 +124,7 @@ def _band_from_score(score: int) -> str:
 
 
 def _llm_legitimacy(ev: Dict):
-    from services.gemini_client import gemini_json, GEMINI_FLASH
+    from services.claude_client import claude_json, CLAUDE_FLASH
     prompt = (
         "Rate how LEGITIMATE and worthwhile this event looks for a serious job seeker to attend "
         "and put on a resume. Penalize spam, pay-to-win, vague organizers, and 'guaranteed job' claims.\n\n"
@@ -133,7 +133,7 @@ def _llm_legitimacy(ev: Dict):
         f"Prize: {ev.get('prize_pool')}\nDescription: {(ev.get('description') or '')[:600]}\n\n"
         'Return strict JSON: {"score": 0-100, "rationale": "one short sentence"}'
     )
-    res = gemini_json(prompt, max_tokens=200, temperature=0.0, model=GEMINI_FLASH,
+    res = claude_json(prompt, max_tokens=200, temperature=0.0, model=CLAUDE_FLASH,
                       schema={"score": int, "rationale": str})
     if not res:
         return None, None

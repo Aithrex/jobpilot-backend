@@ -2,7 +2,7 @@
 
 Both providers can return malformed JSON in edge cases (truncation, markdown
 fences, trailing text). These helpers implement the same multi-strategy
-cascade that the original `gemini_client.py` used.
+cascade that the original `claude_client.py` used.
 """
 import json
 import re

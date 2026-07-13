@@ -15,7 +15,7 @@ Two responsibilities:
    point is a 1-in-100 answer, not a template — see _DISTINCTIVENESS_BLOCK.
 
 Grounding follows the same pattern as services/project_generator.py:
-reuse flatten_skills / build_resume_text and the gemini_json LLM facade.
+reuse flatten_skills / build_resume_text and the claude_json LLM facade.
 """
 import logging
 from typing import Any, Dict, List, Optional
@@ -233,7 +233,7 @@ def build_application_profile(
     }
 
 
-# JSON schema (gemini_json/_dict_of style) for the multi-variant answer output.
+# JSON schema (claude_json/_dict_of style) for the multi-variant answer output.
 _ANSWER_SCHEMA = {
     "variants": [{
         "answer": str,
@@ -261,7 +261,7 @@ class AnswerGenerator:
         "structured" key of base_resume_doc) and the job context. Returns an
         empty list on failure so the caller can surface a clean error.
         """
-        from services.gemini_client import gemini_json, GEMINI_PRO
+        from services.claude_client import claude_json, CLAUDE_PRO
         from schemas.resume_schemas import flatten_skills, build_resume_text
         from utils.llm_safety import redact_pii_for_model, wrap_untrusted, guarded_system
 
@@ -331,11 +331,11 @@ class AnswerGenerator:
         )
 
         try:
-            result = gemini_json(
+            result = claude_json(
                 prompt,
                 max_tokens=2500,
                 temperature=0.7,  # higher than the deterministic generators — we WANT variety
-                model=GEMINI_PRO,
+                model=CLAUDE_PRO,
                 schema=_ANSWER_SCHEMA,
                 system=guarded_system(
                     "You write a job-application answer in the CANDIDATE'S OWN "
