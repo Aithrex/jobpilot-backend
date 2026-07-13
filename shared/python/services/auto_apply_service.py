@@ -80,12 +80,49 @@ def _clean(value: Any, max_length: int = 200) -> str:
 _executor: Optional[ExecutorAdapter] = None
 
 
+def _configured_executor() -> ExecutorAdapter:
+    """Pick the executor from config. Default = StubExecutor (prod stays dark).
+
+    ``AUTO_APPLY_EXECUTOR=ats`` selects the real ``AtsExecutor`` (live Greenhouse
+    recon; submit still dark until the browser fleet is deployed — see
+    ``ats_executor`` docstring). Any import/other failure falls back to the stub
+    so a misconfig can never break the pipeline."""
+    from utils.config import _get_config_value
+    choice = (_get_config_value("AUTO_APPLY_EXECUTOR", "stub") or "stub").strip().lower()
+    if choice == "browser":
+        # Full Playwright submit executor. In prod this runs INSIDE the
+        # apply-executor container Lambda; the resume Lambda reaches it via
+        # LambdaInvokeExecutor (choice == "remote", below).
+        try:
+            from services.browser_executor import BrowserExecutor
+            return BrowserExecutor()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error("AUTO_APPLY_EXECUTOR=browser failed to load (%s); "
+                         "falling back to StubExecutor", e)
+    elif choice == "remote":
+        try:
+            from services.lambda_invoke_executor import LambdaInvokeExecutor
+            return LambdaInvokeExecutor()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error("AUTO_APPLY_EXECUTOR=remote failed to load (%s); "
+                         "falling back to StubExecutor", e)
+    elif choice == "ats":
+        try:
+            from services.ats_executor import AtsExecutor
+            return AtsExecutor()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error("AUTO_APPLY_EXECUTOR=ats but AtsExecutor failed to load (%s); "
+                         "falling back to StubExecutor", e)
+    return StubExecutor()
+
+
 def get_executor() -> ExecutorAdapter:
-    """Return the active executor. Tranche 1 = StubExecutor (no browser fleet).
-    A real Playwright/Fargate adapter drops in here — nothing else changes."""
+    """Return the active executor. Default = StubExecutor (no browser fleet);
+    ``AUTO_APPLY_EXECUTOR=ats`` swaps in the real recon executor. This is the ONE
+    seam a future Playwright/Fargate submit fleet drops into — nothing else moves."""
     global _executor
     if _executor is None:
-        _executor = StubExecutor()
+        _executor = _configured_executor()
     return _executor
 
 
@@ -436,6 +473,9 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
                               confidence_score=confidence,
                               tailoring_record_id=app.get("tailoring_record_id"))
             final = ledger.STATUS_READY
+            # Clean auto-decision → submit NOW, don't wait for the hourly sweep.
+            # Gated by AUTO_SUBMIT_ENABLED; safe/idempotent with the sweep.
+            request_immediate_submit(user_email, application_id)
     except Exception as e:
         logger.error("auto_apply gather %s: failed: %s", application_id, e)
         ledger.mark_failed(user_email, application_id, f"gather_error: {e}")
@@ -475,12 +515,20 @@ def _load_answers(application_id: str, user_email: str) -> Dict[str, Any]:
     return (doc or {}).get("answers") or {}
 
 
-def _resume_ref(app: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _resume_ref(app: Dict[str, Any], user_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """A reference the executor resolves to PDF bytes (the tailored variant) —
     NOT the bytes themselves (the orchestrator never carries megabytes; the
-    fleet fetches from S3). None when no tailored variant is linked."""
+    fleet fetches from S3). None when no tailored variant is linked.
+
+    ``user_email`` is folded in because the S3 lookup for the tailored résumé is
+    owner-scoped and the ledger view (`app`) intentionally omits the owner."""
     trid = app.get("tailoring_record_id")
-    return {"tailoring_record_id": trid} if trid else None
+    if not trid:
+        return None
+    ref = {"tailoring_record_id": trid}
+    if user_email:
+        ref["user_email"] = user_email
+    return ref
 
 
 # ===========================================================================
@@ -537,7 +585,7 @@ def submit(application_id: str, user_email: str) -> Dict[str, Any]:
                 "application_id": application_id}
 
     answers = _load_answers(application_id, user_email)
-    resume_pdf = _resume_ref(app)
+    resume_pdf = _resume_ref(app, user_email)
     try:
         result = executor.submit(app, answers, resume_pdf)
     except Exception as e:
@@ -618,8 +666,15 @@ def _park_verify(user_email: str, application_id: str,
         upsert=True,
     )
 
+    # Human-in-the-loop is the primary CAPTCHA strategy (see the captcha-strategy
+    # decision): surface the wall with the apply URL so the FE can deep-link the
+    # user to finish it in their own (logged-in, un-challenged) browser — faster
+    # and more reliable than a headless retry. The automated sweep still re-checks
+    # in parallel for transient walls.
+    app = ledger.get_application(user_email, application_id) or {}
     item = {"question": f"Verification required ({kind}) to finish this application",
-            "kind": f"oracle_{kind}", "field_id": f"oracle_{kind}"}
+            "kind": f"oracle_{kind}", "field_id": f"oracle_{kind}",
+            "apply_url": app.get("apply_url") or "", "action": "complete_in_browser"}
     ledger.mark_needs_input(user_email, application_id, [item])
     logger.info("auto_apply submit %s: parked on oracle wall (%s)",
                 application_id, kind)
@@ -738,3 +793,45 @@ def _enqueue_submit(application_id: str, user_email: str) -> Optional[str]:
     except Exception as e:  # pragma: no cover - defensive
         logger.error("auto_apply: failed to re-enqueue submit for %s: %s", application_id, e)
         return None
+
+
+def _auto_submit_enabled() -> bool:
+    """Master kill-switch for firing any submission (mirrors apply_scheduler)."""
+    try:
+        from services.auto_submit_service import auto_submit_enabled
+        return bool(auto_submit_enabled())
+    except Exception:
+        return False
+
+
+def request_immediate_submit(user_email: str, application_ids: Any) -> int:
+    """Fire ``auto_apply_submit`` NOW for the given rows instead of waiting for
+    the hourly sweep — this is what makes "user approves → it submits" feel
+    instant. Best-effort + idempotent: the ledger CAS + the async-job idempotency
+    guard make a redundant enqueue (this + the sweep) safe. Gated by the master
+    ``AUTO_SUBMIT_ENABLED`` switch, so it stays dark in prod until enabled.
+
+    Only rows actually in ``ready`` are enqueued (approval flips them to ready
+    first); anything else is skipped. Returns the count enqueued.
+    """
+    if not _auto_submit_enabled():
+        return 0
+    if isinstance(application_ids, str):
+        application_ids = [application_ids]
+    enqueued = 0
+    for raw in (application_ids or []):
+        aid = _clean(raw, 64)
+        if not aid:
+            continue
+        try:
+            row = ledger.get_application(user_email, aid)
+        except ledger.ApplicationLedgerError:
+            row = None
+        if not row or row.get("status") != ledger.STATUS_READY:
+            continue
+        if _enqueue_submit(aid, user_email):
+            enqueued += 1
+    if enqueued:
+        logger.info("auto_apply: immediate submit enqueued for %d row(s) (user=%s)",
+                    enqueued, user_email)
+    return enqueued

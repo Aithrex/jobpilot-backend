@@ -24,6 +24,7 @@ jobs:
       services: ${{ steps.resolve.outputs.services }}
       any: ${{ steps.resolve.outputs.any }}
       shared: ${{ steps.filter.outputs.shared }}
+      executor: ${{ steps.filter.outputs.executor }}
     steps:
       - uses: actions/checkout@v4
       - id: filter
@@ -31,6 +32,7 @@ jobs:
         with:
           filters: |
             shared:  ['shared/**', 'infra/**', '.github/workflows/**']
+            executor: ['services/apply_executor/**', 'shared/python/services/browser_executor.py', 'shared/python/services/ats_executor.py', 'shared/python/services/ats_detector.py']
             auth:    ['services/auth/**']
             jobs:    ['services/jobs/**']
             resume:  ['services/resume/**']
@@ -138,6 +140,44 @@ jobs:
           aws lambda update-function-configuration \
             --function-name "$FN" \
             --layers "${{ needs.deploy-layer.outputs.layer_arn }}" --no-cli-pager
+          aws lambda wait function-updated --function-name "$FN"
+
+  # ---------------------------------------------------------------------------
+  # The auto-apply browser fleet is a CONTAINER-image Lambda (Playwright +
+  # Chromium), deployed separately from the four zip services. Rebuilt on a
+  # change to services/apply_executor/** or the executor's shared modules.
+  deploy-apply-executor:
+    name: Build & deploy apply-executor image
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.executor == 'true' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: login
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build & push image
+        env:
+          REGISTRY: ${{ steps.login.outputs.registry }}
+        run: |
+          REPO="${REGISTRY}/${PROJECT}-apply-executor-${ENVIRONMENT}"
+          # --provenance/--sbom=false: attestation manifests make an OCI index
+          # that Lambda rejects ("image manifest ... not supported").
+          docker build --provenance=false --sbom=false \
+            -f services/apply_executor/Dockerfile -t "$REPO:prod" .
+          docker push "$REPO:prod"
+      - name: Update function code
+        env:
+          REGISTRY: ${{ steps.login.outputs.registry }}
+        run: |
+          FN="${PROJECT}-apply-executor-${ENVIRONMENT}"
+          aws lambda update-function-code --function-name "$FN" \
+            --image-uri "${REGISTRY}/${PROJECT}-apply-executor-${ENVIRONMENT}:prod" \
+            --publish --no-cli-pager
           aws lambda wait function-updated --function-name "$FN"
 
   # ---------------------------------------------------------------------------

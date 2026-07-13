@@ -498,6 +498,35 @@ def auto_submit_cancel():
 # ------------------------------------------------------------------
 # GET /api/apply/auto-submit/pending — the eligible-to-submit queue
 # ------------------------------------------------------------------
+def _ledger_ready_as_pending(user_email: str) -> list:
+    """Bridge System B → the extension: auto-apply LEDGER rows in `ready` (either
+    user-approved or a clean `auto` decision) mapped to the extension's pending-
+    record shape. This is what lets the extension auto-submit pipeline
+    applications in the USER's own browser — the reliable path past reCAPTCHA that
+    the headless fleet cannot clear. Best-effort; never raises past the caller."""
+    try:
+        from services import application_ledger_service as ledger
+        rows = ledger.list_applications(user_email, status=ledger.STATUS_READY, limit=100)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("auto-submit pending: ledger bridge failed: %s", e)
+        return []
+    out = []
+    for r in rows:
+        url = r.get("apply_url")
+        if not url:
+            continue
+        out.append({
+            "application_id": r.get("application_id"),
+            "apply_url": url, "url": url,
+            "status": "approved",       # `ready` == approved-to-submit for the extension
+            "eligible": True,
+            "ats": r.get("ats_family"),
+            "title": r.get("title"), "company": r.get("company"),
+            "source": "ledger",
+        })
+    return out
+
+
 @apply_bp.route("/auto-submit/pending", methods=["GET"])
 @jwt_required()
 def auto_submit_pending():
@@ -506,7 +535,14 @@ def auto_submit_pending():
         return disabled
     user_email = get_jwt_identity()
     try:
-        return jsonify(auto_submit_service.list_pending_eligible(user_email)), 200
+        resp = auto_submit_service.list_pending_eligible(user_email)  # {"pending":[...],"waiting":[...]}
+        pending = list(resp.get("pending") or [])
+        seen = {p.get("application_id") for p in pending}
+        for row in _ledger_ready_as_pending(user_email):
+            if row["application_id"] not in seen:
+                pending.append(row)
+        resp["pending"] = pending
+        return jsonify(resp), 200
     except Exception as e:
         logger.exception("apply/auto-submit pending error: %s", e)
         return jsonify({"error": "Failed to load pending approvals"}), 500
@@ -528,6 +564,19 @@ def auto_submit_mark_submitted():
     )
     if not application_id:
         return jsonify({"error": "application_id is required"}), 400
+    # Bridge: if this is an auto-apply LEDGER row (the extension submitted a
+    # pipeline application in the user's browser), record it on the ledger.
+    try:
+        from services import application_ledger_service as ledger
+        app = ledger.get_application(user_email, application_id)
+        if app and app.get("status") in (ledger.STATUS_READY, ledger.STATUS_SUBMITTING):
+            if app.get("status") == ledger.STATUS_READY:
+                ledger.mark_submitting(user_email, application_id)
+            ledger.mark_submitted(user_email, application_id)
+            return jsonify({"approval": {"application_id": application_id,
+                                         "status": "submitted", "source": "ledger"}}), 200
+    except Exception as e:  # fall through to System A on any ledger miss
+        logger.info("auto-submit mark: ledger bridge miss for %s (%s)", application_id, e)
     try:
         record = auto_submit_service.mark_submitted(user_email, application_id)
         return jsonify({"approval": record}), 200
@@ -589,10 +638,22 @@ def queue_application():
             posting_closes_at=data.get("posting_closes_at"),
         )
 
-        # TODO(Tranche 2 §6): enqueue auto_apply_gather here (recon form → map
-        # fields → resolve answers → compute confidence → transition the row).
-        # The job_type/_process_job branch does NOT exist yet — enqueuing it now
-        # would fail — so Tranche 1 stops at the created ledger row.
+        # Enqueue recon/gather for freshly-created (or requeued) rows so the
+        # form is reconned → answers resolved → row transitioned without waiting
+        # for the hourly sweep. Skipped for already-handled duplicates. The
+        # _process_job "auto_apply_gather" branch now exists; failures here are
+        # non-fatal (the sweep still picks the row up).
+        if outcome in ("created", "requeued"):
+            try:
+                from services.resume_service import get_resume_service, ResumeService
+                aid = record.get("application_id")
+                payload = {"application_id": aid, "user_email": user_email}
+                job_id = get_resume_service().create_job("auto_apply_gather", payload,
+                                                         user_email=user_email)
+                ResumeService.invoke_async(job_id, "auto_apply_gather", payload)
+            except Exception as _e:
+                logger.warning("apply/queue: gather enqueue failed for %s: %s",
+                               record.get("application_id"), _e)
         return jsonify({"application": record, "outcome": outcome}), 201
     except application_ledger_service.ApplicationLedgerError as e:
         return jsonify({"error": e.error, "message": e.message}), e.status
@@ -799,6 +860,14 @@ def approve_link():
 
         if action in ("approve_all", "approve_one"):
             moved = application_ledger_service.approve_to_ready(user_email, application_ids)
+            # Fire submission immediately on approval instead of waiting for the
+            # hourly sweep (best-effort; gated by AUTO_SUBMIT_ENABLED, idempotent
+            # with the sweep). This is what makes "approve → it applies" instant.
+            try:
+                from services.auto_apply_service import request_immediate_submit
+                request_immediate_submit(user_email, application_ids)
+            except Exception as _e:  # never let the confirmation page fail on this
+                logger.warning("approve-link immediate submit enqueue failed: %s", _e)
             return _approve_link_page(
                 "Approved",
                 f"{moved} application{'s' if moved != 1 else ''} queued to apply — "
