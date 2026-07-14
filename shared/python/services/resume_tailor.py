@@ -159,7 +159,7 @@ class ResumeTailor:
         def _finalize(t: Dict[str, Any]) -> Dict[str, Any]:
             t = self._restore_contact(t, structured_resume)
             t = self._ensure_jd_skills_coverage(t, structured_resume, jd_analysis)
-            t = self._cap_skills_per_category(t, structured_resume, jd_analysis)
+            t = self._polish_skills(t, jd_analysis)
             t = self._allocate_bullets(t, jd_analysis)
             if target_role:
                 t["target_role"] = target_role
@@ -360,7 +360,7 @@ class ResumeTailor:
         # tailored ones (only partially repaired later by the augmenter).
         corrected = self._restore_contact(corrected, structured_resume)
         corrected = self._ensure_jd_skills_coverage(corrected, structured_resume, jd_analysis)
-        corrected = self._cap_skills_per_category(corrected, structured_resume, jd_analysis)
+        corrected = self._polish_skills(corrected, jd_analysis)
         corrected = self._allocate_bullets(corrected, jd_analysis)
         target_role = (jd_analysis.get("job_title") or "").strip()
         if target_role:
@@ -427,14 +427,138 @@ class ResumeTailor:
     # non-skill/soft-trait strip. A truly cross-domain language with no bridge is
     # forbidden by the prompt and surfaced to the user by the match-gap reporter.
 
-    # Maximum items per skills category — keeps the rendered block to ~2
-    # lines per category at 10pt with 11mm L/R margins. The LLM sometimes
-    # produces categories with 20-25 items which overflows the page; the
-    # ATS scorer reads from JSON, so the cap also applies to JSON for
-    # consistency between rendered PDF and structured data. Tighter cap
-    # applies when there are 2+ projects to make room.
-    _MAX_SKILLS_PER_CATEGORY_BASE = 14
-    _MAX_SKILLS_PER_CATEGORY_DENSE = 10
+    # Maximum items per skills category — industry-standard skills sections
+    # run 3-5 categories × ≤8 skills (~15-28 total): enough for honest ATS
+    # keyword coverage, short enough that a human recruiter doesn't read it
+    # as keyword soup. Fixed (no longer varies with project count — the old
+    # 14/10 project-based cap read a STALE project count anyway, since the
+    # augmenter adds projects after the tailor finalizes). The ATS scorer
+    # reads from JSON, so the cap also applies to JSON for consistency
+    # between rendered PDF and structured data.
+    _MAX_SKILLS_PER_CATEGORY = 8
+
+    # Umbrella entry: at most this many sub-services in the parenthetical —
+    # "AWS (EC2, S3, EKS, RDS)" — JD-matched members are never dropped.
+    _MAX_UMBRELLA_SUBS = 4
+
+    # Renderer-safe skills-section headings. Every entry must contain the
+    # word "Skills": pdf_ats_check's section-presence check looks for a
+    # literal "SKILLS" substring in the extracted PDF text.
+    _SKILLS_TITLE_WHITELIST = (
+        "Technical Skills",
+        "Skills",
+        "Core Skills",
+        "Professional Skills",
+        "Key Skills",
+    )
+
+    # Curated platform-suite map for deterministic umbrella collapse.
+    # Keys of "members" are canonical-lowercase skill forms (via
+    # keyword_normalizer.normalize_single for cloud vendors; literal
+    # aliases for Adobe/Office, which the normalizer doesn't cover) →
+    # the short display used inside the parenthetical. Platform-agnostic
+    # tools that merely run ON a platform (Terraform, Databricks,
+    # Kubernetes, Azure DevOps, …) are deliberately NOT members.
+    _UMBRELLA_GROUPS = (
+        {
+            "label": "AWS",
+            "umbrella": ("aws",),
+            "members": {
+                "amazon ec2": "EC2",
+                "amazon s3": "S3",
+                "aws lambda": "Lambda",
+                "amazon ecs": "ECS",
+                "amazon eks": "EKS",
+                "amazon rds": "RDS",
+                "amazon cloudfront": "CloudFront",
+                "amazon sqs": "SQS",
+                "amazon sns": "SNS",
+                "aws api gateway": "API Gateway",
+                "amazon cloudwatch": "CloudWatch",
+                "aws iam": "IAM",
+                "amazon redshift": "Redshift",
+                "amazon kinesis": "Kinesis",
+                "amazon aurora": "Aurora",
+                "amazon elasticache": "ElastiCache",
+                "dynamodb": "DynamoDB",
+                "amazon dynamodb": "DynamoDB",
+            },
+        },
+        {
+            "label": "Microsoft Azure",
+            "umbrella": ("microsoft azure",),
+            "members": {
+                "azure kubernetes service": "AKS",
+                "azure blob storage": "Blob Storage",
+                "azure cosmos db": "Cosmos DB",
+                "azure functions": "Functions",
+                "azure service bus": "Service Bus",
+                "azure app service": "App Service",
+                "azure active directory": "Active Directory",
+            },
+        },
+        {
+            "label": "Google Cloud Platform",
+            "umbrella": ("google cloud platform",),
+            "members": {
+                "google bigquery": "BigQuery",
+                "google kubernetes engine": "GKE",
+                "google cloud storage": "Cloud Storage",
+                "google cloud pub/sub": "Pub/Sub",
+                "google cloud functions": "Cloud Functions",
+                "google cloud run": "Cloud Run",
+                "google app engine": "App Engine",
+                "google dataflow": "Dataflow",
+            },
+        },
+        {
+            "label": "Adobe Creative Suite",
+            "umbrella": (
+                "adobe creative suite",
+                "adobe creative cloud",
+                "adobe cc",
+            ),
+            "members": {
+                "photoshop": "Photoshop",
+                "adobe photoshop": "Photoshop",
+                "illustrator": "Illustrator",
+                "adobe illustrator": "Illustrator",
+                "indesign": "InDesign",
+                "adobe indesign": "InDesign",
+                "premiere pro": "Premiere Pro",
+                "adobe premiere pro": "Premiere Pro",
+                "after effects": "After Effects",
+                "adobe after effects": "After Effects",
+                "lightroom": "Lightroom",
+                "adobe lightroom": "Lightroom",
+                "adobe xd": "Adobe XD",
+                "adobe acrobat": "Acrobat",
+            },
+        },
+        {
+            "label": "Microsoft Office",
+            "umbrella": (
+                "microsoft office",
+                "ms office",
+                "office 365",
+                "microsoft 365",
+            ),
+            "members": {
+                "excel": "Excel",
+                "microsoft excel": "Excel",
+                "ms excel": "Excel",
+                "word": "Word",
+                "microsoft word": "Word",
+                "powerpoint": "PowerPoint",
+                "microsoft powerpoint": "PowerPoint",
+                "outlook": "Outlook",
+                "microsoft outlook": "Outlook",
+                "microsoft access": "Access",
+                "microsoft visio": "Visio",
+                "visio": "Visio",
+            },
+        },
+    )
 
     @staticmethod
     def bullets_per_project(project_count: int) -> int:
@@ -452,16 +576,6 @@ class ResumeTailor:
         if project_count <= 1:
             return 5
         return 3
-
-    @classmethod
-    def _max_skills_per_category(cls, project_count: int) -> int:
-        """Tighter skills cap when there are 2+ projects, to compensate
-        for the extra vertical space projects consume."""
-        if project_count <= 1:
-            return cls._MAX_SKILLS_PER_CATEGORY_BASE
-        return cls._MAX_SKILLS_PER_CATEGORY_DENSE
-
-    _MAX_SKILLS_PER_CATEGORY = _MAX_SKILLS_PER_CATEGORY_BASE  # legacy alias
 
     @staticmethod
     def _allocate_bullets(
@@ -497,50 +611,205 @@ class ResumeTailor:
         return build_match_gaps(tailored, jd_analysis)
 
     @classmethod
-    def _cap_skills_per_category(
+    def _polish_skills(
         cls,
         tailored: Dict[str, Any],
-        original: Dict[str, Any],
         jd_analysis: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Trim each skills category to a max length, preferring items that
-        match JD required_skills and keywords (highest ATS value)."""
+        """Deterministic, industry-agnostic skills polish (absorbs the old
+        _cap_skills_per_category). The model decides skills CONTENT (prompt);
+        this guards the structural floors regardless of what it emitted:
+
+          1. cross-category dedup (same skill in two categories → keep it in
+             the most JD-relevant one)
+          2. umbrella collapse — platform + sub-services become ONE entry:
+             "AWS (EC2, S3, EKS, RDS)" (curated _UMBRELLA_GROUPS map)
+          3. per-category ordering (JD-aligned first, stable) + cap at
+             _MAX_SKILLS_PER_CATEGORY
+          4. category reorder by JD relevance (most relevant first — dict
+             insertion order flows through to the rendered document)
+          5. prune empty categories; normalize skills_section_title against
+             _SKILLS_TITLE_WHITELIST
+        """
+        # Title normalization happens even when skills are empty/malformed.
+        raw_title = str(tailored.get("skills_section_title") or "").strip()
+        tailored["skills_section_title"] = next(
+            (t for t in cls._SKILLS_TITLE_WHITELIST
+             if t.lower() == raw_title.lower()),
+            "Technical Skills",
+        )
+
         skills = tailored.get("skills", {})
-        if not isinstance(skills, dict):
+        if not isinstance(skills, dict) or not skills:
             return tailored
 
-        project_count = len(tailored.get("projects") or [])
-        cap = cls._max_skills_per_category(project_count)
+        _PAREN_RE = re.compile(r"\s*\(([^)]*)\)\s*$")
 
-        jd_terms_lower = set()
-        for s in (jd_analysis.get("required_skills") or []):
-            jd_terms_lower.add((normalize_single(s) or s).lower())
-            for f in get_all_forms(s) or []:
-                jd_terms_lower.add(f.lower())
-        for s in (jd_analysis.get("keywords") or []):
-            jd_terms_lower.add((normalize_single(s) or s).lower())
-            for f in get_all_forms(s) or []:
-                jd_terms_lower.add(f.lower())
+        def base_text(s: str) -> str:
+            """Skill text without a trailing parenthetical."""
+            return _PAREN_RE.sub("", str(s)).strip()
 
-        for cat, items in list(skills.items()):
-            if not isinstance(items, list) or not items:
+        def paren_tokens(s: str) -> List[str]:
+            m = _PAREN_RE.search(str(s))
+            if not m:
+                return []
+            return [p.strip() for p in m.group(1).split(",") if p.strip()]
+
+        def canon(s: str) -> str:
+            b = base_text(s)
+            return (normalize_single(b) or b).lower()
+
+        def all_forms(s: str) -> set:
+            """Alias forms of the skill AND of its parenthetical members."""
+            out = {canon(s)}
+            out |= {f.lower() for f in (get_all_forms(base_text(s)) or [])}
+            for tok in paren_tokens(s):
+                out.add((normalize_single(tok) or tok).lower())
+                out |= {f.lower() for f in (get_all_forms(tok) or [])}
+            return out
+
+        # --- JD term index (required_skills weigh 2, keywords weigh 1) ---
+        def _term_forms(values) -> set:
+            terms = set()
+            for s in values or []:
+                terms.add((normalize_single(s) or s).lower())
+                terms |= {f.lower() for f in (get_all_forms(s) or [])}
+            return terms
+
+        req_terms = _term_forms(jd_analysis.get("required_skills"))
+        kw_terms = _term_forms(jd_analysis.get("keywords"))
+
+        def item_score(s: str) -> int:
+            forms = all_forms(s)
+            if forms & req_terms:
+                return 2
+            if forms & kw_terms:
+                return 1
+            return 0
+
+        # Working copy: only str items in list categories are polished;
+        # anything malformed passes through untouched.
+        cats: Dict[str, List[str]] = {
+            cat: [str(s) for s in items if isinstance(s, str) and s.strip()]
+            for cat, items in skills.items()
+            if isinstance(items, list)
+        }
+
+        def category_rank() -> List[str]:
+            """Categories ordered most-JD-relevant first; ties keep the
+            model's original order (mean score + small sum tiebreak)."""
+            original_pos = {c: i for i, c in enumerate(cats)}
+            def score(c: str) -> float:
+                scores = [item_score(s) for s in cats[c]]
+                if not scores:
+                    return 0.0
+                return (sum(scores) / len(scores)) + 0.001 * sum(scores)
+            return sorted(cats, key=lambda c: (-score(c), original_pos[c]))
+
+        # --- 1. Cross-category dedup (most-relevant category wins) ---
+        seen: Dict[str, str] = {}  # canonical key -> owning category
+        removed_dupes: List[str] = []
+        for cat in category_rank():
+            kept = []
+            for s in cats[cat]:
+                key = canon(s)
+                if key in seen and seen[key] != cat:
+                    removed_dupes.append(f"{s} ({cat})")
+                    continue
+                if key in seen:
+                    # duplicate within the same category
+                    removed_dupes.append(f"{s} ({cat})")
+                    continue
+                seen[key] = cat
+                kept.append(s)
+            cats[cat] = kept
+
+        # --- 2. Umbrella collapse ---
+        collapsed: List[str] = []
+        for group in cls._UMBRELLA_GROUPS:
+            umbrella_hit = None  # (cat, text)
+            member_hits: List[tuple] = []  # (cat, text, display, score)
+            for cat, items in cats.items():
+                for s in items:
+                    key = canon(s)
+                    if key in group["umbrella"] and umbrella_hit is None:
+                        umbrella_hit = (cat, s)
+                    elif key in group["members"]:
+                        member_hits.append(
+                            (cat, s, group["members"][key], item_score(s))
+                        )
+            if not member_hits or (umbrella_hit is None and len(member_hits) < 2):
                 continue
-            # Stable partition: JD-aligned first, then originals. Preserve
-            # input order within each group so the highest-relevance items
-            # the LLM put first stay first. Applied even when under the cap so
-            # short categories still lead with JD-relevant skills (ATS scan).
-            jd_aligned = []
-            rest = []
-            for s in items:
-                lower = (normalize_single(s) or s).lower()
-                forms = {f.lower() for f in (get_all_forms(s) or [])}
-                forms.add(lower)
-                if forms & jd_terms_lower:
-                    jd_aligned.append(s)
-                else:
-                    rest.append(s)
-            skills[cat] = (jd_aligned + rest)[:cap]
-        tailored["skills"] = skills
+
+            # Sub-service list: existing parenthetical tokens of the umbrella
+            # entry first (preserves a model-emitted acronym pair like
+            # "Amazon Web Services (AWS)"), then JD-matched members (never
+            # dropped), then the rest up to _MAX_UMBRELLA_SUBS members.
+            subs: List[str] = []
+            if umbrella_hit:
+                subs.extend(paren_tokens(umbrella_hit[1]))
+            jd_members = [m for m in member_hits if m[3] > 0]
+            other_members = [m for m in member_hits if m[3] == 0]
+            picked = jd_members + other_members[
+                : max(0, cls._MAX_UMBRELLA_SUBS - len(jd_members))
+            ]
+            seen_subs = {t.lower() for t in subs}
+            for _, _, display, _ in picked:
+                if display.lower() not in seen_subs:
+                    seen_subs.add(display.lower())
+                    subs.append(display)
+
+            if umbrella_hit:
+                host_cat, anchor = umbrella_hit
+                prefix = base_text(anchor)
+            else:
+                # Host = the most JD-relevant category holding a member.
+                rank_pos = {c: i for i, c in enumerate(category_rank())}
+                host_cat = min({m[0] for m in member_hits}, key=rank_pos.get)
+                anchor = next(m[1] for m in member_hits if m[0] == host_cat)
+                prefix = group["label"]
+
+            entry = f"{prefix} ({', '.join(subs)})" if subs else prefix
+            drop = {m[1] for m in member_hits}
+            for cat, items in cats.items():
+                new_items = []
+                for s in items:
+                    if s == anchor and cat == host_cat:
+                        new_items.append(entry)
+                    elif s in drop or (umbrella_hit and s == umbrella_hit[1]):
+                        continue
+                    else:
+                        new_items.append(s)
+                cats[cat] = new_items
+            collapsed.append(entry)
+
+        # --- 3. Per-category ordering (JD-aligned first, stable) + cap ---
+        overflow: List[str] = []
+        for cat, items in cats.items():
+            jd_aligned = [s for s in items if item_score(s) > 0]
+            rest = [s for s in items if item_score(s) == 0]
+            ordered = jd_aligned + rest
+            overflow.extend(ordered[cls._MAX_SKILLS_PER_CATEGORY:])
+            cats[cat] = ordered[: cls._MAX_SKILLS_PER_CATEGORY]
+
+        # --- 4. Category reorder + 5. prune empties ---
+        polished = {cat: cats[cat] for cat in category_rank() if cats[cat]}
+
+        # Preserve any non-list category values verbatim (defensive).
+        for cat, items in skills.items():
+            if not isinstance(items, list) and items:
+                polished[cat] = items
+
+        if removed_dupes or collapsed or overflow:
+            logger.info(
+                "Tailor: skills polish — %d cross-category dupes removed %s, "
+                "%d umbrella collapses %s, %d over-cap items trimmed %s",
+                len(removed_dupes), removed_dupes,
+                len(collapsed), collapsed,
+                len(overflow), overflow,
+            )
+
+        tailored["skills"] = polished
         return tailored
 
     @classmethod
@@ -948,10 +1217,11 @@ class ResumeTailor:
             "   write an honest summary around their real strengths), and do NOT turn the summary\n"
             "   into a keyword list — it must read like a human wrote it.\n\n"
 
-            "2. Skills: 4-6 categories, most JD-relevant category first, and within each category list the\n"
-            "   most JD-relevant skills first. The skills section is read TWICE: by the ATS (which wants\n"
-            "   real keyword overlap) and then by a HUMAN recruiter (who rejects keyword soup). Both must\n"
-            "   pass. Rules for a HIGH-QUALITY skills section:\n"
+            "2. Skills: 3-5 categories, MAX 8 skills per category, ~15-28 skills total. Most JD-relevant\n"
+            "   category FIRST, and within each category list the most JD-relevant skills first. The\n"
+            "   skills section is read TWICE: by the ATS (which wants real keyword overlap) and then by a\n"
+            "   HUMAN recruiter (who rejects keyword soup). Both must pass. Rules for a HIGH-QUALITY\n"
+            "   skills section:\n"
             "   - THE LITMUS TEST — before listing any entry, ask: 'Is this a NAMED, teachable\n"
             "     capability that a recruiter would recognize as a hard or methodological skill, and\n"
             "     that I could be tested on?' If not, it does NOT belong in skills. Specifically, NEVER\n"
@@ -980,6 +1250,21 @@ class ResumeTailor:
             "     category must contain only items that truly match its label.\n"
             "   - Use canonical, recruiter-recognized names ('CI/CD' not 'continuous integration and\n"
             "     continuous delivery'; 'PostgreSQL' not 'postgres db'; 'Kubernetes (EKS)' is fine).\n"
+            "   - UMBRELLA GROUPING — when you list a vendor platform AND several of its sub-services or\n"
+            "     apps, collapse them into ONE entry: 'AWS (EC2, S3, EKS, RDS)' — never 'AWS', 'Amazon\n"
+            "     EC2', 'Amazon S3' as separate sibling entries. Same for every industry's platform\n"
+            "     suites: 'Microsoft Azure (AKS, Blob Storage, Cosmos DB)', 'Google Cloud Platform\n"
+            "     (BigQuery, GKE)', 'Adobe Creative Suite (Photoshop, Illustrator, InDesign)', 'Microsoft\n"
+            "     Office (Excel, PowerPoint, Access)'. List at most 4 sub-services, JD-relevant first. A\n"
+            "     standalone tool that merely RUNS on a platform (e.g. Terraform, Databricks, Kubernetes)\n"
+            "     stays its own entry.\n"
+            "   - ACRONYM PAIRING — for the 1-3 MOST JD-critical skills that have a well-known acronym,\n"
+            "     write the pair once — 'Search Engine Optimization (SEO)', 'Amazon Web Services (AWS)' —\n"
+            "     and use the short form everywhere else. ATS engines match literally; the pair covers\n"
+            "     both phrasings.\n"
+            "   - CATEGORY NAMES are concrete and industry-appropriate: 'Backend & APIs', 'Financial\n"
+            "     Modeling & Analysis', 'Campaign & Marketing Analytics', 'Clinical Systems &\n"
+            "     Compliance'. NEVER a 'Soft Skills', 'Other', or 'Miscellaneous' bucket.\n"
             "   - Include ALL original-resume skills relevant to the JD, experience, or projects — do NOT\n"
             "     drop a real skill just because it isn't in the JD. A skill need NOT appear in a bullet to\n"
             "     be listed, but it MUST be one the candidate genuinely has; do NOT pad with JD wishlist\n"
@@ -1132,7 +1417,16 @@ class ResumeTailor:
             "    'Data & Infra':   ['PostgreSQL', 'Docker', 'Kubernetes', 'AWS']\n"
             "    'Testing & AI Tooling': ['pytest', 'TDD', 'GitHub Copilot']\n"
             "    The soft-traits ('ownership', 'comfort with ambiguity') and the healthcare domain go\n"
-            "    into the SUMMARY as a sentence — never into skills.\n\n"
+            "    into the SUMMARY as a sentence — never into skills.\n"
+            "    UMBRELLA RULE applied: if the candidate had also listed Amazon EC2 and Amazon S3, the\n"
+            "    'Data & Infra' entry becomes 'AWS (EC2, S3)' — ONE entry, not three.\n"
+            "  GOOD — same rules, NON-TECH candidate (marketer; JD wants paid social + analytics):\n"
+            "    'Paid & Social Campaigns': ['Google Ads', 'Meta Ads Manager', 'A/B testing',\n"
+            "      'audience segmentation']\n"
+            "    'Marketing Analytics': ['Google Analytics (GA4)', 'Looker Studio', 'attribution\n"
+            "      modeling']\n"
+            "    'Content & Design Tools': ['Adobe Creative Suite (Photoshop, Illustrator)', 'Canva',\n"
+            "      'Figma']\n\n"
 
             "Example G — XYZ structure + honest quantification (no invented numbers):\n"
             "  Original bullet: 'Maintained internal reporting scripts for the sales team.'\n"
@@ -1167,6 +1461,7 @@ class ResumeTailor:
             '    "Category Name": ["Skill1", "Skill2", "..."],\n'
             '    "Another Category": ["Skill3", "Skill4", "..."]\n'
             "  },\n"
+            '  "skills_section_title": "Best-fit heading for this industry, EXACTLY one of: Technical Skills | Skills | Core Skills | Professional Skills | Key Skills",\n'
             '  "experience": [\n'
             "    {\n"
             '      "title": "Job Title",\n'

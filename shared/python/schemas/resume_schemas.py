@@ -62,8 +62,15 @@ PARSED_RESUME_SCHEMA = {
     "certifications": [str],
 }
 
-# TailoredFullResume mirrors the parsed schema 1:1.
+# TailoredFullResume mirrors the parsed schema 1:1...
 TAILORED_RESUME_SCHEMA = dict(PARSED_RESUME_SCHEMA)
+# ...plus the tailor-chosen heading for the skills section ("Technical
+# Skills" for engineers, "Core Skills"/"Professional Skills" for non-tech
+# industries). Optional: missing/unknown values fall back to "Technical
+# Skills" downstream (ResumeTailor._SKILLS_TITLE_WHITELIST is the source of
+# truth; the renderer double-checks against its own copy). NOT added to
+# PARSED_RESUME_SCHEMA — the parser never emits it.
+TAILORED_RESUME_SCHEMA["skills_section_title"] = str
 
 # Matches JDAnalysis
 JD_ANALYSIS_SCHEMA = {

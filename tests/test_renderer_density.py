@@ -133,20 +133,124 @@ def test_render_single_page_and_parseable(resume):
     assert check["pdf_parseable_score"] >= 85
 
 
-def test_docx_renders_with_calibri(tmp_path):
+def test_docx_renders_with_times(tmp_path):
     from docx import Document
     import io
 
     data = ResumeRenderer().generate_docx(SPARSE)
     doc = Document(io.BytesIO(data))
-    assert doc.styles["Normal"].font.name == "Calibri"
+    assert doc.styles["Normal"].font.name == "Times New Roman"
     text = "\n".join(p.text for p in doc.paragraphs)
-    assert "Surya Kommuguri" in text
+    # Overleaf template: \MakeUppercase name
+    assert "SURYA KOMMUGURI" in text
     assert "EXPERIENCE" in text
 
 
-def test_pdf_embeds_carlito():
-    """The PDF must carry the embedded Carlito family (Calibri metrics) —
-    if the TTFs go missing the fallback silently changes the product look."""
+def test_pdf_embeds_tinos():
+    """The PDF must carry the embedded Tinos family (Times metrics, per the
+    user's Overleaf template) — if the TTFs go missing the fallback silently
+    changes the product look."""
     pdf_bytes = ResumeRenderer().generate_pdf(SPARSE)
-    assert b"Carlito" in pdf_bytes
+    assert b"Tinos" in pdf_bytes
+
+
+def test_pdf_name_renders_uppercase():
+    """Template's \\MakeUppercase — the text layer must carry the caps name
+    (and the parseability checker must still find it)."""
+    from services.pdf_ats_check import extract_pdf_text
+
+    pdf_bytes = ResumeRenderer().generate_pdf(SPARSE)
+    text, _ = extract_pdf_text(pdf_bytes)
+    assert "SURYA KOMMUGURI" in text
+
+
+# ---------------------------------------------------------------------------
+# Plain-text contacts (product decision: no hyperlinks in either format)
+# ---------------------------------------------------------------------------
+
+def test_pdf_contacts_are_plain_text():
+    """No link annotations anywhere in the PDF — email/LinkedIn render as
+    plain black text."""
+    pdf_bytes = ResumeRenderer().generate_pdf(SPARSE)
+    assert b"/URI" not in pdf_bytes
+
+
+def test_docx_contacts_are_plain_text():
+    import io
+    from docx import Document
+
+    data = ResumeRenderer().generate_docx(SPARSE)
+    doc = Document(io.BytesIO(data))
+    hyperlink_rels = [
+        rel for rel in doc.part.rels.values() if "hyperlink" in rel.reltype
+    ]
+    assert not hyperlink_rels
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "s@example.com" in text            # email still present, as text
+    assert "linkedin.com/in/surya" in text
+
+
+# ---------------------------------------------------------------------------
+# Pass-3 leading stretch — page fill for resumes between the font rungs
+# ---------------------------------------------------------------------------
+
+# The dead-band shape this fix exists for: content that just misses the 11pt
+# up-tier (like the user's real 2-role 8+6-bullet resume) used to render at
+# 10.5pt with ~25% of the page empty because the gap ceilings could only
+# absorb ~27mm.
+MID_DENSITY = _resume(n_roles=2, bullets_per_role=7)
+
+
+def test_mid_density_fills_page():
+    r = ResumeRenderer()
+    layout = r._compute_pdf_layout(MID_DENSITY)
+    fill = layout["predicted_height"] / r._AVAIL_H
+    assert fill >= 0.95, f"dead-band case must fill the page (got {fill:.1%})"
+    # stretch stays within the leading ceiling
+    assert layout["stretch"] <= 1.25 + 1e-9
+    assert layout["lh"] * layout["stretch"] <= r._MAX_LEADING_MM + 1e-6
+
+
+def test_sparse_resume_stretch_capped_not_padded():
+    """A genuinely thin resume stretches to the leading ceiling and stops —
+    oversized leading would read as padding."""
+    r = ResumeRenderer()
+    layout = r._compute_pdf_layout(SPARSE)
+    assert layout["body_size"] == 11.0
+    assert layout["stretch"] == pytest.approx(
+        min(1.25, r._MAX_LEADING_MM / layout["lh"]), abs=1e-6
+    )
+
+
+def test_dense_resume_never_stretches():
+    r = ResumeRenderer()
+    layout = r._compute_pdf_layout(DENSITY_STRESS)
+    assert layout["stretch"] == 1.0
+
+
+def test_stretch_still_single_page():
+    """Stretched renders must not spill to page 2."""
+    from services.pdf_ats_check import check_pdf_parseability
+
+    pdf_bytes = ResumeRenderer().generate_pdf(MID_DENSITY)
+    check = check_pdf_parseability(pdf_bytes, MID_DENSITY, {})
+    assert check["checks"]["page_count"] == 1
+    assert check["pdf_parseable_score"] >= 85
+
+
+# ---------------------------------------------------------------------------
+# Adaptive skills-section title
+# ---------------------------------------------------------------------------
+
+def test_skills_title_whitelist():
+    from services.pdf_ats_check import extract_pdf_text
+
+    r = ResumeRenderer()
+    core = dict(SPARSE, skills_section_title="Core Skills")
+    text, _ = extract_pdf_text(r.generate_pdf(core))
+    assert "CORE SKILLS" in text
+
+    # Unknown/hostile values fall back to the default heading.
+    junk = dict(SPARSE, skills_section_title="Best Stuff Ever")
+    text, _ = extract_pdf_text(r.generate_pdf(junk))
+    assert "TECHNICAL SKILLS" in text

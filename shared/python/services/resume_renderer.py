@@ -20,11 +20,34 @@ class ResumeRenderer:
     # changes live here in the renderer, not the content, so without a version
     # tag a cache "hit" would keep serving a PDF rendered by the OLD code.
     # Including this in the cache key forces a re-render after any format fix.
-    RENDER_VERSION = "2026-07-13.3"
+    RENDER_VERSION = "2026-07-14.1"
+
+    # Allowed headings for the skills section. The tailor may pick one per
+    # industry via `skills_section_title` (ResumeTailor normalizes it); this
+    # is defense-in-depth so an unexpected value can never reach the page.
+    # Every entry must contain the word "Skills" — pdf_ats_check's
+    # section-presence check greps the extracted text for "SKILLS".
+    SKILLS_TITLES = (
+        "Technical Skills",
+        "Skills",
+        "Core Skills",
+        "Professional Skills",
+        "Key Skills",
+    )
+
+    @classmethod
+    def _skills_title(cls, tailored: Dict[str, Any]) -> str:
+        title = str(tailored.get("skills_section_title") or "").strip()
+        return title if title in cls.SKILLS_TITLES else "Technical Skills"
 
     @staticmethod
     def _contact_display(key: str, value: str) -> tuple:
-        """Return (display_text, href_url_or_None) for a contact field."""
+        """Return (display_text, href_url_or_None) for a contact field.
+
+        The href element is currently unused by both renderers (contacts
+        render as plain text — product decision) but is kept for the display
+        normalization callers rely on and a possible future link toggle.
+        """
         if not value:
             return ("", None)
         if key == "linkedin":
@@ -105,27 +128,28 @@ class ResumeRenderer:
     # one page for typical 2-experience + up-to-3-project resumes. The Pass 2
     # distribution + tier fallback (10pt-tight → 9.5pt → 9pt) still handle
     # the densest layouts automatically.
-    _MARGIN_LR = 12.7          # 0.5 inch — the industry-standard margin floor
-    _MARGIN_TOP = 12.7         # 0.5 inch
-    _MARGIN_BOTTOM = 12.7      # 0.5 inch
+    _MARGIN_LR = 15.24         # 0.6 inch — matches the user's Overleaf template
+    _MARGIN_TOP = 15.24        # 0.6 inch
+    _MARGIN_BOTTOM = 15.24     # 0.6 inch
     _PAGE_H = 297.0            # A4 height mm
     _AVAIL_H = _PAGE_H - _MARGIN_TOP - _MARGIN_BOTTOM  # ~271.6mm usable
 
-    # Font family: Carlito — the SIL-OFL, metric-identical twin of Calibri
-    # (the Word-default font recruiters have read resumes in for 16 years).
-    # Embedded from shared/python/services/fonts/ at render time; the DOCX
-    # renderer names "Calibri" directly (present on recipients' machines,
-    # same metrics). Falls back to Helvetica if the TTFs are missing.
-    _FONT_FAMILY = "Carlito"
+    # Font family: Tinos — the SIL-OFL, metric-identical twin of Times New
+    # Roman, matching the user's own Overleaf template (resume.cls compiles
+    # with newtxtext, a Times clone). Embedded from
+    # shared/python/services/fonts/ at render time; the DOCX renderer names
+    # "Times New Roman" directly (on every recipient's machine, same
+    # metrics). Falls back to core Times if the TTFs are missing.
+    _FONT_FAMILY = "Tinos"
 
     # Font sizes. Section/company/role-title sizes are DERIVED per render as
     # body_size + 1pt so the hierarchy scales with the adaptive density tier
     # (11pt body → 12pt headers; 9pt body → 10pt headers) instead of headers
     # staying fixed while the body moves.
-    _NAME_SIZE = 19.0          # large centered name
+    _NAME_SIZE = 20.0          # large centered name (recruiter guidance: 20-22)
     _CONTACT_SIZE = 10.0       # contact line
     _BODY_SIZE = 11.0          # body base (overridden by adaptive tier)
-    _HEADING_DELTA = 1.0       # section/company/title size = body_size + this
+    _HEADING_DELTA = 1.0       # section/company/title = body + 1 (template: 12pt at 11 body)
     _BULLET_INDENT = 5.05      # ~0.199in
 
     # Line heights
@@ -134,7 +158,7 @@ class ResumeRenderer:
     _LH_SKILL = 4.0            # skill row line height
     _LH_CONTACT = 4.5          # contact line height
 
-    _SECTION_HR_WIDTH = 0.16   # thin rule under section header
+    _SECTION_HR_WIDTH = 0.18   # rule under section header (template: 0.5pt)
 
     # Spacing floors — minimum visual gaps. Each constant fires multiple times
     # on a project-heavy resume, so values are kept conservative to fit one page:
@@ -168,6 +192,11 @@ class ResumeRenderer:
     _MAX_POST_HEADER = 2.5
     _MAX_HEADER_GAP = 1.2
     _MAX_SKILL_GAP = 1.4
+
+    # Pass-3 leading ceiling: body line height may stretch up to this many mm
+    # (≈13pt leading — airy but not padded at 10.5-11pt). The stretch factor
+    # is additionally capped at 1.25 so the 10pt base tier can't balloon.
+    _MAX_LEADING_MM = 4.6
 
     # Up-tier ladder: (body_size, lh, lh_s, max_fill). A bigger font must be
     # JUSTIFIED by emptiness — each rung is taken only when the content at
@@ -245,22 +274,22 @@ class ResumeRenderer:
         }
 
     def _register_fonts(self, pdf) -> None:
-        """Embed the Carlito family (Calibri metrics, SIL OFL) into the PDF.
+        """Embed the Tinos family (Times metrics, SIL OFL) into the PDF.
 
-        Falls back to core Helvetica when the TTFs are unavailable so a
+        Falls back to core Times when the TTFs are unavailable so a
         missing font file degrades the look, never the render.
         """
         import os
 
         fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
         try:
-            pdf.add_font(self._FONT_FAMILY, "", os.path.join(fonts_dir, "Carlito-Regular.ttf"))
-            pdf.add_font(self._FONT_FAMILY, "B", os.path.join(fonts_dir, "Carlito-Bold.ttf"))
-            pdf.add_font(self._FONT_FAMILY, "I", os.path.join(fonts_dir, "Carlito-Italic.ttf"))
-            pdf.add_font(self._FONT_FAMILY, "BI", os.path.join(fonts_dir, "Carlito-BoldItalic.ttf"))
+            pdf.add_font(self._FONT_FAMILY, "", os.path.join(fonts_dir, "Tinos-Regular.ttf"))
+            pdf.add_font(self._FONT_FAMILY, "B", os.path.join(fonts_dir, "Tinos-Bold.ttf"))
+            pdf.add_font(self._FONT_FAMILY, "I", os.path.join(fonts_dir, "Tinos-Italic.ttf"))
+            pdf.add_font(self._FONT_FAMILY, "BI", os.path.join(fonts_dir, "Tinos-BoldItalic.ttf"))
         except Exception:
             # Instance attribute shadows the class constant for this renderer.
-            self._FONT_FAMILY = "Helvetica"
+            self._FONT_FAMILY = "Times"
 
     def _render_pdf(
         self,
@@ -274,15 +303,30 @@ class ResumeRenderer:
         body_size: float = 11.0,
         lh: float = 4.2,
         lh_s: float = 4.0,
+        stretch: float = 1.0,
         measure_only: bool = False,
     ) -> "tuple[bytes | None, float]":
         """Core rendering logic matching the LaTeX resume.cls template.
 
         Returns (pdf_bytes_or_None, content_height_mm).
         If measure_only is True, pdf_bytes is None (saves memory).
+
+        `stretch` scales body leading and intra-entry gaps continuously
+        (Pass 3): line height doesn't change wrapping, so content height is
+        linear in it. Header/name/contact cell heights stay fixed on purpose —
+        headers hug their content; only body text breathes.
         """
         from fpdf import FPDF
         sanitize = self._sanitize_text
+
+        # Pass-3 leading stretch — body leading + the gaps that read as part
+        # of the body rhythm. Section/entry gaps are Pass-2 knobs, not scaled.
+        lh = lh * stretch
+        lh_s = lh_s * stretch
+        bullet_gap = self._BULLET_GAP * stretch
+        pre_bullet_gap = self._PRE_BULLET_GAP * stretch
+        edu_entry_gap = self._EDU_ENTRY_GAP * stretch
+        job_title_h = self._JOB_TITLE_CELL_H * stretch
 
         contact = tailored.get("contact", {})
         name = sanitize(contact.get("name", "")).strip() or "Resume"
@@ -310,15 +354,18 @@ class ResumeRenderer:
         pdf.set_y(mt)
         w = pdf.w - 2 * ml  # usable width ≈ 184.6mm
 
-        # Name in Title Case (centered, bold). Section headers below still
-        # use uppercase, but the candidate's name itself reads more naturally
-        # as "Harshith Siddardha Manne" than as ALL CAPS.
+        # Name in ALL CAPS (centered, bold) — matches the user's Overleaf
+        # template (\MakeUppercase{\huge ...}). PDF metadata keeps the
+        # Title Case form set above.
         pdf.set_font(self._FONT_FAMILY, "B", self._NAME_SIZE)
-        pdf.cell(w, 6.5, name, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(w, 6.5, name.upper(), align="C", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(0.5)  # \nameskip = \smallskip
 
-        # ── Contact line (centered, pipe-separated, black text) ──
+        # ── Contact line (centered, pipe-separated, plain black text) ──
         # LaTeX: \fontsize{11}{13}\selectfont, pipe separator
+        # Product decision: contact fields render as PLAIN TEXT — no
+        # hyperlinks, no link color. _contact_display() still normalizes the
+        # display form (protocol stripping); its href is intentionally unused.
         # Order matches the LaTeX template's reference resume:
         #   location | phone | email | portfolio | linkedin | github
         contact_fields = []
@@ -362,12 +409,9 @@ class ResumeRenderer:
                 line_w += sep_w * max(0, len(line) - 1)
                 x_start = ml + max(0.0, (w - line_w) / 2)
                 pdf.set_x(x_start)
-                for i, (display, href) in enumerate(line):
+                for i, (display, _href) in enumerate(line):
                     cell_w = pdf.get_string_width(display)
-                    if href:
-                        pdf.cell(cell_w, self._LH_CONTACT, display, link=href)
-                    else:
-                        pdf.cell(cell_w, self._LH_CONTACT, display)
+                    pdf.cell(cell_w, self._LH_CONTACT, display)
                     if i < len(line) - 1:
                         pdf.cell(sep_w, self._LH_CONTACT, sep)
                 pdf.ln(self._LH_CONTACT)
@@ -389,9 +433,9 @@ class ResumeRenderer:
         # ── Helper: bullet point — constant spacing between bullets ──
         def bullet(text: str, is_first: bool = False):
             if is_first:
-                pdf.ln(self._PRE_BULLET_GAP)  # gap before first bullet
+                pdf.ln(pre_bullet_gap)  # gap before first bullet
             else:
-                pdf.ln(self._BULLET_GAP)      # constant gap between bullets
+                pdf.ln(bullet_gap)      # constant gap between bullets
             indent = self._BULLET_INDENT
             pdf.set_font(self._FONT_FAMILY, "", body_size)
             x_start = pdf.l_margin + indent
@@ -470,7 +514,7 @@ class ResumeRenderer:
                 title = sanitize(exp.get("title", ""))
                 if title:
                     pdf.set_font(self._FONT_FAMILY, "I", heading_size)
-                    pdf.cell(w, self._JOB_TITLE_CELL_H, title,
+                    pdf.cell(w, job_title_h, title,
                              new_x="LMARGIN", new_y="NEXT")
 
                 exp_bullets = exp.get("bullets", [])
@@ -509,7 +553,7 @@ class ResumeRenderer:
         # ── TECHNICAL SKILLS ── (LaTeX: rSection{TECHNICAL SKILLS})
         skills = tailored.get("skills", {})
         if skills:
-            section_header("Technical Skills")
+            section_header(self._skills_title(tailored))
             # Use a slightly looser line-height than the bullet tight value
             # so a category that wraps onto a second line still reads as one
             # cohesive block. Without this, wrapped categories collapse onto
@@ -547,7 +591,7 @@ class ResumeRenderer:
                 section_header("Education")
                 for ei, edu in enumerate(deduped_education):
                     if ei > 0:
-                        pdf.ln(self._EDU_ENTRY_GAP)  # gap between education entries
+                        pdf.ln(edu_entry_gap)  # gap between education entries
                     inst = sanitize(edu.get("institution", ""))
                     location = sanitize(edu.get("location", ""))
                     degree = sanitize(edu.get("degree", ""))
@@ -598,14 +642,19 @@ class ResumeRenderer:
             return None, content_h
         return bytes(pdf.output()), content_h
 
-    def generate_pdf(self, tailored: Dict[str, Any]) -> bytes:
-        """Generate a single-page PDF that adaptively fills one A4 page.
+    def _compute_pdf_layout(self, tailored: Dict[str, Any]) -> Dict[str, float]:
+        """Solve the page layout in three passes and return the render knobs.
 
-        Two-pass approach:
-          Pass 1: Render with minimum spacing to measure content height.
-          Pass 2: Distribute remaining whitespace proportionally, then render final PDF.
+        Pass 1: choose the largest font tier that fits (or shrink on overflow).
+        Pass 2: distribute leftover whitespace into gaps, capped at ceilings.
+        Pass 3: continuous leading stretch — the font rungs are discrete and
+          the gap ceilings absorb only ~25-30mm, so a page that just misses a
+          rung could still leave a 30-45mm dead band at the bottom. Leading
+          doesn't change line wrapping, so content height is LINEAR in the
+          stretch factor — solve it exactly from two measurements.
 
-        If content overflows even at minimum spacing, reduces font size and line heights.
+        Returns a dict of `_render_pdf` kwargs plus `predicted_height` (mm),
+        which tests use to assert page fill without parsing a PDF.
         """
         avail = self._AVAIL_H
         slots = self._count_spacing_slots(tailored)
@@ -706,9 +755,9 @@ class ResumeRenderer:
         header_gap = min(self._MIN_HEADER_GAP + unit * 1, self._MAX_HEADER_GAP)
         skill_gap = min(self._MIN_SKILL_GAP + unit * 0.5, self._MAX_SKILL_GAP)
 
-        # --- Final render ---
-        pdf_bytes, _ = self._render_pdf(
-            tailored,
+        # --- Pass 3: continuous leading stretch absorbs what the gap ---
+        # --- ceilings couldn't ---
+        knobs = dict(
             section_gap=section_gap,
             entry_gap=entry_gap,
             post_header=post_header,
@@ -716,6 +765,44 @@ class ResumeRenderer:
             skill_gap=skill_gap,
             body_size=body_size, lh=lh, lh_s=lh_s,
         )
+        stretch = 1.0
+        _, h1 = self._render_pdf(tailored, **knobs, stretch=1.0,
+                                 measure_only=True)
+        predicted = h1
+        s_max = min(1.25, self._MAX_LEADING_MM / lh)
+        if s_max > 1.01 and (avail - h1) > 3.0:
+            _, h2 = self._render_pdf(tailored, **knobs, stretch=s_max,
+                                     measure_only=True)
+            if h2 <= avail:
+                stretch = s_max
+                predicted = h2
+            elif h2 > h1:
+                # Height is linear in stretch: interpolate the exact factor
+                # that lands on the page bottom, then verify (rounding guard).
+                stretch = 1.0 + (avail - h1) * (s_max - 1.0) / (h2 - h1)
+                stretch = max(1.0, min(stretch, s_max))
+                _, hv = self._render_pdf(tailored, **knobs, stretch=stretch,
+                                         measure_only=True)
+                if hv > avail:
+                    stretch = max(1.0, stretch - 0.02)
+                    _, hv = self._render_pdf(tailored, **knobs,
+                                             stretch=stretch,
+                                             measure_only=True)
+                predicted = hv
+
+        knobs["stretch"] = stretch
+        knobs["predicted_height"] = predicted
+        return knobs
+
+    def generate_pdf(self, tailored: Dict[str, Any]) -> bytes:
+        """Generate a single-page PDF that adaptively fills one A4 page.
+
+        Layout is solved by `_compute_pdf_layout` (font tier → gap
+        distribution → leading stretch); this just runs the final render.
+        """
+        layout = self._compute_pdf_layout(tailored)
+        layout.pop("predicted_height", None)
+        pdf_bytes, _ = self._render_pdf(tailored, **layout)
         return pdf_bytes
 
     # ------------------------------------------------------------------
@@ -723,7 +810,7 @@ class ResumeRenderer:
     # ------------------------------------------------------------------
 
     # Usable page height in pt (A4 297mm - 0.5in*2 margins ≈ 271.6mm ≈ 770pt).
-    _DOCX_AVAIL_PT = 770.0
+    _DOCX_AVAIL_PT = 755.0
 
     def _estimate_docx_height_pt(
         self,
@@ -745,15 +832,16 @@ class ResumeRenderer:
         """
         # Usable width in mm * (chars per mm at given pt). Arial at 10pt
         # averages ~2.1 chars/mm in our 197mm-wide text box → ~414 chars/line.
-        # Scale inversely with font size. Calibri/Carlito is narrower than
-        # Arial but wider than the old Times metrics.
+        # Scale inversely with font size (Times/Tinos metrics).
         scale = 10.0 / max(body_size, 6.0)
-        chars_per_line = 92 * scale  # rough but stable
+        chars_per_line = 95 * scale  # rough but stable
         h = 0.0
 
         def para(text: str, size: float = None, bullet: bool = False) -> float:
             s = size or body_size
-            line_h = s * 1.15  # ~1.15 line spacing equivalent
+            # Body paragraphs honor the line_spacing knob (Pass-3 fill);
+            # name/contact/section headers below stay at the fixed 1.15.
+            line_h = s * line_spacing
             if not text:
                 return line_h + 2
             length = len(text) + (3 if bullet else 0)
@@ -784,7 +872,7 @@ class ResumeRenderer:
             for i, exp in enumerate(experience):
                 h += header_block(exp.get("company", ""), exp.get("dates", ""))
                 if exp.get("title"):
-                    h += 10.5 * 1.15 + 1
+                    h += 10.5 * line_spacing + 1
                 for b in exp.get("bullets", []) or []:
                     h += para(b, bullet=True)
                 if i < len(experience) - 1:
@@ -830,6 +918,7 @@ class ResumeRenderer:
         entry_gap: float,
         skill_gap: float,
         header_gap: float,
+        line_spacing: float = 1.1,
     ) -> bytes:
         """Render a DOCX mirroring the PDF layout with the given spacing knobs."""
         from docx import Document
@@ -838,17 +927,17 @@ class ResumeRenderer:
         from docx.oxml.ns import qn
         from docx.oxml import OxmlElement
 
-        FONT = "Calibri"
+        FONT = "Times New Roman"  # matches the Overleaf template; Tinos-identical metrics
         doc = Document()
 
         # A4 page, 0.5in margins all around (mirrors the PDF's 12.7mm).
         for section in doc.sections:
             section.page_width = Mm(210)
             section.page_height = Mm(297)
-            section.top_margin = Inches(0.5)
-            section.bottom_margin = Inches(0.5)
-            section.left_margin = Inches(0.5)
-            section.right_margin = Inches(0.5)
+            section.top_margin = Inches(0.6)
+            section.bottom_margin = Inches(0.6)
+            section.left_margin = Inches(0.6)
+            section.right_margin = Inches(0.6)
 
         # Normal style
         style = doc.styles["Normal"]
@@ -856,7 +945,7 @@ class ResumeRenderer:
         style.font.size = Pt(body_size)
         style.paragraph_format.space_after = Pt(0)
         style.paragraph_format.space_before = Pt(0)
-        style.paragraph_format.line_spacing = 1.1
+        style.paragraph_format.line_spacing = line_spacing
 
         # Usable width in EMU for right-aligned tab stops (page_width - L - R)
         usable_w_emu = section.page_width - section.left_margin - section.right_margin
@@ -882,7 +971,7 @@ class ResumeRenderer:
         def tight(p, before=0.0, after=0.0):
             p.paragraph_format.space_before = Pt(before)
             p.paragraph_format.space_after = Pt(after)
-            p.paragraph_format.line_spacing = 1.1
+            p.paragraph_format.line_spacing = line_spacing
 
         def add_bottom_border(p, size="6"):
             pPr = p._p.get_or_add_pPr()
@@ -922,7 +1011,8 @@ class ResumeRenderer:
         name = self._title_case_name(name)
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = p.add_run(name)
+        # ALL CAPS name — matches the Overleaf template's \MakeUppercase.
+        run = p.add_run(name.upper())
         set_run_font(run, title_size, bold=True)
         tight(p, before=0, after=1.0)
 
@@ -935,12 +1025,10 @@ class ResumeRenderer:
         if contact_fields:
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            for i, (display, href) in enumerate(contact_fields):
-                if href:
-                    self._add_docx_hyperlink(p, display, href, FONT, Pt(body_size + 0.5))
-                else:
-                    run = p.add_run(display)
-                    set_run_font(run, body_size + 0.5)
+            # Plain black text — no hyperlinks (mirrors the PDF contact line).
+            for i, (display, _href) in enumerate(contact_fields):
+                run = p.add_run(display)
+                set_run_font(run, body_size + 0.5)
                 if i < len(contact_fields) - 1:
                     sep = p.add_run(" | ")
                     set_run_font(sep, body_size + 0.5)
@@ -1019,7 +1107,7 @@ class ResumeRenderer:
         # ------------------- TECHNICAL SKILLS -------------------
         skills = tailored.get("skills", {}) or {}
         if any(v for v in skills.values()):
-            add_section_header("Technical Skills")
+            add_section_header(self._skills_title(tailored))
             for category, skill_list in skills.items():
                 if not skill_list:
                     continue
@@ -1117,11 +1205,11 @@ class ResumeRenderer:
         # only when content leaves headroom for gap distribution; otherwise
         # fall to the 10pt base and, past that, the shrink tiers.
         for body_size, title_size, header_size, max_fill in (
-            (11.0, 18.0, 12.0, 0.78),
-            (10.5, 17.5, 11.5, 0.88),
-            (10.0, 17.0, 11.0, 1.00),
-            (9.5, 16.5, 10.5, 1.00),
-            (9.0, 16.0, 10.0, 1.00),
+            (11.0, 20.0, 12.0, 0.78),
+            (10.5, 19.5, 11.5, 0.88),
+            (10.0, 19.0, 11.0, 1.00),
+            (9.5, 18.5, 10.5, 1.00),
+            (9.0, 18.0, 10.0, 1.00),
         ):
             min_h = self._estimate_docx_height_pt(
                 tailored,
@@ -1172,6 +1260,36 @@ class ResumeRenderer:
         skill_gap = min(min_skill_gap + unit * 0.5, max_skill_gap)
         header_gap = min(min_header_gap + unit * 1, max_header_gap)
 
+        # Pass 3 (mirrors the PDF's leading stretch): whatever the gap
+        # ceilings couldn't absorb goes into line spacing, interpolated
+        # linearly between 1.1 and 1.30. Estimator-driven, so fill is
+        # approximate; the 1.30 cap prevents overshoot onto page 2.
+        line_spacing = 1.1
+        h1 = self._estimate_docx_height_pt(
+            tailored,
+            body_size=body_size,
+            line_spacing=1.1,
+            section_gap=section_gap,
+            entry_gap=entry_gap,
+            skill_gap=skill_gap,
+            header_gap=header_gap,
+        )
+        if (avail - h1) > 10.0:
+            h2 = self._estimate_docx_height_pt(
+                tailored,
+                body_size=body_size,
+                line_spacing=1.30,
+                section_gap=section_gap,
+                entry_gap=entry_gap,
+                skill_gap=skill_gap,
+                header_gap=header_gap,
+            )
+            if h2 <= avail:
+                line_spacing = 1.30
+            elif h2 > h1:
+                line_spacing = 1.1 + (avail - h1) * 0.2 / (h2 - h1)
+                line_spacing = max(1.1, min(line_spacing, 1.30))
+
         return self._render_docx(
             tailored,
             body_size=body_size,
@@ -1181,55 +1299,8 @@ class ResumeRenderer:
             entry_gap=entry_gap,
             skill_gap=skill_gap,
             header_gap=header_gap,
+            line_spacing=line_spacing,
         )
-
-    # ------------------------------------------------------------------
-    # DOCX hyperlink helper
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _add_docx_hyperlink(paragraph, text: str, url: str, font_name: str, font_size):
-        """Add a clickable hyperlink run to a DOCX paragraph using OPC XML."""
-        from docx.oxml.ns import qn
-        from docx.oxml import OxmlElement
-
-        # Create the w:hyperlink element
-        part = paragraph.part
-        r_id = part.relate_to(url, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink", is_external=True)
-
-        hyperlink = OxmlElement("w:hyperlink")
-        hyperlink.set(qn("r:id"), r_id)
-
-        # Create the run inside the hyperlink
-        new_run = OxmlElement("w:r")
-        rPr = OxmlElement("w:rPr")
-
-        # Font name
-        rFonts = OxmlElement("w:rFonts")
-        rFonts.set(qn("w:ascii"), font_name)
-        rFonts.set(qn("w:hAnsi"), font_name)
-        rPr.append(rFonts)
-
-        # Font size
-        sz = OxmlElement("w:sz")
-        sz.set(qn("w:val"), str(font_size.pt * 2))  # half-points
-        rPr.append(sz)
-
-        # Black color (not default blue)
-        color = OxmlElement("w:color")
-        color.set(qn("w:val"), "000000")
-        rPr.append(color)
-
-        new_run.append(rPr)
-
-        # Text node
-        t = OxmlElement("w:t")
-        t.set(qn("xml:space"), "preserve")
-        t.text = text
-        new_run.append(t)
-
-        hyperlink.append(new_run)
-        paragraph._p.append(hyperlink)
 
     # ------------------------------------------------------------------
     # Filename helper
