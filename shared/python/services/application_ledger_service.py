@@ -389,11 +389,20 @@ def _sanitize_needs_input(items: Any) -> List[Dict[str, str]]:
         question = _clean_str(item.get("question"), 500)
         if not question:
             continue
-        out.append({
+        entry = {
             "question": question,
             "kind": _clean_str(item.get("kind"), 40),
             "field_id": _clean_str(item.get("field_id"), 200),
-        })
+        }
+        # Optional human-handoff fields (e.g. an oracle/captcha wall the user can
+        # finish in their own browser): keep the apply URL + action when present.
+        apply_url = _clean_str(item.get("apply_url"), 2000)
+        if apply_url:
+            entry["apply_url"] = apply_url
+        action = _clean_str(item.get("action"), 40)
+        if action:
+            entry["action"] = action
+        out.append(entry)
     return out
 
 

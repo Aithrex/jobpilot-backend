@@ -17,6 +17,7 @@ import pytest
 from _vg_support import load_service_app, current_db
 
 import services.auto_submit_service as ass
+import services.application_ledger_service as als
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +28,10 @@ _AUTO_SUBMIT_COLLECTIONS = (
     "auto_submit_approvals",
     "auto_submit_audit",
     "feature_usage",
+    # The /auto-submit/pending endpoint now also bridges auto-apply LEDGER rows
+    # in `ready` (extension submit path). Clear it too so ledger rows left by
+    # other test files (shared mongomock) don't leak into these assertions.
+    "applications",
 )
 
 USER_A = "alice@aspirely.me"
@@ -336,3 +341,39 @@ def test_whatsapp_hook_requires_opt_in(db):
 
 if __name__ == "__main__":  # allow `python tests/test_auto_submit.py`
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ---------------------------------------------------------------------------
+# Extension ↔ auto-apply LEDGER bridge (the wired submit path)
+# ---------------------------------------------------------------------------
+def _ready_ledger_app(user=USER_A):
+    view, _ = als.create_application(
+        user, company="Acme", title="Cloud Engineer",
+        jd_text="Build AWS infra with Terraform and Kubernetes.",
+        source="greenhouse", ats_family="greenhouse",
+        apply_url="https://job-boards.greenhouse.io/acme/jobs/999")
+    aid = view["application_id"]
+    als.mark_gathering(user, aid)
+    als.mark_ready(user, aid, autonomy="auto", confidence_score=0.95, tailoring_record_id=None)
+    return aid
+
+
+def test_pending_surfaces_ledger_ready_app(db, app):
+    aid = _ready_ledger_app()
+    call = _client(app, USER_A)
+    pending = call("get", "/api/apply/auto-submit/pending", None).get_json()
+    rec = next((p for p in pending["pending"] if p.get("application_id") == aid), None)
+    assert rec is not None
+    assert rec["status"] == "approved" and rec["eligible"] is True
+    assert rec["source"] == "ledger"
+    assert rec["apply_url"] == "https://job-boards.greenhouse.io/acme/jobs/999"
+
+
+def test_mark_submitted_bridges_to_ledger(db, app):
+    aid = _ready_ledger_app()
+    call = _client(app, USER_A)
+    resp = call("post", "/api/apply/auto-submit/mark-submitted", {"application_id": aid})
+    assert resp.status_code == 200
+    assert resp.get_json()["approval"]["source"] == "ledger"
+    row = als.get_application(USER_A, aid)
+    assert row["status"] == als.STATUS_SUBMITTED
