@@ -127,6 +127,70 @@ def parse_end_date(dates: str) -> Optional[Tuple[int, int]]:
     return None
 
 
+def parse_start_date(dates: str) -> Optional[Tuple[int, int]]:
+    """Best-effort (year, month) for the START of a date range — the FIRST
+    month+year token in the string. Bare-year fallback resolves to (year, 1).
+    """
+    if not dates or not dates.strip():
+        return None
+    candidates: List[Tuple[int, int, int]] = []  # (position, year, month)
+    for m in _FULL_MONTH_RE.finditer(dates):
+        candidates.append((m.start(), int(m.group(2)), _MONTH_NUM[m.group(1).lower()]))
+    for m in _ABBR_MONTH_RE.finditer(dates):
+        abbr = m.group(1).lower()[:3]
+        month = next(
+            (num for name, num in _MONTH_NUM.items() if name.startswith(abbr)), None
+        )
+        if month:
+            candidates.append((m.start(), int(m.group(2)), month))
+    for m in _NUMERIC_RE.finditer(dates):
+        candidates.append((m.start(), int(m.group(2)), int(m.group(1))))
+    if candidates:
+        _, year, month = min(candidates, key=lambda c: c[0])
+        return (year, month)
+    years = _BARE_YEAR_RE.findall(dates)
+    if years:
+        return (int(years[0]), 1)
+    return None
+
+
+def total_experience_years(structured: Dict[str, Any]) -> float:
+    """Total professional experience in years, from the immutable experience
+    date ranges. Overlapping roles are merged so concurrent jobs don't double
+    count; "Present" end dates count up to the current month. Unparseable
+    entries are skipped; no experience → 0.0.
+    """
+    from datetime import date
+
+    now = date.today()
+    now_idx = now.year * 12 + (now.month - 1)
+
+    intervals: List[Tuple[int, int]] = []  # (start_month_idx, end_month_idx)
+    for exp in structured.get("experience") or []:
+        dates = exp.get("dates") or ""
+        start = parse_start_date(dates)
+        end = parse_end_date(dates)
+        if not start or not end:
+            continue
+        start_idx = start[0] * 12 + (start[1] - 1)
+        end_idx = now_idx if end[0] == 9999 else end[0] * 12 + (end[1] - 1)
+        end_idx = min(end_idx, now_idx)  # future-dated ends clamp to now
+        if end_idx >= start_idx:
+            intervals.append((start_idx, end_idx))
+
+    if not intervals:
+        return 0.0
+
+    merged: List[List[int]] = []
+    for s, e in sorted(intervals):
+        if merged and s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    total_months = sum(e - s + 1 for s, e in merged)
+    return round(total_months / 12.0, 2)
+
+
 def is_reverse_chronological(tailored: Dict[str, Any]) -> bool:
     """True when experience entries with parseable end dates are ordered
     newest-first. Unparseable entries are skipped; <2 parseable dates is

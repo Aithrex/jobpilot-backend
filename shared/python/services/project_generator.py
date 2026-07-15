@@ -14,6 +14,7 @@ Rules:
 - bullets: 3 realistic, grounded descriptions — what was built and how
 """
 import logging
+import os
 import re
 from typing import Any, Dict, Optional
 
@@ -25,6 +26,49 @@ logger = logging.getLogger(__name__)
 # The generator over-generates up to `bullets_per_project` ranked bullets; the
 # allocator downstream trims to what fits the page.
 _MIN_PROJECT_BULLETS = 2
+
+# Experience-first policy: above this many years of real experience, project
+# GENERATION is off — a recruiter reads invented projects on an experienced
+# resume as filler, and every generated bullet steals one-page space from the
+# real experience section. Real resume projects are always kept; confirmed
+# GitHub repos may still ground generated entries (they're real work).
+PROJECT_GEN_MAX_YEARS = float(os.getenv("PROJECT_GEN_MAX_YEARS", "3"))
+
+
+def project_generation_policy(
+    structured_resume: Dict[str, Any],
+    github_evidence: list = None,
+) -> Dict[str, Any]:
+    """Decide whether/how project generation may run for this candidate.
+
+    Returns {"allow": bool, "evidence_only": bool, "years": float, "reason": str}:
+      - years <= PROJECT_GEN_MAX_YEARS: allow free generation (early-career
+        resumes are expected to carry projects; generated ones are flagged by
+        the verifier for review and feed the learning-hub build loop).
+      - years >  PROJECT_GEN_MAX_YEARS: generation ONLY from confirmed GitHub
+        evidence (real repos). No evidence → no generation; the experience
+        section gets the whole page.
+    """
+    from services.ats_vendor_checks import total_experience_years
+
+    years = total_experience_years(structured_resume)
+    evidence = [e for e in (github_evidence or []) if str(e).strip()]
+
+    if years <= PROJECT_GEN_MAX_YEARS:
+        return {
+            "allow": True, "evidence_only": False, "years": years,
+            "reason": f"early-career ({years}y <= {PROJECT_GEN_MAX_YEARS}y cutoff)",
+        }
+    if evidence:
+        return {
+            "allow": True, "evidence_only": True, "years": years,
+            "reason": f"experienced ({years}y) — confirmed GitHub evidence only",
+        }
+    return {
+        "allow": False, "evidence_only": False, "years": years,
+        "reason": f"experienced ({years}y), no confirmed GitHub evidence — "
+                  "experience section gets the full page",
+    }
 
 
 # Shared bullet-quality block injected into both single and batch prompts.
@@ -479,6 +523,7 @@ class ProjectGenerator:
         bullets_per_project: int = 5,
         rejections_sink: list = None,
         github_evidence: list = None,
+        evidence_only: bool = False,
     ) -> list:
         """Generate multiple projects in a single LLM call for speed.
 
@@ -497,6 +542,9 @@ class ProjectGenerator:
                 asserting only what the evidence shows (languages, topics,
                 what the description says it does; stars if notable). A repo
                 is evidence of a personal project, never employment.
+            evidence_only: experienced-candidate mode — EVERY generated
+                project must BE one of the confirmed repositories (count is
+                capped at the evidence count; no evidence → no generation).
 
         Returns a list of validated project dicts (may be fewer than `count`
         if some fail validation or are duplicates).
@@ -505,6 +553,13 @@ class ProjectGenerator:
             rejections_sink = []
         from services.claude_client import claude_json, CLAUDE_FLASH
         from schemas.resume_schemas import flatten_skills, build_resume_text
+
+        if evidence_only:
+            n_evidence = len([e for e in (github_evidence or []) if str(e).strip()])
+            if n_evidence == 0:
+                logger.info("ProjectGenerator: evidence_only with no evidence — skipping")
+                return []
+            count = min(count, n_evidence)
 
         if count <= 0:
             return []
@@ -548,9 +603,16 @@ class ProjectGenerator:
         github_block = ""
         if evidence_lines:
             from utils.llm_safety import wrap_untrusted
+            mode_line = (
+                "EVERY project you output MUST correspond to one of these repositories\n"
+                "(this candidate is experienced — only their REAL public work belongs in\n"
+                "the Projects section; do not invent additional projects).\n"
+                if evidence_only else
+                "PREFER grounding generated projects in these actual repositories.\n"
+            )
             github_block = (
                 "=== CONFIRMED GITHUB REPOSITORIES (user-verified, REAL projects) ===\n"
-                "PREFER grounding generated projects in these actual repositories.\n"
+                + mode_line +
                 "Assert ONLY what the evidence shows: the repo's language/topics, what\n"
                 "its description says it does, and stars when noted. Never present a\n"
                 "repo as employment, production traffic, or team leadership.\n"
