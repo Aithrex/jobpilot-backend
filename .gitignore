@@ -16,6 +16,8 @@ venv/
 .env
 .env.*
 !.env.example
+# Google OAuth verification correspondence — contains reviewer credentials in plaintext
+docs/google-verification/
 
 # AWS / deploy artifacts
 *.zip
