@@ -315,6 +315,14 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             job_id = get_resume_service().create_job("trend_aggregate", {}, "system@internal")
             ResumeService.invoke_async(job_id, "trend_aggregate", {})
             return {"job": name, "enqueued": job_id}
+        if name == "ats_signal_aggregate":
+            # System/cron recompute of the cross-user (role, keyword) -> mean-ATS
+            # aggregate (Part B3). Same bridge pattern as trend_aggregate:
+            # system actor, no user_email, aggregate-only output. Not user-routable.
+            from services.resume_service import get_resume_service, ResumeService
+            job_id = get_resume_service().create_job("ats_signal_aggregate", {}, "system@internal")
+            ResumeService.invoke_async(job_id, "ats_signal_aggregate", {})
+            return {"job": name, "enqueued": job_id}
         logger.warning("[scheduled] unknown job: %s", name)
         return {"error": "unknown job", "name": name}
     except Exception as e:

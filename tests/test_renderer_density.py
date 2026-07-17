@@ -1,9 +1,18 @@
 """Renderer bidirectional density — sparse resumes scale UP to fill the page,
 dense resumes keep the shrink tiers. Real fpdf2 measure passes, no LLM.
+
+These assert the SINGLE-PAGE shrink engine (the default/prod contract), so they
+force ALLOW_TWO_PAGE off. Two-page behavior is covered by test_two_page.py.
 """
 import pytest
 
+from services import resume_renderer
 from services.resume_renderer import ResumeRenderer
+
+
+@pytest.fixture(autouse=True)
+def _force_single_page(monkeypatch):
+    monkeypatch.setattr(resume_renderer, "ALLOW_TWO_PAGE", False, raising=False)
 
 
 def _bullet(i):

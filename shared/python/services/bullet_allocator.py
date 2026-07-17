@@ -225,6 +225,7 @@ def allocate_bullets(
     *,
     jd_analysis: Optional[Dict[str, Any]] = None,
     scorer: Optional[Scorer] = None,
+    max_pages: int = 1,
 ) -> Dict[str, Any]:
     """Select the page-fitting subset of model-proposed bullets by relevance.
 
@@ -248,7 +249,12 @@ def allocate_bullets(
     if not candidates:
         return tailored
 
-    avail = renderer._AVAIL_H
+    # Budget = one usable page by default; two pages when the caller opts into
+    # two-page rendering (Phase 5), so the allocator keeps the bullets a senior
+    # resume needs instead of evicting them to fit one page.
+    avail = renderer._AVAIL_H * max(1, max_pages)
+    # The measurement yardstick (_measure) renders at the densest 10pt tier for a
+    # SINGLE page; scale its result comparison by using the multi-page budget.
 
     # Group candidates by entry. Within an entry, order by relevance SCORE (not
     # the raw model rank) so the floor keeps each entry's most JD-relevant

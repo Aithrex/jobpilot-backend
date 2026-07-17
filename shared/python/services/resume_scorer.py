@@ -66,9 +66,18 @@ _LOGISTICS_KEYWORDS = frozenset({
 # is encouraging fabrication. These belong on a resume only when bullets
 # already show work in the matching domain.
 _COMPLIANCE_FRAMEWORKS = frozenset({
+    # Tech / govcloud security & privacy
     "fedramp", "soc 2", "soc2", "hipaa", "pci-dss", "pci dss", "pci",
     "sox", "iso 27001", "iso27001", "iso", "nist 800-53", "nist", "gdpr",
     "ccpa", "ato", "fisma", "hitrust", "cmmc",
+    # Non-tech credentials/licenses (Phase 3C de-SWE) — like compliance
+    # frameworks, these require real domain exposure and must never be
+    # suggested as a free "add this skill".
+    "cpa", "cfa", "series 7", "series 63", "series 65", "series 66",
+    "rn license", "registered nurse license", "bls certification",
+    "acls certification", "pals certification", "pmp", "csm",
+    "six sigma black belt", "six sigma green belt", "bar admission",
+    "j.d.", "jd license", "bar exam", "cma", "cia", " chfc", "cpcu",
 })
 
 
@@ -111,7 +120,20 @@ class ResumeScorer:
         "i", "ii", "iii", "iv", "v", "1", "2", "3",
     })
     _TITLE_STOPWORDS = frozenset({"of", "the", "and", "a", "an", "&", "-"})
-    _ROLE_EQUIV = {"developer": "engineer", "programmer": "engineer", "swe": "engineer"}
+    # Cross-profession title folding so honest title mirroring scores full marks
+    # regardless of the exact word a JD/resume uses (Phase 3C de-SWE).
+    _ROLE_EQUIV = {
+        # software
+        "developer": "engineer", "programmer": "engineer", "swe": "engineer",
+        # healthcare
+        "rn": "nurse", "r.n.": "nurse", "registered": "nurse",
+        # finance
+        "cpa": "accountant", "accounting": "accountant",
+        # sales
+        "ae": "sales", "rep": "sales", "representative": "sales",
+        # generic
+        "mgr": "manager", "coordinator": "specialist", "analyst": "analyst",
+    }
 
     def score(
         self,
@@ -639,6 +661,43 @@ class ResumeScorer:
         tailored_json = json.dumps(tailored, indent=2)[:4000]
         jd_json = json.dumps(jd_analysis, indent=2)[:2000]
 
+        # Domain-aware recruiter persona (Phase 3C de-SWE): a finance/nursing/
+        # marketing résumé should be reviewed by a recruiter framed for that
+        # field, not always "technical". Fails safe to a generic recruiter.
+        try:
+            from services.domain_classifier import classify_domain
+            _domain = classify_domain(jd_analysis, tailored)
+        except Exception:
+            _domain = "general"
+        _persona = {
+            # tech
+            "software": "expert technical recruiter",
+            "data_science": "expert data-science recruiter",
+            "data_engineering": "expert data-engineering recruiter",
+            "data_analytics": "expert data-analytics recruiter",
+            "devops": "expert DevOps/platform recruiter",
+            "cybersecurity": "expert cybersecurity recruiter",
+            "it_support": "expert IT/infrastructure recruiter",
+            # business
+            "finance": "expert finance recruiter",
+            "product": "expert product-management recruiter",
+            "project_program_mgmt": "expert program-management recruiter",
+            "business_ops": "expert business-operations recruiter",
+            "consulting": "expert management-consulting recruiter",
+            "marketing": "expert marketing recruiter",
+            "sales": "expert sales recruiter",
+            "hr": "expert HR/talent recruiter",
+            # licensed / specialized
+            "healthcare": "expert healthcare/clinical recruiter",
+            "legal": "expert legal recruiter",
+            "design": "expert design recruiter",
+            # engineering disciplines
+            "mechanical_eng": "expert mechanical-engineering recruiter",
+            "civil_eng": "expert civil-engineering recruiter",
+            "electrical_eng": "expert electrical-engineering recruiter",
+            "construction": "expert construction recruiter",
+        }.get(_domain, "expert recruiter")
+
         # Classify missing keywords so the suggestions model only sees the
         # ones that are safe to recommend the candidate add. Logistics terms
         # (Contract W2, Hybrid) and compliance frameworks (FedRAMP, HIPAA)
@@ -656,8 +715,8 @@ class ResumeScorer:
             f"- Recency/Relevance score: {det.get('recency_relevance', '?')}/100\n"
             f"- Readability score: {det.get('readability', '?')}/100\n"
             f"- Format: single-column, standard fonts, no tables/images/columns, "
-            "ATS-friendly section headers (SUMMARY, EXPERIENCE, PROJECTS, "
-            "TECHNICAL SKILLS, EDUCATION), bullets with Unicode standard •\n"
+            "ATS-friendly section headers (Summary, Experience, Skills, "
+            "Education, and Projects where applicable), bullets with Unicode standard •\n"
             f"- Missing skills the candidate could plausibly add ({len(safe_missing_skills)}): "
             f"{', '.join(safe_missing_skills[:8]) or 'none'}\n\n"
         )
@@ -706,7 +765,7 @@ class ResumeScorer:
         )
 
         prompt = (
-            "You are an expert technical recruiter reviewing a tailored resume "
+            f"You are an {_persona} reviewing a tailored resume "
             "against a job description.\n\n"
             + facts_block
             + suggestion_guardrails +

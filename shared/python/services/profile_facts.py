@@ -45,12 +45,17 @@ def build_fact_store(
     user_email: str = "",
     structured_resume: Optional[Dict[str, Any]] = None,
     include_enrichment: bool = True,
+    include_voicegraph: bool = True,
 ) -> Dict[str, Any]:
     """Compile the candidate's fact store.
 
     `structured_resume` short-circuits the Mongo read (the tailor pipeline
     already holds the doc). Enrichment (confirmed LinkedIn/GitHub facts)
     is merged when available — resume-only stores are always valid.
+
+    Voice Graph facts (Part B2) are merged when the user has consented to the
+    voice_graph scope — each is an evidence-backed claim in the user's own
+    words and acts as additional grounding (never a new employer/title/date).
     """
     if structured_resume is None and user_email:
         from services.resume_parser import ResumeParser
@@ -61,7 +66,8 @@ def build_fact_store(
     structured_resume = structured_resume or {}
 
     facts: List[Dict[str, Any]] = list(_resume_facts(structured_resume))
-    sources = {"resume": bool(facts), "linkedin": False, "github": False}
+    sources = {"resume": bool(facts), "linkedin": False, "github": False,
+               "voicegraph": False}
 
     if include_enrichment and user_email:
         try:
@@ -73,11 +79,76 @@ def build_fact_store(
             # Enrichment must never break tailoring — resume-only is valid.
             logger.warning("profile_facts: enrichment merge failed: %s", e)
 
+    if include_voicegraph and user_email:
+        try:
+            for fact in _voicegraph_facts(user_email):
+                facts.append(fact)
+                sources["voicegraph"] = True
+        except Exception as e:
+            # Voice Graph must never break tailoring — degrade silently.
+            logger.warning("profile_facts: voicegraph merge failed: %s", e)
+
     return {
         "facts": facts,
         "by_id": {f["fact_id"]: f for f in facts},
         "sources": sources,
     }
+
+
+# Only confident, user-confirmed graph nodes become grounding. A low-confidence
+# extracted node is not strong enough to justify a resume claim.
+_VG_MIN_CONFIDENCE = 0.6
+_VG_MAX_FACTS = 20
+
+
+def _voicegraph_facts(user_email: str):
+    """Yield grounding facts from the user's consented Voice Graph.
+
+    FIREWALL: per-user only — reads exactly this user's graph, gated on the
+    user's own voice_graph consent. Each fact carries the verified verbatim
+    quote from the user's OWN writing, so it grounds without inventing.
+    """
+    from services.voicegraph import store as vg_store
+    from services.voicegraph import consent as vg_consent
+
+    if not vg_consent.is_granted(user_email):
+        return
+
+    graph = vg_store.get_graph(user_email) or {}
+    count = 0
+    for node in graph.get("nodes") or []:
+        if count >= _VG_MAX_FACTS:
+            break
+        if not node.get("user_confirmed"):
+            continue
+        try:
+            if float(node.get("confidence") or 0.0) < _VG_MIN_CONFIDENCE:
+                continue
+        except (TypeError, ValueError):
+            continue
+        node_id = node.get("node_id")
+        label = (node.get("label") or "").strip()
+        if not node_id or not label:
+            continue
+        # Attach the verified verbatim span so the display IS grounded text.
+        quote = ""
+        try:
+            ev = vg_store.evidence_for("node", node_id) or []
+            if ev:
+                quote = (ev[0].get("quote") or "").strip()
+        except Exception:
+            quote = ""
+        display = (
+            f'VERIFIED (candidate\'s own words): "{quote}"'
+            if quote else f"VERIFIED: {label}"
+        )
+        yield {
+            "fact_id": f"vg:node:{node_id}",
+            "type": (node.get("type") or "voicegraph").lower(),
+            "source": "voicegraph",
+            "display": display,
+        }
+        count += 1
 
 
 def _resume_facts(structured: Dict[str, Any]):
@@ -224,22 +295,29 @@ def build_fact_sheet(fact_store: Dict[str, Any], max_chars: int = 9000) -> str:
     return "\n".join(lines)
 
 
+# Sources that count as user-verified grounding (beyond the resume itself):
+# confirmed LinkedIn/GitHub facts and consented Voice Graph claims (B2).
+_GROUNDING_SOURCES = ("linkedin", "github", "voicegraph")
+
+
 def grounding_texts(fact_store: Dict[str, Any]) -> List[str]:
     """Confirmed-enrichment display texts — extra grounding for claim_guard
-    (a metric backed by a confirmed GitHub/LinkedIn fact is grounded)."""
+    (a metric backed by a confirmed GitHub/LinkedIn/Voice-Graph fact is
+    grounded)."""
     return [
         f.get("display", "")
         for f in (fact_store.get("facts") or [])
-        if f.get("source") in ("linkedin", "github")
+        if f.get("source") in _GROUNDING_SOURCES
     ]
 
 
 def enrichment_context(fact_store: Dict[str, Any], max_chars: int = 1500) -> str:
-    """Confirmed LinkedIn/GitHub fact lines for the tailor prompt (capped)."""
+    """Confirmed LinkedIn/GitHub + Voice-Graph fact lines for the tailor prompt
+    (capped)."""
     lines: List[str] = []
     total = 0
     for f in fact_store.get("facts") or []:
-        if f.get("source") not in ("linkedin", "github"):
+        if f.get("source") not in _GROUNDING_SOURCES:
             continue
         line = f"- {f.get('display', '')}"
         if total + len(line) + 1 > max_chars:

@@ -57,9 +57,24 @@ class KeywordGapEngine:
         )
 
         # Separate analysis for required skills only
-        req_matched, req_missing, _ = self._match_keywords(
+        req_matched, req_missing, req_partial = self._match_keywords(
             required, resume_text, resume_skills
         )
+
+        # Implication promotion: a JD skill the resume didn't literally name but
+        # which an OWNED skill provably implies (e.g. React -> HTML/CSS/DOM) is
+        # covered, not a gap. The candidate can defend it because doing the
+        # parent skill necessarily involves it. Promoted skills are also added to
+        # `partial` so downstream (prompt/audit) know they're implied, not
+        # literal — the tailor should surface them in context, not assume prose.
+        owned = self._owned_skills(matched, resume_skills)
+        matched, missing, promoted = self._promote_implied(matched, missing, owned)
+        req_matched, req_missing, req_promoted = self._promote_implied(
+            req_matched, req_missing, owned
+        )
+        for p in promoted:
+            if p not in partial:
+                partial.append(p)
 
         total = len(all_keywords)
         coverage = round((len(matched) / total) * 100) if total > 0 else 100
@@ -118,6 +133,50 @@ class KeywordGapEngine:
                 missing.append(canonical)
 
         return matched, missing, partial
+
+    @staticmethod
+    def _owned_skills(matched: List[str], resume_skills: Set[str]) -> Set[str]:
+        """The set of skills the candidate genuinely HAS, for implication lookup.
+
+        Union of (a) every JD keyword the resume literally matched and (b) the
+        resume's own skills section. Parenthetical umbrellas ("AWS (EC2, S3)")
+        contribute both the umbrella and each inner token so an owned "EKS"
+        inside "AWS (EKS)" can still imply Kubernetes.
+        """
+        owned: Set[str] = set(matched)
+        for s in resume_skills:
+            owned.add(s)
+            # Split "aws (ec2, s3, eks)" into aws + ec2 + s3 + eks.
+            if "(" in s:
+                head, _, rest = s.partition("(")
+                if head.strip():
+                    owned.add(head.strip())
+                for tok in rest.rstrip(")").split(","):
+                    if tok.strip():
+                        owned.add(tok.strip())
+        return owned
+
+    @staticmethod
+    def _promote_implied(
+        matched: List[str], missing: List[str], owned: Set[str]
+    ) -> Tuple[List[str], List[str], List[str]]:
+        """Promote missing keywords an owned skill provably implies to matched.
+
+        Returns (matched, missing, promoted). Deterministic, conservative — only
+        the SOLID implication tier promotes, and forbidden reverse edges never do
+        (see utils.skill_implications).
+        """
+        from utils.skill_implications import is_implied
+
+        still_missing: List[str] = []
+        promoted: List[str] = []
+        for kw in missing:
+            if is_implied(kw, owned):
+                matched.append(kw)
+                promoted.append(kw)
+            else:
+                still_missing.append(kw)
+        return matched, still_missing, promoted
 
     @staticmethod
     def _text_contains(text_lower: str, keyword_lower: str) -> bool:

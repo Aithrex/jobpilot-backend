@@ -148,18 +148,18 @@ class ImpactEngine:
         if issue_counts.get("weak_verb", 0) > 0:
             n = issue_counts["weak_verb"]
             suggestions.append(
-                f"Replace weak action verbs in {n} bullet(s) — use strong verbs "
-                f"like 'Engineered', 'Architected', 'Deployed', 'Optimized', "
-                f"'Spearheaded' instead of 'Helped', 'Assisted', 'Worked on'."
+                f"Replace weak action verbs in {n} bullet(s) — use strong, specific "
+                f"verbs like 'Built', 'Designed', 'Deployed', 'Optimized', 'Reduced', "
+                f"'Migrated' instead of 'Helped', 'Assisted', 'Worked on'."
             )
 
         no_metrics = issue_counts.get("no_metrics", 0)
         if no_metrics > 0 and total_bullets > 0:
             pct = round((no_metrics / total_bullets) * 100)
             suggestions.append(
-                f"Add quantifiable impact to {no_metrics} of {total_bullets} "
-                f"bullets ({pct}%) — include percentages, dollar amounts, "
-                f"user counts, or scale numbers."
+                f"Sharpen {no_metrics} of {total_bullets} bullets ({pct}%) with a "
+                f"grounded metric OR a concrete outcome — quantify only what the "
+                f"source supports; never invent numbers."
             )
 
         if issue_counts.get("too_short", 0) > 0:

@@ -6,9 +6,20 @@ Format: A4, 0.5in margins, Calibri-style font (Carlito embedded in PDF), adaptiv
 Section order: Summary → Experience → Projects → Technical Skills → Education.
 """
 import io
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict
+
+
+def _two_page_enabled() -> bool:
+    """Opt-in two-page rendering (Phase 5). Default OFF in prod; on in dev only
+    when a senior resume genuinely overflows one page at 10pt."""
+    default = "true" if os.environ.get("ENVIRONMENT", "development") == "development" else "false"
+    return os.environ.get("ALLOW_TWO_PAGE", default).strip().lower() in ("1", "true", "yes", "on")
+
+
+ALLOW_TWO_PAGE = _two_page_enabled()
 
 
 class ResumeRenderer:
@@ -20,7 +31,7 @@ class ResumeRenderer:
     # changes live here in the renderer, not the content, so without a version
     # tag a cache "hit" would keep serving a PDF rendered by the OLD code.
     # Including this in the cache key forces a re-render after any format fix.
-    RENDER_VERSION = "2026-07-14.1"
+    RENDER_VERSION = "2026-07-17.1"  # sparse-resume gap ceilings raised (better fill/rhythm)
 
     # Allowed headings for the skills section. The tailor may pick one per
     # industry via `skills_section_title` (ResumeTailor normalizes it); this
@@ -187,16 +198,20 @@ class ResumeRenderer:
     # left a visible dead band at the bottom of the page. Combined with the
     # up-tier font ladder, these let a sparse page reach ~90%+ visual fill
     # while dense pages stay near the floors (Pass 2 is proportional).
-    _MAX_SECTION_GAP = 4.5     # ≈13pt before a section header
-    _MAX_ENTRY_GAP = 3.5
-    _MAX_POST_HEADER = 2.5
-    _MAX_HEADER_GAP = 1.2
-    _MAX_SKILL_GAP = 1.4
+    # Ceilings raised so a genuinely sparse resume (e.g. 2 roles, no projects)
+    # distributes its slack as even breathing room instead of leaving a large
+    # dead band at the page bottom. Pass-2/3 are PROPORTIONAL, so dense resumes
+    # stay near the floors regardless — only sparse pages reach these ceilings.
+    _MAX_SECTION_GAP = 6.5     # before a section header
+    _MAX_ENTRY_GAP = 5.0
+    _MAX_POST_HEADER = 3.5
+    _MAX_HEADER_GAP = 2.0
+    _MAX_SKILL_GAP = 2.2
 
-    # Pass-3 leading ceiling: body line height may stretch up to this many mm
-    # (≈13pt leading — airy but not padded at 10.5-11pt). The stretch factor
-    # is additionally capped at 1.25 so the 10pt base tier can't balloon.
-    _MAX_LEADING_MM = 4.6
+    # Pass-3 leading ceiling: body line height may stretch up to this many mm.
+    # The stretch factor is additionally capped (below) so the 10pt base tier
+    # can't balloon on dense content.
+    _MAX_LEADING_MM = 5.4
 
     # Up-tier ladder: (body_size, lh, lh_s, max_fill). A bigger font must be
     # JUSTIFIED by emptiness — each rung is taken only when the content at
@@ -305,10 +320,15 @@ class ResumeRenderer:
         lh_s: float = 4.0,
         stretch: float = 1.0,
         measure_only: bool = False,
+        max_pages: int = 1,
     ) -> "tuple[bytes | None, float]":
         """Core rendering logic matching the LaTeX resume.cls template.
 
-        Returns (pdf_bytes_or_None, content_height_mm).
+        Returns (pdf_bytes_or_None, content_height_mm). When `max_pages > 1`
+        (Phase 5), fpdf auto-page-break is enabled so content flows onto a
+        second page instead of overflowing; the returned height then spans all
+        pages used (page-count * usable-height + last-page content) so the
+        layout solver measures true total content.
         If measure_only is True, pdf_bytes is None (saves memory).
 
         `stretch` scales body leading and intra-entry gaps continuously
@@ -338,7 +358,14 @@ class ResumeRenderer:
         heading_size = body_size + self._HEADING_DELTA
 
         pdf = FPDF(format="A4")
-        pdf.set_auto_page_break(auto=False)
+        # Single-page (default): no auto break — content that overflows is
+        # caught by the layout solver's shrink cascade. Multi-page (Phase 5):
+        # enable auto break at the bottom margin so overflow flows to page 2+
+        # instead of being clipped.
+        if max_pages > 1:
+            pdf.set_auto_page_break(auto=True, margin=self._MARGIN_BOTTOM)
+        else:
+            pdf.set_auto_page_break(auto=False)
         self._register_fonts(pdf)
         # ATS hint: enterprise screeners (Workday, iCIMS) sometimes flag
         # PDFs with empty Document Information as low-confidence — populating
@@ -637,7 +664,14 @@ class ResumeRenderer:
                         pdf.multi_cell(w, lh_s, left_text,
                                        new_x="LMARGIN", new_y="NEXT")
 
-        content_h = pdf.get_y() - mt
+        # Total content height. Single page: current Y minus top margin.
+        # Multi-page: each completed page contributed a full usable height, plus
+        # the content on the final page. `pdf.page` is the current (1-based) page
+        # number after all content is drawn.
+        if max_pages > 1 and getattr(pdf, "page", 1) > 1:
+            content_h = (pdf.page - 1) * self._AVAIL_H + (pdf.get_y() - mt)
+        else:
+            content_h = pdf.get_y() - mt
         if measure_only:
             return None, content_h
         return bytes(pdf.output()), content_h
@@ -658,6 +692,25 @@ class ResumeRenderer:
         """
         avail = self._AVAIL_H
         slots = self._count_spacing_slots(tailored)
+
+        # --- Phase 5: two-page decision (opt-in) ---
+        # Before shrinking a dense senior resume down to 9pt to force one page,
+        # check whether it genuinely overflows the densest 10pt single page. If
+        # so AND two-page is allowed, render on two pages at a readable 10pt
+        # instead of an unreadable 9pt single page. When ALLOW_TWO_PAGE is off
+        # (default in prod), max_pages stays 1 and behavior is byte-identical.
+        max_pages = 1
+        if ALLOW_TWO_PAGE:
+            _, densest_1page = self._render_pdf(
+                tailored,
+                section_gap=self._MIN_SECTION_GAP, entry_gap=self._MIN_ENTRY_GAP,
+                post_header=self._MIN_POST_HEADER, header_gap=self._MIN_HEADER_GAP,
+                skill_gap=self._MIN_SKILL_GAP,
+                body_size=10.0, lh=3.10, lh_s=3.08, measure_only=True,
+            )
+            if densest_1page > self._AVAIL_H:
+                max_pages = 2
+                avail = self._AVAIL_H * 2  # two-page budget
 
         # --- Pass 1: choose the LARGEST presentation that fits (up-tiers) ---
         # Bidirectional density: sparse resumes (e.g. an experienced 2-role
@@ -687,7 +740,7 @@ class ResumeRenderer:
                     header_gap=self._MIN_HEADER_GAP,
                     skill_gap=self._MIN_SKILL_GAP,
                     body_size=10.0, lh=tier_lh, lh_s=tier_lhs,
-                    measure_only=True,
+                    measure_only=True, max_pages=max_pages,
                 )
                 if retry_height <= avail:
                     lh = tier_lh
@@ -708,7 +761,7 @@ class ResumeRenderer:
                 header_gap=self._MIN_HEADER_GAP,
                 skill_gap=self._MIN_SKILL_GAP,
                 body_size=body_size, lh=lh, lh_s=lh_s,
-                measure_only=True,
+                measure_only=True, max_pages=max_pages,
             )
 
         if min_height > avail:
@@ -724,7 +777,7 @@ class ResumeRenderer:
                 header_gap=self._MIN_HEADER_GAP,
                 skill_gap=self._MIN_SKILL_GAP,
                 body_size=body_size, lh=lh, lh_s=lh_s,
-                measure_only=True,
+                measure_only=True, max_pages=max_pages,
             )
 
         # --- Pass 2: distribute remaining whitespace ---
@@ -764,13 +817,21 @@ class ResumeRenderer:
             header_gap=header_gap,
             skill_gap=skill_gap,
             body_size=body_size, lh=lh, lh_s=lh_s,
+            max_pages=max_pages,
         )
         stretch = 1.0
         _, h1 = self._render_pdf(tailored, **knobs, stretch=1.0,
                                  measure_only=True)
         predicted = h1
+        # Stretch cap held at 1.25 — beyond this, leading reads as padding
+        # (design principle enforced by test_sparse_resume_stretch_capped_not_padded).
+        # Sparse resumes fill via the raised GAP ceilings + the augmenter adding
+        # content, not via ballooned line leading.
         s_max = min(1.25, self._MAX_LEADING_MM / lh)
-        if s_max > 1.01 and (avail - h1) > 3.0:
+        # Leading stretch fills a single page's dead band. On a 2-page render,
+        # a partially-filled last page is expected — don't stretch content
+        # across the page break.
+        if max_pages == 1 and s_max > 1.01 and (avail - h1) > 3.0:
             _, h2 = self._render_pdf(tailored, **knobs, stretch=s_max,
                                      measure_only=True)
             if h2 <= avail:

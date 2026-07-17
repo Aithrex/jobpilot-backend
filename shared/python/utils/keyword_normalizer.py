@@ -798,6 +798,344 @@ _SYNONYM_GROUPS = {
         ["Technical Writing", "tech writing"],
         ["Architecture Review", "architecture decision record", "adr"],
     ],
+
+    # ---------------------------------------------------------------
+    # 16. FINANCE & ACCOUNTING (Craft-overhaul Phase 3A — de-SWE)
+    # ---------------------------------------------------------------
+    "finance": [
+        ["FP&A", "fp and a", "financial planning and analysis",
+         "financial planning & analysis"],
+        ["Variance Analysis", "budget variance", "budget vs actual",
+         "budget-vs-actual"],
+        ["Financial Modeling", "financial models", "financial model",
+         "three-statement model", "3-statement model"],
+        ["Forecasting", "financial forecasting", "rolling forecast",
+         "cash flow forecasting"],
+        ["Budgeting", "budget management", "budget planning",
+         "annual budgeting"],
+        ["GAAP", "us gaap", "generally accepted accounting principles"],
+        ["IFRS", "international financial reporting standards"],
+        ["Financial Reporting", "management reporting", "financial statements",
+         "monthly reporting"],
+        ["Month-End Close", "monthly close", "close process",
+         "period-end close", "month end close"],
+        ["Accounts Payable", "ap", "accounts payable (ap)"],
+        ["Accounts Receivable", "ar", "accounts receivable (ar)"],
+        ["Reconciliation", "account reconciliation", "balance sheet reconciliation",
+         "reconciliations"],
+        ["Cost Accounting", "cost analysis", "product costing"],
+        ["Auditing", "audit", "internal audit", "external audit",
+         "audit support"],
+        ["Tax Preparation", "tax filing", "tax compliance", "corporate tax"],
+        ["Financial Analysis", "financial analytics", "profitability analysis"],
+        ["P&L Management", "p and l", "profit and loss", "p&l",
+         "profit & loss"],
+        ["Treasury", "treasury management", "cash management"],
+        ["CPA", "certified public accountant"],
+        ["CFA", "chartered financial analyst"],
+        ["Financial Due Diligence", "due diligence", "m&a analysis"],
+        ["ERP", "enterprise resource planning"],
+        ["NetSuite", "oracle netsuite"],
+        ["QuickBooks", "quick books", "qbo"],
+        ["SAP FICO", "sap fi", "sap finance"],
+    ],
+
+    # ---------------------------------------------------------------
+    # 17. HEALTHCARE & NURSING (Phase 3A — de-SWE)
+    # ---------------------------------------------------------------
+    "healthcare": [
+        ["Patient Assessment", "patient assessments", "clinical assessment",
+         "nursing assessment"],
+        ["Patient Care", "direct patient care", "patient care management"],
+        ["Clinical Documentation", "clinical charting", "nursing documentation",
+         "chart documentation"],
+        ["Medication Administration", "med administration", "medication management"],
+        ["Telemetry", "cardiac telemetry", "telemetry monitoring"],
+        ["Electronic Health Records", "ehr", "electronic medical records",
+         "emr", "electronic health record"],
+        ["Epic", "epic systems", "epic ehr", "epic emr"],
+        ["Cerner", "cerner millennium", "oracle cerner"],
+        ["Care Coordination", "care management", "case management",
+         "discharge planning"],
+        ["Vital Signs", "vitals", "vital sign monitoring"],
+        ["IV Therapy", "intravenous therapy", "iv insertion",
+         "iv administration"],
+        ["Wound Care", "wound management", "wound assessment"],
+        ["BLS", "basic life support"],
+        ["ACLS", "advanced cardiac life support",
+         "advanced cardiovascular life support"],
+        ["PALS", "pediatric advanced life support"],
+        # NOTE: bare "rn" is intentionally omitted — it collides with the
+        # React Native alias. Use the unambiguous long forms.
+        ["Registered Nurse", "registered nurse", "r.n."],
+        ["Critical Care", "intensive care", "icu",
+         "critical care nursing"],
+        # NOTE: bare "hipaa" is owned by the security group; here we only add
+        # the healthcare-framed patient-privacy phrasing.
+        ["Patient Privacy", "patient confidentiality", "phi protection"],
+        ["Infection Control", "infection prevention", "sterile technique"],
+        ["Triage", "patient triage", "emergency triage"],
+        ["Phlebotomy", "blood draw", "venipuncture"],
+        ["Patient Education", "patient teaching", "discharge education"],
+        ["Care Plans", "nursing care plan", "care planning",
+         "individualized care plan"],
+    ],
+
+    # ---------------------------------------------------------------
+    # 18. MARKETING (Phase 3A — de-SWE)
+    # ---------------------------------------------------------------
+    "marketing": [
+        ["SEO", "search engine optimization", "organic search"],
+        ["SEM", "search engine marketing", "paid search"],
+        ["PPC", "pay-per-click", "pay per click", "ppc advertising"],
+        ["Google Ads", "google adwords", "adwords", "google advertising"],
+        ["Meta Ads", "facebook ads", "meta advertising", "facebook advertising"],
+        ["Paid Social", "social advertising", "paid social media"],
+        ["GA4", "google analytics 4", "google analytics", "ga"],
+        ["Conversion Rate Optimization", "cro", "conversion optimization",
+         "conversion-rate optimization"],
+        ["A/B Testing", "a b testing", "split testing", "ab testing",
+         "multivariate testing"],
+        ["Content Marketing", "content strategy", "content creation"],
+        ["Email Marketing", "email campaigns", "email automation",
+         "drip campaigns"],
+        ["Marketing Automation", "marketing ops", "martech"],
+        ["HubSpot", "hub spot"],
+        ["Marketo", "adobe marketo"],
+        ["Demand Generation", "demand gen", "lead generation", "lead gen"],
+        ["Brand Management", "brand strategy", "brand marketing", "branding"],
+        ["Social Media Marketing", "social media management", "smm",
+         "social media strategy"],
+        ["Campaign Management", "campaign planning", "marketing campaigns",
+         "campaign strategy"],
+        ["Copywriting", "marketing copy", "ad copy", "copywriter"],
+        ["Google Tag Manager", "gtm", "tag manager"],
+        ["Influencer Marketing", "influencer partnerships"],
+        ["Marketing Analytics", "marketing metrics", "attribution modeling"],
+    ],
+
+    # ---------------------------------------------------------------
+    # 19. SALES (Phase 3A — de-SWE)
+    # ---------------------------------------------------------------
+    "sales": [
+        ["Salesforce", "sfdc", "salesforce crm", "salesforce.com"],
+        ["CRM", "customer relationship management", "crm software"],
+        ["Pipeline Management", "sales pipeline", "pipeline development"],
+        ["Lead Qualification", "lead qualifying", "qualifying leads",
+         "bant"],
+        ["Account Management", "account manager", "key account management"],
+        ["Business Development", "biz dev", "bd", "new business development"],
+        ["Quota Attainment", "quota", "quota achievement", "hitting quota"],
+        ["Prospecting", "sales prospecting", "cold calling", "outbound prospecting"],
+        ["Negotiation", "contract negotiation", "deal negotiation"],
+        ["Cold Outreach", "cold email", "outbound sales", "cold outreach"],
+        ["Territory Management", "territory planning", "sales territory"],
+        ["Sales Forecasting", "revenue forecasting", "sales forecast"],
+        ["Upselling", "up-selling", "cross-selling", "cross selling"],
+        ["Customer Retention", "client retention", "churn reduction"],
+        ["SDR", "sales development representative", "sales development"],
+        ["Account Executive", "ae", "enterprise account executive"],
+        ["Solution Selling", "consultative selling", "value selling"],
+        ["Deal Closing", "closing deals", "closing", "deal close"],
+        ["Outreach", "outreach.io", "salesloft", "sales engagement"],
+    ],
+
+    # ---------------------------------------------------------------
+    # 20. DATA ANALYTICS / BI (domain expansion)
+    # ---------------------------------------------------------------
+    "analytics": [
+        ["Data Visualization", "data viz", "dataviz", "data visualisation"],
+        ["Dashboarding", "dashboards", "dashboard development",
+         "reporting dashboards"],
+        ["Requirements Gathering", "requirements analysis",
+         "requirements elicitation", "business requirements"],
+        ["Data Storytelling", "insights presentation", "data narrative"],
+        ["Cohort Analysis", "cohort analytics", "retention analysis"],
+        ["Funnel Analysis", "conversion funnel", "funnel analytics"],
+        ["Statistical Analysis", "statistical modeling", "statistics",
+         "hypothesis testing"],
+        ["Excel Modeling", "advanced excel", "pivot tables", "vlookup",
+         "xlookup"],
+        ["DAX", "data analysis expressions"],
+        ["SQL Reporting", "sql queries", "sql analysis"],
+        ["KPI Reporting", "kpi tracking", "metrics reporting",
+         "performance metrics"],
+        ["Google Data Studio", "data studio"],  # "looker studio" owned by Looker group
+        ["Business Intelligence", "bi reporting", "bi analytics"],
+    ],
+
+    # ---------------------------------------------------------------
+    # 21. CYBERSECURITY (domain expansion — beyond the security/authn group)
+    # ---------------------------------------------------------------
+    "cybersecurity": [
+        ["Threat Detection", "threat hunting", "threat analysis",
+         "threat intelligence"],
+        ["Incident Response", "security incident response", "ir",
+         "incident handling"],
+        ["Vulnerability Management", "vulnerability assessment",
+         "vulnerability scanning", "vuln management"],
+        ["Security Operations Center", "soc", "security operations"],
+        ["SIEM Tools", "qradar", "arcsight", "logrhythm"],  # "splunk" is its own canonical
+        ["Endpoint Detection", "edr", "endpoint security", "crowdstrike",
+         "sentinelone"],
+        ["Network Security", "firewall management", "ids", "ips",
+         "intrusion detection"],
+        ["Security Frameworks", "nist csf", "mitre att&ck", "cis controls",
+         "iso 27001"],
+        ["Risk Assessment", "security risk assessment", "risk management"],
+        ["Security Auditing", "security audit", "compliance audit"],
+        ["Malware Analysis", "reverse engineering", "malware reverse engineering"],
+        ["CISSP", "certified information systems security professional"],
+        ["CompTIA Security+", "security plus", "sec+"],
+        ["CEH", "certified ethical hacker"],
+    ],
+
+    # ---------------------------------------------------------------
+    # 22. IT / SYSTEMS / SUPPORT (domain expansion)
+    # ---------------------------------------------------------------
+    "it_support": [
+        ["ServiceNow", "service now", "snow itsm"],
+        ["Active Directory", "ad"],  # azure ad / entra id owned by the cloud group
+        ["ITIL", "itil framework", "it service management", "itsm"],
+        ["Help Desk Support", "helpdesk", "service desk", "desktop support"],
+        ["System Administration", "sysadmin", "systems administration"],
+        ["Network Administration", "network admin", "lan/wan",
+         "network troubleshooting"],
+        ["Windows Server", "windows server administration"],
+        ["Endpoint Management", "sccm", "intune", "mdm", "jamf"],
+        ["Ticketing Systems", "jira service desk", "zendesk", "freshservice"],
+        ["Hardware Troubleshooting", "hardware support", "pc troubleshooting"],
+        ["Remote Support", "remote desktop", "remote troubleshooting"],
+        ["CompTIA A+", "comptia network+", "network plus", "a plus"],
+    ],
+
+    # ---------------------------------------------------------------
+    # 23. PRODUCT MANAGEMENT (domain expansion)
+    # ---------------------------------------------------------------
+    "product": [
+        ["Product Roadmap", "roadmapping", "product roadmapping",
+         "roadmap planning"],
+        ["Product Strategy", "product vision", "go-to-market strategy"],
+        ["User Stories", "user story mapping", "story writing"],
+        ["Product Requirements", "prd", "product requirements document",
+         "requirements documentation"],
+        ["Backlog Management", "product backlog", "backlog grooming",
+         "backlog prioritization"],
+        ["Product Analytics", "amplitude", "mixpanel", "product metrics"],
+        ["User Research", "customer discovery", "user interviews"],
+        ["A/B Experimentation", "experimentation", "feature testing"],
+        ["Go-to-Market", "product launch", "launch strategy"],  # "gtm" owned by Google Tag Manager
+        ["Stakeholder Alignment", "cross-functional alignment"],
+        ["OKRs", "objectives and key results", "okr planning"],
+        ["Product Discovery", "opportunity assessment", "discovery process"],
+    ],
+
+    # ---------------------------------------------------------------
+    # 24. HUMAN RESOURCES / RECRUITING (domain expansion)
+    # ---------------------------------------------------------------
+    "hr": [
+        ["Talent Acquisition", "recruiting", "full-cycle recruiting",
+         "full cycle recruiting", "recruitment"],
+        ["Applicant Tracking System", "ats", "greenhouse", "lever",
+         "workday recruiting"],
+        ["Employee Relations", "er", "employee engagement",
+         "conflict resolution"],
+        ["Performance Management", "performance reviews",
+         "performance appraisal"],
+        ["Compensation and Benefits", "comp and benefits", "total rewards",
+         "benefits administration"],
+        ["Onboarding", "employee onboarding", "new hire orientation"],
+        ["HRIS", "hr information system", "workday hcm", "bamboohr",
+         "adp"],
+        ["Talent Management", "succession planning", "talent development"],
+        ["Diversity and Inclusion", "dei", "d&i", "diversity equity inclusion"],
+        ["Sourcing", "candidate sourcing", "boolean search", "linkedin recruiter"],
+        ["HR Compliance", "employment law", "eeo", "fmla"],
+        ["SHRM-CP", "shrm", "phr", "sphr"],
+    ],
+
+    # ---------------------------------------------------------------
+    # 25. CONSTRUCTION MANAGEMENT (domain expansion)
+    # ---------------------------------------------------------------
+    "construction": [
+        ["Procore", "procore construction"],
+        ["Primavera P6", "primavera", "p6", "oracle primavera"],
+        ["Bluebeam", "bluebeam revu"],
+        ["Cost Estimating", "construction estimating", "quantity takeoff",
+         "estimating"],
+        ["Project Scheduling", "construction scheduling", "cpm scheduling",
+         "critical path method"],
+        ["Submittals", "rfi management", "rfis", "submittal review"],
+        ["Change Orders", "change order management"],
+        ["Site Supervision", "field supervision", "site management"],
+        ["OSHA Compliance", "osha 30", "osha 10", "construction safety",
+         "safety compliance"],
+        ["Subcontractor Management", "subcontractor coordination",
+         "trade coordination"],
+        ["Building Codes", "code compliance", "permitting"],
+        ["Value Engineering", "constructability review"],
+        ["LEED", "leed certification", "green building"],
+    ],
+
+    # ---------------------------------------------------------------
+    # 26. ENGINEERING DISCIPLINES (mechanical / civil / electrical)
+    # ---------------------------------------------------------------
+    "engineering_disciplines": [
+        ["SolidWorks", "solid works"],
+        ["AutoCAD", "auto cad", "autodesk autocad"],
+        ["CATIA", "catia v5"],
+        ["Civil 3D", "autocad civil 3d", "civil3d"],
+        ["Revit", "autodesk revit", "bim"],
+        ["ANSYS", "ansys simulation"],
+        ["Finite Element Analysis", "fea", "fem", "finite element method"],
+        ["GD&T", "geometric dimensioning and tolerancing"],
+        ["MATLAB", "mat lab", "simulink"],
+        ["PLC Programming", "plc", "ladder logic", "scada"],
+        ["EPLAN", "eplan electric"],
+        ["ETAP", "power system analysis"],
+        ["Structural Analysis", "structural design", "load analysis"],
+        ["Thermodynamics", "heat transfer", "fluid dynamics", "cfd"],
+        ["PE License", "professional engineer", "professional engineer license",
+         "eit", "fe exam"],
+        ["Six Sigma", "lean manufacturing", "lean six sigma"],
+    ],
+
+    # ---------------------------------------------------------------
+    # 27. PROJECT / PROGRAM MANAGEMENT (domain expansion)
+    # ---------------------------------------------------------------
+    "project_mgmt": [
+        ["Project Management", "program management", "delivery management"],
+        ["PMP", "project management professional", "pmp certification"],
+        ["Agile", "agile methodology", "agile delivery"],
+        ["Scrum", "scrum master", "scrum framework"],
+        ["Kanban", "kanban board", "kanban method"],
+        ["Microsoft Project", "ms project", "msp"],
+        ["Risk Management", "risk mitigation", "risk register"],
+        ["Stakeholder Management", "stakeholder engagement"],
+        ["Resource Planning", "resource allocation"],  # "capacity planning" is its own canonical
+        ["Budget Management", "project budgeting", "cost control"],
+        ["Gantt Charts", "gantt"],  # "project scheduling" owned by construction group
+        ["SAFe", "scaled agile framework", "safe agile"],
+        ["Waterfall", "waterfall methodology"],
+        ["PMO", "project management office"],
+    ],
+
+    # ---------------------------------------------------------------
+    # 28. CONSULTING / STRATEGY (domain expansion)
+    # ---------------------------------------------------------------
+    "consulting": [
+        ["Management Consulting", "strategy consulting", "advisory"],
+        ["Market Analysis", "market research", "market sizing", "tam analysis"],
+        ["Business Strategy", "corporate strategy", "strategic planning"],
+        ["Financial Analysis", "business case"],  # "financial due diligence" owned by finance group
+        ["Process Improvement", "process optimization", "business process reengineering"],
+        ["Change Management", "organizational change", "transformation"],
+        ["Client Management", "client engagement", "client delivery"],
+        ["Data-Driven Recommendations", "insights and recommendations"],
+        ["Operating Model", "operating model design", "org design"],
+        ["Benchmarking", "competitive benchmarking", "competitive analysis"],
+        ["Stakeholder Interviews", "executive interviews"],
+    ],
 }
 
 

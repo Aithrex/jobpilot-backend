@@ -23,6 +23,11 @@ locals {
     # is wired: scheduled_jobs.dispatch_scheduled("trend_aggregate") enqueues the
     # resume `_process_job` job of the same name (system actor, payload {}).
     trend_aggregate = { expression = "cron(0 4 * * ? *)", desc = "Nightly cross-user market trend recompute (04:00 UTC)" }
+    # Nightly cross-user (role, keyword) -> mean-ATS-lift recompute (Part B3).
+    # Aggregate-only output (jd_keyword_ats_stats); same system-actor bridge as
+    # trend_aggregate: dispatch_scheduled("ats_signal_aggregate"). Runs after the
+    # trend recompute so the two nightly aggregates don't overlap.
+    ats_signal_aggregate = { expression = "cron(30 4 * * ? *)", desc = "Nightly cross-user ATS keyword-signal recompute (04:30 UTC)" }
   }
 }
 
