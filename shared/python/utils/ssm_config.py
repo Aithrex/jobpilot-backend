@@ -113,6 +113,10 @@ def get_all_secrets() -> Dict[str, str]:
         # Guest Onboarding — server-side salt for guest ip_hash. Without it,
         # guest_service.hash_ip fails CLOSED (stores null, logs once).
         'GUEST_IP_HASH_SALT': os.getenv('SSM_GUEST_IP_HASH_SALT'),
+        # ZeptoMail (Zoho transactional email) Send Mail token — the transport
+        # secret for email_service when EMAIL_PROVIDER=zeptomail. Missing → the
+        # service falls back to dev console logging (no mail sent).
+        'ZEPTOMAIL_TOKEN': os.getenv('SSM_ZEPTOMAIL_TOKEN'),
     }
     
     # Filter out empty values
@@ -282,6 +286,10 @@ class SSMConfig:
     @property
     def GUEST_IP_HASH_SALT(self) -> Optional[str]:
         return self._get('GUEST_IP_HASH_SALT', 'GUEST_IP_HASH_SALT')
+
+    @property
+    def ZEPTOMAIL_TOKEN(self) -> Optional[str]:
+        return self._get('ZEPTOMAIL_TOKEN', 'ZEPTOMAIL_TOKEN')
 
     @property
     def ALLOWED_ORIGINS(self) -> str:

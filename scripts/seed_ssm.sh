@@ -39,6 +39,7 @@ declare -A MAP=(
   [GOOGLE_OAUTH_CLIENT_ID]="google-oauth-client-id"
   [GOOGLE_OAUTH_CLIENT_SECRET]="google-oauth-client-secret"
   [GMAIL_TOKEN_ENCRYPTION_KEY]="gmail-token-encryption-key"
+  [ZEPTOMAIL_TOKEN]="zeptomail-token"
 )
 
 get_val() {

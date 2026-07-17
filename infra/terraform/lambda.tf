@@ -34,10 +34,17 @@ resource "aws_lambda_function" "service" {
       RESUME_S3_BUCKET   = aws_s3_bucket.resumes.bucket
       FRONTEND_URL       = var.frontend_url
       BACKEND_PUBLIC_URL = var.frontend_url
-      # Transactional + notification email sender (SES). Friendly-from; the
-      # aspirely.me domain must be a verified SES identity for sends to succeed.
+      # Transactional + notification email. EMAIL_PROVIDER selects the transport
+      # (zeptomail | ses); default is ses. We use ZeptoMail (Zoho transactional)
+      # because SES production access was denied — the aspirely.me domain must be
+      # a verified sender in ZeptoMail. From/Reply-To are shared across providers
+      # (email_service falls back to the SES_* names, so these stay authoritative).
+      EMAIL_PROVIDER   = "zeptomail"
       SES_FROM_ADDRESS = "Aspirely <no-reply@aspirely.me>"
       SES_REPLY_TO     = "support@aithrex.tech"
+      # ZeptoMail Send Mail token (SecureString via SSM). Non-US Mail Agents also
+      # need ZEPTOMAIL_API_URL (default is the .com host).
+      SSM_ZEPTOMAIL_TOKEN = "${var.ssm_path_prefix}/zeptomail-token"
       # Expected SNS topic for SES bounce/complaint feedback — the webhook
       # (POST /api/auth/ses-notifications) rejects messages from any other topic.
       SES_SNS_TOPIC_ARN = aws_sns_topic.ses_notifications.arn

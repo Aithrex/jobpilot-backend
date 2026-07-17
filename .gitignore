@@ -37,3 +37,8 @@ crash.log
 .idea/
 .DS_Store
 Thumbs.db
+
+# Terraform saved plan files (may contain sensitive values)
+tfplan
+tfplan_*
+*.tfplan
