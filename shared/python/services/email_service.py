@@ -213,6 +213,40 @@ def send_password_reset(to_email: str, reset_link: str) -> bool:
     return send_email(to_email, subject, html_body, text_body)
 
 
+def send_welcome(to_email: str, app_url: str = "") -> bool:
+    """Welcome a newly-registered user. Best-effort — the caller must not block
+    signup on the result."""
+    app_url = (app_url or "https://aspirely.me").rstrip("/")
+    subject = f"Welcome to {APP_NAME}"
+    html_body = f"""\
+<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:auto;color:#0f172a">
+  <h2 style="margin:0 0 12px">Welcome to {APP_NAME} 👋</h2>
+  <p style="color:#444;line-height:1.6">Your account is ready. {APP_NAME} helps you tailor your
+  résumé to each job, track applications, and prep for interviews — built to be honest about your
+  real experience, never to fabricate it.</p>
+  <p style="color:#444;line-height:1.6;margin:14px 0 0">To get started:</p>
+  <ol style="color:#444;line-height:1.7;padding-left:20px;margin:6px 0 0">
+    <li>Upload your résumé</li>
+    <li>See your best-matched jobs</li>
+    <li>Tailor and apply</li>
+  </ol>
+  <p style="margin:24px 0">
+    <a href="{app_url}" style="background:#4f46e5;color:#fff;padding:12px 20px;border-radius:8px;
+       text-decoration:none;display:inline-block;font-weight:600">Open {APP_NAME}</a>
+  </p>
+  <p style="color:#888;font-size:13px;line-height:1.6">Questions? Just reply to this email — it reaches a real person.</p>
+</div>"""
+    text_body = (
+        f"Welcome to {APP_NAME}\n\n"
+        f"Your account is ready. {APP_NAME} helps you tailor your resume to each job, track "
+        f"applications, and prep for interviews.\n\n"
+        f"Get started:\n  1. Upload your resume\n  2. See your best-matched jobs\n  3. Tailor and apply\n\n"
+        f"Open {APP_NAME}: {app_url}\n\n"
+        f"Questions? Just reply to this email."
+    )
+    return send_email(to_email, subject, html_body, text_body)
+
+
 def _strip_html(html: str) -> str:
     import re
     text = re.sub(r"<[^>]+>", " ", html or "")

@@ -196,6 +196,15 @@ def register():
         logger.error("register failed for %s: %s", email, e)
         return jsonify({"error": "Could not create account"}), 500
 
+    # Welcome email — best-effort, mirrors the password-reset dispatch. A mail
+    # failure (or unconfigured provider in dev) must never break signup.
+    try:
+        from utils.config import AppUrlsConfig
+        from services import email_service
+        email_service.send_welcome(email, AppUrlsConfig.FRONTEND_URL)
+    except Exception as e:
+        logger.warning("welcome email dispatch failed for %s: %s", email, e)
+
     # Return a token (the frontend deliberately discards it and asks the user to
     # log in explicitly — see AuthContext register()). Shape stays {access_token,email}.
     token = create_access_token(identity=email)
