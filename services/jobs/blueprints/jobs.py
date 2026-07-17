@@ -1135,3 +1135,84 @@ def delete_saved(job_id):
     except Exception as e:
         logger.error(f"Delete saved job error: {e}")
         return jsonify({"error": "Failed to delete job"}), 500
+
+
+# ------------------------------------------------------------------
+# POST /api/jobs/guest/matches — Guest Onboarding job matching (NO JWT)
+# ------------------------------------------------------------------
+# Free direct sources ONLY (Workday CXS + Greenhouse/Lever/Ashby — the same
+# skip_apify=True path as the daily pipeline; no Apify, no paid actors),
+# scored with jd_match_scorer against the guest's parsed resume, filtered to
+# score >= guest_jobs_min_score, capped at guest_jobs_max.
+#
+# Cached per guest per day in the session doc: a same-day repeat call returns
+# the cache synchronously (200, {cached:true}). A cache miss dispatches the
+# scrape+score as an ASYNC job (invariant #2 — the free-source fan-out blows
+# past API Gateway's 29s), returning 202 {job_id}; the FE polls
+# GET /api/resume/guest/job/<id>?guest_id=.
+@jobs_bp.route("/guest/matches", methods=["POST"])
+def guest_matches():
+    from services import guest_service
+
+    if not guest_service.guest_onboarding_enabled():
+        return (
+            jsonify({
+                "error": "guest_onboarding_disabled",
+                "message": "Guest onboarding is currently unavailable. Please sign up to continue.",
+            }),
+            503,
+        )
+
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"guest:matches:{client_ip}", max_requests=10, window_seconds=3600):
+        return jsonify({"error": "Rate limit exceeded"}), 429
+
+    data = request.get_json(force=True, silent=True) or {}
+    guest_id = guest_service.validate_guest_id(data.get("guest_id") or "")
+    if not guest_id:
+        return jsonify({"error": "A valid guest_id is required"}), 400
+
+    session = guest_service.get_session(guest_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+    if not ((session.get("resume") or {}).get("structured")):
+        return jsonify({"error": "Upload your resume first"}), 400
+
+    try:
+        cached = guest_service.get_cached_matches(guest_id)
+        if cached is not None:
+            # Same-day cache hit — serves from the session doc and must NOT
+            # consume the global daily scrape budget.
+            return jsonify(cached), 200
+
+        # Cache MISS = a real free-source scrape. Reserve a slot in the
+        # platform-wide daily budget (atomic) BEFORE dispatching.
+        if not guest_service.try_reserve_global_matches():
+            return (
+                jsonify({
+                    "error": "capacity",
+                    "global": True,
+                    "message": (
+                        "We've hit today's platform-wide limit for free guest "
+                        "job matching. Sign up (free) to continue — or try "
+                        "again tomorrow."
+                    ),
+                }),
+                429,
+            )
+
+        from services.resume_service import ResumeService
+
+        payload = {"guest_id": guest_id}
+        try:
+            job_id = guest_service.create_guest_job("guest_matches", payload, guest_id)
+            ResumeService.invoke_async(job_id, "guest_matches", payload)
+        except Exception:
+            # The job never dispatched — free the reserved global slot.
+            guest_service.release_global_matches()
+            raise
+        return jsonify({"job_id": job_id}), 202
+    except Exception as e:
+        logger.error(f"Guest matches error: {e}")
+        return jsonify({"error": "Failed to compute job matches"}), 500

@@ -356,6 +356,38 @@ INDEX_SPECS = [
     ("scheduled_posts", [("status", ASCENDING), ("scheduled_for", ASCENDING)],
      {"name": "status_scheduled_for"}),
     ("scheduled_posts", [("user_email", ASCENDING)], {"name": "by_user"}),
+
+    # === Guest Onboarding (docs/specs/guest-onboarding.md) ==================
+    # guest_sessions: guest_id is the uuid4 capability token — every route
+    # filters {guest_id} (guest_service.get_session / attach_parsed_resume /
+    # increment_guest_tailors). Unique protects capability-token integrity.
+    ("guest_sessions", [("guest_id", ASCENDING)], {"unique": True, "name": "guest_id_unique"}),
+    # Identity-resolution lookups (guest_identity_service._match_counts):
+    # exact-match / $in on each composite-identity signal field.
+    ("guest_sessions", [("identity.name_normalized", ASCENDING)],
+     {"name": "identity_name_normalized"}),
+    ("guest_sessions", [("identity.emails", ASCENDING)], {"name": "identity_emails"}),
+    ("guest_sessions", [("identity.phones", ASCENDING)], {"name": "identity_phones"}),
+    ("guest_sessions", [("identity.resume_hashes", ASCENDING)],
+     {"name": "identity_resume_hashes"}),
+    ("guest_sessions", [("fingerprint_hash", ASCENDING)],
+     {"sparse": True, "name": "fingerprint_hash_sparse"}),
+    # cluster membership scan (guest_identity_service.cluster_ids) filters
+    # {merged_into: canonical_id}; sparse — only merged members carry it.
+    ("guest_sessions", [("merged_into", ASCENDING)],
+     {"sparse": True, "name": "merged_into_sparse"}),
+    # claim lookups / admin "who claimed what" (guest_service.claim_session).
+    ("guest_sessions", [("claimed_by", ASCENDING)],
+     {"sparse": True, "name": "claimed_by_sparse"}),
+    # Guest job polling: get_guest_job filters {job_id, guest_id} — job_id is
+    # already unique above; add guest_id so the ownership check stays indexed.
+    ("resume_jobs", [("guest_id", ASCENDING)], {"sparse": True, "name": "guest_id_sparse"}),
+    # Guest tailoring records: claim_session.update_many filters
+    # {guest_id: {$in: cluster}, user_email: None}.
+    ("tailoring_records", [("guest_id", ASCENDING)],
+     {"sparse": True, "name": "guest_id_sparse"}),
+    # platform_config is keyed on _id (default index) — nothing extra needed;
+    # guest_global_counters (per-day $inc circuit breaker) likewise rides _id.
 ]
 
 

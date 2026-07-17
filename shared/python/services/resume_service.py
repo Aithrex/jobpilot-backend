@@ -644,6 +644,152 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             )
             svc.complete_job(job_id, {"parsed_resume": doc})
 
+        elif job_type == "guest_parse":
+            # Guest Onboarding — parse an anonymous upload (FLASH, same parser
+            # as upload_parse) but store the result on the guest_sessions doc,
+            # NOT user_resumes. Also runs the soft 2-of-N identity resolution
+            # so the completed job can carry "welcome back" recognition.
+            from services import guest_service
+
+            guest_id = payload.get("guest_id", "")
+            file_base64 = payload.get("file_base64")
+            mime_type = payload.get("mime_type", "application/pdf")
+            try:
+                validated, raw_text = svc.parser.parse_to_structured(
+                    "", file_base64, mime_type
+                )
+            except (ValueError, KeyError) as ve:
+                logger.warning("Guest parse validation failed: %s", ve)
+                svc.fail_job(job_id, f"Resume parsing failed validation: {ve}")
+                return
+            if len(raw_text.strip()) < 50:
+                svc.fail_job(
+                    job_id,
+                    "Could not extract meaningful text from the document. "
+                    "The file may be a scanned image or empty.",
+                )
+                return
+            recognition = guest_service.attach_parsed_resume(
+                guest_id,
+                validated,
+                raw_text,
+                payload.get("filename", ""),
+                fingerprint_hash=payload.get("fingerprint_hash"),
+            )
+            svc.complete_job(
+                job_id,
+                {
+                    "parsed_resume": {
+                        "structured": validated,
+                        "filename": payload.get("filename", ""),
+                    },
+                    "guest": recognition,
+                },
+            )
+
+        elif job_type == "guest_tailor":
+            # Guest Onboarding — PRO tailor against the guest session's parsed
+            # resume. Quota + circuit breaker were charged at the route BEFORE
+            # dispatch (gate before you spend). IntegrityGuard / fabrication
+            # filter / verification run exactly as in the logged-in pipeline.
+            from services import guest_service
+
+            guest_id = payload.get("guest_id", "")
+            session = guest_service.get_session(guest_id)
+            structured = ((session or {}).get("resume") or {}).get("structured")
+            if not structured:
+                svc.fail_job(
+                    job_id,
+                    "No parsed resume found for this session. Please upload your resume first.",
+                )
+                return
+
+            job_info = payload.get("job") or {}
+            jd_text = (job_info.get("jd_text") or "").strip()
+            if not jd_text and job_info.get("url"):
+                # JD URLs go ONLY through jd_fetcher (SSRF posture — spec §Security 6).
+                from services.jd_fetcher import fetch_jd
+
+                fetched, _kind = fetch_jd(job_info["url"])
+                jd_text = (fetched or "").strip()
+            if not jd_text:
+                svc.fail_job(
+                    job_id,
+                    "Couldn't get the job description from that link. "
+                    "Paste the JD text and try again.",
+                )
+                return
+
+            svc.update_job_progress(job_id, "extracting_jd", 5)
+            jd_analysis = svc.extract_jd(jd_text)
+
+            from services.profile_facts import build_fact_store
+            fact_store = build_fact_store(
+                user_email="", structured_resume=structured
+            )
+            gen_policy = _project_policy(structured, fact_store)
+            svc.update_job_progress(job_id, "tailoring", 25)
+            result = svc.tailor.tailor(structured, jd_analysis, fact_store=fact_store)
+            result = _finalize_tailored_result(
+                svc, job_id, result, structured, jd_analysis,
+                user_email="", fact_store=fact_store,
+                allow_project_generation=(
+                    gen_policy["allow"] and not gen_policy["evidence_only"]
+                ),
+            )
+
+            # Guest-owned tailoring record: user_email stays None until
+            # /guest/claim flips ownership to the signed-up account.
+            record_id = None
+            try:
+                import uuid as _uuid
+                from services.resume_versioning import build_initial_version
+                from utils.db_connect import DBConnect as _DBC
+
+                _db = _DBC().get_db()
+                record_id = str(_uuid.uuid4())
+                initial = build_initial_version(result, source="initial", ats_scores=None)
+                _db.tailoring_records.insert_one({
+                    "record_id": record_id,
+                    "user_email": None,
+                    "guest_id": guest_id,
+                    "base_resume_filename": (session.get("resume") or {}).get("filename") or "",
+                    "base_resume_s3_key": "",
+                    "jd_text": jd_text[:15000],
+                    "jd_analysis": jd_analysis,
+                    "tailored_resume": result,
+                    "versions": [initial],
+                    "current_version_id": initial["version_id"],
+                    "ats_scores": None,
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                    "source": "guest_tailor",
+                })
+                _db.guest_sessions.update_one(
+                    {"guest_id": guest_id},
+                    {"$push": {"tailor_record_ids": record_id}},
+                )
+            except Exception as rec_err:
+                logger.warning("guest_tailor: failed to save tailoring_record: %s", rec_err)
+
+            svc.complete_job(
+                job_id,
+                {
+                    "tailored_resume": result,
+                    "jd_analysis": jd_analysis,
+                    "record_id": record_id,
+                },
+            )
+
+        elif job_type == "guest_matches":
+            # Guest Onboarding — free direct sources only (skip_apify path),
+            # scored vs the guest's parsed resume, high-score only, cached
+            # per guest per day. No LLM, no paid actors.
+            from services import guest_service
+
+            result = guest_service.compute_guest_matches(payload.get("guest_id", ""))
+            svc.complete_job(job_id, result)
+
         elif job_type == "tailor":
             user_email = payload.get("user_email", "")
             resume = svc.parser.ensure_structured_resume(user_email=user_email)

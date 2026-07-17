@@ -110,6 +110,9 @@ def get_all_secrets() -> Dict[str, str]:
         # magic-links (NEVER the JWT secret). Fetched in the same batched
         # GetParameters call below (the loop chunks to the 10-per-call limit).
         'APPROVAL_LINK_SECRET': os.getenv('SSM_APPROVAL_LINK_SECRET'),
+        # Guest Onboarding — server-side salt for guest ip_hash. Without it,
+        # guest_service.hash_ip fails CLOSED (stores null, logs once).
+        'GUEST_IP_HASH_SALT': os.getenv('SSM_GUEST_IP_HASH_SALT'),
     }
     
     # Filter out empty values
@@ -275,6 +278,10 @@ class SSMConfig:
     @property
     def APPROVAL_LINK_SECRET(self) -> Optional[str]:
         return self._get('APPROVAL_LINK_SECRET', 'APPROVAL_LINK_SECRET')
+
+    @property
+    def GUEST_IP_HASH_SALT(self) -> Optional[str]:
+        return self._get('GUEST_IP_HASH_SALT', 'GUEST_IP_HASH_SALT')
 
     @property
     def ALLOWED_ORIGINS(self) -> str:

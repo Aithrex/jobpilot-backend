@@ -253,8 +253,22 @@ def quota(email_or_plan: str, feature: str) -> Optional[int]:
 
     Accepts either an email (looked up) or a plan name directly, so
     usage_service can pass a plan it already resolved.
+
+    The FREE plan's daily tailor limit is admin-tunable at runtime via
+    `platform_config.free_daily_tailors` (Guest Onboarding spec — the same
+    knob the guest→signup carry-in reads). Any config-read failure falls
+    back to the static PLAN_LIMITS value, so behavior without the config
+    doc is byte-for-byte the previous behavior (5/day).
     """
     plan = email_or_plan if email_or_plan in VALID_PLANS else get_plan(email_or_plan)
+    if plan == FREE and feature == "tailor":
+        try:
+            from services import platform_config_service as pconfig
+            runtime_limit = pconfig.get_guest_config().get("free_daily_tailors")
+            if isinstance(runtime_limit, int) and not isinstance(runtime_limit, bool) and runtime_limit >= 0:
+                return runtime_limit
+        except Exception:  # pragma: no cover - defensive fallback
+            pass
     return PLAN_LIMITS.get(plan, PLAN_LIMITS[DEFAULT_PLAN]).get(feature)
 
 

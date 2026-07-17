@@ -134,6 +134,46 @@ def ops_set_override(email):
 
 
 # ---------------------------------------------------------------------------
+# Guest Onboarding runtime config (platform_config._id="guest_onboarding")
+# ---------------------------------------------------------------------------
+# The admin tailoring-control surface for the guest funnel: quotas, score
+# threshold, circuit breaker, retention — all editable at runtime, no deploy.
+# Validation (types + sane bounds) lives in platform_config_service so the
+# route stays thin. PUT writes audit fields (updated_at/updated_by).
+@admin_bp.route("/guest-config", methods=["GET"])
+@admin_required
+def guest_config_get():
+    from services import platform_config_service as pconfig
+    from services.guest_service import guest_onboarding_env_enabled
+
+    cfg = pconfig.get_guest_config(force_refresh=True)
+    cfg["updated_at"] = _iso(cfg.get("updated_at"))
+    # Surface the env kill-switch state so the admin UI can explain why the
+    # feature is off even when the runtime `enabled` knob is on.
+    cfg["env_flag_enabled"] = guest_onboarding_env_enabled()
+    return jsonify(cfg), 200
+
+
+@admin_bp.route("/guest-config", methods=["PUT"])
+@admin_required
+def guest_config_put():
+    from services import platform_config_service as pconfig
+    from services.guest_service import guest_onboarding_env_enabled
+
+    body = request.get_json(force=True, silent=True) or {}
+    clean, errors = pconfig.validate_guest_config_patch(body)
+    if errors:
+        return jsonify({"error": "invalid_config", "fields": errors}), 400
+    if not clean:
+        return jsonify({"error": "invalid_config", "fields": {"_body": "No valid keys provided"}}), 400
+    cfg = pconfig.update_guest_config(clean, updated_by=get_jwt_identity())
+    cfg["updated_at"] = _iso(cfg.get("updated_at"))
+    cfg["env_flag_enabled"] = guest_onboarding_env_enabled()
+    logger.info("guest-config updated by %s: keys=%s", get_jwt_identity(), sorted(clean.keys()))
+    return jsonify(cfg), 200
+
+
+# ---------------------------------------------------------------------------
 # Stats
 # ---------------------------------------------------------------------------
 @admin_bp.route("/stats", methods=["GET"])

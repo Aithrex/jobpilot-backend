@@ -29,10 +29,12 @@ posting can't hang the request thread.
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
+import socket
 from typing import Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -48,6 +50,112 @@ _UA = (
     "(KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
 )
 _MAX_JD_CHARS = 6000
+
+
+# ---------------------------------------------------------------------------
+# SSRF guard — applied to EVERY outbound fetch in this module
+# ---------------------------------------------------------------------------
+# The JD URL is untrusted user input (guest tailor AND the logged-in
+# /api/jobs/fetch-jd path). Without a guard, requests.get(url) is a classic
+# SSRF primitive against the Lambda's VPC/metadata endpoint. Stdlib-only:
+# ipaddress + socket.getaddrinfo (no new deps).
+
+_ALLOWED_SCHEMES = {"http", "https"}
+_MAX_REDIRECTS = 5
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+
+
+def _ip_is_public(ip) -> bool:
+    """False for loopback / private (10/8, 172.16/12, 192.168/16, fc00::/7) /
+    link-local (169.254/16 incl. 169.254.169.254, fe80::/10) / reserved /
+    multicast / unspecified (0.0.0.0, ::) addresses."""
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped  # ::ffff:127.0.0.1 must fail like 127.0.0.1
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def url_is_safe(url: str) -> Tuple[bool, str]:
+    """SSRF guard: (allowed, reason). Scheme must be http/https and the host
+    — literal IP or EVERY address the name resolves to — must be public.
+
+    DNS resolution failure fails CLOSED (we refuse rather than let requests
+    resolve it a second time unchecked).
+    """
+    if not url or not isinstance(url, str):
+        return False, "empty_url"
+    try:
+        parsed = urlparse(url.strip())
+    except Exception:
+        return False, "unparseable_url"
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _ALLOWED_SCHEMES:
+        return False, f"scheme_not_allowed:{scheme or 'none'}"
+    host = parsed.hostname
+    if not host:
+        return False, "no_host"
+
+    # Literal IP (incl. bracketed IPv6) — validate directly, no DNS.
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        return (True, "") if _ip_is_public(literal) else (False, "private_ip_literal")
+
+    try:
+        port = parsed.port or (443 if scheme == "https" else 80)
+    except ValueError:
+        return False, "bad_port"
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, OSError, UnicodeError, ValueError):
+        return False, "dns_failure"
+    if not infos:
+        return False, "dns_empty"
+    for info in infos:
+        addr = str(info[4][0]).split("%")[0]
+        try:
+            resolved = ipaddress.ip_address(addr)
+        except ValueError:
+            return False, "unparseable_resolved_addr"
+        if not _ip_is_public(resolved):
+            return False, "resolves_to_private_ip"
+    return True, ""
+
+
+def _safe_get(url: str, *, timeout: int = _TIMEOUT_S, headers: Optional[dict] = None):
+    """requests.get with the SSRF guard applied to the URL AND to every
+    redirect hop (allow_redirects=False + manual follow, max 5, each target
+    re-validated before it is fetched). Returns the final Response, or None
+    when the URL/a hop was blocked or the redirect chain is too long.
+
+    Note: validate-then-fetch has an inherent DNS TOCTOU window (rebinding);
+    per-hop re-validation + private-range rejection is the accepted posture
+    here (no connection pinning without new deps).
+    """
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        allowed, reason = url_is_safe(current)
+        if not allowed:
+            logger.warning("jd_fetcher: blocked outbound fetch (%s)", reason)
+            return None
+        r = requests.get(current, timeout=timeout, headers=headers, allow_redirects=False)
+        if r.status_code in _REDIRECT_STATUSES:
+            location = r.headers.get("Location") or ""
+            if not location:
+                return r
+            current = urljoin(current, location)
+            continue
+        return r
+    logger.warning("jd_fetcher: redirect chain exceeded %d hops", _MAX_REDIRECTS)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +208,13 @@ def fetch_jd(url: str) -> Tuple[str, str]:
         host = urlparse(url).netloc.lower()
     except Exception:
         return "", "invalid_url"
+
+    # SSRF guard up front (scheme + host/IP ranges). Every per-source fetch
+    # below ALSO goes through _safe_get, which re-validates each redirect hop.
+    allowed, reason = url_is_safe(url)
+    if not allowed:
+        logger.warning("jd_fetcher: rejected JD url (%s)", reason)
+        return "", "blocked_url"
 
     # ---- LinkedIn (guest job-posting endpoint, no auth required) --------
     m = _LINKEDIN_VIEW_RE.search(url)
@@ -166,8 +281,8 @@ def fetch_jd(url: str) -> Tuple[str, str]:
 def _fetch_linkedin_guest(job_id: str) -> str:
     api_url = f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
     try:
-        r = requests.get(api_url, timeout=_TIMEOUT_S, headers={"User-Agent": _UA})
-        if not r.ok:
+        r = _safe_get(api_url, headers={"User-Agent": _UA})
+        if r is None or not r.ok:
             logger.info("LinkedIn guest JD %s returned %s", job_id, r.status_code)
             return ""
         return _html_to_text(r.text)[:_MAX_JD_CHARS]
@@ -179,8 +294,8 @@ def _fetch_linkedin_guest(job_id: str) -> str:
 def _fetch_greenhouse_detail(slug: str, job_id: str) -> str:
     api_url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs/{job_id}?content=true"
     try:
-        r = requests.get(api_url, timeout=_TIMEOUT_S)
-        if not r.ok:
+        r = _safe_get(api_url)
+        if r is None or not r.ok:
             return ""
         body = r.json() or {}
         content = body.get("content") or ""
@@ -193,8 +308,8 @@ def _fetch_greenhouse_detail(slug: str, job_id: str) -> str:
 def _fetch_lever_detail(slug: str, posting_id: str) -> str:
     api_url = f"https://api.lever.co/v0/postings/{slug}/{posting_id}?mode=json"
     try:
-        r = requests.get(api_url, timeout=_TIMEOUT_S)
-        if not r.ok:
+        r = _safe_get(api_url)
+        if r is None or not r.ok:
             return ""
         body = r.json() or {}
         plain = (body.get("descriptionPlain") or "").strip()
@@ -217,8 +332,8 @@ def _fetch_lever_detail(slug: str, posting_id: str) -> str:
 def _fetch_ashby_detail(slug: str, posting_id: str) -> str:
     api_url = f"https://api.ashbyhq.com/posting-api/job-board/{slug}/{posting_id}"
     try:
-        r = requests.get(api_url, timeout=_TIMEOUT_S)
-        if not r.ok:
+        r = _safe_get(api_url)
+        if r is None or not r.ok:
             return ""
         body = r.json() or {}
         # Ashby wraps the posting in a `job` field on detail endpoints.
@@ -251,7 +366,9 @@ def _fetch_workday_cxs(host: str, site: str, job_id: str, original_url: str) -> 
         "Referer": original_url,
     }
     try:
-        r = requests.get(cxs_url, timeout=_TIMEOUT_S, headers=headers)
+        r = _safe_get(cxs_url, headers=headers)
+        if r is None:
+            return ""
         if not r.ok:
             logger.info("Workday CXS %s -> %s", cxs_url, r.status_code)
             return ""
@@ -353,8 +470,10 @@ def _fetch_generic_html(url: str) -> str:
         "Upgrade-Insecure-Requests": "1",
     }
     try:
-        r = requests.get(url, timeout=_TIMEOUT_S, headers=headers, allow_redirects=True)
-        if not r.ok:
+        # _safe_get = SSRF guard + manual redirect follow with per-hop
+        # re-validation (replaces the old allow_redirects=True).
+        r = _safe_get(url, headers=headers)
+        if r is None or not r.ok:
             return ""
         # Cap raw body before regex work — some pages are MB of HTML and most
         # of it is non-content (navs, footers, scripts).

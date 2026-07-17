@@ -1,23 +1,114 @@
 """Security utilities for input validation and sanitization."""
+import ipaddress
+import os
 import re
 import html
 import logging
-from typing import Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
 
+def _peer_ip(request) -> str:
+    """Transport-level peer IP — set by the infrastructure, never spoofable.
+
+    Under Lambda, apig-wsgi exposes the raw API Gateway request context in the
+    WSGI environ (``apig_wsgi.request_context``); its ``sourceIp`` comes from
+    the TCP connection as observed by AWS. (apig-wsgi also mirrors it into
+    REMOTE_ADDR for HTTP API v2 events, but reading the context is explicit
+    and covers v1 payloads too.) Locally this falls back to remote_addr.
+    """
+    try:
+        ctx = request.environ.get("apig_wsgi.request_context") or {}
+        source = (
+            (ctx.get("http") or {}).get("sourceIp")        # HTTP API payload v2
+            or (ctx.get("identity") or {}).get("sourceIp")  # REST API / v1
+        )
+        if source:
+            return str(source).strip()
+    except Exception:  # pragma: no cover - defensive (odd environ shapes)
+        pass
+    return (request.remote_addr or "").strip()
+
+
+def _normalize_ip_token(token: str) -> str:
+    """Validate one X-Forwarded-For token as an IP; '' if it isn't one.
+
+    Handles the common proxy decorations: ``1.2.3.4:5678`` and ``[::1]:5678``.
+    """
+    token = (token or "").strip()
+    if not token:
+        return ""
+    if token.startswith("["):  # [ipv6]:port
+        token = token[1:].split("]", 1)[0]
+    elif token.count(":") == 1 and "." in token:  # ipv4:port
+        token = token.split(":", 1)[0]
+    try:
+        ipaddress.ip_address(token.split("%")[0])
+    except ValueError:
+        return ""
+    return token
+
+
+def _trusted_proxy_hops() -> int:
+    """Number of trusted forwarders in FRONT of API Gateway that each append
+    the true peer IP to X-Forwarded-For (CloudFront = 1, the prod default).
+    Set TRUSTED_PROXY_HOPS=0 when API Gateway is hit directly (no CloudFront)
+    so the connection source IP is used and XFF is ignored entirely."""
+    try:
+        return max(0, int(os.getenv("TRUSTED_PROXY_HOPS", "1")))
+    except (TypeError, ValueError):
+        return 1
+
+
 def get_client_ip(request) -> str:
+    """Real client IP, spoof-resistant behind CloudFront + API Gateway.
+
+    Trust model: each trusted hop APPENDS the IP of its own peer to
+    X-Forwarded-For, so everything a client sent itself sits on the LEFT and
+    is attacker-controlled; only the RIGHTMOST entries are trustworthy.
+    Prod chain (client -> CloudFront -> API Gateway -> Lambda) arrives as
+    ``[client-junk..., real_client, cloudfront_edge]`` with the request
+    context sourceIp == cloudfront_edge; we drop the entry duplicating the
+    connection peer, then take the rightmost remaining entry (per
+    TRUSTED_PROXY_HOPS, default 1 = CloudFront appended it).
+
+    Unchanged for existing traffic: requests without X-Forwarded-For (local
+    dev, tests, direct calls) still resolve to remote_addr, and a normal
+    non-spoofing user keys to the same IP as the old leftmost parse — only
+    attacker-prepended junk stops being honored. The return shape (a bare IP
+    string used as a RateLimiter key) is identical.
     """
-    Get client IP from request, respecting X-Forwarded-For when behind a proxy.
-    Uses the leftmost (original client) IP when the header contains multiple IPs.
-    """
-    raw = ""
-    if request.headers.getlist("X-Forwarded-For"):
-        raw = request.headers.getlist("X-Forwarded-For")[0].strip()
-    else:
-        raw = (request.remote_addr or "").strip()
-    return raw.split(",")[0].strip() if raw else ""
+    peer = _peer_ip(request)
+
+    entries: List[str] = []
+    try:
+        header_values = request.headers.getlist("X-Forwarded-For")
+    except Exception:  # pragma: no cover - defensive
+        header_values = []
+    for header_value in header_values:
+        for token in (header_value or "").split(","):
+            token = token.strip()
+            if token:
+                entries.append(token)
+
+    hops = _trusted_proxy_hops()
+    if not entries or hops == 0:
+        return peer
+
+    # API Gateway appends its own peer (the CloudFront edge, or the client
+    # when hit directly) as the last entry — drop the duplicate so the
+    # rightmost remaining entry is what the outermost trusted hop recorded.
+    if peer and entries[-1] == peer:
+        entries = entries[:-1]
+    if not entries:
+        return peer  # direct-to-API-Gateway: the peer IS the client
+
+    # Rightmost entry appended by the `hops` trusted forwarders = the client.
+    # Never walk further LEFT than that position — everything left of it is
+    # attacker-controlled; an invalid token there falls back to the peer.
+    idx = max(0, len(entries) - hops)
+    return _normalize_ip_token(entries[idx]) or peer
 
 
 class InputSanitizer:

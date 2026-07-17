@@ -102,11 +102,17 @@ def create_app():
     from blueprints.voice_graph import voice_graph_bp
     app.register_blueprint(voice_graph_bp, url_prefix='/api/resume/voice-graph')
 
+    # Guest Onboarding — mounted UNDER /api/resume (same rationale: rides the
+    # existing edge route). Gated per-route by GUEST_ONBOARDING_ENABLED AND the
+    # admin runtime knob (disabled → 503).
+    from blueprints.guest import guest_bp
+    app.register_blueprint(guest_bp, url_prefix='/api/resume/guest')
+
     @app.route('/api/health')
     def health():
         return {'status': 'healthy', 'service': 'resume-service', 'version': '2.0.0'}, 200
 
-    logger.info("Resume service initialized (resume, feedback, tech_chronicle, voice_graph registered)")
+    logger.info("Resume service initialized (resume, feedback, tech_chronicle, voice_graph, guest registered)")
     return app
 
 

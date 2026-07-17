@@ -29,6 +29,14 @@ approval channel's carrier plumbing is the human gate below.
 | Indexes | Run `python scripts/migrate_indexes.py` to create indexes for `auto_submit_settings`, `auto_submit_approvals`, `auto_submit_audit` (specs added this session). Until then those queries COLLSCAN (fine at low volume). | Run once |
 | **WhatsApp approval channel** | The backend hook `auto_submit_service.create_whatsapp_approval(user_email, application_id, answers)` creates an `approved` record with `source: whatsapp`, carrying the SAME guardrails as in-app (master flag + per-user opt-in + undo window + single-use expiry). The **Twilio / WhatsApp Cloud API send + receive is NOT built** and is not faked: it needs a Meta Business verification + WhatsApp Cloud API number + an approved message template (days), and Twilio (account + number + keys) if SMS-backed. The inbound reply handler is a NEW top-level prefix (e.g. `POST /api/whatsapp-inbound`) that needs an **external Terraform edge route** + Twilio/Meta signature verification; only after verifying an approving reply does it call `create_whatsapp_approval(...)`. Until wired, auto-submit approvals arrive `in_app` only. | Meta/Twilio account + verification + template approval + edge route |
 
+## Guest Onboarding — current build
+
+| Step | What | Status |
+|---|---|---|
+| **`GUEST_IP_HASH_SALT` (new SSM secret)** | Server-side salt for `guest_sessions.ip_hash` (sha256(ip + salt) for abuse correlation — never the raw IP). **Unset → fail closed:** `ip_hash` stored as `null`, feature still works, one no-PII warning logged. To wire it, the standard **4-edit SSM pattern** applies — the two in-repo edits are ✅ done (`utils/ssm_config.py` param map entry `SSM_GUEST_IP_HASH_SALT` + `SSMConfig.GUEST_IP_HASH_SALT` property); remaining for devops: (1) create the SecureString parameter (e.g. `/portfolio/prod/guest-ip-hash-salt`, value = a long random string), (2) add the `SSM_GUEST_IP_HASH_SALT` env var (pointing at that parameter path) to the **resume** Lambda in the external Terraform (jobs Lambda too if it ever calls `hash_ip`). Locally: set `GUEST_IP_HASH_SALT` in `.env`. | Devops: SSM param + Lambda env |
+| `TRUSTED_PROXY_HOPS` | `utils/security.get_client_ip` now derives the client IP from the rightmost trustworthy X-Forwarded-For entry. Default `1` matches prod (CloudFront → API Gateway). If API Gateway is ever exposed WITHOUT CloudFront, set `TRUSTED_PROXY_HOPS=0` on every Lambda so only the connection source IP is trusted. | Only on topology change |
+| Global daily guest budgets | `global_daily_guest_parses` (500) and `global_daily_guest_matches` (1000) join `global_daily_guest_tailors` (200) in `platform_config` — admin-tunable at runtime via `PUT /api/admin/guest-config`, no deploy. | Optional tuning |
+
 ## Anticipated gates for later epics (built behind flags as we reach them)
 
 | Epic | Human gate |
