@@ -50,6 +50,9 @@ from services.workday_jobs_service import (
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 8
+# ORC hosts (7k+ open reqs at JPMC) and Uber's search API run noticeably
+# slower than the board ATSes — give them a longer per-request budget.
+HEAVY_REQUEST_TIMEOUT = 15
 DETAIL_TIMEOUT = 6
 # The async runner is the RESUME Lambda (300s timeout in this repo, not the
 # legacy 900s monolith) — cap the fan-out to leave room for detail enrichment
@@ -129,6 +132,7 @@ _ATS_LABEL = {
     "smartrecruiters": "SmartRecruiters", "workable": "Workable",
     "recruitee": "Recruitee", "amazon": "Amazon Jobs",
     "eightfold": "Eightfold", "phenom": "Phenom",
+    "orc": "Oracle Recruiting", "uber": "Uber Careers",
 }
 
 # Explicit non-US markers for ATS location strings (board APIs often give
@@ -414,10 +418,113 @@ def _fetch_phenom(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
     return out
 
 
+def _fetch_orc(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
+    """Oracle Recruiting Cloud (ORC) — public CandidateExperience JSON API.
+
+    Config-driven: any company hosting on {host}/hcmRestApi (JPMorgan Chase,
+    Oracle itself, ...). ONE request per company — the `finder` DSL carries
+    the keyword server-side, so no per-term fan-in. Every posting on an ORC
+    host belongs to that company, so no employer filtering is needed.
+    Endpoint verified live 2026-07-17 (jpmc.fa.oraclecloud.com,
+    eeho.fa.us2.oraclecloud.com).
+    """
+    host = c["host"]
+    site = (c.get("extra") or {}).get("site_number") or "CX_1"
+    kw = " ".join(t.strip() for t in terms if t.strip()).strip()
+    finder = f"findReqs;siteNumber={site}"
+    if kw:
+        finder += f",keyword={kw}"
+    finder += ",limit=25,sortBy=POSTING_DATES_DESC"
+    try:
+        r = _SESSION.get(
+            f"https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions",
+            params={"onlyData": "true",
+                    "expand": "requisitionList.secondaryLocations",
+                    "finder": finder},
+            timeout=HEAVY_REQUEST_TIMEOUT)
+        r.raise_for_status()
+        items = (r.json() or {}).get("items") or []
+        if not items:
+            return []
+        out: List[Dict[str, Any]] = []
+        for j in items[0].get("requisitionList") or []:
+            if not isinstance(j, dict):
+                continue
+            desc = " ".join(x for x in [
+                j.get("ShortDescriptionStr") or "",
+                j.get("ExternalQualificationsStr") or "",
+                j.get("ExternalResponsibilitiesStr") or ""] if x)
+            out.append(_row(
+                c, j.get("Id"), j.get("Title") or "",
+                f"https://{host}/hcmUI/CandidateExperience/en/sites/{site}"
+                f"/job/{j.get('Id')}",
+                _iso(j.get("PostedDate")),
+                j.get("PrimaryLocation") or "",
+                description=_html_to_text(desc)[:5000],
+                country=str(j.get("PrimaryLocationCountry") or "")))
+        logger.info("orc: %s returned %d rows (total=%s)",
+                    c.get("slug"), len(out), items[0].get("TotalJobsCount"))
+        return out
+    except Exception as e:
+        logger.warning("orc: %s fetch failed: %s", c.get("slug"), type(e).__name__)
+        return []
+
+
+def _fetch_uber(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
+    """Uber's first-party careers search API (single company, no config).
+
+    POST loadSearchJobsResults with the literal csrf token "x" (accepted
+    anonymously). Endpoint verified live 2026-07-17.
+    """
+    query = " ".join(t.strip() for t in terms if t.strip()).strip()
+    body = {"params": {"query": query, "location": []}, "page": 0, "limit": 25}
+    try:
+        r = _SESSION.post(
+            "https://www.uber.com/api/loadSearchJobsResults?localeCode=en",
+            json=body, headers={"x-csrf-token": "x"},
+            timeout=HEAVY_REQUEST_TIMEOUT)
+        r.raise_for_status()
+        data = (r.json() or {}).get("data") or {}
+        results = data.get("results") or []
+        total = data.get("totalResults")
+        if isinstance(total, dict):   # API returns {"low": N} on some builds
+            total = total.get("low")
+        out: List[Dict[str, Any]] = []
+        for j in results:
+            if not isinstance(j, dict):
+                continue
+            locs = [x for x in (j.get("allLocations") or []) if isinstance(x, dict)]
+            loc0 = locs[0] if locs else (
+                j.get("location") if isinstance(j.get("location"), dict) else {})
+            location = ", ".join(
+                str(x) for x in [loc0.get("city"), loc0.get("region"),
+                                 loc0.get("countryName")] if x)
+            if not location and isinstance(j.get("location"), str):
+                location = j["location"]
+            title = str(j.get("title") or "")
+            desc = _html_to_text(str(j.get("description") or ""))
+            out.append(_row(
+                c, j.get("id"), title,
+                f"https://www.uber.com/global/en/careers/list/{j.get('id')}/",
+                _iso(j.get("creationDate") or j.get("updatedDate")),
+                location,
+                description=desc[:5000],
+                is_remote=bool(_REMOTE_RE.search(title + " " + desc)) or None,
+                country=str(loc0.get("country") or "")))
+        logger.info("uber: %s returned %d rows (total=%s)",
+                    c.get("slug"), len(out), total)
+        return out
+    except Exception as e:
+        logger.warning("uber: fetch failed: %s", type(e).__name__)
+        return []
+
+
 ENTERPRISE_FETCHERS: Dict[str, Callable[[Dict[str, str], List[str]], List[Dict[str, Any]]]] = {
     "amazon": _fetch_amazon,
     "eightfold": _fetch_eightfold,
     "phenom": _fetch_phenom,
+    "orc": _fetch_orc,
+    "uber": _fetch_uber,
 }
 
 # Hand-maintained (the auto-generated catalog covers board ATSes only).

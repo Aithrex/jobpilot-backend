@@ -8,6 +8,11 @@ company, dispatching per engine:
                  career_pages_service.ENTERPRISE_FETCHERS)
   workday      - the public Workday CXS endpoint (reuses
                  workday_cxs_fetcher._fetch_tenant; NVIDIA-style configs)
+  orc          - Oracle Recruiting Cloud public CE API (reuses
+                 career_pages_service ENTERPRISE_FETCHERS["orc"];
+                 JPMorgan Chase / Oracle, host + site_number per row)
+  uber         - Uber's first-party careers search API (reuses
+                 ENTERPRISE_FETCHERS["uber"]; single company, no config)
   aggregator   - JSearch "<title> <company>" for bot-walled companies
                  (Google/Meta/Apple/Tesla/...) with a STRICT employer-name
                  match so only that company's postings pass; skipped
@@ -93,16 +98,23 @@ def _source_kind(row: Dict[str, Any]) -> str:
         return row["ats"]
     if engine == "enterprise":
         return row["fetcher"]
-    if engine == "workday":
-        return "workday"
+    if engine in ("workday", "orc", "uber"):
+        return engine
     return "aggregator"
 
 
 def _company_dict(row: Dict[str, Any]) -> Dict[str, Any]:
     """Adapt an MNC row to the company dict the career-pages fetchers expect."""
+    engine = row.get("engine")
+    if engine == "career_pages":
+        ats = row["ats"]
+    elif engine in ("orc", "uber"):
+        ats = engine
+    else:
+        ats = row.get("fetcher", "")
     return {
         "display_name": row["display_name"],
-        "ats": row["ats"] if row.get("engine") == "career_pages" else row.get("fetcher", ""),
+        "ats": ats,
         "slug": row["slug"],
         "industry": row["sector"],
         "host": row.get("host", ""),
@@ -121,6 +133,16 @@ def _fetch_board(row: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _fetch_enterprise(row: Dict[str, Any], terms: List[str]) -> List[Dict[str, Any]]:
     jobs = ENTERPRISE_FETCHERS[row["fetcher"]](_company_dict(row), terms)
     # Same posting often matches several terms — dedupe here.
+    return list({j["job_id"]: j for j in jobs}.values())
+
+
+def _fetch_orc(row: Dict[str, Any], terms: List[str]) -> List[Dict[str, Any]]:
+    jobs = ENTERPRISE_FETCHERS["orc"](_company_dict(row), terms)
+    return list({j["job_id"]: j for j in jobs}.values())
+
+
+def _fetch_uber(row: Dict[str, Any], terms: List[str]) -> List[Dict[str, Any]]:
+    jobs = ENTERPRISE_FETCHERS["uber"](_company_dict(row), terms)
     return list({j["job_id"]: j for j in jobs}.values())
 
 
@@ -397,6 +419,10 @@ def run_mnc_search(
                     jobs_c = _fetch_enterprise(r, title_terms)
                 elif engine == "workday":
                     jobs_c = _fetch_workday(r, title_terms)
+                elif engine == "orc":
+                    jobs_c = _fetch_orc(r, title_terms)
+                elif engine == "uber":
+                    jobs_c = _fetch_uber(r, title_terms)
                 else:
                     jobs_c = _fetch_aggregator(r, title_terms)
             except Exception as e:

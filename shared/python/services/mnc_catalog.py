@@ -1,6 +1,6 @@
 """Curated MNC / Big-Tech catalog for the MNCs tab (third career-pages variant).
 
-Every DIRECT-fetch row (career_pages / workday / enterprise) was live-verified
+Every DIRECT-fetch row (career_pages / workday / enterprise / orc / uber) was live-verified
 on 2026-07-17: its public JSON endpoint returned HTTP 200 with real job rows
 using the exact URL patterns the existing fetchers use (see
 career_pages_service.FETCHERS / ENTERPRISE_FETCHERS and
@@ -14,6 +14,10 @@ Row shape: {display_name, slug, sector, engine, ...engine-specific}:
   engine "career_pages": + ats                     (slug = board slug)
   engine "enterprise":   + fetcher, host, extra    (ENTERPRISE_FETCHERS config)
   engine "workday":      + tenant, wd_host, site   (CXS fetcher config)
+  engine "orc":          + host, extra{site_number}  (Oracle Recruiting Cloud
+                           public CE API; verified live 2026-07-17)
+  engine "uber":         (no config — Uber's own careers search API;
+                           verified live 2026-07-17)
   engine "aggregator":   + aliases (optional)      (extra employer-name forms)
 """
 from __future__ import annotations
@@ -34,7 +38,8 @@ MNC_SECTORS: Tuple[str, ...] = (
     "media_entertainment",
 )
 
-MNC_ENGINES: Tuple[str, ...] = ("career_pages", "enterprise", "workday", "aggregator")
+MNC_ENGINES: Tuple[str, ...] = (
+    "career_pages", "enterprise", "workday", "orc", "uber", "aggregator")
 
 MNC_CATALOG: List[Dict[str, Any]] = [
     # ── big_tech ─────────────────────────────────────────────────────────
@@ -54,7 +59,7 @@ MNC_CATALOG: List[Dict[str, Any]] = [
     {"display_name": "Cisco", "slug": "cisco", "sector": "big_tech",
      "engine": "workday", "tenant": "cisco", "wd_host": "wd5", "site": "Cisco_Careers"},
     {"display_name": "Uber", "slug": "uber", "sector": "big_tech",
-     "engine": "aggregator", "aliases": ["uber technologies"]},
+     "engine": "uber"},
     {"display_name": "Airbnb", "slug": "airbnb", "sector": "big_tech",
      "engine": "career_pages", "ats": "greenhouse"},
 
@@ -83,7 +88,8 @@ MNC_CATALOG: List[Dict[str, Any]] = [
     {"display_name": "Adobe", "slug": "adobe", "sector": "enterprise_software",
      "engine": "workday", "tenant": "adobe", "wd_host": "wd5", "site": "external_experienced"},
     {"display_name": "Oracle", "slug": "oracle", "sector": "enterprise_software",
-     "engine": "aggregator", "aliases": ["oracle america"]},
+     "engine": "orc", "host": "eeho.fa.us2.oraclecloud.com",
+     "extra": {"site_number": "CX_1"}},
     {"display_name": "SAP", "slug": "sap", "sector": "enterprise_software",
      "engine": "aggregator", "aliases": ["sap america"]},
     {"display_name": "ServiceNow", "slug": "servicenow", "sector": "enterprise_software",
@@ -111,8 +117,8 @@ MNC_CATALOG: List[Dict[str, Any]] = [
 
     # ── finance_banking ──────────────────────────────────────────────────
     {"display_name": "JPMorgan Chase", "slug": "jpmorganchase", "sector": "finance_banking",
-     "engine": "aggregator",
-     "aliases": ["jpmorganchase", "jp morgan chase", "jpmorgan chase bank", "chase"]},
+     "engine": "orc", "host": "jpmc.fa.oraclecloud.com",
+     "extra": {"site_number": "CX_1"}},
     {"display_name": "Goldman Sachs", "slug": "goldmansachs", "sector": "finance_banking",
      "engine": "aggregator", "aliases": ["the goldman sachs group"]},
     {"display_name": "Morgan Stanley", "slug": "morganstanley", "sector": "finance_banking",

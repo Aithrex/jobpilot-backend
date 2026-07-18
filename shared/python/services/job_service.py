@@ -458,7 +458,7 @@ class JobService:
             api_params["employment_types"] = employment_type
 
         resp = requests.get(
-            f"{self.JSEARCH_BASE}/search",
+            f"{self.JSEARCH_BASE}/search-v2",
             headers=headers,
             params=api_params,
             timeout=20,
@@ -466,7 +466,15 @@ class JobService:
         if not resp.ok:
             raise RuntimeError(f"JSearch returned {resp.status_code} {resp.reason}")
         data = resp.json()
-        items = data.get("data") or []
+        # JSearch retired the flat `/search` endpoint (now 404) in favor of
+        # `/search-v2`, whose payload nests jobs under data.jobs (with a
+        # data.cursor for pagination). Tolerate both shapes so a future
+        # revert or a cached legacy response still parses.
+        payload = data.get("data")
+        if isinstance(payload, dict):
+            items = payload.get("jobs") or []
+        else:
+            items = payload or []
         logger.info(
             "JSearch query=%r date=%s returned %d items",
             clean_query, effective_date, len(items),

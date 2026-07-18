@@ -9,11 +9,13 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import requests
 
 from _vg_support import load_service_app
 
 from services.career_pages_service import ENTERPRISE_FETCHERS, FETCHERS
 from services.mnc_catalog import MNC_CATALOG, MNC_ENGINES, MNC_SECTORS
+import services.career_pages_service as cps
 import services.mnc_jobs_service as mnc
 
 
@@ -48,6 +50,12 @@ def test_catalog_engine_specific_keys():
             assert str(r.get("tenant") or "").strip(), r
             assert str(r.get("wd_host") or "").startswith("wd"), r
             assert str(r.get("site") or "").strip(), r
+        elif engine == "orc":
+            assert str(r.get("host") or "").strip(), r
+            assert isinstance(r.get("extra"), dict), r
+            assert str(r["extra"].get("site_number") or "").strip(), r
+        elif engine == "uber":
+            pass  # single company, no per-row config
         else:  # aggregator
             assert isinstance(r.get("aliases", []), list), r
 
@@ -85,7 +93,7 @@ def test_catalog_summary_shape():
             assert set(c.keys()) == {"name", "tenant", "ats"}
             assert c["ats"] in ("greenhouse", "lever", "ashby", "smartrecruiters",
                                 "workable", "recruitee", "amazon", "eightfold",
-                                "phenom", "workday", "aggregator")
+                                "phenom", "workday", "orc", "uber", "aggregator")
     assert count_sum == summary["total"]
     assert len(seen_keys) == len(set(seen_keys))
 
@@ -163,6 +171,179 @@ def test_fetch_aggregator_filters_foreign_employers(monkeypatch):
 
 
 # ----------------------------------------------------------------------
+# Direct engines: ORC (JPMorgan Chase / Oracle) + Uber — promoted off the
+# aggregator 2026-07-17. Mocked HTTP only; endpoints were verified live.
+# ----------------------------------------------------------------------
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+def test_catalog_promoted_direct_engines():
+    assert _row_for("oracle")["engine"] == "orc"
+    assert _row_for("oracle")["host"] == "eeho.fa.us2.oraclecloud.com"
+    assert _row_for("jpmorganchase")["engine"] == "orc"
+    assert _row_for("jpmorganchase")["host"] == "jpmc.fa.oraclecloud.com"
+    assert _row_for("uber")["engine"] == "uber"
+    assert "orc" in MNC_ENGINES and "uber" in MNC_ENGINES
+    # Still-bot-walled companies stay on the aggregator.
+    assert _row_for("google")["engine"] == "aggregator"
+
+    summary = mnc.catalog_summary()
+    ats_by_name = {c["name"]: c["ats"]
+                   for ind in summary["industries"] for c in ind["companies"]}
+    assert ats_by_name["Oracle"] == "orc"
+    assert ats_by_name["JPMorgan Chase"] == "orc"
+    assert ats_by_name["Uber"] == "uber"
+
+
+def _orc_payload(reqs, total=None):
+    item = {"requisitionList": reqs}
+    if total is not None:
+        item["TotalJobsCount"] = total
+    return {"items": [item]}
+
+
+def test_fetch_orc_normalizes_requisitions(monkeypatch):
+    posted = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    captured = {}
+
+    def fake_get(url, params=None, timeout=None, **kw):
+        captured["url"] = url
+        captured["params"] = params or {}
+        # No TotalJobsCount on purpose — its absence must not crash.
+        return _FakeResp(_orc_payload([
+            {"Id": "111", "Title": "Senior Software Engineer",
+             "PrimaryLocation": "Plano, TX, United States",
+             "PrimaryLocationCountry": "US", "PostedDate": posted,
+             "ShortDescriptionStr": "<p>Build backend services.</p>",
+             "ExternalQualificationsStr": "<p>Python and AWS.</p>",
+             "secondaryLocations": []},
+            {"Id": "222", "Title": "DevOps Engineer",
+             "PrimaryLocation": "Austin, TX, United States",
+             "PrimaryLocationCountry": "US", "PostedDate": posted},
+        ]))
+
+    monkeypatch.setattr(cps._SESSION, "get", fake_get)
+    jobs = mnc._fetch_orc(_row_for("oracle"), ["software engineer"])
+
+    assert captured["url"] == ("https://eeho.fa.us2.oraclecloud.com"
+                               "/hcmRestApi/resources/latest/recruitingCEJobRequisitions")
+    assert captured["params"]["finder"] == (
+        "findReqs;siteNumber=CX_1,keyword=software engineer,"
+        "limit=25,sortBy=POSTING_DATES_DESC")
+
+    assert len(jobs) == 2
+    by_id = {j["job_id"]: j for j in jobs}
+    j1 = by_id["orc:oracle:111"]
+    assert j1["title"] == "Senior Software Engineer"
+    assert j1["company"] == "Oracle"
+    assert j1["location"] == "Plano, TX, United States"
+    assert j1["country_hint"] == "us"
+    assert j1["apply_link"] == ("https://eeho.fa.us2.oraclecloud.com/hcmUI"
+                                "/CandidateExperience/en/sites/CX_1/job/111")
+    assert "Build backend services." in j1["description"]
+    assert "Python and AWS." in j1["description"]
+    assert j1["source"] == "Oracle Recruiting"
+    assert j1["days_ago"] == 2
+    # Row without description strings still normalizes.
+    assert by_id["orc:oracle:222"]["description"] == ""
+
+
+def test_fetch_orc_empty_items_no_keyword_and_errors(monkeypatch):
+    captured = {}
+
+    def fake_get(url, params=None, timeout=None, **kw):
+        captured["params"] = params or {}
+        return _FakeResp({"items": []})
+
+    monkeypatch.setattr(cps._SESSION, "get", fake_get)
+    row = _row_for("jpmorganchase")
+    assert mnc._fetch_orc(row, []) == []
+    # keyword= is omitted entirely when there are no query terms.
+    assert captured["params"]["finder"] == (
+        "findReqs;siteNumber=CX_1,limit=25,sortBy=POSTING_DATES_DESC")
+
+    def boom(*a, **k):
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(cps._SESSION, "get", boom)
+    assert mnc._fetch_orc(row, ["python"]) == []
+
+
+def test_fetch_uber_normalizes_results(monkeypatch):
+    created = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    captured = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None, **kw):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers or {}
+        return _FakeResp({"data": {
+            "totalResults": {"low": 2},   # dict form must be guarded
+            "results": [
+                {"id": 140123, "title": "Software Engineer II, Backend",
+                 "description": "Build Go and Python services.",
+                 "team": {"name": "Engineering"}, "department": "Engineering",
+                 "allLocations": [{"city": "San Francisco",
+                                   "region": "California",
+                                   "countryName": "United States",
+                                   "country": "USA"}],
+                 "location": {"city": "San Francisco"},
+                 "creationDate": created, "updatedDate": created},
+                {"id": 140999, "title": "Staff Engineer - Remote",
+                 "description": "Remote role.",
+                 "allLocations": [{"city": "Bangalore", "region": "Karnataka",
+                                   "countryName": "India", "country": "IND"}],
+                 "creationDate": created},
+            ]}})
+
+    monkeypatch.setattr(cps._SESSION, "post", fake_post)
+    jobs = mnc._fetch_uber(_row_for("uber"), ["software engineer"])
+
+    assert captured["url"] == "https://www.uber.com/api/loadSearchJobsResults?localeCode=en"
+    assert captured["headers"]["x-csrf-token"] == "x"
+    assert captured["json"] == {"params": {"query": "software engineer",
+                                           "location": []},
+                                "page": 0, "limit": 25}
+
+    assert len(jobs) == 2
+    by_id = {j["job_id"]: j for j in jobs}
+    us = by_id["uber:uber:140123"]
+    assert us["title"] == "Software Engineer II, Backend"
+    assert us["company"] == "Uber"
+    assert us["location"] == "San Francisco, California, United States"
+    assert us["country_hint"] == "usa"
+    assert us["apply_link"] == "https://www.uber.com/global/en/careers/list/140123/"
+    assert us["source"] == "Uber Careers"
+    assert us["days_ago"] == 1
+    # Non-USA rows still normalize (the shared US filter drops them later).
+    foreign = by_id["uber:uber:140999"]
+    assert foreign["country_hint"] == "ind"
+    assert foreign["is_remote"] is True        # "remote" in title/description
+
+
+def test_fetch_uber_guards_totals_and_errors(monkeypatch):
+    monkeypatch.setattr(
+        cps._SESSION, "post",
+        lambda *a, **k: _FakeResp({"data": {"results": [], "totalResults": 5}}))
+    assert mnc._fetch_uber(_row_for("uber"), []) == []
+
+    def boom(*a, **k):
+        raise requests.Timeout("slow")
+
+    monkeypatch.setattr(cps._SESSION, "post", boom)
+    assert mnc._fetch_uber(_row_for("uber"), ["python"]) == []
+
+
+# ----------------------------------------------------------------------
 # run_mnc_search — mocked fetchers, real scoring/filter/rank pipeline
 # ----------------------------------------------------------------------
 
@@ -219,6 +400,16 @@ def patched_pipeline(monkeypatch, mock_db):
                                description="Python microservices on AWS.")]
         if r["slug"] == "cisco" else [])
     monkeypatch.setattr(mnc, "_fetch_aggregator", lambda r, terms: [])
+    monkeypatch.setattr(
+        mnc, "_fetch_orc",
+        lambda r, terms: [_job(r["slug"], "o1", "Software Engineer", ats="orc",
+                               description="Java and Python microservices.")]
+        if r["slug"] == "oracle" else [])
+    monkeypatch.setattr(
+        mnc, "_fetch_uber",
+        lambda r, terms: [_job(r["slug"], "u1", "Software Engineer", ats="uber",
+                               description="Go and Python at scale on AWS.")]
+        if r["slug"] == "uber" else [])
     monkeypatch.setattr(mnc, "_jsearch_configured", lambda: True)
     monkeypatch.setattr(mnc, "_enrich_details", lambda jobs: 0)
     monkeypatch.setattr(mnc, "_load_resume_profile",
@@ -273,6 +464,21 @@ def test_run_mnc_search_scores_filters_and_ranks(patched_pipeline):
     assert partials, "partial_cb never called"
     assert partials[-1]["streaming"] is True
     assert "progress" in partials[-1] and "jobs" in partials[-1]
+
+
+def test_run_mnc_search_dispatches_orc_and_uber(patched_pipeline):
+    result = mnc.run_mnc_search(
+        {"titles": ["software engineer"],
+         "companies": ["oracle", "jpmorganchase", "uber"],
+         "us_only": True, "user_email": "t@x.com"})
+    assert result["tenants_total"] == 3
+    ids = {j["job_id"] for j in result["jobs"]}
+    assert "orc:oracle:o1" in ids
+    assert "uber:uber:u1" in ids
+    by_id = {j["job_id"]: j for j in result["jobs"]}
+    assert by_id["orc:oracle:o1"]["sector"] == "enterprise_software"
+    assert by_id["uber:uber:u1"]["sector"] == "big_tech"
+    assert {"orc", "uber"} <= set(result["ats_available"])
 
 
 def test_run_mnc_search_second_call_hits_cache(patched_pipeline):
