@@ -86,6 +86,12 @@ resource "aws_lambda_function" "service" {
       # approve-links (§2), read as a SecureString via SSM_APPROVAL_LINK_SECRET.
       CREDENTIALS_KMS_KEY_ID    = aws_kms_key.credentials.arn
       SSM_APPROVAL_LINK_SECRET  = "${var.ssm_path_prefix}/approval-link-secret"
+
+      # Guest onboarding (no-signup /start flow). ON in prod. Server-side salt
+      # for guest ip_hash via SSM (unset ⇒ hash_ip fails closed, feature still
+      # works). Gate = env flag AND the admin `enabled` knob (default true).
+      GUEST_ONBOARDING_ENABLED = "true"
+      SSM_GUEST_IP_HASH_SALT   = "${var.ssm_path_prefix}/guest-ip-hash-salt"
     }
   }
 
