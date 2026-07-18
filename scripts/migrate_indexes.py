@@ -348,6 +348,11 @@ INDEX_SPECS = [
     ("career_pages_cache", [("cache_key", ASCENDING)], {"name": "cache_key_1"}),
     ("career_pages_cache", [("cached_at", ASCENDING)],
      {"expireAfterSeconds": 6 * 3600, "name": "career_pages_cache_ttl"}),
+    # mnc_jobs_service._get_cache_collection creates these at runtime with the
+    # same names; re-asserted here for fresh DBs (6h TTL / 3h in-app freshness).
+    ("mnc_pages_cache", [("cache_key", ASCENDING)], {"name": "cache_key_1"}),
+    ("mnc_pages_cache", [("cached_at", ASCENDING)],
+     {"expireAfterSeconds": 6 * 3600, "name": "mnc_pages_cache_ttl"}),
 
     # === Learning §6.6 — cached differentiation analysis (reload without re-spend).
     ("differentiation_analyses", [("user_email", ASCENDING)],

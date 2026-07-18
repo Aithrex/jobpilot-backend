@@ -733,6 +733,61 @@ def career_pages_search():
 
 
 # ------------------------------------------------------------------
+# MNCs / Big Tech tab — third career-pages variant over the curated
+# MNC_CATALOG (board ATS + Workday CXS + enterprise platforms, with a
+# JSearch aggregator fallback for bot-walled companies). Same async
+# submit/poll pattern.
+# ------------------------------------------------------------------
+
+@jobs_bp.route("/mnc/catalog", methods=["GET"])
+@jwt_required()
+def mnc_catalog():
+    """Catalog metadata for the MNCs tab's sector/company filters."""
+    try:
+        from services.mnc_jobs_service import catalog_summary
+        return jsonify(catalog_summary()), 200
+    except Exception as e:
+        logger.error(f"MNC catalog error: {e}")
+        return jsonify({"error": "Failed to load MNC catalog"}), 500
+
+
+@jobs_bp.route("/mnc/search", methods=["POST"])
+@jwt_required()
+def mnc_search():
+    """Run an MNCs search across the verified MNC catalog.
+
+    Body mirrors /career-pages/search: titles, industries (sector keys),
+    companies (slugs), location, remote_only, us_only, force_refresh.
+    Returns: {"job_id": "..."} (202) — poll /api/resume/job/<id>.
+    """
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"jobs_mnc:{client_ip}", max_requests=6, window_seconds=300):
+        return jsonify({"error": "Rate limit exceeded. MNC searches are limited to 6 / 5 min."}), 429
+
+    data = request.get_json(silent=True) or {}
+    payload = {
+        "titles": _split_lines(data.get("titles"), max_items=40, max_len=120),
+        "industries": _split_lines(data.get("industries"), max_items=15, max_len=40),
+        "companies": _split_lines(data.get("companies"), max_items=100, max_len=60),
+        "location": InputSanitizer.sanitize_string(str(data.get("location") or ""), max_length=80),
+        "remote_only": bool(data.get("remote_only", False)),
+        "us_only": bool(data.get("us_only", True)),
+        "force_refresh": bool(data.get("force_refresh", False)),
+        "user_email": get_jwt_identity(),
+    }
+    try:
+        from services.resume_service import get_resume_service, ResumeService
+        svc = get_resume_service()
+        job_id = svc.create_job("mnc_jobs", payload, user_email=payload["user_email"])
+        ResumeService.invoke_async(job_id, "mnc_jobs", payload)
+        return jsonify({"job_id": job_id}), 202
+    except Exception as e:
+        logger.error(f"MNC search submit error: {e}")
+        return jsonify({"error": "Failed to start MNC search"}), 500
+
+
+# ------------------------------------------------------------------
 # POST /api/jobs/analyze
 # ------------------------------------------------------------------
 

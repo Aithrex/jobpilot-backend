@@ -1452,6 +1452,15 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result = run_career_pages_search(payload, partial_cb=_stream_career_partial)
             svc.complete_job(job_id, result)
 
+        elif job_type == "mnc_jobs":
+            from services.mnc_jobs_service import run_mnc_search
+
+            def _stream_mnc_partial(partial: dict) -> None:
+                svc.update_job_partial(job_id, partial)
+
+            result = run_mnc_search(payload, partial_cb=_stream_mnc_partial)
+            svc.complete_job(job_id, result)
+
         elif job_type == "daily_pipeline":
             # Idempotency guard — Lambda async invocations are at-least-once,
             # so AWS may retry the same job after a transient failure or long
