@@ -268,54 +268,57 @@ def _split_lines(value, max_items: int, max_len: int = 200) -> list:
 # Per-user Apify key (BYO) — GET status, PUT to set/update, DELETE to clear.
 # ------------------------------------------------------------------
 
-@jobs_bp.route("/apify-key", methods=["GET"])
-@jwt_required()
-def get_apify_key():
-    user_email = get_jwt_identity()
-    try:
-        from services.job_service import get_job_service
-        return jsonify(get_job_service().get_user_apify_key_status(user_email)), 200
-    except Exception as e:
-        logger.error(f"Get apify key error: {e}")
-        return jsonify({"error": "Failed to load key"}), 500
-
-
-@jobs_bp.route("/apify-key", methods=["PUT"])
-@jwt_required()
-def set_apify_key():
-    client_ip = get_client_ip(request)
-    limiter = get_rate_limiter()
-    if limiter.is_rate_limited(f"jobs_apify_key:{client_ip}", max_requests=10, window_seconds=300):
-        return jsonify({"error": "Rate limit exceeded"}), 429
-
-    user_email = get_jwt_identity()
-    data = request.get_json(silent=True) or {}
-    raw = data.get("apify_key", "")
-    if not isinstance(raw, str):
-        return jsonify({"error": "apify_key must be a string"}), 400
-    # Belt + braces: don't sanitize as 'string' here because the sanitizer
-    # may strip safe chars; we validate format inside the service.
-    try:
-        from services.job_service import get_job_service
-        result = get_job_service().set_user_apify_key(user_email, raw)
-        if not result.get("ok"):
-            return jsonify({"error": result.get("error", "Failed to save key")}), 400
-        return jsonify(result), 200
-    except Exception as e:
-        logger.error(f"Save apify key error: {e}")
-        return jsonify({"error": "Failed to save key"}), 500
-
-
-@jobs_bp.route("/apify-key", methods=["DELETE"])
-@jwt_required()
-def delete_apify_key():
-    user_email = get_jwt_identity()
-    try:
-        from services.job_service import get_job_service
-        return jsonify(get_job_service().delete_user_apify_key(user_email)), 200
-    except Exception as e:
-        logger.error(f"Delete apify key error: {e}")
-        return jsonify({"error": "Failed to remove key"}), 500
+# --- APIFY DISABLED (temporary): the BYO per-user Apify key endpoints are
+# turned off (GET/PUT/DELETE /api/jobs/apify-key). Uncomment this whole block
+# to re-enable. ---
+# @jobs_bp.route("/apify-key", methods=["GET"])
+# @jwt_required()
+# def get_apify_key():
+#     user_email = get_jwt_identity()
+#     try:
+#         from services.job_service import get_job_service
+#         return jsonify(get_job_service().get_user_apify_key_status(user_email)), 200
+#     except Exception as e:
+#         logger.error(f"Get apify key error: {e}")
+#         return jsonify({"error": "Failed to load key"}), 500
+#
+#
+# @jobs_bp.route("/apify-key", methods=["PUT"])
+# @jwt_required()
+# def set_apify_key():
+#     client_ip = get_client_ip(request)
+#     limiter = get_rate_limiter()
+#     if limiter.is_rate_limited(f"jobs_apify_key:{client_ip}", max_requests=10, window_seconds=300):
+#         return jsonify({"error": "Rate limit exceeded"}), 429
+#
+#     user_email = get_jwt_identity()
+#     data = request.get_json(silent=True) or {}
+#     raw = data.get("apify_key", "")
+#     if not isinstance(raw, str):
+#         return jsonify({"error": "apify_key must be a string"}), 400
+#     # Belt + braces: don't sanitize as 'string' here because the sanitizer
+#     # may strip safe chars; we validate format inside the service.
+#     try:
+#         from services.job_service import get_job_service
+#         result = get_job_service().set_user_apify_key(user_email, raw)
+#         if not result.get("ok"):
+#             return jsonify({"error": result.get("error", "Failed to save key")}), 400
+#         return jsonify(result), 200
+#     except Exception as e:
+#         logger.error(f"Save apify key error: {e}")
+#         return jsonify({"error": "Failed to save key"}), 500
+#
+#
+# @jobs_bp.route("/apify-key", methods=["DELETE"])
+# @jwt_required()
+# def delete_apify_key():
+#     user_email = get_jwt_identity()
+#     try:
+#         from services.job_service import get_job_service
+#         return jsonify(get_job_service().delete_user_apify_key(user_email)), 200
+#     except Exception as e:
+#         logger.error(f"Delete apify key error: {e}")
+#         return jsonify({"error": "Failed to remove key"}), 500
 
 
 @jobs_bp.route("/fetch-jd", methods=["POST"])

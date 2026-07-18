@@ -427,11 +427,15 @@ INTERN_TITLE = re.compile(r"\b(intern|internship|summer 2026|co-?op)\b", re.IGNO
 # Apify client
 # --------------------------------------------------------------------------
 def _get_apify_token() -> str:
-    return (
-        _get_config_value("APIFY_API_KEY", "")
-        or _get_config_value("APIFY_TOKEN", "")
-        or ""
-    )
+    # --- APIFY DISABLED (temporary): force an empty token so every Apify actor
+    # path no-ops and the pipeline stays on the free direct sources. Restore the
+    # original return below to re-enable Apify. ---
+    return ""
+    # return (
+    #     _get_config_value("APIFY_API_KEY", "")
+    #     or _get_config_value("APIFY_TOKEN", "")
+    #     or ""
+    # )
 
 
 _CREDIT_EXHAUSTED_HINTS = (
@@ -2030,12 +2034,18 @@ def run_pipeline(
     no token is configured. Used by the free scheduled morning-digest path so a
     daily run never spends Apify credits.
     """
-    if skip_apify:
-        token = ""
-    else:
-        token = (apify_token or "").strip() or _get_apify_token()
-        if not token:
-            raise RuntimeError("APIFY_API_KEY/APIFY_TOKEN is not configured")
+    # --- APIFY DISABLED (temporary): force the free direct-source path so the
+    # pipeline never calls paid Apify actors (LinkedIn/Workday/Indeed) and never
+    # raises on a missing token. It keeps returning free direct-ATS + Workday-CXS
+    # results. Restore the block below to re-enable Apify. ---
+    skip_apify = True
+    token = ""
+    # if skip_apify:
+    #     token = ""
+    # else:
+    #     token = (apify_token or "").strip() or _get_apify_token()
+    #     if not token:
+    #         raise RuntimeError("APIFY_API_KEY/APIFY_TOKEN is not configured")
 
     li_kw = [k.strip() for k in (linkedin_keywords or DEFAULT_LINKEDIN_KEYWORD_SETS) if k and k.strip()]
     wd_titles = [t.strip() for t in (workday_titles or DEFAULT_WORKDAY_TITLES) if t and t.strip()]

@@ -401,6 +401,10 @@ def _fetch_apify_fallback(url: str) -> str:
     surfaces the same "couldn't fetch — paste manually" UX as before. This
     is purely additive — never invoked when the direct path succeeded.
     """
+    # --- APIFY DISABLED (temporary): the browser-rendered Apify JD fallback is
+    # turned off. Return "" so callers fall through to the existing "couldn't
+    # fetch — paste manually" UX. Remove this return to re-enable. ---
+    return ""
     from urllib.parse import quote
     try:
         from services.daily_pipeline_service import _get_apify_token

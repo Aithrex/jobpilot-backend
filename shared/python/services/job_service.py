@@ -675,7 +675,11 @@ class JobService:
 
     @staticmethod
     def _get_apify_token() -> str:
-        return _get_config_value("APIFY_API_KEY", "") or _get_config_value("APIFY_TOKEN", "")
+        # --- APIFY DISABLED (temporary): return no token so the live-search
+        # fan-out skips all Apify actors and runs JSearch + free direct sources
+        # only. Restore the original return below to re-enable. ---
+        return ""
+        # return _get_config_value("APIFY_API_KEY", "") or _get_config_value("APIFY_TOKEN", "")
 
     def _run_apify_actor(
         self,

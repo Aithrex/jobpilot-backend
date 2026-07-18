@@ -91,8 +91,9 @@ def get_all_secrets() -> Dict[str, str]:
         'JWT_SECRET_KEY': os.getenv('SSM_JWT_SECRET'),
         'IPINFO_TOKEN': os.getenv('SSM_IPINFO_TOKEN'),
         'JSEARCH_API_KEY': os.getenv('SSM_JSEARCH_API_KEY'),
-        'APIFY_API_KEY': os.getenv('SSM_APIFY_API_KEY'),
-        'APIFY_TOKEN': os.getenv('SSM_APIFY_TOKEN'),
+        # --- APIFY DISABLED (temporary) ---
+        # 'APIFY_API_KEY': os.getenv('SSM_APIFY_API_KEY'),
+        # 'APIFY_TOKEN': os.getenv('SSM_APIFY_TOKEN'),
         'JOB_SEARCH_PASSWORD_HASH': os.getenv('SSM_JOB_SEARCH_PASSWORD_HASH'),
         'GITHUB_PAT': os.getenv('SSM_GITHUB_PAT'),
         'GOOGLE_SIGNIN_CLIENT_ID': os.getenv('SSM_GOOGLE_SIGNIN_CLIENT_ID'),
@@ -221,11 +222,16 @@ class SSMConfig:
 
     @property
     def APIFY_API_KEY(self) -> Optional[str]:
-        return self._get('APIFY_API_KEY', 'APIFY_API_KEY')
+        # --- APIFY DISABLED (temporary): never resolve an Apify key from
+        # SSM/env. Restore the original return to re-enable. ---
+        return None
+        # return self._get('APIFY_API_KEY', 'APIFY_API_KEY')
 
     @property
     def APIFY_TOKEN(self) -> Optional[str]:
-        return self._get('APIFY_TOKEN', 'APIFY_TOKEN')
+        # --- APIFY DISABLED (temporary) ---
+        return None
+        # return self._get('APIFY_TOKEN', 'APIFY_TOKEN')
 
     @property
     def JOB_SEARCH_PASSWORD_HASH(self) -> Optional[str]:
