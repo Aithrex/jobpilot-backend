@@ -20,6 +20,7 @@ Domains (coarse, intentionally few):
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -184,3 +185,63 @@ def classify_domain(
 def allows_project_generation(domain: str) -> bool:
     """GitHub-style project generation only makes sense for tech domains."""
     return domain in PROJECT_GEN_DOMAINS
+
+
+# ---------------------------------------------------------------------------
+# Career-Portals retrieval vocabulary (used by workday/career-pages/mnc tabs)
+# ---------------------------------------------------------------------------
+# Single-word profession head-nouns. The Career-Portals engines use this to
+#   (a) accept a lone-token job title as a real search term, and
+#   (b) widen cross-title recall to the user's OWN profession.
+# It is a SUPERSET of the old tech-only allowlist (engineer/developer/...), so
+# tech users are unaffected — it only rescues non-tech titles that were being
+# dropped (a lone "Nurse"/"Electrician"/"Accountant" used to fall through to
+# the "software engineer" fallback). Generic corporate filler (manager,
+# coordinator, specialist, associate, director, ...) is deliberately EXCLUDED:
+# those match nearly every posting and would flood results.
+ROLE_NOUNS = frozenset({
+    # tech (superset of the previous _derive_query_terms allowlist)
+    "engineer", "developer", "scientist", "analyst", "architect", "devops",
+    "sre", "administrator", "consultant", "designer", "programmer",
+    # healthcare
+    "nurse", "physician", "surgeon", "clinician", "therapist", "pharmacist",
+    "technologist", "technician", "phlebotomist", "hygienist", "paramedic",
+    "caregiver", "practitioner", "dietitian", "sonographer", "radiographer",
+    # skilled trades / industrial
+    "electrician", "machinist", "welder", "mechanic", "plumber", "carpenter",
+    "operator", "millwright", "fabricator", "installer", "lineman",
+    "pipefitter",
+    # finance / legal / admin
+    "accountant", "auditor", "bookkeeper", "controller", "actuary",
+    "underwriter", "attorney", "paralegal", "counsel", "adjuster", "teller",
+    "cashier",
+    # education / services / hospitality / ops
+    "teacher", "professor", "instructor", "librarian", "counselor", "chef",
+    "cook", "bartender", "server", "barista", "housekeeper", "custodian",
+    "estimator", "surveyor", "inspector", "appraiser", "recruiter", "buyer",
+    "planner", "dispatcher", "driver",
+})
+
+
+def user_role_noun_re(titles: Optional[List[str]]) -> Optional["re.Pattern"]:
+    """Regex matching the profession head-nouns present in the user's OWN
+    titles (e.g. {"nurse"} for a nurse, {"engineer","devops"} for a SWE).
+
+    Career-Portals tier-1 recall unions this with the built-in engineering net,
+    so a nurse also recalls differently-titled nurse rows ("Charge Nurse")
+    without a global list that would flood every user's results. Returns None
+    when the titles carry no recognizable role noun (callers then keep today's
+    exact behavior). Never raises.
+    """
+    try:
+        found = {
+            re.escape(tok)
+            for t in (titles or [])
+            for tok in re.split(r"[^a-z0-9]+", str(t).lower())
+            if tok in ROLE_NOUNS
+        }
+        if not found:
+            return None
+        return re.compile(r"\b(?:" + "|".join(sorted(found)) + r")\b", re.IGNORECASE)
+    except Exception:  # pragma: no cover - retrieval must never break on this
+        return None

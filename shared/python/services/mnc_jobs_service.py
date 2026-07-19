@@ -45,6 +45,7 @@ from services.career_pages_service import (
     _read_cache,
     _write_cache,
 )
+from services.domain_classifier import user_role_noun_re
 from services.mnc_catalog import MNC_CATALOG, MNC_ENGINES, MNC_SECTORS
 from services.workday_cxs_fetcher import _fetch_tenant
 from services.workday_jobs_service import (
@@ -335,6 +336,9 @@ def run_mnc_search(
 
     skills, resume_years = _load_resume_profile(user_email)
     title_terms = _derive_query_terms(titles, cap=MAX_QUERY_TERMS)
+    # Widen tier-1 recall to the user's OWN profession (unions with the
+    # engineering net, so tech users are unaffected).
+    role_noun_re = user_role_noun_re(titles)
     skill_terms = _derive_skill_terms(skills, title_terms,
                                       cap=TOTAL_TERMS_CAP - len(title_terms))
     terms = title_terms + skill_terms
@@ -431,7 +435,7 @@ def run_mnc_search(
                       if j.get("days_ago") is not None and j["days_ago"] <= WINDOW_DAYS]
             if us_only:
                 jobs_c = [j for j in jobs_c if _keep_us(j)]
-            jobs_c = _keep_relevant(jobs_c, term_res, skill_res)
+            jobs_c = _keep_relevant(jobs_c, term_res, skill_res, role_noun_re)
             jobs_c.sort(key=lambda j: (j.get("_tier", 1), j.get("days_ago") or 0))
             jobs_c = jobs_c[:PER_COMPANY_KEEP]
             for j in jobs_c:

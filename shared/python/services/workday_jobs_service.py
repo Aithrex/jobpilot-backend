@@ -38,6 +38,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
+from services.domain_classifier import ROLE_NOUNS
 from services.workday_cxs_fetcher import _HEADERS, _approx_iso_from_relative
 from services.workday_tenant_catalog import WORKDAY_TENANT_CATALOG, INDUSTRIES
 
@@ -160,6 +161,8 @@ def _derive_query_terms(titles: List[str], cap: int = MAX_QUERY_TERMS) -> List[s
     """
     seen: set = set()
     out: List[str] = []
+    loose_seen: set = set()
+    loose: List[str] = []          # every cleaned term, incl. lone modifiers
     for raw in titles or []:
         # Compound resume titles like "Cloud/DevOps Engineer (Associate
         # Data Scientist)" must yield SEPARATE terms ("cloud engineer",
@@ -169,21 +172,30 @@ def _derive_query_terms(titles: List[str], cap: int = MAX_QUERY_TERMS) -> List[s
             core = [t for t in tokens if t not in _TERM_NOISE]
             if not core:
                 continue
-            # A lone non-role token ("cloud" left over from "Cloud/DevOps")
-            # is too broad to search on its own.
-            if len(core) == 1 and core[0] not in {
-                "engineer", "developer", "scientist", "analyst", "architect",
-                "devops", "sre", "administrator", "consultant", "designer",
-            }:
-                continue
             term = " ".join(core[:4])
+            if term not in loose_seen:
+                loose_seen.add(term)
+                loose.append(term)
+            # A lone token joins the PRIMARY search set only if it's a real
+            # role noun. ROLE_NOUNS spans tech AND non-tech professions (nurse,
+            # electrician, accountant, teacher, …), so a single-word non-tech
+            # title is kept. A lone MODIFIER ("cloud", left over from
+            # "Cloud/DevOps Engineer") is too broad to search alongside real
+            # role terms, so it's held back here — but still captured in
+            # `loose` so it isn't lost if it's all the user gave us.
+            if len(core) == 1 and core[0] not in ROLE_NOUNS:
+                continue
             if term in seen:
                 continue
             seen.add(term)
             out.append(term)
             if len(out) >= cap:
                 return out
-    return out or ["software engineer"]
+    # Prefer role-qualified terms. If none survived, fall back to the user's
+    # OWN cleaned title tokens (so a bare "cloud" searches cloud roles) rather
+    # than a tech-centric default; only use "software engineer" when the user
+    # gave no usable title text at all.
+    return out or loose[:cap] or ["software engineer"]
 
 
 # Soft skills / ubiquitous tokens that would make terrible search terms —
@@ -643,9 +655,33 @@ def _attach_feasibility(jobs: List[Dict[str, Any]], resume_skills: List[str],
     if not resume_skills:
         return
     resume_fams = _families_in(" \n".join(resume_skills))
+    # A resume with no recognizable tech stack is non-tech. The stack-mismatch
+    # / "not a technical role" / IC-vs-management verdicts below are all
+    # tech-specific and would wrongly "skip" every nurse/accountant/teacher
+    # role. For non-tech resumes we therefore run ONLY the domain-agnostic
+    # gates that are still valid — the experience-year gap and the clearance
+    # requirement — and otherwise leave feasibility neutral.
+    is_tech = bool(resume_fams)
     for job in jobs:
         title = job.get("title") or ""
         desc = job.get("description") or ""
+        if not is_tech:
+            verdict, reason = None, ""
+            if desc and _CLEARANCE_RE.search(desc):
+                verdict, reason = "skip", "Requires an active security clearance"
+            else:
+                req = _required_years(desc) if desc else None
+                gap = (req - resume_years) if (req and resume_years is not None) else 0
+                if gap >= 5:
+                    verdict, reason = "skip", f"Asks ~{req}+ yrs experience vs ≈{resume_years} on resume"
+                elif gap >= 2:
+                    verdict, reason = "stretch", f"Asks ~{req}+ yrs vs ≈{resume_years} — a stretch"
+            if verdict:
+                job["tailor_feasibility"] = verdict
+                job["feasibility_reason"] = reason
+                if verdict == "skip":
+                    job["match_score"] = min(job.get("match_score") or 0, 12)
+            continue
         title_fams = _families_in(title)
         core = set(title_fams)
         if desc:

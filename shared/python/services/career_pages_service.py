@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import requests
 
 from services.career_pages_catalog import ATS_KINDS, CAREER_PAGES_CATALOG, INDUSTRIES
+from services.domain_classifier import user_role_noun_re
 from services.workday_jobs_service import (
     GLOBAL_KEEP,
     WINDOW_DAYS,
@@ -626,12 +627,14 @@ _ROLE_NOUN_RE = re.compile(
 
 
 def _keep_relevant(jobs: List[Dict[str, Any]], term_res: List[re.Pattern],
-                   skill_res: List[re.Pattern]) -> List[Dict[str, Any]]:
+                   skill_res: List[re.Pattern],
+                   extra_role_re: Optional[re.Pattern] = None) -> List[Dict[str, Any]]:
     """Keep rows a Workday CXS search WOULD have retrieved, tiered:
       0 - a query term matches the title (best)
-      1 - the title carries an engineering role noun, or the description
-          mentions >=2 distinct resume skills (the differently-titled-but-
-          matching-skills recall path)
+      1 - the title carries a role noun (the built-in engineering net UNION the
+          user's own profession nouns via ``extra_role_re`` — so a nurse also
+          recalls 'Charge Nurse' rows), or the description mentions >=2 distinct
+          resume skills (the differently-titled-but-matching-skills recall path)
     The tier drives the per-company cap so term matches never lose their
     slot to generic engineer rows."""
     out = []
@@ -643,13 +646,15 @@ def _keep_relevant(jobs: List[Dict[str, Any]], term_res: List[re.Pattern],
             j["_tier"] = 0
             out.append(j)
             continue
-        if _ROLE_NOUN_RE.search(title):
+        if _ROLE_NOUN_RE.search(title) or (extra_role_re and extra_role_re.search(title)):
             j["matched_terms"] = []
             j["_tier"] = 1
             out.append(j)
             continue
-        desc = (j.get("description") or "").lower()
-        if desc and sum(1 for rx in skill_res if rx.search(desc)) >= 2:
+        # Include inline board metadata so a description-less row (SmartRecruiters
+        # / Workable) can still be recalled by skills its department/function names.
+        desc = ((j.get("description") or "") + " " + (j.get("_meta") or "")).lower()
+        if desc.strip() and sum(1 for rx in skill_res if rx.search(desc)) >= 2:
             j["matched_terms"] = []
             j["_tier"] = 1
             out.append(j)
@@ -864,6 +869,9 @@ def run_career_pages_search(
     ]
     skills, resume_years = _load_resume_profile(user_email)
     title_terms = _derive_query_terms(titles, cap=MAX_QUERY_TERMS)
+    # Widen tier-1 recall to the user's OWN profession (a nurse also keeps
+    # "Charge Nurse"; a SWE is unchanged — this unions with the engineering net).
+    role_noun_re = user_role_noun_re(titles)
     skill_terms = _derive_skill_terms(skills, title_terms,
                                       cap=TOTAL_TERMS_CAP - len(title_terms))
     terms = title_terms + skill_terms
@@ -955,7 +963,7 @@ def run_career_pages_search(
                       if j.get("days_ago") is not None and j["days_ago"] <= WINDOW_DAYS]
             if us_only:
                 jobs_c = [j for j in jobs_c if _keep_us(j)]
-            jobs_c = _keep_relevant(jobs_c, term_res, skill_res)
+            jobs_c = _keep_relevant(jobs_c, term_res, skill_res, role_noun_re)
             jobs_c.sort(key=lambda j: (j.get("_tier", 1), j.get("days_ago") or 0))
             jobs_c = jobs_c[:PER_COMPANY_KEEP]
             for j in jobs_c:
