@@ -64,7 +64,7 @@ WORKDAY_TENANT_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Standard Chartered", "tenant": "peopleplus", "wd_host": "wd3", "site": "SCB_Careers", "industry": "banking"},
     {"display_name": "Piper Sandler", "tenant": "pipersandler", "wd_host": "wd501", "site": "Piper_Sandler_Careers", "industry": "banking"},
     {"display_name": "PNC", "tenant": "pnc", "wd_host": "wd5", "site": "External", "industry": "banking"},
-    {"display_name": "Raymond James", "tenant": "raymondjames", "wd_host": "wd1", "site": "RaymondJamesEarlyCareers", "industry": "banking"},
+    {"display_name": "Raymond James", "tenant": "raymondjames", "wd_host": "wd1", "site": "RaymondJamesCareers", "industry": "banking"},
     {"display_name": "Federal Reserve System", "tenant": "rb", "wd_host": "wd5", "site": "FRS", "industry": "banking"},
     {"display_name": "Regions Bank", "tenant": "regions", "wd_host": "wd5", "site": "Regions_Careers", "industry": "banking"},
     {"display_name": "Rialto Capital", "tenant": "rialtocapital", "wd_host": "wd1", "site": "Rialto", "industry": "banking"},
@@ -506,7 +506,6 @@ WORKDAY_TENANT_CATALOG: List[Dict[str, str]] = [
     {"display_name": "NTT", "tenant": "nttlimited", "wd_host": "wd3", "site": "NTT_Careers", "industry": "tech"},
     {"display_name": "NVIDIA", "tenant": "nvidia", "wd_host": "wd5", "site": "NVIDIAExternalCareerSite", "industry": "tech"},
     {"display_name": "NXP Semiconductors", "tenant": "nxp", "wd_host": "wd3", "site": "careers", "industry": "tech"},
-    {"display_name": "The New York Times", "tenant": "nytimes", "wd_host": "wd5", "site": "NYT", "industry": "tech"},
     {"display_name": "Optiv", "tenant": "optiv", "wd_host": "wd5", "site": "Optiv_Careers", "industry": "tech"},
     {"display_name": "Yahoo", "tenant": "ouryahoo", "wd_host": "wd5", "site": "Careers", "industry": "tech"},
     {"display_name": "PayPal", "tenant": "paypal", "wd_host": "wd1", "site": "jobs", "industry": "tech"},
@@ -1017,6 +1016,8 @@ WORKDAY_TENANT_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Silgan Containers", "tenant": "silgancontainers", "wd_host": "wd1", "site": "silgan", "industry": "manufacturing_automotive"},
     {"display_name": "Ready Capital", "tenant": "readycapital", "wd_host": "wd501", "site": "ReadyCapital", "industry": "real_estate"},
     {"display_name": "Clayton Homes", "tenant": "claytonhomes", "wd_host": "wd1", "site": "ClaytonCareers", "industry": "real_estate"},
+    # repaired-migration 2026-07-19 (moved ATS, live-validated)
+    {"display_name": "Palo Alto Networks", "tenant": "paloaltonetworks", "wd_host": "wd5", "site": "panwexternalcareers", "industry": "tech"},
 ]
 
 INDUSTRIES: List[str] = sorted({row["industry"] for row in WORKDAY_TENANT_CATALOG})
