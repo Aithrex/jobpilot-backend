@@ -405,7 +405,7 @@ def run_mnc_search(
                                  "tenants_total": companies_total,
                                  "jobs_found": len(rows_snap)},
                     "jobs": [
-                        {k: v for k, v in j.items() if k != "description"}
+                        {k: v for k, v in j.items() if k not in ("description", "_meta", "_exp")}
                         for j in rows_snap[:STREAM_TOP]
                     ],
                     "total": len(rows_snap),
@@ -501,7 +501,7 @@ def run_mnc_search(
                 "progress": {"tenants_done": companies_total,
                              "tenants_total": companies_total,
                              "jobs_found": len(jobs), "phase": "details"},
-                "jobs": [{k: v for k, v in j.items() if k != "description"}
+                "jobs": [{k: v for k, v in j.items() if k not in ("description", "_meta", "_exp")}
                          for j in jobs[:STREAM_TOP]],
                 "total": len(jobs), "streaming": True,
             })
@@ -546,6 +546,9 @@ def run_mnc_search(
         if d <= 30:
             window_counts["d30"] += 1
 
+    for j in jobs:  # scoring-only signals — never exposed to the client
+        j.pop("_meta", None)
+        j.pop("_exp", None)
     return {
         "ok": True,
         "generated_at": datetime.now(timezone.utc).isoformat(),

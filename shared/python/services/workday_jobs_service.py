@@ -541,22 +541,37 @@ _DESC_ENTRY_RE = re.compile(
     r"university grad|no prior experience|0-2 years", re.IGNORECASE)
 
 
-def _seniority_full(title: str, description: str) -> str:
-    """Title verdict, refined by the JD when the title carries no level.
+def _seniority_full(title: str, description: str, exp_level: str = "") -> str:
+    """Title verdict, refined by the JD or the board's experience-level label.
 
     Enterprise postings often title entry roles plainly ("Software
     Engineer") and put the level in the description ("entry level",
     "0-2 years experience") — title-only classification files those under
     "mid" and starves the Entry filter. Only unmarked titles are refined;
     an explicit "Senior X" title always wins.
+
+    ``exp_level`` is the board's structured experience label (SmartRecruiters /
+    Workable) — a clean signal used when the title is ambiguous AND no
+    description was fetched, so un-enriched rows still get an accurate level.
     """
     level = _seniority(title)
-    if level != "mid" or not description:
+    if level != "mid":
         return level
-    req = _required_years(description)
-    if _DESC_ENTRY_RE.search(description) or (req is not None and req <= 2):
+    # Ambiguous title — refine from the JD description when we fetched one.
+    if description:
+        req = _required_years(description)
+        if _DESC_ENTRY_RE.search(description) or (req is not None and req <= 2):
+            return "entry"
+        if req is not None and req >= 7:
+            return "senior"
+    # Otherwise fall back to the board's experience-level label (no per-job
+    # fetch needed). "Mid-Senior Level" is left as mid (genuinely ambiguous).
+    e = (exp_level or "").lower()
+    if "intern" in e:
+        return "intern"
+    if "entry" in e or e == "associate":
         return "entry"
-    if req is not None and req >= 7:
+    if "director" in e or "executive" in e:
         return "senior"
     return "mid"
 
@@ -852,7 +867,8 @@ def _score_jobs(
 
     for job in jobs:
         title_lc = job["title"].lower()
-        blob = (job["title"] + "\n" + (job.get("description") or "")).lower()
+        blob = (job["title"] + "\n" + (job.get("description") or "")
+                + "\n" + (job.get("_meta") or "")).lower()
         matched = [s for s, rx in skill_rx if rx is not None and rx.search(blob)]
         matched_set = set(matched)
         missing = [s for s, _ in skill_rx if s not in matched_set][:8]
@@ -876,7 +892,8 @@ def _score_jobs(
         job["matched_skills"] = matched[:12]
         job["missing_skills"] = missing
         job["title_matched"] = title_matched
-        job["seniority"] = _seniority_full(job["title"], job.get("description") or "")
+        job["seniority"] = _seniority_full(
+            job["title"], job.get("description") or "", job.get("_exp") or "")
     return jobs
 
 

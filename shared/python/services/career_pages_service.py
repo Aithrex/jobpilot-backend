@@ -145,9 +145,10 @@ _COUNTRY_OK = {"us", "usa", "united states", "united states of america"}
 
 def _row(company: Dict[str, str], raw_id: Any, title: str, url: str,
          date_posted: str, location: str, description: str = "",
-         is_remote: Optional[bool] = None, country: str = "") -> Dict[str, Any]:
+         is_remote: Optional[bool] = None, country: str = "",
+         meta: str = "", exp: str = "") -> Dict[str, Any]:
     days = _days_ago(date_posted) if date_posted else None
-    return {
+    row = {
         "job_id": f"{company['ats']}:{company['slug']}:{raw_id}",
         "title": str(title or "").strip()[:200],
         "company": company["display_name"],
@@ -165,6 +166,20 @@ def _row(company: Dict[str, str], raw_id: Any, title: str, url: str,
                      else bool(_REMOTE_RE.search(location or "")),
         "source": _ATS_LABEL.get(company["ats"], company["ats"]),
     }
+    if meta:
+        # Inline board metadata (function / department / experience level) that
+        # the LIST endpoint already returned — folded into a SCORING-ONLY field
+        # so an on-topic but oddly-titled row ("Clinical Partner", function
+        # "Nursing") can earn skill/recall signal WITHOUT the extra per-job
+        # description fetch. Never the JD body (feasibility ignores it) and
+        # stripped before the response reaches the client.
+        row["_meta"] = str(meta).strip()[:400]
+    if exp:
+        # Structured experience-level label from the board ("Entry Level" /
+        # "Mid-Senior Level" / "Director") — a clean seniority signal for rows
+        # with no fetched description. Scoring-only; stripped before response.
+        row["_exp"] = str(exp).strip()[:40]
+    return row
 
 
 # ----------------------------------------------------------------------
@@ -245,12 +260,20 @@ def _fetch_smartrecruiters(c: Dict[str, str]) -> List[Dict[str, Any]]:
         for j in content:
             loc = j.get("location") or {}
             city = ", ".join(x for x in [loc.get("city"), loc.get("region")] if x)
+            # SmartRecruiters ships function/department/experience/industry
+            # labels inline (no description in the list response) — keep them.
+            meta = " · ".join(x for x in (
+                (j.get("function") or {}).get("label"),
+                (j.get("department") or {}).get("label"),
+                (j.get("experienceLevel") or {}).get("label"),
+                (j.get("industry") or {}).get("label")) if x)
             out.append(_row(
                 c, j.get("id"), j.get("name") or "",
                 f"https://jobs.smartrecruiters.com/{c['slug']}/{j.get('id')}",
                 _iso(j.get("releasedDate")), city,
                 is_remote=bool(loc.get("remote")) or None,
-                country=str(loc.get("country") or "")))
+                country=str(loc.get("country") or ""), meta=meta,
+                exp=(j.get("experienceLevel") or {}).get("label") or ""))
         offset += len(content)
         if len(content) < 100:
             break
@@ -265,11 +288,16 @@ def _fetch_workable(c: Dict[str, str]) -> List[Dict[str, Any]]:
     out = []
     for j in (r.json() or {}).get("jobs") or []:
         loc = ", ".join(x for x in [j.get("city"), j.get("state")] if x)
+        # Workable ships function/department/experience/industry inline.
+        meta = " · ".join(x for x in (
+            j.get("function"), j.get("department"),
+            j.get("experience"), j.get("industry")) if x)
         out.append(_row(
             c, j.get("shortcode") or j.get("code"), j.get("title") or "",
             j.get("url") or "", _iso(j.get("published_on")), loc,
             is_remote=bool(j.get("telecommuting")) or None,
-            country=str(j.get("country") or "")))
+            country=str(j.get("country") or ""), meta=meta,
+            exp=str(j.get("experience") or "")))
     return out
 
 
@@ -910,7 +938,8 @@ def run_career_pages_search(
         def _provisional(j: Dict[str, Any]) -> Tuple[int, List[str]]:
             cached = prov_cache.get(j["job_id"])
             if cached is None:
-                blob = (j["title"] + "\n" + (j.get("description") or "")[:1500]).lower()
+                blob = (j["title"] + "\n" + (j.get("description") or "")[:1500]
+                        + "\n" + (j.get("_meta") or "")).lower()
                 tl = j["title"].lower()
                 tm = any(all(tok in tl for tok in m) for m in matchers)
                 matched = [s for s, rx in stream_rx if rx is not None and rx.search(blob)]
@@ -939,7 +968,7 @@ def run_career_pages_search(
                                  "tenants_total": companies_total,
                                  "jobs_found": len(rows_snap)},
                     "jobs": [
-                        {k: v for k, v in j.items() if k != "description"}
+                        {k: v for k, v in j.items() if k not in ("description", "_meta", "_exp")}
                         for j in rows_snap[:STREAM_TOP]
                     ],
                     "total": len(rows_snap),
@@ -1028,7 +1057,7 @@ def run_career_pages_search(
                 "progress": {"tenants_done": companies_total,
                              "tenants_total": companies_total,
                              "jobs_found": len(jobs), "phase": "details"},
-                "jobs": [{k: v for k, v in j.items() if k != "description"}
+                "jobs": [{k: v for k, v in j.items() if k not in ("description", "_meta", "_exp")}
                          for j in jobs[:STREAM_TOP]],
                 "total": len(jobs), "streaming": True,
             })
@@ -1056,6 +1085,9 @@ def run_career_pages_search(
     _attach_sponsorship(jobs)
     _apply_career_sponsorship(jobs)
     _drain_pools()
+    for j in jobs:  # scoring-only signals — never exposed to the client
+        j.pop("_meta", None)
+        j.pop("_exp", None)
 
     window_counts = {"today": 0, "d1": 0, "d3": 0, "d7": 0, "d30": 0}
     for j in jobs:
