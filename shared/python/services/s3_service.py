@@ -101,6 +101,46 @@ class ResumeStorageService:
             logger.error("Failed to upload generated resume for user %s: %s", user_id, e)
             raise
 
+    def upload_guest_resume(self, guest_id: str, file_bytes: bytes, filename: str) -> str:
+        """Upload an anonymous guest's resume under the dedicated guest/ prefix.
+
+        Keeps the raw file OUT of Mongo job payloads (the async guest_parse
+        worker fetches it back by key). Objects live under
+        ``guest/{guest_id}/`` so the retention cleanup can delete them with
+        the expiring session.
+
+        Args:
+            guest_id: The server-issued guest session id.
+            file_bytes: Raw bytes of the resume file.
+            filename: Original filename including extension.
+
+        Returns:
+            The S3 key where the file was stored.
+        """
+        try:
+            if not self.bucket:
+                raise ValueError("RESUME_S3_BUCKET is not configured")
+
+            sanitized = self._sanitize_filename(filename)
+            timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            s3_key = f"guest/{guest_id}/{timestamp}_{sanitized}"
+
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "pdf"
+            content_type = CONTENT_TYPES.get(ext, "application/octet-stream")
+
+            self.client.put_object(
+                Bucket=self.bucket,
+                Key=s3_key,
+                Body=file_bytes,
+                ContentType=content_type,
+            )
+
+            logger.info("Uploaded guest resume for %s: %s", guest_id, s3_key)
+            return s3_key
+        except Exception as e:
+            logger.error("Failed to upload guest resume for %s: %s", guest_id, e)
+            raise
+
     def list_base_resumes(self, user_id: str) -> list:
         """List all base resumes for a user.
 

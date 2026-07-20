@@ -30,6 +30,7 @@ Async pattern:
   4. On completion, the result dict is stored in MongoDB and returned.
 """
 
+import base64
 import json
 import logging
 import os
@@ -136,7 +137,13 @@ class ResumeService:
         return job
 
     def complete_job(self, job_id: str, result: dict):
-        """Mark a job as completed with its result dict."""
+        """Mark a job as completed with its result dict.
+
+        Also drops the stored input ``payload``: it can embed the whole
+        uploaded file as base64, nothing reads it after dispatch (workers get
+        the payload via the invoke event/thread args, pollers only see
+        status/result), and keeping it is what once filled the Atlas tier.
+        """
         self.resume_jobs.update_one(
             {"job_id": job_id},
             {
@@ -144,7 +151,8 @@ class ResumeService:
                     "status": "completed",
                     "result": result,
                     "completed_at": datetime.now(timezone.utc),
-                }
+                },
+                "$unset": {"payload": ""},
             },
         )
 
@@ -179,7 +187,11 @@ class ResumeService:
         self.update_job_partial(job_id, {"progress": progress})
 
     def fail_job(self, job_id: str, error: str, error_code: Optional[str] = None):
-        """Mark a job as failed with an error message and optional machine-readable code."""
+        """Mark a job as failed with an error message and optional machine-readable code.
+
+        Drops the stored input ``payload`` like complete_job does — retries
+        always arrive as a fresh submission, never by re-driving the doc.
+        """
         update: Dict[str, Any] = {
             "status": "failed",
             "error": error,
@@ -187,7 +199,9 @@ class ResumeService:
         }
         if error_code:
             update["error_code"] = error_code
-        self.resume_jobs.update_one({"job_id": job_id}, {"$set": update})
+        self.resume_jobs.update_one(
+            {"job_id": job_id}, {"$set": update, "$unset": {"payload": ""}}
+        )
 
     @staticmethod
     def invoke_async(job_id: str, job_type: str, payload: dict):
@@ -772,7 +786,22 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             from services import guest_service
 
             guest_id = payload.get("guest_id", "")
+            # Primary path: the raw file lives in S3 (guest/ prefix) and the
+            # payload carries only its key — keeps job docs small and the
+            # async Lambda invoke under its 256KB event limit. file_base64
+            # survives as the local-dev fallback for bucketless environments.
             file_base64 = payload.get("file_base64")
+            file_s3_key = payload.get("file_s3_key")
+            if file_s3_key and not file_base64:
+                try:
+                    from services.s3_service import get_storage_service
+
+                    file_bytes = get_storage_service().get_resume(file_s3_key)
+                    file_base64 = base64.b64encode(file_bytes).decode("utf-8")
+                except Exception as fetch_err:
+                    logger.error("Guest parse: S3 fetch failed for %s: %s", file_s3_key, fetch_err)
+                    svc.fail_job(job_id, "Could not read the uploaded file. Please try again.")
+                    return
             mime_type = payload.get("mime_type", "application/pdf")
             try:
                 validated, raw_text = svc.parser.parse_to_structured(

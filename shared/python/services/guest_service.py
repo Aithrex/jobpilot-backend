@@ -1171,12 +1171,29 @@ def render_record_file(record: Dict[str, Any], fmt: str) -> Tuple[bytes, str]:
 # Retention cleanup (claim-aware; never a blind TTL)
 # ---------------------------------------------------------------------------
 
+def record_resume_file_key(guest_id: str, s3_key: str) -> None:
+    """Track a guest resume file's S3 key on the session so retention
+    cleanup can delete the object together with the expiring session.
+    Best-effort — losing the pointer only means a stray S3 object."""
+    gid = validate_guest_id(guest_id)
+    if not gid or not s3_key:
+        return
+    try:
+        _sessions().update_one(
+            {"guest_id": gid},
+            {"$addToSet": {"resume_file_s3_keys": str(s3_key)}},
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("guest resume file key not recorded for %s: %s", gid, e)
+
+
 def run_retention_cleanup() -> Dict[str, Any]:
     """Delete ONLY expired unclaimed guest data: sessions with
     ``claimed_by: null`` whose ``last_seen_at`` is older than
     ``retention_days`` (0 = keep forever → skip), plus their unclaimed
-    tailoring_records and stale guest resume_jobs. Claimed data is never
-    touched. Subjects keep their quota counters (abuse memory)."""
+    tailoring_records, stale guest resume_jobs, and the sessions' uploaded
+    resume files in S3 (guest/ prefix). Claimed data is never touched.
+    Subjects keep their quota counters (abuse memory)."""
     days = pconfig.get_int("retention_days")
     if days <= 0:
         return {
@@ -1187,12 +1204,13 @@ def run_retention_cleanup() -> Dict[str, Any]:
             "jobs_deleted": 0,
         }
     cutoff = _now() - timedelta(days=days)
-    ids = [
-        str(d["guest_id"])
-        for d in _sessions().find(
-            {"claimed_by": None, "last_seen_at": {"$lt": cutoff}}, {"guest_id": 1}
+    expiring = list(
+        _sessions().find(
+            {"claimed_by": None, "last_seen_at": {"$lt": cutoff}},
+            {"guest_id": 1, "resume_file_s3_keys": 1},
         )
-    ]
+    )
+    ids = [str(d["guest_id"]) for d in expiring]
     if not ids:
         return {
             "skipped": False,
@@ -1200,13 +1218,31 @@ def run_retention_cleanup() -> Dict[str, Any]:
             "sessions_deleted": 0,
             "records_deleted": 0,
             "jobs_deleted": 0,
+            "files_deleted": 0,
         }
+    # Uploaded guest resume files (guest/ prefix) go with their sessions.
+    # Best-effort per object — an S3 hiccup must never block the Mongo purge.
+    files_deleted = 0
+    s3_keys = [k for d in expiring for k in (d.get("resume_file_s3_keys") or []) if k]
+    if s3_keys:
+        try:
+            from services.s3_service import get_storage_service
+
+            storage = get_storage_service()
+            for key in s3_keys:
+                try:
+                    storage.delete_resume(key)
+                    files_deleted += 1
+                except Exception as del_err:
+                    logger.warning("guest retention: S3 delete failed for %s: %s", key, del_err)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("guest retention: S3 cleanup unavailable: %s", e)
     recs = _db().tailoring_records.delete_many({"guest_id": {"$in": ids}, "user_email": None})
     jobs = _db().resume_jobs.delete_many({"guest_id": {"$in": ids}})
     sess = _sessions().delete_many({"guest_id": {"$in": ids}, "claimed_by": None})
     logger.info(
-        "guest retention cleanup: sessions=%d records=%d jobs=%d (retention_days=%d)",
-        sess.deleted_count, recs.deleted_count, jobs.deleted_count, days,
+        "guest retention cleanup: sessions=%d records=%d jobs=%d files=%d (retention_days=%d)",
+        sess.deleted_count, recs.deleted_count, jobs.deleted_count, files_deleted, days,
     )
     return {
         "skipped": False,
@@ -1214,6 +1250,7 @@ def run_retention_cleanup() -> Dict[str, Any]:
         "sessions_deleted": int(sess.deleted_count),
         "records_deleted": int(recs.deleted_count),
         "jobs_deleted": int(jobs.deleted_count),
+        "files_deleted": files_deleted,
     }
 
 

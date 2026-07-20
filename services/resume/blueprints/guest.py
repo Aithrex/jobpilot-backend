@@ -190,13 +190,33 @@ def onboard():
         if not guest_service.try_reserve_global_parse():
             return _capacity_response("resume parsing")
 
+        # Store the raw file in S3 under the guest/ prefix and pass only the
+        # key through the async job: keeps multi-MB base64 out of Mongo job
+        # docs AND under the 256KB async Lambda invoke payload limit. The
+        # base64 inline path survives ONLY as a local-dev fallback for
+        # environments without a bucket.
         payload = {
-            "file_base64": base64.b64encode(file_bytes).decode("utf-8"),
             "mime_type": ResumeParser.get_mime_type(file.filename),
             "filename": InputSanitizer.sanitize_string(file.filename, max_length=255),
             "guest_id": guest_id,
             "fingerprint_hash": fingerprint_hash,
         }
+        try:
+            from services.s3_service import get_storage_service
+
+            file_s3_key = get_storage_service().upload_guest_resume(
+                guest_id, file_bytes, file.filename
+            )
+            payload["file_s3_key"] = file_s3_key
+            # Track the object on the session so retention cleanup deletes it
+            # together with the expiring unclaimed session.
+            guest_service.record_resume_file_key(guest_id, file_s3_key)
+        except Exception as s3_err:
+            logger.warning(
+                "Guest onboard: S3 upload unavailable, falling back to inline payload: %s",
+                s3_err,
+            )
+            payload["file_base64"] = base64.b64encode(file_bytes).decode("utf-8")
         try:
             job_id = guest_service.create_guest_job("guest_parse", payload, guest_id)
             ResumeService.invoke_async(job_id, "guest_parse", payload)

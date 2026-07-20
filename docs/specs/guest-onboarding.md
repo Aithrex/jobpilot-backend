@@ -153,6 +153,12 @@ Resume Lambda (`/api/resume/guest/*`, blueprint `services/resume/blueprints/gues
 - `POST /guest/onboard` — multipart pdf/docx <=5MB + `fingerprint_hash`, optional `guest_id`,
   optional `device_token`. -> `202 {guest_id, job_id, device_token}`. IP-throttled 10/hr; global
   parse breaker; progressive challenge hook (below). Async parse (FLASH) unchanged.
+  - Storage (v2.1): the raw file is uploaded to S3 under `guest/{guest_id}/` and the async job
+    payload carries only `file_s3_key` (never multi-MB base64 in Mongo, and always under the 256KB
+    async Lambda invoke limit). The key is tracked on the session (`resume_file_s3_keys`) so
+    retention cleanup deletes the object with the expiring unclaimed session. `file_base64` in the
+    payload survives ONLY as a bucketless local-dev fallback. Job finalization (`complete_job` /
+    `fail_job`) `$unset`s the stored payload — nothing reads it after dispatch.
 - `GET /guest/job/<job_id>?guest_id=` — unchanged capability-scoped polling, mirrors the authed
   job shape. `guest_parse` completed result: `{parsed_resume:{structured, filename},
   guest:{recognized, tailors_used, tailors_limit, recognized_name?}}` — `recognized_name` only via

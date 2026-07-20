@@ -2269,5 +2269,152 @@ class TestNoGuest401Sweep:
         assert resp.status_code == expected
 
 
+# ===========================================================================
+# Guest file storage: S3-first payloads, payload stripping, retention deletes
+# ===========================================================================
+
+class _FakeStorage:
+    """Records calls; serves PDF_BYTES back for any key."""
+
+    def __init__(self, fail_upload=False):
+        self.fail_upload = fail_upload
+        self.uploaded = []   # (guest_id, filename) tuples
+        self.fetched = []    # keys
+        self.deleted = []    # keys
+
+    def upload_guest_resume(self, guest_id, file_bytes, filename):
+        if self.fail_upload:
+            raise ValueError("RESUME_S3_BUCKET is not configured")
+        key = f"guest/{guest_id}/20260720000000_{filename}"
+        self.uploaded.append((guest_id, filename))
+        return key
+
+    def get_resume(self, s3_key):
+        self.fetched.append(s3_key)
+        return PDF_BYTES
+
+    def delete_resume(self, s3_key):
+        self.deleted.append(s3_key)
+        return True
+
+
+class TestGuestFileStorage:
+    def _patch_storage(self, monkeypatch, storage):
+        import services.s3_service as s3s
+        monkeypatch.setattr(s3s, "get_storage_service", lambda: storage)
+        return storage
+
+    def test_finalizers_strip_payload(self, guest_db):
+        import services.resume_service as rs
+        svc = rs.get_resume_service()
+        s = _new_session()
+        big = {"file_base64": "x" * 5000, "guest_id": s["guest_id"]}
+
+        done = guest_service.create_guest_job("guest_parse", dict(big), s["guest_id"])
+        svc.complete_job(done, {"ok": True})
+        row = guest_db.resume_jobs.find_one({"job_id": done})
+        assert row["status"] == "completed" and "payload" not in row
+
+        failed = guest_service.create_guest_job("guest_parse", dict(big), s["guest_id"])
+        svc.fail_job(failed, "boom")
+        row = guest_db.resume_jobs.find_one({"job_id": failed})
+        assert row["status"] == "failed" and "payload" not in row
+
+    def test_onboard_stores_file_in_s3_and_records_key(
+            self, guest_db, resume_app, monkeypatch):
+        storage = self._patch_storage(monkeypatch, _FakeStorage())
+        resp = resume_app.test_client().post(
+            "/api/resume/guest/onboard",
+            data={"file": (io.BytesIO(PDF_BYTES), "resume.pdf"),
+                  "fingerprint_hash": "fp_s3_path"},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 202, resp.get_data(as_text=True)
+        gid, jid = resp.get_json()["guest_id"], resp.get_json()["job_id"]
+        assert storage.uploaded == [(gid, "resume.pdf")]
+
+        row = guest_db.resume_jobs.find_one({"job_id": jid})
+        assert row["payload"]["file_s3_key"].startswith(f"guest/{gid}/")
+        assert "file_base64" not in row["payload"]  # no inline blob in Mongo
+
+        session = guest_db.guest_sessions.find_one({"guest_id": gid})
+        assert session["resume_file_s3_keys"] == [row["payload"]["file_s3_key"]]
+
+    def test_onboard_falls_back_to_inline_without_bucket(
+            self, guest_db, resume_app, monkeypatch):
+        self._patch_storage(monkeypatch, _FakeStorage(fail_upload=True))
+        resp = resume_app.test_client().post(
+            "/api/resume/guest/onboard",
+            data={"file": (io.BytesIO(PDF_BYTES), "resume.pdf")},
+            content_type="multipart/form-data",
+        )
+        assert resp.status_code == 202
+        row = guest_db.resume_jobs.find_one({"job_id": resp.get_json()["job_id"]})
+        assert "file_s3_key" not in row["payload"]
+        assert row["payload"]["file_base64"]  # local-dev fallback still works
+
+    def test_guest_parse_worker_fetches_from_s3(self, guest_db, monkeypatch):
+        import services.resume_service as rs
+        storage = self._patch_storage(monkeypatch, _FakeStorage())
+        s = _new_session(fp="fp_s3_worker")
+        key = f"guest/{s['guest_id']}/20260720000000_resume.pdf"
+        payload = {
+            "file_s3_key": key, "mime_type": "application/pdf",
+            "filename": "resume.pdf", "guest_id": s["guest_id"],
+            "fingerprint_hash": "fp_s3_worker",
+        }
+        job_id = guest_service.create_guest_job("guest_parse", payload, s["guest_id"])
+        svc = rs.get_resume_service()
+        seen = {}
+        def fake_parse(raw, file_b64, mime):
+            seen["file_b64"] = file_b64
+            return _structured(), "Jordan Alvarez raw resume text " * 5
+        monkeypatch.setattr(svc.parser, "parse_to_structured", fake_parse)
+        rs._process_job(job_id, "guest_parse", payload)
+
+        assert storage.fetched == [key]
+        import base64 as b64
+        assert seen["file_b64"] == b64.b64encode(PDF_BYTES).decode("utf-8")
+        job = guest_service.get_guest_job(job_id, s["guest_id"])
+        assert job["status"] == "completed"
+
+    def test_guest_parse_worker_fails_honestly_on_s3_miss(
+            self, guest_db, monkeypatch):
+        import services.resume_service as rs
+
+        class _Missing(_FakeStorage):
+            def get_resume(self, s3_key):
+                raise KeyError(s3_key)
+
+        self._patch_storage(monkeypatch, _Missing())
+        s = _new_session()
+        payload = {"file_s3_key": "guest/x/nope.pdf", "guest_id": s["guest_id"],
+                   "mime_type": "application/pdf", "filename": "resume.pdf"}
+        job_id = guest_service.create_guest_job("guest_parse", payload, s["guest_id"])
+        rs._process_job(job_id, "guest_parse", payload)
+        job = guest_service.get_guest_job(job_id, s["guest_id"])
+        assert job["status"] == "failed"
+        assert "Could not read the uploaded file" in job["error"]
+
+    def test_retention_cleanup_deletes_recorded_s3_files(
+            self, guest_db, monkeypatch):
+        from datetime import timedelta
+        storage = self._patch_storage(monkeypatch, _FakeStorage())
+        s = _new_session()
+        key = f"guest/{s['guest_id']}/20260720000000_resume.pdf"
+        guest_service.record_resume_file_key(s["guest_id"], key)
+        # Recording twice stays deduped ($addToSet).
+        guest_service.record_resume_file_key(s["guest_id"], key)
+        guest_db.guest_sessions.update_one(
+            {"guest_id": s["guest_id"]},
+            {"$set": {"last_seen_at":
+                      guest_service._now() - timedelta(days=45)}},
+        )
+        out = guest_service.run_retention_cleanup()
+        assert out["sessions_deleted"] == 1
+        assert out["files_deleted"] == 1
+        assert storage.deleted == [key]
+
+
 if __name__ == "__main__":  # allow `python tests/test_guest_onboarding.py`
     sys.exit(pytest.main([__file__, "-q"]))
