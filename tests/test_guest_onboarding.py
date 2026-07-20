@@ -42,14 +42,18 @@ GUEST_COLLECTIONS = (
     "guest_claim_carryins",
     "guest_global_counters",
     "guest_challenge_velocity",
+    "job_match_snapshots",
     "platform_config",
     "tailoring_records",
     "tailor_usage",
     "user_resumes",
+    "resume_assets",
     "resume_jobs",
     "users",
     "feature_usage",
     "sponsorship_signals",
+    "quota_counters",
+    "quota_ledger",
 )
 
 PDF_BYTES = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
@@ -452,14 +456,22 @@ class TestClaim:
     def test_claim_does_not_overwrite_existing_resume(self, guest_db):
         gid = self._seed_guest(guest_db)
         email = "hasresume@example.com"
-        guest_db.user_resumes.insert_one({
+        # v3: the user's resume lives on a resume_assets doc.
+        guest_db.resume_assets.insert_one({
+            "resume_id": "existing-asset", "owner_type": "user",
             "user_email": email, "structured": {"summary": "existing"},
+            "parse_status": "parsed",
             "parsed_at": datetime.now(timezone.utc),
         })
         res = guest_service.claim_session(gid, email)
         assert res["resume_imported"] is False
-        doc = guest_db.user_resumes.find_one({"user_email": email})
+        # The user's pre-existing asset is untouched (v3: the claim ATTACHES
+        # the guest asset as an additional owned asset, never overwrites).
+        doc = guest_db.resume_assets.find_one({"resume_id": "existing-asset"})
         assert doc["structured"]["summary"] == "existing"
+        # And the active pointer was not stolen by the claimed guest asset.
+        user = guest_db.users.find_one({"email": email}) or {}
+        assert user.get("active_resume_id") in (None, "existing-asset")
 
     def test_premium_claim_never_seeds_usage(self, guest_db):
         gid = self._seed_guest(guest_db, tailors_used=1)
@@ -927,8 +939,14 @@ class TestGuestJobs:
         # Owning-guest_id + parsed resume → own name may travel.
         assert guest["recognized_name"] == "jordan alvarez"
 
+        # v3: the session stores only the resume_id ref; parsed content lives
+        # on the guest-owned resume_assets doc (get_session hydrates the view).
         session = guest_db.guest_sessions.find_one({"guest_id": s["guest_id"]})
-        assert session["resume"]["structured"]
+        assert session.get("resume") in (None, {})  # no embedded resume blob
+        assert session["resume_id"]
+        asset = guest_db.resume_assets.find_one({"resume_id": session["resume_id"]})
+        assert asset["structured"] and asset["guest_id"] == s["guest_id"]
+        assert guest_service.get_session(s["guest_id"])["resume"]["structured"]
         ident = session["identity"]
         assert ident["email_hmacs"] and ident["email_hmacs"][0].startswith("v1:")
         # v1 plaintext identity fields are GONE from new writes.
@@ -1433,7 +1451,7 @@ class TestClaimRace:
 
         rec = guest_db.tailoring_records.find_one({"record_id": "rec-race"})
         assert rec["user_email"] is None                      # no PII transfer
-        assert guest_db.user_resumes.find_one({"user_email": loser}) is None
+        assert guest_db.resume_assets.find_one({"user_email": loser}) is None
         from services import usage_service
         assert usage_service.get_usage(loser)["used"] == 0
         session = guest_db.guest_sessions.find_one({"guest_id": gid})
@@ -1446,12 +1464,12 @@ class TestClaimRace:
         email = "repeat@example.com"
         first = guest_service.claim_session(s["guest_id"], email)
         assert first["already_claimed"] is False and first["resume_imported"] is True
-        before = guest_db.user_resumes.count_documents({"user_email": email})
+        before = guest_db.resume_assets.count_documents({"user_email": email})
 
         second = guest_service.claim_session(s["guest_id"], email)
         assert second["claimed"] is True and second["already_claimed"] is True
         assert second["resume_imported"] is False and second["records_transferred"] == 0
-        assert guest_db.user_resumes.count_documents({"user_email": email}) == before
+        assert guest_db.resume_assets.count_documents({"user_email": email}) == before
 
 
 # ===========================================================================
@@ -2278,7 +2296,8 @@ class _FakeStorage:
 
     def __init__(self, fail_upload=False):
         self.fail_upload = fail_upload
-        self.uploaded = []   # (guest_id, filename) tuples
+        self.uploaded = []   # (guest_id, filename) tuples (legacy scheme)
+        self.assets = []     # (resume_id, mime_type) tuples (v3 scheme)
         self.fetched = []    # keys
         self.deleted = []    # keys
 
@@ -2288,6 +2307,12 @@ class _FakeStorage:
         key = f"guest/{guest_id}/20260720000000_{filename}"
         self.uploaded.append((guest_id, filename))
         return key
+
+    def upload_resume_asset(self, resume_id, file_bytes, mime_type):
+        if self.fail_upload:
+            raise ValueError("RESUME_S3_BUCKET is not configured")
+        self.assets.append((resume_id, mime_type))
+        return f"resume-assets/{resume_id}/original"
 
     def get_resume(self, s3_key):
         self.fetched.append(s3_key)
@@ -2330,15 +2355,27 @@ class TestGuestFileStorage:
             content_type="multipart/form-data",
         )
         assert resp.status_code == 202, resp.get_data(as_text=True)
-        gid, jid = resp.get_json()["guest_id"], resp.get_json()["job_id"]
-        assert storage.uploaded == [(gid, "resume.pdf")]
+        body = resp.get_json()
+        gid, jid, rid = body["guest_id"], body["job_id"], body["resume_id"]
+        # v3: the object lands under the anonymous asset key scheme.
+        assert storage.assets == [(rid, "application/pdf")]
 
         row = guest_db.resume_jobs.find_one({"job_id": jid})
-        assert row["payload"]["file_s3_key"].startswith(f"guest/{gid}/")
-        assert "file_base64" not in row["payload"]  # no inline blob in Mongo
+        assert row["payload"]["object_key"] == f"resume-assets/{rid}/original"
+        assert "file_base64" not in row["payload"]          # no inline blob
+        assert "file_bytes_b64_dev" not in row["payload"]   # S3 path won
 
+        # Asset doc created BEFORE the S3 write, key attached after.
+        asset = guest_db.resume_assets.find_one({"resume_id": rid})
+        assert asset["owner_type"] == "guest" and asset["guest_id"] == gid
+        assert asset["parse_status"] == "pending"
+        assert asset["object_key"] == f"resume-assets/{rid}/original"
+        assert asset["scan_status"] == "unscanned"
+        assert asset["purge_after"] is not None            # guest retention TTL
+
+        # Legacy retention list still tracks the object until Phase C.
         session = guest_db.guest_sessions.find_one({"guest_id": gid})
-        assert session["resume_file_s3_keys"] == [row["payload"]["file_s3_key"]]
+        assert session["resume_file_s3_keys"] == [row["payload"]["object_key"]]
 
     def test_onboard_falls_back_to_inline_without_bucket(
             self, guest_db, resume_app, monkeypatch):
@@ -2350,8 +2387,9 @@ class TestGuestFileStorage:
         )
         assert resp.status_code == 202
         row = guest_db.resume_jobs.find_one({"job_id": resp.get_json()["job_id"]})
-        assert "file_s3_key" not in row["payload"]
-        assert row["payload"]["file_base64"]  # local-dev fallback still works
+        assert "object_key" not in row["payload"]
+        # Non-Lambda local-dev fallback rides the explicit dev-only key.
+        assert row["payload"]["file_bytes_b64_dev"]
 
     def test_guest_parse_worker_fetches_from_s3(self, guest_db, monkeypatch):
         import services.resume_service as rs

@@ -1307,21 +1307,34 @@ def guest_matches():
             # daily scrape budget (re-uploads never re-spend the breaker).
             return jsonify(cached), 200
 
-        # Cache MISS = a real free-source scrape. Reserve a slot in the
-        # platform-wide daily budget (atomic) BEFORE dispatching.
-        if not guest_service.try_reserve_global_matches():
-            return (
-                jsonify({
-                    "error": "capacity",
-                    "global": True,
-                    "message": (
-                        "We've hit today's platform-wide limit for free guest "
-                        "job matching. Sign up (free) to continue — or try "
-                        "again tomorrow."
-                    ),
-                }),
-                429,
-            )
+        # Cache MISS. The global counter is spent ONCE per (subject, date)
+        # (spec 3.7): the atomic matches_reserved guard on the quota subject
+        # decides whether this call is today's FIRST run (spend the breaker)
+        # or a retry after a failed run (re-dispatch WITHOUT re-spending).
+        run = guest_service.reserve_matches_run(guest_id)
+        if run.get("first"):
+            if not guest_service.try_reserve_global_matches():
+                guest_service.release_matches_run(guest_id)
+                return (
+                    jsonify({
+                        "error": "capacity",
+                        "global": True,
+                        "message": (
+                            "We've hit today's platform-wide limit for free guest "
+                            "job matching. Sign up (free) to continue — or try "
+                            "again tomorrow."
+                        ),
+                    }),
+                    429,
+                )
+        else:
+            prior_job_id = run.get("job_id")
+            if prior_job_id:
+                prior = guest_service.get_guest_job(prior_job_id, guest_id)
+                if prior and prior.get("status") == "processing":
+                    # Idempotent retry while today's run is still in flight.
+                    return jsonify({"job_id": prior_job_id, "existing": True}), 202
+                # Failed (or evaporated) run: re-dispatch, no second spend.
 
         from services.resume_service import ResumeService
 
@@ -1330,9 +1343,15 @@ def guest_matches():
             job_id = guest_service.create_guest_job("guest_matches", payload, guest_id)
             ResumeService.invoke_async(job_id, "guest_matches", payload)
         except Exception:
-            # The job never dispatched — free the reserved global slot.
-            guest_service.release_global_matches()
+            if run.get("first"):
+                # The job never dispatched — free the reserved global slot
+                # and today's subject reservation (pre-dispatch rollback).
+                guest_service.release_global_matches()
+                guest_service.release_matches_run(guest_id)
             raise
+        # Stamp AFTER a successful dispatch so a dispatch failure never pins
+        # a dead job onto today's reservation.
+        guest_service.attach_matches_job(guest_id, job_id)
         return jsonify({"job_id": job_id}), 202
     except Exception as e:
         logger.error(f"Guest matches error: {e}")

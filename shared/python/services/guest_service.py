@@ -28,10 +28,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac as _hmac
+import inspect
 import logging
 import os
 import re
 import secrets as _pysecrets
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -59,10 +61,28 @@ DOWNLOAD_FORMATS = ("pdf", "docx")
 _DOWNLOAD_TOKEN_VERSION = "v1"
 
 # Whitelisted job-card fields returned to guests (no internal scoring debris).
+# Card shape per resume-platform-v3 spec 1.4: title/company/location/source/
+# posted/apply_link/url/logo_url (+ match_score/matched_skills/gaps/why/
+# sponsorship/match_id stamped below).
 _JOB_CARD_FIELDS = (
     "title", "company", "location", "apply_link", "url", "source",
-    "posted", "tier", "logo_url",
+    "posted", "logo_url",
 )
+
+# Matching latency budgets (resume-platform-v3 spec 3.1/3.3).
+GUEST_MATCH_BUDGET_SECONDS = 75
+_ENRICH_MAX_CANDIDATES = 15
+_ENRICH_PER_REQUEST_TIMEOUT = 6
+_ENRICH_OVERALL_BUDGET = 12
+
+# Unclaimed snapshots are purged 7 days out (claim extends to null).
+SNAPSHOT_RETENTION_DAYS = 7
+
+
+def _clock() -> float:
+    """Monotonic clock seam — tests monkeypatch this to drive the 75s
+    wall-clock budget deterministically."""
+    return time.monotonic()
 
 
 def _db():
@@ -75,6 +95,12 @@ def _sessions():
 
 def _subjects():
     return _db().guest_quota_subjects
+
+
+def _snapshots():
+    """job_match_snapshots — guest matches live here (spec 1.4), OUT of
+    guest_sessions/guest_quota_subjects."""
+    return _db().job_match_snapshots
 
 
 def _now():
@@ -183,10 +209,29 @@ def hash_ip(ip: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def get_session(guest_id: str) -> Optional[Dict[str, Any]]:
+    """Load the session doc, hydrating the in-memory ``resume`` view from the
+    referenced resume_assets doc (v3: sessions store only the resume_id ref;
+    readers keep seeing the legacy embedded shape until Phase C rewires them).
+    """
     gid = validate_guest_id(guest_id)
     if not gid:
         return None
-    return _sessions().find_one({"guest_id": gid})
+    doc = _sessions().find_one({"guest_id": gid})
+    if doc and not doc.get("resume") and doc.get("resume_id"):
+        try:
+            from services import resume_access
+
+            asset = resume_access.get_asset(doc["resume_id"])
+            if asset and asset.get("structured"):
+                doc["resume"] = {
+                    "filename": asset.get("filename") or "",
+                    "structured": asset["structured"],
+                    "raw_text": asset.get("raw_text") or "",
+                    "uploaded_at": asset.get("parsed_at") or asset.get("created_at"),
+                }
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("guest session resume hydration failed: %s", type(e).__name__)
+    return doc
 
 
 def create_or_get_session(
@@ -231,11 +276,27 @@ def create_or_get_session(
             "sig_v": identity.SIGNAL_VERSION,
         },
         "resume": None,
-        "matched_jobs": None,
+        "resume_id": None,        # ref -> resume_assets (spec 1.7)
+        "snapshot_id": None,      # ref -> job_match_snapshots (spec 1.4/1.7)
         "tailor_record_ids": [],
+        "resume_file_s3_keys": [],  # legacy field kept for retention
         "merged_into": None,
         "claimed_by": None,
         "claimed_at": None,
+        # Claim state machine (spec 1.7): unclaimed -> claim_pending ->
+        # transferring -> completed; steps tick as each transfer lands.
+        "claim": {
+            "state": "unclaimed",
+            "email": None,
+            "started_at": None,
+            "completed_at": None,
+            "steps": {
+                "records": False,
+                "resume": False,
+                "subject_link": False,
+                "carryin": False,
+            },
+        },
     }
     _sessions().insert_one(doc)
     doc.pop("_id", None)
@@ -256,7 +317,6 @@ def ensure_subject(subject_id: str) -> None:
                 "created_at": _now(),
                 "tailors_used": 0,
                 "reservation": None,
-                "matched_jobs": None,
                 "linked_accounts": [],
             },
             "$set": {"last_seen_at": _now()},
@@ -327,10 +387,16 @@ def attach_parsed_resume(
     raw_text: str,
     filename: str,
     fingerprint_hash: Optional[str] = None,
+    resume_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Store the parsed resume on the session, extract v2 HMAC identity
+    """Write the parsed resume INTO the guest-owned resume_assets doc, store
+    only the ``resume_id`` ref on the session, extract v2 HMAC identity
     signals and run strong-signal resolution/merge. Returns the recognition
-    summary (this session's OWN parsed name only — never another session's)."""
+    summary (this session's OWN parsed name only — never another session's).
+
+    When ``resume_id`` is omitted (legacy/direct callers), a fileless
+    guest-owned asset is created on the fly so the asset model stays uniform.
+    """
     gid = validate_guest_id(guest_id)
     if not gid:
         raise ValueError("invalid guest_id")
@@ -339,15 +405,26 @@ def attach_parsed_resume(
     if not session:
         raise ValueError("guest session not found")
 
+    from services import resume_access
+
+    if not resume_id:
+        resume_id = resume_access.create_pending_asset(
+            owner_type="guest",
+            guest_id=gid,
+            quota_subject_id=session.get("quota_subject_id"),
+            filename=filename or "",
+            purge_after=_now() + timedelta(days=30),
+        )
+    resume_access.save_parsed_fields(
+        resume_id, resume_access.build_parsed_fields(structured, raw_text)
+    )
+
     signals = identity.extract_signals(structured, fingerprint_hash, raw_text)
     set_fields: Dict[str, Any] = {
         "last_seen_at": _now(),
-        "resume": {
-            "filename": InputSanitizer.sanitize_string(filename or "", max_length=255),
-            "structured": structured,
-            "raw_text": (raw_text or "")[:60000],
-            "uploaded_at": _now(),
-        },
+        # v3: the session carries only the asset ref — parsed content lives
+        # on resume_assets (get_session hydrates the legacy view for readers).
+        "resume_id": resume_id,
         "identity.name_normalized": signals["name_normalized"],
         "identity.sig_v": identity.SIGNAL_VERSION,
     }
@@ -374,6 +451,7 @@ def attach_parsed_resume(
         "recognized_name": signals["name_normalized"],  # this session's own name
         "tailors_used": state["tailors_used"],
         "tailors_limit": state["tailors_limit"],
+        "resume_id": resume_id,
     }
 
 
@@ -643,6 +721,60 @@ def release_global_matches() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Matches run reservation — once per (subject, date) (spec 3.7)
+# ---------------------------------------------------------------------------
+
+def reserve_matches_run(guest_id: str) -> Dict[str, Any]:
+    """Atomically reserve today's matches run for the guest's quota subject.
+
+    The global daily counter must be spent ONCE per (subject, date) — a retry
+    after a failed run re-dispatches WITHOUT consuming it twice. Returns
+    {"first": True} when this call won today's reservation (caller must then
+    spend the global counter), else {"first": False, "job_id": <last job>}.
+    """
+    sid = subject_for_guest(guest_id)
+    today = _today_key()
+    if not sid:
+        return {"first": True}  # degenerate: no subject -> legacy behavior
+    won = _subjects().find_one_and_update(
+        {"subject_id": sid, "matches_reserved": {"$ne": today}},
+        {"$set": {
+            "matches_reserved": today,
+            "matches_job_id": None,
+            "last_seen_at": _now(),
+        }},
+    )
+    if won is not None:
+        return {"first": True}
+    doc = _subjects().find_one({"subject_id": sid}, {"matches_job_id": 1}) or {}
+    jid = doc.get("matches_job_id")
+    return {"first": False, "job_id": str(jid) if jid else None}
+
+
+def attach_matches_job(guest_id: str, job_id: str) -> None:
+    """Stamp the dispatched matches job onto today's reservation (called
+    AFTER a successful dispatch so a dispatch failure never pins a dead job)."""
+    sid = subject_for_guest(guest_id)
+    if not sid or not job_id:
+        return
+    _subjects().update_one(
+        {"subject_id": sid}, {"$set": {"matches_job_id": str(job_id)}}
+    )
+
+
+def release_matches_run(guest_id: str) -> None:
+    """Pre-dispatch rollback of today's matches reservation. Guarded on
+    matches_job_id being unset so a release can never orphan a live run."""
+    sid = subject_for_guest(guest_id)
+    if not sid:
+        return
+    _subjects().update_one(
+        {"subject_id": sid, "matches_job_id": None},
+        {"$set": {"matches_reserved": None}},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Guest async jobs (ride the resume_jobs backbone; ownership = guest_id)
 # ---------------------------------------------------------------------------
 
@@ -682,41 +814,54 @@ def get_guest_job(job_id: str, guest_id: str) -> Optional[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def _cache_doc_for_guest(guest_id: str) -> Optional[Dict[str, Any]]:
-    """The subject-level cache doc, falling back to the session-level cache
-    (the fallback carries the guests through a missing HMAC key — each session
-    is then its own standalone subject anyway)."""
+    """Resolve the guest's snapshot doc (spec 1.4): subject-level first
+    (today's (quota_subject_id, date) snapshot), falling back to the
+    session's snapshot_id ref (carries guests through a missing HMAC key —
+    each session is then its own standalone subject anyway)."""
     sid = subject_for_guest(guest_id)
     if sid:
-        subj = _subjects().find_one({"subject_id": sid}, {"matched_jobs": 1}) or {}
-        cached = subj.get("matched_jobs")
-        if cached:
-            return cached
+        snap = _snapshots().find_one({"quota_subject_id": sid, "date": _today_key()})
+        if snap:
+            return snap
     doc = get_session(guest_id) or {}
-    return doc.get("matched_jobs")
+    snap_id = doc.get("snapshot_id")
+    if snap_id and isinstance(snap_id, str):
+        return _snapshots().find_one({"snapshot_id": snap_id})
+    return None
 
 
 def get_cached_matches(guest_id: str) -> Optional[Dict[str, Any]]:
     """Same-day cached matches for the guest's quota subject (never re-spends
     the global matches budget). Rows are HARD-CAPPED at guest_jobs_max — the
-    server never returns more (no hidden locked rows for CSS to hide)."""
+    server never returns more (no hidden locked rows for CSS to hide).
+    jd_sources are SERVER-ONLY and never leave this module."""
     cached = _cache_doc_for_guest(guest_id)
     if not cached or cached.get("date") != _today_key():
         return None
     max_jobs = max(1, pconfig.get_int("guest_jobs_max"))
     computed_at = cached.get("computed_at")
-    return {
+    out: Dict[str, Any] = {
         "jobs": list(cached.get("jobs") or [])[:max_jobs],
         "date": cached.get("date"),
         "computed_at": computed_at.isoformat() if hasattr(computed_at, "isoformat") else computed_at,
         "min_score": cached.get("min_score"),
         "cached": True,
     }
+    report = cached.get("sources_report")
+    if isinstance(report, dict) and report:
+        out["sources_report"] = report
+        if isinstance(report.get("considered"), int):
+            out["total_considered"] = report["considered"]
+    if cached.get("empty_reason") and not out["jobs"]:
+        out["empty_reason"] = cached["empty_reason"]
+    return out
 
 
 def find_cached_match(guest_id: str, match_id: str) -> Optional[Dict[str, Any]]:
     """Resolve a served match_id to its server-stored JD source
     ({title, company, jd_text, url}) — the ONLY tailorable reference. The JD
-    never comes from the client (SSRF/injection posture)."""
+    never comes from the client (SSRF/injection posture). Resolves via the
+    job_match_snapshots doc (spec 1.4)."""
     mid = validate_match_id(match_id)
     if not mid:
         return None
@@ -744,27 +889,69 @@ def _store_matches(
     jobs: List[Dict[str, Any]],
     min_score: int,
     jd_sources: Optional[Dict[str, Dict[str, Any]]] = None,
-) -> None:
-    cache = {
-        "date": _today_key(),
-        "jobs": jobs,
-        "jd_sources": jd_sources or {},
-        "computed_at": _now(),
-        "min_score": min_score,
-    }
+    *,
+    sources_report: Optional[Dict[str, Any]] = None,
+    timings: Optional[Dict[str, Any]] = None,
+    empty_reason: Optional[str] = None,
+) -> Optional[str]:
+    """Create/replace today's job_match_snapshots doc for the guest's quota
+    subject (spec 1.4) and stamp the snapshot_id ref on the session.
+
+    One snapshot per (quota_subject_id, date) — a same-day recompute
+    REPLACES the doc (its snapshot_id is preserved by $setOnInsert).
+    Unclaimed snapshots carry purge_after = now + 7d; a claimed session's
+    snapshot is retained (purge_after null)."""
     gid = validate_guest_id(guest_id)
     if not gid:
-        return
+        return None
+    sid = subject_for_guest(gid)
+    if not sid:
+        return None
+    session = _sessions().find_one(
+        {"guest_id": gid}, {"resume_id": 1, "claimed_by": 1}
+    ) or {}
+    now = _now()
+    max_jobs = max(1, pconfig.get_int("guest_jobs_max"))
+    claimed = bool(session.get("claimed_by"))
+    doc: Dict[str, Any] = {
+        "owner_type": "guest",
+        "guest_id": gid,
+        "quota_subject_id": sid,   # server-only, never exposed to clients
+        "resume_id": session.get("resume_id"),
+        "date": _today_key(),
+        "computed_at": now,
+        "jobs": list(jobs or [])[:max_jobs],
+        "jd_sources": jd_sources or {},   # server-only
+        "sources_report": sources_report or {},
+        "timings": timings or {},
+        "empty_reason": empty_reason,
+        "min_score": min_score,
+        "purge_after": None if claimed else now + timedelta(days=SNAPSHOT_RETENTION_DAYS),
+    }
+    from pymongo import ReturnDocument
+
+    new_snapshot_id = uuid.uuid4().hex
+    try:
+        res = _snapshots().find_one_and_update(
+            {"quota_subject_id": sid, "date": doc["date"]},
+            {"$set": doc, "$setOnInsert": {"snapshot_id": new_snapshot_id}},
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+        snapshot_id = str((res or {}).get("snapshot_id") or new_snapshot_id)
+    except TypeError:  # pragma: no cover - mongomock signature fallback
+        _snapshots().update_one(
+            {"quota_subject_id": sid, "date": doc["date"]},
+            {"$set": doc, "$setOnInsert": {"snapshot_id": new_snapshot_id}},
+            upsert=True,
+        )
+        found = _snapshots().find_one({"quota_subject_id": sid, "date": doc["date"]})
+        snapshot_id = str((found or {}).get("snapshot_id") or new_snapshot_id)
     _sessions().update_one(
         {"guest_id": gid},
-        {"$set": {"matched_jobs": cache, "last_seen_at": _now()}},
+        {"$set": {"snapshot_id": snapshot_id, "last_seen_at": now}},
     )
-    sid = subject_for_guest(gid)
-    if sid:
-        _subjects().update_one(
-            {"subject_id": sid},
-            {"$set": {"matched_jobs": cache, "last_seen_at": _now()}},
-        )
+    return snapshot_id
 
 
 def _guest_role_terms(structured: Dict[str, Any]) -> List[str]:
@@ -781,10 +968,61 @@ def _guest_role_terms(structured: Dict[str, Any]) -> List[str]:
     return terms or ["software engineer"]
 
 
-def _fetch_free_jobs(structured: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _role_title_filter(structured: Dict[str, Any]):
+    """Resume-derived title-relevance predicate for the ATS fetcher boundary
+    (spec 3.2). Replaces the tech-only _ATS_TECH_TITLE drop so non-tech
+    resumes are not zeroed out; a tech resume keeps its current supply (the
+    predicate is the UNION of the resume's role tokens and the tech default).
+    Returns None (pipeline default) when the resume yields no usable tokens."""
+    from services.daily_pipeline_service import (
+        _default_title_filter, _significant_term_tokens,
+    )
+
+    tokens: List[str] = []
+    seen = set()
+    for term in _guest_role_terms(structured):
+        for tok in _significant_term_tokens(term):
+            if tok not in seen:
+                seen.add(tok)
+                tokens.append(tok)
+    if not tokens:
+        return None
+    patterns = [
+        re.compile(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", re.IGNORECASE)
+        for t in tokens
+    ]
+
+    def _relevant(title: str) -> bool:
+        t = str(title or "")
+        if any(p.search(t) for p in patterns):
+            return True
+        return _default_title_filter(t)
+
+    return _relevant
+
+
+def _fetch_workday_details(
+    apply_urls: List[str], overall_budget: float = _ENRICH_OVERALL_BUDGET
+) -> Dict[str, str]:
+    """CXS job DETAIL descriptions for description-less Workday candidates
+    (spec 3.1). Best effort; module-level so tests can patch it."""
+    from services.workday_cxs_fetcher import fetch_job_details
+
+    return fetch_job_details(
+        apply_urls,
+        per_request_timeout=_ENRICH_PER_REQUEST_TIMEOUT,
+        overall_budget=overall_budget,
+    )
+
+
+def _fetch_free_jobs(structured: Dict[str, Any], progress_cb=None):
     """Run the FREE direct sources (ATS boards + Workday CXS — the daily
-    pipeline's skip_apify=True path; NO Apify, no paid actors) and return the
-    flattened candidate rows. Module-level so tests can patch it."""
+    pipeline's skip_apify=True path; NO Apify, no paid actors).
+
+    Returns (rows, sources_report) where sources_report is the spec-1.4
+    shape {ok, failed, timed_out, considered} plus the per-source timings
+    the snapshot records. Module-level so tests can patch it (legacy patches
+    returning a bare list are still accepted by compute_guest_matches)."""
     from services.daily_pipeline_service import run_pipeline
 
     terms = _guest_role_terms(structured)
@@ -798,8 +1036,23 @@ def _fetch_free_jobs(structured: Dict[str, Any]) -> List[Dict[str, Any]]:
         employment_type="ANY",
         work_arrangement="any",
         skip_apify=True,
+        title_filter=_role_title_filter(structured),
+        workday_direct_timeout=25,   # guest budget 15s -> 25s (spec 3.3)
+        ats_overall_timeout=20,      # ATS fan-out overall cap (spec 3.3)
+        progress_cb=progress_cb,
     )
-    return list(result.get("apply_now") or []) + list(result.get("verify_dates") or [])
+    rows = list(result.get("apply_now") or []) + list(result.get("verify_dates") or [])
+    status = result.get("source_status") or {}
+    report: Dict[str, Any] = {"ok": [], "failed": [], "timed_out": [], "considered": len(rows)}
+    for src in ("workday_direct", "ats_direct"):
+        st = status.get(src)
+        if st == "failed":
+            report["failed"].append(src)
+        elif st == "timed_out":
+            report["timed_out"].append(src)
+        else:
+            report["ok"].append(src)
+    return rows, {**report, "timings_ms": result.get("source_timings_ms") or {}}
 
 
 _SAFE_URL_PREFIXES = ("http://", "https://")
@@ -882,16 +1135,64 @@ def _sponsorship_for_card(company: Any, signal_cache: Dict[str, Any]) -> Optiona
     }
 
 
-def compute_guest_matches(guest_id: str) -> Dict[str, Any]:
-    """Async-job body for `guest_matches`: fetch free sources, score each row
-    with jd_match_scorer against the guest's parsed resume, keep only
-    score >= guest_jobs_min_score, cap at guest_jobs_max (5), mint a match_id
-    per card, add the deterministic `why` + public-filings `sponsorship`, and
-    cache on the quota subject for the day."""
+def _build_card(row: Dict[str, Any], verdict: Dict[str, Any]) -> Dict[str, Any]:
+    """Public job card from a scored pipeline row — whitelist + URL-scheme
+    guards + deterministic score/gaps/why fields."""
+    card = {k: row.get(k) for k in _JOB_CARD_FIELDS if row.get(k) is not None}
+    # Link fields must be http(s) — drop anything else (javascript:, data:).
+    for url_field in ("apply_link", "url"):
+        if url_field in card:
+            safe = _safe_job_url(card[url_field])
+            if safe is None:
+                card.pop(url_field)
+            else:
+                card[url_field] = safe
+    # logo_url additionally allows the server-generated relative
+    # /api/jobs/logo/<sha1> path (exact shape only).
+    if "logo_url" in card:
+        safe_logo = _safe_logo_url(card["logo_url"])
+        if safe_logo is None:
+            card.pop("logo_url")
+        else:
+            card["logo_url"] = safe_logo
+    card["match_score"] = verdict["match_score"]
+    card["matched_skills"] = verdict.get("matched_skills") or []
+    # Honest gap signal: the scorer's top unmatched resume-relative skills
+    # (deterministic, additive v2.1 field — absent on older cached cards).
+    card["gaps"] = (verdict.get("missing_top") or [])[:5]
+    card["why"] = _match_why(card["matched_skills"])
+    return card
+
+
+def _classify_empty_reason(
+    rows_count: int, skills_count: int, sources_report: Dict[str, Any], fetch_failed: bool
+) -> str:
+    """spec 3.5: distinguish completed-empty from provider failure so the FE
+    can render honest states."""
+    if fetch_failed or (rows_count == 0 and not (sources_report or {}).get("ok")):
+        return "sources_unavailable"
+    if skills_count == 0:
+        return "low_signal_resume"
+    return "no_openings_matched"
+
+
+def compute_guest_matches(guest_id: str, job_id: Optional[str] = None) -> Dict[str, Any]:
+    """Async-job body for `guest_matches` (spec 3.1-3.8): fetch free sources,
+    score each row with jd_match_scorer against the guest's parsed resume,
+    enrich the top description-less Workday candidates with real CXS detail
+    descriptions and re-score, keep only score >= guest_jobs_min_score, cap
+    at guest_jobs_max (5), mint a match_id per card, add the deterministic
+    `why` + public-filings `sponsorship`, and persist today's
+    job_match_snapshots doc for the quota subject.
+
+    Bounded by a 75s wall-clock budget: on expiry, whatever genuine partial
+    results exist are persisted. When job_id is given, honest progress phases
+    are emitted via update_job_progress."""
     gid = validate_guest_id(guest_id)
     if not gid:
         raise ValueError("invalid guest_id")
-    doc = _sessions().find_one({"guest_id": gid})
+    # get_session hydrates the resume view from the resume_assets ref (v3).
+    doc = get_session(gid)
     if not doc:
         raise ValueError("guest session not found")
     structured = ((doc.get("resume") or {}).get("structured")) or {}
@@ -902,47 +1203,132 @@ def compute_guest_matches(guest_id: str) -> Dict[str, Any]:
     min_score = int(cfg.get("guest_jobs_min_score", 40))
     max_jobs = max(1, int(cfg.get("guest_jobs_max", 5)))
 
+    started = _clock()
+    deadline = started + GUEST_MATCH_BUDGET_SECONDS
+
+    def _remaining() -> float:
+        return deadline - _clock()
+
+    def _progress(phase: str, pct: int) -> None:
+        if not job_id:
+            return
+        try:
+            from services.resume_service import get_resume_service
+
+            get_resume_service().update_job_progress(job_id, phase, pct)
+        except Exception:  # pragma: no cover - progress must never break
+            pass
+
     from services.jd_match_scorer import score_one
 
+    _progress("reading_resume", 10)
     skills = _resume_skills(structured)
-    rows = _fetch_free_jobs(structured)
 
-    scored: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    # --- searching_sources (30..70 as providers complete) ------------------
+    _progress("searching_sources", 30)
+
+    def _source_progress(done: int, total: int) -> None:
+        _progress("searching_sources", 30 + int(40 * done / max(1, total)))
+
+    timings: Dict[str, int] = {}
+    fetch_failed = False
+    src_report: Optional[Dict[str, Any]] = None
+    t_fetch = _clock()
+    try:
+        fetcher = _fetch_free_jobs
+        try:
+            accepts_cb = len(inspect.signature(fetcher).parameters) >= 2
+        except (TypeError, ValueError):  # pragma: no cover - exotic patch
+            accepts_cb = False
+        fetched = fetcher(structured, _source_progress) if accepts_cb else fetcher(structured)
+    except Exception as e:
+        logger.warning("guest matches: free-source fetch failed: %s", type(e).__name__)
+        fetched, fetch_failed = [], True
+    if isinstance(fetched, tuple) and len(fetched) == 2:
+        rows, src_report = list(fetched[0] or []), dict(fetched[1] or {})
+    else:
+        rows, src_report = list(fetched or []), None
+
+    sources_report: Dict[str, Any] = src_report or {
+        "ok": [] if fetch_failed else ["workday_direct", "ats_direct"],
+        "failed": ["workday_direct", "ats_direct"] if fetch_failed else [],
+        "timed_out": [],
+        "considered": len(rows),
+    }
+    src_timings = sources_report.pop("timings_ms", {}) or {}
+    timings["workday_ms"] = int(src_timings.get("workday_ms") or (_clock() - t_fetch) * 1000)
+    timings["ats_ms"] = int(src_timings.get("ats_ms") or (_clock() - t_fetch) * 1000)
+
+    # --- initial deterministic scoring (budget-checked per row) ------------
+    t_score = _clock()
+    budget_expired = False
+    scored: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []  # (row, verdict)
     for row in rows:
+        if _remaining() <= 0:
+            budget_expired = True
+            break
         verdict = score_one(
             jd_text=str(row.get("description") or ""),
             title=str(row.get("title") or ""),
             resume_skills=skills,
         )
-        if verdict["match_score"] < min_score:
-            continue
-        card = {k: row.get(k) for k in _JOB_CARD_FIELDS if row.get(k) is not None}
-        # Link fields must be http(s) — drop anything else (javascript:, data:).
-        for url_field in ("apply_link", "url"):
-            if url_field in card:
-                safe = _safe_job_url(card[url_field])
-                if safe is None:
-                    card.pop(url_field)
-                else:
-                    card[url_field] = safe
-        # logo_url additionally allows the server-generated relative
-        # /api/jobs/logo/<sha1> path (exact shape only).
-        if "logo_url" in card:
-            safe_logo = _safe_logo_url(card["logo_url"])
-            if safe_logo is None:
-                card.pop("logo_url")
-            else:
-                card["logo_url"] = safe_logo
-        card["match_score"] = verdict["match_score"]
-        card["matched_skills"] = verdict.get("matched_skills") or []
-        # Honest gap signal: the scorer's top unmatched resume-relative skills
-        # (deterministic, additive v2.1 field — absent on older cached cards).
-        card["gaps"] = (verdict.get("missing_top") or [])[:5]
-        card["why"] = _match_why(card["matched_skills"])
-        scored.append((card, row))
+        scored.append((row, verdict))
+    timings["score_ms"] = int((_clock() - t_score) * 1000)
 
-    scored.sort(key=lambda pair: pair[0].get("match_score", 0), reverse=True)
-    top_pairs = scored[:max_jobs]
+    # --- 3.1: CXS detail enrichment for description-less Workday rows ------
+    t_enrich = _clock()
+    enriched = 0
+    if not budget_expired and _remaining() > 0:
+        candidates = [
+            (row, verdict) for row, verdict in scored
+            if str(row.get("source") or "") == "Workday Direct"
+            and not str(row.get("description") or "").strip()
+        ]
+        candidates.sort(key=lambda rv: rv[1].get("match_score", 0), reverse=True)
+        candidates = candidates[:_ENRICH_MAX_CANDIDATES]
+        urls = []
+        by_url: Dict[str, Tuple[Dict[str, Any], Dict[str, Any]]] = {}
+        for row, verdict in candidates:
+            u = str(row.get("url") or row.get("apply_link") or "").strip()
+            if u and u not in by_url:
+                urls.append(u)
+                by_url[u] = (row, verdict)
+        if urls:
+            try:
+                details = _fetch_workday_details(
+                    urls,
+                    overall_budget=min(_ENRICH_OVERALL_BUDGET, max(1, _remaining())),
+                )
+            except Exception as e:  # pragma: no cover - enrichment best effort
+                logger.warning("guest matches: detail enrichment skipped: %s", type(e).__name__)
+                details = {}
+            for u, text in (details or {}).items():
+                pair = by_url.get(u)
+                if not pair or not text:
+                    continue
+                row, verdict = pair
+                row["description"] = str(text)[:15000]
+                fresh = score_one(
+                    jd_text=row["description"],
+                    title=str(row.get("title") or ""),
+                    resume_skills=skills,
+                )
+                verdict.clear()
+                verdict.update(fresh)
+                enriched += 1
+    timings["enrich_ms"] = int((_clock() - t_enrich) * 1000)
+    if budget_expired and "budget" not in (sources_report.get("timed_out") or []):
+        sources_report.setdefault("timed_out", []).append("budget")
+
+    # --- ranking + honest floor (no padding — spec 3.6) --------------------
+    _progress("ranking", 80)
+    qualifying = [
+        (_build_card(row, verdict), row)
+        for row, verdict in scored
+        if verdict.get("match_score", 0) >= min_score
+    ]
+    qualifying.sort(key=lambda pair: pair[0].get("match_score", 0), reverse=True)
+    top_pairs = qualifying[:max_jobs]
 
     # Public-filings sponsorship signal (one bulk Mongo read). Any failure or
     # absent ingest data → null on every card (honest "no data", never wrong).
@@ -981,18 +1367,40 @@ def compute_guest_matches(guest_id: str) -> Dict[str, Any]:
     except Exception as e:  # pragma: no cover - logos must never break matches
         logger.warning("guest matches: logo stamping skipped: %s", type(e).__name__)
 
-    _store_matches(gid, top, min_score, jd_sources=jd_sources)
-    logger.info(
-        "guest matches computed for %s: %d/%d rows cleared score>=%d",
-        gid, len(top), len(rows), min_score,
+    _progress("finalizing", 95)
+    sources_report["considered"] = len(rows)
+    empty_reason = None
+    if not top:
+        empty_reason = _classify_empty_reason(
+            len(rows), len(skills), sources_report, fetch_failed
+        )
+    timings["total_ms"] = int((_clock() - started) * 1000)
+    _store_matches(
+        gid, top, min_score,
+        jd_sources=jd_sources,
+        sources_report=sources_report,
+        timings=timings,
+        empty_reason=empty_reason,
     )
-    return {
+    # One structured no-PII WARNING summary per run (spec 3.8): counts and
+    # durations only — guest_id is an opaque capability uuid, never identity.
+    logger.warning(
+        "guest matches summary: guest=%s rows=%d scored=%d enriched=%d served=%d "
+        "min_score=%d empty_reason=%s budget_expired=%s total_ms=%d",
+        gid, len(rows), len(scored), enriched, len(top),
+        min_score, empty_reason, budget_expired, timings["total_ms"],
+    )
+    result: Dict[str, Any] = {
         "jobs": top,
         "date": _today_key(),
         "min_score": min_score,
         "total_considered": len(rows),
+        "sources_report": sources_report,
         "cached": False,
     }
+    if empty_reason:
+        result["empty_reason"] = empty_reason
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1187,13 +1595,37 @@ def record_resume_file_key(guest_id: str, s3_key: str) -> None:
         logger.warning("guest resume file key not recorded for %s: %s", gid, e)
 
 
+def _delete_s3_keys(keys: List[str]) -> int:
+    """Best-effort S3 deletes — an S3 hiccup must never block a Mongo purge."""
+    deleted = 0
+    if not keys:
+        return 0
+    try:
+        from services.s3_service import get_storage_service
+
+        storage = get_storage_service()
+        for key in keys:
+            try:
+                storage.delete_resume(key)
+                deleted += 1
+            except Exception as del_err:
+                logger.warning("guest retention: S3 delete failed for %s: %s", key, del_err)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("guest retention: S3 cleanup unavailable: %s", e)
+    return deleted
+
+
 def run_retention_cleanup() -> Dict[str, Any]:
     """Delete ONLY expired unclaimed guest data: sessions with
     ``claimed_by: null`` whose ``last_seen_at`` is older than
     ``retention_days`` (0 = keep forever → skip), plus their unclaimed
-    tailoring_records, stale guest resume_jobs, and the sessions' uploaded
-    resume files in S3 (guest/ prefix). Claimed data is never touched.
-    Subjects keep their quota counters (abuse memory)."""
+    tailoring_records, guest resume_assets docs (and their S3 objects),
+    job_match_snapshots, stale guest resume_jobs, and the sessions' legacy
+    resume_file_s3_keys. Claimed data is NEVER touched by retention —
+    account erasure handles it.
+
+    Also enforces the spec-2 orphan rule: assets stuck parse_status=pending
+    with no object_key for >24h are swept (doc + any stray object)."""
     days = pconfig.get_int("retention_days")
     if days <= 0:
         return {
@@ -1211,46 +1643,89 @@ def run_retention_cleanup() -> Dict[str, Any]:
         )
     )
     ids = [str(d["guest_id"]) for d in expiring]
-    if not ids:
-        return {
-            "skipped": False,
-            "retention_days": days,
-            "sessions_deleted": 0,
-            "records_deleted": 0,
-            "jobs_deleted": 0,
-            "files_deleted": 0,
-        }
-    # Uploaded guest resume files (guest/ prefix) go with their sessions.
-    # Best-effort per object — an S3 hiccup must never block the Mongo purge.
-    files_deleted = 0
-    s3_keys = [k for d in expiring for k in (d.get("resume_file_s3_keys") or []) if k]
-    if s3_keys:
-        try:
-            from services.s3_service import get_storage_service
 
-            storage = get_storage_service()
-            for key in s3_keys:
-                try:
-                    storage.delete_resume(key)
-                    files_deleted += 1
-                except Exception as del_err:
-                    logger.warning("guest retention: S3 delete failed for %s: %s", key, del_err)
-        except Exception as e:  # pragma: no cover - defensive
-            logger.warning("guest retention: S3 cleanup unavailable: %s", e)
-    recs = _db().tailoring_records.delete_many({"guest_id": {"$in": ids}, "user_email": None})
-    jobs = _db().resume_jobs.delete_many({"guest_id": {"$in": ids}})
-    sess = _sessions().delete_many({"guest_id": {"$in": ids}, "claimed_by": None})
+    files_deleted = 0
+    assets_deleted = 0
+    snapshots_deleted = 0
+    records_deleted = 0
+    jobs_deleted = 0
+    sessions_deleted = 0
+    if ids:
+        # Guest-owned resume assets (claimed ones are excluded — a claimed
+        # session never appears in `expiring`, and the claim_status guard
+        # protects against any drift).
+        assets = list(
+            _db().resume_assets.find(
+                {"guest_id": {"$in": ids}, "claim_status": {"$ne": "claimed"}},
+                {"resume_id": 1, "object_key": 1},
+            )
+        )
+        s3_keys = [k for d in expiring for k in (d.get("resume_file_s3_keys") or []) if k]
+        s3_keys += [str(a["object_key"]) for a in assets if a.get("object_key")]
+        files_deleted = _delete_s3_keys(sorted(set(s3_keys)))
+        if assets:
+            res = _db().resume_assets.delete_many(
+                {"resume_id": {"$in": [a["resume_id"] for a in assets]}}
+            )
+            assets_deleted = int(res.deleted_count)
+        snaps = _snapshots().delete_many({"guest_id": {"$in": ids}})
+        snapshots_deleted = int(snaps.deleted_count)
+        recs = _db().tailoring_records.delete_many(
+            {"guest_id": {"$in": ids}, "user_email": None}
+        )
+        records_deleted = int(recs.deleted_count)
+        jobs = _db().resume_jobs.delete_many({"guest_id": {"$in": ids}})
+        jobs_deleted = int(jobs.deleted_count)
+        sess = _sessions().delete_many({"guest_id": {"$in": ids}, "claimed_by": None})
+        sessions_deleted = int(sess.deleted_count)
+
+    # Spec-2 orphan rule: pending assets with no object_key >24h — Mongo doc
+    # plus any stray object under the derived key (an S3 write may have
+    # landed without the $set). Never touches claimed assets.
+    orphan_assets_deleted = 0
+    try:
+        from services import resume_access
+
+        orphan_cutoff = _now() - timedelta(hours=24)
+        orphans = list(
+            _db().resume_assets.find(
+                {
+                    "parse_status": "pending",
+                    "object_key": None,
+                    "created_at": {"$lt": orphan_cutoff},
+                    "claim_status": {"$ne": "claimed"},
+                },
+                {"resume_id": 1},
+            )
+        )
+        if orphans:
+            _delete_s3_keys(
+                [resume_access.asset_object_key(str(o["resume_id"])) for o in orphans]
+            )
+            res = _db().resume_assets.delete_many(
+                {"resume_id": {"$in": [o["resume_id"] for o in orphans]},
+                 "parse_status": "pending", "object_key": None}
+            )
+            orphan_assets_deleted = int(res.deleted_count)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("guest retention: orphan sweep failed: %s", type(e).__name__)
+
     logger.info(
-        "guest retention cleanup: sessions=%d records=%d jobs=%d files=%d (retention_days=%d)",
-        sess.deleted_count, recs.deleted_count, jobs.deleted_count, files_deleted, days,
+        "guest retention cleanup: sessions=%d records=%d jobs=%d files=%d "
+        "assets=%d snapshots=%d orphans=%d (retention_days=%d)",
+        sessions_deleted, records_deleted, jobs_deleted, files_deleted,
+        assets_deleted, snapshots_deleted, orphan_assets_deleted, days,
     )
     return {
         "skipped": False,
         "retention_days": days,
-        "sessions_deleted": int(sess.deleted_count),
-        "records_deleted": int(recs.deleted_count),
-        "jobs_deleted": int(jobs.deleted_count),
+        "sessions_deleted": sessions_deleted,
+        "records_deleted": records_deleted,
+        "jobs_deleted": jobs_deleted,
         "files_deleted": files_deleted,
+        "assets_deleted": assets_deleted,
+        "snapshots_deleted": snapshots_deleted,
+        "orphan_assets_deleted": orphan_assets_deleted,
     }
 
 
@@ -1268,22 +1743,46 @@ def _daily_usage_snapshot(email: str) -> Tuple[int, int]:
         return 0, 0
 
 
-def claim_session(guest_id: str, user_email: str) -> Dict[str, Any]:
-    """Flip guest artifacts to the authenticated user (v2). Atomic +
-    idempotent + exact-capability-only:
+def _already_claimed_summary(email: str) -> Dict[str, Any]:
+    used, limit = _daily_usage_snapshot(email)
+    return {
+        "claimed": True,
+        "already_claimed": True,
+        "resume_imported": False,
+        "records_transferred": 0,
+        "tailors_carried": 0,
+        "daily_tailors_used": used,
+        "daily_tailors_limit": limit,
+    }
 
-      1. Atomic claimed_by guard (find_one_and_update unclaimed→claimed) —
-         all transfer steps run only for the winner of this flip; a repeat
-         claim by the same account returns already_claimed:true with zero
-         re-transfer; another account gets the already_claimed error (403).
-      2. Transfers ONLY the presented capability's session chain (sessions
-         already merged server-side by strong-signal resolution — never a
-         wider soft cluster) + its unclaimed tailoring_records.
-      3. Copies the parsed resume into user_resumes IF the user has none.
-      4. Links the account email on the quota subject.
-      5. Seeds day-1 FREE-plan usage exactly once per (subject, UTC day),
-         double-guarded by the claim flip AND the guest_claim_carryins
-         unique (subject_id, date) marker. Premium plans untouched.
+
+def _tick_claim_step(gid: str, email: str, step: str) -> None:
+    _sessions().update_one(
+        {"guest_id": gid, "claim.email": email},
+        {"$set": {f"claim.steps.{step}": True}},
+    )
+
+
+def claim_session(guest_id: str, user_email: str) -> Dict[str, Any]:
+    """Flip guest artifacts to the authenticated user — claim STATE MACHINE
+    (spec 1.7): unclaimed -> claim_pending -> transferring -> completed.
+
+      1. CAS unclaimed→claim_pending (find_one_and_update guarded on state
+         unclaimed OR (claim_pending/transferring AND claim.email == caller))
+         — a second account gets the already_claimed error (403 at the
+         route); the SAME account resumes an interrupted claim.
+      2. transferring: idempotent steps, each ticking claim.steps flags:
+         records (tailoring_records guest→email), resume (resume_assets
+         claim_status→claimed + owner attach user_id/email + purge_after→
+         null; snapshots retained), subject link, day-1 carry-in (existing
+         (subject, UTC day) unique double guard; premium untouched).
+      3. completed: legacy claimed_by/claimed_at set + claim.state=completed.
+
+    Exact-capability-only: the claim covers THIS session and the records its
+    guest_id proves — sibling sessions in the strong-signal cluster keep
+    their own capabilities. On completion, guest download minting for the
+    claimed records STOPS (mint requires user_email null) and outstanding
+    pre-claim tokens die at redemption (same guest-owned re-check).
     """
     gid = validate_guest_id(guest_id)
     if not gid:
@@ -1292,83 +1791,122 @@ def claim_session(guest_id: str, user_email: str) -> Dict[str, Any]:
     if not email:
         return {"error": "invalid_user"}
 
-    session = _sessions().find_one({"guest_id": gid})
+    # get_session hydrates the resume view from the resume_assets ref (v3).
+    session = get_session(gid)
     if not session:
         return {"error": "not_found"}
 
+    claim = session.get("claim") or {}
     already_claimed_by = session.get("claimed_by")
     if already_claimed_by and already_claimed_by != email:
         # Capability token was already consumed by another account.
         return {"error": "already_claimed"}
+    if already_claimed_by == email or (
+        claim.get("state") == "completed" and claim.get("email") == email
+    ):
+        # Repeat claim by the same account: idempotent, zero re-transfer.
+        return _already_claimed_summary(email)
 
     subject_id = subject_for_guest(gid)
+    now = _now()
 
-    # --- 1. atomic unclaimed→claimed flip (the idempotency guard) ---------
+    # --- 1. CAS unclaimed -> claim_pending (same-account resume allowed) --
     flipped = _sessions().find_one_and_update(
-        {"guest_id": gid, "claimed_by": None},
-        {"$set": {"claimed_by": email, "claimed_at": _now(), "last_seen_at": _now()}},
+        {
+            "guest_id": gid,
+            "$or": [
+                # Fresh claim: never claimed, state unclaimed/absent.
+                {"claimed_by": None, "claim.state": {"$in": [None, "unclaimed"]}},
+                {"claimed_by": None, "claim": {"$exists": False}},
+                # Same-account resume of an interrupted claim.
+                {"claim.state": {"$in": ["claim_pending", "transferring"]},
+                 "claim.email": email},
+            ],
+        },
+        {"$set": {
+            "claim.state": "claim_pending",
+            "claim.email": email,
+            "last_seen_at": now,
+        }},
     )
-    first_claim = flipped is not None
-    if not first_claim:
-        # We lost the atomic flip (or this is a repeat claim). EVERY transfer
-        # step below is reserved for the winner: a concurrent claim by another
-        # account must do nothing (no PII transfer race), and a repeat claim
-        # by the same account is a no-op (idempotent — no re-copy).
-        current = _sessions().find_one({"guest_id": gid}, {"claimed_by": 1}) or {}
-        if current.get("claimed_by") != email:
-            return {"error": "already_claimed"}
-        used, limit = _daily_usage_snapshot(email)
-        return {
-            "claimed": True,
-            "already_claimed": True,
-            "resume_imported": False,
-            "records_transferred": 0,
-            "tailors_carried": 0,
-            "daily_tailors_used": used,
-            "daily_tailors_limit": limit,
-        }
+    if flipped is None:
+        # Lost the CAS: either another account owns the claim, or ours
+        # completed concurrently. EVERY transfer step is reserved for the
+        # CAS winner — a losing call must transfer NOTHING.
+        current = _sessions().find_one(
+            {"guest_id": gid}, {"claimed_by": 1, "claim": 1}
+        ) or {}
+        cur_claim = current.get("claim") or {}
+        if current.get("claimed_by") == email or cur_claim.get("email") == email:
+            return _already_claimed_summary(email)
+        return {"error": "already_claimed"}
 
-    # Winner only from here on. EXACT-capability-only (v2): the claim covers
-    # THIS session and the records its guest_id proves — sibling sessions in
-    # the strong-signal cluster keep their own capabilities (another device's
-    # session can be claimed later, by the same or a linked account; artifact
-    # access never crosses guest_ids).
+    # Stamp started_at once (survives interrupted-claim resumes).
+    _sessions().update_one(
+        {"guest_id": gid, "claim.email": email, "claim.started_at": None},
+        {"$set": {"claim.started_at": now}},
+    )
 
-    # --- 2. ownership flip on THIS session's guest records (winner only) --
+    # --- 2. transferring: idempotent steps, flags tick as each lands ------
+    _sessions().update_one(
+        {"guest_id": gid, "claim.email": email},
+        {"$set": {"claim.state": "transferring"}},
+    )
+
+    # 2a. records: this session's unclaimed tailoring_records -> the account.
     rec_result = _db().tailoring_records.update_many(
         {"guest_id": gid, "user_email": None},
-        {"$set": {"user_email": email, "updated_at": _now()}},
+        {"$set": {"user_email": email, "updated_at": now}},
     )
+    _tick_claim_step(gid, email, "records")
 
-    # --- 3. copy resume into user_resumes if the user has none ------------
+    # 2b. resume: attach ownership on the guest-owned resume_assets docs
+    # (claim_status -> claimed, user_id/email attached, retention TTL
+    # lifted). The claimed session's snapshots are retained too.
     resume_imported = False
-    resume = session.get("resume") or {}
-    structured = resume.get("structured")
-    if structured:
-        existing = _db().user_resumes.find_one(
-            {"user_email": email, "structured": {"$exists": True}}, {"_id": 1}
+    try:
+        user_doc = _db().users.find_one({"email": email}, {"_id": 1})
+        user_id = str(user_doc["_id"]) if user_doc else None
+        had_resume = _db().resume_assets.find_one(
+            {"user_email": email, "structured": {"$ne": None}}, {"_id": 1}
+        ) is not None
+        _db().resume_assets.update_many(
+            {"guest_id": gid, "claim_status": {"$ne": "claimed"}},
+            {"$set": {
+                "claim_status": "claimed",
+                "user_email": email,
+                "user_id": user_id,
+                "purge_after": None,
+            }},
         )
-        if not existing:
-            try:
-                from services.resume_parser import ResumeParser
+        _snapshots().update_many(
+            {"guest_id": gid}, {"$set": {"purge_after": None}}
+        )
+        claimed_rid = session.get("resume_id")
+        if claimed_rid and not had_resume:
+            from services import resume_access
 
-                ResumeParser(_db()).save_parsed_resume(
-                    structured,
-                    resume.get("raw_text") or "",
-                    user_email=email,
-                )
+            asset = resume_access.get_asset(claimed_rid)
+            if asset and asset.get("structured"):
                 resume_imported = True
-            except Exception as e:  # pragma: no cover - defensive
-                logger.warning("guest claim: resume copy failed for %s: %s", gid, e)
+                # Adopt as the account's active resume only when it has none.
+                resume_access.adopt_active_if_unset(email, claimed_rid)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("guest claim: resume attach failed for %s: %s", gid, e)
+    else:
+        _tick_claim_step(gid, email, "resume")
 
-    # --- 4. link the account on the quota subject -------------------------
+    # 2c. link the account on the quota subject.
     if subject_id:
         _subjects().update_one(
             {"subject_id": subject_id},
-            {"$addToSet": {"linked_accounts": email}, "$set": {"last_seen_at": _now()}},
+            {"$addToSet": {"linked_accounts": email}, "$set": {"last_seen_at": now}},
         )
+        _tick_claim_step(gid, email, "subject_link")
 
-    # --- 5. seed day-1 FREE usage once per (subject, day) -----------------
+    # 2d. seed day-1 FREE usage once per (subject, day) — the existing
+    # guest_claim_carryins unique (subject_id, date) marker is the double
+    # guard, so an interrupted-claim resume can never double-seed.
     tailors_carried = 0
     carried = 0
     if subject_id:
@@ -1377,7 +1915,7 @@ def claim_session(guest_id: str, user_email: str) -> Dict[str, Any]:
             carried = max(0, int(subj.get("tailors_used") or 0))
         except (TypeError, ValueError):
             carried = 0
-    if first_claim and carried > 0 and subject_id:
+    if carried > 0 and subject_id:
         try:
             from services import entitlements_service
 
@@ -1389,7 +1927,7 @@ def claim_session(guest_id: str, user_email: str) -> Dict[str, Any]:
                             "subject_id": subject_id,
                             "date": _today_key(),
                             "email": email,
-                            "created_at": _now(),
+                            "created_at": now,
                         }
                     },
                     upsert=True,
@@ -1401,6 +1939,19 @@ def claim_session(guest_id: str, user_email: str) -> Dict[str, Any]:
                     tailors_carried = carried
         except Exception as e:  # pragma: no cover - defensive
             logger.warning("guest claim: usage seed failed for %s: %s", gid, e)
+    _tick_claim_step(gid, email, "carryin")
+
+    # --- 3. completed: legacy claimed_by/claimed_at + claim.state ---------
+    _sessions().update_one(
+        {"guest_id": gid, "claim.email": email},
+        {"$set": {
+            "claimed_by": email,
+            "claimed_at": now,
+            "claim.state": "completed",
+            "claim.completed_at": now,
+            "last_seen_at": now,
+        }},
+    )
 
     used, limit = _daily_usage_snapshot(email)
     logger.info(

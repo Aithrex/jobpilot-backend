@@ -455,10 +455,10 @@ def _load_canonical(user_email: str) -> Dict[str, Any]:
     """
     db = _db()
     try:
-        resume_doc = db.user_resumes.find_one(
-            {"user_email": user_email, "structured": {"$exists": True}},
-            sort=[("parsed_at", -1)],
-        ) or {}
+        # Resume Platform v3: canonical read path (users.active_resume_id ->
+        # resume_assets) — never a direct user_resumes scan.
+        from services import resume_access
+        resume_doc = resume_access.get_active_structured(user_email) or {}
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("answer_library: resume load failed for %s: %s", user_email, e)
         resume_doc = {}

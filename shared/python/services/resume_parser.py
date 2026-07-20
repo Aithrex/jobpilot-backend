@@ -293,9 +293,11 @@ class ResumeParser:
         """Initialize with a MongoDB database instance.
 
         Args:
-            db: pymongo Database object. The parser uses the 'user_resumes' collection.
+            db: pymongo Database object. Parsed content is stored in the
+                'resume_assets' collection (Resume Platform v3).
         """
-        self.user_resumes = db.user_resumes
+        self.db = db
+        self.resume_assets = db.resume_assets
 
     # ======================================================================
     # 1. FILE VALIDATION
@@ -632,10 +634,10 @@ class ResumeParser:
             link = link.strip()
             if "linkedin.com" in link.lower() and not linkedin_href:
                 linkedin_href = link
-                logger.info("Contact backfill: found LinkedIn PDF href: %s", link)
+                logger.info("Contact backfill: found LinkedIn PDF href")
             elif "github.com" in link.lower() and not github_href:
                 github_href = link
-                logger.info("Contact backfill: found GitHub PDF href: %s", link)
+                logger.info("Contact backfill: found GitHub PDF href")
 
         # Override GitHub immediately from href (authoritative)
         if github_href:
@@ -650,7 +652,7 @@ class ResumeParser:
             and "github.com" not in linkedin_val.lower()
         ):
             contact["linkedin"] = ""
-            logger.warning("Contact: cleared non-URL linkedin value '%s'", linkedin_val)
+            logger.warning("Contact: cleared non-URL linkedin value")
 
         # --- Email ---
         if not contact.get("email", "").strip():
@@ -740,9 +742,7 @@ class ResumeParser:
         # The PDF annotation URL is the single source of truth for LinkedIn.
         if linkedin_href:
             contact["linkedin"] = linkedin_href
-            logger.info(
-                "Contact backfill: LinkedIn FINAL override from PDF href: %s", linkedin_href
-            )
+            logger.info("Contact backfill: LinkedIn FINAL override from PDF href")
 
         # Normalize LinkedIn and GitHub URLs to canonical forms
         if contact.get("linkedin"):
@@ -756,7 +756,7 @@ class ResumeParser:
             original_name = contact["name"]
             normalized_name = ResumeParser._normalize_name(original_name)
             if original_name != normalized_name:
-                logger.info("Contact: normalized name '%s' → '%s'", original_name, normalized_name)
+                logger.info("Contact: normalized name casing")
             contact["name"] = normalized_name
 
         result["contact"] = contact
@@ -966,11 +966,7 @@ class ResumeParser:
                         line = line.strip()
                         if uni_pattern.search(line) and len(line) < 100:
                             edu_entry["institution"] = _trim_institution(line)
-                            logger.info(
-                                "Education backfill: found institution '%s' near degree '%s'",
-                                edu_entry["institution"],
-                                degree,
-                            )
+                            logger.info("Education backfill: found institution near degree text")
                             break
 
             # Strategy 2: If still empty, search for university name patterns globally
@@ -979,10 +975,7 @@ class ResumeParser:
                     line = line.strip()
                     if uni_pattern.search(line) and len(line) < 100 and not line.startswith("["):
                         edu_entry["institution"] = _trim_institution(line)
-                        logger.info(
-                            "Education backfill: found institution '%s' via global search",
-                            edu_entry["institution"],
-                        )
+                        logger.info("Education backfill: found institution via global search")
                         break
 
         return result
@@ -1138,75 +1131,72 @@ class ResumeParser:
         raw_text: str,
         user_email: str = "",
         content_hash: str = "",
+        resume_id: str = None,
     ) -> dict:
-        """Build flat status fields, persist to MongoDB, and return the document.
+        """Persist parsed content INTO the owning ``resume_assets`` doc.
 
-        This method is separated from upload_and_parse so the async job worker
-        can call it independently after LLM parsing completes.
-
-        Flat fields (skills, experience_years, job_titles, summary) are stored
-        alongside the full structured JSON for backward compatibility with
-        the GET /api/resume/status endpoint.
-
-        Storage model: per-user — the previous resume for this user is replaced.
+        Resume Platform v3 (spec 1.1): one asset doc per uploaded file,
+        written in place — never delete-then-insert. Flat status fields
+        (skills, experience_years, job_titles, summary, education,
+        certifications) are stored alongside the full structured JSON.
 
         Args:
             structured: Validated structured resume JSON.
             raw_text: Original extracted text (stored for fallback and repair).
             user_email: Email of the authenticated user (for scoping storage).
+            content_hash: sha256 of the original file bytes (dedup key).
+            resume_id: The owning asset's immutable id. When omitted (legacy
+                callers, e.g. guest-claim import), a new fileless asset is
+                created and adopted as active only if the user has none.
 
         Returns:
-            The stored document dict with _id removed.
+            The stored asset doc in the legacy resume-doc shape (_id removed,
+            ``s3_key`` alias present).
         """
-        # Derive flat status fields from the structured data
-        flat_skills = flatten_skills(structured)
-        job_titles = extract_job_titles(structured)
-        experience_years = self._estimate_experience_years(structured)
-        summary = structured.get("summary", "")
+        from services import resume_access
 
-        doc = {
-            "user_email": user_email,
-            "structured": structured,
-            "content_hash": content_hash,
-            "raw_text": raw_text[:_MAX_TEXT_CHARS],
-            "raw_text_length": len(raw_text),
-            "skills": flat_skills,
-            "experience_years": experience_years,
-            "job_titles": job_titles,
-            "summary": summary,
-            "education": [
-                {
-                    "degree": edu.get("degree", ""),
-                    "institution": edu.get("institution", ""),
-                    "year": (
-                        edu.get("dates", "").split("–")[-1].strip() if edu.get("dates") else ""
-                    ),
-                }
-                for edu in structured.get("education", [])
-            ],
-            # Mirror structured.certifications at the top level for backwards
-            # compat with status/list endpoints. Empty list when the resume
-            # had none — the parser prompt forbids fabrication.
-            "certifications": [
-                c for c in (structured.get("certifications") or []) if isinstance(c, str) and c.strip()
-            ],
-            "parsed_at": datetime.now(timezone.utc),
-        }
+        fields = resume_access.build_parsed_fields(
+            structured, raw_text, content_hash=content_hash
+        )
 
-        # Per-user storage (parsed/structured resume only):
-        # Don't delete "base" documents (type='base') which store the uploaded file metadata.
-        self.user_resumes.delete_many({"user_email": user_email, "structured": {"$exists": True}})
-        self.user_resumes.insert_one(doc)
+        if not resume_id:
+            resume_id = resume_access.create_pending_asset(
+                owner_type="user",
+                user_email=user_email or None,
+                filename="",
+                content_hash=content_hash,
+            )
+            asset = resume_access.save_parsed_fields(resume_id, fields)
+            if user_email:
+                # New fileless asset never steals an existing active pointer.
+                resume_access.adopt_active_if_unset(user_email, resume_id)
+            return resume_access.shape_asset(asset)
 
-        doc.pop("_id", None)
-        return doc
+        asset = resume_access.save_parsed_fields(resume_id, fields)
+        if asset is None:
+            # Defensive: unknown resume_id — create the asset so the parse
+            # result is never lost, then write into it.
+            resume_id = resume_access.create_pending_asset(
+                owner_type="user",
+                user_email=user_email or None,
+                filename="",
+                content_hash=content_hash,
+            )
+            asset = resume_access.save_parsed_fields(resume_id, fields)
+            if user_email:
+                resume_access.adopt_active_if_unset(user_email, resume_id)
+        return resume_access.shape_asset(asset)
 
     # ======================================================================
     # 4. RETRIEVAL
     # ======================================================================
 
     def get_structured_resume(self, user_email: str = "") -> Optional[Dict[str, Any]]:
-        """Retrieve the latest stored structured resume from MongoDB.
+        """Retrieve the user's ACTIVE structured resume.
+
+        Thin delegate to ``resume_access.get_active_structured`` (Resume
+        Platform v3): resolves ``users.active_resume_id`` -> ``resume_assets``.
+        Signature and return shape are unchanged for the 35+ call sites.
 
         Args:
             user_email: Email of the authenticated user (for scoping retrieval).
@@ -1215,30 +1205,16 @@ class ResumeParser:
             The resume document dict with _id removed, or None if no resume
             has been uploaded yet.
         """
-        # `user_resumes` contains both:
-        # - base resume docs: { type: 'base', s3_key, filename, ... } (no `structured`)
-        # - parsed/structured resume docs: { structured, raw_text, parsed_at, ... }
-        # Only return parsed/structured docs.
-        query = {"user_email": user_email, "structured": {"$exists": True}} if user_email else {}
-        resume = self.user_resumes.find_one(query, sort=[("parsed_at", -1)])
-        if resume:
-            resume.pop("_id", None)
-            # Backwards-compat: resumes parsed before name normalization may
-            # still hold ALL-CAPS names. Normalize on read so display is correct.
-            structured = resume.get("structured")
-            if isinstance(structured, dict):
-                contact = structured.get("contact")
-                if isinstance(contact, dict) and contact.get("name"):
-                    contact["name"] = ResumeParser._normalize_name(contact["name"])
-        return resume
+        from services import resume_access
+
+        return resume_access.get_active_structured(user_email=user_email)
 
     def ensure_structured_resume(self, user_email: str = "") -> Optional[Dict[str, Any]]:
-        """Return a structured resume, re-parsing from the base S3 file if needed.
+        """Return a structured resume, re-parsing the ACTIVE asset's original
+        file from S3 if its parse never completed (or failed).
 
-        Users who uploaded before the async parse flow (or whose parse job
-        failed) only have a `type='base'` doc with an S3 key — no `structured`
-        field. Without this fallback the tailor endpoint would reject them
-        even though their resume is sitting in S3.
+        Only the active asset is ever re-parsed — a stale sibling upload can
+        never resurrect itself through this path (spec 1.2).
         """
         resume = self.get_structured_resume(user_email=user_email)
         if resume and resume.get("structured"):
@@ -1250,30 +1226,22 @@ class ResumeParser:
             )
             return None
 
-        logger.info(
-            "ensure_structured_resume: no parsed resume for %s, searching for base file to re-parse",
-            user_email,
-        )
+        from services import resume_access
 
-        base = self.user_resumes.find_one(
-            {"user_email": user_email, "type": "base", "is_active": True}
-        ) or self.user_resumes.find_one(
-            {"user_email": user_email, "type": "base"},
-            sort=[("uploaded_at", -1)],
-        )
-        if not base or not base.get("s3_key"):
+        asset = resume_access.get_active_asset(user_email)
+        if not asset or not asset.get("object_key"):
             logger.warning(
-                "ensure_structured_resume: no base file doc with s3_key for %s (base doc exists: %s)",
+                "ensure_structured_resume: no re-parsable asset for %s (asset exists: %s)",
                 user_email,
-                bool(base),
+                bool(asset),
             )
             return None
 
+        resume_id = asset["resume_id"]
         logger.info(
-            "ensure_structured_resume: found base file for %s — s3_key=%s, filename=%s — attempting re-parse from S3",
+            "ensure_structured_resume: re-parsing asset %s for %s from S3",
+            resume_id,
             user_email,
-            base.get("s3_key"),
-            base.get("filename", "?"),
         )
 
         try:
@@ -1281,23 +1249,29 @@ class ResumeParser:
             import base64 as _b64
             import hashlib as _hashlib
 
-            file_bytes = get_storage_service().get_resume(base["s3_key"])
+            file_bytes = get_storage_service().get_resume(asset["object_key"])
             file_b64 = _b64.b64encode(file_bytes).decode("utf-8")
-            mime_type = self.get_mime_type(base.get("filename", "resume.pdf"))
-            content_hash = base.get("content_hash") or _hashlib.sha256(file_bytes).hexdigest()
+            mime_type = asset.get("mime_type") or self.get_mime_type(
+                asset.get("filename", "resume.pdf")
+            )
+            content_hash = asset.get("content_hash") or _hashlib.sha256(file_bytes).hexdigest()
             structured, raw_text = self.parse_to_structured("", file_b64, mime_type)
             result = self.save_parsed_resume(
-                structured, raw_text, user_email=user_email, content_hash=content_hash
+                structured,
+                raw_text,
+                user_email=user_email,
+                content_hash=content_hash,
+                resume_id=resume_id,
             )
+            resume_access.adopt_active_if_unset(user_email, resume_id)
             logger.info(
-                "ensure_structured_resume: successfully re-parsed resume for %s", user_email
+                "ensure_structured_resume: successfully re-parsed asset %s", resume_id
             )
             return result
         except Exception as e:
             logger.error(
-                "ensure_structured_resume: S3 reparse failed for %s (s3_key=%s): %s",
-                user_email,
-                base.get("s3_key"),
+                "ensure_structured_resume: S3 reparse failed for asset %s: %s",
+                resume_id,
                 e,
                 exc_info=True,
             )

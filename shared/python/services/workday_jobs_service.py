@@ -853,13 +853,10 @@ def _load_resume_profile(user_email: str) -> Tuple[List[str], Optional[int]]:
     if not user_email:
         return [], None
     try:
-        from utils.db_connect import DBConnect
         from schemas.resume_schemas import flatten_skills
-        db = DBConnect().get_db()
-        doc = db.user_resumes.find_one(
-            {"user_email": user_email, "structured": {"$exists": True}},
-            sort=[("parsed_at", -1)],
-        )
+        from services import resume_access
+        # v3: the active resume_assets doc via the canonical accessor.
+        doc = resume_access.get_active_structured(user_email)
         if not doc:
             return [], None
         skills_raw = flatten_skills(doc.get("structured") or {}) or []

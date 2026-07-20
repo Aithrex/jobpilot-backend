@@ -49,14 +49,11 @@ def _build_match_regex(skill_lower: str) -> Optional[re.Pattern]:
 
 
 def _load_user_skills(user_email: str) -> List[str]:
-    """Pull the user's most recent parsed resume, return deduped lowercase skills."""
+    """Pull the user's ACTIVE parsed resume (v3: resume_access resolves
+    users.active_resume_id -> resume_assets), return deduped lowercase skills."""
     try:
-        from utils.db_connect import DBConnect
-        db = DBConnect().get_db()
-        resume = db.user_resumes.find_one(
-            {"user_email": user_email, "structured": {"$exists": True}},
-            sort=[("parsed_at", -1)],
-        )
+        from services import resume_access
+        resume = resume_access.get_active_structured(user_email)
         if not resume:
             return []
         structured = resume.get("structured") or {}

@@ -35,7 +35,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from utils.db_connect import DBConnect
@@ -83,7 +83,13 @@ class ResumeService:
     # Job management (async pattern for Lambda)
     # ------------------------------------------------------------------
 
-    def create_job(self, job_type: str, payload: dict, user_email: str = "") -> str:
+    def create_job(
+        self,
+        job_type: str,
+        payload: dict,
+        user_email: str = "",
+        idempotency_key: Optional[str] = None,
+    ) -> str:
         """Create a pending async job and return its unique ID.
 
         The job is stored in MongoDB with status='processing'.
@@ -92,25 +98,49 @@ class ResumeService:
         Args:
             job_type: One of 'upload_parse', 'extract_jd', 'tailor', 'ats_scores'.
             payload: Job-type-specific data (e.g., raw_text, jd_analysis).
+                NEVER file bytes/base64 in Lambda-bound payloads — pass an S3
+                object_key instead (spec 1.3; `file_bytes_b64_dev` is the
+                non-Lambda dev fallback only).
             user_email: Authenticated user's email to scope job polling.
+            idempotency_key: Optional caller-supplied dedup key (unique sparse
+                index) — a retry with the same key returns the EXISTING job
+                instead of double-dispatching.
 
         Returns:
             UUID string identifying the job.
         """
+        if idempotency_key:
+            existing = self.resume_jobs.find_one(
+                {"idempotency_key": str(idempotency_key)}, {"job_id": 1}
+            )
+            if existing:
+                return existing["job_id"]
+
         job_id = str(uuid.uuid4())
-        self.resume_jobs.insert_one(
-            {
-                "job_id": job_id,
-                "job_type": job_type,
-                "status": "processing",
-                "payload": payload,
-                "user_email": user_email,
-                "result": None,
-                "error": None,
-                "created_at": datetime.now(timezone.utc),
-                "completed_at": None,
-            }
-        )
+        doc = {
+            "job_id": job_id,
+            "job_type": job_type,
+            "status": "processing",
+            "payload": payload,
+            "user_email": user_email,
+            "result": None,
+            "error": None,
+            "created_at": datetime.now(timezone.utc),
+            "completed_at": None,
+        }
+        if idempotency_key:
+            doc["idempotency_key"] = str(idempotency_key)
+        try:
+            self.resume_jobs.insert_one(doc)
+        except Exception as insert_err:
+            # Unique-index race on idempotency_key: hand back the winner.
+            if idempotency_key:
+                existing = self.resume_jobs.find_one(
+                    {"idempotency_key": str(idempotency_key)}, {"job_id": 1}
+                )
+                if existing:
+                    return existing["job_id"]
+            raise insert_err
         return job_id
 
     def get_job(self, job_id: str, user_email: str = "") -> Optional[Dict[str, Any]]:
@@ -136,6 +166,18 @@ class ResumeService:
         job.pop("payload", None)  # Don't send payload back to client
         return job
 
+    def _job_quota_entry_id(self, job_id: str) -> Optional[str]:
+        """Read the payload's quota ledger entry_id BEFORE the payload is
+        dropped by complete_job/fail_job (spec 1.6 settle hook)."""
+        try:
+            row = self.resume_jobs.find_one(
+                {"job_id": job_id}, {"payload.quota_entry_id": 1}
+            )
+            entry_id = ((row or {}).get("payload") or {}).get("quota_entry_id")
+            return entry_id if isinstance(entry_id, str) and entry_id else None
+        except Exception:  # pragma: no cover - defensive
+            return None
+
     def complete_job(self, job_id: str, result: dict):
         """Mark a job as completed with its result dict.
 
@@ -143,18 +185,35 @@ class ResumeService:
         uploaded file as base64, nothing reads it after dispatch (workers get
         the payload via the invoke event/thread args, pollers only see
         status/result), and keeping it is what once filled the Atlas tier.
+
+        Quota (spec 1.6): a tailor-family payload carries ``quota_entry_id``;
+        completion settles the ledger entry reserved -> completed (idempotent
+        state transition — a Lambda retry can't double-settle).
         """
+        entry_id = self._job_quota_entry_id(job_id)
+        now = datetime.now(timezone.utc)
         self.resume_jobs.update_one(
             {"job_id": job_id},
             {
                 "$set": {
                     "status": "completed",
                     "result": result,
-                    "completed_at": datetime.now(timezone.utc),
+                    "completed_at": now,
+                    # TTL: settled job rows expire 7 days later (spec 1.3).
+                    "expire_at": now + timedelta(days=7),
                 },
                 "$unset": {"payload": ""},
             },
         )
+        if entry_id:
+            try:
+                from services import quota_ledger_service
+                quota_ledger_service.complete_entry(
+                    entry_id, job_id=job_id,
+                    record_id=(result or {}).get("record_id"),
+                )
+            except Exception as e:  # pragma: no cover - never fail completion
+                logger.warning("quota complete settle failed for %s: %s", job_id, e)
 
     def update_job_partial(self, job_id: str, partial_result: dict) -> None:
         """Write an in-progress partial result for streaming polls.
@@ -191,17 +250,32 @@ class ResumeService:
 
         Drops the stored input ``payload`` like complete_job does — retries
         always arrive as a fresh submission, never by re-driving the doc.
+
+        Quota (spec 1.6): a terminal failure REFUNDS the tailor reservation —
+        only a successful tailoring consumes. The refund rides the guarded
+        reserved->refunded transition, so repeated fail_job calls (or a
+        refund racing a completion) can never double-decrement.
         """
+        entry_id = self._job_quota_entry_id(job_id)
+        now = datetime.now(timezone.utc)
         update: Dict[str, Any] = {
             "status": "failed",
             "error": error,
-            "completed_at": datetime.now(timezone.utc),
+            "completed_at": now,
+            # TTL: settled job rows expire 7 days later (spec 1.3).
+            "expire_at": now + timedelta(days=7),
         }
         if error_code:
             update["error_code"] = error_code
         self.resume_jobs.update_one(
             {"job_id": job_id}, {"$set": update, "$unset": {"payload": ""}}
         )
+        if entry_id:
+            try:
+                from services import quota_ledger_service
+                quota_ledger_service.refund_entry(entry_id)
+            except Exception as e:  # pragma: no cover - never fail the fail path
+                logger.warning("quota refund failed for %s: %s", job_id, e)
 
     @staticmethod
     def invoke_async(job_id: str, job_type: str, payload: dict):
@@ -552,6 +626,55 @@ def _finalize_tailored_result(
     return result
 
 
+def _persist_tailoring_record(
+    user_email: str,
+    resume: Dict[str, Any],
+    jd_text: str,
+    jd_analysis: Dict[str, Any],
+    result: Dict[str, Any],
+    source: str,
+) -> Optional[str]:
+    """Worker-side canonical tailoring_records persistence (spec 1.5).
+
+    The `tailor` and `extract_and_tailor` workers persist the record at
+    finalize time (mirrors batch_tailor_item / guest_tailor) so closing the
+    browser never loses completed tailoring history. POST /save-record stays
+    for ats_scores attach + streak and is idempotent-by-record_id — it will
+    NOT duplicate this record. Best effort: a persistence failure never fails
+    the tailor job (the result still reaches the poller).
+    """
+    try:
+        import uuid as _uuid
+        from services.resume_versioning import build_initial_version
+        from utils.db_connect import DBConnect as _DBC
+
+        _db = _DBC().get_db()
+        rid = str(_uuid.uuid4())
+        initial = build_initial_version(result, source="initial", ats_scores=None)
+        _db.tailoring_records.insert_one({
+            "record_id": rid,
+            "user_email": user_email,
+            "base_resume_filename": (resume or {}).get("filename") or "",
+            "base_resume_s3_key": (resume or {}).get("s3_key") or "",
+            "jd_text": (jd_text or "")[:15000],
+            "jd_analysis": jd_analysis,
+            "tailored_resume": result,  # legacy mirror; versions[0] is canonical
+            "versions": [initial],
+            "current_version_id": initial["version_id"],
+            "ats_scores": None,
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+            "source": source,
+        })
+        logger.info(
+            "%s: worker persisted tailoring_record %s for %s", source, rid, user_email
+        )
+        return rid
+    except Exception as e:
+        logger.warning("%s: failed to persist tailoring_record: %s", source, e)
+        return None
+
+
 def _attach_ats_keyword_audit(result: Dict[str, Any], jd_analysis: Dict[str, Any]) -> None:
     """Re-run the deterministic keyword gap engine on the FINAL tailored
     resume so the UI can warn about JD keywords that didn't make it in.
@@ -628,6 +751,52 @@ def _stamp_job_logos(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("logo stamping skipped: %s", type(e).__name__)
     return payload
+
+
+def _derive_guest_profile(structured: Dict[str, Any]) -> Dict[str, Any]:
+    """Profile block for the guest_parse job result (spec section 5).
+
+    ONLY genuinely extracted fields — a field the resume doesn't state is
+    OMITTED, never invented (IntegrityGuard posture). The extracted name is
+    presentation-only, never identity.
+    """
+    profile: Dict[str, Any] = {}
+    try:
+        from schemas.resume_schemas import flatten_skills
+        from services.resume_parser import ResumeParser
+
+        contact = structured.get("contact") or {}
+        name = (contact.get("name") or "").strip()
+        if name:
+            profile["first_name"] = name.split()[0]
+
+        experience = structured.get("experience") or []
+        if experience and isinstance(experience[0], dict):
+            title = (experience[0].get("title") or "").strip()
+            if title:
+                profile["headline_title"] = title
+
+        years = ResumeParser._estimate_experience_years(structured)
+        if years:
+            profile["years"] = years
+            profile["experience_level"] = (
+                "entry" if years <= 2 else "mid" if years <= 5 else "senior"
+            )
+
+        skills = flatten_skills(structured)[:10]
+        if skills:
+            profile["skills"] = skills
+
+        location = (contact.get("location") or "").strip()
+        if location:
+            profile["location"] = location
+
+        summary = (structured.get("summary") or "").strip()
+        if summary:
+            profile["summary_short"] = summary[:200]
+    except Exception as e:  # pragma: no cover - advisory block, never fails the job
+        logger.warning("guest profile derivation skipped: %s", type(e).__name__)
+    return profile
 
 
 def _process_job(job_id: str, job_type: str, payload: dict):
@@ -740,13 +909,43 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             svc.complete_job(job_id, {"message": message})
 
         elif job_type == "upload_parse":
+            # Resume Platform v3 (spec 1.3): the payload is transport-only —
+            # {resume_id, object_key, mime_type, content_hash}; the worker
+            # fetches the original bytes from S3. `file_bytes_b64_dev` is the
+            # non-Lambda local-dev fallback for bucketless environments.
+            from services import resume_access
+
             user_email = payload.get("user_email", "")
             content_hash = payload.get("content_hash", "")
-            # file_base64 + mime_type for multi-modal LLM input (new path)
-            # Falls back to pdf_base64 for backward compatibility
-            file_base64 = payload.get("file_base64") or payload.get("pdf_base64")
+            resume_id = payload.get("resume_id", "")
             mime_type = payload.get("mime_type", "application/pdf")
             input_raw_text = payload.get("raw_text", "")
+
+            file_base64 = (
+                payload.get("file_bytes_b64_dev")
+                or payload.get("file_base64")
+                or payload.get("pdf_base64")
+            )
+            object_key = payload.get("object_key")
+            if object_key and not file_base64:
+                try:
+                    from services.s3_service import get_storage_service
+
+                    file_bytes = get_storage_service().get_resume(object_key)
+                    file_base64 = base64.b64encode(file_bytes).decode("utf-8")
+                except Exception as fetch_err:
+                    logger.error(
+                        "Upload parse: S3 fetch failed for asset %s: %s",
+                        resume_id, fetch_err,
+                    )
+                    resume_access.mark_asset_failed(resume_id, "s3_fetch_failed")
+                    resume_access.clear_pending_active(user_email, resume_id)
+                    svc.fail_job(job_id, "Could not read the uploaded file. Please try again.")
+                    return
+
+            if resume_id:
+                resume_access.mark_asset_parsing(resume_id)
+            svc.update_job_progress(job_id, "parsing", 20)
 
             # parse_to_structured validates internally via validate_and_coerce.
             # If the LLM returns fundamentally broken output, attempt one repair.
@@ -760,11 +959,15 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 validated = _repair_extraction(input_raw_text, {}, str(ve))
                 raw_text = input_raw_text
                 if validated is None:
+                    resume_access.mark_asset_failed(resume_id, f"validation: {ve}")
+                    resume_access.clear_pending_active(user_email, resume_id)
                     svc.fail_job(job_id, f"Resume parsing failed validation: {ve}")
                     return
 
             # Validate that the LLM extracted meaningful content
             if len(raw_text.strip()) < 50:
+                resume_access.mark_asset_failed(resume_id, "no_meaningful_text")
+                resume_access.clear_pending_active(user_email, resume_id)
                 svc.fail_job(
                     job_id,
                     "Could not extract meaningful text from the document. "
@@ -772,26 +975,46 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 )
                 return
 
-            # Store in DB
+            svc.update_job_progress(job_id, "extracting_skills", 60)
+
+            # Write parsed content INTO the owning asset doc.
             doc = svc.parser.save_parsed_resume(
-                validated, raw_text, user_email=user_email, content_hash=content_hash
+                validated,
+                raw_text,
+                user_email=user_email,
+                content_hash=content_hash,
+                resume_id=resume_id or None,
             )
-            svc.complete_job(job_id, {"parsed_resume": doc})
+
+            svc.update_job_progress(job_id, "finalizing", 90)
+
+            # Promote the active pointer — guarded so a stale parse never
+            # overwrites a pointer the user changed meanwhile (spec 1.2).
+            if resume_id and user_email:
+                resume_access.promote_active(user_email, resume_id)
+
+            svc.complete_job(
+                job_id,
+                {"parsed_resume": doc, "resume_id": resume_id or doc.get("resume_id", "")},
+            )
 
         elif job_type == "guest_parse":
             # Guest Onboarding — parse an anonymous upload (FLASH, same parser
-            # as upload_parse) but store the result on the guest_sessions doc,
-            # NOT user_resumes. Also runs the soft 2-of-N identity resolution
-            # so the completed job can carry "welcome back" recognition.
-            from services import guest_service
+            # as upload_parse); parsed content lands on the guest-owned
+            # resume_assets doc, the session keeps only the resume_id ref.
+            # Also runs the soft 2-of-N identity resolution so the completed
+            # job can carry "welcome back" recognition.
+            from services import guest_service, resume_access
 
             guest_id = payload.get("guest_id", "")
-            # Primary path: the raw file lives in S3 (guest/ prefix) and the
-            # payload carries only its key — keeps job docs small and the
-            # async Lambda invoke under its 256KB event limit. file_base64
-            # survives as the local-dev fallback for bucketless environments.
-            file_base64 = payload.get("file_base64")
-            file_s3_key = payload.get("file_s3_key")
+            resume_id = payload.get("resume_id", "")
+            # Primary path: the raw file lives in S3 under the v3 asset key
+            # and the payload carries only its key — keeps job docs small and
+            # the async Lambda invoke under its 256KB event limit.
+            # file_bytes_b64_dev (and legacy file_base64) survive as the
+            # local-dev fallback for bucketless environments.
+            file_base64 = payload.get("file_bytes_b64_dev") or payload.get("file_base64")
+            file_s3_key = payload.get("object_key") or payload.get("file_s3_key")
             if file_s3_key and not file_base64:
                 try:
                     from services.s3_service import get_storage_service
@@ -799,32 +1022,47 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                     file_bytes = get_storage_service().get_resume(file_s3_key)
                     file_base64 = base64.b64encode(file_bytes).decode("utf-8")
                 except Exception as fetch_err:
-                    logger.error("Guest parse: S3 fetch failed for %s: %s", file_s3_key, fetch_err)
+                    logger.error(
+                        "Guest parse: S3 fetch failed for asset %s: %s",
+                        resume_id or "-", fetch_err,
+                    )
+                    resume_access.mark_asset_failed(resume_id, "s3_fetch_failed")
                     svc.fail_job(job_id, "Could not read the uploaded file. Please try again.")
                     return
             mime_type = payload.get("mime_type", "application/pdf")
+            asset = resume_access.get_asset(resume_id) if resume_id else None
+            filename = payload.get("filename", "") or (asset or {}).get("filename", "")
+
+            if resume_id:
+                resume_access.mark_asset_parsing(resume_id)
+            svc.update_job_progress(job_id, "parsing", 20)
             try:
                 validated, raw_text = svc.parser.parse_to_structured(
                     "", file_base64, mime_type
                 )
             except (ValueError, KeyError) as ve:
                 logger.warning("Guest parse validation failed: %s", ve)
+                resume_access.mark_asset_failed(resume_id, f"validation: {ve}")
                 svc.fail_job(job_id, f"Resume parsing failed validation: {ve}")
                 return
             if len(raw_text.strip()) < 50:
+                resume_access.mark_asset_failed(resume_id, "no_meaningful_text")
                 svc.fail_job(
                     job_id,
                     "Could not extract meaningful text from the document. "
                     "The file may be a scanned image or empty.",
                 )
                 return
+            svc.update_job_progress(job_id, "extracting_skills", 60)
             recognition = guest_service.attach_parsed_resume(
                 guest_id,
                 validated,
                 raw_text,
-                payload.get("filename", ""),
+                filename,
                 fingerprint_hash=payload.get("fingerprint_hash"),
+                resume_id=resume_id or None,
             )
+            svc.update_job_progress(job_id, "finalizing", 90)
             guest_info = {
                 "recognized": bool(recognition.get("recognized")),
                 "tailors_used": recognition.get("tailors_used", 0),
@@ -842,9 +1080,13 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 {
                     "parsed_resume": {
                         "structured": validated,
-                        "filename": payload.get("filename", ""),
+                        "filename": filename,
                     },
                     "guest": guest_info,
+                    "resume_id": recognition.get("resume_id") or resume_id or "",
+                    # Profile reveal block (spec section 5) — only genuinely
+                    # extracted fields; absent otherwise.
+                    "profile": _derive_guest_profile(validated),
                 },
             )
 
@@ -977,11 +1219,17 @@ def _process_job(job_id: str, job_type: str, payload: dict):
 
         elif job_type == "guest_matches":
             # Guest Onboarding — free direct sources only (skip_apify path),
-            # scored vs the guest's parsed resume, high-score only, cached
-            # per quota subject per day. No LLM, no paid actors.
+            # scored vs the guest's parsed resume, high-score only, persisted
+            # as today's job_match_snapshots doc per quota subject (spec 1.4).
+            # No LLM, no paid actors. job_id rides along so the worker emits
+            # honest progress phases (reading_resume/searching_sources/
+            # ranking/finalizing — spec 3.4) and the result carries
+            # sources_report/empty_reason/total_considered (spec 3.5).
             from services import guest_service
 
-            result = guest_service.compute_guest_matches(payload.get("guest_id", ""))
+            result = guest_service.compute_guest_matches(
+                payload.get("guest_id", ""), job_id=job_id
+            )
             svc.complete_job(job_id, result)
 
         elif job_type == "guest_retention_cleanup":
@@ -1051,7 +1299,14 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                     gen_policy["allow"] and not gen_policy["evidence_only"]
                 ),
             )
-            svc.complete_job(job_id, {"tailored_resume": result})
+            # Worker-persisted canonical record (spec 1.5) — record_id rides
+            # the job result; /save-record attaches ATS scores idempotently.
+            record_id = _persist_tailoring_record(
+                user_email, resume, "", payload["jd_analysis"], result, "tailor"
+            )
+            svc.complete_job(
+                job_id, {"tailored_resume": result, "record_id": record_id}
+            )
 
         elif job_type == "regenerate":
             user_email = payload.get("user_email", "")
@@ -1358,11 +1613,17 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                     gen_policy["allow"] and not gen_policy["evidence_only"]
                 ),
             )
+            # Worker-persisted canonical record (spec 1.5).
+            record_id = _persist_tailoring_record(
+                user_email, resume, jd_text, jd_analysis, result,
+                "extract_and_tailor",
+            )
             svc.complete_job(
                 job_id,
                 {
                     "tailored_resume": result,
                     "jd_analysis": jd_analysis,
+                    "record_id": record_id,
                     # Post-backfill base resume — lets the client diff the
                     # tailored output against what the user actually has,
                     # without a second round-trip.

@@ -29,10 +29,22 @@ _ESSAY_Q = "Why do you want to work here?"
 @pytest.fixture()
 def lib_db():
     d = current_db()
-    for c in ("application_answer_library", "user_resumes", "user_preferences",
-              "visa_profiles", "application_answers"):
+    for c in ("application_answer_library", "user_resumes", "resume_assets",
+              "users", "user_preferences", "visa_profiles",
+              "application_answers"):
         d[c].delete_many({})
     return d
+
+
+def _seed_resume(d, structured):
+    """Resume Platform v3: the canonical resume store is resume_assets
+    (read through resume_access.get_active_structured)."""
+    d.resume_assets.insert_one({
+        "resume_id": "asset-answer-lib", "owner_type": "user",
+        "user_email": USER, "structured": structured,
+        "parse_status": "parsed",
+        "parsed_at": "2026-01-01T00:00:00+00:00",
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -79,22 +91,14 @@ class TestEssays:
 # ---------------------------------------------------------------------------
 class TestCoverage:
     def test_profile_field_filled_and_coverage_full(self, lib_db):
-        lib_db.user_resumes.insert_one({
-            "user_email": USER,
-            "structured": {"contact": {"email": "alice@aspirely.me"}},
-            "parsed_at": "2026-01-01T00:00:00+00:00",
-        })
+        _seed_resume(lib_db, {"contact": {"email": "alice@aspirely.me"}})
         out = lib.resolve(USER, [_EMAIL_Q])
         assert out["coverage"] == 1.0
         assert out["answers"][_EMAIL_Q]["source"] == "profile"
         assert out["answers"][_EMAIL_Q]["value"] == "alice@aspirely.me"
 
     def test_mixed_resolved_and_unresolved_coverage(self, lib_db):
-        lib_db.user_resumes.insert_one({
-            "user_email": USER,
-            "structured": {"contact": {"email": "alice@aspirely.me"}},
-            "parsed_at": "2026-01-01T00:00:00+00:00",
-        })
+        _seed_resume(lib_db, {"contact": {"email": "alice@aspirely.me"}})
         # one resolvable (email) + one undeclared legal → coverage = 1/2.
         out = lib.resolve(USER, [_EMAIL_Q, _WORK_AUTH_Q])
         assert out["coverage"] == pytest.approx(0.5)

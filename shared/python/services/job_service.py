@@ -1959,14 +1959,12 @@ class JobService:
         return jobs
 
     def _get_resume_skills(self, user_email: str = "") -> List[str]:
-        """Get flat skills list from the stored resume for this user."""
+        """Get flat skills list from the user's ACTIVE resume asset (v3)."""
         if not user_email:
             return []
         try:
-            resume = self.user_resumes.find_one(
-                {"user_email": user_email, "skills": {"$exists": True}},
-                sort=[("parsed_at", -1)],
-            )
+            from services import resume_access
+            resume = resume_access.get_active_structured(user_email)
             if resume:
                 return resume.get("skills", [])
         except Exception as e:
@@ -1984,10 +1982,8 @@ class JobService:
         if not user_email:
             return None
         try:
-            resume = self.user_resumes.find_one(
-                {"user_email": user_email, "structured": {"$exists": True}},
-                sort=[("parsed_at", -1)],
-            )
+            from services import resume_access
+            resume = resume_access.get_active_structured(user_email)
             if not resume:
                 return None
             structured = resume.get("structured") or {}
@@ -2006,16 +2002,12 @@ class JobService:
             return None
 
     def get_resume(self, user_email: str = "") -> Optional[Dict[str, Any]]:
-        """Retrieve the latest stored resume for this user (used by analyze_job)."""
+        """Retrieve the user's ACTIVE parsed resume (v3: resume_access
+        resolves users.active_resume_id -> resume_assets; used by analyze_job)."""
         if not user_email:
             return None
-        resume = self.user_resumes.find_one(
-            {"user_email": user_email, "skills": {"$exists": True}, "parsed_at": {"$exists": True}},
-            sort=[("parsed_at", -1)],
-        )
-        if resume:
-            resume.pop("_id", None)
-        return resume
+        from services import resume_access
+        return resume_access.get_active_structured(user_email)
 
     # ------------------------------------------------------------------
     # AI Job Analysis

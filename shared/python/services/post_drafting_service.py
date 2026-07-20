@@ -91,8 +91,10 @@ def draft_post(payload: Dict) -> Dict:
     # Light resume context for grounding (optional).
     resume_ctx = ""
     try:
-        base = _db().user_resumes.find_one({"user_email": user_email, "type": "base"}) or {}
-        parsed = base.get("parsed") or {}
+        # Resume Platform v3: canonical read path (active resume_assets doc).
+        from services import resume_access
+        base = resume_access.get_active_structured(user_email) or {}
+        parsed = base.get("structured") or {}
         if parsed.get("summary"):
             resume_ctx = f"Candidate summary: {parsed.get('summary')[:300]}"
     except Exception:

@@ -339,10 +339,10 @@ def build_trend_aggregate_job(payload: Dict) -> Dict:
 def _user_evidence(user_email: str) -> Dict:
     """Skills the user demonstrably has + resume text (for the 'already has it' test)."""
     db = _db()
-    resume_doc = db.user_resumes.find_one(
-        {"user_email": user_email, "structured": {"$exists": True}},
-        sort=[("parsed_at", -1)],
-    ) or {}
+    # Resume Platform v3: canonical read path (users.active_resume_id ->
+    # resume_assets) — never a direct user_resumes scan.
+    from services import resume_access
+    resume_doc = resume_access.get_active_structured(user_email) or {}
     structured = resume_doc.get("structured") or {}
     skills = [s for s in flatten_skills(structured) if s] if structured else []
     resume_text = build_resume_text(structured).lower() if structured else ""

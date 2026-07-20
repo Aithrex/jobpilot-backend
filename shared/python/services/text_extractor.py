@@ -278,6 +278,18 @@ def extract_docx_text(file_bytes: bytes) -> Tuple[str, List[str]]:
     rels). Each header/footer part has its own rel collection in OOXML, so
     we walk them separately rather than relying solely on the main part.
     """
+    # Zip-bomb guard BEFORE python-docx opens the archive (spec §4). The
+    # upload routes reject guarded files with a 400 up front; this is the
+    # defense-in-depth seam for every other path (S3 re-parse etc.), where
+    # degrading to "no local extraction" is the safe behavior.
+    try:
+        from utils.zip_guard import guard_zip_archive
+
+        guard_zip_archive(file_bytes)
+    except ValueError as e:
+        logger.warning("DOCX rejected by zip guard: %s", e)
+        return "", []
+
     try:
         from docx import Document
     except ImportError:

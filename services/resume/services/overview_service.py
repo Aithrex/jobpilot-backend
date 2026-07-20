@@ -53,7 +53,8 @@ def get_overview(email: str) -> Dict:
     total_apps = len(apps)
 
     # ── Resume / jobs ──
-    has_base = db.user_resumes.count_documents({"user_email": email, "type": "base"}) > 0
+    # Resume Platform v3: base uploads live in resume_assets.
+    has_base = db.resume_assets.count_documents({"user_email": email, "owner_type": "user"}) > 0
     saved_jobs = db.saved_jobs.count_documents({"user_email": email})
 
     # ── Learning ──

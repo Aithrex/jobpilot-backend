@@ -42,3 +42,6 @@ Thumbs.db
 tfplan
 tfplan_*
 *.tfplan
+
+# Local dev log sink (services/*/app.py FileHandler) — never commit
+app.log

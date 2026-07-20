@@ -72,9 +72,36 @@ INDEX_SPECS = [
     ("users", [("oauth_identities.apple.subject", ASCENDING)],
      {"sparse": True, "name": "oauth_apple_subject"}),
 
-    # === user_resumes (canonical resume collection) =======================
-    # resume_parser.get_structured_resume:1210 find({user_email, structured:exists})
-    # sort([(parsed_at,-1)]); ensure_structured_resume also filters by user_email.
+    # === resume_assets (Resume Platform v3 §1.1 — canonical resume store) ==
+    # One doc per uploaded file; resume_id is the immutable uuid4-hex key
+    # (resume_access.get_asset / save_parsed_fields filter {resume_id}).
+    ("resume_assets", [("resume_id", ASCENDING)],
+     {"unique": True, "name": "resume_id_unique"}),
+    # resume_access.get_active_structured fallback + /versions listing:
+    # find({user_email, ...}) sort created_at/parsed_at desc.
+    ("resume_assets", [("user_email", ASCENDING), ("created_at", DESCENDING)],
+     {"name": "user_email_created_at"}),
+    # Account erasure walks the {user_id}-owned assets.
+    ("resume_assets", [("user_id", ASCENDING)],
+     {"sparse": True, "name": "user_id_sparse"}),
+    # Guest-owned assets (attach_parsed_resume / retention).
+    ("resume_assets", [("guest_id", ASCENDING)],
+     {"sparse": True, "name": "guest_id_sparse"}),
+    # Upload dedup: resume.py upload route find({user_email, content_hash,
+    # parse_status:'parsed'}).
+    ("resume_assets", [("content_hash", ASCENDING), ("user_email", ASCENDING)],
+     {"name": "content_hash_user_email"}),
+    # Guest retention TTL: only guest-owned assets carry a real purge_after;
+    # partialFilterExpression keeps user assets exempt (spec 1.1).
+    ("resume_assets", [("purge_after", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_purge_after",
+      "partialFilterExpression": {"owner_type": "guest"}}),
+
+    # === user_resumes (LEGACY reader seam) ================================
+    # v3 moved canonical storage to resume_assets; a handful of Phase B
+    # matching readers (daily_pipeline_service, jd_match_scorer, job_service)
+    # still query {user_email, structured:exists} sort parsed_at — keep this
+    # index until those readers move to resume_access.
     ("user_resumes", [("user_email", ASCENDING), ("parsed_at", DESCENDING)],
      {"name": "user_email_parsed_at"}),
 
@@ -83,11 +110,34 @@ INDEX_SPECS = [
     # job_id is a uuid4 → unique is safe and protects polling correctness.
     ("resume_jobs", [("job_id", ASCENDING)], {"unique": True, "name": "job_id_unique"}),
     ("resume_jobs", [("user_email", ASCENDING)], {"name": "user_email_idx"}),
+    # v3 §1.3: settled jobs (complete_job/fail_job) stamp expire_at = now+7d;
+    # TTL reaps them. In-flight jobs carry no expire_at and are untouched.
+    ("resume_jobs", [("expire_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expire_at"}),
+    # v3 §1.3: optional caller-supplied dedup key (create_job) — unique sparse
+    # so client retries can't double-dispatch.
+    ("resume_jobs", [("idempotency_key", ASCENDING)],
+     {"unique": True, "sparse": True, "name": "idempotency_key_unique"}),
 
     # === usage counters (atomic $inc upserts) =============================
     # usage_service:65 tailor_usage.find_one({email, date}); :90 $inc upsert on it.
     ("tailor_usage", [("email", ASCENDING), ("date", ASCENDING)],
      {"unique": True, "name": "email_date_unique"}),
+    # === quota ledger (Resume Platform v3 §1.6 — atomic tailor quota) ======
+    # quota_counters needs NO extra index: its key is the implicit unique _id
+    # ("tailor:{pool_key}:{date}") that reserve's find_one_and_update targets.
+    # quota_ledger: entry_id is the settle key (complete_entry/refund_entry
+    # find_one_and_update {entry_id, state}); uuid4 → unique.
+    ("quota_ledger", [("entry_id", ASCENDING)],
+     {"unique": True, "name": "entry_id_unique"}),
+    # Caller-supplied dedup key (reserve_tailor idempotency) — unique sparse
+    # so a client retry can't double-reserve.
+    ("quota_ledger", [("idempotency_key", ASCENDING)],
+     {"unique": True, "sparse": True, "name": "idempotency_key_unique"}),
+    # Per-actor daily reads: entries_count_for_users filters
+    # {user_email $in, date, state $in}.
+    ("quota_ledger", [("user_email", ASCENDING), ("date", ASCENDING)],
+     {"name": "user_email_date"}),
     # feature_usage real doc shape is {user_email, date, feature} — confirmed at
     # entitlements_service.py:241 (find_one) and :273 ($inc upsert). Matches the
     # existing migrate_users_v2 index name so this is a clean no-op re-assert.
@@ -416,6 +466,23 @@ INDEX_SPECS = [
      {"sparse": True, "name": "guest_id_sparse"}),
     # platform_config is keyed on _id (default index) — nothing extra needed;
     # guest_global_counters + guest_challenge_velocity ($inc counters) ride _id.
+
+    # === job_match_snapshots (Resume Platform v3 §1.4) ======================
+    # Guest matches live HERE (moved out of guest_sessions/guest_quota_subjects
+    # embedded matched_jobs — those embedded paths are gone; the fresh DB
+    # carries no legacy index for them). snapshot_id is the session's ref key.
+    ("job_match_snapshots", [("snapshot_id", ASCENDING)],
+     {"unique": True, "name": "snapshot_id_unique"}),
+    # One snapshot per (quota_subject_id, date): guest_service._store_matches
+    # upserts on this pair; _cache_doc_for_guest reads it.
+    ("job_match_snapshots", [("quota_subject_id", ASCENDING), ("date", ASCENDING)],
+     {"unique": True, "name": "subject_date_unique"}),
+    # Retention sweep / claim purge-extension / erasure all filter {guest_id}.
+    ("job_match_snapshots", [("guest_id", ASCENDING)], {"name": "guest_id_idx"}),
+    # Unclaimed snapshots carry purge_after = now + 7d; claim sets it null
+    # (TTL ignores non-date values, so claimed snapshots are retained).
+    ("job_match_snapshots", [("purge_after", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_purge_after"}),
 ]
 
 # Indexes DROPPED by this migration (Guest Onboarding v2: plaintext identity

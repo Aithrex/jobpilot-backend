@@ -181,12 +181,12 @@ def _load_user_profile(user_email: str) -> Optional[Dict[str, Any]]:
     """
     try:
         from services.resume_profiler import build_profile, feedback_signal_for_user
+        from services import resume_access
         from utils.db_connect import DBConnect
         db = DBConnect().get_db()
-        resume = db.user_resumes.find_one(
-            {"user_email": user_email, "structured": {"$exists": True}},
-            sort=[("parsed_at", -1)],
-        )
+        # v3: the active resume_assets doc via the canonical accessor
+        # (users.active_resume_id -> resume_assets), never user_resumes.
+        resume = resume_access.get_active_structured(user_email)
         if not resume:
             return None
         structured = resume.get("structured") or {}
@@ -602,6 +602,11 @@ def _build_linkedin_url(
 # Pre-filter for ATS direct fetchers: drop sales / PM / marketing / recruiter /
 # legal / finance / ops roles before we even normalize them. Saves compute on
 # large company boards (Stripe, OpenAI, Anthropic publish 200+ jobs each).
+#
+# v3 (matching spec 3.2): this tech-only regex is now only the DEFAULT
+# predicate. Callers with a resume-derived view of the candidate (the guest
+# matching path) pass an explicit `title_filter` callable so non-tech resumes
+# are not zeroed out at the fetcher boundary.
 _ATS_TECH_TITLE = re.compile(
     r"\b(engineer|engineering|developer|swe|sde|sre|mts|devops|"
     r"programmer|scientist|architect|technical staff|software|"
@@ -609,6 +614,61 @@ _ATS_TECH_TITLE = re.compile(
     r"backend|frontend|full[- ]?stack|web)\b",
     re.IGNORECASE,
 )
+
+
+def _default_title_filter(title: str) -> bool:
+    return bool(_ATS_TECH_TITLE.search(title or ""))
+
+
+# Tokens too generic to signal role relevance on their own (seniority /
+# level noise). Role words like "engineer" / "manager" / "nurse" stay
+# significant — they ARE the role family.
+_ROLE_TERM_STOPWORDS = frozenset({
+    "senior", "junior", "lead", "staff", "principal", "associate",
+    "assistant", "intern", "internship", "new", "grad", "entry", "level",
+    "the", "and", "of", "for", "with",
+})
+
+
+def _significant_term_tokens(term: str) -> List[str]:
+    """Meaningful tokens of a role term ("Registered Nurse" -> ["registered",
+    "nurse"]) — used for token-overlap role matching (spec 3.2)."""
+    return [
+        t for t in re.findall(r"[a-z0-9+#.]{3,}", str(term or "").lower())
+        if t not in _ROLE_TERM_STOPWORDS
+    ]
+
+
+def _custom_term_hit(title: str, custom_role_terms: Optional[List[str]]) -> Optional[str]:
+    """Return the matching custom role term for a title, or None.
+
+    Exact-substring first (legacy behavior), then a token-overlap fallback so
+    "Staff Nurse" still matches a "Registered Nurse" target — without this,
+    non-tech resumes were zeroed by the tech-shaped role families (spec 3.2).
+    """
+    if not custom_role_terms:
+        return None
+    tl = str(title or "").lower()
+    for term in custom_role_terms:
+        if term and term.lower() in tl:
+            return str(term)
+    title_tokens = set(re.findall(r"[a-z0-9+#.]{3,}", tl))
+    for term in custom_role_terms:
+        toks = _significant_term_tokens(term)
+        if toks and any(t in title_tokens for t in toks):
+            return str(term)
+    return None
+
+
+def _title_of(j: dict) -> str:
+    """Normalize the title field at the fetcher boundary (spec section 5):
+    every emitted job row must carry `title`, whatever the source called it."""
+    for key in ("title", "jobTitle", "job_title", "aiTitle", "role",
+                "position", "name"):
+        v = _clean_str(j.get(key))
+        if v:
+            return v
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -649,10 +709,11 @@ def _html_to_text(html: str) -> str:
     return s.strip()
 
 
-def _fetch_greenhouse(slug: str, display: str) -> List[Dict[str, Any]]:
+def _fetch_greenhouse(slug: str, display: str, title_filter=None) -> List[Dict[str, Any]]:
     # ?content=true returns each job with a `content` field holding the
     # full HTML description. Costs nothing extra (single API call) and
     # Tailor pre-fills correctly without a per-job follow-up request.
+    tf = title_filter or _default_title_filter
     url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
     try:
         r = requests.get(url, timeout=12)
@@ -664,8 +725,8 @@ def _fetch_greenhouse(slug: str, display: str) -> List[Dict[str, Any]]:
         return []
     out: List[Dict[str, Any]] = []
     for j in items:
-        title = _clean_str(j.get("title"))
-        if not _ATS_TECH_TITLE.search(title):
+        title = _title_of(j)
+        if not title or not tf(title):
             continue
         description = _html_to_text(_clean_str(j.get("content")))
         out.append({
@@ -682,7 +743,8 @@ def _fetch_greenhouse(slug: str, display: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _fetch_lever(slug: str, display: str) -> List[Dict[str, Any]]:
+def _fetch_lever(slug: str, display: str, title_filter=None) -> List[Dict[str, Any]]:
+    tf = title_filter or _default_title_filter
     url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
     try:
         r = requests.get(url, timeout=10)
@@ -694,8 +756,8 @@ def _fetch_lever(slug: str, display: str) -> List[Dict[str, Any]]:
         return []
     out: List[Dict[str, Any]] = []
     for j in items:
-        title = _clean_str(j.get("text"))
-        if not _ATS_TECH_TITLE.search(title):
+        title = _clean_str(j.get("text")) or _title_of(j)
+        if not title or not tf(title):
             continue
         cats = j.get("categories") or {}
         posted_iso = ""
@@ -736,7 +798,8 @@ def _fetch_lever(slug: str, display: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _fetch_ashby(slug: str, display: str) -> List[Dict[str, Any]]:
+def _fetch_ashby(slug: str, display: str, title_filter=None) -> List[Dict[str, Any]]:
+    tf = title_filter or _default_title_filter
     url = f"https://api.ashbyhq.com/posting-api/job-board/{slug}"
     try:
         r = requests.get(url, timeout=10)
@@ -748,8 +811,8 @@ def _fetch_ashby(slug: str, display: str) -> List[Dict[str, Any]]:
         return []
     out: List[Dict[str, Any]] = []
     for j in items:
-        title = _clean_str(j.get("title"))
-        if not _ATS_TECH_TITLE.search(title):
+        title = _title_of(j)
+        if not title or not tf(title):
             continue
         # Ashby returns descriptionPlain (preferred) or descriptionHtml.
         plain = _clean_str(j.get("descriptionPlain"))
@@ -773,25 +836,62 @@ def _scrape_ats_direct(
     greenhouse: Optional[List[Tuple[str, str, str]]] = None,
     lever: Optional[List[Tuple[str, str, str]]] = None,
     ashby: Optional[List[Tuple[str, str, str]]] = None,
+    *,
+    title_filter=None,
+    overall_timeout: Optional[float] = None,
+    status_out: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Fan out to Greenhouse / Lever / Ashby in parallel and merge results."""
+    """Fan out to Greenhouse / Lever / Ashby in parallel and merge results.
+
+    overall_timeout (spec 3.3): when set, the WHOLE fan-out is bounded by one
+    wall-clock deadline (partial results returned on expiry) instead of the
+    legacy per-future 15s waits. status_out (spec 3.5), when provided, gets
+    {"workers", "errors", "timed_out"} so the caller can classify a silent-
+    empty result vs a source failure.
+    """
     gh = greenhouse if greenhouse is not None else DEFAULT_GREENHOUSE_SLUGS
     lv = lever if lever is not None else DEFAULT_LEVER_SLUGS
     ab = ashby if ashby is not None else DEFAULT_ASHBY_SLUGS
     tasks = []
     out: List[Dict[str, Any]] = []
+    errors = 0
+    timed_out = False
     with ThreadPoolExecutor(max_workers=8) as pool:
         for slug, name, _domain in gh:
-            tasks.append(pool.submit(_fetch_greenhouse, slug, name))
+            tasks.append(pool.submit(_fetch_greenhouse, slug, name, title_filter))
         for slug, name, _domain in lv:
-            tasks.append(pool.submit(_fetch_lever, slug, name))
+            tasks.append(pool.submit(_fetch_lever, slug, name, title_filter))
         for slug, name, _domain in ab:
-            tasks.append(pool.submit(_fetch_ashby, slug, name))
-        for fut in tasks:
+            tasks.append(pool.submit(_fetch_ashby, slug, name, title_filter))
+        if overall_timeout:
+            from concurrent.futures import as_completed as _as_completed
             try:
-                out.extend(fut.result(timeout=15))
-            except Exception as e:
-                logger.warning("ATS fetch worker failed: %s", e)
+                for fut in _as_completed(tasks, timeout=overall_timeout):
+                    try:
+                        out.extend(fut.result(timeout=overall_timeout))
+                    except Exception as e:
+                        errors += 1
+                        logger.warning("ATS fetch worker failed: %s", e)
+            except TimeoutError:
+                timed_out = True
+                for f in tasks:
+                    if not f.done():
+                        f.cancel()
+                logger.info(
+                    "[ats-direct] overall %.0fs cap hit; returning partial result",
+                    overall_timeout,
+                )
+        else:
+            for fut in tasks:
+                try:
+                    out.extend(fut.result(timeout=15))
+                except Exception as e:
+                    errors += 1
+                    logger.warning("ATS fetch worker failed: %s", e)
+    if status_out is not None:
+        status_out["workers"] = len(tasks)
+        status_out["errors"] = errors
+        status_out["timed_out"] = timed_out
     logger.info("[ats-direct] fetched %d total postings", len(out))
     return out
 
@@ -828,8 +928,8 @@ def _ats_apify_fallback(
     out: List[Dict[str, Any]] = []
     label = ats_type.capitalize()
     for j in items or []:
-        title = _clean_str(j.get("title"))
-        if not _ATS_TECH_TITLE.search(title):
+        title = _title_of(j)
+        if not title or not _default_title_filter(title):
             continue
         out.append({
             "source": f"{label} (Apify)",
@@ -919,7 +1019,7 @@ def _scrape_indeed(
             out.append({
                 "source": "Indeed",
                 "company": _clean_str(j.get("companyName") or j.get("company")),
-                "title": _clean_str(j.get("jobTitle") or j.get("title")),
+                "title": _title_of(j),
                 "location": _clean_str(j.get("location")),
                 "posted": _normalize_posted(j.get("date") or j.get("postedAt") or j.get("posted_at")),
                 "salary": _clean_str(j.get("salary") or j.get("salary_text")) or "—",
@@ -1143,7 +1243,7 @@ def _linkedin_to_record(j: dict) -> dict:
     return {
         "source": "LinkedIn",
         "company": _clean_str(j.get("companyName")),
-        "title": _clean_str(j.get("title")),
+        "title": _title_of(j),
         "location": _clean_str(j.get("location")),
         "posted": _normalize_posted(j.get("postedAt") or j.get("postedDate") or j.get("listedAt")),
         "salary": _clean_str(j.get("salary")) or "—",
@@ -1153,27 +1253,29 @@ def _linkedin_to_record(j: dict) -> dict:
     }
 
 
-def _scrape_workday_direct(search_text: str, location: str) -> List[Dict[str, Any]]:
+def _scrape_workday_direct(
+    search_text: str, location: str, overall_timeout: int = 15
+) -> List[Dict[str, Any]]:
     """Direct Workday CXS scrape — free, no Apify, ~10s overall.
 
     Returns the raw shape produced by services.workday_cxs_fetcher; the caller
     runs each item through _workday_direct_to_record to get the daily-pipeline
     record shape (source/company/title/location/posted/url/description) that
     _filter_and_score expects.
+
+    Raises on failure — run_pipeline catches per-future so it can classify
+    the source as failed in source_status (spec 3.5) instead of silently
+    reporting an empty-but-"healthy" source.
     """
-    try:
-        from services.workday_cxs_fetcher import fetch_workday_direct
-        items = fetch_workday_direct(
-            search_text=search_text,
-            location=location,
-            overall_timeout=15,
-            max_workers=32,
-        )
-        logger.info("[workday-direct] pipeline scrape returned %d postings", len(items))
-        return items
-    except Exception as e:
-        logger.warning("Workday-direct pipeline scrape failed: %s", e)
-        return []
+    from services.workday_cxs_fetcher import fetch_workday_direct
+    items = fetch_workday_direct(
+        search_text=search_text,
+        location=location,
+        overall_timeout=overall_timeout,
+        max_workers=32,
+    )
+    logger.info("[workday-direct] pipeline scrape returned %d postings", len(items))
+    return items
 
 
 def _workday_direct_to_record(j: dict) -> dict:
@@ -1250,7 +1352,7 @@ def _workday_to_record(j: dict) -> dict:
     return {
         "source": "Workday",
         "company": _clean_str(j.get("organization") or j.get("aiOrganization") or j.get("company")),
-        "title": _clean_str(j.get("title") or j.get("aiTitle")),
+        "title": _title_of(j),
         "location": _clean_str(location),
         "posted": _normalize_posted(posted_raw),
         "salary": salary,
@@ -1468,11 +1570,12 @@ def _role_match(rec: dict, custom_role_terms: Optional[List[str]] = None) -> Lis
     if not out and re.search(r"\bsoftware engineer\b|\bswe\b", t, re.IGNORECASE):
         out.append("Software Engineer")
     if not out and custom_role_terms:
-        tl = t.lower()
-        for term in custom_role_terms:
-            if term and term.lower() in tl:
-                out.append(f"Custom: {term}")
-                break
+        # Exact-substring first, then token-overlap fallback (spec 3.2) so
+        # role families derived from a non-tech resume still match near-
+        # variant titles ("Growth Marketing Lead" vs "Marketing Manager").
+        hit = _custom_term_hit(t, custom_role_terms)
+        if hit:
+            out.append(f"Custom: {hit}")
     return out
 
 
@@ -1848,7 +1951,13 @@ def _filter_and_score(
             excluded.append({**r, "reason": "not a verified H-1B sponsor",
                              "tier": "Skip", "score": 0, "flags": ""}); continue
         if (why := _healthcare_noise(r)):
-            excluded.append({**r, "reason": why, "tier": "Skip", "score": 0, "flags": ""}); continue
+            # The healthcare/non-tech noise drop protects TECH candidates.
+            # When the row's title matches the user's OWN target role terms
+            # (e.g. a nurse's resume-derived terms), the user's terms win —
+            # non-tech resumes must not be zeroed by a tech-shaped blocklist
+            # (spec 3.2).
+            if not _custom_term_hit(r.get("title") or "", custom_role_terms):
+                excluded.append({**r, "reason": why, "tier": "Skip", "score": 0, "flags": ""}); continue
         if (why := _blocked_company(r)):
             excluded.append({**r, "reason": why, "tier": "Skip", "score": 0, "flags": ""}); continue
         if (why := _ghost_job_reason(r)):
@@ -1871,6 +1980,13 @@ def _filter_and_score(
                              "tier": "Skip", "score": 0, "flags": ""}); continue
 
         sc, flags = _score(r, today_iso=today_iso, profile=profile)
+        # Rows whose ONLY role family is the user's own custom term get the
+        # same order of title bonus the built-in (tech-shaped) families
+        # enjoy — otherwise a non-tech candidate's exact target roles sit at
+        # the base 50 and die at the score>=60 gate (spec 3.2).
+        if roles and all(str(role).startswith("Custom: ") for role in roles):
+            sc += 15
+            flags.append("Target-role (+15)")
         rec = {**r, "score": sc, "tier": _tier(sc),
                "flags": ", ".join(flags) or "—",
                "roles": ", ".join(roles), "opt": _opt_status(r)}
@@ -2023,6 +2139,10 @@ def run_pipeline(
     hide_title_patterns: Optional[List[str]] = None,
     max_per_company: int = 4,
     skip_apify: bool = False,
+    title_filter=None,
+    workday_direct_timeout: int = 15,
+    ats_overall_timeout: Optional[float] = None,
+    progress_cb=None,
 ) -> Dict[str, Any]:
     """Run the full daily pipeline and return tier-grouped JSON.
 
@@ -2033,6 +2153,15 @@ def run_pipeline(
     Workday CXS) — no Apify actors, no shared-token fallback, and no error if
     no token is configured. Used by the free scheduled morning-digest path so a
     daily run never spends Apify credits.
+
+    v3 matching additions (guest path — spec 3.1-3.5):
+      title_filter: optional predicate replacing the tech-only _ATS_TECH_TITLE
+        drop at the ATS fetcher boundary (resume-derived role relevance).
+      workday_direct_timeout: per-search Workday CXS budget (guests pass 25).
+      ats_overall_timeout: overall wall-clock cap on the ATS fan-out (20 for
+        guests); None keeps the legacy per-future waits.
+      progress_cb(done, total): called as each free source completes so the
+        caller can emit honest searching_sources progress.
     """
     # --- APIFY DISABLED (temporary): force the free direct-source path so the
     # pipeline never calls paid Apify actors (LinkedIn/Workday/Indeed) and never
@@ -2082,6 +2211,25 @@ def run_pipeline(
         if _terms:
             wd_direct_terms = _terms[:5]  # cap fan-out — each term hits every Workday tenant
 
+    # Per-source wall-clock timings + honest status (spec 3.5/3.8). Status
+    # semantics: "ok" = the fetch completed (even with zero rows), "failed" =
+    # it raised, "timed_out" = an overall cap expired mid-fan-out.
+    _src_t0 = time.time()
+    source_timings_ms: Dict[str, int] = {}
+    source_status: Dict[str, str] = {}
+    _ats_status: Dict[str, Any] = {}
+    _progress_total = (0 if skip_apify else 1) + (1 if ats_enabled else 0) + len(wd_direct_terms)
+    _progress_done = 0
+
+    def _tick_progress():
+        nonlocal _progress_done
+        _progress_done += 1
+        if progress_cb:
+            try:
+                progress_cb(_progress_done, max(1, _progress_total))
+            except Exception:  # pragma: no cover - progress must never break
+                pass
+
     _pool_workers = max(4, len(wd_direct_terms) + 2)
     with ThreadPoolExecutor(max_workers=_pool_workers) as pool:
         # Apify LinkedIn+Workday scrape — skipped entirely on the free path.
@@ -2104,7 +2252,12 @@ def run_pipeline(
             employment_type="",
             location=location,
         ) if (indeed_enabled and not skip_apify) else None
-        f_ats = pool.submit(_scrape_ats_direct) if ats_enabled else None
+        f_ats = pool.submit(
+            _scrape_ats_direct,
+            title_filter=title_filter,
+            overall_timeout=ats_overall_timeout,
+            status_out=_ats_status,
+        ) if ats_enabled else None
         # Direct Workday CXS — free, no Apify, covers tenants the Apify
         # actor's index misses (Yahoo / Adobe / NVIDIA / Mastercard / ...).
         # This is the whole reason the direct fetcher exists; without it
@@ -2112,24 +2265,58 @@ def run_pipeline(
         # Apify Workday actor's daily index didn't include them.
         # One CXS search per target role; merged + deduped (by apply_link) below.
         f_wd_directs = [
-            pool.submit(_scrape_workday_direct, search_text=term, location=location)
+            pool.submit(
+                _scrape_workday_direct, search_text=term, location=location,
+                overall_timeout=workday_direct_timeout,
+            )
             for term in wd_direct_terms
         ]
         if f_apify is not None:
             linkedin_items, workday_items, errors, actor_diagnostics = f_apify.result()
+            _tick_progress()
         else:
             linkedin_items, workday_items, errors, actor_diagnostics = [], [], [], {}
         indeed_items = f_indeed.result() if f_indeed is not None else []
-        ats_items = f_ats.result() if f_ats is not None else []
+        if f_ats is not None:
+            try:
+                ats_items = f_ats.result() or []
+                source_status["ats_direct"] = (
+                    "timed_out" if _ats_status.get("timed_out")
+                    else ("failed" if _ats_status.get("workers")
+                          and _ats_status.get("errors") == _ats_status.get("workers")
+                          else "ok")
+                )
+            except Exception as _ats_err:
+                ats_items = []
+                source_status["ats_direct"] = "failed"
+                logger.warning("ATS direct fan-out failed: %s", _ats_err)
+            source_timings_ms["ats_ms"] = int((time.time() - _src_t0) * 1000)
+            _tick_progress()
+        else:
+            ats_items = []
         wd_direct_items, _wd_seen = [], set()
+        _wd_failures = 0
         for _f in f_wd_directs:
-            for _item in (_f.result() or []):
+            try:
+                _items = _f.result() or []
+            except Exception as _wd_err:
+                _wd_failures += 1
+                logger.warning("Workday-direct pipeline scrape failed: %s", _wd_err)
+                _tick_progress()
+                continue
+            for _item in _items:
                 _u = str(_item.get("apply_link") or "").strip().lower()
                 if _u and _u in _wd_seen:
                     continue
                 if _u:
                     _wd_seen.add(_u)
                 wd_direct_items.append(_item)
+            _tick_progress()
+        if f_wd_directs:
+            source_status["workday_direct"] = (
+                "failed" if _wd_failures == len(f_wd_directs) else "ok"
+            )
+            source_timings_ms["workday_ms"] = int((time.time() - _src_t0) * 1000)
 
     # Source-4 fallback: only fire for companies that returned 0 postings from
     # Source 5 (direct API). When APIFY_ATS_ACTOR is unset, _ats_apify_fallback
@@ -2291,6 +2478,11 @@ def run_pipeline(
             "verify_dates": len(verify),
             "excluded": len(excluded),
         },
+        # Honest per-source outcome + wall-clock timings (spec 3.5/3.8) —
+        # lets the guest matcher distinguish "sources down" from "no
+        # openings matched" and stamp snapshot timings.
+        "source_status": source_status,
+        "source_timings_ms": source_timings_ms,
         "apply_now": apply_now,
         "verify_dates": verify,
         # Trim excluded to avoid huge payloads.

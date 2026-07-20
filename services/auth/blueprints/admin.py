@@ -220,9 +220,13 @@ def stats():
     users_7d = _safe(lambda: db.users.count_documents({"created_at": {"$gte": d7}}))
     users_30d = _safe(lambda: db.users.count_documents({"created_at": {"$gte": d30}}))
 
-    total_base = _safe(lambda: db.user_resumes.count_documents({"type": "base"}))
-    legacy_gen = _safe(lambda: db.user_resumes.count_documents({"type": "generated"}))
-    total_parsed = _safe(lambda: db.user_resumes.count_documents({"parsed": {"$exists": True}})) or total_base
+    # Resume Platform v3: base uploads live in resume_assets; generated files
+    # are the rendered version files on tailoring_records.
+    total_base = _safe(lambda: db.resume_assets.count_documents({"owner_type": "user"}))
+    legacy_gen = _safe(lambda: db.tailoring_records.count_documents(
+        {"versions.files.pdf.s3_key": {"$exists": True}}))
+    total_parsed = _safe(lambda: db.resume_assets.count_documents(
+        {"owner_type": "user", "parse_status": "parsed"})) or total_base
 
     total_tailoring = _safe(lambda: db.tailoring_records.count_documents({"deleted": {"$ne": True}}))
     tailoring_7d = _safe(lambda: db.tailoring_records.count_documents({"created_at": {"$gte": d7}}))
@@ -292,10 +296,12 @@ def users():
             "last_login": _iso(d.get("last_login")),
             "last_login_ip": d.get("last_login_ip"),
             "login_attempts": int(d.get("login_attempts", 0)),
-            "base_resumes": db.user_resumes.count_documents({"user_email": email, "type": "base"}),
-            "generated_resumes": db.user_resumes.count_documents({"user_email": email, "type": "generated"}),
+            "base_resumes": db.resume_assets.count_documents({"user_email": email, "owner_type": "user"}),
+            "generated_resumes": db.tailoring_records.count_documents(
+                {"user_email": email, "versions.files.pdf.s3_key": {"$exists": True}}),
             "tailoring_sessions": db.tailoring_records.count_documents({"user_email": email, "deleted": {"$ne": True}}),
-            "has_parsed_resume": db.user_resumes.count_documents({"user_email": email, "parsed": {"$exists": True}}) > 0,
+            "has_parsed_resume": db.resume_assets.count_documents(
+                {"user_email": email, "parse_status": "parsed"}) > 0,
             "daily_tailor_limit_custom": custom if isinstance(custom, int) else None,
             "daily_tailor_limit_effective": usage_service.get_user_limit(email),
             "tailored_today": today.get(email, 0),
@@ -351,15 +357,24 @@ def user_detail(email):
         "plan": u.get("plan") or "free",
         "auth_providers": u.get("auth_providers", []),
     }
-    base = list(db.user_resumes.find({"user_email": email, "type": "base"}).limit(50))
-    gen = list(db.user_resumes.find({"user_email": email, "type": "generated"}).limit(50))
-    parsed = next((r.get("parsed") for r in base if r.get("parsed")), None)
+    # Resume Platform v3: base uploads = resume_assets (heavy fields projected
+    # out); the parsed view = the active asset's structured content.
+    base = list(db.resume_assets.find(
+        {"user_email": email, "owner_type": "user"},
+        {"raw_text": 0},
+    ).sort("created_at", -1).limit(50))
+    parsed = next(
+        (r.get("structured") for r in base if r.get("structured")), None
+    )
+    for r in base:
+        r.pop("structured", None)
+        r.pop("quota_subject_id", None)  # server-only, never exposed
     records = list(db.tailoring_records.find({"user_email": email, "deleted": {"$ne": True}}).sort("created_at", -1).limit(100))
     return jsonify({
         "user": user,
         "parsed_resume": parsed,
         "base_resumes": [_clean(r) for r in base],
-        "generated_resumes": [_clean(r) for r in gen],
+        "generated_resumes": [],  # legacy user_resumes generated rows retired (v3)
         "tailoring_records": [_clean(r) for r in records],
     }), 200
 
@@ -411,7 +426,10 @@ def feedback_update(fid):
 @admin_bp.route("/resumes", methods=["GET"])
 @admin_required
 def resumes():
-    docs = list(_db().user_resumes.find({}).sort("parsed_at", -1).limit(500))
+    # Resume Platform v3: list resume_assets (heavy fields projected out).
+    docs = list(_db().resume_assets.find(
+        {}, {"structured": 0, "raw_text": 0, "quota_subject_id": 0}
+    ).sort("created_at", -1).limit(500))
     return jsonify({"resumes": [_clean(d) for d in docs]}), 200
 
 

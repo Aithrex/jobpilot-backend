@@ -29,8 +29,11 @@ challenge hook and all budget reservations run BEFORE any spend; no resume
 PII or raw tokens are ever logged.
 """
 import base64
+import hashlib
 import io
 import logging
+import os
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, request, jsonify, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -171,10 +174,16 @@ def onboard():
         return challenged
 
     try:
+        from services import resume_access
         from services.resume_parser import ResumeParser
         from services.resume_service import ResumeService
 
         ResumeParser.validate_file(file_bytes, file.filename)
+        # DOCX zip-bomb guard BEFORE anything opens the archive (spec §4).
+        if file.filename.lower().endswith(".docx"):
+            from utils.zip_guard import guard_zip_archive
+
+            guard_zip_archive(file_bytes)
 
         device_token = echoed_device_token or guest_service.mint_device_token()
         session = guest_service.create_or_get_session(
@@ -190,33 +199,74 @@ def onboard():
         if not guest_service.try_reserve_global_parse():
             return _capacity_response("resume parsing")
 
-        # Store the raw file in S3 under the guest/ prefix and pass only the
-        # key through the async job: keeps multi-MB base64 out of Mongo job
-        # docs AND under the 256KB async Lambda invoke payload limit. The
-        # base64 inline path survives ONLY as a local-dev fallback for
-        # environments without a bucket.
+        mime_type = ResumeParser.get_mime_type(file.filename)
+        content_hash = hashlib.sha256(file_bytes).hexdigest()
+
+        # Resume Platform v3 (spec 1.1/2): Mongo asset doc FIRST
+        # (parse_status='pending'), S3 write second under
+        # resume-assets/{resume_id}/original, then $set object_key. A failed
+        # S3 write marks the asset failed. The async payload carries ONLY the
+        # key (never bytes) on Lambda; file_bytes_b64_dev is the local-dev
+        # fallback for bucketless environments.
+        try:
+            resume_id = resume_access.create_pending_asset(
+                owner_type="guest",
+                guest_id=guest_id,
+                quota_subject_id=session.get("quota_subject_id"),
+                filename=file.filename,
+                mime_type=mime_type,
+                size_bytes=len(file_bytes),
+                content_hash=content_hash,
+                purge_after=datetime.now(timezone.utc) + timedelta(days=30),
+            )
+        except Exception:
+            guest_service.release_global_parse()
+            raise
+
         payload = {
-            "mime_type": ResumeParser.get_mime_type(file.filename),
-            "filename": InputSanitizer.sanitize_string(file.filename, max_length=255),
+            "resume_id": resume_id,
+            "mime_type": mime_type,
+            "content_hash": content_hash,
             "guest_id": guest_id,
             "fingerprint_hash": fingerprint_hash,
         }
         try:
             from services.s3_service import get_storage_service
 
-            file_s3_key = get_storage_service().upload_guest_resume(
-                guest_id, file_bytes, file.filename
+            object_key = get_storage_service().upload_resume_asset(
+                resume_id, file_bytes, mime_type
             )
-            payload["file_s3_key"] = file_s3_key
-            # Track the object on the session so retention cleanup deletes it
-            # together with the expiring unclaimed session.
-            guest_service.record_resume_file_key(guest_id, file_s3_key)
+            try:
+                resume_access.attach_object_key(resume_id, object_key)
+            except Exception:
+                # Orphan rule: S3 write landed but the Mongo ref didn't —
+                # compensating delete in the same request path (best effort).
+                try:
+                    get_storage_service().delete_resume(object_key)
+                except Exception:
+                    pass
+                raise
+            payload["object_key"] = object_key
+            # Track the object on the session so the legacy retention sweep
+            # keeps deleting it with the expiring unclaimed session (Phase C
+            # moves this fully onto the asset TTL).
+            guest_service.record_resume_file_key(guest_id, object_key)
         except Exception as s3_err:
+            if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+                # On Lambda there is no inline fallback (spec 1.3): storage
+                # down means the upload cannot proceed.
+                resume_access.mark_asset_failed(resume_id, "storage_unavailable")
+                guest_service.release_global_parse()
+                logger.error(
+                    "Guest onboard: S3 unavailable for asset %s: %s",
+                    resume_id, type(s3_err).__name__,
+                )
+                return jsonify({"error": "storage_unavailable"}), 503
             logger.warning(
-                "Guest onboard: S3 upload unavailable, falling back to inline payload: %s",
-                s3_err,
+                "Guest onboard: S3 upload unavailable, dev inline fallback for asset %s: %s",
+                resume_id, type(s3_err).__name__,
             )
-            payload["file_base64"] = base64.b64encode(file_bytes).decode("utf-8")
+            payload["file_bytes_b64_dev"] = base64.b64encode(file_bytes).decode("utf-8")
         try:
             job_id = guest_service.create_guest_job("guest_parse", payload, guest_id)
             ResumeService.invoke_async(job_id, "guest_parse", payload)
@@ -225,7 +275,12 @@ def onboard():
             guest_service.release_global_parse()
             raise
         return (
-            jsonify({"guest_id": guest_id, "job_id": job_id, "device_token": device_token}),
+            jsonify({
+                "guest_id": guest_id,
+                "job_id": job_id,
+                "device_token": device_token,
+                "resume_id": resume_id,
+            }),
             202,
         )
 
@@ -489,8 +544,16 @@ def guest_download_file(token):
     try:
         from utils.db_connect import DBConnect
 
+        # REDEMPTION re-checks the record is STILL guest-owned (user_email
+        # null) — after /guest/claim flips ownership, outstanding pre-claim
+        # tokens die here with the same generic 404 (spec 1.7 step 4). The
+        # claimed copy is served by the authed /api/resume/download path.
         record = DBConnect().get_db().tailoring_records.find_one(
-            {"record_id": claims["record_id"], "guest_id": claims["guest_id"]}
+            {
+                "record_id": claims["record_id"],
+                "guest_id": claims["guest_id"],
+                "user_email": None,
+            }
         )
         if not record:
             return jsonify({"error": "Not found"}), 404
