@@ -59,7 +59,7 @@ variable "log_level" {
 
 variable "db_name" {
   type        = string
-  default     = "portfolio_db"
+  default     = "aspirely_db"
   description = "MongoDB database name (DB_NAME env var)."
 }
 

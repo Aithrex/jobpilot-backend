@@ -52,7 +52,7 @@ from utils import db_connect  # noqa: E402
 if not getattr(db_connect.DBConnect, "_vg_suite_patched", False):
     _MOCK_CLIENT = mongomock.MongoClient()
     db_connect.DBConnect.get_db = (
-        lambda self=None, _c=_MOCK_CLIENT: _c["portfolio_db"]
+        lambda self=None, _c=_MOCK_CLIENT: _c["aspirely_db"]
     )
     db_connect.DBConnect._vg_suite_patched = True
 

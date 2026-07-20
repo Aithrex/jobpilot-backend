@@ -45,7 +45,7 @@ Codebase-aware Claude Code subagents for `jobpilot-backend` (Flask · MongoDB/Py
   6. **New `/api/<prefix>`** needs an external (Terraform, not in this repo) edge route or it 404s in prod.
 
 ## Stack quick-reference
-App factory `app.py::create_app()` · Lambda `lambda_handler.py` (apig-wsgi) · local `local.py` · Mongo singleton `shared/python/utils/db_connect.py` (`portfolio_db`) · config/secrets `shared/python/utils/config.py` + SSM · security `shared/python/utils/security.py` · LLM `services/llm_providers/claude.py` · async orchestrator `services/resume_service.py` · entitlements `services/entitlements_service.py` · schemas `schemas/resume_schemas.py`.
+App factory `app.py::create_app()` · Lambda `lambda_handler.py` (apig-wsgi) · local `local.py` · Mongo singleton `shared/python/utils/db_connect.py` (`aspirely_db`) · config/secrets `shared/python/utils/config.py` + SSM · security `shared/python/utils/security.py` · LLM `services/llm_providers/claude.py` · async orchestrator `services/resume_service.py` · entitlements `services/entitlements_service.py` · schemas `schemas/resume_schemas.py`.
 
 ## Editing the agents
 Each file is Markdown with YAML frontmatter (`name`, `description`, `tools`, `model`) + a system prompt. Edit freely; keep `description` trigger-rich (it drives routing) and keep the invariants accurate as the codebase evolves.

@@ -64,7 +64,7 @@ class DBConfigMeta(type):
     def DATABASE_CONFIG(cls):
         return {
             'mongo_uri': _get_config_value('MONGODB_URI', os.getenv('MONGO_URI', 'mongodb://localhost:27017/')),
-            'db_name': os.getenv('DB_NAME', 'portfolio_db'),
+            'db_name': os.getenv('DB_NAME', 'aspirely_db'),
         }
 
 

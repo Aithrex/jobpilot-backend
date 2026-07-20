@@ -1,4 +1,4 @@
-"""Production-readiness MongoDB index migration for JobPilot (`portfolio_db`).
+"""Production-readiness MongoDB index migration for JobPilot (`aspirely_db`).
 
 The codebase defines almost no indexes in-repo, so virtually every recurring
 filter/sort is a COLLSCAN — the #1 latent perf risk flagged by the audit. This

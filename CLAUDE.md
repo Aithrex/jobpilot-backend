@@ -19,7 +19,7 @@ Split into **4 independently-deployed Lambda microservices** under `services/<sv
 6. **New `/api/<prefix>`** needs an external (Terraform) edge route or it 404s in prod (no `.tf` in this repo).
 
 ## Stack
-Flask (per-service factory `services/<svc>/app.py::create_app()`) · MongoDB `portfolio_db` via **raw PyMongo** (NO ORM, NO migration framework, **NO indexes defined in-repo → most queries are COLLSCAN**) · Claude on AWS Bedrock · AWS Lambda (4× `services/<svc>/lambda_handler.py` + apig-wsgi) / local `local.py` gateway · PyJWT + flask-jwt-extended · bcrypt (12 rounds) · boto3 (S3/SES/SSM/Bedrock) · fpdf2/python-docx/pypdf · cryptography.
+Flask (per-service factory `services/<svc>/app.py::create_app()`) · MongoDB `aspirely_db` via **raw PyMongo** (NO ORM, NO migration framework, **NO indexes defined in-repo → most queries are COLLSCAN**) · Claude on AWS Bedrock · AWS Lambda (4× `services/<svc>/lambda_handler.py` + apig-wsgi) / local `local.py` gateway · PyJWT + flask-jwt-extended · bcrypt (12 rounds) · boto3 (S3/SES/SSM/Bedrock) · fpdf2/python-docx/pypdf · cryptography.
 
 ## Architecture (4 Lambdas · thin blueprints → fat shared services → shared layer)
 Each `services/<svc>/` is its own deployable Lambda: `app.py` (factory, registers only its blueprints + CORS/JWT/security-header hook), `lambda_handler.py` (apig-wsgi; **only `resume` has the async-job self-invoke branch**), `blueprints/`, and (auth/jobs/resume) a local `services/` of domain-only logic. **No per-service `requirements.txt`** — all runtime deps live in the shared layer (`shared/python/requirements.txt`); `package.sh` bundles only code.

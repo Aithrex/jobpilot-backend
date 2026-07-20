@@ -76,7 +76,7 @@ it (localStorage) and echoes it on session/matches/tailor calls. Server stores o
 It is an anti-abuse signal, not a capability. A transparent privacy notice on the FE explains this
 first-party anti-abuse storage.
 
-## Data model (Mongo `portfolio_db`)
+## Data model (Mongo `aspirely_db`)
 
 ### `guest_sessions` (v2 shape)
 ```
