@@ -201,8 +201,12 @@ Jobs Lambda (`/api/jobs/guest/*`):
   breaker reservation -> async `202 {job_id}`. Free direct sources only (unchanged).
   **Server returns at most `guest_jobs_max` (5) jobs — no extra locked rows for CSS to hide.**
   Each card: `{match_id, title, company, location, apply_link, url, source, posted, tier,
-  logo_url, match_score, matched_skills:[], why: str, sponsorship: {signal, note}|null}`.
+  logo_url, match_score, matched_skills:[], gaps:[], why: str, sponsorship: {signal, note}|null}`.
   - `match_id` — opaque server-minted id stored in the cache; the only tailorable reference.
+  - `gaps` — additive v2.1 field (absent on older cached cards): up to 5 of the guest's own
+    resume skills the posting does NOT mention (the scorer's `missing_top`). Resume-relative
+    score context, NOT JD requirements the guest lacks — the FE must label it accordingly
+    (e.g. "from your resume, not mentioned in this posting").
   - `logo_url` — server-generated relative path `/api/jobs/logo/<sha1(company)>` serving the
     company's cached real favicon (public, no auth); when it 404s the FE renders a monogram.
   - `why` — short deterministic explanation from the scorer (matched skills / role-term overlap).

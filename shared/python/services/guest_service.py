@@ -935,6 +935,9 @@ def compute_guest_matches(guest_id: str) -> Dict[str, Any]:
                 card["logo_url"] = safe_logo
         card["match_score"] = verdict["match_score"]
         card["matched_skills"] = verdict.get("matched_skills") or []
+        # Honest gap signal: the scorer's top unmatched resume-relative skills
+        # (deterministic, additive v2.1 field — absent on older cached cards).
+        card["gaps"] = (verdict.get("missing_top") or [])[:5]
         card["why"] = _match_why(card["matched_skills"])
         scored.append((card, row))
 
