@@ -167,7 +167,11 @@ def _derive_query_terms(titles: List[str], cap: int = MAX_QUERY_TERMS) -> List[s
         # Compound resume titles like "Cloud/DevOps Engineer (Associate
         # Data Scientist)" must yield SEPARATE terms ("cloud engineer",
         # "devops engineer", "data scientist"), not one mangled phrase.
-        for seg in re.split(r"[/(),;&+]|\band\b", str(raw).lower()):
+        # First collapse an ampersand sitting BETWEEN single letters ("R&D",
+        # "M&A") into one token so the & splitter below (and the [^a-z0-9…]
+        # token split) don't shatter "R&D Engineer" into "r" + "d engineer".
+        lowered = re.sub(r"\b([a-z])\s*&\s*([a-z])\b", r"\1\2", str(raw).lower())
+        for seg in re.split(r"[/(),;&+]|\band\b", lowered):
             tokens = [t for t in re.split(r"[^a-z0-9+#.]+", seg) if t]
             core = [t for t in tokens if t not in _TERM_NOISE]
             if not core:
@@ -629,26 +633,54 @@ _IC_ENG_RE = re.compile(
     r"administrator", re.IGNORECASE)
 _MGMT_RE = re.compile(
     r"\b(manager|director|vp|vice president|head of)\b", re.IGNORECASE)
-_YEARS_RE = re.compile(r"(\d{1,2})\s*\+?\s*years?", re.IGNORECASE)
+_YEARS_RE = re.compile(
+    r"(?:(\d{1,2})\s*(?:[-–—]|to)\s*)?(\d{1,2})\s*\+?\s*years?", re.IGNORECASE)
+# A "N years" number is a years-of-EXPERIENCE ask only when an experience cue
+# sits nearby — otherwise "5 years ago" / "renewed every 2 years" would
+# register. Broader than a bare "experience" check: real JDs phrase the bar as
+# "5+ years in a similar role", "minimum 3 years leading…", "at least 4 years
+# hands-on" — none of which contain the word "experience".
+_EXP_CUE_RE = re.compile(
+    r"experience|exp\.|years?\s+(?:in|of|as|with|building|leading|working|"
+    r"developing|managing|supporting)|background|track record|minimum|"
+    r"at least|require|proven|hands-on|expertise|history of|seniority",
+    re.IGNORECASE)
+
+
+def _family_counts(text: str) -> Dict[str, int]:
+    """Occurrence count per stack family in `text` (nonzero families only).
+
+    Split out so the count map can be computed ONCE per job during scoring and
+    reused by _attach_feasibility, sparing a second full-description regex
+    sweep (17 families over up to ~5k chars) on every enriched row.
+    """
+    counts: Dict[str, int] = {}
+    for key, (_label, rx) in _STACK_FAMILIES.items():
+        n = len(rx.findall(text))
+        if n:
+            counts[key] = n
+    return counts
 
 
 def _families_in(text: str, core_threshold: int = 1) -> set:
-    found = set()
-    for key, (_label, rx) in _STACK_FAMILIES.items():
-        if len(rx.findall(text)) >= core_threshold:
-            found.add(key)
-    return found
+    return {k for k, n in _family_counts(text).items() if n >= core_threshold}
 
 
-def _required_years(description: str) -> Optional[int]:
-    """Max plausible years-of-experience ask ("8+ years ... experience")."""
+def _required_years(description: str, prefer_min: bool = False) -> Optional[int]:
+    """Plausible years-of-experience ask near "experience".
+
+    Default: the MAX such number ("8+ years"). With ``prefer_min=True`` a range
+    uses its LOWER bound ("3-6 years" -> 3) — used by the experience-gap check so
+    a range isn't over-penalized. Seniority keeps the default (max).
+    """
     best = None
     for m in _YEARS_RE.finditer(description or ""):
-        n = int(m.group(1))
+        lo, hi = m.group(1), m.group(2)           # lo set only for a range
+        n = int(lo) if (prefer_min and lo) else int(hi)
         if n > 20:
             continue
-        window = description[max(0, m.start() - 60):m.end() + 60].lower()
-        if "experience" in window or "exp." in window:
+        window = description[max(0, m.start() - 60):m.end() + 60]
+        if _EXP_CUE_RE.search(window):
             best = n if best is None else max(best, n)
     return best
 
@@ -685,12 +717,15 @@ def _attach_feasibility(jobs: List[Dict[str, Any]], resume_skills: List[str],
             if desc and _CLEARANCE_RE.search(desc):
                 verdict, reason = "skip", "Requires an active security clearance"
             else:
-                req = _required_years(desc) if desc else None
+                req = _required_years(desc, prefer_min=True) if desc else None
                 gap = (req - resume_years) if (req and resume_years is not None) else 0
                 if gap >= 5:
                     verdict, reason = "skip", f"Asks ~{req}+ yrs experience vs ≈{resume_years} on resume"
                 elif gap >= 2:
                     verdict, reason = "stretch", f"Asks ~{req}+ yrs vs ≈{resume_years} — a stretch"
+                    # Graded experience penalty so an under-qualified role can't
+                    # headline as a perfect score (gap 2→-11, 3→-22, 4→-33).
+                    job["match_score"] = max(0, (job.get("match_score") or 0) - (gap - 1) * 11)
             if verdict:
                 job["tailor_feasibility"] = verdict
                 job["feasibility_reason"] = reason
@@ -700,7 +735,15 @@ def _attach_feasibility(jobs: List[Dict[str, Any]], resume_skills: List[str],
         title_fams = _families_in(title)
         core = set(title_fams)
         if desc:
-            core |= _families_in(desc, core_threshold=3)
+            # Reuse the family counts cached by _score_jobs (blob = title +
+            # desc). For a family ABSENT from the title, its blob-count equals
+            # its desc-count, so {f: count>=3} unioned with title_fams is
+            # identical to the old _families_in(desc, 3) — without re-scanning
+            # the JD. Fall back to a direct count only if scoring didn't run.
+            counts = job.get("_fam_counts")
+            if counts is None:
+                counts = _family_counts(title + "\n" + desc)
+            core |= {k for k, n in counts.items() if n >= 3}
         verdict, reason = "possible", "No hard conflicts found"
         overlap = core & resume_fams
         conflicts = core - resume_fams
@@ -718,12 +761,15 @@ def _attach_feasibility(jobs: List[Dict[str, Any]], resume_skills: List[str],
         elif desc and _CLEARANCE_RE.search(desc):
             verdict, reason = "skip", "Requires an active security clearance"
         else:
-            req = _required_years(desc) if desc else None
+            req = _required_years(desc, prefer_min=True) if desc else None
             gap = (req - resume_years) if (req and resume_years is not None) else 0
             if gap >= 5:
                 verdict, reason = "skip", f"Asks ~{req}+ yrs experience vs ≈{resume_years} on resume"
             elif gap >= 2:
                 verdict, reason = "stretch", f"Asks ~{req}+ yrs vs ≈{resume_years} — a stretch"
+                # Graded experience penalty (years-gap stretch only, not the
+                # partial-off-stack / management stretches below).
+                job["match_score"] = max(0, (job.get("match_score") or 0) - (gap - 1) * 11)
             elif conflicts and overlap:
                 labels = ", ".join(_STACK_FAMILIES[k][0] for k in sorted(conflicts))
                 verdict, reason = "stretch", f"Partially off-stack ({labels}) — tailorable via {', '.join(_STACK_FAMILIES[k][0] for k in sorted(overlap))}"
@@ -882,8 +928,12 @@ def _score_jobs(
             skill_terms_set & {str(t).lower() for t in (job.get("matched_terms") or [])}
         )
         # Stack alignment: a cloud-primary resume must rank cloud-centered
-        # JDs above equally title-matched off-stack ones.
-        job_fams = _families_in(blob)
+        # JDs above equally title-matched off-stack ones. Cache the family
+        # counts on the job so _attach_feasibility reuses this scan instead of
+        # re-sweeping the full description.
+        fam_counts = _family_counts(blob)
+        job["_fam_counts"] = fam_counts
+        job_fams = set(fam_counts)
         align = 12 if job_fams & primary_fams else (6 if job_fams & resume_fams else 0)
         score = min(100, base + (45 if title_matched else (20 if skill_signal else 0)) + align)
         if not skills and not title_matched:
@@ -1245,7 +1295,11 @@ def run_workday_jobs_search(
                 "progress": {"tenants_done": tenants_total,
                              "tenants_total": tenants_total,
                              "jobs_found": len(jobs), "phase": "details"},
-                "jobs": jobs[:STREAM_TOP], "total": len(jobs),
+                # Strip the internal _fam_counts on the streamed copies while
+                # leaving the originals intact for _attach_feasibility to reuse.
+                "jobs": [{k: v for k, v in j.items() if k != "_fam_counts"}
+                         for j in jobs[:STREAM_TOP]],
+                "total": len(jobs),
                 "streaming": True,
             })
         except Exception:
@@ -1288,6 +1342,8 @@ def run_workday_jobs_search(
     _attach_feasibility(jobs, skills, resume_years)
     _rank(jobs)  # feasibility caps skip-row scores — order must reflect it
     _attach_sponsorship(jobs)
+    for j in jobs:
+        j.pop("_fam_counts", None)  # internal scan cache — never leak to client
     # Release every pooled socket — a warm container must not carry idle
     # connections to hundreds of hosts into its next invocation.
     _drain_session_pools()

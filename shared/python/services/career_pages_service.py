@@ -968,7 +968,7 @@ def run_career_pages_search(
                                  "tenants_total": companies_total,
                                  "jobs_found": len(rows_snap)},
                     "jobs": [
-                        {k: v for k, v in j.items() if k not in ("description", "_meta", "_exp")}
+                        {k: v for k, v in j.items() if k not in ("description", "_meta", "_exp", "_fam_counts")}
                         for j in rows_snap[:STREAM_TOP]
                     ],
                     "total": len(rows_snap),
@@ -1057,7 +1057,7 @@ def run_career_pages_search(
                 "progress": {"tenants_done": companies_total,
                              "tenants_total": companies_total,
                              "jobs_found": len(jobs), "phase": "details"},
-                "jobs": [{k: v for k, v in j.items() if k not in ("description", "_meta", "_exp")}
+                "jobs": [{k: v for k, v in j.items() if k not in ("description", "_meta", "_exp", "_fam_counts")}
                          for j in jobs[:STREAM_TOP]],
                 "total": len(jobs), "streaming": True,
             })
@@ -1088,6 +1088,7 @@ def run_career_pages_search(
     for j in jobs:  # scoring-only signals — never exposed to the client
         j.pop("_meta", None)
         j.pop("_exp", None)
+        j.pop("_fam_counts", None)
 
     window_counts = {"today": 0, "d1": 0, "d3": 0, "d7": 0, "d30": 0}
     for j in jobs:
