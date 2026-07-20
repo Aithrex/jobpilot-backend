@@ -78,15 +78,19 @@ def score_one(
     resume_skills: List[str],
     *,
     min_resume_skills: int = 8,
+    max_denom_skills: int = 14,
 ) -> Dict[str, Any]:
     """Score a single JD against a precompiled skill list.
 
     Returns dict with `match_score` (0..100), `matched_skills` (list[str]),
     `missing_top` (best-effort list[str]). Deterministic, no AI.
 
-    Scoring is `matched / max(min_resume_skills, total_skills) * 100`. The
-    `min_resume_skills` floor prevents a 3-skill resume from getting 100%
-    for any JD that mentions all three — small resumes need a wider denom.
+    Scoring is `matched / clamp(total_skills, min_resume_skills,
+    max_denom_skills) * 100`. The floor prevents a 3-skill resume from
+    getting 100% for any JD that mentions all three; the cap prevents the
+    opposite failure: a rich 28-skill resume would otherwise need 12 skills
+    named in one posting to reach a 40 score, so skill-heavy resumes scored
+    near zero everywhere and guests saw no matches at all.
     """
     if not resume_skills:
         return {"match_score": 0, "matched_skills": [], "missing_top": [],
@@ -108,7 +112,7 @@ def score_one(
         else:
             missing.append(sk)
 
-    denom = max(min_resume_skills, len(resume_skills))
+    denom = max(min_resume_skills, min(len(resume_skills), max_denom_skills))
     raw = (len(matched) / denom) * 100.0
     score = max(0, min(100, round(raw)))
     # Truncate matched list — the UI needs 8 names max, more is noise. Order

@@ -31,9 +31,12 @@ DEFAULTS: Dict[str, Any] = {
     "enabled": True,
     "guest_tailor_limit": 1,          # LIFETIME guest tailors per quota subject (v2: exactly one trial)
     # jd_match_scorer.score_one = matched/max(8, total_skills)*100 — real resumes
-    # land ~20-55, so 40 (not the spec's original 70) is the honest "high
-    # confidence" bar. Don't raise it without re-tuning the scorer.
-    "guest_jobs_min_score": 40,       # only show high-confidence matches
+    # land ~20-55. Real postings name only 3-6 specific technologies, so with
+    # the scorer's denominator clamp (max 14) a typical genuine fit scores
+    # 21-43: the bar is 25 (posting names ~a quarter of the resume's core
+    # stack). 40 starved skill-rich resumes to zero results (2026-07-20
+    # incident). Don't raise it without re-tuning the scorer.
+    "guest_jobs_min_score": 25,       # match bar: see scorer tuning note above
     "guest_jobs_max": 5,              # v2: exactly 5 strong matches, server-enforced
     "free_daily_tailors": 5,          # free plan daily tailors (post-signup)
     "free_jobs_daily_cap": 10,        # free plan daily job-match cap (post-signup)

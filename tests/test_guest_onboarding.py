@@ -563,10 +563,13 @@ class TestAdminConfig:
         assert pconfig.BOUNDS["retention_days"] == (0, 3650)
 
     def test_min_score_default_matches_scorer_range(self, guest_db):
-        # jd_match_scorer.score_one lands ~20-55 on real resumes; the spec's
-        # original 70 would blank the guest funnel. Locked at 40 — don't
-        # "fix" it back up without re-tuning the scorer.
-        assert pconfig.DEFAULTS["guest_jobs_min_score"] == 40
+        # jd_match_scorer.score_one (denominator clamped to [8, 14]) lands
+        # 21-43 on genuine fits because real postings name only 3-6 specific
+        # technologies. The bar is locked at 25: 40 starved skill-rich
+        # resumes to zero results (2026-07-20 incident), and the spec's
+        # original 70 would blank the funnel entirely. Don't raise it
+        # without re-tuning the scorer.
+        assert pconfig.DEFAULTS["guest_jobs_min_score"] == 25
 
     def test_admin_route_put_and_get(self, guest_db):
         app = load_service_app("auth")
