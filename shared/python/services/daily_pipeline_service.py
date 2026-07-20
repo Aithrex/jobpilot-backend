@@ -2204,6 +2204,19 @@ def run_pipeline(
     excluded.extend(user_hidden)
     duplicates_dropped = max(0, len(all_raw) + len(user_hidden) - (len(apply_now) + len(verify) + len(excluded)))
 
+    # Company logos — stamp logo_url on every served row. This is the single
+    # choke point for BOTH Discover (daily_pipeline async result) and guest
+    # matches (_fetch_free_jobs reuses this pipeline). The stamp also upserts
+    # the company_logos docs the /api/jobs/logo route needs (it never fetches
+    # for keys without a doc). Lazy import: company_logo_service pulls in
+    # jd_fetcher, which imports _html_to_text from THIS module.
+    try:
+        from services.company_logo_service import stamp_logo_urls
+        stamp_logo_urls(apply_now)
+        stamp_logo_urls(verify)
+    except Exception as _logo_err:  # never let logos break the pipeline
+        logger.warning("logo stamping skipped: %s", type(_logo_err).__name__)
+
     tier_counts = {
         "tier_1": sum(1 for r in apply_now + verify if r["tier"] == "Tier 1"),
         "tier_2": sum(1 for r in apply_now + verify if r["tier"] == "Tier 2"),

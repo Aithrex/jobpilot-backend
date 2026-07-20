@@ -7,7 +7,7 @@ All endpoints require a valid JWT whose identity is the user's email.
 import logging
 import re
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, Response, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from utils.security import InputSanitizer, get_rate_limiter, get_client_ip
@@ -1193,6 +1193,48 @@ def delete_saved(job_id):
     except Exception as e:
         logger.error(f"Delete saved job error: {e}")
         return jsonify({"error": "Failed to delete job"}), 500
+
+
+# ------------------------------------------------------------------
+# GET /api/jobs/logo/<key> — public company-logo asset (cached favicon)
+# ------------------------------------------------------------------
+# Rides the existing ANY /api/jobs/{proxy+} edge route — NO new Terraform
+# prefix. PUBLIC (an <img> tag can't send Authorization) and never 401.
+# The key is format-validated (exactly 40 lowercase hex chars) BEFORE any
+# Mongo filter. The service NEVER fetches for a key without an existing
+# company_logos doc — docs are created only by the stamp/warm paths, which
+# derive keys from real scraped companies (no SSRF-by-hash oracle).
+_LOGO_KEY_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+@jobs_bp.route("/logo/<key>", methods=["GET"])
+def company_logo(key):
+    if not isinstance(key, str) or not _LOGO_KEY_RE.match(key):
+        return jsonify({"error": "Not found"}), 404
+
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"jobs_logo:{client_ip}", max_requests=300, window_seconds=300):
+        return jsonify({"error": "Rate limit exceeded"}), 429
+
+    try:
+        from services.company_logo_service import get_logo_bytes
+        got = get_logo_bytes(key)
+    except Exception as e:
+        logger.error(f"Logo serve error: {type(e).__name__}")
+        got = None
+    if not got:
+        # Unknown key, negative-cached miss, or fetch failure — all the same
+        # generic 404 (the FE falls back to a monogram).
+        return jsonify({"error": "Not found"}), 404
+
+    data, content_type = got
+    resp = Response(data, mimetype=content_type)
+    # Immutable: the key is a content-addressed sha1 of the company name and
+    # the underlying icon changes rarely; a week of edge/browser caching is
+    # safe. The app-level no-store hook carves this path out.
+    resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
+    return resp
 
 
 # ------------------------------------------------------------------

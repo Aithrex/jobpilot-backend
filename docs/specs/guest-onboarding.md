@@ -201,8 +201,10 @@ Jobs Lambda (`/api/jobs/guest/*`):
   breaker reservation -> async `202 {job_id}`. Free direct sources only (unchanged).
   **Server returns at most `guest_jobs_max` (5) jobs — no extra locked rows for CSS to hide.**
   Each card: `{match_id, title, company, location, apply_link, url, source, posted, tier,
-  match_score, matched_skills:[], why: str, sponsorship: {signal, note}|null}`.
+  logo_url, match_score, matched_skills:[], why: str, sponsorship: {signal, note}|null}`.
   - `match_id` — opaque server-minted id stored in the cache; the only tailorable reference.
+  - `logo_url` — server-generated relative path `/api/jobs/logo/<sha1(company)>` serving the
+    company's cached real favicon (public, no auth); when it 404s the FE renders a monogram.
   - `why` — short deterministic explanation from the scorer (matched skills / role-term overlap).
     Scores are presented as estimates, never hiring probabilities.
   - `sponsorship` — only when the employer matches public-filing data (`h1b_sponsor_data`):

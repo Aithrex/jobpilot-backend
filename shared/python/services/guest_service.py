@@ -61,7 +61,7 @@ _DOWNLOAD_TOKEN_VERSION = "v1"
 # Whitelisted job-card fields returned to guests (no internal scoring debris).
 _JOB_CARD_FIELDS = (
     "title", "company", "location", "apply_link", "url", "source",
-    "posted", "tier",
+    "posted", "tier", "logo_url",
 )
 
 
@@ -817,6 +817,21 @@ def _safe_job_url(value: Any) -> Optional[str]:
     return None
 
 
+# The ONLY relative path a card may carry: the server-generated company-logo
+# route (exact sha1 shape). Every other field keeps the strict http(s) guard —
+# this allowance is per-field for logo_url, never a general weakening.
+_LOGO_URL_RE = re.compile(r"^/api/jobs/logo/[0-9a-f]{40}$")
+
+
+def _safe_logo_url(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    candidate = InputSanitizer.sanitize_string(value, max_length=2048)
+    if _LOGO_URL_RE.match(candidate):
+        return candidate
+    return _safe_job_url(candidate)
+
+
 def _resume_skills(structured: Dict[str, Any]) -> List[str]:
     from schemas.resume_schemas import flatten_skills
 
@@ -910,6 +925,14 @@ def compute_guest_matches(guest_id: str) -> Dict[str, Any]:
                     card.pop(url_field)
                 else:
                     card[url_field] = safe
+        # logo_url additionally allows the server-generated relative
+        # /api/jobs/logo/<sha1> path (exact shape only).
+        if "logo_url" in card:
+            safe_logo = _safe_logo_url(card["logo_url"])
+            if safe_logo is None:
+                card.pop("logo_url")
+            else:
+                card["logo_url"] = safe_logo
         card["match_score"] = verdict["match_score"]
         card["matched_skills"] = verdict.get("matched_skills") or []
         card["why"] = _match_why(card["matched_skills"])
@@ -943,6 +966,17 @@ def compute_guest_matches(guest_id: str) -> Dict[str, Any]:
             "url": card.get("url") or card.get("apply_link") or "",
         }
         top.append(card)
+
+    # Company logos — (re)stamped at cache-build time so every cached guest
+    # card carries the server-derived logo_url AND the company_logos docs the
+    # /api/jobs/logo route needs exist (the route never fetches for keys
+    # without a doc). Overwrites any row-provided value: deterministic from
+    # the company name, never client-influenced.
+    try:
+        from services.company_logo_service import stamp_logo_urls
+        stamp_logo_urls(top)
+    except Exception as e:  # pragma: no cover - logos must never break matches
+        logger.warning("guest matches: logo stamping skipped: %s", type(e).__name__)
 
     _store_matches(gid, top, min_score, jd_sources=jd_sources)
     logger.info(
