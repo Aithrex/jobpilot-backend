@@ -467,6 +467,29 @@ class TestStamping:
         doc = logo_db.company_logos.find_one({"key": key})
         assert doc["status"] == "ok" and doc["s3_key"]  # $setOnInsert only
 
+    def test_discover_search_results_and_partials_are_stamped(self, logo_db, no_network):
+        """The interactive Discover searches (workday / career-pages / mnc) are a
+        DIFFERENT path from the daily pipeline: their worker branches stream
+        partials and complete with {"jobs": [...]}. Both must be stamped, or job
+        cards in the app silently lose their company icons."""
+        from services.resume_service import _stamp_job_logos
+
+        partial = {"jobs": [{"title": "SWE", "company": "Acme Corp"}], "progress": 12}
+        out = _stamp_job_logos(partial)
+        acme_key = logo_svc.logo_key("Acme Corp")
+        assert out["jobs"][0]["logo_url"] == f"/api/jobs/logo/{acme_key}"
+        assert out["progress"] == 12  # untouched passthrough
+
+        result = {"jobs": [{"title": "SWE II", "company": "Stripe"}], "total": 1}
+        assert _stamp_job_logos(result)["jobs"][0]["logo_url"] == (
+            f"/api/jobs/logo/{logo_svc.logo_key('Stripe')}"
+        )
+
+        # Shapes without jobs, and stamping failures, must never break a search.
+        assert _stamp_job_logos({"progress": 5}) == {"progress": 5}
+        assert _stamp_job_logos({}) == {}
+        assert _stamp_job_logos(None) is None
+
     def test_guest_cards_carry_logo_url(self, logo_db, no_network, monkeypatch):
         monkeypatch.setenv("GUEST_SIGNAL_HMAC_KEY", "unit-test-signal-key")
         pconfig.update_guest_config({"guest_jobs_min_score": 0}, "admin@test")

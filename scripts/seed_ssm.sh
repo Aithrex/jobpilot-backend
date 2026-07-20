@@ -40,6 +40,13 @@ declare -A MAP=(
   [GOOGLE_OAUTH_CLIENT_SECRET]="google-oauth-client-secret"
   [GMAIL_TOKEN_ENCRYPTION_KEY]="gmail-token-encryption-key"
   [ZEPTOMAIL_TOKEN]="zeptomail-token"
+  # Guest onboarding secrets. All three fail closed when absent.
+  # NOTE: rotating GUEST_SIGNAL_HMAC_KEY orphans every stored identity HMAC
+  # (quota subjects stop linking); rotating the download secret only
+  # invalidates in-flight 15 minute download tokens.
+  [GUEST_IP_HASH_SALT]="guest-ip-hash-salt"
+  [GUEST_SIGNAL_HMAC_KEY]="guest-signal-hmac-key"
+  [GUEST_DOWNLOAD_TOKEN_SECRET]="guest-download-token-secret"
 )
 
 get_val() {

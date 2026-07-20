@@ -599,6 +599,23 @@ def _consume_projects_diagnostic(result: Dict[str, Any]) -> None:
     result.setdefault("_diagnostics", {})["projects"] = diag
 
 
+def _stamp_job_logos(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Add `logo_url` to a search result/partial's `jobs` rows, in place.
+
+    The interactive Discover searches (workday/career-pages/mnc) stream partials
+    and complete with `{"jobs": [...]}`; both go through here so cards carry a
+    company icon. Best effort: a logo failure must never fail a job search.
+    """
+    try:
+        rows = (payload or {}).get("jobs")
+        if isinstance(rows, list) and rows:
+            from services.company_logo_service import stamp_logo_urls
+            stamp_logo_urls(rows)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("logo stamping skipped: %s", type(e).__name__)
+    return payload
+
+
 def _process_job(job_id: str, job_type: str, payload: dict):
     """Execute the appropriate pipeline step and store the result in MongoDB."""
     svc = get_resume_service()
@@ -1495,28 +1512,28 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             from services.workday_jobs_service import run_workday_jobs_search
 
             def _stream_workday_partial(partial: dict) -> None:
-                svc.update_job_partial(job_id, partial)
+                svc.update_job_partial(job_id, _stamp_job_logos(partial))
 
             result = run_workday_jobs_search(payload, partial_cb=_stream_workday_partial)
-            svc.complete_job(job_id, result)
+            svc.complete_job(job_id, _stamp_job_logos(result))
 
         elif job_type == "career_pages":
             from services.career_pages_service import run_career_pages_search
 
             def _stream_career_partial(partial: dict) -> None:
-                svc.update_job_partial(job_id, partial)
+                svc.update_job_partial(job_id, _stamp_job_logos(partial))
 
             result = run_career_pages_search(payload, partial_cb=_stream_career_partial)
-            svc.complete_job(job_id, result)
+            svc.complete_job(job_id, _stamp_job_logos(result))
 
         elif job_type == "mnc_jobs":
             from services.mnc_jobs_service import run_mnc_search
 
             def _stream_mnc_partial(partial: dict) -> None:
-                svc.update_job_partial(job_id, partial)
+                svc.update_job_partial(job_id, _stamp_job_logos(partial))
 
             result = run_mnc_search(payload, partial_cb=_stream_mnc_partial)
-            svc.complete_job(job_id, result)
+            svc.complete_job(job_id, _stamp_job_logos(result))
 
         elif job_type == "daily_pipeline":
             # Idempotency guard — Lambda async invocations are at-least-once,
