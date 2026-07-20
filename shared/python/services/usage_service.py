@@ -58,12 +58,56 @@ def get_user_limit(email: str) -> int:
     return DEFAULT_DAILY_LIMIT
 
 
+def _linked_pool_emails(email: str) -> list:
+    """FREE-plan shared daily pool (Guest Onboarding v2).
+
+    Accounts confidently linked to the same guest quota subject (each linked
+    via an authenticated /guest/claim — `guest_quota_subjects.linked_accounts`)
+    share ONE free daily tailor pool. Returns the pool emails (always includes
+    the caller). PREMIUM PLANS ARE UNTOUCHED: a non-free caller always meters
+    solo, and non-free linked accounts are excluded from the pool. Defensive —
+    any failure degrades to solo metering. Each tailor event is still recorded
+    exactly once under the acting account (no double count); only the COUNT
+    aggregates across the pool.
+    """
+    if not email:
+        return [email]
+    try:
+        from services import entitlements_service
+
+        if entitlements_service.get_plan(email) != entitlements_service.FREE:
+            return [email]
+        db = DBConnect().get_db()
+        linked = {email}
+        # `email` comes from the JWT identity; value-position equality only.
+        for doc in db.guest_quota_subjects.find(
+            {"linked_accounts": email}, {"linked_accounts": 1}
+        ).limit(20):
+            for other in doc.get("linked_accounts") or []:
+                if isinstance(other, str) and other:
+                    linked.add(other)
+        if len(linked) <= 1:
+            return [email]
+        return [
+            e for e in sorted(linked)
+            if e == email or entitlements_service.get_plan(e) == entitlements_service.FREE
+        ]
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("linked free-pool resolution failed (solo metering): %s", e)
+        return [email]
+
+
 def get_usage(email: str) -> Dict:
     """Today's usage snapshot for the user."""
     db = DBConnect().get_db()
     today = _today_key()
     rec = db.tailor_usage.find_one({"email": email, "date": today}, {"count": 1})
     used = int(rec.get("count", 0)) if rec else 0
+    # Free-plan pool: linked accounts' spend counts against the shared limit.
+    pool = _linked_pool_emails(email)
+    others = [e for e in pool if e != email]
+    if others:
+        used += sum(get_today_usage_for_users(others).values())
     limit = get_user_limit(email)
     resets = _resets_at()
     now = datetime.now(timezone.utc)

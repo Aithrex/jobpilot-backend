@@ -362,21 +362,26 @@ INDEX_SPECS = [
      {"name": "status_scheduled_for"}),
     ("scheduled_posts", [("user_email", ASCENDING)], {"name": "by_user"}),
 
-    # === Guest Onboarding (docs/specs/guest-onboarding.md) ==================
+    # === Guest Onboarding v2 (docs/specs/guest-onboarding.md) ===============
     # guest_sessions: guest_id is the uuid4 capability token — every route
-    # filters {guest_id} (guest_service.get_session / attach_parsed_resume /
-    # increment_guest_tailors). Unique protects capability-token integrity.
+    # filters {guest_id}. Unique protects capability-token integrity.
     ("guest_sessions", [("guest_id", ASCENDING)], {"unique": True, "name": "guest_id_unique"}),
-    # Identity-resolution lookups (guest_identity_service._match_counts):
-    # exact-match / $in on each composite-identity signal field.
-    ("guest_sessions", [("identity.name_normalized", ASCENDING)],
-     {"name": "identity_name_normalized"}),
-    ("guest_sessions", [("identity.emails", ASCENDING)], {"name": "identity_emails"}),
-    ("guest_sessions", [("identity.phones", ASCENDING)], {"name": "identity_phones"}),
-    ("guest_sessions", [("identity.resume_hashes", ASCENDING)],
-     {"name": "identity_resume_hashes"}),
+    # v2 identity-resolution lookups (guest_identity_service._match_counts):
+    # exact-match / $in on the versioned keyed-HMAC signal fields. The v1
+    # plaintext indexes (identity.emails/phones/resume_hashes,
+    # identity.name_normalized) are DROPPED below (DROP_INDEXES).
+    ("guest_sessions", [("identity.email_hmacs", ASCENDING)], {"name": "identity_email_hmacs"}),
+    ("guest_sessions", [("identity.phone_hmacs", ASCENDING)], {"name": "identity_phone_hmacs"}),
+    ("guest_sessions", [("identity.resume_sig_hmacs", ASCENDING)],
+     {"name": "identity_resume_sig_hmacs"}),
     ("guest_sessions", [("fingerprint_hash", ASCENDING)],
      {"sparse": True, "name": "fingerprint_hash_sparse"}),
+    # Server-issued device token (sha256 stored) — session recognition +
+    # identity "device" signal lookup.
+    ("guest_sessions", [("device_token_hash", ASCENDING)],
+     {"sparse": True, "name": "device_token_hash_sparse"}),
+    # Quota-subject membership (unify_subjects re-points by subject id).
+    ("guest_sessions", [("quota_subject_id", ASCENDING)], {"name": "quota_subject_id_idx"}),
     # cluster membership scan (guest_identity_service.cluster_ids) filters
     # {merged_into: canonical_id}; sparse — only merged members carry it.
     ("guest_sessions", [("merged_into", ASCENDING)],
@@ -384,15 +389,43 @@ INDEX_SPECS = [
     # claim lookups / admin "who claimed what" (guest_service.claim_session).
     ("guest_sessions", [("claimed_by", ASCENDING)],
      {"sparse": True, "name": "claimed_by_sparse"}),
+    # Retention sweep: {claimed_by: null, last_seen_at: {$lt: cutoff}}. A
+    # partial index can't express equality-to-null (unsupported in
+    # partialFilterExpression), so this is a plain compound index serving the
+    # same claim-aware scan. NO Mongo TTL — retention is a claim-aware job.
+    ("guest_sessions", [("claimed_by", ASCENDING), ("last_seen_at", ASCENDING)],
+     {"name": "retention_scan"}),
+    # guest_quota_subjects: the server-only quota/abuse identity. subject_id
+    # is the atomic-reservation key (find_one_and_update) — unique required.
+    ("guest_quota_subjects", [("subject_id", ASCENDING)],
+     {"unique": True, "name": "subject_id_unique"}),
+    # usage_service._linked_pool_emails: find({linked_accounts: email}).
+    ("guest_quota_subjects", [("linked_accounts", ASCENDING)],
+     {"name": "linked_accounts_idx"}),
+    # guest_claim_carryins: once-per-(subject, UTC day) day-1 usage seed
+    # marker — unique is a CORRECTNESS requirement (claim idempotency).
+    ("guest_claim_carryins", [("subject_id", ASCENDING), ("date", ASCENDING)],
+     {"unique": True, "name": "subject_date_unique"}),
     # Guest job polling: get_guest_job filters {job_id, guest_id} — job_id is
     # already unique above; add guest_id so the ownership check stays indexed.
     ("resume_jobs", [("guest_id", ASCENDING)], {"sparse": True, "name": "guest_id_sparse"}),
     # Guest tailoring records: claim_session.update_many filters
-    # {guest_id: {$in: cluster}, user_email: None}.
+    # {guest_id: {$in: cluster}, user_email: None}; download mint filters
+    # {record_id, guest_id, user_email: None}.
     ("tailoring_records", [("guest_id", ASCENDING)],
      {"sparse": True, "name": "guest_id_sparse"}),
     # platform_config is keyed on _id (default index) — nothing extra needed;
-    # guest_global_counters (per-day $inc circuit breaker) likewise rides _id.
+    # guest_global_counters + guest_challenge_velocity ($inc counters) ride _id.
+]
+
+# Indexes DROPPED by this migration (Guest Onboarding v2: plaintext identity
+# lookup fields are removed — no raw email/phone/resume-signature index may
+# remain). Dropping a non-existent index is logged and skipped.
+DROP_INDEXES = [
+    ("guest_sessions", "identity_name_normalized"),
+    ("guest_sessions", "identity_emails"),
+    ("guest_sessions", "identity_phones"),
+    ("guest_sessions", "identity_resume_hashes"),
 ]
 
 
@@ -407,6 +440,23 @@ def _fmt(keys, opts):
         flags.append(f"TTL={opts['expireAfterSeconds']}s")
     suffix = f" [{', '.join(flags)}]" if flags else ""
     return f"{{{key_str}}}{suffix}"
+
+
+def run_drops(db, dry_run: bool):
+    """Drop superseded indexes (v1 → v2 migrations). Missing indexes skip."""
+    for coll, name in DROP_INDEXES:
+        label = f"{coll}.{name}"
+        if dry_run:
+            print(f"  [would-drop]   {label}")
+            continue
+        try:
+            if name in db[coll].index_information():
+                db[coll].drop_index(name)
+                print(f"  [dropped]  {label}")
+            else:
+                print(f"  [absent]   {label}")
+        except (OperationFailure, PyMongoError) as e:
+            print(f"  [DROP-FAILED] {label}: {e}")
 
 
 def run(db, dry_run: bool):
@@ -448,6 +498,7 @@ def main():
     print(f"   {len(INDEX_SPECS)} index spec(s) across "
           f"{len({c for c, _, _ in INDEX_SPECS})} collection(s)\n")
 
+    run_drops(db, dry_run)
     created, existed, failed = run(db, dry_run)
 
     print("\n== Summary by collection ==")

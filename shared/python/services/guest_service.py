@@ -1,4 +1,4 @@
-"""Guest Onboarding service — sessions, quotas, matching, claim.
+"""Guest Onboarding service v2 — sessions, quota subjects, matching, downloads, claim.
 
 Backs the guest blueprints (resume Lambda `/api/resume/guest/*`, jobs Lambda
 `/api/jobs/guest/matches`) and the guest async-job branches in
@@ -6,25 +6,34 @@ services.resume_service._process_job. Lives in the shared layer because the
 guest domain spans BOTH the resume and jobs Lambdas (same rationale as
 job_service/resume_service — see the coupling note in CLAUDE.md).
 
-Key properties:
-  * guest_id is a uuid4 capability token — validated as UUID before ANY Mongo
-    filter; 404/generic responses on mismatch (no existence oracle).
-  * Quota = LIFETIME `guest_tailor_limit` per identity CLUSTER (sum across
-    merged sessions), plus a platform-wide per-day circuit breaker on
-    anonymous LLM spend (`global_daily_guest_tailors`, atomic $inc).
-  * Matched jobs are cached per guest per day in the session doc.
-  * Claim is an atomic ownership flip guarded by the claimed_by field, so a
-    double claim can never double-seed the user's daily tailor usage.
-  * No resume PII in logs — guest_ids/counters only (spec §Security 4).
+v2 key properties (docs/specs/guest-onboarding.md v2):
+  * guest_id — uuid4 CAPABILITY token: validated as UUID before ANY Mongo
+    filter; generic 404 on mismatch (no existence oracle). Grants artifact
+    access only.
+  * quota_subject_id — server-only pseudonymous uuid per abuse/quota cluster
+    (collection `guest_quota_subjects`). Used ONLY for quota counters, the
+    single-trial reservation slot, the same-day match cache, and claim
+    carry-in. NEVER returned to a client; grants no artifact access.
+  * The single guest tailor is an ATOMIC single-reservation slot on the
+    subject (find_one_and_update) — two concurrent tailors → one reservation;
+    a same-match retry is idempotent ({existing:true}); a failed tailor
+    releases the slot so infra errors never cheat the guest.
+  * Download capability tokens: versioned HMAC over record_id|guest_id|format|exp
+    with the dedicated GUEST_DOWNLOAD_TOKEN_SECRET (fail closed; never a 401).
+  * Global per-day circuit breakers on anonymous spend (atomic $inc).
+  * No resume PII or raw tokens in logs — guest_ids/counters only.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac as _hmac
 import logging
 import os
 import re
+import secrets as _pysecrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils.config import _get_config_value
@@ -39,9 +48,15 @@ logger = logging.getLogger(__name__)
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
+_MATCH_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_DEVICE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,256}$")
 
 _FLAG_TRUE = {"1", "true", "yes", "on"}
 _FLAG_FALSE = {"0", "false", "no", "off"}
+
+DOWNLOAD_TOKEN_TTL_SECONDS = 15 * 60
+DOWNLOAD_FORMATS = ("pdf", "docx")
+_DOWNLOAD_TOKEN_VERSION = "v1"
 
 # Whitelisted job-card fields returned to guests (no internal scoring debris).
 _JOB_CARD_FIELDS = (
@@ -56,6 +71,10 @@ def _db():
 
 def _sessions():
     return _db().guest_sessions
+
+
+def _subjects():
+    return _db().guest_quota_subjects
 
 
 def _now():
@@ -104,6 +123,37 @@ def validate_guest_id(guest_id: Any) -> Optional[str]:
     return candidate if _UUID_RE.match(candidate) else None
 
 
+def validate_match_id(match_id: Any) -> Optional[str]:
+    """match_id is an opaque server-minted uuid4().hex — 32 lowercase hex chars.
+    Format-validated before it reaches any Mongo filter or cache lookup."""
+    if not match_id or not isinstance(match_id, str):
+        return None
+    candidate = InputSanitizer.sanitize_string(match_id, max_length=64).lower()
+    return candidate if _MATCH_ID_RE.match(candidate) else None
+
+
+def validate_device_token(token: Any) -> Optional[str]:
+    """Server-issued device tokens are urlsafe-base64 strings. Charset/length
+    validated; anything else is dropped (never an error — it's a weak signal)."""
+    if not token or not isinstance(token, str):
+        return None
+    candidate = InputSanitizer.sanitize_string(token, max_length=256)
+    return candidate if _DEVICE_TOKEN_RE.match(candidate) else None
+
+
+def mint_device_token() -> str:
+    """Opaque random device token (>=32 bytes, urlsafe). The server stores
+    ONLY sha256(token) — an anti-abuse signal, never a capability."""
+    return _pysecrets.token_urlsafe(32)
+
+
+def hash_device_token(token: Any) -> Optional[str]:
+    t = validate_device_token(token)
+    if not t:
+        return None
+    return hashlib.sha256(t.encode("utf-8")).hexdigest()
+
+
 _ip_salt_warned = False
 
 
@@ -143,6 +193,7 @@ def create_or_get_session(
     guest_id: Optional[str],
     fingerprint_hash: Optional[str],
     ip_hash: Optional[str],
+    device_token_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Return the existing session for a valid guest_id, else create a new one.
 
@@ -157,6 +208,8 @@ def create_or_get_session(
             update: Dict[str, Any] = {"$set": {"last_seen_at": _now()}}
             if fp and not existing.get("fingerprint_hash"):
                 update["$set"]["fingerprint_hash"] = fp
+            if device_token_hash and not existing.get("device_token_hash"):
+                update["$set"]["device_token_hash"] = str(device_token_hash)
             _sessions().update_one({"guest_id": gid}, update)
             existing.update(update["$set"])
             return existing
@@ -166,17 +219,19 @@ def create_or_get_session(
         "guest_id": new_id,
         "created_at": _now(),
         "last_seen_at": _now(),
+        "quota_subject_id": str(uuid.uuid4()),  # server-only; never sent to clients
         "fingerprint_hash": fp or None,
+        "device_token_hash": device_token_hash or None,
         "ip_hash": ip_hash or None,  # null when GUEST_IP_HASH_SALT is unset
         "identity": {
             "name_normalized": "",
-            "emails": [],
-            "phones": [],
-            "resume_hashes": [],
+            "email_hmacs": [],
+            "phone_hmacs": [],
+            "resume_sig_hmacs": [],
+            "sig_v": identity.SIGNAL_VERSION,
         },
         "resume": None,
         "matched_jobs": None,
-        "tailors_used": 0,
         "tailor_record_ids": [],
         "merged_into": None,
         "claimed_by": None,
@@ -188,6 +243,84 @@ def create_or_get_session(
     return doc
 
 
+# ---------------------------------------------------------------------------
+# Quota subjects (server-only; quota + trial + cache + claim carry-in)
+# ---------------------------------------------------------------------------
+
+def ensure_subject(subject_id: str) -> None:
+    """Upsert the guest_quota_subjects doc for subject_id (atomic)."""
+    _subjects().update_one(
+        {"subject_id": str(subject_id)},
+        {
+            "$setOnInsert": {
+                "created_at": _now(),
+                "tailors_used": 0,
+                "reservation": None,
+                "matched_jobs": None,
+                "linked_accounts": [],
+            },
+            "$set": {"last_seen_at": _now()},
+        },
+        upsert=True,
+    )
+
+
+def subject_for_guest(guest_id: str) -> Optional[str]:
+    """Resolve the session's quota_subject_id (minting one for legacy docs),
+    ensuring the subject doc exists. None for unknown sessions."""
+    doc = get_session(guest_id)
+    if not doc:
+        return None
+    sid = doc.get("quota_subject_id")
+    if not sid:
+        sid = str(uuid.uuid4())
+        _sessions().update_one(
+            {"guest_id": doc["guest_id"], "quota_subject_id": None},
+            {"$set": {"quota_subject_id": sid}},
+        )
+        refreshed = _sessions().find_one({"guest_id": doc["guest_id"]}, {"quota_subject_id": 1})
+        sid = (refreshed or {}).get("quota_subject_id") or sid
+    ensure_subject(sid)
+    return str(sid)
+
+
+def unify_subjects(canonical_guest_id: str, newer_guest_id: str) -> None:
+    """Merge the newer session's quota subject into the canonical session's
+    subject (called from guest_identity_service.merge_sessions).
+
+    Counters AGGREGATE onto the canonical subject ($inc, never negative) so a
+    re-upload under a fresh guest_id can never reset the trial.
+    """
+    canonical_sid = subject_for_guest(canonical_guest_id)
+    newer = get_session(newer_guest_id)
+    if not canonical_sid or not newer:
+        return
+    newer_sid = newer.get("quota_subject_id")
+    if not newer_sid or str(newer_sid) == canonical_sid:
+        return
+    newer_sid = str(newer_sid)
+
+    # Re-point every session on the old subject at the canonical subject.
+    _sessions().update_many(
+        {"quota_subject_id": newer_sid},
+        {"$set": {"quota_subject_id": canonical_sid}},
+    )
+    old = _subjects().find_one({"subject_id": newer_sid})
+    if old:
+        update: Dict[str, Any] = {"$set": {"last_seen_at": _now()}}
+        carried = max(0, int(old.get("tailors_used") or 0))
+        if carried:
+            update["$inc"] = {"tailors_used": carried}
+        linked = [e for e in (old.get("linked_accounts") or []) if isinstance(e, str) and e]
+        if linked:
+            update["$addToSet"] = {"linked_accounts": {"$each": linked}}
+        _subjects().update_one({"subject_id": canonical_sid}, update)
+        _subjects().update_one(
+            {"subject_id": newer_sid},
+            {"$set": {"merged_into": canonical_sid, "last_seen_at": _now()}},
+        )
+
+
 def attach_parsed_resume(
     guest_id: str,
     structured: Dict[str, Any],
@@ -195,11 +328,16 @@ def attach_parsed_resume(
     filename: str,
     fingerprint_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Store the parsed resume on the session, extract identity signals and
-    run soft 2-of-N resolution/merge. Returns the recognition summary."""
+    """Store the parsed resume on the session, extract v2 HMAC identity
+    signals and run strong-signal resolution/merge. Returns the recognition
+    summary (this session's OWN parsed name only — never another session's)."""
     gid = validate_guest_id(guest_id)
     if not gid:
         raise ValueError("invalid guest_id")
+
+    session = _sessions().find_one({"guest_id": gid})
+    if not session:
+        raise ValueError("guest session not found")
 
     signals = identity.extract_signals(structured, fingerprint_hash, raw_text)
     set_fields: Dict[str, Any] = {
@@ -211,82 +349,99 @@ def attach_parsed_resume(
             "uploaded_at": _now(),
         },
         "identity.name_normalized": signals["name_normalized"],
+        "identity.sig_v": identity.SIGNAL_VERSION,
     }
     if signals["fingerprint"]:
         set_fields["fingerprint_hash"] = signals["fingerprint"]
     add_to_set: Dict[str, Any] = {}
-    if signals["emails"]:
-        add_to_set["identity.emails"] = {"$each": signals["emails"]}
-    if signals["phones"]:
-        add_to_set["identity.phones"] = {"$each": signals["phones"]}
-    if signals["resume_hash"]:
-        add_to_set["identity.resume_hashes"] = {"$each": [signals["resume_hash"]]}
+    if signals["email_hmacs"]:
+        add_to_set["identity.email_hmacs"] = {"$each": signals["email_hmacs"]}
+    if signals["phone_hmacs"]:
+        add_to_set["identity.phone_hmacs"] = {"$each": signals["phone_hmacs"]}
+    if signals["resume_sig_hmac"]:
+        add_to_set["identity.resume_sig_hmacs"] = {"$each": [signals["resume_sig_hmac"]]}
     update: Dict[str, Any] = {"$set": set_fields}
     if add_to_set:
         update["$addToSet"] = add_to_set
-    result = _sessions().update_one({"guest_id": gid}, update)
-    if result.matched_count == 0:
-        raise ValueError("guest session not found")
+    _sessions().update_one({"guest_id": gid}, update)
 
-    recognition = identity.resolve_and_merge(gid, signals)
-    limit = pconfig.get_int("guest_tailor_limit")
-    used = identity.cluster_tailors_used(gid)
+    recognition = identity.resolve_and_merge(
+        gid, signals, device_token_hash=session.get("device_token_hash")
+    )
+    state = tailor_quota_state(gid)
     return {
         "recognized": bool(recognition.get("recognized")),
-        "recognized_name": recognition.get("recognized_name") or "",
-        "tailors_used": used,
-        "tailors_limit": limit,
+        "recognized_name": signals["name_normalized"],  # this session's own name
+        "tailors_used": state["tailors_used"],
+        "tailors_limit": state["tailors_limit"],
     }
 
 
-def session_summary(guest_id: Optional[str], fingerprint_hash: Optional[str]) -> Dict[str, Any]:
-    """GET /guest/session payload. If guest_id is unknown but the fingerprint
-    matches an identity cluster, return the designed recognition response."""
+def session_summary(
+    guest_id: Optional[str],
+    fingerprint_hash: Optional[str],
+    device_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """GET /guest/session payload (v2).
+
+    * guest_id capability holder: full summary; `recognized_name` ONLY when
+      the session has a parsed resume (and a name) — the owning-guest_id rule.
+    * device/fingerprint-only hit: `{exists:false, recognized:true,
+      claimed:false}` with NO name key (a guessable signal must never be a
+      name or account-state disclosure oracle).
+    """
     doc = get_session(guest_id) if guest_id else None
     if doc:
-        limit = pconfig.get_int("guest_tailor_limit")
-        used = identity.cluster_tailors_used(doc["guest_id"])
-        cached = doc.get("matched_jobs") or {}
-        matched_today = (
-            len(cached.get("jobs") or []) if cached.get("date") == _today_key() else 0
-        )
-        return {
+        state = tailor_quota_state(doc["guest_id"])
+        cached = get_cached_matches(doc["guest_id"]) or {}
+        matched_today = len(cached.get("jobs") or [])
+        has_resume = bool((doc.get("resume") or {}).get("structured"))
+        out: Dict[str, Any] = {
             "exists": True,
             "recognized": False,
-            "recognized_name": (doc.get("identity") or {}).get("name_normalized") or "",
-            "tailors_used": used,
-            "tailors_limit": limit,
-            "has_resume": bool((doc.get("resume") or {}).get("structured")),
+            "tailors_used": state["tailors_used"],
+            "tailors_limit": state["tailors_limit"],
+            "has_resume": has_resume,
             "matched_jobs_today": matched_today,
             "claimed": bool(doc.get("claimed_by")),
         }
+        if has_resume:
+            name = (doc.get("identity") or {}).get("name_normalized") or ""
+            if name:
+                out["recognized_name"] = name
+        return out
 
-    # Unknown guest_id — fingerprint-only recognition (single signal: it may
-    # RECOGNIZE for the "welcome back" banner but never links quota by itself).
-    # A fingerprint is low-entropy/guessable, so a single-signal hit NEVER
-    # reveals the stored name (disclosure oracle); recognized_name is only
-    # returned to the guest_id capability holder above — i.e. 2+ signals,
-    # matching the spec's own identity rule.
+    # Unknown guest_id — device-signal-only recognition ("welcome back"
+    # banner). Never links quota, never reveals a name or claim state.
+    ors: List[Dict[str, Any]] = []
     fp = identity.sanitize_fingerprint(fingerprint_hash)
     if fp:
-        match = _sessions().find_one({"fingerprint_hash": fp}, {"claimed_by": 1})
+        ors.append({"fingerprint_hash": fp})
+    dth = hash_device_token(device_token)
+    if dth:
+        ors.append({"device_token_hash": dth})
+    if ors:
+        query: Dict[str, Any] = ors[0] if len(ors) == 1 else {"$or": ors}
+        match = _sessions().find_one(query, {"guest_id": 1})
         if match:
-            return {
-                "exists": False,
-                "recognized": True,
-                "recognized_name": "",
-                "claimed": bool(match.get("claimed_by")),
-            }
+            return {"exists": False, "recognized": True, "claimed": False}
     return {"exists": False, "recognized": False}
 
 
 # ---------------------------------------------------------------------------
-# Quotas — cluster lifetime limit + global daily circuit breaker
+# Quota — the atomic single-reservation slot on the quota subject
 # ---------------------------------------------------------------------------
 
 def tailor_quota_state(guest_id: str) -> Dict[str, Any]:
     limit = pconfig.get_int("guest_tailor_limit")
-    used = identity.cluster_tailors_used(guest_id)
+    used = 0
+    sid = subject_for_guest(guest_id)
+    if sid:
+        doc = _subjects().find_one({"subject_id": sid}, {"tailors_used": 1}) or {}
+        try:
+            used = max(0, int(doc.get("tailors_used") or 0))
+        except (TypeError, ValueError):
+            used = 0
     return {
         "tailors_used": used,
         "tailors_limit": limit,
@@ -294,62 +449,130 @@ def tailor_quota_state(guest_id: str) -> Dict[str, Any]:
     }
 
 
-def check_guest_tailor_quota(guest_id: str) -> Tuple[bool, Dict[str, Any]]:
-    state = tailor_quota_state(guest_id)
-    return state["remaining"] > 0, state
+def try_reserve_tailor(guest_id: str, match_id: str) -> Dict[str, Any]:
+    """Atomically reserve the subject's single tailor slot for match_id.
 
+    Exactly the spec'd find_one_and_update: filter requires an empty-or-failed
+    reservation AND tailors_used < limit; the update installs the reservation
+    and $incs the counter in the same atomic op. Two concurrent tailor calls →
+    exactly one reservation.
 
-def try_charge_guest_tailor(guest_id: str) -> Tuple[bool, Dict[str, Any]]:
-    """Atomically charge ONE tailor against the cluster lifetime limit.
-
-    Increment-then-verify-and-rollback (same pattern as the global circuit
-    breaker): $inc this session's tailors_used first (atomic per doc), then
-    verify the cluster SUM; over the limit → roll our $inc back and report
-    exhausted. Concurrent charges each see the other's increment in the sum,
-    so the cluster can never exceed the cap (a check-then-inc TOCTOU could).
-    Returns (charged, quota_state); on failure the state carries the same
-    fields _quota_exhausted_response renders (429 {quota_exhausted:true}).
+    Returns one of:
+      {"reserved": True,  "state": {...}}
+      {"existing": True,  "job_id": str, "state": {...}}   (same-match retry)
+      {"exhausted": True, "state": {...}}
     """
+    from pymongo import ReturnDocument
+
     gid = validate_guest_id(guest_id)
+    mid = validate_match_id(match_id)
     limit = pconfig.get_int("guest_tailor_limit")
-    if not gid:
-        return False, {"tailors_used": 0, "tailors_limit": limit, "remaining": 0}
+    if not gid or not mid:
+        return {"exhausted": True, "state": {"tailors_used": 0, "tailors_limit": limit, "remaining": 0}}
+    sid = subject_for_guest(gid)
+    if not sid:
+        return {"exhausted": True, "state": {"tailors_used": 0, "tailors_limit": limit, "remaining": 0}}
     if limit <= 0:
-        return False, {
-            "tailors_used": identity.cluster_tailors_used(gid),
-            "tailors_limit": limit,
-            "remaining": 0,
-        }
-    charged = _sessions().find_one_and_update(
-        {"guest_id": gid},
-        {"$inc": {"tailors_used": 1}, "$set": {"last_seen_at": _now()}},
+        return {"exhausted": True, "state": tailor_quota_state(gid)}
+
+    reserved = _subjects().find_one_and_update(
+        {
+            "subject_id": sid,
+            "$or": [{"reservation": None}, {"reservation.status": "failed"}],
+            "tailors_used": {"$lt": limit},
+        },
+        {
+            "$set": {
+                "reservation": {
+                    "match_id": mid,
+                    "guest_id": gid,
+                    "job_id": None,
+                    "record_id": None,
+                    "status": "reserved",
+                    "reserved_at": _now(),
+                },
+                "last_seen_at": _now(),
+            },
+            "$inc": {"tailors_used": 1},
+        },
+        return_document=ReturnDocument.AFTER,
     )
-    if charged is None:  # unknown session — nothing was incremented
-        return False, {"tailors_used": 0, "tailors_limit": limit, "remaining": 0}
-    used = identity.cluster_tailors_used(gid)  # includes our +1
-    if used > limit:
-        _sessions().update_one({"guest_id": gid}, {"$inc": {"tailors_used": -1}})
-        return False, {
-            "tailors_used": used - 1,
-            "tailors_limit": limit,
-            "remaining": max(0, limit - (used - 1)),
+    if reserved is not None:
+        used = max(0, int(reserved.get("tailors_used") or 0))
+        return {
+            "reserved": True,
+            "state": {
+                "tailors_used": used,
+                "tailors_limit": limit,
+                "remaining": max(0, limit - used),
+            },
         }
-    return True, {
-        "tailors_used": used,
-        "tailors_limit": limit,
-        "remaining": max(0, limit - used),
-    }
+
+    # Lost the slot. Same-match retry against a live/completed reservation is
+    # idempotent — hand back the existing job_id.
+    doc = _subjects().find_one({"subject_id": sid}) or {}
+    resv = doc.get("reservation") or {}
+    if (
+        resv.get("match_id") == mid
+        and resv.get("status") in ("reserved", "completed")
+        and resv.get("job_id")
+    ):
+        return {"existing": True, "job_id": str(resv["job_id"]), "state": tailor_quota_state(gid)}
+    return {"exhausted": True, "state": tailor_quota_state(gid)}
 
 
-def increment_guest_tailors(guest_id: str, n: int = 1) -> None:
-    gid = validate_guest_id(guest_id)
-    if not gid:
+def attach_reservation_job(guest_id: str, match_id: str, job_id: str) -> None:
+    """Stamp the dispatched job_id onto the live reservation."""
+    sid = subject_for_guest(guest_id)
+    mid = validate_match_id(match_id)
+    if not sid or not mid:
         return
-    _sessions().update_one(
-        {"guest_id": gid},
-        {"$inc": {"tailors_used": int(n)}, "$set": {"last_seen_at": _now()}},
+    _subjects().update_one(
+        {"subject_id": sid, "reservation.match_id": mid, "reservation.status": "reserved"},
+        {"$set": {"reservation.job_id": str(job_id)}},
     )
 
+
+def release_reservation(guest_id: str) -> None:
+    """Pre-dispatch rollback: the job never left the building — clear the
+    reservation and refund the counter (status-guarded so a double release
+    can never drive the counter negative)."""
+    sid = subject_for_guest(guest_id)
+    if not sid:
+        return
+    _subjects().update_one(
+        {"subject_id": sid, "reservation.status": "reserved"},
+        {"$set": {"reservation": None}, "$inc": {"tailors_used": -1}},
+    )
+
+
+def complete_reservation(guest_id: str, job_id: str, record_id: Optional[str]) -> None:
+    """Worker success: mark the reservation completed and stamp the record."""
+    sid = subject_for_guest(guest_id)
+    if not sid or not job_id:
+        return
+    _subjects().update_one(
+        {"subject_id": sid, "reservation.job_id": str(job_id)},
+        {"$set": {"reservation.status": "completed", "reservation.record_id": record_id}},
+    )
+
+
+def fail_reservation(guest_id: str, job_id: str) -> None:
+    """Worker failure: keep the reservation object (status=failed, so the
+    $or re-reserve clause matches) and refund the counter — an infra error
+    must never consume the guest's single trial. Status-guarded: idempotent."""
+    sid = subject_for_guest(guest_id)
+    if not sid or not job_id:
+        return
+    _subjects().update_one(
+        {"subject_id": sid, "reservation.job_id": str(job_id), "reservation.status": "reserved"},
+        {"$set": {"reservation.status": "failed"}, "$inc": {"tailors_used": -1}},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Global per-day circuit breakers on anonymous spend
+# ---------------------------------------------------------------------------
 
 def _try_reserve_global(kind: str, limit_knob: str) -> bool:
     """Platform-wide per-day circuit breaker on anonymous spend (shared by
@@ -455,19 +678,34 @@ def get_guest_job(job_id: str, guest_id: str) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Matched jobs (free direct sources only) + per-day cache
+# Matched jobs (free direct sources only) + subject-level same-day cache
 # ---------------------------------------------------------------------------
 
+def _cache_doc_for_guest(guest_id: str) -> Optional[Dict[str, Any]]:
+    """The subject-level cache doc, falling back to the session-level cache
+    (the fallback carries the guests through a missing HMAC key — each session
+    is then its own standalone subject anyway)."""
+    sid = subject_for_guest(guest_id)
+    if sid:
+        subj = _subjects().find_one({"subject_id": sid}, {"matched_jobs": 1}) or {}
+        cached = subj.get("matched_jobs")
+        if cached:
+            return cached
+    doc = get_session(guest_id) or {}
+    return doc.get("matched_jobs")
+
+
 def get_cached_matches(guest_id: str) -> Optional[Dict[str, Any]]:
-    doc = get_session(guest_id)
-    if not doc:
+    """Same-day cached matches for the guest's quota subject (never re-spends
+    the global matches budget). Rows are HARD-CAPPED at guest_jobs_max — the
+    server never returns more (no hidden locked rows for CSS to hide)."""
+    cached = _cache_doc_for_guest(guest_id)
+    if not cached or cached.get("date") != _today_key():
         return None
-    cached = doc.get("matched_jobs") or {}
-    if cached.get("date") != _today_key():
-        return None
+    max_jobs = max(1, pconfig.get_int("guest_jobs_max"))
     computed_at = cached.get("computed_at")
     return {
-        "jobs": cached.get("jobs") or [],
+        "jobs": list(cached.get("jobs") or [])[:max_jobs],
         "date": cached.get("date"),
         "computed_at": computed_at.isoformat() if hasattr(computed_at, "isoformat") else computed_at,
         "min_score": cached.get("min_score"),
@@ -475,21 +713,58 @@ def get_cached_matches(guest_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def _store_matches(guest_id: str, jobs: List[Dict[str, Any]], min_score: int) -> None:
-    _sessions().update_one(
-        {"guest_id": guest_id},
-        {
-            "$set": {
-                "matched_jobs": {
-                    "date": _today_key(),
-                    "jobs": jobs,
-                    "computed_at": _now(),
-                    "min_score": min_score,
-                },
-                "last_seen_at": _now(),
+def find_cached_match(guest_id: str, match_id: str) -> Optional[Dict[str, Any]]:
+    """Resolve a served match_id to its server-stored JD source
+    ({title, company, jd_text, url}) — the ONLY tailorable reference. The JD
+    never comes from the client (SSRF/injection posture)."""
+    mid = validate_match_id(match_id)
+    if not mid:
+        return None
+    cached = _cache_doc_for_guest(guest_id)
+    if not cached:
+        return None
+    sources = cached.get("jd_sources") or {}
+    src = sources.get(mid)
+    if isinstance(src, dict):
+        return src
+    # Defensive fallback: derive from the public card (no stored description).
+    for card in cached.get("jobs") or []:
+        if card.get("match_id") == mid:
+            return {
+                "title": card.get("title") or "",
+                "company": card.get("company") or "",
+                "jd_text": "",
+                "url": card.get("url") or card.get("apply_link") or "",
             }
-        },
+    return None
+
+
+def _store_matches(
+    guest_id: str,
+    jobs: List[Dict[str, Any]],
+    min_score: int,
+    jd_sources: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> None:
+    cache = {
+        "date": _today_key(),
+        "jobs": jobs,
+        "jd_sources": jd_sources or {},
+        "computed_at": _now(),
+        "min_score": min_score,
+    }
+    gid = validate_guest_id(guest_id)
+    if not gid:
+        return
+    _sessions().update_one(
+        {"guest_id": gid},
+        {"$set": {"matched_jobs": cache, "last_seen_at": _now()}},
     )
+    sid = subject_for_guest(gid)
+    if sid:
+        _subjects().update_one(
+            {"subject_id": sid},
+            {"$set": {"matched_jobs": cache, "last_seen_at": _now()}},
+        )
 
 
 def _guest_role_terms(structured: Dict[str, Any]) -> List[str]:
@@ -554,10 +829,50 @@ def _resume_skills(structured: Dict[str, Any]) -> List[str]:
     return out
 
 
+def _match_why(matched_skills: List[str]) -> str:
+    """Short deterministic explanation from the scorer's matched skills.
+    Scores are estimates, never hiring probabilities. No LLM, sentence case,
+    no dashes."""
+    skills = [str(s) for s in (matched_skills or [])[:3] if s]
+    if not skills:
+        return "Estimated match based on overlap between this role and your resume."
+    if len(skills) == 1:
+        listed = skills[0]
+    elif len(skills) == 2:
+        listed = f"{skills[0]} and {skills[1]}"
+    else:
+        listed = f"{skills[0]}, {skills[1]} and {skills[2]}"
+    return f"Estimated match because this posting mentions {listed} from your resume."
+
+
+def _sponsorship_for_card(company: Any, signal_cache: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """{signal, note} from public-filing data (sponsorship_signals — DOL LCA +
+    USCIS Data Hub, ingested by scripts/ingest_sponsorship.py), else None.
+    Honest language only: "signals from public filings", never "verified
+    sponsor"; absent data → null, never a guess."""
+    if not company:
+        return None
+    sig = signal_cache.get(str(company))
+    if not sig:
+        return None
+    band = sig.get("band")
+    if band not in ("low", "moderate", "strong"):
+        return None
+    headline = str(sig.get("headline") or "").strip().rstrip(".")
+    if not headline:
+        return None
+    return {
+        "signal": band,
+        "note": f"Signals from public filings: {headline}. Not a guarantee of sponsorship.",
+    }
+
+
 def compute_guest_matches(guest_id: str) -> Dict[str, Any]:
     """Async-job body for `guest_matches`: fetch free sources, score each row
     with jd_match_scorer against the guest's parsed resume, keep only
-    score >= guest_jobs_min_score, cap at guest_jobs_max, cache per day."""
+    score >= guest_jobs_min_score, cap at guest_jobs_max (5), mint a match_id
+    per card, add the deterministic `why` + public-filings `sponsorship`, and
+    cache on the quota subject for the day."""
     gid = validate_guest_id(guest_id)
     if not gid:
         raise ValueError("invalid guest_id")
@@ -570,14 +885,14 @@ def compute_guest_matches(guest_id: str) -> Dict[str, Any]:
 
     cfg = pconfig.get_guest_config()
     min_score = int(cfg.get("guest_jobs_min_score", 40))
-    max_jobs = int(cfg.get("guest_jobs_max", 8))
+    max_jobs = max(1, int(cfg.get("guest_jobs_max", 5)))
 
     from services.jd_match_scorer import score_one
 
     skills = _resume_skills(structured)
     rows = _fetch_free_jobs(structured)
 
-    scored: List[Dict[str, Any]] = []
+    scored: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
     for row in rows:
         verdict = score_one(
             jd_text=str(row.get("description") or ""),
@@ -597,11 +912,39 @@ def compute_guest_matches(guest_id: str) -> Dict[str, Any]:
                     card[url_field] = safe
         card["match_score"] = verdict["match_score"]
         card["matched_skills"] = verdict.get("matched_skills") or []
-        scored.append(card)
+        card["why"] = _match_why(card["matched_skills"])
+        scored.append((card, row))
 
-    scored.sort(key=lambda r: r.get("match_score", 0), reverse=True)
-    top = scored[:max_jobs]
-    _store_matches(gid, top, min_score)
+    scored.sort(key=lambda pair: pair[0].get("match_score", 0), reverse=True)
+    top_pairs = scored[:max_jobs]
+
+    # Public-filings sponsorship signal (one bulk Mongo read). Any failure or
+    # absent ingest data → null on every card (honest "no data", never wrong).
+    signal_cache: Dict[str, Any] = {}
+    try:
+        from services.sponsorship_service import bulk_signals
+        companies = [str(c.get("company") or "") for c, _ in top_pairs if c.get("company")]
+        if companies:
+            signal_cache = bulk_signals(companies)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("guest matches: sponsorship lookup unavailable: %s", e)
+        signal_cache = {}
+
+    top: List[Dict[str, Any]] = []
+    jd_sources: Dict[str, Dict[str, Any]] = {}
+    for card, row in top_pairs:
+        match_id = uuid.uuid4().hex  # opaque server-minted id — the only tailorable reference
+        card["match_id"] = match_id
+        card["sponsorship"] = _sponsorship_for_card(card.get("company"), signal_cache)
+        jd_sources[match_id] = {
+            "title": str(card.get("title") or ""),
+            "company": str(card.get("company") or ""),
+            "jd_text": str(row.get("description") or "")[:15000],
+            "url": card.get("url") or card.get("apply_link") or "",
+        }
+        top.append(card)
+
+    _store_matches(gid, top, min_score, jd_sources=jd_sources)
     logger.info(
         "guest matches computed for %s: %d/%d rows cleared score>=%d",
         gid, len(top), len(rows), min_score,
@@ -616,22 +959,257 @@ def compute_guest_matches(guest_id: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Claim — atomic ownership flip after signup/login
+# Download capability tokens (versioned HMAC; dedicated secret; fail closed)
 # ---------------------------------------------------------------------------
 
+class DownloadTokensUnavailable(Exception):
+    """GUEST_DOWNLOAD_TOKEN_SECRET unset outside development — fail closed."""
+
+
+class DownloadTokenInvalid(Exception):
+    """Malformed/forged/unknown token → generic 404 (no oracle)."""
+
+
+class DownloadTokenExpired(Exception):
+    """Well-formed, signature-valid, but past exp → 410."""
+
+
+_dev_download_secret: Optional[str] = None
+_download_secret_warned = False
+
+
+def _download_secret() -> Optional[bytes]:
+    """The dedicated download-token secret (`GUEST_DOWNLOAD_TOKEN_SECRET`,
+    SSM `SSM_GUEST_DOWNLOAD_TOKEN_SECRET`). NEVER JWT_SECRET_KEY. Missing in
+    production → None (mint/verify fail closed, 503-style message, never 401).
+    In development a per-process random secret keeps local flows working
+    (tokens simply die on restart) — same pattern as approval_token_service."""
+    global _dev_download_secret, _download_secret_warned
+    value = (_get_config_value("GUEST_DOWNLOAD_TOKEN_SECRET", "") or "").strip()
+    if value:
+        return value.encode("utf-8")
+    env = os.getenv("ENVIRONMENT", "development").strip().lower()
+    if env != "development":
+        if not _download_secret_warned:
+            logger.warning(
+                "GUEST_DOWNLOAD_TOKEN_SECRET not configured — guest downloads "
+                "disabled (fail closed)"
+            )
+            _download_secret_warned = True
+        return None
+    if _dev_download_secret is None:
+        _dev_download_secret = _pysecrets.token_hex(32)
+        logger.warning(
+            "guest_service: GUEST_DOWNLOAD_TOKEN_SECRET unset — using a "
+            "per-process dev secret (download links break on restart)"
+        )
+    return _dev_download_secret.encode("utf-8")
+
+
+def _b64e(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64d(seg: str) -> bytes:
+    seg = str(seg or "")
+    pad = (-len(seg)) % 4
+    return base64.urlsafe_b64decode(seg + "=" * pad)
+
+
+def _sign_download(payload_b64: str, key: bytes) -> bytes:
+    # The version prefix is inside the signed bytes — a v2 token can never be
+    # replayed as v1.
+    data = f"{_DOWNLOAD_TOKEN_VERSION}.{payload_b64}".encode("ascii")
+    return _hmac.new(key, data, hashlib.sha256).digest()
+
+
+def mint_download_token(
+    record_id: str, guest_id: str, fmt: str, ttl_seconds: int = DOWNLOAD_TOKEN_TTL_SECONDS
+) -> Tuple[str, str]:
+    """Mint a short-lived download capability token.
+
+    Versioned HMAC over ``record_id|guest_id|format|exp`` (TTL 15 min).
+    Returns (token, expires_at_iso). Raises DownloadTokensUnavailable when
+    the secret is not configured (fail closed — the route answers with a
+    503-style capacity message, never 401). Unlimited re-issue; downloads
+    never consume quota.
+    """
+    key = _download_secret()
+    if key is None:
+        raise DownloadTokensUnavailable()
+    rid = validate_guest_id(record_id)
+    gid = validate_guest_id(guest_id)
+    if not rid or not gid or fmt not in DOWNLOAD_FORMATS:
+        raise DownloadTokenInvalid()
+    exp_dt = _now() + timedelta(seconds=int(ttl_seconds))
+    exp = int(exp_dt.timestamp())
+    payload_b64 = _b64e(f"{rid}|{gid}|{fmt}|{exp}".encode("utf-8"))
+    sig_b64 = _b64e(_sign_download(payload_b64, key))
+    token = f"{_DOWNLOAD_TOKEN_VERSION}.{payload_b64}.{sig_b64}"
+    return token, exp_dt.isoformat()
+
+
+def verify_download_token(token: str) -> Dict[str, str]:
+    """Verify a download token: constant-time HMAC first, shape second,
+    expiry last (so 410 only ever fires for a well-formed VALID token).
+    Returns {record_id, guest_id, format}."""
+    key = _download_secret()
+    if key is None:
+        raise DownloadTokensUnavailable()
+    if not token or not isinstance(token, str) or len(token) > 1024:
+        raise DownloadTokenInvalid()
+    parts = token.split(".")
+    if len(parts) != 3 or parts[0] != _DOWNLOAD_TOKEN_VERSION or not parts[1] or not parts[2]:
+        raise DownloadTokenInvalid()
+    _, payload_b64, sig_b64 = parts
+    expected = _sign_download(payload_b64, key)
+    try:
+        provided = _b64d(sig_b64)
+    except (ValueError, TypeError):
+        raise DownloadTokenInvalid()
+    if not _hmac.compare_digest(expected, provided):
+        raise DownloadTokenInvalid()
+    try:
+        payload = _b64d(payload_b64).decode("utf-8")
+    except (ValueError, TypeError, UnicodeDecodeError):
+        raise DownloadTokenInvalid()
+    fields = payload.split("|")
+    if len(fields) != 4:
+        raise DownloadTokenInvalid()
+    rid = validate_guest_id(fields[0])
+    gid = validate_guest_id(fields[1])
+    fmt = fields[2]
+    if not rid or not gid or fmt not in DOWNLOAD_FORMATS:
+        raise DownloadTokenInvalid()
+    try:
+        exp = int(fields[3])
+    except (TypeError, ValueError):
+        raise DownloadTokenInvalid()
+    if _now().timestamp() >= exp:
+        raise DownloadTokenExpired()
+    return {"record_id": rid, "guest_id": gid, "format": fmt}
+
+
+def render_record_file(record: Dict[str, Any], fmt: str) -> Tuple[bytes, str]:
+    """Render (or serve the version-cached file for) a tailoring record via
+    the EXISTING shared resume_renderer — the same polished output as the
+    authed /api/resume/download path, including its render_version dedup
+    guard. Returns (file_bytes, filename)."""
+    from services.resume_service import get_resume_service
+    from services.resume_versioning import ensure_versions, find_version, latest_version
+
+    svc = get_resume_service()
+    versions, _migrated = ensure_versions(record)
+    target = None
+    cur_id = record.get("current_version_id")
+    if cur_id:
+        target = find_version(versions, cur_id)
+    if target is None:
+        target = latest_version(versions)
+    tailored = (target or {}).get("tailored_resume") or record.get("tailored_resume") or {}
+    jd_analysis = record.get("jd_analysis") or {}
+    filename = svc.renderer.build_filename(tailored, jd_analysis, fmt)
+
+    # Versioned dedup: an already-rendered current-format file is served as-is.
+    cached = ((target or {}).get("files") or {}).get(fmt) or {}
+    if cached.get("s3_key") and cached.get("render_version") == svc.renderer.RENDER_VERSION:
+        try:
+            from services.s3_service import get_storage_service
+            data = get_storage_service().get_resume(cached["s3_key"])
+            if data:
+                return data, cached.get("filename") or filename
+        except Exception as cache_err:  # pragma: no cover - cache miss path
+            logger.warning("guest download: cached fetch failed, re-rendering: %s", cache_err)
+
+    if fmt == "pdf":
+        data = svc.renderer.generate_pdf(tailored)
+    else:
+        data = svc.renderer.generate_docx(tailored)
+    if not data or len(data) < 100:
+        raise ValueError("render produced no output")
+    return data, filename
+
+
+# ---------------------------------------------------------------------------
+# Retention cleanup (claim-aware; never a blind TTL)
+# ---------------------------------------------------------------------------
+
+def run_retention_cleanup() -> Dict[str, Any]:
+    """Delete ONLY expired unclaimed guest data: sessions with
+    ``claimed_by: null`` whose ``last_seen_at`` is older than
+    ``retention_days`` (0 = keep forever → skip), plus their unclaimed
+    tailoring_records and stale guest resume_jobs. Claimed data is never
+    touched. Subjects keep their quota counters (abuse memory)."""
+    days = pconfig.get_int("retention_days")
+    if days <= 0:
+        return {
+            "skipped": True,
+            "retention_days": days,
+            "sessions_deleted": 0,
+            "records_deleted": 0,
+            "jobs_deleted": 0,
+        }
+    cutoff = _now() - timedelta(days=days)
+    ids = [
+        str(d["guest_id"])
+        for d in _sessions().find(
+            {"claimed_by": None, "last_seen_at": {"$lt": cutoff}}, {"guest_id": 1}
+        )
+    ]
+    if not ids:
+        return {
+            "skipped": False,
+            "retention_days": days,
+            "sessions_deleted": 0,
+            "records_deleted": 0,
+            "jobs_deleted": 0,
+        }
+    recs = _db().tailoring_records.delete_many({"guest_id": {"$in": ids}, "user_email": None})
+    jobs = _db().resume_jobs.delete_many({"guest_id": {"$in": ids}})
+    sess = _sessions().delete_many({"guest_id": {"$in": ids}, "claimed_by": None})
+    logger.info(
+        "guest retention cleanup: sessions=%d records=%d jobs=%d (retention_days=%d)",
+        sess.deleted_count, recs.deleted_count, jobs.deleted_count, days,
+    )
+    return {
+        "skipped": False,
+        "retention_days": days,
+        "sessions_deleted": int(sess.deleted_count),
+        "records_deleted": int(recs.deleted_count),
+        "jobs_deleted": int(jobs.deleted_count),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Claim v2 — exact-capability, atomic, idempotent; free day-1 carry-in once
+# ---------------------------------------------------------------------------
+
+def _daily_usage_snapshot(email: str) -> Tuple[int, int]:
+    try:
+        from services import usage_service
+        usage = usage_service.get_usage(email)
+        return int(usage.get("used") or 0), int(usage.get("limit") or 0)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("guest claim: usage snapshot failed: %s", e)
+        return 0, 0
+
+
 def claim_session(guest_id: str, user_email: str) -> Dict[str, Any]:
-    """Flip guest artifacts to the authenticated user. Idempotent:
+    """Flip guest artifacts to the authenticated user (v2). Atomic +
+    idempotent + exact-capability-only:
 
       1. Atomic claimed_by guard (find_one_and_update unclaimed→claimed) —
-         ALL transfer steps below run only for the winner of this flip, so a
-         concurrent claim by another account transfers nothing and gets
-         already_claimed, and a repeat claim by the same account is a no-op.
-      2. Guest tailoring_records (user_email=None + guest_id in cluster) get
-         user_email set (winner only).
-      3. The parsed resume is copied into user_resumes IF the user has none
-         (winner only).
-      4. Today's tailor usage is seeded ONCE (never double-counts with
-         usage_service).
+         all transfer steps run only for the winner of this flip; a repeat
+         claim by the same account returns already_claimed:true with zero
+         re-transfer; another account gets the already_claimed error (403).
+      2. Transfers ONLY the presented capability's session chain (sessions
+         already merged server-side by strong-signal resolution — never a
+         wider soft cluster) + its unclaimed tailoring_records.
+      3. Copies the parsed resume into user_resumes IF the user has none.
+      4. Links the account email on the quota subject.
+      5. Seeds day-1 FREE-plan usage exactly once per (subject, UTC day),
+         double-guarded by the claim flip AND the guest_claim_carryins
+         unique (subject_id, date) marker. Premium plans untouched.
     """
     gid = validate_guest_id(guest_id)
     if not gid:
@@ -649,8 +1227,7 @@ def claim_session(guest_id: str, user_email: str) -> Dict[str, Any]:
         # Capability token was already consumed by another account.
         return {"error": "already_claimed"}
 
-    ids = identity.cluster_ids(gid)
-    carried = identity.cluster_tailors_used(gid)
+    subject_id = subject_for_guest(gid)
 
     # --- 1. atomic unclaimed→claimed flip (the idempotency guard) ---------
     flipped = _sessions().find_one_and_update(
@@ -666,30 +1243,31 @@ def claim_session(guest_id: str, user_email: str) -> Dict[str, Any]:
         current = _sessions().find_one({"guest_id": gid}, {"claimed_by": 1}) or {}
         if current.get("claimed_by") != email:
             return {"error": "already_claimed"}
+        used, limit = _daily_usage_snapshot(email)
         return {
             "claimed": True,
-            "first_claim": False,
+            "already_claimed": True,
+            "resume_imported": False,
             "records_transferred": 0,
-            "resume_copied": False,
-            "carried_tailors": 0,
+            "tailors_carried": 0,
+            "daily_tailors_used": used,
+            "daily_tailors_limit": limit,
         }
 
-    # Winner only from here on.
-    # Mark the rest of the cluster too (recognition/no-reuse), guarded the
-    # same way so a concurrent claim of a sibling doesn't overwrite.
-    _sessions().update_many(
-        {"guest_id": {"$in": ids}, "claimed_by": None},
-        {"$set": {"claimed_by": email, "claimed_at": _now()}},
-    )
+    # Winner only from here on. EXACT-capability-only (v2): the claim covers
+    # THIS session and the records its guest_id proves — sibling sessions in
+    # the strong-signal cluster keep their own capabilities (another device's
+    # session can be claimed later, by the same or a linked account; artifact
+    # access never crosses guest_ids).
 
-    # --- 2. ownership flip on guest tailor records (winner only) ----------
+    # --- 2. ownership flip on THIS session's guest records (winner only) --
     rec_result = _db().tailoring_records.update_many(
-        {"guest_id": {"$in": ids}, "user_email": None},
+        {"guest_id": gid, "user_email": None},
         {"$set": {"user_email": email, "updated_at": _now()}},
     )
 
     # --- 3. copy resume into user_resumes if the user has none ------------
-    resume_copied = False
+    resume_imported = False
     resume = session.get("resume") or {}
     structured = resume.get("structured")
     if structured:
@@ -705,29 +1283,62 @@ def claim_session(guest_id: str, user_email: str) -> Dict[str, Any]:
                     resume.get("raw_text") or "",
                     user_email=email,
                 )
-                resume_copied = True
+                resume_imported = True
             except Exception as e:  # pragma: no cover - defensive
                 logger.warning("guest claim: resume copy failed for %s: %s", gid, e)
 
-    # --- 4. seed today's usage ONCE (guarded by the claimed flip) ---------
-    usage_seeded = 0
-    if first_claim and carried > 0:
-        try:
-            from services import usage_service
+    # --- 4. link the account on the quota subject -------------------------
+    if subject_id:
+        _subjects().update_one(
+            {"subject_id": subject_id},
+            {"$addToSet": {"linked_accounts": email}, "$set": {"last_seen_at": _now()}},
+        )
 
-            usage_service.increment_usage(email, n=carried)
-            usage_seeded = carried
+    # --- 5. seed day-1 FREE usage once per (subject, day) -----------------
+    tailors_carried = 0
+    carried = 0
+    if subject_id:
+        subj = _subjects().find_one({"subject_id": subject_id}, {"tailors_used": 1}) or {}
+        try:
+            carried = max(0, int(subj.get("tailors_used") or 0))
+        except (TypeError, ValueError):
+            carried = 0
+    if first_claim and carried > 0 and subject_id:
+        try:
+            from services import entitlements_service
+
+            if entitlements_service.get_plan(email) == entitlements_service.FREE:
+                marker = _db().guest_claim_carryins.update_one(
+                    {"subject_id": subject_id, "date": _today_key()},
+                    {
+                        "$setOnInsert": {
+                            "subject_id": subject_id,
+                            "date": _today_key(),
+                            "email": email,
+                            "created_at": _now(),
+                        }
+                    },
+                    upsert=True,
+                )
+                if marker.upserted_id is not None:  # we won the once-per-day marker
+                    from services import usage_service
+
+                    usage_service.increment_usage(email, n=carried)
+                    tailors_carried = carried
         except Exception as e:  # pragma: no cover - defensive
             logger.warning("guest claim: usage seed failed for %s: %s", gid, e)
 
+    used, limit = _daily_usage_snapshot(email)
     logger.info(
-        "guest claim: %s claimed (first=%s records=%d resume_copied=%s carried=%d)",
-        gid, first_claim, rec_result.modified_count, resume_copied, usage_seeded,
+        "guest claim: %s claimed (records=%d resume_imported=%s carried=%d)",
+        gid, rec_result.modified_count, resume_imported, tailors_carried,
     )
     return {
         "claimed": True,
-        "first_claim": first_claim,
+        "already_claimed": False,
+        "resume_imported": resume_imported,
         "records_transferred": int(rec_result.modified_count),
-        "resume_copied": resume_copied,
-        "carried_tailors": usage_seeded,
+        "tailors_carried": tailors_carried,
+        "daily_tailors_used": used,
+        "daily_tailors_limit": limit,
     }

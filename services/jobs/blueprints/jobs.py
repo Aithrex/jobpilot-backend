@@ -1201,15 +1201,20 @@ def delete_saved(job_id):
 # Free direct sources ONLY (Workday CXS + Greenhouse/Lever/Ashby — the same
 # skip_apify=True path as the daily pipeline; no Apify, no paid actors),
 # scored with jd_match_scorer against the guest's parsed resume, filtered to
-# score >= guest_jobs_min_score, capped at guest_jobs_max.
+# score >= guest_jobs_min_score, HARD-capped at guest_jobs_max (5) — the
+# server never returns more rows (no hidden locked rows for CSS to hide).
+# Each card carries a server-minted match_id (the only tailorable reference),
+# a deterministic `why`, and a public-filings `sponsorship` signal (or null).
 #
-# Cached per guest per day in the session doc: a same-day repeat call returns
-# the cache synchronously (200, {cached:true}). A cache miss dispatches the
-# scrape+score as an ASYNC job (invariant #2 — the free-source fan-out blows
-# past API Gateway's 29s), returning 202 {job_id}; the FE polls
-# GET /api/resume/guest/job/<id>?guest_id=.
+# Cached per QUOTA SUBJECT per day (session-level fallback): a same-day
+# repeat call — even from a fresh guest_id of the same subject — returns the
+# cache synchronously (200, {cached:true}) and never re-spends the global
+# matches budget. A cache miss dispatches the scrape+score as an ASYNC job
+# (invariant #2 — the free-source fan-out blows past API Gateway's 29s),
+# returning 202 {job_id}; the FE polls GET /api/resume/guest/job/<id>?guest_id=.
 @jobs_bp.route("/guest/matches", methods=["POST"])
 def guest_matches():
+    from services import guest_challenge_service
     from services import guest_service
 
     if not guest_service.guest_onboarding_enabled():
@@ -1230,6 +1235,8 @@ def guest_matches():
     guest_id = guest_service.validate_guest_id(data.get("guest_id") or "")
     if not guest_id:
         return jsonify({"error": "A valid guest_id is required"}), 400
+    # Optional echoed device token — validated anti-abuse signal, never trusted.
+    guest_service.validate_device_token(data.get("device_token") or "")
 
     session = guest_service.get_session(guest_id)
     if not session:
@@ -1237,11 +1244,25 @@ def guest_matches():
     if not ((session.get("resume") or {}).get("structured")):
         return jsonify({"error": "Upload your resume first"}), 400
 
+    # Progressive challenge hook — BEFORE any budget spend (default: no-op).
+    ch = guest_challenge_service.maybe_challenge(
+        "matches", guest_service.hash_ip(client_ip), session.get("quota_subject_id")
+    )
+    if ch:
+        return (
+            jsonify({
+                "error": "challenge_required",
+                "provider": ch.get("provider"),
+                "message": "Please complete a quick verification to continue.",
+            }),
+            429,
+        )
+
     try:
         cached = guest_service.get_cached_matches(guest_id)
         if cached is not None:
-            # Same-day cache hit — serves from the session doc and must NOT
-            # consume the global daily scrape budget.
+            # Same-day subject-level cache hit — must NOT consume the global
+            # daily scrape budget (re-uploads never re-spend the breaker).
             return jsonify(cached), 200
 
         # Cache MISS = a real free-source scrape. Reserve a slot in the

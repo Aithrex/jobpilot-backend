@@ -28,6 +28,11 @@ locals {
     # trend_aggregate: dispatch_scheduled("ats_signal_aggregate"). Runs after the
     # trend recompute so the two nightly aggregates don't overlap.
     ats_signal_aggregate = { expression = "cron(30 4 * * ? *)", desc = "Nightly cross-user ATS keyword-signal recompute (04:30 UTC)" }
+    # Guest Onboarding v2 — daily claim-aware retention sweep. Routes to
+    # scheduled_jobs.dispatch_scheduled("guest_retention"), which enqueues the
+    # resume `guest_retention_cleanup` job (deletes ONLY expired UNCLAIMED
+    # guest data per the admin `retention_days` knob; 0 = keep forever).
+    guest_retention = { expression = "cron(45 5 * * ? *)", desc = "Daily guest retention cleanup (05:45 UTC)" }
   }
 }
 

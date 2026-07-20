@@ -26,21 +26,21 @@ logger = logging.getLogger(__name__)
 GUEST_CONFIG_ID = "guest_onboarding"
 _CACHE_TTL_SECONDS = 60
 
-# Spec'd defaults (docs/specs/guest-onboarding.md §platform_config).
+# Spec'd defaults (docs/specs/guest-onboarding.md v2 §platform_config).
 DEFAULTS: Dict[str, Any] = {
     "enabled": True,
-    "guest_tailor_limit": 5,          # LIFETIME free tailors per guest identity cluster
+    "guest_tailor_limit": 1,          # LIFETIME guest tailors per quota subject (v2: exactly one trial)
     # jd_match_scorer.score_one = matched/max(8, total_skills)*100 — real resumes
     # land ~20-55, so 40 (not the spec's original 70) is the honest "high
     # confidence" bar. Don't raise it without re-tuning the scorer.
     "guest_jobs_min_score": 40,       # only show high-confidence matches
-    "guest_jobs_max": 8,              # cap on guest matched jobs shown
+    "guest_jobs_max": 5,              # v2: exactly 5 strong matches, server-enforced
     "free_daily_tailors": 5,          # free plan daily tailors (post-signup)
     "free_jobs_daily_cap": 10,        # free plan daily job-match cap (post-signup)
     "global_daily_guest_tailors": 200,  # platform-wide anonymous-LLM circuit breaker
     "global_daily_guest_parses": 500,   # platform-wide cap on anonymous resume parses
     "global_daily_guest_matches": 1000,  # platform-wide cap on anonymous match scrapes (cache misses)
-    "retention_days": 0,              # 0 = keep guest data until claimed
+    "retention_days": 30,             # v2: unclaimed guest data kept 30 days (0 = forever)
 }
 
 # Validation bounds for admin PUTs: key -> (type, min, max). `enabled` is bool.

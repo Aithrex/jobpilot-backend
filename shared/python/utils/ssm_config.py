@@ -114,6 +114,14 @@ def get_all_secrets() -> Dict[str, str]:
         # Guest Onboarding — server-side salt for guest ip_hash. Without it,
         # guest_service.hash_ip fails CLOSED (stores null, logs once).
         'GUEST_IP_HASH_SALT': os.getenv('SSM_GUEST_IP_HASH_SALT'),
+        # Guest Onboarding v2 — keyed-HMAC secret for guest identity signals
+        # (emails/phones/resume signatures). Unset -> fail closed: signals are
+        # not stored or matched, quota subjects stay standalone.
+        'GUEST_SIGNAL_HMAC_KEY': os.getenv('SSM_GUEST_SIGNAL_HMAC_KEY'),
+        # Guest Onboarding v2 — HMAC secret for the short-lived guest download
+        # capability tokens. Unset -> issuing tokens fails closed (503-style
+        # message, never 401). NEVER reuse JWT_SECRET_KEY.
+        'GUEST_DOWNLOAD_TOKEN_SECRET': os.getenv('SSM_GUEST_DOWNLOAD_TOKEN_SECRET'),
         # ZeptoMail (Zoho transactional email) Send Mail token — the transport
         # secret for email_service when EMAIL_PROVIDER=zeptomail. Missing → the
         # service falls back to dev console logging (no mail sent).
@@ -292,6 +300,14 @@ class SSMConfig:
     @property
     def GUEST_IP_HASH_SALT(self) -> Optional[str]:
         return self._get('GUEST_IP_HASH_SALT', 'GUEST_IP_HASH_SALT')
+
+    @property
+    def GUEST_SIGNAL_HMAC_KEY(self) -> Optional[str]:
+        return self._get('GUEST_SIGNAL_HMAC_KEY', 'GUEST_SIGNAL_HMAC_KEY')
+
+    @property
+    def GUEST_DOWNLOAD_TOKEN_SECRET(self) -> Optional[str]:
+        return self._get('GUEST_DOWNLOAD_TOKEN_SECRET', 'GUEST_DOWNLOAD_TOKEN_SECRET')
 
     @property
     def ZEPTOMAIL_TOKEN(self) -> Optional[str]:

@@ -315,6 +315,17 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             job_id = get_resume_service().create_job("trend_aggregate", {}, "system@internal")
             ResumeService.invoke_async(job_id, "trend_aggregate", {})
             return {"job": name, "enqueued": job_id}
+        if name == "guest_retention":
+            # Guest Onboarding v2 — daily claim-aware retention sweep. Same
+            # system-actor bridge as trend_aggregate: enqueue the resume
+            # `_process_job` job `guest_retention_cleanup` (deletes ONLY
+            # expired UNCLAIMED guest sessions/records/jobs; retention_days=0
+            # → the job reports skipped). Also admin-invokable via
+            # POST /api/admin/guest-retention-cleanup.
+            from services.resume_service import get_resume_service, ResumeService
+            job_id = get_resume_service().create_job("guest_retention_cleanup", {}, "system@internal")
+            ResumeService.invoke_async(job_id, "guest_retention_cleanup", {})
+            return {"job": name, "enqueued": job_id}
         if name == "ats_signal_aggregate":
             # System/cron recompute of the cross-user (role, keyword) -> mean-ATS
             # aggregate (Part B3). Same bridge pattern as trend_aggregate:

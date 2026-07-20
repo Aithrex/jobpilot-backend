@@ -173,6 +173,32 @@ def guest_config_put():
     return jsonify(cfg), 200
 
 
+@admin_bp.route("/guest-retention-cleanup", methods=["POST"])
+@admin_required
+def guest_retention_cleanup():
+    """Admin-invokable guest retention sweep (spec v2 §guest_retention_cleanup).
+
+    Enqueues the async `guest_retention_cleanup` job on the resume Lambda
+    (invoke_async rewrites -auth- → -resume-; long work never runs inline —
+    invariant #2). Deletes ONLY expired UNCLAIMED guest data per the runtime
+    `retention_days` knob (0 = keep forever → the job reports skipped).
+    EventBridge also fires this daily via the `guest_retention` schedule.
+    Poll the result at GET /api/resume/job/<job_id>.
+    """
+    try:
+        from services.resume_service import get_resume_service, ResumeService
+
+        job_id = get_resume_service().create_job(
+            "guest_retention_cleanup", {}, user_email=get_jwt_identity()
+        )
+        ResumeService.invoke_async(job_id, "guest_retention_cleanup", {})
+        logger.info("guest retention cleanup enqueued by %s", get_jwt_identity())
+        return jsonify({"job_id": job_id}), 202
+    except Exception as e:
+        logger.error("guest retention cleanup enqueue failed: %s", e)
+        return jsonify({"error": "Failed to start retention cleanup"}), 500
+
+
 # ---------------------------------------------------------------------------
 # Stats
 # ---------------------------------------------------------------------------
