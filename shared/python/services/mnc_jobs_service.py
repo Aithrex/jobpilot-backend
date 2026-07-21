@@ -326,6 +326,13 @@ def run_mnc_search(
         overall_timeout = min(OVERALL_TIMEOUT, max(30, int(payload.get("overall_timeout") or OVERALL_TIMEOUT)))
     except (TypeError, ValueError):
         overall_timeout = OVERALL_TIMEOUT
+    # Detail-enrichment cap for embedded callers (guest scan) — shrink only.
+    try:
+        _enrich_cap = int(payload.get("enrich_top")) if payload.get("enrich_top") else None
+    except (TypeError, ValueError):
+        _enrich_cap = None
+    enrich_top_n = min(DETAIL_ENRICH_TOP, _enrich_cap) if _enrich_cap else DETAIL_ENRICH_TOP
+    enrich_recent_n = min(DETAIL_ENRICH_RECENT, _enrich_cap) if _enrich_cap else DETAIL_ENRICH_RECENT
 
     rows = [
         r for r in MNC_CATALOG
@@ -528,10 +535,10 @@ def run_mnc_search(
         except Exception:
             pass
 
-    top = jobs[:DETAIL_ENRICH_TOP] + [
-        j for j in jobs[DETAIL_ENRICH_TOP:]
+    top = jobs[:enrich_top_n] + [
+        j for j in jobs[enrich_top_n:]
         if (j.get("days_ago") if j.get("days_ago") is not None else 99) <= 3
-    ][:DETAIL_ENRICH_RECENT]
+    ][:enrich_recent_n]
     if _enrich_details(top):
         _score_jobs(top, titles, skills, skill_terms)
         _rank(jobs)

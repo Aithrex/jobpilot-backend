@@ -1139,6 +1139,15 @@ def run_workday_jobs_search(
         overall_timeout = min(OVERALL_TIMEOUT, max(30, int(payload.get("overall_timeout") or OVERALL_TIMEOUT)))
     except (TypeError, ValueError):
         overall_timeout = OVERALL_TIMEOUT
+    # Detail-enrichment cap for embedded callers (guest scan): the tab
+    # defaults fetch hundreds of JD pages — a bounded caller shrinks both
+    # slices. Never grows beyond the defaults.
+    try:
+        _enrich_cap = int(payload.get("enrich_top")) if payload.get("enrich_top") else None
+    except (TypeError, ValueError):
+        _enrich_cap = None
+    enrich_top_n = min(DETAIL_ENRICH_TOP, _enrich_cap) if _enrich_cap else DETAIL_ENRICH_TOP
+    enrich_recent_n = min(DETAIL_ENRICH_RECENT, _enrich_cap) if _enrich_cap else DETAIL_ENRICH_RECENT
 
     rows = [
         r for r in WORKDAY_TENANT_CATALOG
@@ -1356,10 +1365,10 @@ def run_workday_jobs_search(
     # to "last 3 days", and a 3d-old row stuck at the +20 skill-signal score
     # because its description was never fetched is exactly the "wall of 20s"
     # the user sees. Recent rows must carry real skill scores.
-    top = jobs[:DETAIL_ENRICH_TOP] + [
-        j for j in jobs[DETAIL_ENRICH_TOP:]
+    top = jobs[:enrich_top_n] + [
+        j for j in jobs[enrich_top_n:]
         if (j.get("days_ago") if j.get("days_ago") is not None else 99) <= 3
-    ][:DETAIL_ENRICH_RECENT]
+    ][:enrich_recent_n]
     enriched = _enrich_details(top, tz_offset)
     if enriched:
         _score_jobs(top, titles, skills, skill_terms)

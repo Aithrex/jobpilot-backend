@@ -75,9 +75,17 @@ _JOB_CARD_FIELDS = (
 # in parallel inside ONE resume-Lambda invocation, so the wall clock is the
 # slowest source, not the sum. 300s Lambda − scoring/enrich/store headroom.)
 GUEST_MATCH_BUDGET_SECONDS = 210
-GUEST_FETCH_BUDGET_SECONDS = 170
-GUEST_WORKDAY_TIMEOUT = 150
-GUEST_SIDE_SOURCE_TIMEOUT = 120
+GUEST_FETCH_BUDGET_SECONDS = 165
+GUEST_WORKDAY_TIMEOUT = 110
+GUEST_SIDE_SOURCE_TIMEOUT = 90
+# Post-fetch grace: scoring/ranking is pure CPU (regex) — it must NEVER be
+# starved by a fetch that ate the wall clock (live incident: fetch 230s,
+# scored=0, honest-but-wrong empty day). The deadline extends to at least
+# fetch-end + this many seconds.
+GUEST_SCORE_GRACE_SECONDS = 25
+# Detail-enrichment cap passed to each feed service (their tab defaults
+# fetch 150-700 JD pages — far beyond a guest scan's budget).
+GUEST_ENRICH_TOP = 50
 _ENRICH_MAX_CANDIDATES = 15
 _ENRICH_PER_REQUEST_TIMEOUT = 6
 _ENRICH_OVERALL_BUDGET = 12
@@ -1116,15 +1124,27 @@ def _fetch_free_jobs(
 
     def _run_workday():
         from services.workday_jobs_service import run_workday_jobs_search
-        return run_workday_jobs_search({**base_payload, "overall_timeout": GUEST_WORKDAY_TIMEOUT})
+        return run_workday_jobs_search({
+            **base_payload,
+            "overall_timeout": GUEST_WORKDAY_TIMEOUT,
+            "enrich_top": GUEST_ENRICH_TOP,
+        })
 
     def _run_career_pages():
         from services.career_pages_service import run_career_pages_search
-        return run_career_pages_search({**base_payload, "overall_timeout": GUEST_SIDE_SOURCE_TIMEOUT})
+        return run_career_pages_search({
+            **base_payload,
+            "overall_timeout": GUEST_SIDE_SOURCE_TIMEOUT,
+            "enrich_top": GUEST_ENRICH_TOP,
+        })
 
     def _run_mnc():
         from services.mnc_jobs_service import run_mnc_search
-        return run_mnc_search({**base_payload, "overall_timeout": GUEST_SIDE_SOURCE_TIMEOUT})
+        return run_mnc_search({
+            **base_payload,
+            "overall_timeout": GUEST_SIDE_SOURCE_TIMEOUT,
+            "enrich_top": GUEST_ENRICH_TOP,
+        })
 
     sources = {
         "workday": _run_workday,
@@ -1136,33 +1156,42 @@ def _fetch_free_jobs(
     timings_ms: Dict[str, int] = {}
     started = _clock()
     done = 0
-    with ThreadPoolExecutor(max_workers=len(sources)) as pool:
-        futures = {pool.submit(fn): name for name, fn in sources.items()}
-        try:
-            for fut in as_completed(futures, timeout=GUEST_FETCH_BUDGET_SECONDS):
-                name = futures[fut]
-                done += 1
+    # NO `with` block: executor __exit__ blocks on running futures, which let
+    # one straggling source eat the WHOLE match budget past the as_completed
+    # timeout (live incident: fetch 230s, zero scoring time). shutdown with
+    # wait=False abandons stragglers instead — partial results, on time.
+    pool = ThreadPoolExecutor(max_workers=len(sources))
+    futures = {pool.submit(fn): name for name, fn in sources.items()}
+    try:
+        for fut in as_completed(futures, timeout=GUEST_FETCH_BUDGET_SECONDS):
+            name = futures[fut]
+            done += 1
+            try:
+                result = fut.result() or {}
+                jobs = list(result.get("jobs") or [])
+                for j in jobs:
+                    j["_guest_source"] = name
+                rows.extend(jobs)
+                report["ok"].append(name)
+            except Exception as e:
+                logger.warning("guest matches: %s source failed: %s", name, type(e).__name__)
+                report["failed"].append(name)
+            timings_ms[f"{name}_ms"] = int((_clock() - started) * 1000)
+            if progress_cb:
                 try:
-                    result = fut.result() or {}
-                    jobs = list(result.get("jobs") or [])
-                    for j in jobs:
-                        j["_guest_source"] = name
-                    rows.extend(jobs)
-                    report["ok"].append(name)
-                except Exception as e:
-                    logger.warning("guest matches: %s source failed: %s", name, type(e).__name__)
-                    report["failed"].append(name)
-                timings_ms[f"{name}_ms"] = int((_clock() - started) * 1000)
-                if progress_cb:
-                    try:
-                        progress_cb(done, len(sources))
-                    except Exception:
-                        pass
-        except _FutTimeout:
-            for fut, name in futures.items():
-                if not fut.done():
-                    fut.cancel()
-                    report["timed_out"].append(name)
+                    progress_cb(done, len(sources))
+                except Exception:
+                    pass
+    except _FutTimeout:
+        for fut, name in futures.items():
+            if not fut.done():
+                fut.cancel()
+                report["timed_out"].append(name)
+    finally:
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except TypeError:  # pragma: no cover - cancel_futures needs py3.9+
+            pool.shutdown(wait=False)
 
     # Merge: one posting can surface from more than one catalog — dedupe on
     # (company, title, location), keeping the copy with the richer signal.
@@ -1268,19 +1297,43 @@ def experience_level_for_years(years: Any) -> str:
     return "entry" if y <= 2 else "mid" if y <= 5 else "senior"
 
 
+_VIEW_PER_COMPANY_CAP = 2
+
+
 def _pool_view(
     pool: List[Dict[str, Any]], seniority: str, max_jobs: int,
 ) -> Tuple[List[Dict[str, Any]], int, Dict[str, int]]:
     """Slice the ranked pool into one seniority view: (visible top rows,
-    qualifying total for that view, per-view counts for the toggle)."""
+    qualifying total for that view, per-view counts for the toggle).
+
+    Diversity: the visible slice caps at 2 rows per company, backfilling
+    from the skipped rows only if the cap leaves empty slots — a single
+    high-volume employer (live run: 4 of 5 were one company's near-identical
+    postings) must not monopolize a guest's whole first impression."""
     lvl = normalize_seniority(seniority)
     allowed = _SENIORITY_ALLOWED[lvl]
     rows = [c for c in pool if allowed is None or c.get("seniority") in allowed]
+    picked: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    per_company: Dict[str, int] = {}
+    for c in rows:
+        if len(picked) >= max_jobs:
+            break
+        key = str(c.get("company") or "").strip().lower()
+        if per_company.get(key, 0) >= _VIEW_PER_COMPANY_CAP:
+            skipped.append(c)
+            continue
+        per_company[key] = per_company.get(key, 0) + 1
+        picked.append(c)
+    for c in skipped:  # backfill in rank order if diversity left gaps
+        if len(picked) >= max_jobs:
+            break
+        picked.append(c)
     counts = {"any": len(pool)}
     for k in GUEST_SENIORITY_LEVELS:
         a = _SENIORITY_ALLOWED[k]
         counts[k] = sum(1 for c in pool if c.get("seniority") in a)
-    return rows[:max_jobs], len(rows), counts
+    return picked, len(rows), counts
 
 
 def _match_why(matched_skills: List[str]) -> str:
@@ -1485,6 +1538,10 @@ def compute_guest_matches(
             row["posted"] = row.get("posted_text") or row.get("date_posted") or None
 
     # --- initial deterministic scoring (budget-checked per row) ------------
+    # Post-fetch grace: whatever the fetch consumed, scoring/ranking (pure
+    # CPU regex, no network) always gets a guaranteed window — a slow scan
+    # must degrade to fewer sources, never to unscored rows.
+    deadline = max(deadline, _clock() + GUEST_SCORE_GRACE_SECONDS)
     t_score = _clock()
     budget_expired = False
     scored: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []  # (row, verdict)
