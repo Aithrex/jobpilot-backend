@@ -25,6 +25,7 @@ Everything else — routes, workers, parser, scorer, renderer, guards — is rea
 """
 import copy
 import io
+import json
 import uuid as _uuid
 
 import pytest
@@ -207,10 +208,17 @@ class _FakeHTTPResponse:
         self.status_code = status
         self.reason = "OK" if status == 200 else "Not Found"
         self._payload = payload
+        self.headers = {"Content-Type": "application/json"}
+        self.text = "" if payload is None else json.dumps(payload)
+        self.content = self.text.encode()
 
     @property
     def ok(self):
         return 200 <= self.status_code < 300
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise _requests_mod.HTTPError(f"{self.status_code} for fake url")
 
     def json(self):
         if self._payload is None:
@@ -218,13 +226,18 @@ class _FakeHTTPResponse:
         return self._payload
 
 
+_GH_DESC_HTML = (
+    "<p>We use Python Go SQL AWS daily. You will build backend APIs "
+    "and data services with Python and SQL on AWS.</p>"
+)
+
+
 def _greenhouse_jobs_payload():
-    """Six scoreable postings with real descriptions (>=5 clear the default
-    score bar of 40; the guest cap must trim the response to 5)."""
-    desc = (
-        "<p>We use Python Go SQL AWS daily. You will build backend APIs "
-        "and data services with Python and SQL on AWS.</p>"
-    )
+    """Six scoreable postings (>=5 clear the score bar; the guest cap must
+    trim the visible response to 5). Shapes match the REAL Greenhouse board
+    API the career-pages fetcher consumes (?content=false list + per-job
+    detail): dict location, numeric ids, first_published timestamps.
+    Seniority-neutral titles by design — they appear in every view."""
     titles = (
         "Backend Engineer",
         "Python Backend Engineer",
@@ -235,10 +248,12 @@ def _greenhouse_jobs_payload():
     )
     return {"jobs": [
         {
+            "id": 1000 + i,
             "title": t,
-            "location": "Remote - United States",
-            "absolute_url": f"https://boards.example/jobs/{i}",
-            "content": desc,
+            "location": {"name": "Remote - United States"},
+            "absolute_url": f"https://boards.example/jobs/{1000 + i}",
+            "content": _GH_DESC_HTML,
+            "first_published": "2026-07-20T08:00:00Z",
             "updated_at": "2026-07-20T08:00:00Z",
         }
         for i, t in enumerate(titles)
@@ -247,36 +262,45 @@ def _greenhouse_jobs_payload():
 
 @pytest.fixture()
 def fake_job_http(monkeypatch):
-    """Route ALL outbound provider HTTP through a deterministic fake:
-    one Greenhouse board returns six scoreable jobs; every other board is
-    empty; Workday CXS is a clean 404. Unknown URLs fail the test loudly."""
-    import services.daily_pipeline_service as dp
+    """Route ALL outbound provider HTTP through a deterministic fake — both
+    the module-level requests.get/post AND Session.get/post (the v4 scan's
+    three feed services each use a module Session). ONE Greenhouse board
+    (the first greenhouse company in the career-pages catalog) returns six
+    scoreable jobs; every other provider/host answers an empty 404 — with
+    three full catalogs in the scan, enumerating hosts is impractical, so
+    the guard is "no real network" rather than "no unknown URL"."""
+    from services.career_pages_catalog import CAREER_PAGES_CATALOG
 
-    slug, company, _domain = dp.DEFAULT_GREENHOUSE_SLUGS[0]
+    gh = next(r for r in CAREER_PAGES_CATALOG if r["ats"] == "greenhouse")
+    slug, company = gh["slug"], gh["display_name"]
     payload = _greenhouse_jobs_payload()
 
     def _get(url, *args, **kwargs):
         u = str(url)
+        if "boards-api.greenhouse.io" in u and f"/boards/{slug}/jobs" in u:
+            tail = u.split(f"/boards/{slug}/jobs", 1)[1]
+            if tail.startswith("/"):  # per-job detail (description enrich)
+                return _FakeHTTPResponse({"content": _GH_DESC_HTML})
+            return _FakeHTTPResponse(payload)
         if "boards-api.greenhouse.io" in u:
-            if f"/boards/{slug}/jobs" in u:
-                return _FakeHTTPResponse(payload)
             return _FakeHTTPResponse({"jobs": []})
         if "api.lever.co" in u:
             return _FakeHTTPResponse([])
         if "api.ashbyhq.com" in u:
             return _FakeHTTPResponse({"jobs": []})
-        if "myworkdayjobs.com" in u:
-            return _FakeHTTPResponse(None, status=404)
-        raise AssertionError(f"unexpected outbound GET: {u}")
+        return _FakeHTTPResponse(None, status=404)
 
     def _post(url, *args, **kwargs):
-        u = str(url)
-        if "myworkdayjobs.com" in u:
-            return _FakeHTTPResponse(None, status=404)
-        raise AssertionError(f"unexpected outbound POST: {u}")
+        return _FakeHTTPResponse(None, status=404)
 
     monkeypatch.setattr(_requests_mod, "get", _get)
     monkeypatch.setattr(_requests_mod, "post", _post)
+    # The feed services call their own requests.Session instances — patch the
+    # CLASS so every session routes through the same fake (no real network).
+    monkeypatch.setattr(_requests_mod.Session, "get",
+                        lambda self, url, *a, **k: _get(url, *a, **k))
+    monkeypatch.setattr(_requests_mod.Session, "post",
+                        lambda self, url, *a, **k: _post(url, *a, **k))
     return company
 
 
@@ -438,13 +462,31 @@ class TestGuestJourneyE2E:
         for card in cards:
             assert guest_service.validate_match_id(card["match_id"])
             assert card["title"]
-            assert card["match_score"] >= 40  # default guest_jobs_min_score
-        assert "ats_direct" in mres["sources_report"]["ok"]
-        assert "workday_direct" in mres["sources_report"]["ok"]
+            assert card["match_score"] >= 25  # default guest_jobs_min_score
+            assert card["seniority"] in ("entry", "mid", "senior", "neutral")
+        # v4: the scan runs the SAME three sources as the authed feed.
+        for src in ("workday", "career_pages", "mnc"):
+            assert src in mres["sources_report"]["ok"]
+        # Seniority pool metadata: honest counts, instant re-rank support.
+        assert mres["seniority"] in ("any", "entry", "mid", "senior")
+        assert mres["pool_total"] >= len(cards)
+        assert mres["locked_count"] == mres["pool_total"] - len(cards)
+        assert mres["detected_experience"]["level"] in ("entry", "mid", "senior")
         # Snapshot persisted server-side; jd_sources never leave the server.
         snap = db.job_match_snapshots.find_one({"guest_id": guest_id})
         assert snap and len(snap["jobs"]) == 5
+        assert len(snap["pool"]) >= 5
         assert "jd_sources" not in mres
+        assert "pool" not in mres
+
+        # Seniority toggle: a cached re-request with a different view is an
+        # INSTANT 200 re-slice of the stored pool (no new job, no budget).
+        m2 = jobs_client.post("/api/jobs/guest/matches",
+                              json={"guest_id": guest_id, "seniority": "any"})
+        assert m2.status_code == 200, m2.get_data(as_text=True)
+        v2 = m2.get_json()
+        assert v2["cached"] is True and v2["seniority"] == "any"
+        assert 1 <= len(v2["jobs"]) <= 5
 
         match_id = cards[0]["match_id"]
 

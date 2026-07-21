@@ -669,6 +669,9 @@ def workday_search():
         "us_only": us_only,
         "force_refresh": force_refresh,
         "user_email": user_email,
+        # Viewer timezone: "posted today" is computed in the USER's calendar
+        # day (service clamps to the real-world offset range).
+        "tz_offset_minutes": data.get("tz_offset_minutes"),
     }
     try:
         from services.resume_service import get_resume_service, ResumeService
@@ -723,6 +726,7 @@ def career_pages_search():
         "us_only": bool(data.get("us_only", True)),
         "force_refresh": bool(data.get("force_refresh", False)),
         "user_email": get_jwt_identity(),
+        "tz_offset_minutes": data.get("tz_offset_minutes"),
     }
     try:
         from services.resume_service import get_resume_service, ResumeService
@@ -778,6 +782,7 @@ def mnc_search():
         "us_only": bool(data.get("us_only", True)),
         "force_refresh": bool(data.get("force_refresh", False)),
         "user_email": get_jwt_identity(),
+        "tz_offset_minutes": data.get("tz_offset_minutes"),
     }
     try:
         from services.resume_service import get_resume_service, ResumeService
@@ -1279,6 +1284,13 @@ def guest_matches():
         return jsonify({"error": "A valid guest_id is required"}), 400
     # Optional echoed device token — validated anti-abuse signal, never trusted.
     guest_service.validate_device_token(data.get("device_token") or "")
+    # Optional seniority view over the day's scanned pool (instant re-rank,
+    # never a re-scan) + viewer timezone for local-day recency.
+    seniority = data.get("seniority")
+    requested_seniority = (
+        guest_service.normalize_seniority(seniority) if seniority is not None else None
+    )
+    tz_offset_minutes = data.get("tz_offset_minutes")
 
     session = guest_service.get_session(guest_id)
     if not session:
@@ -1301,10 +1313,12 @@ def guest_matches():
         )
 
     try:
-        cached = guest_service.get_cached_matches(guest_id)
+        cached = guest_service.get_cached_matches(guest_id, requested_seniority)
         if cached is not None:
             # Same-day subject-level cache hit — must NOT consume the global
             # daily scrape budget (re-uploads never re-spend the breaker).
+            # A seniority change lands here too: it re-slices the stored
+            # pool instantly — no re-scan, no quota.
             return jsonify(cached), 200
 
         # Cache MISS. The global counter is spent ONCE per (subject, date)
@@ -1339,6 +1353,12 @@ def guest_matches():
         from services.resume_service import ResumeService
 
         payload = {"guest_id": guest_id}
+        if requested_seniority:
+            payload["seniority"] = requested_seniority
+        try:
+            payload["tz_offset_minutes"] = int(tz_offset_minutes)
+        except (TypeError, ValueError):
+            pass
         try:
             job_id = guest_service.create_guest_job("guest_matches", payload, guest_id)
             ResumeService.invoke_async(job_id, "guest_matches", payload)

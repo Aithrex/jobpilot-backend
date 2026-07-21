@@ -230,11 +230,19 @@ class ResumeService:
         except Exception as e:
             logger.warning(f"Partial update for job {job_id} failed: {e}")
 
-    def update_job_progress(self, job_id: str, phase: str, pct: int | None = None) -> None:
+    def update_job_progress(
+        self,
+        job_id: str,
+        phase: str,
+        pct: int | None = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Write an honest sub-phase marker into the job's partial result.
 
         Clients polling while status='processing' see {"progress": {phase,
         pct}} and can drive a truthful stepper (no elapsed-time guessing).
+        `extra` carries small REAL data previews (e.g. the parse job's
+        genuinely extracted skill names) — never synthetic filler.
         Rides update_job_partial, whose status!=completed guard makes this
         race-safe against complete_job; complete_job later overwrites the
         whole `result` with the final payload.
@@ -242,6 +250,9 @@ class ResumeService:
         progress: Dict[str, Any] = {"phase": phase}
         if pct is not None:
             progress["pct"] = max(0, min(100, int(pct)))
+        if extra:
+            for k, v in extra.items():
+                progress.setdefault(k, v)
         progress["updated_at"] = datetime.now(timezone.utc).isoformat()
         self.update_job_partial(job_id, {"progress": progress})
 
@@ -1062,7 +1073,22 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 fingerprint_hash=payload.get("fingerprint_hash"),
                 resume_id=resume_id or None,
             )
-            svc.update_job_progress(job_id, "finalizing", 90)
+            # Real-data preview for the parsing animation: the GENUINELY
+            # extracted skill names (never invented) ride the finalizing
+            # marker so the client can materialize them while it waits for
+            # the completed payload.
+            skills_preview: list = []
+            try:
+                from schemas.resume_schemas import flatten_skills
+                skills_preview = [
+                    str(s) for s in (flatten_skills(validated) or []) if str(s or "").strip()
+                ][:8]
+            except Exception:  # pragma: no cover - preview must never break parse
+                skills_preview = []
+            svc.update_job_progress(
+                job_id, "finalizing", 90,
+                extra={"skills_preview": skills_preview} if skills_preview else None,
+            )
             guest_info = {
                 "recognized": bool(recognition.get("recognized")),
                 "tailors_used": recognition.get("tailors_used", 0),
@@ -1218,17 +1244,26 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 raise
 
         elif job_type == "guest_matches":
-            # Guest Onboarding — free direct sources only (skip_apify path),
-            # scored vs the guest's parsed resume, high-score only, persisted
-            # as today's job_match_snapshots doc per quota subject (spec 1.4).
+            # Guest Onboarding v4 — the SAME three sources as the authed Job
+            # Opportunities feed (Workday catalog + career pages + MNC), run
+            # in parallel, scored vs the guest's parsed resume, persisted as
+            # today's pooled job_match_snapshots doc per quota subject.
             # No LLM, no paid actors. job_id rides along so the worker emits
             # honest progress phases (reading_resume/searching_sources/
             # ranking/finalizing — spec 3.4) and the result carries
-            # sources_report/empty_reason/total_considered (spec 3.5).
+            # sources_report/empty_reason/total_considered (spec 3.5) plus
+            # the seniority pool metadata (v4).
             from services import guest_service
 
+            try:
+                tz_off = int(payload.get("tz_offset_minutes") or 0)
+            except (TypeError, ValueError):
+                tz_off = 0
             result = guest_service.compute_guest_matches(
-                payload.get("guest_id", ""), job_id=job_id
+                payload.get("guest_id", ""),
+                job_id=job_id,
+                seniority=payload.get("seniority"),
+                tz_offset_minutes=tz_off,
             )
             svc.complete_job(job_id, result)
 

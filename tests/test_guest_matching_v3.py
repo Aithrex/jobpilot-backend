@@ -317,13 +317,14 @@ class TestWallClockBudget:
         real_score = jms.score_one
 
         def slow_score(**kwargs):
-            state["t"] += 40.0                    # each row costs 40s
+            state["t"] += 100.0                   # each row costs 100s
             return real_score(**kwargs)
 
         monkeypatch.setattr(jms, "score_one", slow_score)
 
         result = guest_service.compute_guest_matches(gid)
-        # Rows 1+2 scored (t=50, 90); row 3 hit the 75s deadline.
+        # Rows 1+2 scored (t=110, 210); row 3 hit the 210s deadline (the v4
+        # authed-parity scan budget).
         assert len(result["jobs"]) == 2
         assert "budget" in result["sources_report"]["timed_out"]
         # The PARTIAL result is persisted as today's snapshot.

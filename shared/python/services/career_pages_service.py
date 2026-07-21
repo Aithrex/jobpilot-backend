@@ -36,6 +36,7 @@ from services.workday_jobs_service import (
     _attach_feasibility,
     _attach_sponsorship,
     _build_match_regex,
+    _clamp_tz_offset,
     _days_ago,
     _derive_query_terms,
     _derive_skill_terms,
@@ -888,6 +889,13 @@ def run_career_pages_search(
     us_only = bool(payload.get("us_only", True))
     force_refresh = bool(payload.get("force_refresh", False))
     user_email = str(payload.get("user_email") or "")
+    # Viewer timezone (recency in the USER's calendar day) + optional tighter
+    # fan-out budget for embedded callers (guest scan). See workday service.
+    tz_offset = _clamp_tz_offset(payload.get("tz_offset_minutes"))
+    try:
+        overall_timeout = min(OVERALL_TIMEOUT, max(30, int(payload.get("overall_timeout") or OVERALL_TIMEOUT)))
+    except (TypeError, ValueError):
+        overall_timeout = OVERALL_TIMEOUT
 
     rows = [
         r for r in list(CAREER_PAGES_CATALOG) + ENTERPRISE_CATALOG
@@ -896,6 +904,17 @@ def run_career_pages_search(
         and (not companies or r["slug"].lower() in companies)
     ]
     skills, resume_years = _load_resume_profile(user_email)
+    # Anonymous callers (guest scan) pass parsed skills/years directly so
+    # scoring quality matches an authed run. Never overrides a real profile.
+    if not user_email:
+        payload_skills = [str(s).strip() for s in (payload.get("resume_skills") or []) if str(s or "").strip()]
+        if payload_skills:
+            skills = payload_skills[:60]
+        try:
+            if payload.get("resume_years") is not None:
+                resume_years = max(0, int(payload["resume_years"]))
+        except (TypeError, ValueError):
+            pass
     title_terms = _derive_query_terms(titles, cap=MAX_QUERY_TERMS)
     # Widen tier-1 recall to the user's OWN profession (a nurse also keeps
     # "Charge Nurse"; a SWE is unchanged — this unions with the engineering net).
@@ -1002,7 +1021,7 @@ def run_career_pages_search(
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
             futures = {pool.submit(_one_company, c): c for c in rows}
             try:
-                for fut in as_completed(futures, timeout=OVERALL_TIMEOUT):
+                for fut in as_completed(futures, timeout=overall_timeout):
                     c = futures[fut]
                     done += 1
                     try:
@@ -1030,11 +1049,12 @@ def run_career_pages_search(
         companies_done = companies_total
         companies_with_results = len({j.get("tenant") for j in raw_jobs})
 
-    # Serve path: recompute recency, apply window + remote filters.
+    # Serve path: recompute recency IN THE VIEWER'S TIMEZONE, apply window +
+    # remote filters.
     jobs = []
     for j0 in raw_jobs:
         j = dict(j0)
-        days = _days_ago(j.get("date_posted") or "")
+        days = _days_ago(j.get("date_posted") or "", tz_offset)
         if days is None or days > WINDOW_DAYS:
             continue
         j["days_ago"] = days

@@ -284,14 +284,37 @@ def _resume_family_weights(skills: List[str]) -> Tuple[set, set]:
     return primary, set(counts)
 
 
-def _days_ago(iso_date: str) -> Optional[int]:
+def _clamp_tz_offset(minutes: Any) -> int:
+    """Sanitize a client-supplied UTC offset (minutes EAST of UTC, e.g. MST
+    = -420). Clamped to the real-world range; anything unparseable -> 0."""
+    try:
+        return max(-14 * 60, min(14 * 60, int(minutes)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _days_ago(iso_date: str, tz_offset_minutes: int = 0) -> Optional[int]:
+    """Calendar-day age of a posting in the VIEWER's timezone.
+
+    The old UTC-date diff made "Today" roll over at 5pm for a Mountain-time
+    user: a job posted that same local morning counted as 1 day old the
+    moment UTC crossed midnight, while the source site still said "posted
+    today". Both `now` and timestamped postings are shifted into the
+    viewer's frame before the date diff. Date-ONLY strings (len 10) are the
+    source's calendar date already — they diff directly against the
+    viewer-local today, never shifted.
+    """
     if not iso_date:
         return None
+    offset = timedelta(minutes=_clamp_tz_offset(tz_offset_minutes))
     try:
-        d = datetime.fromisoformat(iso_date.replace("Z", "+00:00"))
+        raw = iso_date.replace("Z", "+00:00")
+        d = datetime.fromisoformat(raw)
         if d.tzinfo is None:
             d = d.replace(tzinfo=timezone.utc)
-        return max(0, (datetime.now(timezone.utc).date() - d.date()).days)
+        local_today = (datetime.now(timezone.utc) + offset).date()
+        posted_date = d.date() if len(raw) == 10 else (d.astimezone(timezone.utc) + offset).date()
+        return max(0, (local_today - posted_date).days)
     except ValueError:
         return None
 
@@ -956,7 +979,7 @@ def _html_to_text(raw: str) -> str:
     return re.sub(r"\s+", " ", _TAG_RE.sub(" ", _html.unescape(raw or ""))).strip()
 
 
-def _enrich_details(jobs: List[Dict[str, Any]]) -> int:
+def _enrich_details(jobs: List[Dict[str, Any]], tz_offset_minutes: int = 0) -> int:
     """Fetch the CXS job-detail JSON for rows lacking a description.
 
     GET {base}/wday/cxs/{tenant}/{site}{externalPath} returns
@@ -986,7 +1009,7 @@ def _enrich_details(jobs: List[Dict[str, Any]]) -> int:
             job["description"] = _html_to_text(desc)[:5000]
         start = str(info.get("startDate") or "")[:10]
         if re.match(r"^\d{4}-\d{2}-\d{2}$", start):
-            days = _days_ago(start)
+            days = _days_ago(start, tz_offset_minutes)
             if days is not None:
                 job["date_posted"] = start
                 job["days_ago"] = days
@@ -1107,6 +1130,15 @@ def run_workday_jobs_search(
     us_only = bool(payload.get("us_only", True))
     force_refresh = bool(payload.get("force_refresh", False))
     user_email = str(payload.get("user_email") or "")
+    # Viewer timezone: recency ("today") is computed in the USER's calendar
+    # day, not UTC's. 0 (absent) preserves the old UTC behavior.
+    tz_offset = _clamp_tz_offset(payload.get("tz_offset_minutes"))
+    # Callers with a tighter wall-clock (the guest scan runs three sources in
+    # parallel inside one Lambda) may shrink the fan-out budget — never grow.
+    try:
+        overall_timeout = min(OVERALL_TIMEOUT, max(30, int(payload.get("overall_timeout") or OVERALL_TIMEOUT)))
+    except (TypeError, ValueError):
+        overall_timeout = OVERALL_TIMEOUT
 
     rows = [
         r for r in WORKDAY_TENANT_CATALOG
@@ -1116,6 +1148,18 @@ def run_workday_jobs_search(
     # Resume skills drive retrieval (extra search terms), scoring, and the
     # tailor-feasibility verdicts; years feed the experience-gap check.
     skills, resume_years = _load_resume_profile(user_email)
+    # Anonymous callers (the guest scan) have no profile doc — they pass the
+    # guest's own parsed skills/years directly so scoring quality matches an
+    # authed run. Never overrides a real profile.
+    if not user_email:
+        payload_skills = [str(s).strip() for s in (payload.get("resume_skills") or []) if str(s or "").strip()]
+        if payload_skills:
+            skills = payload_skills[:60]
+        try:
+            if payload.get("resume_years") is not None:
+                resume_years = max(0, int(payload["resume_years"]))
+        except (TypeError, ValueError):
+            pass
     title_terms = _derive_query_terms(titles)
     skill_terms = _derive_skill_terms(
         skills, title_terms, cap=TOTAL_TERMS_CAP - len(title_terms),
@@ -1200,7 +1244,7 @@ def run_workday_jobs_search(
             futures = {pool.submit(_fetch_tenant_term, r, t, location, us_only): (r, t)
                        for r, t in tasks}
             try:
-                for fut in as_completed(futures, timeout=OVERALL_TIMEOUT):
+                for fut in as_completed(futures, timeout=overall_timeout):
                     r, _t = futures[fut]
                     done_tasks += 1
                     try:
@@ -1261,7 +1305,7 @@ def run_workday_jobs_search(
     jobs = []
     for j0 in raw_jobs:
         j = dict(j0)
-        days = _days_ago(j.get("date_posted") or "")
+        days = _days_ago(j.get("date_posted") or "", tz_offset)
         if days is None or days > WINDOW_DAYS:
             continue
         # country_code is set by detail enrichment (possibly via a cached
@@ -1269,6 +1313,13 @@ def run_workday_jobs_search(
         if us_only and j.get("country_code") not in (None, "US"):
             continue
         j["days_ago"] = days
+        # The card label must agree with the viewer-local bucket (the old
+        # cached "Posted Yesterday" text disagreed with the source site).
+        j["posted_text"] = (
+            "Posted Today" if days == 0
+            else "Posted Yesterday" if days == 1
+            else f"Posted {days} Days Ago"
+        )
         jobs.append(j)
 
     if remote_only:
@@ -1309,7 +1360,7 @@ def run_workday_jobs_search(
         j for j in jobs[DETAIL_ENRICH_TOP:]
         if (j.get("days_ago") if j.get("days_ago") is not None else 99) <= 3
     ][:DETAIL_ENRICH_RECENT]
-    enriched = _enrich_details(top)
+    enriched = _enrich_details(top, tz_offset)
     if enriched:
         _score_jobs(top, titles, skills, skill_terms)
         # startDate refinement can push a row past the window, and the

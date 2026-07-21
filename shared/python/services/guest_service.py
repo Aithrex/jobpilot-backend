@@ -63,17 +63,43 @@ _DOWNLOAD_TOKEN_VERSION = "v1"
 # Whitelisted job-card fields returned to guests (no internal scoring debris).
 # Card shape per resume-platform-v3 spec 1.4: title/company/location/source/
 # posted/apply_link/url/logo_url (+ match_score/matched_skills/gaps/why/
-# sponsorship/match_id stamped below).
+# sponsorship/match_id stamped below; days_ago/posted_text/seniority are
+# additive v4 fields from the authed-parity scan).
 _JOB_CARD_FIELDS = (
     "title", "company", "location", "apply_link", "url", "source",
-    "posted", "logo_url",
+    "posted", "posted_text", "days_ago", "logo_url",
 )
 
-# Matching latency budgets (resume-platform-v3 spec 3.1/3.3).
-GUEST_MATCH_BUDGET_SECONDS = 75
+# Matching latency budgets (v4: the guest scan runs the SAME three sources as
+# the authed Job Opportunities feed — Workday catalog + career pages + MNC —
+# in parallel inside ONE resume-Lambda invocation, so the wall clock is the
+# slowest source, not the sum. 300s Lambda − scoring/enrich/store headroom.)
+GUEST_MATCH_BUDGET_SECONDS = 210
+GUEST_FETCH_BUDGET_SECONDS = 170
+GUEST_WORKDAY_TIMEOUT = 150
+GUEST_SIDE_SOURCE_TIMEOUT = 120
 _ENRICH_MAX_CANDIDATES = 15
 _ENRICH_PER_REQUEST_TIMEOUT = 6
 _ENRICH_OVERALL_BUDGET = 12
+
+# The scored pool persisted per snapshot: guests SEE the top guest_jobs_max
+# (5); the rest exist as an honest locked count + power the instant seniority
+# re-rank (no re-scan). jd_sources are stored for the top slice only so
+# snapshot docs stay small (the Atlas 512MB incident taught us).
+GUEST_POOL_MAX = 60
+GUEST_JD_SOURCES_MAX = 25
+_JD_TEXT_MAX = 12000
+
+# Seniority views over the pool. A title with no seniority marker is
+# "neutral" and shows in every view; markers EXCLUDE mismatched views.
+GUEST_SENIORITY_LEVELS = ("entry", "mid", "senior")
+_SENIOR_TITLE_RE = re.compile(
+    r"\b(senior|sr\.?|staff|principal|lead|architect|director|"
+    r"head of|vp|vice president|distinguished|iii|iv)\b", re.IGNORECASE)
+_ENTRY_TITLE_RE = re.compile(
+    r"\b(intern(ship)?|co[- ]?op|new ?grad(uate)?|entry[- ]?level|junior|"
+    r"jr\.?|graduate|early career|apprentice)\b|\bi\b$", re.IGNORECASE)
+_MID_TITLE_RE = re.compile(r"\b(mid[- ]?level|ii)\b", re.IGNORECASE)
 
 # Unclaimed snapshots are purged 7 days out (claim extends to null).
 SNAPSHOT_RETENTION_DAYS = 7
@@ -830,29 +856,53 @@ def _cache_doc_for_guest(guest_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def get_cached_matches(guest_id: str) -> Optional[Dict[str, Any]]:
+def get_cached_matches(
+    guest_id: str, seniority: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """Same-day cached matches for the guest's quota subject (never re-spends
-    the global matches budget). Rows are HARD-CAPPED at guest_jobs_max — the
-    server never returns more (no hidden locked rows for CSS to hide).
-    jd_sources are SERVER-ONLY and never leave this module."""
+    the global matches budget). Visible rows are HARD-CAPPED at
+    guest_jobs_max; the ranked pool behind them powers the INSTANT seniority
+    re-rank (no re-scan, no quota) and the honest locked count. jd_sources
+    are SERVER-ONLY and never leave this module."""
     cached = _cache_doc_for_guest(guest_id)
     if not cached or cached.get("date") != _today_key():
         return None
     max_jobs = max(1, pconfig.get_int("guest_jobs_max"))
     computed_at = cached.get("computed_at")
     out: Dict[str, Any] = {
-        "jobs": list(cached.get("jobs") or [])[:max_jobs],
         "date": cached.get("date"),
         "computed_at": computed_at.isoformat() if hasattr(computed_at, "isoformat") else computed_at,
         "min_score": cached.get("min_score"),
         "cached": True,
     }
+    pool = list(cached.get("pool") or [])
+    if pool:
+        view = normalize_seniority(seniority) if seniority else (
+            cached.get("default_seniority") or "any"
+        )
+        jobs, pool_total, counts = _pool_view(pool, view, max_jobs)
+        applied = view
+        # The stored default can be empty for legacy pools — same honest
+        # fallback the compute path uses, only when nothing was requested.
+        if not jobs and pool and seniority is None:
+            jobs, pool_total, counts = _pool_view(pool, "any", max_jobs)
+            applied = "any"
+        out["jobs"] = jobs
+        out["seniority"] = applied
+        out["seniority_counts"] = counts
+        out["pool_total"] = pool_total
+        out["locked_count"] = max(0, pool_total - len(jobs))
+        if isinstance(cached.get("detected_experience"), dict) and cached["detected_experience"]:
+            out["detected_experience"] = cached["detected_experience"]
+    else:
+        # Legacy snapshot (pre-pool): serve exactly what was stored.
+        out["jobs"] = list(cached.get("jobs") or [])[:max_jobs]
     report = cached.get("sources_report")
     if isinstance(report, dict) and report:
         out["sources_report"] = report
         if isinstance(report.get("considered"), int):
             out["total_considered"] = report["considered"]
-    if cached.get("empty_reason") and not out["jobs"]:
+    if cached.get("empty_reason") and not out["jobs"] and not pool:
         out["empty_reason"] = cached["empty_reason"]
     return out
 
@@ -873,7 +923,9 @@ def find_cached_match(guest_id: str, match_id: str) -> Optional[Dict[str, Any]]:
     if isinstance(src, dict):
         return src
     # Defensive fallback: derive from the public card (no stored description).
-    for card in cached.get("jobs") or []:
+    # Pool rows beyond the jd_sources slice are still tailorable this way —
+    # the tailor service resolves the JD from the card's URL server-side.
+    for card in list(cached.get("jobs") or []) + list(cached.get("pool") or []):
         if card.get("match_id") == mid:
             return {
                 "title": card.get("title") or "",
@@ -893,6 +945,9 @@ def _store_matches(
     sources_report: Optional[Dict[str, Any]] = None,
     timings: Optional[Dict[str, Any]] = None,
     empty_reason: Optional[str] = None,
+    pool: Optional[List[Dict[str, Any]]] = None,
+    detected_experience: Optional[Dict[str, Any]] = None,
+    default_seniority: Optional[str] = None,
 ) -> Optional[str]:
     """Create/replace today's job_match_snapshots doc for the guest's quota
     subject (spec 1.4) and stamp the snapshot_id ref on the session.
@@ -921,6 +976,12 @@ def _store_matches(
         "date": _today_key(),
         "computed_at": now,
         "jobs": list(jobs or [])[:max_jobs],
+        # v4: the full ranked pool behind the visible 5 — powers the instant
+        # seniority re-rank + the honest locked count. Descriptions are NOT
+        # stored on pool cards (jd_sources carries the tailorable top slice).
+        "pool": list(pool or [])[:GUEST_POOL_MAX],
+        "detected_experience": detected_experience or {},
+        "default_seniority": normalize_seniority(default_seniority),
         "jd_sources": jd_sources or {},   # server-only
         "sources_report": sources_report or {},
         "timings": timings or {},
@@ -1015,44 +1076,114 @@ def _fetch_workday_details(
     )
 
 
-def _fetch_free_jobs(structured: Dict[str, Any], progress_cb=None):
-    """Run the FREE direct sources (ATS boards + Workday CXS — the daily
-    pipeline's skip_apify=True path; NO Apify, no paid actors).
+def _fetch_free_jobs(
+    structured: Dict[str, Any],
+    progress_cb=None,
+    *,
+    resume_skills: Optional[List[str]] = None,
+    resume_years: Optional[int] = None,
+    tz_offset_minutes: int = 0,
+):
+    """Run the SAME three sources as the authed Job Opportunities feed —
+    the Workday tenant catalog (~1000 tenants), the Career Pages catalog,
+    and the MNC catalog — in PARALLEL threads inside this one Lambda, then
+    merge. This replaced the thin run_pipeline scan (v4): guests now get
+    exactly the logged-in feed's coverage; only the display is capped.
 
-    Returns (rows, sources_report) where sources_report is the spec-1.4
-    shape {ok, failed, timed_out, considered} plus the per-source timings
-    the snapshot records. Module-level so tests can patch it (legacy patches
-    returning a bare list are still accepted by compute_guest_matches)."""
-    from services.daily_pipeline_service import run_pipeline
+    Each service scores against the guest's parsed skills (passed through
+    the payload since guests have no profile doc) and benefits from the
+    services' shared 3h Mongo caches, so common titles are warm and fast.
+
+    Returns (rows, sources_report) in the spec-1.4 shape. Module-level so
+    tests can patch it (legacy patches returning a bare list still work)."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout, as_completed
 
     terms = _guest_role_terms(structured)
-    result = run_pipeline(
-        workday_titles=terms,
-        custom_role_terms=terms,
-        past_days=3,
-        user_email="",           # anonymous — no profile/applied-index reads
-        location="United States",
-        experience_level="any",  # wide fetch; resume-match scoring filters below
-        employment_type="ANY",
-        work_arrangement="any",
-        skip_apify=True,
-        title_filter=_role_title_filter(structured),
-        workday_direct_timeout=25,   # guest budget 15s -> 25s (spec 3.3)
-        ats_overall_timeout=20,      # ATS fan-out overall cap (spec 3.3)
-        progress_cb=progress_cb,
-    )
-    rows = list(result.get("apply_now") or []) + list(result.get("verify_dates") or [])
-    status = result.get("source_status") or {}
-    report: Dict[str, Any] = {"ok": [], "failed": [], "timed_out": [], "considered": len(rows)}
-    for src in ("workday_direct", "ats_direct"):
-        st = status.get(src)
-        if st == "failed":
-            report["failed"].append(src)
-        elif st == "timed_out":
-            report["timed_out"].append(src)
-        else:
-            report["ok"].append(src)
-    return rows, {**report, "timings_ms": result.get("source_timings_ms") or {}}
+    skills = resume_skills if resume_skills is not None else _resume_skills(structured)
+    base_payload = {
+        "titles": terms,
+        "industries": [],
+        "companies": [],
+        "location": "",
+        "remote_only": False,
+        "us_only": True,
+        "force_refresh": False,
+        "user_email": "",            # anonymous — services use the overrides below
+        "resume_skills": skills,
+        "resume_years": resume_years,
+        "tz_offset_minutes": tz_offset_minutes,
+    }
+
+    def _run_workday():
+        from services.workday_jobs_service import run_workday_jobs_search
+        return run_workday_jobs_search({**base_payload, "overall_timeout": GUEST_WORKDAY_TIMEOUT})
+
+    def _run_career_pages():
+        from services.career_pages_service import run_career_pages_search
+        return run_career_pages_search({**base_payload, "overall_timeout": GUEST_SIDE_SOURCE_TIMEOUT})
+
+    def _run_mnc():
+        from services.mnc_jobs_service import run_mnc_search
+        return run_mnc_search({**base_payload, "overall_timeout": GUEST_SIDE_SOURCE_TIMEOUT})
+
+    sources = {
+        "workday": _run_workday,
+        "career_pages": _run_career_pages,
+        "mnc": _run_mnc,
+    }
+    rows: List[Dict[str, Any]] = []
+    report: Dict[str, Any] = {"ok": [], "failed": [], "timed_out": [], "considered": 0}
+    timings_ms: Dict[str, int] = {}
+    started = _clock()
+    done = 0
+    with ThreadPoolExecutor(max_workers=len(sources)) as pool:
+        futures = {pool.submit(fn): name for name, fn in sources.items()}
+        try:
+            for fut in as_completed(futures, timeout=GUEST_FETCH_BUDGET_SECONDS):
+                name = futures[fut]
+                done += 1
+                try:
+                    result = fut.result() or {}
+                    jobs = list(result.get("jobs") or [])
+                    for j in jobs:
+                        j["_guest_source"] = name
+                    rows.extend(jobs)
+                    report["ok"].append(name)
+                except Exception as e:
+                    logger.warning("guest matches: %s source failed: %s", name, type(e).__name__)
+                    report["failed"].append(name)
+                timings_ms[f"{name}_ms"] = int((_clock() - started) * 1000)
+                if progress_cb:
+                    try:
+                        progress_cb(done, len(sources))
+                    except Exception:
+                        pass
+        except _FutTimeout:
+            for fut, name in futures.items():
+                if not fut.done():
+                    fut.cancel()
+                    report["timed_out"].append(name)
+
+    # Merge: one posting can surface from more than one catalog — dedupe on
+    # (company, title, location), keeping the copy with the richer signal.
+    merged: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for j in rows:
+        key = (
+            str(j.get("company") or "").strip().lower(),
+            str(j.get("title") or "").strip().lower(),
+            str(j.get("location") or "").strip().lower(),
+        )
+        prev = merged.get(key)
+        if prev is None:
+            merged[key] = j
+            continue
+        prev_rank = (len(prev.get("description") or ""), prev.get("match_score") or 0)
+        new_rank = (len(j.get("description") or ""), j.get("match_score") or 0)
+        if new_rank > prev_rank:
+            merged[key] = j
+    out = list(merged.values())
+    report["considered"] = len(out)
+    return out, {**report, "timings_ms": timings_ms}
 
 
 _SAFE_URL_PREFIXES = ("http://", "https://")
@@ -1095,6 +1226,61 @@ def _resume_skills(structured: Dict[str, Any]) -> List[str]:
             seen.add(n)
             out.append(n)
     return out
+
+
+def normalize_seniority(value: Any) -> str:
+    """Sanitize a client-requested seniority view to the known set."""
+    v = str(value or "").strip().lower()
+    return v if v in GUEST_SENIORITY_LEVELS else "any"
+
+
+def _seniority_of(title: Any) -> str:
+    """Deterministic title-marker classifier: 'senior' | 'mid' | 'entry' |
+    'neutral' (no marker — shows in every view). Senior markers win so
+    "Senior Associate" classifies senior."""
+    t = str(title or "")
+    if _SENIOR_TITLE_RE.search(t):
+        return "senior"
+    if _ENTRY_TITLE_RE.search(t):
+        return "entry"
+    if _MID_TITLE_RE.search(t):
+        return "mid"
+    return "neutral"
+
+
+# A marker EXCLUDES mismatched views; neutral titles show everywhere.
+_SENIORITY_ALLOWED: Dict[str, Optional[frozenset]] = {
+    "any": None,
+    "entry": frozenset({"entry", "neutral"}),
+    "mid": frozenset({"mid", "neutral"}),
+    "senior": frozenset({"senior", "neutral"}),
+}
+
+
+def experience_level_for_years(years: Any) -> str:
+    """Deterministic level from exact date-range math (resume_parser):
+    <=2y entry, <=5y mid, else senior — the same mapping the guest profile
+    reveal uses, so the toggle's 'Detected' chip always agrees with it."""
+    try:
+        y = float(years or 0)
+    except (TypeError, ValueError):
+        y = 0.0
+    return "entry" if y <= 2 else "mid" if y <= 5 else "senior"
+
+
+def _pool_view(
+    pool: List[Dict[str, Any]], seniority: str, max_jobs: int,
+) -> Tuple[List[Dict[str, Any]], int, Dict[str, int]]:
+    """Slice the ranked pool into one seniority view: (visible top rows,
+    qualifying total for that view, per-view counts for the toggle)."""
+    lvl = normalize_seniority(seniority)
+    allowed = _SENIORITY_ALLOWED[lvl]
+    rows = [c for c in pool if allowed is None or c.get("seniority") in allowed]
+    counts = {"any": len(pool)}
+    for k in GUEST_SENIORITY_LEVELS:
+        a = _SENIORITY_ALLOWED[k]
+        counts[k] = sum(1 for c in pool if c.get("seniority") in a)
+    return rows[:max_jobs], len(rows), counts
 
 
 def _match_why(matched_skills: List[str]) -> str:
@@ -1176,16 +1362,23 @@ def _classify_empty_reason(
     return "no_openings_matched"
 
 
-def compute_guest_matches(guest_id: str, job_id: Optional[str] = None) -> Dict[str, Any]:
-    """Async-job body for `guest_matches` (spec 3.1-3.8): fetch free sources,
-    score each row with jd_match_scorer against the guest's parsed resume,
-    enrich the top description-less Workday candidates with real CXS detail
-    descriptions and re-score, keep only score >= guest_jobs_min_score, cap
-    at guest_jobs_max (5), mint a match_id per card, add the deterministic
-    `why` + public-filings `sponsorship`, and persist today's
-    job_match_snapshots doc for the quota subject.
+def compute_guest_matches(
+    guest_id: str,
+    job_id: Optional[str] = None,
+    seniority: Optional[str] = None,
+    tz_offset_minutes: int = 0,
+) -> Dict[str, Any]:
+    """Async-job body for `guest_matches` (spec 3.1-3.8, v4): run the SAME
+    three sources as the authed Job Opportunities feed in parallel, score
+    every row with jd_match_scorer against the guest's parsed resume, enrich
+    the top description-less Workday candidates with real CXS detail
+    descriptions and re-score, keep only score >= guest_jobs_min_score, and
+    persist a ranked POOL (up to GUEST_POOL_MAX) in today's
+    job_match_snapshots doc. Guests SEE the top guest_jobs_max (5) for their
+    detected (or requested) seniority; the rest surface as an honest locked
+    count and power the instant seniority re-rank.
 
-    Bounded by a 75s wall-clock budget: on expiry, whatever genuine partial
+    Bounded by a wall-clock budget: on expiry, whatever genuine partial
     results exist are persisted. When job_id is given, honest progress phases
     are emitted via update_job_progress."""
     gid = validate_guest_id(guest_id)
@@ -1202,6 +1395,15 @@ def compute_guest_matches(guest_id: str, job_id: Optional[str] = None) -> Dict[s
     cfg = pconfig.get_guest_config()
     min_score = int(cfg.get("guest_jobs_min_score", 40))
     max_jobs = max(1, int(cfg.get("guest_jobs_max", 5)))
+
+    # Deterministic experience detection: exact date-range math (merged
+    # intervals — parallel jobs never double-count), mapped to the same
+    # entry/mid/senior bands the profile reveal shows.
+    from services.resume_parser import ResumeParser
+    detected_years = ResumeParser._estimate_experience_years(structured)
+    detected_level = experience_level_for_years(detected_years)
+    requested = normalize_seniority(seniority) if seniority else None
+    default_view = requested or detected_level
 
     started = _clock()
     deadline = started + GUEST_MATCH_BUDGET_SECONDS
@@ -1237,10 +1439,23 @@ def compute_guest_matches(guest_id: str, job_id: Optional[str] = None) -> Dict[s
     try:
         fetcher = _fetch_free_jobs
         try:
-            accepts_cb = len(inspect.signature(fetcher).parameters) >= 2
+            params = inspect.signature(fetcher).parameters
+            accepts_cb = len(params) >= 2
+            accepts_profile = "resume_skills" in params
         except (TypeError, ValueError):  # pragma: no cover - exotic patch
-            accepts_cb = False
-        fetched = fetcher(structured, _source_progress) if accepts_cb else fetcher(structured)
+            accepts_cb, accepts_profile = False, False
+        profile_kwargs = (
+            {
+                "resume_skills": skills,
+                "resume_years": detected_years,
+                "tz_offset_minutes": tz_offset_minutes,
+            }
+            if accepts_profile else {}
+        )
+        fetched = (
+            fetcher(structured, _source_progress, **profile_kwargs)
+            if accepts_cb else fetcher(structured)
+        )
     except Exception as e:
         logger.warning("guest matches: free-source fetch failed: %s", type(e).__name__)
         fetched, fetch_failed = [], True
@@ -1250,14 +1465,24 @@ def compute_guest_matches(guest_id: str, job_id: Optional[str] = None) -> Dict[s
         rows, src_report = list(fetched or []), None
 
     sources_report: Dict[str, Any] = src_report or {
-        "ok": [] if fetch_failed else ["workday_direct", "ats_direct"],
-        "failed": ["workday_direct", "ats_direct"] if fetch_failed else [],
+        "ok": [] if fetch_failed else ["workday", "career_pages", "mnc"],
+        "failed": ["workday", "career_pages", "mnc"] if fetch_failed else [],
         "timed_out": [],
         "considered": len(rows),
     }
     src_timings = sources_report.pop("timings_ms", {}) or {}
-    timings["workday_ms"] = int(src_timings.get("workday_ms") or (_clock() - t_fetch) * 1000)
-    timings["ats_ms"] = int(src_timings.get("ats_ms") or (_clock() - t_fetch) * 1000)
+    timings["fetch_ms"] = int((_clock() - t_fetch) * 1000)
+    for k, v in src_timings.items():
+        try:
+            timings[k] = int(v)
+        except (TypeError, ValueError):
+            pass
+
+    # Feed rows carry posted_text/date_posted; the legacy card field is
+    # `posted` — map it so cached cards keep one canonical field.
+    for row in rows:
+        if not row.get("posted"):
+            row["posted"] = row.get("posted_text") or row.get("date_posted") or None
 
     # --- initial deterministic scoring (budget-checked per row) ------------
     t_score = _clock()
@@ -1281,7 +1506,7 @@ def compute_guest_matches(guest_id: str, job_id: Optional[str] = None) -> Dict[s
     if not budget_expired and _remaining() > 0:
         candidates = [
             (row, verdict) for row, verdict in scored
-            if str(row.get("source") or "") == "Workday Direct"
+            if str(row.get("source") or "") in ("Workday Direct", "Workday")
             and not str(row.get("description") or "").strip()
         ]
         candidates.sort(key=lambda rv: rv[1].get("match_score", 0), reverse=True)
@@ -1327,34 +1552,43 @@ def compute_guest_matches(guest_id: str, job_id: Optional[str] = None) -> Dict[s
         for row, verdict in scored
         if verdict.get("match_score", 0) >= min_score
     ]
-    qualifying.sort(key=lambda pair: pair[0].get("match_score", 0), reverse=True)
-    top_pairs = qualifying[:max_jobs]
+    # Fresh-first tiebreak: equal scores rank by recency (viewer-local days).
+    qualifying.sort(key=lambda pair: (
+        -(pair[0].get("match_score") or 0),
+        pair[0].get("days_ago") if pair[0].get("days_ago") is not None else 99,
+    ))
+    pool_pairs = qualifying[:GUEST_POOL_MAX]
 
     # Public-filings sponsorship signal (one bulk Mongo read). Any failure or
     # absent ingest data → null on every card (honest "no data", never wrong).
     signal_cache: Dict[str, Any] = {}
     try:
         from services.sponsorship_service import bulk_signals
-        companies = [str(c.get("company") or "") for c, _ in top_pairs if c.get("company")]
+        companies = [str(c.get("company") or "") for c, _ in pool_pairs if c.get("company")]
         if companies:
             signal_cache = bulk_signals(companies)
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("guest matches: sponsorship lookup unavailable: %s", e)
         signal_cache = {}
 
-    top: List[Dict[str, Any]] = []
+    pool: List[Dict[str, Any]] = []
     jd_sources: Dict[str, Dict[str, Any]] = {}
-    for card, row in top_pairs:
+    for card, row in pool_pairs:
         match_id = uuid.uuid4().hex  # opaque server-minted id — the only tailorable reference
         card["match_id"] = match_id
+        card["seniority"] = _seniority_of(card.get("title"))
         card["sponsorship"] = _sponsorship_for_card(card.get("company"), signal_cache)
-        jd_sources[match_id] = {
-            "title": str(card.get("title") or ""),
-            "company": str(card.get("company") or ""),
-            "jd_text": str(row.get("description") or "")[:15000],
-            "url": card.get("url") or card.get("apply_link") or "",
-        }
-        top.append(card)
+        # JD sources for the top slice only — any of these rows can become
+        # visible via the seniority toggle and must stay tailorable, but the
+        # snapshot must not balloon (Atlas 512MB incident).
+        if len(jd_sources) < GUEST_JD_SOURCES_MAX:
+            jd_sources[match_id] = {
+                "title": str(card.get("title") or ""),
+                "company": str(card.get("company") or ""),
+                "jd_text": str(row.get("description") or "")[:_JD_TEXT_MAX],
+                "url": card.get("url") or card.get("apply_link") or "",
+            }
+        pool.append(card)
 
     # Company logos — (re)stamped at cache-build time so every cached guest
     # card carries the server-derived logo_url AND the company_logos docs the
@@ -1363,14 +1597,24 @@ def compute_guest_matches(guest_id: str, job_id: Optional[str] = None) -> Dict[s
     # the company name, never client-influenced.
     try:
         from services.company_logo_service import stamp_logo_urls
-        stamp_logo_urls(top)
+        stamp_logo_urls(pool)
     except Exception as e:  # pragma: no cover - logos must never break matches
         logger.warning("guest matches: logo stamping skipped: %s", type(e).__name__)
 
     _progress("finalizing", 95)
+    # Default view: the DETECTED level (or the caller's explicit choice).
+    # A detected view that filters everything away falls back to "any" for
+    # the default only — never a fake empty day when matches exist.
+    top, pool_total, seniority_counts = _pool_view(pool, default_view, max_jobs)
+    applied_view = default_view
+    if not top and pool and requested is None:
+        top, pool_total, seniority_counts = _pool_view(pool, "any", max_jobs)
+        applied_view = "any"
+    detected_experience = {"level": detected_level, "years": detected_years}
+
     sources_report["considered"] = len(rows)
     empty_reason = None
-    if not top:
+    if not pool:
         empty_reason = _classify_empty_reason(
             len(rows), len(skills), sources_report, fetch_failed
         )
@@ -1381,14 +1625,17 @@ def compute_guest_matches(guest_id: str, job_id: Optional[str] = None) -> Dict[s
         sources_report=sources_report,
         timings=timings,
         empty_reason=empty_reason,
+        pool=pool,
+        detected_experience=detected_experience,
+        default_seniority=applied_view,
     )
     # One structured no-PII WARNING summary per run (spec 3.8): counts and
     # durations only — guest_id is an opaque capability uuid, never identity.
     logger.warning(
-        "guest matches summary: guest=%s rows=%d scored=%d enriched=%d served=%d "
-        "min_score=%d empty_reason=%s budget_expired=%s total_ms=%d",
-        gid, len(rows), len(scored), enriched, len(top),
-        min_score, empty_reason, budget_expired, timings["total_ms"],
+        "guest matches summary: guest=%s rows=%d scored=%d enriched=%d pool=%d served=%d "
+        "min_score=%d level=%s empty_reason=%s budget_expired=%s total_ms=%d",
+        gid, len(rows), len(scored), enriched, len(pool), len(top),
+        min_score, applied_view, empty_reason, budget_expired, timings["total_ms"],
     )
     result: Dict[str, Any] = {
         "jobs": top,
@@ -1397,6 +1644,11 @@ def compute_guest_matches(guest_id: str, job_id: Optional[str] = None) -> Dict[s
         "total_considered": len(rows),
         "sources_report": sources_report,
         "cached": False,
+        "seniority": applied_view,
+        "detected_experience": detected_experience,
+        "seniority_counts": seniority_counts,
+        "pool_total": pool_total,
+        "locked_count": max(0, pool_total - len(top)),
     }
     if empty_reason:
         result["empty_reason"] = empty_reason

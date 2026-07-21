@@ -1300,46 +1300,88 @@ class ResumeParser:
         Returns:
             Estimated total years of experience (minimum 1 if any work found,
             0 if no parseable dates exist).
-        """
-        total_months = 0
-        now = datetime.now()
-        current_year = now.year
-        current_month = now.month
 
+        v4: delegates to _experience_intervals_months — exact month-level
+        interval math WITH overlap merging, so concurrent roles never
+        double-count and numeric date formats (05/2021) parse too.
+        """
+        total_months = ResumeParser._experience_intervals_months(structured)
+        return max(1, total_months // 12) if total_months > 0 else 0
+
+    @staticmethod
+    def _experience_intervals_months(structured: dict) -> int:
+        """Exact total months of experience with OVERLAP MERGING.
+
+        Each experience entry's date string parses into a month-precision
+        (start, end) interval; overlapping intervals merge before summing, so
+        concurrent roles (a job + a parallel contract) never double-count —
+        the per-entry sum in _estimate_experience_years inflates exactly
+        those resumes. Handles "Jan 2020 - Dec 2022" (inclusive months),
+        "May 2021 - Present/Current/Now", year-only "2019 - 2021"
+        (Jan..Dec assumed), and numeric "05/2021 - 08/2023" / "2021-05".
+        Deterministic — no LLM anywhere. Returns 0 when nothing parses."""
+        now = datetime.now()
+        now_idx = now.year * 12 + (now.month - 1)
+
+        def _month_points(dates: str):
+            """Month-precision points in textual order: (pos, index, bare?)"""
+            points = []
+            covered = []
+            # Numeric MM/YYYY and YYYY-MM before the bare-year pass would
+            # otherwise split their digits.
+            for m in re.finditer(r"\b(0?[1-9]|1[0-2])\s*/\s*((?:19|20)\d{2})\b", dates):
+                points.append((m.start(), int(m.group(2)) * 12 + int(m.group(1)) - 1, False))
+                covered.append((m.start(), m.end()))
+            for m in re.finditer(r"\b((?:19|20)\d{2})\s*-\s*(0?[1-9]|1[0-2])\b(?!\s*\d)", dates):
+                points.append((m.start(), int(m.group(1)) * 12 + int(m.group(2)) - 1, False))
+                covered.append((m.start(), m.end()))
+            # "Month YYYY" pairs.
+            for m in _MONTH_PATTERN.finditer(dates):
+                year_m = _YEAR_PATTERN.search(dates, m.end())
+                if year_m and year_m.start() - m.end() <= 6:
+                    month_num = _MONTH_MAP.get(m.group(0).lower()[:3])
+                    if month_num:
+                        points.append((m.start(), int(year_m.group(0)) * 12 + month_num - 1, False))
+                        covered.append((m.start(), year_m.end()))
+            # Bare years not already claimed by a pair above.
+            for m in _YEAR_PATTERN.finditer(dates):
+                if not any(s <= m.start() < e for s, e in covered):
+                    points.append((m.start(), int(m.group(0)) * 12, True))
+            points.sort(key=lambda p: p[0])
+            return points
+
+        intervals = []
         for exp in structured.get("experience", []):
-            dates = exp.get("dates", "")
+            dates = str(exp.get("dates", "") or "")
             if not dates:
                 continue
+            pts = _month_points(dates)
+            if not pts:
+                continue
+            is_present = any(kw in dates.lower() for kw in _PRESENT_KEYWORDS)
+            start = pts[0][1]
+            if is_present:
+                end = now_idx
+            elif len(pts) >= 2:
+                end = pts[-1][1]
+                if pts[-1][2]:  # year-only end ("... - 2021") means through Dec
+                    end += 11
+            else:
+                end = start  # single dated point, no "present": one month
+            if end < start:
+                start, end = end, start
+            intervals.append((min(start, now_idx), min(end, now_idx)))
 
-            # Extract 4-digit years (e.g., 2020, 2023)
-            years = _YEAR_PATTERN.findall(dates)
-
-            # Extract month abbreviations (e.g., "Jan", "May", "December")
-            months = [m.group(0).lower()[:3] for m in _MONTH_PATTERN.finditer(dates)]
-
-            if len(years) >= 2:
-                # Date range with start and end years
-                try:
-                    start_year = int(years[0])
-                    end_year = int(years[-1])
-                    start_m = _MONTH_MAP.get(months[0], 1) if months else 1
-                    end_m = (
-                        _MONTH_MAP.get(months[-1] if len(months) >= 2 else "", 12) if months else 12
-                    )
-                    total_months += (end_year - start_year) * 12 + (end_m - start_m)
-                except (ValueError, IndexError):
-                    # Fallback: year-only calculation
-                    total_months += (int(years[-1]) - int(years[0])) * 12
-
-            elif len(years) == 1:
-                # Single year — check if it extends to "Present"
-                dates_lower = dates.lower()
-                if any(kw in dates_lower for kw in _PRESENT_KEYWORDS):
-                    try:
-                        start_year = int(years[0])
-                        start_m = _MONTH_MAP.get(months[0], 1) if months else 1
-                        total_months += (current_year - start_year) * 12 + (current_month - start_m)
-                    except (ValueError, IndexError):
-                        total_months += (current_year - int(years[0])) * 12
-
-        return max(1, total_months // 12) if total_months > 0 else 0
+        if not intervals:
+            return 0
+        intervals.sort()
+        total = 0
+        cur_start, cur_end = intervals[0]
+        for s, e in intervals[1:]:
+            if s <= cur_end + 1:
+                cur_end = max(cur_end, e)
+            else:
+                total += cur_end - cur_start + 1
+                cur_start, cur_end = s, e
+        total += cur_end - cur_start + 1
+        return total
