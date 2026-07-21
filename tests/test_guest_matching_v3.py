@@ -38,6 +38,8 @@ COLLECTIONS = (
     "guest_claim_carryins",
     "guest_global_counters",
     "guest_challenge_velocity",
+    "guest_challenges",
+    "rate_limit_buckets",
     "job_match_snapshots",
     "platform_config",
     "tailoring_records",
@@ -100,10 +102,13 @@ def _session_with_resume(structured=None, raw="resume text " * 10):
 
 
 def _row(title, source="Greenhouse", description="", company="Acme",
-         url=None, apply_link=None):
+         url=None, apply_link=None, days_ago=1):
+    # days_ago is REQUIRED by the guest freshness contract: a row with an
+    # unknown posted date is dropped before scoring (test_guest_freshness_v5).
     return {
         "title": title, "company": company, "location": "US",
         "source": source, "description": description,
+        "days_ago": days_ago,
         "url": url or f"https://jobs.example/{_uuid.uuid4().hex[:8]}",
         "apply_link": apply_link or "",
     }
@@ -154,7 +159,8 @@ class TestSnapshots:
         gid = _session_with_resume()
         mid = _uuid.uuid4().hex
         guest_service._store_matches(
-            gid, [{"title": "T", "match_score": 88, "match_id": mid}], 40,
+            gid, [{"title": "T", "match_score": 88, "match_id": mid,
+                   "days_ago": 2}], 40,
             jd_sources={mid: {"title": "T", "company": "Acme",
                               "jd_text": "Python APIs", "url": "https://x"}},
         )
@@ -204,10 +210,13 @@ class TestEnrichment:
         result = guest_service.compute_guest_matches(gid)
         assert seen["urls"] == [wd_url]
         by_title = {c["title"]: c for c in result["jobs"]}
-        # Title-only the Workday row scores 0 (< 40) — the enriched real
-        # description rescues it (4/8 skills => 50).
+        # Title-only the Workday row scores low — the enriched real
+        # description rescues it. Under the fit engine (ADR-002) the
+        # denominator is what the POSTING asks for, so a description naming
+        # python/go/sql/aws that the resume fully covers scores high rather
+        # than 4/8-of-the-resume = 50.
         assert "Software Engineer" in by_title
-        assert by_title["Software Engineer"]["match_score"] == 50
+        assert by_title["Software Engineer"]["match_score"] == 76
         assert "python" in by_title["Software Engineer"]["matched_skills"]
 
     def test_enrichment_failure_never_breaks_matching(self, guest_db, monkeypatch):
@@ -295,7 +304,7 @@ class TestNonTechPrefilter:
 
 class TestWallClockBudget:
     def test_budget_expiry_persists_partial_results(self, guest_db, monkeypatch):
-        import services.jd_match_scorer as jms
+        import services.fit_score as jms
         pconfig.update_guest_config({"guest_jobs_min_score": 20}, "admin@test")
         gid = _session_with_resume(_structured(skills=["Python", "Go", "SQL", "AWS"]))
 

@@ -42,6 +42,8 @@ GUEST_COLLECTIONS = (
     "guest_claim_carryins",
     "guest_global_counters",
     "guest_challenge_velocity",
+    "guest_challenges",
+    "rate_limit_buckets",
     "job_match_snapshots",
     "platform_config",
     "tailoring_records",
@@ -83,6 +85,7 @@ def _guest_secrets(monkeypatch):
     monkeypatch.setenv("GUEST_SIGNAL_HMAC_KEY", "unit-test-signal-key")
     monkeypatch.setenv("GUEST_DOWNLOAD_TOKEN_SECRET", "unit-test-download-secret")
     monkeypatch.delenv("GUEST_CHALLENGE_PROVIDER", raising=False)
+    monkeypatch.delenv("GUEST_CHALLENGE_SECRET", raising=False)
     monkeypatch.delenv("GUEST_IP_HASH_SALT", raising=False)
 
 
@@ -127,6 +130,7 @@ def _serve_matches(guest_id, n=2):
         jobs.append({
             "match_id": mid, "title": f"Backend Role {i}", "company": "Acme",
             "url": f"https://jobs.example/{i}", "source": "Greenhouse",
+            "days_ago": 1,   # guest freshness contract: cards carry a known age
             "match_score": 80 - i, "matched_skills": ["python"],
             "why": "Estimated match because this posting mentions python from your resume.",
             "sponsorship": None,
@@ -967,16 +971,16 @@ class TestGuestJobs:
         rows = [
             {"title": "Python Backend Engineer", "company": "A", "location": "US",
              "apply_link": "https://a.example/1", "source": "Greenhouse",
-             "description": "Python Go SQL AWS backend"},
+             "days_ago": 1, "description": "Python Go SQL AWS backend"},
             {"title": "Go Platform Engineer", "company": "B", "location": "US",
              "apply_link": "https://b.example/2", "source": "Workday Direct",
-             "description": "Go SQL AWS"},
+             "days_ago": 2, "description": "Go SQL AWS"},
             {"title": "Python Data Engineer", "company": "C", "location": "US",
              "apply_link": "https://c.example/3", "source": "Lever",
-             "description": "Python SQL"},
+             "days_ago": 3, "description": "Python SQL"},
             {"title": "Marketing Manager", "company": "D", "location": "US",
              "apply_link": "https://d.example/4", "source": "Ashby",
-             "description": "brand campaigns"},
+             "days_ago": 4, "description": "brand campaigns"},
         ]
         monkeypatch.setattr(guest_service, "_fetch_free_jobs", lambda structured: rows)
 
@@ -1011,7 +1015,7 @@ class TestGuestJobs:
         _attach(s["guest_id"], _structured(skills=["Python"]), "sponsor test " * 5)
         rows = [{"title": "Python Engineer", "company": "Acme", "location": "US",
                  "apply_link": "https://a.example/1", "source": "Greenhouse",
-                 "description": "Python"}]
+                 "days_ago": 1, "description": "Python"}]
         monkeypatch.setattr(guest_service, "_fetch_free_jobs", lambda structured: rows)
         result = guest_service.compute_guest_matches(s["guest_id"])
         sp = result["jobs"][0]["sponsorship"]
@@ -1043,7 +1047,7 @@ class TestGuestJobs:
         _attach(a["guest_id"], _structured(), raw)
         rows = [{"title": "Python Engineer", "company": "A", "location": "US",
                  "apply_link": "https://a.example/1", "source": "Greenhouse",
-                 "description": "Python Go SQL"}]
+                 "days_ago": 1, "description": "Python Go SQL"}]
         monkeypatch.setattr(guest_service, "_fetch_free_jobs", lambda structured: rows)
 
         first = client.post("/api/jobs/guest/matches", json={"guest_id": a["guest_id"]})
@@ -1074,7 +1078,9 @@ class TestGuestJobs:
         assert first.get_json()["job_id"]
 
         # Same-day cache present -> synchronous 200 with cached rows.
-        guest_service._store_matches(s["guest_id"], [{"title": "T", "match_score": 90}], 20)
+        guest_service._store_matches(
+            s["guest_id"],
+            [{"title": "T", "match_score": 90, "days_ago": 1}], 20)
         second = client.post("/api/jobs/guest/matches", json={"guest_id": s["guest_id"]})
         assert second.status_code == 200
         body = second.get_json()
@@ -1111,15 +1117,20 @@ class TestChallengeSeam:
     def test_velocity_triggers_after_threshold_never_on_first(self, guest_db, monkeypatch):
         monkeypatch.setenv("GUEST_IP_HASH_SALT", "salt")
         monkeypatch.setenv("GUEST_CHALLENGE_PROVIDER", "turnstile")
+        monkeypatch.setenv("GUEST_CHALLENGE_SECRET", "unit-test-challenge-secret")
         monkeypatch.setenv("GUEST_CHALLENGE_THRESHOLD", "2")
         ip_hash = guest_service.hash_ip("203.0.113.7")
         assert guest_challenge_service.maybe_challenge("onboard", ip_hash) is None  # 1st
         assert guest_challenge_service.maybe_challenge("onboard", ip_hash) is None  # 2nd
         third = guest_challenge_service.maybe_challenge("onboard", ip_hash)
-        assert third == {"provider": "turnstile"}
+        # A challenge is now ISSUED (stored, expiring, one-time, bound) and
+        # carries the challenge_id the client redeems at /challenge/verify.
+        assert third["provider"] == "turnstile"
+        assert len(third["challenge_id"]) == 32
 
     def test_no_ip_hash_never_blocks(self, guest_db, monkeypatch):
         monkeypatch.setenv("GUEST_CHALLENGE_PROVIDER", "turnstile")
+        monkeypatch.setenv("GUEST_CHALLENGE_SECRET", "unit-test-challenge-secret")
         assert guest_challenge_service.maybe_challenge("tailor", None) is None
 
     def test_matches_route_returns_challenge_before_spend(self, guest_db, monkeypatch):
@@ -1128,6 +1139,7 @@ class TestChallengeSeam:
                             staticmethod(lambda *a, **k: None))
         monkeypatch.setenv("GUEST_IP_HASH_SALT", "salt")
         monkeypatch.setenv("GUEST_CHALLENGE_PROVIDER", "turnstile")
+        monkeypatch.setenv("GUEST_CHALLENGE_SECRET", "unit-test-challenge-secret")
         monkeypatch.setenv("GUEST_CHALLENGE_THRESHOLD", "1")
         app = load_service_app("jobs")
         client = app.test_client()
@@ -1491,14 +1503,14 @@ class TestJobCardUrlScheme:
         rows = [
             {"title": "Python Engineer", "company": "A", "location": "US",
              "apply_link": "javascript:alert(document.cookie)",
-             "url": "https://ok.example/apply/1",
+             "url": "https://ok.example/apply/1", "days_ago": 1,
              "source": "Greenhouse", "description": "Python Go SQL AWS"},
             {"title": "Go Engineer", "company": "B", "location": "US",
-             "apply_link": "https://good.example/2",
+             "apply_link": "https://good.example/2", "days_ago": 1,
              "source": "Lever", "description": "Go SQL AWS"},
             {"title": "SQL Engineer", "company": "C", "location": "US",
              "apply_link": "data:text/html,<script>alert(1)</script>",
-             "url": "vbscript:msgbox(1)",
+             "url": "vbscript:msgbox(1)", "days_ago": 1,
              "source": "Ashby", "description": "SQL Python"},
         ]
         monkeypatch.setattr(guest_service, "_fetch_free_jobs", lambda structured: rows)
@@ -1998,6 +2010,7 @@ class TestChallengeOnWriteEndpoints:
     def _arm(self, monkeypatch):
         monkeypatch.setenv("GUEST_IP_HASH_SALT", "salt")
         monkeypatch.setenv("GUEST_CHALLENGE_PROVIDER", "turnstile")
+        monkeypatch.setenv("GUEST_CHALLENGE_SECRET", "unit-test-challenge-secret")
         monkeypatch.setenv("GUEST_CHALLENGE_THRESHOLD", "1")
 
     def test_onboard_challenge_after_threshold_before_spend(
@@ -2248,6 +2261,7 @@ class TestNoGuest401Sweep:
             if case == "matches_challenge_required":
                 monkeypatch.setenv("GUEST_IP_HASH_SALT", "salt")
                 monkeypatch.setenv("GUEST_CHALLENGE_PROVIDER", "turnstile")
+                monkeypatch.setenv("GUEST_CHALLENGE_SECRET", "unit-test-secret")
                 monkeypatch.setenv("GUEST_CHALLENGE_THRESHOLD", "1")
                 gid = self._gid_with_resume()
                 assert jobs_client.post(

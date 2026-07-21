@@ -14,7 +14,9 @@ import hashlib
 import json
 import logging
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlencode
@@ -25,6 +27,72 @@ from utils.config import _get_config_value
 from utils.db_connect import DBConnect
 
 logger = logging.getLogger(__name__)
+
+
+# ======================================================================
+# Paid-source (cost_class) chokepoint
+# ======================================================================
+# JSearch/RapidAPI is METERED: every call costs real money and is trivially
+# amplified by anonymous traffic. mnc_jobs_service already drops cost_class
+# "paid" catalog rows on guest-safe runs, but that is one caller's gate. The
+# gate below lives on _search_jsearch_raw itself - the single function every
+# JSearch path funnels through - so a NEW caller cannot reach the paid API by
+# another route and quietly bypass the policy.
+#
+# Guest context is established two ways, both fail-safe:
+#   1. EXPLICIT - any caller (including background workers, where there is no
+#      Flask request) can wrap work in ``guest_cost_context()``. A plain
+#      module-level flag is used rather than a ContextVar on purpose:
+#      ThreadPoolExecutor does NOT propagate contextvars into worker threads,
+#      and the guest match pipeline fans out across exactly such a pool - a
+#      ContextVar would silently fail OPEN there.
+#   2. IMPLICIT - inside a Flask request with no verified JWT identity, the
+#      caller is by definition unauthenticated, so paid sources are refused
+#      even if nobody remembered to set the flag.
+# A stale/leaked flag can only ever cause a REFUSAL (degraded results), never
+# an unmetered spend.
+
+class PaidSourceBlocked(RuntimeError):
+    """A metered (cost_class=paid) source was reached from guest context."""
+
+
+_guest_cost_lock = threading.Lock()
+_guest_cost_depth = 0
+
+
+@contextmanager
+def guest_cost_context():
+    """Mark the enclosing work as anonymous/guest: metered sources refuse."""
+    global _guest_cost_depth
+    with _guest_cost_lock:
+        _guest_cost_depth += 1
+    try:
+        yield
+    finally:
+        with _guest_cost_lock:
+            _guest_cost_depth -= 1
+
+
+def in_guest_cost_context() -> bool:
+    """True when metered/paid job sources must not be called."""
+    if _guest_cost_depth > 0:
+        return True
+    try:
+        from flask import has_request_context
+
+        if not has_request_context():
+            return False  # background worker with no explicit marker
+        from flask_jwt_extended import verify_jwt_in_request
+
+        # optional=True: returns None (no raise) when there is no token, so an
+        # unauthenticated HTTP caller is detected without ever emitting a 401.
+        verify_jwt_in_request(optional=True)
+        from flask_jwt_extended import get_jwt_identity
+
+        return not get_jwt_identity()
+    except Exception:
+        # Cannot prove the caller is authenticated -> treat as guest.
+        return True
 
 # ---- Portfolio skills (same source as chat_service.PORTFOLIO_CONTEXT) ----
 PORTFOLIO_SKILLS = [
@@ -428,7 +496,21 @@ class JobService:
         the intent as post-filters in the main pipeline. We also widen
         date_posted from "today" → "3days" because JSearch's daily index
         lags ~1 day for many sources.
+
+        COST GATE (first thing, before the key is even read): JSearch is a
+        metered paid source and is NEVER callable from guest/unauthenticated
+        context, whichever caller got here. See the module header.
         """
+        if in_guest_cost_context():
+            logger.warning(
+                "JSearch refused: metered (cost_class=paid) source reached "
+                "from guest/unauthenticated context"
+            )
+            raise PaidSourceBlocked(
+                "JSearch is a paid source and is not available to "
+                "guest/unauthenticated callers"
+            )
+
         api_key = self._get_jsearch_key()
         if not api_key:
             logger.info("JSearch skipped: JSEARCH_API_KEY not configured")

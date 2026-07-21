@@ -62,7 +62,13 @@ def create_app():
         r"/api/*": {
             "origins": allowed_origins,
             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization"],
+            # X-Guest-* carry the guest capability out of the query string
+            # (where it leaked into edge logs / history / Referer) for clients
+            # that cannot use the HttpOnly cookie. Origin allowlist unchanged.
+            "allow_headers": [
+                "Content-Type", "Authorization",
+                "X-Guest-Id", "X-Guest-Device-Token",
+            ],
             "expose_headers": ["Content-Disposition", "X-Trace-Id", "X-Amzn-Trace-Id", "Server-Timing"],
             "supports_credentials": True,
             "max_age": 3600,

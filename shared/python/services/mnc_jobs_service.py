@@ -90,6 +90,48 @@ CACHE_FRESH_SECONDS = 3 * 3600
 
 
 # ----------------------------------------------------------------------
+# Cost classes
+# ----------------------------------------------------------------------
+# Every source in this catalog is one of two cost classes:
+#
+#   free — the company's OWN ATS/careers API. Unmetered: the only cost is our
+#          own egress, so an anonymous caller can safely fan out across it.
+#   paid — a metered third-party aggregator. Today that is JSearch on RapidAPI
+#          (engine "aggregator"), which bills PER CALL against a plan quota.
+#
+# Anonymous/guest traffic must never spend a paid source: an unauthenticated
+# visitor could otherwise burn the platform's RapidAPI credits at will. Callers
+# opt into that protection with payload["exclude_paid"] (alias "guest_safe"),
+# which drops paid rows BEFORE any fetch. Authed callers default to False and
+# keep full coverage.
+#
+# NOTE: a missing JSEARCH_API_KEY is NOT the control here. The key IS
+# configured in this deployment; the cost class is.
+COST_CLASS_FREE = "free"
+COST_CLASS_PAID = "paid"
+
+ENGINE_COST_CLASS = {
+    "career_pages": COST_CLASS_FREE,   # board ATS JSON APIs
+    "enterprise": COST_CLASS_FREE,     # Amazon / Eightfold / Phenom
+    "workday": COST_CLASS_FREE,        # public Workday CXS
+    "orc": COST_CLASS_FREE,            # Oracle Recruiting Cloud CE
+    "uber": COST_CLASS_FREE,           # Uber first-party careers API
+    "aggregator": COST_CLASS_PAID,     # JSearch / RapidAPI — metered
+}
+
+
+def cost_class_for_engine(engine: Any) -> str:
+    """Cost class of a catalog engine. An UNKNOWN engine is treated as paid:
+    a new metered source must be opted in explicitly, never inherited into
+    anonymous traffic by omission."""
+    return ENGINE_COST_CLASS.get(str(engine or ""), COST_CLASS_PAID)
+
+
+def is_paid_source(row: Dict[str, Any]) -> bool:
+    return cost_class_for_engine((row or {}).get("engine")) == COST_CLASS_PAID
+
+
+# ----------------------------------------------------------------------
 # Catalog helpers
 # ----------------------------------------------------------------------
 
@@ -341,6 +383,17 @@ def run_mnc_search(
         and (not companies or r["slug"].lower() in companies)
     ]
     diagnostics: Dict[str, Any] = {"task_errors": 0}
+    # cost_class gate (guest-safe runs): drop metered aggregator rows BEFORE
+    # any fetch, exactly like the missing-key path below. Default False, so
+    # authed callers are unchanged.
+    exclude_paid = bool(payload.get("exclude_paid") or payload.get("guest_safe"))
+    if exclude_paid:
+        paid = sorted(r["slug"] for r in rows if is_paid_source(r))
+        if paid:
+            diagnostics["paid_sources_excluded"] = paid
+            logger.info("mnc-jobs: guest-safe run; skipping %d paid "
+                        "(cost_class=%s) companies", len(paid), COST_CLASS_PAID)
+        rows = [r for r in rows if not is_paid_source(r)]
     if not _jsearch_configured():
         skipped = sorted(r["slug"] for r in rows if r["engine"] == "aggregator")
         if skipped:
@@ -441,6 +494,11 @@ def run_mnc_search(
                 pass
 
         def _one_company(r: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+            # Belt and braces: paid rows are already filtered out above, so
+            # this can only fire if a future caller reaches _one_company by
+            # another path. Spending a metered call is not recoverable.
+            if exclude_paid and is_paid_source(r):
+                return [], None
             try:
                 engine = r["engine"]
                 if engine == "career_pages":
@@ -519,7 +577,7 @@ def run_mnc_search(
             -(j.get("match_score") or 0),
             j.get("days_ago") if j.get("days_ago") is not None else 99))
 
-    jobs = _score_jobs(jobs, titles, skills, skill_terms)
+    jobs = _score_jobs(jobs, titles, skills, skill_terms, resume_years)
     _rank(jobs)
 
     if partial_cb:
@@ -540,7 +598,7 @@ def run_mnc_search(
         if (j.get("days_ago") if j.get("days_ago") is not None else 99) <= 3
     ][:enrich_recent_n]
     if _enrich_details(top):
-        _score_jobs(top, titles, skills, skill_terms)
+        _score_jobs(top, titles, skills, skill_terms, resume_years)
         _rank(jobs)
         if coll is not None:
             by_id = {j["job_id"]: j for j in top if j.get("description")}

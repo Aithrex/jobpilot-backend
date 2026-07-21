@@ -334,6 +334,29 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             job_id = get_resume_service().create_job("ats_signal_aggregate", {}, "system@internal")
             ResumeService.invoke_async(job_id, "ats_signal_aggregate", {})
             return {"job": name, "enqueued": job_id}
+        if name.startswith("ingest_"):
+            # ADR-003 canonical job inventory. One prefix branch covers every
+            # ingestion rule so adding a shard schedule is a Terraform-only
+            # change, not a code change:
+            #   ingest_workday / ingest_career_pages -> dispatch that source's
+            #       due shards (bounded per tick; `due_shards` excludes leased
+            #       and backed-off shards, which is the backpressure)
+            #   ingest_maintenance -> the retention sweep
+            # Both bridge to the resume `_process_job` job types of the same
+            # family, system actor, exactly like trend_aggregate above.
+            from services.resume_service import get_resume_service, ResumeService
+            if name == "ingest_maintenance":
+                job_type, payload = "job_ingest_maintenance", {}
+            else:
+                source = {"ingest_workday": "workday",
+                          "ingest_career_pages": "career-pages"}.get(name)
+                if source is None:
+                    logger.warning("[scheduled] unknown ingest rule: %s", name)
+                    return {"error": "unknown job", "name": name}
+                job_type, payload = "job_ingest_dispatch", {"source": source}
+            job_id = get_resume_service().create_job(job_type, payload, "system@internal")
+            ResumeService.invoke_async(job_id, job_type, payload)
+            return {"job": name, "enqueued": job_id}
         logger.warning("[scheduled] unknown job: %s", name)
         return {"error": "unknown job", "name": name}
     except Exception as e:

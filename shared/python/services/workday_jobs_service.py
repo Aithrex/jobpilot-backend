@@ -910,26 +910,36 @@ def _score_jobs(
     titles: List[str],
     skills: List[str],
     skill_terms: List[str],
+    resume_years: Optional[int] = None,
+    structured: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Attach match_score / matched_skills / missing_skills to every job.
 
-    Deterministic (no LLM). Three signals:
-      - skill overlap of the resume skills against title + description (the
-        description exists once _enrich_details has run for that row — same
-        regex semantics as jd_match_scorer);
-      - a title-family bonus (+45) when the job title covers all core tokens
-        of one of the user's titles;
-      - a skill-signal bonus (+20) when the title DOESN'T match but the row
-        either overlaps resume skills or was retrieved by a skill-derived
-        search term — this is what keeps differently-titled roles ("Member
-        of Technical Staff") ranked instead of buried at zero.
+    ADR-002: this now delegates to `services.fit_score`, the SAME versioned
+    engine the guest and authenticated display paths use. Previously this
+    function ran its own formula (base = min(55, matched*6) plus +45/+20/+12
+    bonuses) to SELECT and order candidates, and then guest_service.score_one
+    overwrote `match_score` with a different formula. Selection and
+    presentation disagreed about what a good match was. One engine now does
+    both.
 
-    Nothing is ever dropped here — scoring only orders; recall is preserved.
+    The retrieval signal (this row came back for a skill-derived search term)
+    and the stack-family alignment are NOT part of the displayed fit score.
+    They are ranking concerns, so they live in `rank_score`, which callers may
+    order by; `match_score` stays the honest candidate-to-job fit.
+
+    Nothing is ever dropped here - scoring only orders; recall is preserved.
     """
+    from services import fit_score
+
     skill_rx = [(s, _build_match_regex(s)) for s in skills]
     matchers = _role_matchers(titles)
     skill_terms_set = {t.lower() for t in skill_terms}
     primary_fams, resume_fams = _resume_family_weights(skills)
+    # A real parsed resume gives applied-experience evidence; a bare skill
+    # list degrades to listed claims only (never invented into experience).
+    profile = (fit_score.build_resume_profile(structured) if structured
+               else fit_score._profile_from_skills(skills, titles, resume_years))
 
     for job in jobs:
         title_lc = job["title"].lower()
@@ -938,30 +948,35 @@ def _score_jobs(
         matched = [s for s, rx in skill_rx if rx is not None and rx.search(blob)]
         matched_set = set(matched)
         missing = [s for s, _ in skill_rx if s not in matched_set][:8]
-        # Base measures JD COVERAGE, not "fraction of resume used" — a
-        # 50-skill resume matching 10 of a JD's asks is a great fit, not a
-        # 20%. ~6 points per matched skill, saturating at 55 so the
-        # title/skill boosts still differentiate the top of the scale.
-        base = min(55, len(matched) * 6) if skills else 0
         title_matched = any(all(tok in title_lc for tok in m) for m in matchers)
         skill_signal = bool(matched) or bool(
             skill_terms_set & {str(t).lower() for t in (job.get("matched_terms") or [])}
         )
-        # Stack alignment: a cloud-primary resume must rank cloud-centered
-        # JDs above equally title-matched off-stack ones. Cache the family
-        # counts on the job so _attach_feasibility reuses this scan instead of
-        # re-sweeping the full description.
+        # Cache the family counts on the job so _attach_feasibility reuses
+        # this scan instead of re-sweeping the full description.
         fam_counts = _family_counts(blob)
         job["_fam_counts"] = fam_counts
         job_fams = set(fam_counts)
         align = 12 if job_fams & primary_fams else (6 if job_fams & resume_fams else 0)
-        score = min(100, base + (45 if title_matched else (20 if skill_signal else 0)) + align)
-        if not skills and not title_matched:
-            score = 15  # neutral floor so the ring isn't a sea of zeros
-        job["match_score"] = score
+
+        verdict = fit_score.score_one(
+            jd_text=job.get("description") or "",
+            title=job["title"],
+            profile=profile,
+            location=job.get("location") or "",
+        )
+        job["match_score"] = verdict["match_score"]
+        job["fit_band"] = verdict["band"]
+        job["fit_confidence"] = verdict["confidence"]
+        job["score_version"] = verdict["score_version"]
+        # Resume-relative overlap is still the most useful thing to SHOW next
+        # to a feed row, so those two lists keep their existing meaning.
         job["matched_skills"] = matched[:12]
         job["missing_skills"] = missing
         job["title_matched"] = title_matched
+        # Internal ordering only. Never displayed, never persisted as fit.
+        job["rank_score"] = min(
+            100, verdict["match_score"] + (6 if skill_signal else 0) + align // 3)
         job["seniority"] = _seniority_full(
             job["title"], job.get("description") or "", job.get("_exp") or "")
     return jobs
@@ -1340,7 +1355,7 @@ def run_workday_jobs_search(
             j.get("days_ago") if j.get("days_ago") is not None else 99,
         ))
 
-    jobs = _score_jobs(jobs, titles, skills, skill_terms)
+    jobs = _score_jobs(jobs, titles, skills, skill_terms, resume_years)
     _rank(jobs)
 
     # Fetch full descriptions for the top slice, then rescore those rows on
@@ -1371,7 +1386,7 @@ def run_workday_jobs_search(
     ][:enrich_recent_n]
     enriched = _enrich_details(top, tz_offset)
     if enriched:
-        _score_jobs(top, titles, skills, skill_terms)
+        _score_jobs(top, titles, skills, skill_terms, resume_years)
         # startDate refinement can push a row past the window, and the
         # detail country resolves "N Locations" rows definitively.
         jobs = [j for j in jobs

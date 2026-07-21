@@ -467,6 +467,23 @@ INDEX_SPECS = [
     # platform_config is keyed on _id (default index) — nothing extra needed;
     # guest_global_counters + guest_challenge_velocity ($inc counters) ride _id.
 
+    # === Distributed rate limiting + challenge lifecycle ====================
+    # DistributedRateLimiter (utils/security.py) replaced the per-container
+    # in-memory dict, which on 4 independently-scaled Lambdas meant the real
+    # limit was (containers x limit). Buckets are keyed on _id
+    # ("<scope>:<subject>:<window>") so the counter $inc rides the default
+    # index; this TTL is purely reclamation of expired windows.
+    ("rate_limit_buckets", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expires_at"}),
+    # guest_challenges: issue -> verify -> redeem. Verification looks up by
+    # challenge_id, so that must be unique; expiry drives both the one-time
+    # semantics and reclamation. Without the TTL these accumulate forever,
+    # since a challenge that is never solved is never redeemed or deleted.
+    ("guest_challenges", [("challenge_id", ASCENDING)],
+     {"unique": True, "name": "challenge_id_unique"}),
+    ("guest_challenges", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expires_at"}),
+
     # === job_match_snapshots (Resume Platform v3 §1.4) ======================
     # Guest matches live HERE (moved out of guest_sessions/guest_quota_subjects
     # embedded matched_jobs — those embedded paths are gone; the fresh DB
@@ -483,6 +500,134 @@ INDEX_SPECS = [
     # (TTL ignores non-date values, so claimed snapshots are retained).
     ("job_match_snapshots", [("purge_after", ASCENDING)],
      {"expireAfterSeconds": 0, "name": "ttl_purge_after"}),
+    # ADR-003 inventory bridge: job_inventory_service.link_snapshot_jobs pushes
+    # canonical job_ids onto the snapshot. Reverse lookup "which snapshots
+    # referenced this posting" (invalidate on closure) filters {job_ids: <id>}.
+    # Multikey; sparse because snapshots written before the bridge lack it.
+    ("job_match_snapshots", [("job_ids", ASCENDING)],
+     {"sparse": True, "name": "job_ids_idx"}),
+
+    # === job_postings (ADR-003 canonical inventory) =======================
+    # Every spec below is derived from a real query in
+    # shared/python/services/job_inventory_service.py; the function is named in
+    # the comment. Compound key order is equality -> sort -> range throughout.
+    # Each one is verified with explain("executionStats") by
+    # scripts/explain_job_inventory.py — run it after applying this migration.
+    #
+    # Write cost note: 7 indexes on the highest-write collection in the system.
+    # Ingestion is scheduled and batched (EventBridge, not per-request), so the
+    # write amplification lands on a background path, while the read paths it
+    # serves are on the guest request path where a COLLSCAN across the whole
+    # posting corpus would be fatal.
+    #
+    # upsert_posting / get_posting / touch_seen / mark_requirements_parsed /
+    # close_posting all filter {source, source_job_id}. This is THE identity of
+    # a posting: unique enforces at-least-once idempotency at the storage layer
+    # (ADR-003 has no queue dedup), so a concurrent double-delivery raises
+    # DuplicateKeyError instead of creating a twin doc.
+    ("job_postings", [("source", ASCENDING), ("source_job_id", ASCENDING)],
+     {"unique": True, "name": "source_job_id_unique"}),
+    # get_by_job_id / resolve_jd filter {job_id} — the opaque canonical id
+    # handed to snapshots, tailoring and the FE. uuid4 hex, so unique is safe.
+    ("job_postings", [("job_id", ASCENDING)],
+     {"unique": True, "name": "job_id_unique"}),
+    # THE retrieval path. find_active_fresh(role_family=...) issues
+    #   {status:"active", role_family:<eq>, cost_class:<eq|$in>,
+    #    posted_at:{$gte:cutoff}}  sort {posted_at:-1}
+    # Equality (status, role_family, cost_class) -> sort/range (posted_at desc).
+    # cost_class sits LAST among the equalities because the authenticated feed
+    # passes {$in:[free,paid]} while guests pass "free" (ADR-004): as the final
+    # equality field, an $in becomes a SORT_MERGE over index bounds rather than
+    # a blocking in-memory sort. posted_at is descending in the key to match the
+    # sort direction exactly (a reversed scan also works, but matching avoids
+    # any question about it).
+    ("job_postings", [("status", ASCENDING), ("role_family", ASCENDING),
+                      ("cost_class", ASCENDING), ("posted_at", DESCENDING)],
+     {"name": "active_role_cost_posted_at"}),
+    # Same path with NO role filter (browse all fresh postings for a cost
+    # class). role_family sits between status and posted_at in the index above,
+    # so omitting it would leave a gap and force a blocking sort — hence this
+    # deliberate second, shorter index rather than reusing the first.
+    ("job_postings", [("status", ASCENDING), ("cost_class", ASCENDING),
+                      ("posted_at", DESCENDING)],
+     {"name": "active_cost_posted_at"}),
+    # Location-scoped retrieval: find_active_fresh(location_key=...) adds
+    # {"locations.key": <eq>}. `locations` is an array, so this index is
+    # MULTIKEY. MEASURED (scripts/explain_job_inventory.py, 1000-doc scratch
+    # corpus with multi-location docs): IXSCAN on active_location_posted_at,
+    # nReturned=60 keys=60 docs=60, NO blocking SORT — the multikey field
+    # carries an EQUALITY bound and the sort field (posted_at) is not multikey,
+    # which is exactly the case where Mongo can still use the index for the
+    # sort. locations is bounded to 12 entries per doc (normalize_locations),
+    # so the multikey fan-out stays bounded.
+    ("job_postings", [("status", ASCENDING), ("locations.key", ASCENDING),
+                      ("posted_at", DESCENDING)],
+     {"name": "active_location_posted_at"}),
+    # Maintenance path: find_stale_for_verification issues
+    #   {status:"active", source:<eq>, last_verified_at:{$lt:cutoff}}
+    #   sort {last_verified_at: 1}
+    # Equality (status, source) -> sort+range (last_verified_at asc), so the
+    # sweep is a bounded index range with no in-memory sort. close_unseen's
+    # {source, status, last_seen_at:{$lt}} uses the same (status, source)
+    # prefix and finishes with a short filtered scan.
+    ("job_postings", [("status", ASCENDING), ("source", ASCENDING),
+                      ("last_verified_at", ASCENDING)],
+     {"name": "status_source_last_verified"}),
+    # Parse-once lookup: find_by_content_hash / find_parsed_requirements filter
+    # {content_hash} and {content_hash, normalization_version,
+    # requirements.extractor_version}. content_hash is the prefix, so ONE index
+    # serves both the bare lookup and the versioned one. This is what makes a
+    # JD fetched by two different sources get extracted exactly once.
+    ("job_postings", [("content_hash", ASCENDING),
+                      ("normalization_version", ASCENDING)],
+     {"name": "content_hash_norm_version"}),
+    # Retention: purge_expired filters {purge_at:{$lte:now}, status:{$in:closed}}.
+    # DELIBERATELY NOT A TTL INDEX. purge_at is only ever stamped by
+    # close_posting/set_purge_at, and set_purge_at refuses to stamp a live doc —
+    # but if that invariant were ever broken, a TTL index would silently delete
+    # real, live inventory with no audit trail. A plain index + the explicit
+    # bounded sweeper re-checks the closed status at delete time and logs the
+    # count into job_ingestion_runs. partialFilterExpression keeps the index to
+    # the closed minority instead of every active posting.
+    ("job_postings", [("purge_at", ASCENDING)],
+     {"name": "purge_at_retention",
+      "partialFilterExpression": {"purge_at": {"$exists": True}}}),
+    # Employer roll-ups (per-company boards, diversity capping in ranking):
+    # {employer_id, status} filters.
+    ("job_postings", [("employer_id", ASCENDING), ("status", ASCENDING)],
+     {"name": "employer_id_status"}),
+
+    # === job_source_state (leases / watermarks — the SQS replacement) ======
+    # _state_key: every lease/watermark/backoff op filters {source, shard}.
+    # Unique enforces one state doc per shard, which is what makes
+    # acquire_lease's guarded find_one_and_update a real mutual exclusion.
+    ("job_source_state", [("source", ASCENDING), ("shard", ASCENDING)],
+     {"unique": True, "name": "source_shard_unique"}),
+    # due_shards(source=...) — the scheduler's pick list: leases free/expired
+    # AND out of backoff. Equality on source, range on next_attempt_at.
+    ("job_source_state", [("source", ASCENDING), ("next_attempt_at", ASCENDING)],
+     {"name": "source_next_attempt_at"}),
+    # Cross-source expired-lease sweep (a crashed worker's shard): range scan on
+    # lease_expiry alone, no source equality.
+    ("job_source_state", [("lease_expiry", ASCENDING)],
+     {"name": "lease_expiry_idx"}),
+
+    # === job_ingestion_runs (observability — we have no DLQ, ADR-003) ======
+    # bump_run_counts / record_run_failure / finish_run all filter {run_id}
+    # (uuid4 hex → unique is safe and protects counter attribution).
+    ("job_ingestion_runs", [("run_id", ASCENDING)],
+     {"unique": True, "name": "run_id_unique"}),
+    # recent_runs(source) — {source} equality, sort started_at desc.
+    ("job_ingestion_runs", [("source", ASCENDING), ("started_at", DESCENDING)],
+     {"name": "source_started_at"}),
+    # Correlating a run back to the invocation that produced it.
+    ("job_ingestion_runs", [("trace_id", ASCENDING)],
+     {"sparse": True, "name": "trace_id_idx"}),
+    # Runs are logs: start_run stamps expire_at = now + 30d. TTL is correct HERE
+    # (unlike job_postings) because losing an old run record costs an audit
+    # trail, not inventory.
+    ("job_ingestion_runs", [("expire_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expire_at"}),
 ]
 
 # Indexes DROPPED by this migration (Guest Onboarding v2: plaintext identity

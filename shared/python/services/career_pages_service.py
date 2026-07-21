@@ -194,7 +194,12 @@ def _fetch_greenhouse(c: Dict[str, str]) -> List[Dict[str, Any]]:
     r.raise_for_status()
     out = []
     for j in (r.json() or {}).get("jobs") or []:
-        date = j.get("first_published") or j.get("updated_at") or ""
+        # first_published ONLY. updated_at is an edit timestamp, not a posting
+        # date: falling back to it re-dated months-old reqs as "new" (and
+        # Greenhouse is over half the catalog, so it was the single biggest
+        # source of fake freshness). No first_published => the date is
+        # UNKNOWN, and an unknown date is correctly dropped downstream.
+        date = j.get("first_published") or ""
         out.append(_row(
             c, j.get("id"), j.get("title") or "", j.get("absolute_url") or "",
             _iso(date), ((j.get("location") or {}).get("name")) or ""))
@@ -404,7 +409,9 @@ def _fetch_eightfold(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]
             positions = (r.json() or {}).get("positions") or []
         for j in positions:
             locs = j.get("locations") or ([j.get("location")] if j.get("location") else [])
-            posted = j.get("postedTs") or j.get("creationTs") or j.get("t_update") or j.get("t_create")
+            # Posting timestamps only — t_update/t_create are record-edit
+            # times and made stale reqs look freshly posted.
+            posted = j.get("postedTs") or j.get("creationTs")
             url = (j.get("canonicalPositionUrl")
                    or f"https://{host}/careers/job/{j.get('id')}?domain={domain}")
             out.append(_row(
@@ -536,7 +543,8 @@ def _fetch_uber(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
             out.append(_row(
                 c, j.get("id"), title,
                 f"https://www.uber.com/global/en/careers/list/{j.get('id')}/",
-                _iso(j.get("creationDate") or j.get("updatedDate")),
+                # creationDate only: updatedDate is an edit timestamp.
+                _iso(j.get("creationDate")),
                 location,
                 description=desc[:5000],
                 is_remote=bool(_REMOTE_RE.search(title + " " + desc)) or None,
@@ -1075,7 +1083,7 @@ def run_career_pages_search(
             -(j.get("match_score") or 0),
             j.get("days_ago") if j.get("days_ago") is not None else 99))
 
-    jobs = _score_jobs(jobs, titles, skills, skill_terms)
+    jobs = _score_jobs(jobs, titles, skills, skill_terms, resume_years)
     _rank(jobs)
 
     if partial_cb:
@@ -1096,7 +1104,7 @@ def run_career_pages_search(
         if (j.get("days_ago") if j.get("days_ago") is not None else 99) <= 3
     ][:enrich_recent_n]
     if _enrich_details(top):
-        _score_jobs(top, titles, skills, skill_terms)
+        _score_jobs(top, titles, skills, skill_terms, resume_years)
         _rank(jobs)
         if coll is not None:
             by_id = {j["job_id"]: j for j in top if j.get("description")}

@@ -113,6 +113,146 @@ _MID_TITLE_RE = re.compile(r"\b(mid[- ]?level|ii)\b", re.IGNORECASE)
 SNAPSHOT_RETENTION_DAYS = 7
 
 
+# ---------------------------------------------------------------------------
+# Guest freshness contract (server-authoritative)
+# ---------------------------------------------------------------------------
+# The feeds run a 30-day window (workday_jobs_service.WINDOW_DAYS). That is the
+# right window for an authed user browsing a whole tab; it is the WRONG window
+# for a guest's first impression, where a 26-day-old req reads as a dead lead
+# (live incident: a 26-day-old Workday row was served to an anonymous guest).
+#
+# The guest window is enforced HERE, once, so it holds no matter which feed a
+# row came from and no matter how a feed derived its date. All three rules
+# fail CLOSED:
+#   * unknown posted date -> DROP. We never substitute now() for a missing
+#     date; that would turn "we do not know" into "posted today".
+#   * age > GUEST_MAX_AGE_DAYS -> DROP.
+#   * an explicit closed/inactive marker -> DROP.
+# Applied immediately after fetch (before scoring) AND on every snapshot read,
+# so a snapshot written this morning can never serve a row that has since aged
+# out. Fewer than guest_jobs_max survivors is a SUCCESS, never padded.
+
+
+def _env_int(name: str, default: int) -> int:
+    """Optional env override for a guest knob (same contract as
+    workday_jobs_service._env_int; redefined locally so importing
+    guest_service never drags in the workday fan-out module at import time)."""
+    try:
+        return max(1, int(os.environ.get(name, "") or default))
+    except (TypeError, ValueError):
+        return default
+
+
+GUEST_MAX_AGE_DAYS = _env_int("GUEST_MAX_AGE_DAYS", 7)
+
+# Explicit "this req is not live" markers seen across the feeds. Only an
+# EXPLICIT marker rejects: an absent status field is not evidence of closure.
+_CLOSED_STATUS_VALUES = frozenset({
+    "closed", "close", "inactive", "expired", "filled", "archived",
+    "cancelled", "canceled", "removed", "withdrawn", "draft", "unpublished",
+    "not_active", "notactive", "deleted",
+})
+_STATUS_FIELDS = ("status", "job_status", "state", "posting_status")
+# Truthy => open. A present-but-falsey value rejects.
+_OPEN_FLAG_FIELDS = ("active", "is_active", "is_open", "is_live")
+# Truthy => closed.
+_CLOSED_FLAG_FIELDS = ("closed", "is_closed", "expired", "is_expired",
+                       "archived", "is_archived")
+
+
+def _row_days_ago(row: Dict[str, Any]) -> Optional[int]:
+    """The row's own calendar age in days, or None when it is UNKNOWN.
+
+    Only the feed-computed `days_ago` counts. A missing/unparseable value is
+    unknown — it is never derived from now(), and never defaulted to 0."""
+    value = row.get("days_ago")
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_is_open(row: Dict[str, Any]) -> bool:
+    """False only when the row carries an EXPLICIT closed/inactive marker."""
+    for field in _OPEN_FLAG_FIELDS:
+        if field in row and row.get(field) is not None and not row.get(field):
+            return False
+    for field in _CLOSED_FLAG_FIELDS:
+        if row.get(field):
+            return False
+    for field in _STATUS_FIELDS:
+        value = row.get(field)
+        if isinstance(value, str) and value.strip().lower().replace(
+            " ", "_"
+        ) in _CLOSED_STATUS_VALUES:
+            return False
+    return True
+
+
+def filter_fresh_for_guest(
+    rows: Optional[List[Dict[str, Any]]],
+    *,
+    max_age_days: Optional[int] = None,
+    extra_age_days: int = 0,
+) -> List[Dict[str, Any]]:
+    """Drop every row a guest must not see: unknown date, too old, or closed.
+
+    ``extra_age_days`` ages rows that were dated at some point in the PAST
+    (a stored snapshot): a card that was 6 days old when the snapshot was
+    written is 8 days old two days later and must stop being served."""
+    try:
+        limit = int(GUEST_MAX_AGE_DAYS if max_age_days is None else max_age_days)
+    except (TypeError, ValueError):
+        limit = GUEST_MAX_AGE_DAYS
+    try:
+        extra = max(0, int(extra_age_days))
+    except (TypeError, ValueError):
+        extra = 0
+    out: List[Dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        days = _row_days_ago(row)
+        if days is None:            # unknown posted date — never guessed
+            continue
+        if days + extra > limit:
+            continue
+        if not _row_is_open(row):
+            continue
+        out.append(row)
+    return out
+
+
+def _snapshot_extra_age_days(snapshot: Dict[str, Any]) -> int:
+    """Calendar days elapsed since the snapshot's own date — the amount every
+    stored card has aged since it was scored."""
+    raw = str((snapshot or {}).get("date") or "")
+    try:
+        snap_date = datetime.strptime(raw, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return 0
+    return max(0, (_now().date() - snap_date).days)
+
+
+def _freshen_snapshot(snapshot: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Re-apply the guest freshness contract to a STORED snapshot on read.
+
+    A snapshot is a cache, not a licence: rows that have aged out (or were
+    written by an older, laxer code path) are dropped here, so a cache hit can
+    never serve something a fresh scan would reject."""
+    if not snapshot:
+        return snapshot
+    extra = _snapshot_extra_age_days(snapshot)
+    out = dict(snapshot)
+    for key in ("jobs", "pool"):
+        rows = out.get(key)
+        if isinstance(rows, list):
+            out[key] = filter_fresh_for_guest(rows, extra_age_days=extra)
+    return out
+
+
 def _clock() -> float:
     """Monotonic clock seam — tests monkeypatch this to drive the 75s
     wall-clock budget deterministically."""
@@ -851,16 +991,20 @@ def _cache_doc_for_guest(guest_id: str) -> Optional[Dict[str, Any]]:
     """Resolve the guest's snapshot doc (spec 1.4): subject-level first
     (today's (quota_subject_id, date) snapshot), falling back to the
     session's snapshot_id ref (carries guests through a missing HMAC key —
-    each session is then its own standalone subject anyway)."""
+    each session is then its own standalone subject anyway).
+
+    Every return path runs through _freshen_snapshot: this is THE single read
+    seam for stored guest matches, so the freshness contract is re-applied on
+    every cache/snapshot read without each caller having to remember."""
     sid = subject_for_guest(guest_id)
     if sid:
         snap = _snapshots().find_one({"quota_subject_id": sid, "date": _today_key()})
         if snap:
-            return snap
+            return _freshen_snapshot(snap)
     doc = get_session(guest_id) or {}
     snap_id = doc.get("snapshot_id")
     if snap_id and isinstance(snap_id, str):
-        return _snapshots().find_one({"snapshot_id": snap_id})
+        return _freshen_snapshot(_snapshots().find_one({"snapshot_id": snap_id}))
     return None
 
 
@@ -1024,17 +1168,53 @@ def _store_matches(
 
 
 def _guest_role_terms(structured: Dict[str, Any]) -> List[str]:
-    """Derive up to 3 target-role search terms from the guest's own resume."""
+    """Derive up to 3 target-role search terms from the guest's own resume.
+
+    Returns [] when the resume yields no usable role evidence. It deliberately
+    does NOT fall back to "software engineer".
+
+    That fallback used to live here, and it read only experience[].title. So a
+    nurse, an accountant, a teacher, or any new grad whose roles did not parse
+    into that one field triggered a full software-engineering scan, whose
+    results were then scored against their (non-tech) skills. The guest saw
+    near-zero matches and an empty_reason blaming the market. The cause was us.
+
+    Evidence is widened instead: experience titles, then the resume's own
+    headline/title field, then the field of study. If all are empty the caller
+    must say so honestly rather than guess a career.
+    """
     terms: List[str] = []
     seen = set()
-    for exp in (structured.get("experience") or []):
-        title = InputSanitizer.sanitize_string(str(exp.get("title") or ""), max_length=120).strip()
-        if title and title.lower() not in seen:
-            seen.add(title.lower())
-            terms.append(title)
+
+    def _add(raw: Any) -> None:
         if len(terms) >= 3:
+            return
+        text = InputSanitizer.sanitize_string(str(raw or ""), max_length=120).strip()
+        if text and text.lower() not in seen:
+            seen.add(text.lower())
+            terms.append(text)
+
+    for exp in (structured.get("experience") or []):
+        _add(exp.get("title"))
+        if len(terms) >= 3:
+            return terms
+
+    # No parsed work titles: the resume may still declare a role directly
+    # (headline / target title), which is common on student and career-change
+    # resumes where experience[] is empty or non-professional.
+    for key in ("title", "job_title", "headline", "headline_title", "target_title"):
+        _add(structured.get(key))
+    if terms:
+        return terms
+
+    # Last resort: field of study. A degree names a domain, not a job, so this
+    # is weaker evidence and stops at one term.
+    for edu in (structured.get("education") or []):
+        _add(edu.get("degree") or edu.get("field") or edu.get("coursework"))
+        if terms:
             break
-    return terms or ["software engineer"]
+
+    return terms
 
 
 def _role_title_filter(structured: Dict[str, Any]):
@@ -1105,8 +1285,19 @@ def _fetch_free_jobs(
     Returns (rows, sources_report) in the spec-1.4 shape. Module-level so
     tests can patch it (legacy patches returning a bare list still work)."""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout, as_completed
+    from services.job_service import guest_cost_context
 
     terms = _guest_role_terms(structured)
+    if not terms:
+        # No role evidence anywhere in the resume. Scanning ~1000 tenants for a
+        # guessed career burns the whole budget to produce matches the guest
+        # will not recognise, and the old "software engineer" default made that
+        # failure look like a market result. Say what actually happened.
+        logger.info("guest matches: no role terms derivable from resume, skipping scan")
+        return [], {
+            "ok": [], "failed": [], "timed_out": [], "considered": 0,
+            "timings_ms": {}, "empty_reason": "role_undetermined",
+        }
     skills = resume_skills if resume_skills is not None else _resume_skills(structured)
     base_payload = {
         "titles": terms,
@@ -1144,6 +1335,12 @@ def _fetch_free_jobs(
             **base_payload,
             "overall_timeout": GUEST_SIDE_SOURCE_TIMEOUT,
             "enrich_top": GUEST_ENRICH_TOP,
+            # cost_class gate: an anonymous guest must NEVER trigger metered
+            # aggregator (RapidAPI/JSearch) calls. The MNC catalog's
+            # engine == "aggregator" rows are cost_class "paid" and are
+            # dropped BEFORE any fetch. This is not conditional on the key
+            # being absent — the key IS configured in this deployment.
+            "exclude_paid": True,
         })
 
     sources = {
@@ -1161,6 +1358,20 @@ def _fetch_free_jobs(
     # timeout (live incident: fetch 230s, zero scoring time). shutdown with
     # wait=False abandons stragglers instead — partial results, on time.
     pool = ThreadPoolExecutor(max_workers=len(sources))
+    # Paid-source chokepoint. mnc_jobs_service already drops aggregator rows
+    # before any fetch (exclude_paid=True), so this is defense in depth: it
+    # makes job_service._search_jsearch_raw refuse outright if any future
+    # caller reaches JSearch by another path from inside this fan-out.
+    # A module-global flag, NOT a ContextVar — ThreadPoolExecutor does not
+    # propagate contextvars to pool threads.
+    #
+    # The context must span the WHOLE fan-out, not just submit(): the flag is
+    # process-global, so releasing it at submit time would clear it while the
+    # pool threads are still mid-fetch. Stragglers abandoned by the
+    # shutdown(wait=False) below can still outlive it — exclude_paid remains
+    # the load-bearing guarantee, and this is the second line.
+    guest_cost = guest_cost_context()
+    guest_cost.__enter__()
     futures = {pool.submit(fn): name for name, fn in sources.items()}
     try:
         for fut in as_completed(futures, timeout=GUEST_FETCH_BUDGET_SECONDS):
@@ -1192,6 +1403,7 @@ def _fetch_free_jobs(
             pool.shutdown(wait=False, cancel_futures=True)
         except TypeError:  # pragma: no cover - cancel_futures needs py3.9+
             pool.shutdown(wait=False)
+        guest_cost.__exit__(None, None, None)
 
     # Merge: one posting can surface from more than one catalog — dedupe on
     # (company, title, location), keeping the copy with the richer signal.
@@ -1400,6 +1612,25 @@ def _build_card(row: Dict[str, Any], verdict: Dict[str, Any]) -> Dict[str, Any]:
     # (deterministic, additive v2.1 field — absent on older cached cards).
     card["gaps"] = (verdict.get("missing_top") or [])[:5]
     card["why"] = _match_why(card["matched_skills"])
+    # ADR-002: the versioned, explainable fit block. Deliberately TRIMMED to
+    # roughly 500 bytes. This rides into every job_match_snapshots doc, up to
+    # GUEST_POOL_MAX rows, so the per-component prose and the strengths list
+    # are dropped (both are recomputable from the engine and the explanation
+    # already carries the headline). Remembering the Atlas 512MB incident.
+    if verdict.get("score_version"):
+        card["fit"] = {
+            "score_version": verdict["score_version"],
+            "band": verdict.get("band"),
+            "confidence": verdict.get("confidence"),
+            "components": verdict.get("component_scores") or {},
+            "explanation": str(verdict.get("explanation") or "")[:400],
+            "missing_requirements": (verdict.get("missing_requirements") or [])[:4],
+            "hard_constraints": [
+                {"type": c.get("type"), "status": c.get("status")}
+                for c in (verdict.get("hard_constraints") or [])
+                if c.get("status") in ("missing", "unknown")
+            ][:4],
+        }
     return card
 
 
@@ -1474,10 +1705,19 @@ def compute_guest_matches(
         except Exception:  # pragma: no cover - progress must never break
             pass
 
-    from services.jd_match_scorer import score_one
+    # ADR-002: one shared, versioned engine. The old jd_match_scorer built its
+    # denominator from the RESUME's own skills, so it measured "how much of
+    # this resume appears in this posting" and had ~15 reachable values. The
+    # fit engine derives required skills from the JOB DESCRIPTION and is the
+    # SAME engine the feed pipelines use to select candidates, so selection
+    # and display can no longer disagree.
+    from services import fit_score
 
     _progress("reading_resume", 10)
     skills = _resume_skills(structured)
+    # Built once; every posting reuses it (requirement extraction is memoised
+    # per JD inside the engine).
+    fit_profile = fit_score.build_resume_profile(structured)
 
     # --- searching_sources (30..70 as providers complete) ------------------
     _progress("searching_sources", 30)
@@ -1531,6 +1771,18 @@ def compute_guest_matches(
         except (TypeError, ValueError):
             pass
 
+    # --- guest freshness contract: BEFORE any scoring work ------------------
+    # The feeds hand back their own 30-day window; guests get GUEST_MAX_AGE_DAYS.
+    # Dropping here (not at render time) means stale rows never consume scoring
+    # budget, never reach enrichment, and can never be persisted into a
+    # snapshot. Fewer survivors is a success — nothing is padded back in.
+    fetched_count = len(rows)
+    rows = filter_fresh_for_guest(rows)
+    dropped_stale = fetched_count - len(rows)
+    if dropped_stale:
+        sources_report["dropped_stale"] = dropped_stale
+        sources_report["max_age_days"] = GUEST_MAX_AGE_DAYS
+
     # Feed rows carry posted_text/date_posted; the legacy card field is
     # `posted` — map it so cached cards keep one canonical field.
     for row in rows:
@@ -1549,10 +1801,12 @@ def compute_guest_matches(
         if _remaining() <= 0:
             budget_expired = True
             break
-        verdict = score_one(
+        verdict = fit_score.score_one(
             jd_text=str(row.get("description") or ""),
             title=str(row.get("title") or ""),
             resume_skills=skills,
+            profile=fit_profile,
+            location=str(row.get("location") or ""),
         )
         scored.append((row, verdict))
     timings["score_ms"] = int((_clock() - t_score) * 1000)
@@ -1590,10 +1844,12 @@ def compute_guest_matches(
                     continue
                 row, verdict = pair
                 row["description"] = str(text)[:15000]
-                fresh = score_one(
+                fresh = fit_score.score_one(
                     jd_text=row["description"],
                     title=str(row.get("title") or ""),
                     resume_skills=skills,
+                    profile=fit_profile,
+                    location=str(row.get("location") or ""),
                 )
                 verdict.clear()
                 verdict.update(fresh)

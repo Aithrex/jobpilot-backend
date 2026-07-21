@@ -1948,6 +1948,75 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result = ats_signal_service.build_ats_signal_aggregate_job(payload)
             svc.complete_job(job_id, result)
 
+        elif job_type == "job_ingest_dispatch":
+            # ADR-003 — the queue-receive replacement. An EventBridge tick lands
+            # here and enqueues at most JOB_INGEST_SHARDS_PER_TICK `job_ingest_
+            # shard` jobs for shards that are neither leased nor in backoff.
+            # That exclusion IS the backpressure: a tick whose predecessors are
+            # still running enqueues fewer, not more. Duplicate delivery of the
+            # dispatch job itself is harmless — the shards it would re-select
+            # are leased by the first delivery's workers and therefore not due.
+            from services import job_ingest_worker
+            result = job_ingest_worker.dispatch_due_shards(
+                payload.get("source"),
+                limit=int(payload.get("limit") or job_ingest_worker.MAX_SHARDS_PER_TICK),
+            )
+            svc.complete_job(job_id, result)
+
+        elif job_type == "job_ingest_shard":
+            # ADR-003 — one bounded shard of the job registry (~20 sources).
+            # No idempotency guard is needed here beyond the ones inside the
+            # worker: `acquire_lease` makes a duplicate at-least-once delivery a
+            # no-op (`skipped=lease_unavailable`), `upsert_posting` is idempotent
+            # on (source, source_job_id) with `first_seen_at` set only on insert,
+            # and `advance_watermark` refuses to move backwards. run_shard never
+            # raises — a failing shard records backoff in `job_source_state` and
+            # leaves every other shard alone.
+            from services import job_ingest_worker
+            result = job_ingest_worker.run_shard(
+                payload.get("source", ""), payload.get("shard", "")
+            )
+            svc.complete_job(job_id, result)
+
+            # Requirement extraction is dispatched as its OWN job so no Bedrock
+            # call ever sits in the listing/detail hot path. The queue carries
+            # content hashes, and each hash is extracted at most once.
+            queue = result.get("parse_queue") or []
+            if queue and job_ingest_worker.REQUIREMENTS_ENABLED:
+                try:
+                    parse_payload = {"items": queue[:job_ingest_worker.REQUIREMENTS_BATCH]}
+                    parse_id = svc.create_job("job_ingest_requirements",
+                                              parse_payload, "system@internal")
+                    ResumeService.invoke_async(parse_id, "job_ingest_requirements",
+                                               parse_payload)
+                except Exception as parse_err:
+                    logger.warning(
+                        f"job_ingest_shard {job_id}: requirement dispatch failed: {parse_err}"
+                    )
+
+        elif job_type == "job_ingest_requirements":
+            # ADR-002 — expensive requirement extraction, async, once per changed
+            # content_hash. Deduped within the batch AND against inventory, and
+            # gated behind JOB_INGEST_REQUIREMENTS_ENABLED because it is the only
+            # part of ingestion that spends tokens. Idempotency guard: a duplicate
+            # delivery would re-spend, so bail if this job already completed.
+            existing = svc.get_job(job_id, user_email=payload.get("user_email", ""))
+            if existing and existing.get("status") == "completed":
+                logger.info(f"Skipping job_ingest_requirements {job_id}: already completed")
+                return
+
+            from services import job_ingest_worker
+            result = job_ingest_worker.extract_requirements(payload.get("items") or [])
+            svc.complete_job(job_id, result)
+
+        elif job_type == "job_ingest_maintenance":
+            # ADR-003 retention sweep: delete only postings that are BOTH closed
+            # and past purge_at. purge_at is stamped exclusively by close_posting,
+            # so a live posting is unreachable from here. Idempotent by nature.
+            from services import job_ingest_worker
+            result = job_ingest_worker.run_maintenance()
+            svc.complete_job(job_id, result)
+
         elif job_type == "auto_apply_gather":
             # Idempotency guard — Lambda async invocations are at-least-once,
             # so AWS may retry the same job. Re-gathering could re-issue answer

@@ -18,7 +18,7 @@ locals {
     # DRAFT — human review. Hourly auto-apply sweep: enqueue eligible applications,
     # send the evening summary (self-filtered by local hour), reconcile Oracle
     # verify-freezes. Routes to scheduled_jobs.dispatch_scheduled("apply_hourly").
-    apply_hourly   = { expression = "rate(1 hour)", desc = "Auto-apply hourly sweep + evening summary + verify re-check" }
+    apply_hourly = { expression = "rate(1 hour)", desc = "Auto-apply hourly sweep + evening summary + verify re-check" }
     # DRAFT — human review. Nightly cross-user skill-market recompute. Option (a)
     # is wired: scheduled_jobs.dispatch_scheduled("trend_aggregate") enqueues the
     # resume `_process_job` job of the same name (system actor, payload {}).
@@ -33,6 +33,32 @@ locals {
     # resume `guest_retention_cleanup` job (deletes ONLY expired UNCLAIMED
     # guest data per the admin `retention_days` knob; 0 = keep forever).
     guest_retention = { expression = "cron(45 5 * * ? *)", desc = "Daily guest retention cleanup (05:45 UTC)" }
+    # Canonical job inventory (ADR-003).
+    # Deliberately EventBridge and NOT SQS: infra cost must not increase, and
+    # additional rules against the already-deployed resume Lambda are free.
+    # Bounded concurrency, leases, watermarks and idempotency live in MongoDB
+    # (job_source_state) instead of queue semantics.
+    #
+    # These are DISPATCH ticks, not one rule per shard. The registries are
+    # partitioned into 48 Workday shards (1009 distinct tenants, ~21 each) and
+    # 64 career-page shards (1309 companies, ~20 each). That is 112 shards,
+    # which would otherwise be 112 rules. Instead each tick routes to
+    # scheduled_jobs.dispatch_scheduled("ingest_*") -> the resume
+    # `job_ingest_dispatch` job, which claims at most
+    # JOB_INGEST_SHARDS_PER_TICK (16) shards that are neither leased nor in
+    # backoff and self-invokes one `job_ingest_shard` job per shard. Adding or
+    # resizing a shard is then a code/env change, not a Terraform change.
+    #
+    # Coverage: 112 shards / 16 per tick = 7 ticks. At one tick per 15 minutes
+    # the whole registry is re-crawled about every 1h45m, comfortably inside
+    # the 7-day guest freshness window (ADR-001). The two sources are offset by
+    # 7 minutes so their fan-outs do not overlap.
+    ingest_workday      = { expression = "cron(0/15 * * * ? *)", desc = "Workday shard ingestion tick (48 shards, <=16/tick)" }
+    ingest_career_pages = { expression = "cron(7/15 * * * ? *)", desc = "Career-page shard ingestion tick (64 shards, <=16/tick)" }
+    # Retention sweep: deletes only postings that are BOTH closed and past
+    # purge_at. purge_at is stamped exclusively by close_posting, so a live
+    # posting is unreachable from this job (see job_inventory_service:645).
+    ingest_maintenance = { expression = "cron(20 5 * * ? *)", desc = "Daily job-inventory retention purge (05:20 UTC)" }
   }
 }
 
