@@ -370,9 +370,9 @@ def test_purge_expired_only_deletes_closed_and_due(db):
     inv.upsert_posting(_raw(source_job_id="DEAD"), now=NOW)
     inv.close_posting("workday", "DEAD", now=NOW)
 
-    assert inv.purge_expired(now=NOW + timedelta(days=1)) == 0
+    assert inv.purge_expired(now=NOW + timedelta(days=1))["deleted"] == 0
     after = NOW + timedelta(days=inv.RETENTION_DAYS_AFTER_CLOSE + 1)
-    assert inv.purge_expired(now=after) == 1
+    assert inv.purge_expired(now=after)["deleted"] == 1
     assert [d["source_job_id"] for d in db.job_postings.find({})] == ["LIVE"]
 
 
@@ -395,8 +395,48 @@ def test_find_active_fresh_filters_age_status_and_cost_class(db):
     assert sorted(d["source_job_id"] for d in authed) == ["FRESH", "OLD", "PAID"]
 
     assert [d["source_job_id"] for d in inv.find_active_fresh(
-        role_family="backend", cost_classes=["free"], now=NOW)] == ["FRESH"]
+        role_family="software_engineering", cost_classes=["free"], now=NOW)] == ["FRESH"]
     assert inv.find_active_fresh(role_family="design", now=NOW) == []
+
+    # A resume rarely maps to exactly one family, so retrieval accepts a set.
+    assert [d["source_job_id"] for d in inv.find_active_fresh(
+        role_families=["design", "software_engineering"],
+        cost_classes=["free"], now=NOW)] == ["FRESH"]
+
+
+def test_role_family_uses_the_same_taxonomy_the_scorer_uses():
+    """Writer and reader MUST share one role vocabulary.
+
+    The inventory stamps `role_family` at ingest; `guest_service` retrieves by
+    the family `fit_score.classify_role` derives from the resume. If those two
+    disagree the equality filter matches nothing and the product reports an
+    empty job market with no error anywhere. It previously did disagree: the
+    inventory used `pipeline_intel_service._role_family` (13 tech-only families,
+    "swe") while the scorer used `fit_score.ROLE_FAMILIES` (31 families,
+    "software_engineering"), so NO query could ever match and every
+    non-technical posting was stamped "other".
+    """
+    from services import fit_score
+
+    for title in ("Senior Backend Engineer", "Registered Nurse (ICU)",
+                  "High School Math Teacher", "Staff Accountant",
+                  "Journeyman Electrician", "Paralegal, Litigation"):
+        assert inv.role_family_of(title) == fit_score.classify_role(
+            inv.normalize_title(title)), title
+
+    # Non-technical work must classify, not fall into the "other" bucket.
+    assert inv.role_family_of("Registered Nurse (ICU)") == "nursing"
+    assert inv.role_family_of("High School Math Teacher") == "teaching"
+    # And an unrecognised title stays unclassified rather than being guessed
+    # into an engineering family.
+    assert inv.role_family_of("Grand Vizier of Vibes") == "other"
+
+
+def test_seniority_uses_the_scorer_taxonomy():
+    assert inv.seniority_of("Staff Backend Engineer") == "staff"
+    assert inv.seniority_of("Backend Engineer Intern") == "entry"
+    assert inv.seniority_of("Backend Engineer") == "mid"
+    assert set(inv.SENIORITY_LEVELS) >= {"entry", "mid", "senior", "staff"}
 
 
 def test_find_active_fresh_sorts_newest_first(db):

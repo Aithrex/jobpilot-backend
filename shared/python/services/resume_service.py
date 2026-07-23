@@ -2010,11 +2010,21 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             svc.complete_job(job_id, result)
 
         elif job_type == "job_ingest_maintenance":
-            # ADR-003 retention sweep: delete only postings that are BOTH closed
-            # and past purge_at. purge_at is stamped exclusively by close_posting,
-            # so a live posting is unreachable from here. Idempotent by nature.
+            # ADR-003 retention sweep, now also the rolling-window enforcer:
+            #   expire  -> close ACTIVE postings older than the 7-day guest
+            #              window (retention_days=0, so purgeable immediately);
+            #   purge   -> delete closed+past-purge_at rows, ARCHIVING any
+            #              pinned posting to S3 and verifying the object exists
+            #              before the delete (that check is the whole "a job you
+            #              applied to is never lost" guarantee);
+            #   verify  -> close postings no crawl has reconfirmed in 72h, the
+            #              backstop for a shard stuck in backoff.
+            # purge_at is stamped exclusively by close_posting, so a live
+            # posting is unreachable from here. Idempotent by nature.
             from services import job_ingest_worker
-            result = job_ingest_worker.run_maintenance()
+            result = job_ingest_worker.run_maintenance(
+                verify_limit=int(payload.get("verify_limit") or 2000),
+            )
             svc.complete_job(job_id, result)
 
         elif job_type == "auto_apply_gather":

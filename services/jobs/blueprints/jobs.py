@@ -1381,6 +1381,34 @@ def guest_matches():
             payload["tz_offset_minutes"] = int(tz_offset_minutes)
         except (TypeError, ValueError):
             pass
+
+        # --- fast path: serve synchronously from the canonical inventory ----
+        # The legacy path returns 202 + a job_id because matching used to crawl
+        # ~1,100 third-party hosts and take up to 210 seconds. Reading the
+        # inventory is one indexed query plus deterministic scoring, so there is
+        # nothing to wait for: the guest gets results in the response instead of
+        # a spinner and 2-second polling.
+        #
+        # `inventory_only=True` guarantees this cannot start a fan-out inside
+        # the 60s jobs Lambda: if the crawler has not warmed this role family it
+        # returns None and we fall through to the async job below, unchanged.
+        if guest_service.inventory_mode_enabled():
+            try:
+                result = guest_service.compute_guest_matches(
+                    guest_id,
+                    None,
+                    requested_seniority,
+                    payload.get("tz_offset_minutes", 0),
+                    inventory_only=True,
+                )
+            except Exception as sync_err:
+                logger.warning("Guest matches inventory fast path failed: %s", sync_err)
+                result = None
+            if result is not None:
+                # The run is genuinely spent: compute_guest_matches persisted
+                # today's snapshot, so a repeat call hits get_cached_matches.
+                return jsonify(result), 200
+
         try:
             job_id = guest_service.create_guest_job("guest_matches", payload, guest_id)
             ResumeService.invoke_async(job_id, "guest_matches", payload)

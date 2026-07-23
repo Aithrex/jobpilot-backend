@@ -936,8 +936,17 @@ def _listing_implies_same_content(existing: Dict[str, Any], row: Dict[str, Any])
     HAS a body, re-fetching the body could only reproduce the same hash. That is
     the whole fetch-once rule: this check is what turns ~20 detail requests per
     company into ~0 on a steady-state re-run.
+
+    "Already has a body" is `description_chars`, NOT `description_text`. The
+    body now lives in S3 and the Mongo field is empty by design, so testing the
+    text would make this return False for every posting on every crawl and
+    silently re-fetch the entire registry every 15 minutes.
     """
-    if not existing or not existing.get("description_text"):
+    if not existing:
+        return False
+    if not (existing.get("description_chars")
+            or existing.get("description_text")
+            or existing.get("description_ref")):
         return False
     if existing.get("status") != inv.STATUS_ACTIVE:
         return False
@@ -950,6 +959,21 @@ def _listing_implies_same_content(existing: Dict[str, Any], row: Dict[str, Any])
     old_keys = sorted((l or {}).get("key", "") for l in (existing.get("locations") or []))
     new_keys = sorted(l["key"] for l in inv.normalize_locations(row.get("locations")))
     return old_keys == new_keys
+
+
+def _needs_http_detail(row: Dict[str, Any], member: Dict[str, Any]) -> bool:
+    """Would `fetch_detail` actually make a network request for this row?
+
+    Mirrors `fetch_detail`'s own early-outs. Kept next to it deliberately: if
+    one grows a new source the other must too, and the failure mode of drift is
+    quiet (a source silently loses ingestion throughput), so they are reviewed
+    together.
+    """
+    if row.get("description"):
+        return False
+    if member.get("source") == SOURCE_WORKDAY:
+        return bool(row.get("_detail_ref"))
+    return member.get("ats") in _ATS_WITH_DETAIL
 
 
 def fetch_detail(row: Dict[str, Any], member: Dict[str, Any], *, policy: HostPolicy,
@@ -1147,10 +1171,18 @@ def run_shard(
         inv.renew_lease(src, shard_id, owner, now=now)
 
         # --- 3. triage: which rows actually need a body ----------------------
+        # ONE query for the whole shard, not one per row. A shard lists ~20
+        # boards and several hundred postings, so per-row `get_posting` calls
+        # meant several hundred sequential Atlas round trips inside a 90s
+        # budget - the triage step alone could consume most of the shard's
+        # wall clock and starve the detail fetches that actually add inventory.
+        existing_by_id = inv.get_postings_map(
+            src, [row["source_job_id"] for _m, row in rows])
+
         touch_ids: List[str] = []
         needs_detail: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
         for member, row in rows:
-            existing = inv.get_posting(src, row["source_job_id"])
+            existing = existing_by_id.get(row["source_job_id"])
             if _listing_implies_same_content(existing, row):
                 touch_ids.append(row["source_job_id"])
                 counts["unchanged"] += 1
@@ -1160,20 +1192,44 @@ def run_shard(
             inv.touch_seen(src, touch_ids[start:start + 500], now=now)
 
         # --- 4. detail: bounded, freshest first ------------------------------
+        # The budget exists to bound OUTBOUND REQUESTS, so only rows that would
+        # actually make one may consume it. Lever, Ashby and Recruitee ship the
+        # body in the listing payload, and a Workday row with no detail path has
+        # nowhere to fetch from; charging those against `max_details` would
+        # throttle ~450 of the 1309 career-page companies against a budget they
+        # never spend, and silently drop the overflow (rows past the budget are
+        # not written at all).
         needs_detail.sort(key=lambda pair: pair[1]["posted_at"] or fresh_cutoff,
                           reverse=True)
-        detail_targets = needs_detail[:max(0, int(max_details))]
-        counts["detail_skipped_budget"] += len(needs_detail) - len(detail_targets)
+        free_rows = [p for p in needs_detail if not _needs_http_detail(p[1], p[0])]
+        fetch_rows = [p for p in needs_detail if _needs_http_detail(p[1], p[0])]
+        detail_targets = fetch_rows[:max(0, int(max_details))]
+        counts["detail_skipped_budget"] += len(fetch_rows) - len(detail_targets)
         details = run_bounded(
             lambda pair: fetch_detail(pair[1], pair[0], policy=policy,
                                       deadline=deadline, stop=stop),
             detail_targets, max_workers=detail_workers, deadline=deadline, stop=stop)
+        # Body-in-listing rows join the write set without a request.
+        details = list(details) + [
+            (pair, str(pair[1].get("description") or ""), None) for pair in free_rows
+        ]
+        counts["detail_free"] += len(free_rows)
         inv.renew_lease(src, shard_id, owner, now=now)
 
         # --- 5/6. write + parse reuse ---------------------------------------
+        # Deadline-checked like the IO stages above. Writes are several database
+        # round trips per posting, so a slow or distant cluster can make THIS
+        # the stage that overruns: without the check a shard sailed past its 90s
+        # budget and, in Lambda, would be killed mid-loop at the 300s function
+        # timeout - losing the run record and holding the lease until its TTL.
+        # Stopping early is safe by construction: the watermark only advances
+        # over rows actually written, so the next tick resumes from there.
         watermark: Optional[datetime] = None
         parse_queue: List[Dict[str, str]] = []
         for (member, row), description, error in details:
+            if time.monotonic() >= deadline or (stop is not None and stop.is_set()):
+                counts["write_skipped_budget"] += 1
+                continue
             if error:
                 counts["errors"] += 1
                 inv.record_run_failure(run_id, error, item=row["source_job_id"])
@@ -1203,7 +1259,7 @@ def run_shard(
             if outcome["needs_parse"] and description:
                 # Parse-once across the whole inventory: if this exact body was
                 # already extracted (same req on a second board, or an edit that
-                # reverted), reuse it instead of queueing an LLM call.
+                # reverted), reuse it instead of re-extracting.
                 reusable = inv.find_parsed_requirements(outcome["content_hash"])
                 if reusable:
                     if inv.mark_requirements_parsed(
@@ -1212,11 +1268,22 @@ def run_shard(
                     ):
                         counts["parsed_reused"] += 1
                         continue
-                parse_queue.append({
-                    "source": src,
-                    "source_job_id": row["source_job_id"],
-                    "content_hash": outcome["content_hash"],
-                })
+                # Deterministic extraction, HERE, in the crawl. This is the
+                # change that lets the request path score without ever loading a
+                # JD body: `fit_score.extract_requirements` is pure regex over
+                # the text, memoised in-process, and costs no Bedrock tokens, so
+                # there is no reason to defer it to a queue. The LLM extractor
+                # below stays an OPTIONAL enrichment rather than a prerequisite.
+                if _persist_requirements(src, row["source_job_id"],
+                                         outcome["content_hash"], description,
+                                         row.get("title") or "", now=now):
+                    counts["parsed_deterministic"] += 1
+                elif REQUIREMENTS_ENABLED:
+                    parse_queue.append({
+                        "source": src,
+                        "source_job_id": row["source_job_id"],
+                        "content_hash": outcome["content_hash"],
+                    })
 
         # Rows we never got to (budget) are simply not written. The next tick
         # picks them up; nothing is lost because the watermark only advances
@@ -1356,14 +1423,93 @@ def dispatch_due_shards(source: Optional[str] = None, *,
 # Maintenance + requirement extraction
 # ---------------------------------------------------------------------------
 
+def _persist_requirements(source: str, source_job_id: str, content_hash: str,
+                          description: str, title: str, *,
+                          now: Optional[datetime] = None) -> bool:
+    """Extract and store the deterministic requirement profile for one posting.
+
+    Best effort by design: a posting whose profile fails to store is still a
+    perfectly good inventory row, it just costs a live extraction the first time
+    somebody scores against it (`fit_score.score` falls back automatically).
+    """
+    try:
+        from services import fit_score
+
+        profile = fit_score.extract_requirements(description, title)
+        if not profile:
+            return False
+        return inv.mark_requirements_parsed(source, source_job_id, content_hash,
+                                            profile, now=now)
+    except Exception as exc:  # pragma: no cover - never break a crawl
+        logger.warning("ingest: requirement extraction failed for %s: %s",
+                       str(source_job_id)[:40], type(exc).__name__)
+        return False
+
+
 def run_maintenance(*, now: Optional[datetime] = None,
-                    purge_limit: int = 5000) -> Dict[str, Any]:
-    """Retention sweep. `purge_expired` only deletes docs that are BOTH closed
-    and past `purge_at`, and `purge_at` is only ever stamped by `close_posting`,
-    so a live posting cannot be reached from here."""
+                    purge_limit: int = 5000,
+                    expire_limit: int = 5000,
+                    verify_limit: int = 0) -> Dict[str, Any]:
+    """Daily housekeeping: age out, close, purge, and re-verify.
+
+    Order matters. Expiry closes first so the rows it closes are purge-eligible
+    in the SAME sweep (they are stamped with zero retention days), which is what
+    keeps the collection at a true rolling 7-day window instead of a 7-day
+    window plus a growing tail of closed-but-not-yet-purged rows.
+
+    `purge_expired` only deletes docs that are BOTH closed and past `purge_at`,
+    and `purge_at` is only ever stamped by `close_posting`, so a live posting
+    cannot be reached from here. Pinned postings are archived to S3 and verified
+    present before deletion.
+    """
     now = now or _utcnow()
+    expired = inv.expire_aged_postings(limit=expire_limit, now=now)
     purged = inv.purge_expired(limit=purge_limit, now=now)
-    return {"purged": purged, "registry": registry_stats()}
+    result: Dict[str, Any] = {
+        "expired": expired,
+        "purged": purged.get("deleted", 0),
+        "archived": purged.get("archived", 0),
+        "retained_unarchived": purged.get("retained_unarchived", 0),
+        "registry": registry_stats(),
+    }
+    if verify_limit:
+        result["verified"] = verify_liveness(limit=int(verify_limit), now=now)
+    return result
+
+
+# Postings whose liveness has not been reconfirmed in this long are closed.
+# A full crawl cycle is ~1h per source, so 72h is roughly 70 missed chances.
+# Deliberately NOT tuned close to the cycle time: a single ATS having a bad day
+# would then close every posting from 686 Greenhouse companies at once. Three
+# days inside a seven-day window is the honest trade - long enough to ride out
+# an outage, short enough that "we cannot confirm this is still open" stops
+# being shown as a live match.
+VERIFY_STALE_HOURS = _env_int("JOB_INGEST_VERIFY_STALE_HOURS", 72)
+
+
+def verify_liveness(*, limit: int = 200, now: Optional[datetime] = None
+                    ) -> Dict[str, int]:
+    """Close postings the crawl has stopped seeing.
+
+    `_close_stale_in_shard` already does this per shard, but only for shards that
+    actually ran. A shard stuck in backoff (a board that is down, an ATS that
+    rate-limited us) leaves its postings looking live indefinitely, and a dead
+    link in a guest's top five is exactly the trust failure the freshness work
+    exists to prevent. This is the backstop that does not depend on the shard
+    making progress.
+    """
+    now = now or _utcnow()
+    cutoff = now - timedelta(hours=max(1, VERIFY_STALE_HOURS))
+    out = {"checked": 0, "closed": 0}
+    per_source = max(1, int(limit) // max(1, len(SOURCES)))
+    for src in SOURCES:
+        rows = inv.find_stale_for_verification(src, older_than=cutoff, limit=per_source)
+        out["checked"] += len(rows)
+        for row in rows:
+            if inv.close_posting(src, row.get("source_job_id") or "",
+                                 reason="unverified", now=now):
+                out["closed"] += 1
+    return out
 
 
 _REQUIREMENTS_SCHEMA = {

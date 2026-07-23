@@ -1427,6 +1427,167 @@ def _fetch_free_jobs(
     return out, {**report, "timings_ms": timings_ms}
 
 
+# --- inventory read path (ADR-003 cutover) ---------------------------------
+# How many candidates the ranking stage gets. The scorer is pure regex over a
+# precomputed requirement profile, so a few hundred rows cost single-digit
+# milliseconds; the number is chosen for RECALL, not for speed. It is the pool
+# the top 5 is chosen from, so too small a pool silently caps quality.
+INVENTORY_CANDIDATE_LIMIT = _env_int("GUEST_INVENTORY_CANDIDATES", 400)
+# Below this many scorable candidates the inventory is treated as not yet warm
+# for this role family and the caller may fall back to the live scan.
+INVENTORY_MIN_CANDIDATES = _env_int("GUEST_INVENTORY_MIN_CANDIDATES", 12)
+
+
+def _resume_role_families(structured: Dict[str, Any]) -> List[str]:
+    """Role families to retrieve for, widest sensible set.
+
+    Retrieval and ranking have opposite failure modes. A retrieval filter that
+    is too tight returns nothing and looks like an empty market; the scorer, by
+    contrast, is good at pushing a bad fit down. So this errs wide: every family
+    implied by the resume's titles AND by the same role terms the live scan
+    would have searched for, deduped, order-preserved.
+    """
+    from services import fit_score
+
+    families: List[str] = []
+
+    def _add(value: Any) -> None:
+        fam = fit_score.classify_role(value) if value else None
+        if fam and fam not in families:
+            families.append(fam)
+
+    for exp in (structured.get("experience") or [])[:6]:
+        if isinstance(exp, dict):
+            _add(exp.get("title") or exp.get("position") or exp.get("role"))
+    for term in _guest_role_terms(structured)[:6]:
+        _add(term)
+    _add(structured.get("target_role") or structured.get("headline"))
+    return families
+
+
+def _inventory_row(doc: Dict[str, Any], tz_offset_minutes: int) -> Optional[Dict[str, Any]]:
+    """One `job_postings` document -> one guest pipeline row.
+
+    Emits the SAME shape the three live scanners emit, which is what lets the
+    entire downstream path (freshness gate, scoring, ranking, card build,
+    snapshot, seniority views) stay byte-for-byte unchanged. `description` is
+    deliberately empty: the body lives in S3 and the scorer reads
+    `requirements` instead, so no JD text crosses the wire on this path.
+    """
+    from services.workday_jobs_service import _days_ago
+
+    posted_at = doc.get("posted_at")
+    if not isinstance(posted_at, datetime):
+        return None                      # ADR-001: no date, no card. Never guessed.
+    iso = (posted_at if posted_at.tzinfo else posted_at.replace(tzinfo=timezone.utc)).isoformat()
+    days = _days_ago(iso, tz_offset_minutes)
+    if days is None:
+        return None
+
+    locations = doc.get("locations") or []
+    location = ""
+    if isinstance(locations, list) and locations:
+        first = locations[0]
+        location = str((first or {}).get("raw") or "") if isinstance(first, dict) else str(first)
+
+    url = str(doc.get("canonical_url") or "")
+    return {
+        "job_id": doc.get("job_id"),
+        "title": str(doc.get("title_raw") or ""),
+        "company": str(doc.get("employer_name") or ""),
+        "location": location,
+        "url": url,
+        "apply_link": url,
+        "source": "Workday" if doc.get("source") == "workday" else "Career Page",
+        "description": "",
+        "requirements": doc.get("requirements") or None,
+        "posted": iso,
+        "posted_text": iso[:10],
+        "date_posted": iso,
+        "days_ago": days,
+        "work_mode": doc.get("work_mode"),
+        "seniority_hint": doc.get("seniority"),
+        "_guest_source": "inventory",
+    }
+
+
+def _fetch_from_inventory(
+    structured: Dict[str, Any],
+    progress_cb=None,
+    *,
+    resume_skills: Optional[List[str]] = None,
+    resume_years: Optional[int] = None,
+    tz_offset_minutes: int = 0,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Candidate retrieval from the canonical inventory. Drop-in replacement
+    for `_fetch_free_jobs`, same signature and same return contract.
+
+    This is the whole latency story. `_fetch_free_jobs` issues roughly 7,400
+    outbound requests to ~1,100 third-party hosts inside the user's request and
+    still reaches only ~9% of the registry before its 165s budget expires. This
+    issues ONE indexed Mongo query against postings a scheduled crawler already
+    collected, covering 100% of the registry, and returns in milliseconds.
+
+    ADR-004 is enforced structurally: `cost_classes=["free"]` sits in the query
+    itself, so a metered aggregator row cannot reach an anonymous guest even by
+    accident.
+    """
+    from services import fit_score, job_inventory_service as inv
+
+    started = _clock()
+    families = _resume_role_families(structured)
+    if not families:
+        # Same honest failure the live scan reports: no role evidence means we
+        # cannot say what this person does, and guessing produces matches they
+        # will not recognise.
+        return [], {"ok": [], "failed": [], "timed_out": [], "considered": 0,
+                    "timings_ms": {}, "empty_reason": "role_undetermined"}
+
+    try:
+        docs = inv.find_active_fresh(
+            role_families=families,
+            max_age_days=GUEST_MAX_AGE_DAYS,
+            cost_classes=[inv.COST_CLASS_FREE],   # ADR-004, in the query
+            limit=INVENTORY_CANDIDATE_LIMIT,
+        )
+    except Exception as e:
+        logger.warning("guest matches: inventory read failed: %s", type(e).__name__)
+        return [], {"ok": [], "failed": ["inventory"], "timed_out": [],
+                    "considered": 0, "timings_ms": {}}
+
+    rows: List[Dict[str, Any]] = []
+    without_requirements = 0
+    for doc in docs:
+        # Job-side evidence gate. A posting whose body we never read produces no
+        # requirements, and the scorer can then only judge it on its title. It
+        # is capped at 45 by `insufficient_job_requirements`, but a guest's top
+        # five is the product's first impression and does not get to contain
+        # rows we have not actually read. It stays in the inventory and remains
+        # browsable to signed-in users; it just cannot be a headline match.
+        if not fit_score.has_job_requirements(doc.get("requirements")):
+            without_requirements += 1
+            continue
+        row = _inventory_row(doc, tz_offset_minutes)
+        if row is not None:
+            rows.append(row)
+
+    if progress_cb:
+        try:
+            progress_cb(1, 1)
+        except Exception:
+            pass
+
+    report = {
+        "ok": ["inventory"], "failed": [], "timed_out": [],
+        "considered": len(rows),
+        "role_families": families,
+        "retrieved": len(docs),
+        "dropped_no_requirements": without_requirements,
+        "timings_ms": {"inventory_ms": int((_clock() - started) * 1000)},
+    }
+    return rows, report
+
+
 _SAFE_URL_PREFIXES = ("http://", "https://")
 
 
@@ -1646,12 +1807,23 @@ def _classify_empty_reason(
     return "no_openings_matched"
 
 
+def inventory_mode_enabled() -> bool:
+    """Is the canonical inventory the primary retrieval path?
+
+    `GUEST_MATCH_MODE=scan` is the single-env-var rollback to the legacy live
+    fan-out, and is the only value that turns this off.
+    """
+    return (os.getenv("GUEST_MATCH_MODE") or "inventory").strip().lower() != "scan"
+
+
 def compute_guest_matches(
     guest_id: str,
     job_id: Optional[str] = None,
     seniority: Optional[str] = None,
     tz_offset_minutes: int = 0,
-) -> Dict[str, Any]:
+    *,
+    inventory_only: bool = False,
+) -> Optional[Dict[str, Any]]:
     """Async-job body for `guest_matches` (spec 3.1-3.8, v4): run the SAME
     three sources as the authed Job Opportunities feed in parallel, score
     every row with jd_match_scorer against the guest's parsed resume, enrich
@@ -1729,15 +1901,21 @@ def compute_guest_matches(
     fetch_failed = False
     src_report: Optional[Dict[str, Any]] = None
     t_fetch = _clock()
-    try:
-        fetcher = _fetch_free_jobs
+
+    def _run_fetcher(fn) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """Invoke a retrieval function, tolerating legacy one-argument doubles.
+
+        The signature sniffing predates the inventory path: tests patch
+        `_fetch_free_jobs` with a bare `fn(structured)` returning a list, and
+        that contract is still honoured.
+        """
         try:
-            params = inspect.signature(fetcher).parameters
+            params = inspect.signature(fn).parameters
             accepts_cb = len(params) >= 2
             accepts_profile = "resume_skills" in params
         except (TypeError, ValueError):  # pragma: no cover - exotic patch
             accepts_cb, accepts_profile = False, False
-        profile_kwargs = (
+        kwargs = (
             {
                 "resume_skills": skills,
                 "resume_years": detected_years,
@@ -1745,17 +1923,55 @@ def compute_guest_matches(
             }
             if accepts_profile else {}
         )
-        fetched = (
-            fetcher(structured, _source_progress, **profile_kwargs)
-            if accepts_cb else fetcher(structured)
-        )
-    except Exception as e:
-        logger.warning("guest matches: free-source fetch failed: %s", type(e).__name__)
-        fetched, fetch_failed = [], True
-    if isinstance(fetched, tuple) and len(fetched) == 2:
-        rows, src_report = list(fetched[0] or []), dict(fetched[1] or {})
-    else:
-        rows, src_report = list(fetched or []), None
+        out = fn(structured, _source_progress, **kwargs) if accepts_cb else fn(structured)
+        if isinstance(out, tuple) and len(out) == 2:
+            return list(out[0] or []), dict(out[1] or {})
+        return list(out or []), None
+
+    # --- retrieval mode ----------------------------------------------------
+    # `inventory` reads the canonical `job_postings` collection (ADR-003) and
+    # returns in milliseconds; `scan` is the legacy live fan-out that costs up
+    # to 210s. Default is inventory WITH an automatic fallback: while the
+    # crawler is still warming a role family, a thin result would be a worse
+    # answer than a slow one, so a cold read scans instead of reporting an empty
+    # market. `GUEST_MATCH_MODE=scan` forces the legacy path outright, which is
+    # the one-env-var rollback.
+    rows: List[Dict[str, Any]] = []
+    used_mode = "scan"
+
+    if inventory_mode_enabled():
+        used_mode = "inventory"
+        try:
+            rows, src_report = _run_fetcher(_fetch_from_inventory)
+        except Exception as e:
+            logger.warning("guest matches: inventory read failed: %s", type(e).__name__)
+            rows, src_report = [], None
+        # "No role terms" is a genuine answer, not a cold cache - scanning would
+        # burn 210s to produce the same empty result.
+        undetermined = (src_report or {}).get("empty_reason") == "role_undetermined"
+        if len(rows) < INVENTORY_MIN_CANDIDATES and not undetermined:
+            logger.warning(
+                "guest matches: inventory cold for families=%s (%d candidates < %d) "
+                "- falling back to live scan",
+                (src_report or {}).get("role_families"), len(rows),
+                INVENTORY_MIN_CANDIDATES,
+            )
+            used_mode, rows, src_report = "scan_fallback", [], None
+
+    if used_mode != "inventory":
+        # `inventory_only` is the SYNCHRONOUS caller (the HTTP route). It runs
+        # inside a 60s Lambda and must never start a 210s fan-out, so a cold
+        # inventory returns None and the route falls back to the async job.
+        if inventory_only:
+            return None
+        try:
+            rows, src_report = _run_fetcher(_fetch_free_jobs)
+        except Exception as e:
+            logger.warning("guest matches: free-source fetch failed: %s", type(e).__name__)
+            rows, src_report, fetch_failed = [], None, True
+
+    if src_report is not None:
+        src_report["mode"] = used_mode
 
     sources_report: Dict[str, Any] = src_report or {
         "ok": [] if fetch_failed else ["workday", "career_pages", "mnc"],
@@ -1801,12 +2017,17 @@ def compute_guest_matches(
         if _remaining() <= 0:
             budget_expired = True
             break
+        # `requirements` short-circuits JD extraction. Inventory rows carry the
+        # profile the crawler already extracted (identical output, asserted by
+        # test_inventory_scoring_parity), so the JD body never has to be loaded
+        # to produce a score. Live-scan rows carry None and extract inline.
         verdict = fit_score.score_one(
             jd_text=str(row.get("description") or ""),
             title=str(row.get("title") or ""),
             resume_skills=skills,
             profile=fit_profile,
             location=str(row.get("location") or ""),
+            job={"requirements": row.get("requirements")} if row.get("requirements") else None,
         )
         scored.append((row, verdict))
     timings["score_ms"] = int((_clock() - t_score) * 1000)
@@ -1814,7 +2035,11 @@ def compute_guest_matches(
     # --- 3.1: CXS detail enrichment for description-less Workday rows ------
     t_enrich = _clock()
     enriched = 0
-    if not budget_expired and _remaining() > 0:
+    # Inventory rows are already requirement-parsed at crawl time, so there is
+    # nothing to enrich and no reason to open a socket on the request path.
+    if used_mode == "inventory":
+        pass
+    elif not budget_expired and _remaining() > 0:
         candidates = [
             (row, verdict) for row, verdict in scored
             if str(row.get("source") or "") in ("Workday Direct", "Workday")

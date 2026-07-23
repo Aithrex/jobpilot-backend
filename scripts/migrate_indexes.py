@@ -596,6 +596,18 @@ INDEX_SPECS = [
     # {employer_id, status} filters.
     ("job_postings", [("employer_id", ASCENDING), ("status", ASCENDING)],
      {"name": "employer_id_status"}),
+    # expire_aged_postings: {status: active, posted_at: {$lt: cutoff}} — the
+    # rolling 7-day window sweep. Without this the daily maintenance job
+    # COLLSCANs the whole live inventory to find the tail that aged out.
+    ("job_postings", [("status", ASCENDING), ("posted_at", ASCENDING)],
+     {"name": "status_posted_at_expiry"}),
+    # (job_id lookups for pin_posting / resolve_jd reuse `job_id_unique` above.)
+    # purge_expired reads {purge_at, status} then splits on `pinned`; a pinned
+    # posting must be archive-verified before deletion. Sparse because pinning
+    # is rare by construction (only postings a user actually acted on).
+    ("job_postings", [("pinned", ASCENDING), ("purge_at", ASCENDING)],
+     {"name": "pinned_purge_guard",
+      "partialFilterExpression": {"pinned": {"$exists": True}}}),
 
     # === job_source_state (leases / watermarks — the SQS replacement) ======
     # _state_key: every lease/watermark/backoff op filters {source, shard}.

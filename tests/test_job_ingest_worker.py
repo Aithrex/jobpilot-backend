@@ -72,7 +72,15 @@ def small_registry(monkeypatch):
 
 
 def _row(member, raw_id, *, days_ago=1, title="Backend Engineer",
-         description="Python and MongoDB.", now=NOW):
+         description="", now=NOW):
+    """A listing row with NO body by default, so it exercises the detail path.
+
+    Workday listings genuinely ship no description, and a row that already
+    carries one now skips `fetch_detail` entirely (it would be a wasted
+    request), so a default body here would silently stop these tests from
+    covering the detail path at all. `test_listing_body_skips_the_detail_fetch`
+    covers the opposite case explicitly.
+    """
     return w._listing_row(
         member, raw_id, title=title,
         url=f"https://{member['member_key']}.wd1.myworkdayjobs.com/External/{raw_id}",
@@ -523,9 +531,18 @@ def test_changed_title_forces_a_refetch_but_unchanged_does_not(db, small_registr
     assert db.job_postings.count_documents({}) == 1, "a retitle updates, never forks"
 
 
-def test_parse_queue_reuses_an_already_parsed_content_hash(db, small_registry, monkeypatch):
-    """Parse-once, inventory-wide: the same JD body on a second board reuses the
-    stored extraction instead of queueing another Bedrock call."""
+def test_requirements_are_extracted_inline_and_reused_across_boards(db, small_registry,
+                                                                    monkeypatch):
+    """Requirement extraction happens IN the crawl, deterministically.
+
+    This is what lets the request path score without loading a JD body:
+    `fit_score.extract_requirements` is pure regex, so there is no reason to
+    defer it to a queue and no Bedrock call to save. Parse-once still applies
+    inventory-wide, so the same requisition on a second board reuses the stored
+    profile rather than re-extracting.
+    """
+    from services import fit_score
+
     shard = w.shard_of(w.SOURCE_WORKDAY, small_registry[0]["member_key"])
     members = w.shard_members(w.SOURCE_WORKDAY, shard)
     assert len(members) >= 2, "this test needs a shard with two members"
@@ -534,30 +551,82 @@ def test_parse_queue_reuses_an_already_parsed_content_hash(db, small_registry, m
     # (employer_id is one of compute_content_hash's inputs).
     for m in members:
         m["display_name"] = "Acme Corp"
-    body = "We need Python, MongoDB and AWS. Identical body on both boards."
+    body = ("We need 5+ years of Python, MongoDB and AWS. "
+            "Preferred: Terraform. Identical body on both boards.")
     rows = {m["member_key"]: [_row(m, "REQ-1", description=body)] for m in members}
     _patch_shard_io(monkeypatch, rows)
 
     out = w.run_shard(w.SOURCE_WORKDAY, shard, now=NOW)
-    queued = out["parse_queue"]
-    assert queued, "a brand-new body must queue a parse"
 
-    # Two postings, ONE distinct hash: extract_requirements dedupes by hash, so
-    # this costs one Bedrock call, not one per board.
-    hashes = [q["content_hash"] for q in queued]
-    assert len(set(hashes)) == 1, "an identical JD on two boards is one hash"
+    assert out["counts"].get("parsed_deterministic", 0) >= 1
+    # The LLM queue stays empty: the deterministic profile is the whole answer,
+    # and the token-spending path is an optional enrichment, not a prerequisite.
+    assert not out["parse_queue"]
 
-    # Once requirements exist for that hash, a later run reuses rather than queues.
-    inv.mark_requirements_parsed(queued[0]["source"], queued[0]["source_job_id"],
-                                 queued[0]["content_hash"],
-                                 {"required_skills": ["python"], "preferred_skills": []},
-                                 now=NOW)
+    doc = db.job_postings.find_one({"source_job_id": {"$regex": "REQ-1$"}})
+    reqs = doc["requirements"]
+    assert reqs["score_version"] == fit_score.FIT_SCORE_VERSION
+    assert "python" in reqs["required_skills"]
+    assert reqs["source_content_hash"] == doc["content_hash"]
+    # The stored profile must be COMPLETE enough for the scorer to trust it.
+    # A partial profile is worse than none: absent requirements earn neutral
+    # credit, so a lossy record scores HIGH rather than failing loudly.
+    assert fit_score._precomputed_requirements(reqs) is not None
+
+    # An identical body on a second board is one hash, so it is parsed once.
+    hashes = {d["content_hash"] for d in db.job_postings.find({}, {"content_hash": 1})}
+    assert len(hashes) == 1, "an identical JD on two boards is one hash"
+
     rows2 = {m["member_key"]: [_row(m, "REQ-2", description=body)] for m in members}
     _patch_shard_io(monkeypatch, rows2)
     out2 = w.run_shard(w.SOURCE_WORKDAY, shard, now=NOW + timedelta(hours=1))
-
     assert out2["counts"].get("parsed_reused", 0) >= 1
-    assert not out2["parse_queue"], "an already-parsed hash must not queue a new LLM call"
+    assert not out2["parse_queue"]
+
+
+def test_listing_body_skips_the_detail_fetch(db, small_registry, monkeypatch):
+    """The detail budget bounds OUTBOUND REQUESTS, so only rows that would make
+    one may spend it.
+
+    Lever, Ashby and Recruitee ship the body in the listing payload. Charging
+    those against `max_details` throttled ~450 of the 1309 career-page companies
+    against a budget they never spend, and rows past the budget are not written
+    at all, so the overflow was silently dropped from the inventory.
+    """
+    shard = w.shard_of(w.SOURCE_WORKDAY, small_registry[0]["member_key"])
+    members = w.shard_members(w.SOURCE_WORKDAY, shard)
+    rows = {}
+    for i, m in enumerate(members):
+        rows[m["member_key"]] = [
+            _row(m, "WITH-BODY", description="Python, MongoDB and AWS required."),
+            _row(m, "NO-BODY"),
+        ]
+    detail_calls = []
+    _patch_shard_io(monkeypatch, rows, detail_calls)
+
+    out = w.run_shard(w.SOURCE_WORKDAY, shard, now=NOW)
+
+    assert all("NO-BODY" in c for c in detail_calls), \
+        "a row that already has a body must not be fetched again"
+    assert len(detail_calls) == len(members)
+    assert out["counts"].get("detail_free", 0) == len(members)
+    # Both kinds still land in the inventory.
+    assert db.job_postings.count_documents({}) == 2 * len(members)
+
+
+def test_detail_budget_only_counts_rows_that_would_fetch(db, small_registry, monkeypatch):
+    """A shard whose rows all carry bodies must not report skipped work."""
+    shard = w.shard_of(w.SOURCE_WORKDAY, small_registry[0]["member_key"])
+    members = w.shard_members(w.SOURCE_WORKDAY, shard)
+    rows = {m["member_key"]: [_row(m, f"REQ-{i}", description="Python and AWS.")
+                              for i in range(5)] for m in members}
+    _patch_shard_io(monkeypatch, rows)
+
+    out = w.run_shard(w.SOURCE_WORKDAY, shard, now=NOW, max_details=1)
+
+    assert out["counts"].get("detail_skipped_budget", 0) == 0
+    assert db.job_postings.count_documents({}) == 5 * len(members), \
+        "a body-in-listing row must never be dropped by the detail budget"
 
 
 def test_requirements_extraction_is_disabled_by_default():
@@ -696,3 +765,38 @@ def test_dispatch_registers_every_shard_idempotently(db, small_registry):
     w.dispatch_due_shards(w.SOURCE_WORKDAY, limit=0, now=NOW, enqueue=lambda t, p: "x")
     assert db.job_source_state.count_documents({"source": w.SOURCE_WORKDAY}) == 4
     assert inv.get_source_state(w.SOURCE_WORKDAY, "s000")["lease_owner"] == "keeper"
+
+
+def test_write_stage_respects_the_shard_budget(db, small_registry, monkeypatch):
+    """The write loop is deadline-checked like the IO stages.
+
+    Writes are several database round trips per posting, so on a slow or
+    distant cluster THIS is the stage that overruns. Unchecked, a shard sailed
+    past its 90s budget and would be killed mid-loop at the Lambda's 300s
+    timeout, losing the run record and holding the lease until its TTL.
+    """
+    shard = w.shard_of(w.SOURCE_WORKDAY, small_registry[0]["member_key"])
+    members = w.shard_members(w.SOURCE_WORKDAY, shard)
+    rows = {m["member_key"]: [_row(m, f"REQ-{i}") for i in range(4)] for m in members}
+    _patch_shard_io(monkeypatch, rows)
+
+    real_upsert = inv.upsert_posting
+    clock = {"t": 0.0}
+    monkeypatch.setattr(w.time, "monotonic", lambda: clock["t"])
+
+    def slow_upsert(*a, **kw):
+        clock["t"] += 40.0          # each write "takes" 40s of the 90s budget
+        return real_upsert(*a, **kw)
+
+    monkeypatch.setattr(inv, "upsert_posting", slow_upsert)
+
+    out = w.run_shard(w.SOURCE_WORKDAY, shard, now=NOW, budget_seconds=90)
+
+    assert "error" not in out
+    assert out["counts"].get("write_skipped_budget", 0) > 0, \
+        "the loop must stop at the deadline instead of running to the Lambda timeout"
+    written = db.job_postings.count_documents({})
+    assert 0 < written < 4 * len(members), "a partial write set, not all or nothing"
+    # Safe to resume: the watermark only advanced over what was actually written.
+    state = inv.get_source_state(w.SOURCE_WORKDAY, shard)
+    assert state["lease_owner"] is None, "the lease is released even on a short run"

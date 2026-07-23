@@ -68,6 +68,13 @@ resource "aws_cloudwatch_event_rule" "scheduled" {
   name                = "${var.project}-${each.key}-${var.environment}"
   description         = each.value.desc
   schedule_expression = each.value.expression
+
+  # Rule state is DECLARED, not clicked. The three ingest rules were applied and
+  # then disabled out of band, which left the canonical inventory permanently
+  # empty (0 postings, 0 shard state, 0 runs) while every read path silently
+  # kept using the slow live fan-out. Nothing in the repo said so, and terraform
+  # showed no drift because state was not managed here. It is now.
+  state = lookup(each.value, "state", "ENABLED")
 }
 
 resource "aws_cloudwatch_event_target" "scheduled" {

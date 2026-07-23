@@ -448,12 +448,31 @@ def dedup_gate(user_email: str, job_identity: str) -> Tuple[bool, Optional[Dict[
 # ---------------------------------------------------------------------------
 # Create (insert-first; unique-index conflict → skipped_duplicate no-op)
 # ---------------------------------------------------------------------------
+def _pin_source_posting(posting_job_id: Optional[str]) -> None:
+    """Best-effort pin of the inventory row behind an application.
+
+    Never raises. If the pin fails the posting simply stays subject to normal
+    retention and the archive is retried by the next sweep that reaches it;
+    losing the pin is a degraded history link, not a lost application.
+    """
+    if not posting_job_id:
+        return
+    try:
+        from services import job_inventory_service as inv
+
+        inv.pin_posting(str(posting_job_id), reason="applied")
+    except Exception as exc:  # pragma: no cover - pinning must never block apply
+        logger.warning("pin_posting failed for %s: %s",
+                       str(posting_job_id)[:12], type(exc).__name__)
+
+
 def create_application(user_email: str, *, company: str, title: str,
                        jd_text: str, source: str, apply_url: str = "",
                        ats_family: Optional[str] = None,
                        tenant: Optional[str] = None,
                        posting_closes_at: Any = None,
                        tailoring_record_id: Optional[str] = None,
+                       posting_job_id: Optional[str] = None,
                        autonomy: str = "ask",
                        confidence_score: float = 0.0) -> Tuple[Dict[str, Any], str]:
     """Create a ledger row in `queued`, or resolve against the existing one.
@@ -498,6 +517,10 @@ def create_application(user_email: str, *, company: str, title: str,
         "apply_url": _clean_str(apply_url, 2000),
         "posting_closes_at": _parse_closes_at(posting_closes_at),
         "tailoring_record_id": _clean_str(tailoring_record_id, 200) or None,
+        # Link back to the canonical inventory row, when the posting came from
+        # there. This is what `pin_posting` below uses to make the job outlive
+        # the 7-day retention window.
+        "posting_job_id": _clean_str(posting_job_id, 64) or None,
         "autonomy": autonomy,
         "confidence_score": _clamp_score(confidence_score),
     }
@@ -521,7 +544,17 @@ def create_application(user_email: str, *, company: str, title: str,
     try:
         _applications().insert_one(rec)
     except DuplicateKeyError:
+        _pin_source_posting(posting_job_id)
         return _resolve_insert_conflict(user_email, identity, fresh_fields, now)
+
+    # A posting a user has applied to must outlive the inventory's rolling
+    # 7-day window, or their own application history renders as a dead
+    # reference. Pinning archives the full posting (body included) to S3 and
+    # flags the Mongo row so retention verifies that archive before deleting.
+    # Done AFTER the successful insert so a failed create cannot pin, and
+    # deliberately non-fatal: an application that exists with an unpinned
+    # posting is recoverable, an application that failed to record is not.
+    _pin_source_posting(posting_job_id)
 
     _audit(user_email, "application_created", application_id=application_id,
            meta={"job_identity_prefix": identity[:12], "source": source,

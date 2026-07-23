@@ -82,6 +82,16 @@ CONSTRAINT_CAPS: Dict[str, int] = {
     # and any number we printed would be invented. The product surfaces this
     # as the honest "low signal resume" state rather than a fake match.
     "insufficient_resume_evidence": 20,
+    # The MIRROR of the above, on the job side. A posting whose body could not
+    # be read yields no requirements, and absent requirements earn NEUTRAL
+    # credit in every component (60% of skills, domain and education), so a
+    # body-less row scored 72 "good match" against a resume it had literally
+    # never been compared to. That is the single most damaging failure this
+    # engine can produce: a confident number attached to no evidence, sitting
+    # in a guest's top five next to real matches. Capped into "possible match"
+    # so it can still be browsed but can never outrank a posting we actually
+    # read.
+    "insufficient_job_requirements": 45,
 }
 
 BANDS: Sequence[Tuple[int, str]] = (
@@ -937,6 +947,49 @@ def extract_requirements(jd_text: Any, title: Any = "") -> Dict[str, Any]:
     return dict(_extract_requirements_cached(str(jd_text or ""), str(title or "")))
 
 
+# Keys `score()` reads off a requirement profile. A stored profile missing any
+# of these is treated as unusable rather than silently scored with defaults,
+# because a partial profile scores HIGH (absent requirements award the neutral
+# 60% credit) and would quietly promote junk to the top of a guest's results.
+_REQUIRED_PROFILE_KEYS = (
+    "required_skills", "preferred_skills", "required_years",
+    "required_degree_level", "role_family", "job_level", "industries",
+    "work_mode", "licenses", "clearance_required",
+    "work_authorization_restricted",
+)
+
+
+def has_job_requirements(reqs: Any) -> bool:
+    """Did this posting publish anything the scorer can actually measure?
+
+    Public because the retrieval path uses the SAME predicate to decide what a
+    guest is allowed to see (ADR-001's rule: fewer true matches beat more
+    manufactured ones). Keeping one definition means the scorer's cap and the
+    feed's exclusion can never disagree about what "no evidence" means.
+    """
+    if not isinstance(reqs, dict):
+        return False
+    if reqs.get("requirements_source") in (None, "", "none"):
+        return False
+    return bool(reqs.get("required_skills") or reqs.get("preferred_skills"))
+
+
+def _precomputed_requirements(stored: Any) -> Optional[Dict[str, Any]]:
+    """Validate a requirement profile persisted by the ingestion path.
+
+    Returns the profile only when it is complete AND was produced by this exact
+    scorer version. Returns None otherwise, which makes the caller fall back to
+    extracting from the JD body - correct, just slower.
+    """
+    if not isinstance(stored, dict) or not stored:
+        return None
+    if stored.get("score_version") != FIT_SCORE_VERSION:
+        return None
+    if any(k not in stored for k in _REQUIRED_PROFILE_KEYS):
+        return None
+    return stored
+
+
 # ---------------------------------------------------------------------------
 # Resume profile
 # ---------------------------------------------------------------------------
@@ -1370,6 +1423,18 @@ def _hard_constraints(reqs: Dict[str, Any], prof: Dict[str, Any],
                     "cap": CONSTRAINT_CAPS["insufficient_resume_evidence"],
                     "detail": ("No skills could be read from your resume, so coverage "
                                "of this posting's requirements cannot be assessed.")})
+
+    # Job-side evidence gate. `requirements_source == "none"` means the
+    # extractor found no skill, no year count and no credential anywhere in the
+    # body, which in practice means there was no usable body: a listing row
+    # whose detail fetch was skipped, a board that ships an empty description,
+    # or a posting that is pure marketing copy. Everything below the title is
+    # then guesswork, and guesswork must not be able to present as a match.
+    if not has_job_requirements(reqs):
+        out.append({"type": "job_evidence", "status": "missing",
+                    "cap": CONSTRAINT_CAPS["insufficient_job_requirements"],
+                    "detail": ("This posting does not publish readable requirements, "
+                               "so the fit shown is based on the job title alone.")})
     if severe_gap:
         out.append({"type": "experience_gap", "status": "missing",
                     "cap": CONSTRAINT_CAPS["severe_experience_gap"],
@@ -1396,6 +1461,13 @@ def score(resume: Dict[str, Any], job: Dict[str, Any],
     `job` reads `description` / `jd_text`, `title`, `location`. `profile` is
     an optional prebuilt `build_resume_profile` result so a batch pays the
     resume analysis once.
+
+    `job["requirements"]` short-circuits extraction. The canonical inventory
+    (ADR-003) runs `extract_requirements` ONCE per changed JD at ingest time and
+    stores the result on the posting, so the request path can score without ever
+    loading the JD body. The stored profile is only trusted when it declares the
+    CURRENT `FIT_SCORE_VERSION`; anything older falls through to a live extract,
+    which keeps a scorer upgrade from silently serving stale semantics.
     """
     job = job or {}
     jd_text = str(job.get("description") or job.get("jd_text") or "")
@@ -1403,7 +1475,9 @@ def score(resume: Dict[str, Any], job: Dict[str, Any],
     job_location = str(job.get("location") or "")
 
     prof = profile if profile is not None else build_resume_profile(resume or {})
-    reqs = extract_requirements(jd_text, job_title)
+    reqs = _precomputed_requirements(job.get("requirements"))
+    if reqs is None:
+        reqs = extract_requirements(jd_text, job_title)
 
     required = reqs.get("required_skills") or []
     preferred = reqs.get("preferred_skills") or []

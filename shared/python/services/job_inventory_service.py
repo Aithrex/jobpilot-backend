@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -89,6 +90,13 @@ STATUS_CLOSED = "closed"
 STATUS_EXPIRED = "expired"
 CLOSED_STATUSES = (STATUS_CLOSED, STATUS_EXPIRED)
 
+# Closure reasons. Slug form, because `close_posting` runs them through
+# `_safe_key` (which rewrites "_" to "-"); named here so callers and tests
+# never have to guess which form landed in the document.
+CLOSED_REASON_NOT_SEEN = "not-seen"      # the board stopped listing it
+CLOSED_REASON_AGED_OUT = "aged-out"      # older than the servable window
+CLOSED_REASON_UNVERIFIED = "unverified"  # no crawl has confirmed it in days
+
 COST_CLASS_FREE = "free"    # direct ATS - guest-eligible (ADR-004)
 COST_CLASS_PAID = "paid"    # metered aggregator - NEVER on the guest path
 COST_CLASSES = (COST_CLASS_FREE, COST_CLASS_PAID)
@@ -103,10 +111,25 @@ CONFIDENCE_EXACT = "exact"        # source published a real posting date
 CONFIDENCE_RELATIVE = "relative"  # derived from "today" / "3 days ago"
 CONFIDENCE_UNKNOWN = "unknown"    # no usable date - excluded from guest reads
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(str(os.environ.get(name, "")).strip() or default)
+    except (TypeError, ValueError):
+        return default
+
+
 # --- operational tunables ---------------------------------------------------
 LEASE_TTL_SECONDS = 900           # 15 min: > the 110s fetch budget, < a schedule tick
-RETENTION_DAYS_AFTER_CLOSE = 30   # how long a closed posting is kept for audit
+# Retention. The guest contract is a 7-day window (ADR-001), so a posting older
+# than that is not servable and only costs storage. Closed postings get a short
+# grace so a board that flickers does not lose its rows, then go too.
+MAX_INVENTORY_AGE_DAYS = _env_int("JOB_INVENTORY_MAX_AGE_DAYS", 7)
+RETENTION_DAYS_AFTER_CLOSE = _env_int("JOB_INVENTORY_RETENTION_DAYS", 2)
 RUN_RETENTION_DAYS = 30           # job_ingestion_runs log retention
+# How much JD text stays in Mongo once the body is safely in S3. Zero by
+# default: the scorer reads `requirements`, and tailoring resolves the body
+# from object storage, so an inline copy buys nothing and costs a lot.
+INVENTORY_DESCRIPTION_CHARS = _env_int("JOB_INVENTORY_DESCRIPTION_CHARS", 0)
 BACKOFF_BASE_SECONDS = 60
 BACKOFF_MAX_SECONDS = 6 * 3600
 
@@ -163,6 +186,65 @@ def _safe_key(value: Any, max_length: int = 200) -> str:
     return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", raw)).strip("-")
 
 
+def _safe_family(value: Any, max_length: int = 40) -> str:
+    """Equality-position guard for taxonomy values (`role_family`, `seniority`).
+
+    Separate from `_safe_key` because `_safe_key` rewrites "_" to "-", and the
+    scorer's vocabulary is underscored ("software_engineering",
+    "data_engineering", "customer_support"). Passing a family through
+    `_safe_key` on ONE side of the query silently stored
+    "software-engineering" while retrieval asked for the same string re-mangled
+    from a different input, so multi-word families could never match. The
+    injection posture is unchanged: "." and "$" still cannot survive, so no
+    value here can reach an operator position or a dotted field path.
+    """
+    raw = _safe_str(value, max_length).lower()
+    return re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]+", "_", raw)).strip("_")
+
+
+def _safe_display(value: Any, max_length: int = 200) -> str:
+    """Guard for fields that are DISPLAYED, never filtered on.
+
+    Critically NOT `_safe_str`. That routes through
+    `InputSanitizer.sanitize_mongo_query`, which rewrites "." to "_" to stop
+    dotted-field-path traversal. That is exactly right for a value heading into
+    a query filter and actively destructive for content:
+
+        "Acme, Inc."           -> "Acme, Inc_"
+        "Sr. Software Engineer"-> "Sr_ Software Engineer"
+
+    Control characters and length are still bounded, which is the whole threat
+    surface for a value that only ever gets stored and rendered.
+    """
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        return ""
+    return InputSanitizer.sanitize_string(str(value), max_length)
+
+
+def _safe_url(value: Any, max_length: int = 2000) -> str:
+    """http(s) links, dots intact.
+
+    The same "." to "_" rewrite turned every apply link into a dead host
+    ("https://boards.greenhouse.io/..." -> "https://boards_greenhouse_io/..."),
+    which would have shipped a broken Apply button on every single job card.
+    Scheme is whitelisted here so a stored URL can never be javascript: or
+    data:, mirroring `guest_service._safe_job_url` on the render side.
+    """
+    url = _safe_display(value, max_length).strip()
+    if not url:
+        return ""
+    return url if url.lower().startswith(("http://", "https://")) else ""
+
+
+def _safe_version(value: Any, max_length: int = 40) -> str:
+    """Version strings keep their dots. Stored, compared for equality by the
+    scorer, never placed in a Mongo filter - so the guard is a charset
+    whitelist rather than the dotted-path stripper."""
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        return ""
+    return re.sub(r"[^a-zA-Z0-9._\-]+", "", str(value))[:max_length]
+
+
 def _safe_text(value: Any, max_length: int = _MAX_DESCRIPTION_CHARS) -> str:
     """Body text: stored, never used in an equality filter, so only length and
     control characters are bounded."""
@@ -200,20 +282,43 @@ def normalize_title(title: Any) -> str:
 
 
 def role_family_of(title: Any) -> str:
-    """Reuse the ONE existing role taxonomy rather than inventing a second one
-    (`pipeline_intel_service._role_family`). Imported lazily to keep this
-    module's cold-start import graph flat."""
+    """Role family, from the SAME taxonomy the scorer uses.
+
+    This deliberately does NOT use `pipeline_intel_service._role_family`. That
+    taxonomy has 13 families and is tech-only ("swe", "backend", "cloud_devops",
+    else "other"), while `fit_score.ROLE_FAMILIES` has 31 and covers the whole
+    labour market ("nursing", "teaching", "skilled_trades", "accounting", ...).
+
+    Writing one vocabulary and reading with the other is not a style question,
+    it is a silent zero-results bug in both directions:
+
+      * the scorer classifies a resume as `software_engineering` while the
+        inventory stamped the posting `swe`, so an equality filter matches
+        NOTHING; and
+      * every non-technical posting is stamped `other`, so nurses, teachers and
+        accountants never see a single result no matter how well they match.
+
+    `fit_score.classify_role` also refuses to guess: it returns None rather than
+    defaulting an unrecognised title into an engineering family, which is why
+    "other" here means genuinely unclassified and is never used to exclude a
+    posting from retrieval.
+    """
     try:
-        from services.pipeline_intel_service import _role_family
-        return _role_family(normalize_title(title))
+        from services import fit_score
+        return fit_score.classify_role(normalize_title(title)) or "other"
     except Exception:  # pragma: no cover - taxonomy unavailable
         return "other"
 
 
+# fit_score.title_level's vocabulary, plus the "no marker in the title" default.
+SENIORITY_LEVELS = ("entry", "mid", "senior", "staff", "director", "executive")
+
+
 def seniority_of(title: Any) -> str:
+    """Seniority band, again from `fit_score` so writer and reader agree."""
     try:
-        from services.pipeline_intel_service import _seniority
-        return _seniority(normalize_title(title))
+        from services import fit_score
+        return fit_score.title_level(normalize_title(title)) or "mid"
     except Exception:  # pragma: no cover
         return "mid"
 
@@ -230,21 +335,21 @@ def normalize_location(loc: Any) -> Dict[str, str]:
     """One location entry -> {raw, city, region, country, key}. `key` is the
     indexed equality form; `raw` preserves what the source actually said."""
     if isinstance(loc, dict):
-        raw = _safe_str(loc.get("raw") or loc.get("name") or loc.get("text"), 200)
-        city = _safe_str(loc.get("city"), 80)
-        region = _safe_str(loc.get("region") or loc.get("state"), 80)
-        country = _safe_str(loc.get("country"), 80)
+        raw = _safe_display(loc.get("raw") or loc.get("name") or loc.get("text"), 200)
+        city = _safe_display(loc.get("city"), 80)
+        region = _safe_display(loc.get("region") or loc.get("state"), 80)
+        country = _safe_display(loc.get("country"), 80)
     else:
-        raw = _safe_str(loc, 200)
+        raw = _safe_display(loc, 200)
         city = region = country = ""
     if raw and not city:
         parts = [p.strip() for p in raw.split(",") if p.strip()]
         if parts:
-            city = _safe_str(parts[0], 80)
+            city = _safe_display(parts[0], 80)
         if len(parts) > 1:
-            region = region or _safe_str(parts[1], 80)
+            region = region or _safe_display(parts[1], 80)
         if len(parts) > 2:
-            country = country or _safe_str(parts[-1], 80)
+            country = country or _safe_display(parts[-1], 80)
     key = _safe_key("-".join(p for p in (city, region, country) if p), 160)
     return {"raw": raw, "city": city, "region": region, "country": country, "key": key}
 
@@ -316,8 +421,8 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     source = _safe_key(raw.get("source"), 60)
     source_job_id = _safe_str(raw.get("source_job_id") or raw.get("job_id"), 200)
-    employer_name = _safe_str(raw.get("employer_name") or raw.get("company"), 200)
-    title_raw = _safe_str(raw.get("title") or raw.get("title_raw"), _MAX_TITLE_CHARS)
+    employer_name = _safe_display(raw.get("employer_name") or raw.get("company"), 200)
+    title_raw = _safe_display(raw.get("title") or raw.get("title_raw"), _MAX_TITLE_CHARS)
     title_normalized = normalize_title(title_raw)
     locations = normalize_locations(raw.get("locations") or raw.get("location"))
     description_text = _safe_text(raw.get("description_text") or raw.get("description"))
@@ -336,38 +441,63 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
     if cost_class not in COST_CLASSES:
         cost_class = COST_CLASS_PAID  # fail CLOSED: unknown sources are not guest-eligible
 
-    doc = {
-        "source": source,
-        "source_job_id": source_job_id,
-        "canonical_url": _safe_str(raw.get("canonical_url") or raw.get("url"), 2000),
-        "employer_id": employer_id,
-        "employer_name": employer_name,
-        "title_raw": title_raw,
-        "title_normalized": title_normalized,
-        "role_family": _safe_key(raw.get("role_family"), 40) or role_family_of(title_raw),
-        "seniority": _safe_key(raw.get("seniority"), 20) or seniority_of(title_raw),
-        "locations": locations,
-        "work_mode": normalize_work_mode(
-            raw.get("work_mode"), title=title_raw,
-            locations=" ".join(l["raw"] for l in locations),
-        ),
-        "employment_type": employment_type,
-        "description_text": description_text,
-        "posted_at": posted_at,
-        "raw_posted_text": _safe_str(raw.get("raw_posted_text") or raw.get("posted_text"), 120),
-        "posted_at_confidence": confidence,
-        "source_quality": _safe_key(raw.get("source_quality"), 20) or "unknown",
-        "cost_class": cost_class,
-        "normalization_version": NORMALIZATION_VERSION,
-        "scoring_version": SCORING_VERSION,
-    }
-    doc["content_hash"] = compute_content_hash(
+    # The hash is ALWAYS over the full body, never the stored excerpt, so
+    # offloading the text cannot change a posting's identity or spuriously
+    # report a content change on the next crawl.
+    content_hash = compute_content_hash(
         employer_id=employer_id,
         title_normalized=title_normalized,
         description_text=description_text,
         locations=locations,
         employment_type=employment_type,
     )
+
+    doc = {
+        "source": source,
+        "source_job_id": source_job_id,
+        "canonical_url": _safe_url(raw.get("canonical_url") or raw.get("url")),
+        "employer_id": employer_id,
+        "employer_name": employer_name,
+        "title_raw": title_raw,
+        "title_normalized": title_normalized,
+        "role_family": _safe_family(raw.get("role_family")) or role_family_of(title_raw),
+        "seniority": _safe_family(raw.get("seniority"), 20) or seniority_of(title_raw),
+        "locations": locations,
+        "work_mode": normalize_work_mode(
+            raw.get("work_mode"), title=title_raw,
+            locations=" ".join(l["raw"] for l in locations),
+        ),
+        "employment_type": employment_type,
+        "posted_at": posted_at,
+        "raw_posted_text": _safe_display(raw.get("raw_posted_text") or raw.get("posted_text"), 120),
+        "posted_at_confidence": confidence,
+        "source_quality": _safe_key(raw.get("source_quality"), 20) or "unknown",
+        "cost_class": cost_class,
+        "normalization_version": NORMALIZATION_VERSION,
+        "scoring_version": SCORING_VERSION,
+        "content_hash": content_hash,
+        "description_chars": len(description_text),
+    }
+
+    # Body offload. The matching path scores off `requirements`, never the raw
+    # text, so a JD in Mongo is dead weight on a shared-tier cluster. Push it to
+    # S3 under its content hash and keep only a pointer. If S3 is unavailable
+    # (local dev, or a transient failure) we keep the body inline instead: a
+    # bigger document is strictly better than a posting that can never be
+    # tailored against.
+    stored_body = description_text[:INVENTORY_DESCRIPTION_CHARS] \
+        if INVENTORY_DESCRIPTION_CHARS > 0 else ""
+    ref = None
+    if description_text:
+        try:
+            from services import job_content_store
+            ref = job_content_store.put_jd(content_hash, description_text)
+        except Exception as exc:  # pragma: no cover - storage must not break ingest
+            logger.warning("normalize_posting: JD offload failed (%s); keeping inline",
+                           type(exc).__name__)
+            ref = None
+    doc["description_ref"] = ref
+    doc["description_text"] = stored_body if ref else description_text
     return doc
 
 
@@ -500,37 +630,66 @@ def mark_requirements_parsed(
     content_hash sits IN THE FILTER: if the JD changed while the extraction was
     in flight, this update matches nothing and returns False rather than
     stamping stale requirements onto fresh text.
+
+    The stored shape is `fit_score.extract_requirements`' OWN output, verbatim
+    plus guard fields. That is deliberate: the read path feeds this straight
+    back into `fit_score.score()`, so any reshaping here would be a second,
+    drifting schema. An earlier revision persisted a four-field subset, which
+    dropped `required_years`, `licenses`, `clearance_required`,
+    `work_authorization_restricted`, `industries`, `work_mode` and `job_level` -
+    every hard-constraint input the scorer has. A profile missing those does not
+    score low, it scores HIGH (absent requirements earn neutral credit), so that
+    failure would have surfaced as confidently wrong matches, not as an error.
     """
     now = now or _now()
     ch = _safe_str(content_hash, 64)
     if not _HEX_RE.match(ch):
         return False
     payload = requirements if isinstance(requirements, dict) else {}
+    if not payload:
+        return False
+
+    licenses = payload.get("licenses")
+    stored = {
+        # --- fit_score-native profile (exactly what score() consumes) ------
+        # NOT _safe_str: the mongo-query sanitizer strips "." (dotted field
+        # paths), which rewrote "fit-v2.0" to "fit-v2_0". The scorer compares
+        # this against FIT_SCORE_VERSION exactly, so the mangled value would
+        # never match and every stored profile would be silently rejected -
+        # correct results, but the JD-free fast path would never once engage.
+        # This is a stored value that never reaches a filter, so a plain
+        # charset whitelist is the right guard.
+        "score_version": _safe_version(payload.get("score_version")),
+        "requirements_source": _safe_key(payload.get("requirements_source"), 30),
+        "required_skills": _safe_skills(payload.get("required_skills")),
+        "preferred_skills": _safe_skills(payload.get("preferred_skills")),
+        "required_years": payload.get("required_years"),
+        "required_degree_level": int(payload.get("required_degree_level") or 0),
+        "role_family": _safe_family(payload.get("role_family")) or None,
+        "job_level": _safe_family(payload.get("job_level"), 20) or None,
+        "industries": _safe_skills(payload.get("industries"), limit=20),
+        "work_mode": _safe_key(payload.get("work_mode"), 20),
+        "licenses": [
+            {"key": _safe_key(l.get("key"), 40), "label": _safe_str(l.get("label"), 80)}
+            for l in (licenses if isinstance(licenses, list) else [])[:10]
+            if isinstance(l, dict)
+        ],
+        "clearance_required": bool(payload.get("clearance_required")),
+        "work_authorization_restricted": bool(payload.get("work_authorization_restricted")),
+        "text_length": int(payload.get("text_length") or 0),
+        "content_hash": _safe_str(payload.get("content_hash"), 64),
+        # --- guards (parse-once + never-regress) ---------------------------
+        "source_content_hash": ch,
+        "extractor_version": EXTRACTOR_VERSION,
+        "extracted_at": now,
+    }
     res = _postings().update_one(
         {
             "source": _safe_key(source, 60),
             "source_job_id": _safe_str(source_job_id, 200),
             "content_hash": ch,
         },
-        {"$set": {
-            "requirements": {
-                "required_skills": _safe_skills(payload.get("required_skills")),
-                "preferred_skills": _safe_skills(payload.get("preferred_skills")),
-                "min_years_experience": payload.get("min_years_experience"),
-                "education": _safe_str(payload.get("education"), 200),
-                "constraints": {
-                    "work_authorization": _safe_str(
-                        (payload.get("constraints") or {}).get("work_authorization"), 200),
-                    "clearance": _safe_str(
-                        (payload.get("constraints") or {}).get("clearance"), 200),
-                    "licenses": _safe_skills((payload.get("constraints") or {}).get("licenses")),
-                },
-                "source_content_hash": ch,
-                "extractor_version": EXTRACTOR_VERSION,
-                "extracted_at": now,
-            },
-            "updated_at": now,
-        }},
+        {"$set": {"requirements": stored, "updated_at": now}},
     )
     return bool(res.matched_count)
 
@@ -642,30 +801,201 @@ def set_purge_at(source: str, source_job_id: str, when: datetime) -> bool:
     return bool(res.modified_count)
 
 
-def purge_expired(*, limit: int = 5000, now: Optional[datetime] = None) -> int:
+# ---------------------------------------------------------------------------
+# Pinning - "a user is attached to this posting, it must never be lost"
+# ---------------------------------------------------------------------------
+
+PIN_REASONS = ("applied", "saved", "tailored", "snapshot", "manual")
+
+
+def pin_posting(job_id: str, *, reason: str = "applied",
+                now: Optional[datetime] = None) -> bool:
+    """Mark a posting as user-attached AND archive it to S3 in the same call.
+
+    Retention deletes anything past the 7-day window. That is correct for the
+    other 99.9% of the inventory and catastrophic for the posting somebody
+    applied to: the application row in `applications` would outlive the job it
+    points at, and the user's own history would render as a dead reference.
+
+    Pinning resolves that WITHOUT re-growing Mongo. The durable copy goes to S3
+    (unbounded, cheap, exactly the right storage class for a cold immutable
+    record); the Mongo row keeps a `pinned` flag so the purge path knows to
+    verify the archive before deleting. After the purge the posting is still
+    fully resolvable through `resolve_jd` - it just no longer occupies the hot
+    collection.
+
+    Idempotent: pinning twice re-archives (cheap, and it refreshes the snapshot
+    if the posting changed) and adds the reason to the set.
+    """
+    now = now or _now()
+    jid = _safe_str(job_id, 64)
+    if not jid:
+        return False
+    doc = _postings().find_one({"job_id": jid})
+    if not doc:
+        # Already purged. If the archive exists the pin already did its job.
+        try:
+            from services import job_content_store
+            return job_content_store.archive_exists(jid)
+        except Exception:  # pragma: no cover
+            return False
+
+    archived = False
+    try:
+        from services import job_content_store
+        archived = job_content_store.archive_posting(doc, reason=reason)
+    except Exception as exc:  # pragma: no cover
+        logger.error("pin_posting: archive raised for %s: %s", jid[:12], type(exc).__name__)
+
+    safe_reason = _safe_key(reason, 20) or "manual"
+    update: Dict[str, Any] = {
+        "$set": {"pinned": True, "pinned_at": now, "updated_at": now},
+        "$addToSet": {"pin_reasons": safe_reason},
+    }
+    if archived:
+        update["$set"]["archived_at"] = now
+    _postings().update_one({"job_id": jid}, update)
+
+    if not archived:
+        # The flag still lands, so the purge guard will refuse to delete this
+        # row until a later sweep manages to archive it. Loud, because a
+        # persistent failure here means retention is silently blocked.
+        logger.error(
+            "pin_posting: job %s pinned but NOT archived - it will be retained "
+            "in Mongo until the archive succeeds", jid[:12]
+        )
+    return archived
+
+
+def is_pinned(job_id: str) -> bool:
+    doc = _postings().find_one({"job_id": _safe_str(job_id, 64)}, {"pinned": 1, "_id": 0})
+    return bool((doc or {}).get("pinned"))
+
+
+# ---------------------------------------------------------------------------
+# Retention
+# ---------------------------------------------------------------------------
+
+def expire_aged_postings(
+    *,
+    max_age_days: Optional[int] = None,
+    limit: int = 5000,
+    now: Optional[datetime] = None,
+) -> int:
+    """Close every ACTIVE posting older than the servable window.
+
+    Distinct from `close_unseen`, which handles "the board no longer lists it".
+    This handles "it is still listed, but it is older than anything we will ever
+    show". Both funnel into `close_posting`, so `purge_at` still has exactly one
+    writer and the active-doc guard still holds.
+
+    Retention days are 0 here: an aged-out posting has no audit value that the
+    S3 archive does not already cover, and holding it for a grace period is what
+    makes the collection grow without bound.
+    """
+    now = now or _now()
+    limit_days = MAX_INVENTORY_AGE_DAYS if max_age_days is None else int(max_age_days)
+    cutoff = now - timedelta(days=max(0, limit_days))
+    rows = list(
+        _postings()
+        .find({"status": STATUS_ACTIVE, "posted_at": {"$lt": cutoff}},
+              {"_id": 0, "source": 1, "source_job_id": 1})
+        .limit(max(1, int(limit)))
+    )
+    closed = 0
+    for row in rows:
+        if close_posting(row["source"], row["source_job_id"],
+                         reason=CLOSED_REASON_AGED_OUT,
+                         retention_days=0, now=now):
+            closed += 1
+    return closed
+
+
+def purge_expired(*, limit: int = 5000, now: Optional[datetime] = None
+                  ) -> Dict[str, int]:
     """Retention sweeper. Deliberately explicit rather than a TTL index: a bug
     that stamped purge_at on a live posting would silently delete real
     inventory under a TTL, whereas this path is scheduled, bounded, logged, and
-    double-checks the doc is not active."""
+    double-checks the doc is not active.
+
+    Pinned rows take the long way round. Before a pinned posting is deleted the
+    S3 archive is VERIFIED to exist; if it does not, the row is left in place
+    and re-archived on the next sweep. That check is the whole guarantee behind
+    "a job you applied to is never lost", so it is a head request against object
+    storage rather than trust in a flag.
+
+    Returns counts rather than a bare int so the maintenance job can report
+    what was retained and why.
+    """
     now = now or _now()
-    res = _postings().delete_many({
-        "purge_at": {"$lte": now},
-        "status": {"$in": list(CLOSED_STATUSES)},
-    })
-    return int(res.deleted_count or 0)
+    counts = {"deleted": 0, "archived": 0, "retained_unarchived": 0}
+
+    candidates = list(
+        _postings()
+        .find({"purge_at": {"$lte": now}, "status": {"$in": list(CLOSED_STATUSES)}},
+              {"_id": 0, "job_id": 1, "source": 1, "source_job_id": 1,
+               "pinned": 1, "archived_at": 1})
+        .limit(max(1, int(limit)))
+    )
+    if not candidates:
+        return counts
+
+    unpinned_ids = [d["job_id"] for d in candidates if not d.get("pinned") and d.get("job_id")]
+    pinned = [d for d in candidates if d.get("pinned")]
+
+    # Unpinned rows: nobody is attached, the 7-day window has passed, delete.
+    for start in range(0, len(unpinned_ids), 500):
+        res = _postings().delete_many({"job_id": {"$in": unpinned_ids[start:start + 500]}})
+        counts["deleted"] += int(res.deleted_count or 0)
+
+    if not pinned:
+        return counts
+
+    try:
+        from services import job_content_store
+    except Exception:  # pragma: no cover - without the store, retain everything
+        counts["retained_unarchived"] += len(pinned)
+        return counts
+
+    for doc in pinned:
+        jid = doc.get("job_id")
+        if not jid:
+            continue
+        if not job_content_store.archive_exists(jid):
+            full = _postings().find_one({"job_id": jid})
+            if not (full and job_content_store.archive_posting(full, reason="retention")):
+                counts["retained_unarchived"] += 1
+                continue
+            counts["archived"] += 1
+        res = _postings().delete_one({"job_id": jid})
+        counts["deleted"] += int(res.deleted_count or 0)
+
+    if counts["retained_unarchived"]:
+        logger.error(
+            "purge_expired: %d pinned postings could not be archived and were "
+            "RETAINED; inventory will not shrink until object storage recovers",
+            counts["retained_unarchived"],
+        )
+    return counts
 
 
 # ---------------------------------------------------------------------------
 # job_postings - read paths
 # ---------------------------------------------------------------------------
 
+# Everything a job card and a fit score need, and nothing else. Notably ABSENT:
+# `description_text`. Scoring reads the precomputed `requirements` profile
+# (ADR-002 + `fit_score._precomputed_requirements`), so a 200-row candidate read
+# moves ~200KB instead of ~800KB, and the JD body only leaves S3 when somebody
+# actually tailors against the posting.
 _CARD_PROJECTION = {
     "_id": 0, "job_id": 1, "source": 1, "source_job_id": 1, "canonical_url": 1,
     "employer_id": 1, "employer_name": 1, "title_raw": 1, "title_normalized": 1,
     "role_family": 1, "seniority": 1, "locations": 1, "work_mode": 1,
     "employment_type": 1, "posted_at": 1, "posted_at_confidence": 1,
     "cost_class": 1, "source_quality": 1, "content_hash": 1, "requirements": 1,
-    "status": 1, "last_verified_at": 1,
+    "status": 1, "last_verified_at": 1, "description_ref": 1,
+    "description_chars": 1,
 }
 
 
@@ -674,6 +1004,36 @@ def get_posting(source: str, source_job_id: str) -> Optional[Dict[str, Any]]:
         "source": _safe_key(source, 60),
         "source_job_id": _safe_str(source_job_id, 200),
     })
+
+
+def get_postings_map(source: str, source_job_ids: Iterable[str],
+                     ) -> Dict[str, Dict[str, Any]]:
+    """Bulk form of `get_posting`, keyed by source_job_id.
+
+    The shard triage step ("has this posting changed since we last saw it?")
+    runs once per listed row. Done one document at a time that is several
+    hundred sequential round trips per shard, which on a 90s budget is the
+    difference between a shard that ingests and a shard that times out doing
+    bookkeeping. Batched in chunks so a large board cannot build an unbounded
+    $in list.
+    """
+    src = _safe_key(source, 60)
+    ids = [i for i in (_safe_str(v, 200) for v in (source_job_ids or [])) if i]
+    out: Dict[str, Dict[str, Any]] = {}
+    if not src or not ids:
+        return out
+    # Only the fields `_listing_implies_same_content` compares, so this stays a
+    # small read even when a shard lists a few thousand postings.
+    projection = {"_id": 0, "source_job_id": 1, "content_hash": 1, "status": 1,
+                  "title_normalized": 1, "employment_type": 1, "locations": 1,
+                  "description_chars": 1, "description_ref": 1,
+                  "normalization_version": 1}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        for doc in _postings().find({"source": src, "source_job_id": {"$in": chunk}},
+                                    projection):
+            out[doc["source_job_id"]] = doc
+    return out
 
 
 def get_by_job_id(job_id: str) -> Optional[Dict[str, Any]]:
@@ -709,6 +1069,7 @@ def find_parsed_requirements(content_hash: str) -> Optional[Dict[str, Any]]:
 def find_active_fresh(
     *,
     role_family: Optional[str] = None,
+    role_families: Optional[Iterable[str]] = None,
     max_age_days: int = 7,
     cost_classes: Optional[Iterable[str]] = None,
     location_key: Optional[str] = None,
@@ -744,16 +1105,31 @@ def find_active_fresh(
         "posted_at": {"$gte": cutoff},
         "posted_at_confidence": {"$ne": CONFIDENCE_UNKNOWN},
     }
-    rf = _safe_key(role_family, 40)
-    if rf:
-        query["role_family"] = rf
+    # Role family accepts a SET, not just one value. A resume rarely maps to a
+    # single family cleanly (a "Platform Engineer" is legitimately devops and
+    # software_engineering; a "Data Engineer" overlaps data_engineering and
+    # data_analysis), and an over-tight equality filter is indistinguishable
+    # from an empty inventory from the user's side. The candidate set is widened
+    # here and narrowed by the SCORER, which is the component that actually
+    # knows how well the resume fits.
+    families = [f for f in (
+        _safe_family(f) for f in (list(role_families or []) + [role_family])
+    ) if f]
+    seen_f = []
+    for f in families:
+        if f not in seen_f:
+            seen_f.append(f)
+    if len(seen_f) == 1:
+        query["role_family"] = seen_f[0]
+    elif seen_f:
+        query["role_family"] = {"$in": seen_f}
     lk = _safe_key(location_key, 160)
     if lk:
         query["locations.key"] = lk
     wm = _safe_key(work_mode, 20)
     if wm:
         query["work_mode"] = wm
-    sen = _safe_key(seniority, 20)
+    sen = _safe_family(seniority, 20)
     if sen:
         query["seniority"] = sen
     return list(
@@ -788,18 +1164,55 @@ def resolve_jd(job_id: str) -> Optional[Dict[str, Any]]:
     """Server-side JD resolution for tailoring. The JD text NEVER comes from
     the client (SSRF / injection posture, mirroring
     `guest_service.find_cached_match`) - it comes from inventory, fetched and
-    parsed ONCE, keyed by content_hash."""
+    parsed ONCE, keyed by content_hash.
+
+    Three tiers, in order, because the body no longer lives in Mongo and the
+    posting itself may have aged out of it:
+
+      1. the live posting + its JD blob in S3 (the normal case);
+      2. the S3 ARCHIVE, for a posting a user pinned that retention has since
+         removed from Mongo - this is what makes "you applied to it, so it is
+         still here" true after the 7-day window closes;
+      3. nothing. A caller that gets None must not fall back to client-supplied
+         JD text.
+    """
     doc = get_by_job_id(job_id)
-    if not doc:
-        return None
+
+    try:
+        from services import job_content_store
+    except Exception:  # pragma: no cover
+        job_content_store = None  # type: ignore
+
+    if doc is None:
+        if job_content_store is None:
+            return None
+        archived = job_content_store.get_archived(job_id)
+        if not archived:
+            return None
+        return {
+            "job_id": archived.get("job_id"),
+            "title": archived.get("title_raw") or "",
+            "company": archived.get("employer_name") or "",
+            "jd_text": archived.get("description_text") or "",
+            "url": archived.get("canonical_url") or "",
+            "content_hash": archived.get("content_hash"),
+            "requirements": archived.get("requirements"),
+            "archived": True,
+        }
+
+    jd_text = doc.get("description_text") or ""
+    ref = doc.get("description_ref")
+    if not jd_text and ref and job_content_store is not None:
+        jd_text = job_content_store.get_jd(ref) or ""
     return {
         "job_id": doc.get("job_id"),
         "title": doc.get("title_raw") or "",
         "company": doc.get("employer_name") or "",
-        "jd_text": doc.get("description_text") or "",
+        "jd_text": jd_text,
         "url": doc.get("canonical_url") or "",
         "content_hash": doc.get("content_hash"),
         "requirements": doc.get("requirements"),
+        "archived": False,
     }
 
 
