@@ -77,7 +77,15 @@ logger = logging.getLogger(__name__)
 # --- versions ---------------------------------------------------------------
 # Bumped when the normalizer below changes meaning. Stored on every doc so a
 # re-normalization pass can find stale docs with an indexed equality filter.
-NORMALIZATION_VERSION = 1
+#
+# v2: postings carry registry provenance (`industry`, `ats`, `tenant`) so the
+# feed tabs can filter on them. Without a bump, `_listing_implies_same_content`
+# treats every already-stored posting as unchanged and only refreshes
+# `last_seen_at`, so the ~18k rows written before this change would never gain
+# the new fields and would be invisible to an industry or company filter
+# forever. The bump makes them all look stale exactly once, and the next pass
+# over each shard rewrites them.
+NORMALIZATION_VERSION = 2
 # The requirement extractor's contract version (ADR-002). A bump re-parses.
 EXTRACTOR_VERSION = 1
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
