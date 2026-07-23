@@ -629,3 +629,165 @@ def test_a_title_derived_family_is_never_overwritten_by_the_body(db, s3):
                                  profile, now=NOW)
 
     assert db.job_postings.find_one({"source_job_id": "eng:1"})["role_family"] == stamped
+
+
+# ---------------------------------------------------------------------------
+# 10. Strict US gating on the guest path
+# ---------------------------------------------------------------------------
+
+US_CASES = [
+    # Proven US: explicit marker, state code, or full state name.
+    ("Austin, TX, USA", True), ("Tempe, Arizona", True),
+    ("Austin, Texas", True), ("New York, New York", True),
+    ("Remote - USA", True), ("Remote - United States", True),
+    ("Office - USA - CA - Headquarters", True), ("Washington, DC", True),
+    ("San Juan, Puerto Rico", True), ("Chantilly, VA", True),
+    # A US STATE outranks a foreign city name, which is what rescues these.
+    ("Paris, TX", True), ("Vienna, VA", True), ("Dublin, Ohio", True),
+    # Explicitly foreign.
+    ("Hyderabad, India", False), ("London, United Kingdom", False),
+    ("Toronto, Ontario", False), ("Sydney, New South Wales", False),
+    ("KSA-Work from Home", False),
+    # An explicit country beats a colliding state code ("or" is Oregon).
+    ("Canada - Remote (ON, AB, or NS Only)", False),
+    # UNPROVEN, and therefore dropped. This is the whole difference from the
+    # browse tabs, which keep these.
+    ("3 Locations", False), ("Remote", False), ("Getafe Area", False),
+    ("Asia", False), ("", False),
+]
+
+
+@pytest.mark.parametrize("location,expected", US_CASES)
+def test_strict_us_gate(location, expected):
+    from services import guest_service as g
+
+    assert g.is_us_confident({"location": location, "country_hint": ""}) is expected
+
+
+def test_a_parsed_country_field_is_authoritative():
+    from services import guest_service as g
+
+    assert g.is_us_confident({"location": "Tempe, Arizona", "country_hint": "us"})
+    # Country wins over a US-looking city string.
+    assert not g.is_us_confident({"location": "Springfield", "country_hint": "india"})
+
+
+def test_guest_feed_drops_non_us_postings(db, s3, monkeypatch):
+    """The crawler mirrors each board in full, US or not, so this filter is
+    what makes the guest feed US-only. The legacy scan enforced it by passing
+    us_only=True to the source services; the inventory path must too."""
+    from services import guest_service as g
+
+    monkeypatch.setenv("GUEST_US_STRICT", "1")
+    for i in range(20):
+        _ingest(_raw(source_job_id=f"us:{i}", location="Austin, TX, USA"))
+    for i in range(20):
+        _ingest(_raw(source_job_id=f"in:{i}", location="Hyderabad, India"))
+    for i in range(10):
+        _ingest(_raw(source_job_id=f"amb:{i}", location="3 Locations"))
+
+    rows, report = g._fetch_from_inventory(CLOUD_RESUME)
+
+    assert report["us_gate"] == "strict"
+    assert report["dropped_non_us"] == 30, "foreign AND unproven rows both go"
+    assert len(rows) == 20
+    assert all("Austin" in r["location"] for r in rows)
+
+
+def test_lenient_mode_is_the_rollback(db, s3, monkeypatch):
+    from services import guest_service as g
+
+    monkeypatch.setenv("GUEST_US_STRICT", "0")
+    for i in range(20):
+        _ingest(_raw(source_job_id=f"us:{i}", location="Austin, TX, USA"))
+    for i in range(10):
+        _ingest(_raw(source_job_id=f"amb:{i}", location="3 Locations"))
+
+    rows, report = g._fetch_from_inventory(CLOUD_RESUME)
+    assert report["us_gate"] == "lenient"
+    assert len(rows) == 30, "lenient keeps ambiguous locations"
+
+
+def test_warmth_is_judged_before_the_quality_gates(db, s3, monkeypatch):
+    """A role family the crawler HAS covered must not fall back to the 210s
+    live scan just because most of its postings are non-US.
+
+    Those removals are a real answer about the market, not a cold cache, and
+    the scan would spend three minutes rediscovering the same thinness.
+    """
+    from services import guest_service as g
+
+    monkeypatch.setenv("GUEST_US_STRICT", "1")
+    for i in range(40):
+        _ingest(_raw(source_job_id=f"in:{i}", location="Hyderabad, India"))
+    for i in range(3):
+        _ingest(_raw(source_job_id=f"us:{i}", location="Austin, TX, USA"))
+
+    def _boom(*a, **kw):
+        raise AssertionError("a warm-but-US-thin family must not trigger a scan")
+
+    monkeypatch.setattr(g, "_fetch_free_jobs", _boom)
+    gid = g.create_or_get_session(None, None, "iphash")["guest_id"]
+    g.attach_parsed_resume(gid, CLOUD_RESUME, "resume text " * 10, "resume.pdf")
+
+    result = g.compute_guest_matches(gid, inventory_only=True)
+    assert result is not None
+    assert result["sources_report"]["mode"] == "inventory"
+
+
+def test_bare_us_token_and_unqualified_cities_are_recognised(db, s3):
+    """Both were false NEGATIVES found by auditing 9000 live locations.
+
+    "US" alone was the single most common location string in the inventory
+    (828 rows) and was being dropped, because the shared `_US_WORD_RE` matches
+    "usa" and "united states" but not a lone "US". Major cities also routinely
+    appear with no state ("San Francisco", "Seattle"), which lenient gating
+    kept by default and strict gating would otherwise discard.
+    """
+    from services import guest_service as g
+
+    for location in ("US", "U.S.", "Remote, US", "San Francisco", "Seattle",
+                     "New York City", "Palo Alto", "Bellevue", "Tempe"):
+        assert g.is_us_confident({"location": location, "country_hint": ""}), location
+
+
+def test_a_multi_location_posting_including_the_us_is_kept():
+    """Boards concatenate locations ("Remote, Canada; Remote, United States").
+    A role open in the US is a US role even when it is also open elsewhere."""
+    from services import guest_service as g
+
+    assert g.is_us_confident(
+        {"location": "Remote, Canada; Remote, United States", "country_hint": ""})
+    assert not g.is_us_confident(
+        {"location": "Remote, Canada; Remote, Brazil", "country_hint": ""})
+
+
+def test_ambiguous_city_names_are_not_assumed_us():
+    """Cambridge, Manchester and Richmond each name a well-known non-US city;
+    a wrong keep is worse than a missed keep on the guest path."""
+    from services import guest_service as g
+
+    for location in ("Cambridge", "Manchester", "Birmingham", "Richmond"):
+        assert not g.is_us_confident({"location": location, "country_hint": ""}), location
+
+
+def test_us_state_names_survive_the_foreign_country_veto():
+    """`_FOREIGN_COUNTRY_RE` matches "mexico" inside "New Mexico", which would
+    veto an entire US state. State names are masked before the veto runs."""
+    from services import guest_service as g
+
+    assert g.is_us_confident({"location": "New Mexico", "country_hint": ""})
+    assert g.is_us_confident({"location": "Albuquerque, New Mexico", "country_hint": ""})
+    assert not g.is_us_confident({"location": "Mexico City", "country_hint": ""})
+    assert not g.is_us_confident({"location": "Remote, Mexico", "country_hint": ""})
+
+
+def test_a_us_city_beside_a_foreign_country_is_not_enough():
+    """"Dublin, Ireland (Mountain View)" is an Irish posting that names a US
+    office. Only COUNTRY-level US evidence outranks the foreign veto."""
+    from services import guest_service as g
+
+    assert not g.is_us_confident(
+        {"location": "Dublin, Ireland (Mountain View)", "country_hint": ""})
+    assert g.is_us_confident(
+        {"location": "Remote, Canada; Remote, United States", "country_hint": ""})

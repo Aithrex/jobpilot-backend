@@ -1465,6 +1465,136 @@ def _resume_role_families(structured: Dict[str, Any]) -> List[str]:
     return families
 
 
+_US_COUNTRY_VALUES = frozenset({
+    "us", "usa", "u.s.", "u.s.a.", "united states", "united states of america",
+})
+
+# FULL state names. `workday_jobs_service._US_STATE_RE` only carries two-letter
+# codes, which is enough for a lenient filter where an unmatched row is kept
+# anyway - but under strict gating a miss is a DROP, and boards very commonly
+# write "Tempe, Arizona" or "Austin, Texas". Without this, real US roles would
+# be silently discarded, which is the exact failure strict mode exists to avoid
+# on the other side.
+#
+# Deliberately excluded: "Washington" (collides with Washington DC vs the state
+# is fine, but also with countless non-US uses) is INCLUDED because the risk is
+# low; "Georgia" is included despite the country of the same name, because
+# `_FOREIGN_COUNTRY_RE` is consulted first and would have to name Georgia for a
+# real collision - and a US job board writing "Georgia" means the state
+# essentially always.
+# Bare "US" / "U.S." as a standalone token. `career_pages_service._US_WORD_RE`
+# matches "usa", "u.s." and "united states" but NOT a lone "US", and on live
+# inventory "US" was the single most common location string of all (828 rows in
+# a 9000-row audit) - every one of them a US role being discarded.
+_US_TOKEN_RE = re.compile(r"\b(us|u\.s\.|u\.s|usa)\b", re.IGNORECASE)
+
+# Major US cities that routinely appear WITHOUT a state qualifier ("San
+# Francisco", "New York City", "Seattle"). Under lenient gating these fell
+# through to the keep-by-default tier; under strict gating an unrecognised city
+# is a drop, so they need explicit recognition or real jobs vanish.
+#
+# Deliberately EXCLUDED as genuinely ambiguous: Cambridge, Manchester,
+# Birmingham, Richmond, Windsor, Hamilton - each names a well-known non-US city
+# too, and a wrong keep is worse than a missed keep on this path.
+_US_CITY_RE = re.compile(
+    r"\b(san francisco|new york city|nyc|seattle|los angeles|san diego|"
+    r"san jose|silicon valley|palo alto|mountain view|sunnyvale|santa clara|"
+    r"menlo park|redwood city|cupertino|oakland|berkeley|sacramento|"
+    r"san antonio|dallas|houston|fort worth|plano|irving|denver|boulder|"
+    r"atlanta|miami|orlando|tampa|jacksonville|charlotte|raleigh|durham|"
+    r"nashville|memphis|louisville|indianapolis|columbus|cleveland|"
+    r"cincinnati|pittsburgh|philadelphia|baltimore|bethesda|reston|herndon|"
+    r"mclean|arlington|alexandria|minneapolis|st\.? paul|milwaukee|"
+    r"kansas city|st\.? louis|omaha|salt lake city|las vegas|phoenix|"
+    r"scottsdale|tempe|tucson|albuquerque|portland|boise|anchorage|honolulu|"
+    r"brooklyn|queens|bronx|manhattan|long island|newark|jersey city|"
+    r"hoboken|stamford|hartford|providence|buffalo|rochester|albany|"
+    r"bellevue|redmond|kirkland|tacoma|spokane|des moines|madison|"
+    r"ann arbor|grand rapids|chattanooga|huntsville|birmingham al|"
+    r"new orleans|baton rouge|oklahoma city|tulsa|wichita|little rock|"
+    r"colorado springs|fort collins|fort lauderdale|west palm beach|"
+    r"boca raton|sarasota|naples fl|greenville sc|columbia sc|charleston sc)\b",
+    re.IGNORECASE)
+
+_US_STATE_NAME_RE = re.compile(
+    r"\b(alabama|alaska|arizona|arkansas|california|colorado|connecticut|"
+    r"delaware|florida|georgia|hawaii|idaho|illinois|indiana|iowa|kansas|"
+    r"kentucky|louisiana|maine|maryland|massachusetts|michigan|minnesota|"
+    r"mississippi|missouri|montana|nebraska|nevada|new hampshire|new jersey|"
+    r"new mexico|new york|north carolina|north dakota|ohio|oklahoma|oregon|"
+    r"pennsylvania|rhode island|south carolina|south dakota|tennessee|texas|"
+    r"utah|vermont|virginia|washington|west virginia|wisconsin|wyoming|"
+    r"district of columbia|puerto rico)\b",
+    re.IGNORECASE)
+
+
+def guest_us_strict() -> bool:
+    """Strict US gating for guest previews. `GUEST_US_STRICT=0` reverts."""
+    return (os.getenv("GUEST_US_STRICT") or "1").strip().lower() not in ("0", "false", "no")
+
+
+def is_us_confident(row: Dict[str, Any]) -> bool:
+    """Does this posting carry POSITIVE evidence of being a US role?
+
+    Deliberately stricter than `career_pages_service._keep_us`, which keeps
+    ambiguous locations ("3 Locations", "Remote", "Getafe Area") on the
+    reasoning that dropping them loses real US roles. That trade is right for a
+    browse tab, where a user can see the location and judge, and wrong for a
+    guest preview: five cards are the product's entire first impression, and one
+    posting in Hyderabad reads as "this tool does not understand me".
+
+    So the burden of proof inverts here. Ambiguous means dropped, and the honest
+    consequence is fewer cards, which ADR-001 already established as preferable
+    to padded ones.
+
+    Order matters:
+      1. an explicit foreign COUNTRY beats everything, including a colliding US
+         state code ("Canada - Remote (ON, AB, or NS Only)" - "or" is Oregon);
+      2. a parsed country field is authoritative when the source gave us one;
+      3. an explicit US marker or a US state code proves the case;
+      4. anything else is unproven, and unproven is dropped.
+    """
+    from services.career_pages_service import (
+        _FOREIGN_CITY_RE, _FOREIGN_COUNTRY_RE, _US_WORD_RE,
+    )
+    from services.workday_jobs_service import _US_STATE_RE
+
+    location = str(row.get("location") or "").strip()
+    country = str(row.get("country_hint") or "").strip().lower()
+
+    if country:
+        return country in _US_COUNTRY_VALUES
+    if not location:
+        return False
+    # An UNAMBIGUOUS US marker wins even alongside a foreign country, because
+    # boards concatenate multi-location postings ("Remote, Canada; Remote,
+    # United States") and a role open in the US is a US role wherever else it
+    # is also open. Only spelled-out markers qualify here - a two-letter STATE
+    # CODE stays below the foreign veto, because "Canada - Remote (ON, AB, or
+    # NS Only)" would otherwise be rescued by "or" colliding with Oregon.
+    if _US_WORD_RE.search(location) or _US_TOKEN_RE.search(location):
+        return True
+    # US state names are masked before the foreign-country veto is consulted:
+    # `_FOREIGN_COUNTRY_RE` matches "mexico" inside "New Mexico", which would
+    # veto an entire US state. (The same collision exists on the legacy path;
+    # it is hidden there only because an unmatched row is kept anyway.)
+    if _FOREIGN_COUNTRY_RE.search(_US_STATE_NAME_RE.sub(" ", location)):
+        return False
+    # Below the veto on purpose. A US state or city name alongside a foreign
+    # COUNTRY is weak evidence, not multi-location evidence: "Dublin, Ireland
+    # (Mountain View)" is an Irish posting that happens to name a US office.
+    # A two-letter state code sits here for the additional reason that "or"
+    # collides with Oregon in "Canada - Remote (ON, AB, or NS Only)".
+    if (_US_STATE_RE.search(location) or _US_STATE_NAME_RE.search(location)
+            or _US_CITY_RE.search(location)):
+        return True
+    if _FOREIGN_CITY_RE.search(location):
+        return False
+    # Bare "Remote", "3 Locations", a lone city, an unrecognised region: real
+    # US roles hide in here, and so does everything else. Unproven.
+    return False
+
+
 def _inventory_row(doc: Dict[str, Any], tz_offset_minutes: int) -> Optional[Dict[str, Any]]:
     """One `job_postings` document -> one guest pipeline row.
 
@@ -1571,6 +1701,9 @@ def _fetch_from_inventory(
     # "is this a US role" across both retrieval paths.
     from services.career_pages_service import _keep_us
 
+    strict = guest_us_strict()
+    keep_us = is_us_confident if strict else _keep_us
+
     rows: List[Dict[str, Any]] = []
     without_requirements = 0
     dropped_non_us = 0
@@ -1587,7 +1720,7 @@ def _fetch_from_inventory(
         row = _inventory_row(doc, tz_offset_minutes)
         if row is None:
             continue
-        if not _keep_us(row):
+        if not keep_us(row):
             dropped_non_us += 1
             continue
         rows.append(row)
@@ -1605,6 +1738,7 @@ def _fetch_from_inventory(
         "retrieved": len(docs),
         "dropped_no_requirements": without_requirements,
         "dropped_non_us": dropped_non_us,
+        "us_gate": "strict" if strict else "lenient",
         "timings_ms": {"inventory_ms": int((_clock() - started) * 1000)},
     }
     return rows, report
@@ -1971,11 +2105,17 @@ def compute_guest_matches(
         # "No role terms" is a genuine answer, not a cold cache - scanning would
         # burn 210s to produce the same empty result.
         undetermined = (src_report or {}).get("empty_reason") == "role_undetermined"
-        if len(rows) < INVENTORY_MIN_CANDIDATES and not undetermined:
+        # Warmth is measured BEFORE the quality gates, not after. `rows` has
+        # already had non-US, undated and evidence-less postings removed, and
+        # those removals are real answers about the market, not symptoms of a
+        # cold cache. Judging warmth on the filtered count would send a niche
+        # US-thin role down the 210s live scan to rediscover the same thinness.
+        retrieved = int((src_report or {}).get("retrieved") or len(rows))
+        if retrieved < INVENTORY_MIN_CANDIDATES and not undetermined:
             logger.warning(
                 "guest matches: inventory cold for families=%s (%d candidates < %d) "
                 "- falling back to live scan",
-                (src_report or {}).get("role_families"), len(rows),
+                (src_report or {}).get("role_families"), retrieved,
                 INVENTORY_MIN_CANDIDATES,
             )
             used_mode, rows, src_report = "scan_fallback", [], None
