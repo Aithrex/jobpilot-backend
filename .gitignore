@@ -45,3 +45,6 @@ tfplan_*
 
 # Local dev log sink (services/*/app.py FileHandler) — never commit
 app.log
+
+# taxonomy_report.py scratch cache
+scripts/.titles_cache.txt

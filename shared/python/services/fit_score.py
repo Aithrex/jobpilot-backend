@@ -56,6 +56,20 @@ logger = logging.getLogger(__name__)
 
 FIT_SCORE_VERSION = "fit-v2.0"
 
+# HAZARD - do not bump this without a re-parse plan.
+#
+# `_precomputed_requirements` rejects any stored profile whose score_version is
+# not this exact string, and `score()` then falls back to extracting from the JD
+# body. Inventory rows carry NO body (it lives in S3), so the fallback extracts
+# from an empty string, `has_job_requirements` goes False for every posting at
+# once, and the guest path filters the entire inventory out as evidence-less.
+#
+# A bump is therefore a hard cliff, not a gradual migration. Change the
+# EXTRACTOR contract via `job_inventory_service.EXTRACTOR_VERSION` instead
+# whenever the change is to what gets extracted rather than to how the
+# components are weighed: that drives a re-parse through the normal crawl with
+# no window during which nothing is servable.
+
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
     "role_alignment": 25,
@@ -427,6 +441,23 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
         "member of technical staff", "mobile engineer", "ios engineer", "ios developer",
         "android engineer", "android developer", "systems engineer", "api engineer",
         "software architect", "development engineer",
+        # Engineering leadership reads as the same family: the requirements are
+        # the discipline's, and a senior IC resume legitimately matches them.
+        "engineering manager", "engineering lead", "engineering leader",
+        "head of engineering", "director of engineering", "vp of engineering",
+        "software development",
+        # Customer-facing engineering titles. Deliberately NOT filed under sales:
+        # every one of these postings lists an engineering requirement set, which
+        # is what the scorer actually measures.
+        "solutions architect", "solution architect", "solutions engineer",
+        "solution engineer", "forward deployed engineer", "partner engineer",
+        # Seniority-prefixed bare engineer. Safe because matching is on literal
+        # phrases, so "Staff Civil Engineer" does not contain "staff engineer".
+        "staff engineer", "principal engineer", "distinguished engineer",
+        "embedded engineer", "firmware engineer", "compiler engineer",
+        "graphics engineer", "computer scientist",
+        "performance engineer", "integration engineer", "applications engineer",
+        "technical lead", "developer advocate", "developer experience",
     ],
     "data_engineering": [
         "data engineer", "analytics engineer", "etl developer", "big data engineer",
@@ -439,32 +470,54 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
     "data_analysis": [
         "data analyst", "business analyst", "bi analyst", "business intelligence",
         "reporting analyst", "insights analyst", "operations analyst",
+        "strategy analyst", "analytics associate", "insights manager",
+        "analytics manager", "decision scientist",
     ],
     "devops": [
         "devops", "site reliability", "sre", "platform engineer",
         "infrastructure engineer", "cloud engineer", "build engineer",
         "release engineer", "systems administrator", "sysadmin",
+        "devsecops", "cloud architect", "infrastructure architect",
+        "reliability engineer", "tech ops", "cloud operations",
     ],
     "security": [
         "security engineer", "security analyst", "information security", "infosec",
         "application security", "appsec", "soc analyst", "penetration tester",
         "cybersecurity", "security architect",
+        "detection engineer", "incident response", "security operations",
+        "security manager", "security specialist", "threat intelligence",
+        "security consultant", "grc analyst", "security engineering",
+        # Bare "grc" (governance, risk, compliance) is unambiguous in a title.
+        "grc", "security architecture", "vulnerability management",
+        "identity and access",
     ],
     "qa": [
         "qa engineer", "quality assurance engineer", "test engineer", "sdet",
         "automation engineer", "qa analyst", "quality engineer",
+        # A bare "Senior Tester" is unambiguous in a job title.
+        "tester", "quality assurance", "test analyst", "qa specialist", "qa lead",
+        "quality control", "test automation",
+        # Bare "qa" as a standalone token is only ever quality assurance.
+        "qa",
     ],
     "product": [
         "product manager", "product owner", "technical product manager",
         "group product manager",
+        "product management", "director of product", "head of product",
+        "principal product manager", "product lead", "product strategy",
     ],
     "design": [
         "ux designer", "ui designer", "product designer", "graphic designer",
         "visual designer", "ux researcher", "interaction designer",
+        "user researcher", "user research", "design lead", "design manager",
+        "motion designer", "content designer", "design system",
     ],
     "it_support": [
         "help desk", "helpdesk", "desktop support", "it support", "technical support",
         "network engineer", "network administrator", "it technician",
+        "service desk", "systems analyst", "it analyst", "it operations",
+        "field service technician", "it specialist", "systems support",
+        "technical specialist", "application support", "sccm", "endpoint",
     ],
     "nursing": [
         "nurse", "registered nurse", " rn ", "lpn", "lvn", "cna",
@@ -476,6 +529,9 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
         "pharmacy technician", "physical therapist", "occupational therapist",
         "respiratory therapist", "phlebotomist", "medical technologist",
         "surgical technologist", "dental hygienist", "paramedic", "emt",
+        "patient care", "caregiver", "care coordinator", "home health aide",
+        "medical scribe", "clinical coordinator", "sterile processing",
+        "clinical specialist", "sonographer", "veterinary technician", "optician",
     ],
     "physician": [
         "physician", "surgeon", "medical doctor", "hospitalist", "anesthesiologist",
@@ -485,41 +541,97 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
         "accountant", "accounting", "bookkeeper", "controller", "auditor",
         "accounts payable", "accounts receivable", "tax preparer", "tax associate",
         "staff accountant", "senior accountant", "cpa",
+        "payroll", "billing specialist", "financial reporting",
+        "revenue accountant", "accounts receivable specialist",
     ],
     "finance": [
         "financial analyst", "finance manager", "investment analyst", "treasury analyst",
         "fp&a", "underwriter", "credit analyst", "loan officer", "actuary",
+        # "equity research" sits here so it wins the leftmost match over
+        # science_lab's "research associate" in "Equity Research Associate".
+        "equity research", "finops", "order to cash", "revenue analyst",
+        "pricing analyst", "banker", "treasury", "risk analyst",
+        "collections specialist", "billing analyst", "portfolio manager",
+        "quantitative analyst",
     ],
     "teaching": [
         "teacher", "instructor", "educator", "professor", "lecturer", "tutor",
         "curriculum specialist", "instructional designer", "teaching assistant",
         "principal of school", "school counselor",
+        "curriculum developer", "academic advisor", "instructional coach",
+        "training manager", "learning experience", "education specialist",
     ],
     "legal": [
         "paralegal", "legal assistant", "attorney", "lawyer", "counsel",
         "legal secretary", "law clerk", "contract manager", "compliance officer",
+        "compliance specialist", "compliance analyst", "immigration specialist",
+        "regulatory affairs", "contracts manager", "privacy counsel",
+        "compliance manager",
+        "vendor compliance", "compliance director", "risk and compliance",
+        "ethics and compliance",
+        # Bare "compliance" catches the "<domain> Senior Specialist" pattern that
+        # qualified phrases miss ("Compliance Senior Specialist").
+        "compliance", "communications compliance",
     ],
     "hr": [
         "recruiter", "human resources", "talent acquisition", "hr generalist",
         "hr manager", "people operations", "hr business partner", "hr coordinator",
+        "talent management", "people partner", "hris", "compensation analyst",
+        "benefits specialist", "employee relations", "learning and development",
+        "training specialist", "talent partner",
+        "talent development", "workforce", "staffing coordinator",
     ],
     "marketing": [
         "marketing manager", "marketing specialist", "marketing coordinator",
         "seo specialist", "content marketer", "brand manager", "social media manager",
         "growth marketer", "digital marketing", "content writer", "copywriter",
+        "paid media", "field marketing", "product marketing",
+        "communications manager", "social media", "demand generation",
+        "public relations", "marketing analyst", "events manager",
+        "lifecycle marketing", "marketing operations",
+        # Qualified forms only: bare "communications" would swallow
+        # "Communications Compliance Senior Specialist", which is legal.
+        "corporate communications", "internal communications",
+        "communications director", "brand marketing", "content strategist",
+        "campaign manager",
+        # Safe because legal claims "communications compliance" explicitly, and
+        # the alternation is ordered longest-first, so the compound wins.
+        "communications",
     ],
     "sales": [
         "sales representative", "account executive", "business development",
         "sales manager", "sales development", "inside sales", "sales associate",
+        # "account manager" loses to "technical account manager" when both
+        # match, because the alternation is ordered longest-first.
+        "sales engineer", "sales enablement", "sales operations",
+        "solutions consultant", "account manager", "partner development",
+        "partnerships manager", "deal desk", "sales specialist",
+        "sales consultant", "sales director", "sales lead", "sales support",
+        "territory manager", "channel manager", "presales", "pre-sales",
+        "revenue operations", "go-to-market", "sales analyst",
+        "gtm", "client partnerships", "strategic alliances", "partner manager",
+        "renewals", "account director", "commercial lead",
     ],
     "customer_support": [
         "customer support", "customer service", "client success", "customer success",
         "call center", "support specialist", "service advisor",
+        "technical account manager", "implementation manager",
+        "implementation specialist", "client services", "customer experience",
+        "support engineer", "product support", "onboarding specialist",
+        "client relationship",
     ],
     "operations": [
         "operations manager", "operations coordinator", "supply chain",
         "logistics coordinator", "warehouse", "inventory specialist",
         "production supervisor", "fulfillment",
+        "procurement", "business operations", "operations specialist",
+        "operations associate", "operations lead", "operations director",
+        "operations analyst", "continuous improvement", "vendor manager",
+        "process improvement", "facilities manager", "distribution center",
+        "shift supervisor", "plant manager",
+        "distribution operations", "property manager", "inventory control",
+        "logistics manager", "warehouse associate", "supply planner",
+        "production planner", "materials manager",
     ],
     "project_management": [
         "project manager", "program manager", "scrum master", "delivery manager",
@@ -533,29 +645,56 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
     "skilled_trades": [
         "electrician", "plumber", "hvac technician", "welder", "machinist",
         "maintenance technician", "millwright", "auto technician", "mechanic",
+        "maintenance specialist", "maintenance mechanic", "facilities technician",
+        "diesel technician", "hvac", "boilermaker", "pipefitter", "sheet metal",
     ],
     "driving": [
         "truck driver", "delivery driver", "cdl driver", "courier", "chauffeur",
+        "driver helper", "route driver", "shuttle driver", "forklift",
     ],
     "construction": [
         "construction manager", "site supervisor", "foreman", "estimator",
         "superintendent", "civil engineer",
+        "project engineer", "construction superintendent", "field superintendent",
+        "surveyor", "architectural designer",
     ],
     "hospitality": [
         "chef", "line cook", "sous chef", "server", "bartender", "housekeeper",
         "hotel manager", "front desk agent", "banquet",
+        "restaurant manager", "food service", "barista", "dishwasher",
+        "kitchen manager", "catering",
     ],
     "retail": [
         "retail associate", "cashier", "store manager", "merchandiser",
         "sales floor", "shift lead",
+        "keyholder", "key holder", "retail sales", "store associate",
+        "sales floor associate", "visual merchandiser", "stocker",
     ],
     "social_work": [
         "social worker", "case manager", "counselor", "therapist", "clinician",
         "behavioral health", "community outreach",
+        "care manager", "youth counselor", "substance abuse", "peer support",
+    ],
+    # Physical / industrial engineering. Previously homeless: every one of these
+    # fell to "other" and was therefore unreachable by role-family retrieval,
+    # while the nearest existing families would have been actively wrong
+    # (a Mechanical Engineer is not construction, and not software).
+    "hardware_engineering": [
+        "mechanical engineer", "electrical engineer", "manufacturing engineer",
+        "process engineer", "industrial engineer", "design engineer",
+        "hardware engineer", "controls engineer", "structural engineer",
+        "chemical engineer", "aerospace engineer", "rf engineer",
+        "validation engineer", "packaging engineer", "fire safety engineer",
+        "facade engineer", "electronics engineer", "product engineer",
+        "tooling engineer", "materials engineer", "reliability engineering",
     ],
     "science_lab": [
         "lab technician", "laboratory technician", "research associate", "chemist",
         "biologist", "microbiologist", "scientist i", "lab assistant",
+        "research technician", "formulation scientist", "process scientist",
+        "principal scientist", "senior scientist", "staff scientist",
+        "preclinical", "clinical development", "bioinformatics",
+        "assay development",
     ],
 }
 
@@ -926,7 +1065,13 @@ def _extract_requirements_cached(jd_text: str, title: str) -> Dict[str, Any]:
         "preferred_skills": pref_skills[:20],
         "required_years": _required_years(combined),
         "required_degree_level": _degree_level(combined),
-        "role_family": classify_role(title_blob) or classify_role(blob[:800]),
+        # Title first, body as fallback. 3000 chars, not 800: the first 800 are
+        # almost always company boilerplate ("About us..."), so the old window
+        # recovered a family for only 9% of title-unclassifiable postings
+        # against 50% at 3000, measured on live inventory. Deliberately NOT the
+        # whole body - benefits and EEO sections mention other professions
+        # ("you will partner with our nursing staff") and would misfile the row.
+        "role_family": classify_role(title_blob) or classify_role(blob[:3000]),
         "job_level": title_level(title_blob) or title_level(blob[:400]),
         "industries": sorted(_industries(combined)),
         "work_mode": _work_mode(combined),

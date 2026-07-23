@@ -87,7 +87,13 @@ logger = logging.getLogger(__name__)
 # over each shard rewrites them.
 NORMALIZATION_VERSION = 2
 # The requirement extractor's contract version (ADR-002). A bump re-parses.
-EXTRACTOR_VERSION = 1
+#
+# v2: the role taxonomy gained ~180 phrases and a `hardware_engineering` family,
+# and the body fallback window widened from 800 to 3000 characters. Stored
+# profiles carry the OLD classification, and `needs_requirements_parse` is what
+# makes the crawler redo them, so without this bump every posting already in the
+# inventory would keep its stale (usually absent) role_family forever.
+EXTRACTOR_VERSION = 2
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1
