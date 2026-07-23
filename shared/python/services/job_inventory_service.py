@@ -1070,7 +1070,11 @@ def get_postings_map(source: str, source_job_ids: Iterable[str],
     projection = {"_id": 0, "source_job_id": 1, "content_hash": 1, "status": 1,
                   "title_normalized": 1, "employment_type": 1, "locations": 1,
                   "description_chars": 1, "description_ref": 1,
-                  "normalization_version": 1}
+                  "normalization_version": 1,
+                  # The fetch-once check reads this: omitting it makes every
+                  # posting look unparsed and re-fetches the whole registry
+                  # every tick.
+                  "requirements.extractor_version": 1}
     for start in range(0, len(ids), 500):
         chunk = ids[start:start + 500]
         for doc in _postings().find({"source": src, "source_job_id": {"$in": chunk}},

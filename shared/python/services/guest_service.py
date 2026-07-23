@@ -1486,12 +1486,21 @@ def _inventory_row(doc: Dict[str, Any], tz_offset_minutes: int) -> Optional[Dict
 
     locations = doc.get("locations") or []
     location = ""
+    country = ""
     if isinstance(locations, list) and locations:
         first = locations[0]
-        location = str((first or {}).get("raw") or "") if isinstance(first, dict) else str(first)
+        if isinstance(first, dict):
+            location = str(first.get("raw") or "")
+            country = str(first.get("country") or "")
+        else:
+            location = str(first)
 
     url = str(doc.get("canonical_url") or "")
     return {
+        # Geo inputs for `_keep_us`. The crawler stores the whole board, US or
+        # not, so the US contract is enforced on READ.
+        "country_hint": country.lower(),
+        "is_remote": doc.get("work_mode") == "remote",
         "job_id": doc.get("job_id"),
         "title": str(doc.get("title_raw") or ""),
         "company": str(doc.get("employer_name") or ""),
@@ -1555,8 +1564,16 @@ def _fetch_from_inventory(
         return [], {"ok": [], "failed": ["inventory"], "timed_out": [],
                     "considered": 0, "timings_ms": {}}
 
+    # US-only contract. The crawler is deliberately geo-agnostic - it mirrors
+    # each board in full - so this filter is what makes the guest feed US-only,
+    # and the legacy scan enforced it by passing us_only=True down to the three
+    # source services. Reusing their own `_keep_us` keeps one definition of
+    # "is this a US role" across both retrieval paths.
+    from services.career_pages_service import _keep_us
+
     rows: List[Dict[str, Any]] = []
     without_requirements = 0
+    dropped_non_us = 0
     for doc in docs:
         # Job-side evidence gate. A posting whose body we never read produces no
         # requirements, and the scorer can then only judge it on its title. It
@@ -1568,8 +1585,12 @@ def _fetch_from_inventory(
             without_requirements += 1
             continue
         row = _inventory_row(doc, tz_offset_minutes)
-        if row is not None:
-            rows.append(row)
+        if row is None:
+            continue
+        if not _keep_us(row):
+            dropped_non_us += 1
+            continue
+        rows.append(row)
 
     if progress_cb:
         try:
@@ -1583,6 +1604,7 @@ def _fetch_from_inventory(
         "role_families": families,
         "retrieved": len(docs),
         "dropped_no_requirements": without_requirements,
+        "dropped_non_us": dropped_non_us,
         "timings_ms": {"inventory_ms": int((_clock() - started) * 1000)},
     }
     return rows, report

@@ -1007,6 +1007,12 @@ def _listing_implies_same_content(existing: Dict[str, Any], row: Dict[str, Any])
         return False
     if existing.get("normalization_version") != inv.NORMALIZATION_VERSION:
         return False
+    # The extractor contract counts too. `needs_parse` is only ever evaluated
+    # inside `upsert_posting`, which an unchanged posting never reaches - so
+    # without this line an EXTRACTOR_VERSION bump silently does nothing to the
+    # existing inventory, which is the opposite of what that constant is for.
+    if (existing.get("requirements") or {}).get("extractor_version") != inv.EXTRACTOR_VERSION:
+        return False
     if existing.get("title_normalized") != inv.normalize_title(row.get("title")):
         return False
     if (existing.get("employment_type") or "") != _slug(row.get("employment_type"), 40):
