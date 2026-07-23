@@ -88,10 +88,19 @@ def s3(monkeypatch):
 
 @pytest.fixture()
 def db(s3):
+    """Clean the inventory collections BEFORE and AFTER.
+
+    The suite shares one process-wide mongomock database, and the guest path
+    now READS `job_postings`, so postings left behind here leak into every
+    later test that exercises matching - an order-dependent failure that would
+    not reproduce locally if the collection order happens to differ.
+    """
     d = inv._db()
     for c in COLLECTIONS:
         d[c].delete_many({})
-    return d
+    yield d
+    for c in COLLECTIONS:
+        d[c].delete_many({})
 
 
 def _raw(**over):

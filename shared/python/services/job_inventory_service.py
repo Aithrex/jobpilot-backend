@@ -1071,10 +1071,16 @@ def get_postings_map(source: str, source_job_ids: Iterable[str],
                   "title_normalized": 1, "employment_type": 1, "locations": 1,
                   "description_chars": 1, "description_ref": 1,
                   "normalization_version": 1,
-                  # The fetch-once check reads this: omitting it makes every
-                  # posting look unparsed and re-fetches the whole registry
-                  # every tick.
-                  "requirements.extractor_version": 1}
+                  # The fetch-once check reads requirements.extractor_version.
+                  # Projected as the WHOLE subdocument rather than a dotted
+                  # path: mongomock's dotted-projection support has varied
+                  # across releases and the test dependency is unpinned
+                  # (`mongomock>=4.1`), so a dotted projection here is a silent
+                  # correctness risk - if it returned nothing, every posting
+                  # would look unparsed and the whole registry would re-fetch
+                  # every tick. The subdocument is ~1KB and this read happens
+                  # once per shard.
+                  "requirements": 1}
     for start in range(0, len(ids), 500):
         chunk = ids[start:start + 500]
         for doc in _postings().find({"source": src, "source_job_id": {"$in": chunk}},
