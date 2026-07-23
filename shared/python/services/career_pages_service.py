@@ -47,6 +47,8 @@ from services.workday_jobs_service import (
     _role_matchers,
     _score_jobs,
     _US_STATE_RE,
+    _US_STATE_NAME_RE,
+    _REMOTE_RE,
 )
 
 logger = logging.getLogger(__name__)
@@ -601,17 +603,24 @@ ENTERPRISE_CATALOG: List[Dict[str, Any]] = [
 # ----------------------------------------------------------------------
 
 # Board ATSes often print BARE foreign hub cities ("Dublin", "London") with
-# no country — the Workday tiering keeps those because "Dublin, CA" is also
-# a US city. Only applied when the string carries no US signal at all.
+# no country. Checked AFTER the US-positive tier so US namesakes rescued by a
+# state survive ("Dublin, OH", "Paris, TX", "Melbourne, FL"); a bare foreign
+# city with no US signal drops. Word-boundary matched.
 _FOREIGN_CITY_RE = re.compile(
     r"\b(dublin|london|toronto|vancouver|montreal|ottawa|waterloo|singapore|"
     r"bangalore|bengaluru|hyderabad|chennai|pune|mumbai|delhi|noida|gurgaon|"
-    r"amsterdam|berlin|munich|paris|warsaw|krakow|tokyo|osaka|sydney|"
-    r"melbourne|tel aviv|sao paulo|mexico city|lisbon|madrid|barcelona|"
-    r"zurich|stockholm|copenhagen|oslo|helsinki|prague|bucharest|tallinn|"
-    r"athens|milan|rome|brussels|vienna|belgrade|zagreb|seoul|taipei|"
-    r"shanghai|beijing|hong kong|manila|jakarta|kuala lumpur|hanoi|cairo|"
-    r"lagos|nairobi|cape town|johannesburg|buenos aires|santiago|bogota|lima)\b",
+    r"gurugram|kolkata|ahmedabad|kochi|cochin|coimbatore|trivandrum|"
+    r"thiruvananthapuram|indore|nagpur|vadodara|mysore|mysuru|chandigarh|"
+    r"jaipur|bhubaneswar|visakhapatnam|vizag|mississauga|calgary|edinburgh|"
+    r"glasgow|belfast|leeds|manchester|amsterdam|berlin|munich|frankfurt|"
+    r"paris|warsaw|krakow|gdansk|tokyo|osaka|sydney|melbourne|brisbane|"
+    r"tel aviv|sao paulo|mexico city|lisbon|madrid|barcelona|"
+    r"zurich|geneva|stockholm|copenhagen|oslo|helsinki|prague|bucharest|"
+    r"tallinn|athens|milan|rome|brussels|vienna|belgrade|zagreb|seoul|taipei|"
+    r"shanghai|beijing|shenzhen|hong kong|manila|makati|taguig|cebu|jakarta|"
+    r"kuala lumpur|hanoi|ho chi minh|cairo|lagos|nairobi|cape town|"
+    r"johannesburg|buenos aires|santiago|bogota|lima|guadalajara|monterrey|"
+    r"colombo|karachi|lahore|islamabad|budapest|dubai|abu dhabi|riyadh|doha)\b",
     re.IGNORECASE)
 _US_WORD_RE = re.compile(r"united states|\busa\b|\bu\.s\.\b|remote[ -]+us\b",
                          re.IGNORECASE)
@@ -626,12 +635,28 @@ _FOREIGN_COUNTRY_RE = re.compile(
     r"korea|taiwan|argentina|chile|colombia|peru|costa rica|nigeria|kenya|"
     r"south africa|egypt|\buae\b|dubai|new zealand|estonia|latvia|"
     r"lithuania|greece|croatia|serbia|turkey|ukraine|bulgaria|slovakia|"
+    r"singapore|pakistan|bangladesh|sri lanka|qatar|saudi|hong kong|"
     r"latin america|south america|\bemea\b|\bapac\b|\bnsw\b|\bnz\b|\bau\b|"
     r"auckland|wellington|brisbane|perth)\b",
     re.IGNORECASE)
 
 
 def _keep_us(job: Dict[str, Any]) -> bool:
+    """HARD US filter for board rows — same keep/drop contract as
+    ``_geo_keep_us``: keep clearly-US or clearly-remote, DROP everything
+    ambiguous.
+
+    1. Authoritative ``country_hint`` from the ATS payload wins.
+    2. No location text -> keep only if the row is explicitly remote.
+    3. Explicit foreign COUNTRY -> DROP (before the US tier so "Canada -
+       Remote (ON, AB, or NS Only)" cannot be rescued by the "or"->Oregon
+       collision).
+    4. US word or US state (code OR name) -> KEEP (rescues "Dublin, OH",
+       "Paris, TX", "Ontario, California", "Indiana").
+    5. Bare foreign hub CITY -> DROP.
+    6. Clear remote, no foreign marker -> KEEP.
+    7. Else (ambiguous / bare non-foreign city) -> DROP (was: KEEP).
+    """
     hint = job.get("country_hint") or ""
     if hint:
         return hint in _COUNTRY_OK
@@ -642,12 +667,15 @@ def _keep_us(job: Dict[str, Any]) -> bool:
         return bool(job.get("is_remote"))
     if _FOREIGN_COUNTRY_RE.search(loc):
         return False
-    if _US_WORD_RE.search(loc) or _US_STATE_RE.search(loc):
-        return _geo_keep_us(loc)  # US signal present — normal tiering decides
+    if (_US_WORD_RE.search(loc) or _US_STATE_RE.search(loc)
+            or _US_STATE_NAME_RE.search(loc)):
+        return True
     if _FOREIGN_CITY_RE.search(loc):
         return False
-    # No country field — fall back to the Workday location-text tiering.
-    return _geo_keep_us(loc)
+    if _REMOTE_RE.search(loc):
+        return True
+    # Ambiguous (bare US-less city, "N Locations", unknown) -> DROP.
+    return False
 
 
 # ----------------------------------------------------------------------

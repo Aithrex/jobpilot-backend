@@ -127,26 +127,33 @@ _EXTRACTION_PROMPT = (
     "   header/footer artifacts in any field.\n"
     "9. If a section is not present in the resume, use an empty string or empty array.\n"
     "10. Every field must be a non-null string or array — never null.\n\n"
-    "SKILLS — STRICT VOCABULARY RULES (ATS-critical):\n"
-    "A. A 'skill' is a CONCRETE technology, tool, language, framework, library, platform,\n"
-    "   database, cloud service, or methodology TOKEN. Examples of valid skills:\n"
-    "   Python, Go, gRPC, FastAPI, Kubernetes, ECS, S3, Terraform, PostgreSQL, Kafka, Agile.\n"
-    "B. DO NOT extract architectural CONCEPTS as skills. Examples to REJECT as skills:\n"
-    "   'microservices', 'distributed systems', 'scalability', 'high availability',\n"
-    "   'cloud-native', 'event-driven architecture', 'containerization'. These belong in\n"
-    "   the summary or bullets, NOT in skills.\n"
-    "C. DO NOT extract SOFT SKILLS as skills (leadership, communication, mentoring,\n"
-    "   collaboration). These are not ATS keywords — leave them in summary/bullets.\n"
+    "SKILLS — CAPTURE RULES (ATS-critical). There are TWO sources of skills; treat them\n"
+    "differently:\n"
+    "1. EXPLICIT SKILLS SECTION — a dedicated 'Skills' / 'Technical Skills' / 'Core\n"
+    "   Competencies' / 'Technologies' section. EVERY item the user lists there MUST be\n"
+    "   captured — NEVER drop one, even if it is not a concrete tech token:\n"
+    "     - concrete tech tokens (Python, Go, Kubernetes, PostgreSQL, Terraform) → the\n"
+    "       relevant technical category;\n"
+    "     - architectural CONCEPTS (Distributed Systems, Microservices, Event-Driven\n"
+    "       Architecture, Scalability, High Availability) → put under 'Concepts &\n"
+    "       Methodologies';\n"
+    "     - professional / soft skills (Leadership, Communication, Mentoring,\n"
+    "       Collaboration) → put under 'Professional Skills'.\n"
+    "   If an explicit item fits no technical group, use one of those catch-all categories\n"
+    "   rather than discarding it.\n"
+    "2. INFERRED SKILLS — technologies mentioned in the summary, experience bullets, or\n"
+    "   project prose (NOT the Skills section). Here keep ATS discipline: extract ONLY\n"
+    "   concrete technology/tool/framework/language/database/cloud/methodology TOKENS. Do\n"
+    "   NOT promote prose concepts or soft skills to skills from bullets. Example: 'Built\n"
+    "   microservices using Go and gRPC on ECS' → extract 'Go', 'gRPC', 'ECS'; do NOT add\n"
+    "   'microservices'. NEVER invent a skill that is not present in the text.\n"
     "D. PRESERVE THE EXACT TOKEN AS WRITTEN. If the resume says 'AWS' use 'AWS' (not\n"
-    "   'Amazon Web Services'). If the resume says 'Postgres' use 'Postgres' (not\n"
-    "   'PostgreSQL'). If the resume says 'JS' use 'JS' (not 'JavaScript').\n"
+    "   'Amazon Web Services'). If it says 'Postgres' use 'Postgres' (not 'PostgreSQL').\n"
+    "   If it says 'JS' use 'JS' (not 'JavaScript').\n"
     "E. Each skill must appear in EXACTLY ONE category — no cross-category duplicates.\n"
-    "F. Extract skills from ALL sections (not just the Skills heading) — bullets and\n"
-    "   summary often contain technologies. Example: 'Built microservices using Go and\n"
-    "   gRPC on ECS' → extract 'Go', 'gRPC', 'ECS'. Do NOT extract 'microservices'.\n"
-    "G. Categorize into these groups when applicable: Languages, Frameworks & Libraries,\n"
-    "   Cloud & DevOps, Databases, Tools & Platforms, Methodologies. Add new groups\n"
-    "   only if no existing group fits.\n\n"
+    "F. Categorize into these groups when applicable: Languages, Frameworks & Libraries,\n"
+    "   Cloud & DevOps, Databases, Tools & Platforms, Concepts & Methodologies,\n"
+    "   Professional Skills. Add a new group only if none of these fits.\n\n"
     "CERTIFICATIONS — STRICT NO-FABRICATION RULE:\n"
     "- If the resume has a 'Certifications' / 'Certificates' / 'Licenses' section, OR if\n"
     "  certifications are explicitly named anywhere in the resume (e.g., a bullet says\n"
@@ -170,7 +177,9 @@ _EXTRACTION_PROMPT = (
     "  },\n"
     '  "summary": "Professional summary if present, otherwise empty string",\n'
     '  "skills": {\n'
-    '    "Category Name": ["Skill1", "Skill2"]\n'
+    '    "Languages": ["Python", "Go"],\n'
+    '    "Concepts & Methodologies": ["Distributed Systems", "Agile"],\n'
+    '    "Professional Skills": ["Leadership", "Mentoring"]\n'
     "  },\n"
     '  "experience": [\n'
     "    {\n"
@@ -237,21 +246,24 @@ _EXTRACTION_PROMPT_SLIM = (
     "7. Boilerplate: Do NOT include 'References available upon request', page numbers, or\n"
     "   header/footer artifacts in any field.\n"
     "8. If a section is absent, use an empty string or empty array. Never null.\n\n"
-    "SKILLS — STRICT VOCABULARY RULES (ATS-critical):\n"
-    "A. A 'skill' is a CONCRETE technology, tool, language, framework, library, platform,\n"
-    "   database, cloud service, or methodology TOKEN (e.g., Python, Kubernetes, Terraform,\n"
-    "   PostgreSQL, Kafka, Agile).\n"
-    "B. REJECT architectural CONCEPTS as skills: 'microservices', 'distributed systems',\n"
-    "   'scalability', 'high availability', 'cloud-native', 'containerization'. These belong\n"
-    "   in summary/bullets, NOT in skills.\n"
-    "C. REJECT SOFT SKILLS as skills (leadership, communication, mentoring). Leave them in\n"
-    "   summary/bullets.\n"
+    "SKILLS — CAPTURE RULES (ATS-critical). Two sources, treated differently:\n"
+    "1. EXPLICIT 'Skills' / 'Technical Skills' / 'Core Competencies' / 'Technologies'\n"
+    "   section: capture EVERY item the user lists — NEVER drop one. Concrete tech tokens\n"
+    "   go in tech categories; architectural CONCEPTS (Distributed Systems, Microservices,\n"
+    "   Event-Driven Architecture, Scalability) go under 'Concepts & Methodologies';\n"
+    "   professional/soft skills (Leadership, Communication, Mentoring) go under\n"
+    "   'Professional Skills'. Never discard an explicitly listed item — use a catch-all\n"
+    "   category if nothing else fits.\n"
+    "2. INFERRED from prose (summary/bullets/projects, NOT the Skills section): keep ATS\n"
+    "   discipline — extract ONLY concrete tech/tool/framework/language/database/cloud/\n"
+    "   methodology TOKENS ('Built microservices using Go and gRPC' → 'Go', 'gRPC'; do NOT\n"
+    "   add 'microservices'). NEVER invent a skill absent from the text.\n"
     "D. PRESERVE the exact token as written ('AWS' not 'Amazon Web Services'; 'Postgres'\n"
-    "   not 'PostgreSQL'; 'JS' not 'JavaScript'). The post-processing normalizer canonicalizes.\n"
+    "   not 'PostgreSQL'; 'JS' not 'JavaScript').\n"
     "E. Each skill must appear in EXACTLY ONE category — no cross-category duplicates.\n"
-    "F. Extract skills from ALL sections (bullets and summary often contain technologies).\n"
-    "G. Categorize into: Languages, Frameworks & Libraries, Cloud & DevOps, Databases,\n"
-    "   Tools & Platforms, Methodologies. Add new groups only if no existing group fits.\n\n"
+    "F. Categories: Languages, Frameworks & Libraries, Cloud & DevOps, Databases,\n"
+    "   Tools & Platforms, Concepts & Methodologies, Professional Skills. New group only\n"
+    "   if none fits.\n\n"
     "CERTIFICATIONS — STRICT NO-FABRICATION RULE:\n"
     "- Extract every entry from a 'Certifications' / 'Certificates' / 'Licenses' section,\n"
     "  OR named explicitly anywhere in the resume (e.g., a bullet 'Earned AWS Certified\n"
@@ -263,7 +275,7 @@ _EXTRACTION_PROMPT_SLIM = (
     "{\n"
     '  "contact": {"name":"","email":"","phone":"","linkedin":"","github":"","location":"","portfolio":""},\n'
     '  "summary": "",\n'
-    '  "skills": {"Category Name": ["Skill1", "Skill2"]},\n'
+    '  "skills": {"Languages":["Python"],"Concepts & Methodologies":["Distributed Systems"],"Professional Skills":["Leadership"]},\n'
     '  "experience": [{"title":"","company":"","location":"","dates":"","type":"","bullets":[]}],\n'
     '  "education": [{"degree":"","institution":"","location":"","dates":"","gpa":"","coursework":""}],\n'
     '  "projects": [{"name":"","dates":"","bullets":[],"tech":""}],\n'
@@ -428,11 +440,14 @@ class ResumeParser:
         )
 
         # Call the LLM (FLASH tier). Slim path needs far fewer output tokens because
-        # we no longer ask for raw_text or extracted_urls.
+        # we no longer ask for raw_text or extracted_urls. 8000 (was 6000) gives a
+        # rich skills + experience resume enough headroom to avoid truncation-repair
+        # or a silently clipped skills section; the extra ~2k output tokens is a small
+        # Haiku cost delta versus the correctness win of never dropping listed skills.
         result = claude_json(
             prompt=None,  # Prompt is embedded in the parts
             parts=parts,
-            max_tokens=6000 if use_slim else 24000,
+            max_tokens=8000 if use_slim else 24000,
             temperature=0.2,  # Low temp for factual extraction
             model=CLAUDE_FLASH,
             system=_PARSE_SYSTEM,  # trusted anchor; PDF/text parts are untrusted data
@@ -579,25 +594,50 @@ class ResumeParser:
 
     @staticmethod
     def _normalize_skills(result: dict) -> dict:
-        """Normalize extracted skill names to canonical forms.
+        """Deduplicate extracted skills WITHOUT dropping distinct user-listed tokens.
 
-        Applies the project's keyword normalizer to standardize abbreviations
-        and aliases (e.g., "JS" → "JavaScript", "k8s" → "Kubernetes").
-        This ensures accurate downstream matching in scoring and gap analysis.
+        History: this used to run the shared ``normalize_keywords`` over each
+        category, which dedups by *canonical alias* (first-occurrence-wins). The
+        ~800-entry alias map can over-merge genuinely distinct tokens a user
+        explicitly listed (e.g. collapsing "React Native" into "React", or two
+        near-aliases into one), silently discarding a skill the user wrote. For a
+        careers product that is a faithfulness bug: we must never drop what the
+        user listed.
+
+        Fix (local to skills; the shared normalizer is UNCHANGED so matching /
+        scoring callers keep their canonicalizing behavior): within each category
+        we dedup by the *exact lowercased raw token* and preserve the token exactly
+        as written (rule D). This collapses only true exact duplicates while letting
+        distinct tokens like "React" and "React Native" both survive. Downstream
+        matching (jd_match_scorer) canonicalizes at compare time, so we lose no
+        matching power by storing the verbatim token here.
 
         Args:
             result: Parsed resume dict with a 'skills' key.
 
         Returns:
-            The same dict with normalized skill values.
+            The same dict with de-duplicated skill values.
         """
-        from utils.keyword_normalizer import normalize_keywords
-
         skills = result.get("skills", {})
         if isinstance(skills, dict):
             for category in list(skills.keys()):
-                if isinstance(skills[category], list):
-                    skills[category] = normalize_keywords(skills[category])
+                values = skills[category]
+                if not isinstance(values, list):
+                    continue
+                seen: set = set()
+                deduped: list = []
+                for kw in values:
+                    if not isinstance(kw, str):
+                        continue
+                    token = kw.strip()
+                    if not token:
+                        continue
+                    key = token.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    deduped.append(token)
+                skills[category] = deduped
             result["skills"] = skills
         return result
 

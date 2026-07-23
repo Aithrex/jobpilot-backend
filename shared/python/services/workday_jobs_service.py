@@ -336,84 +336,172 @@ _FACET_UNSUPPORTED: set = set()
 _FACET_LOCK = Lock()
 
 # "in" is deliberately absent: Indian postings like "Hyderabad IN" would
-# match it. Indiana rows don't need the rescue — anything not explicitly
-# foreign is kept by the default tier anyway.
+# match it. State CODES only — spelled-out state NAMES live in
+# _US_STATE_NAME_RE so single-token rows like "Indiana" survive the hard
+# filter (a bare "Indiana" has no state code and no country word).
 _US_STATE_RE = re.compile(
     r"\b(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|ia|ks|ky|la|me|md|ma|mi"
     r"|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut"
     r"|vt|va|wa|wv|wi|wy|dc)\b", re.IGNORECASE,
 )
 
-# Explicit non-US markers seen in enterprise Workday locationsText values.
-# Checked ONLY after the US-positive tier, so "Paris, TX" / "Vienna, VA" /
-# "Ontario, CA" are already kept before these substrings are consulted.
-_NON_US_MARKERS = (
-    "india", "canada", "united kingdom", "ireland", "poland", "philippines",
-    "mexico", "brazil", "china", "japan", "singapore", "australia",
-    "germany", "france", "spain", "italy", "netherlands", "romania",
-    "hungary", "czech", "israel", "egypt", "colombia", "argentina",
-    "costa rica", "malaysia", "vietnam", "thailand", "indonesia",
-    "switzerland", "sweden", "denmark", "norway", "finland", "belgium",
-    "austria", "portugal", "greece", "turkey", "united arab emirates",
-    "saudi", "qatar", "south africa", "kenya", "nigeria", "hong kong",
-    "taiwan", "korea", "new zealand", "chile", "peru", "sri lanka",
-    "pakistan", "bangladesh",
-    # City / hub tells that appear without a country suffix:
-    "pune", "bengaluru", "bangalore", "hyderabad", "chennai", "mumbai",
-    "new delhi", "noida", "gurgaon", "gurugram", "kolkata", "ahmedabad",
-    "toronto", "vancouver", "montreal", "mississauga", "ottawa", "calgary",
-    "london", "edinburgh", "glasgow", "belfast", "leeds", "dublin, ireland",
-    "warsaw", "krakow", "gdansk", "bucharest", "budapest", "prague",
-    "lisbon", "madrid", "barcelona", "paris, fr", "munich", "berlin, de",
-    "frankfurt", "amsterdam", "zurich", "geneva", "stockholm", "copenhagen",
-    "oslo", "helsinki", "brussels", "milan, it", "tel aviv", "cairo",
-    "nairobi", "lagos", "dubai", "abu dhabi", "riyadh", "doha", "seoul",
-    "taipei", "jakarta", "kuala lumpur", "ho chi minh", "hanoi", "tokyo",
-    "osaka", "sydney", "melbourne", "brisbane", "shanghai", "beijing",
-    "shenzhen", "makati", "manila", "taguig", "cebu", "guadalajara",
-    "monterrey", "sao paulo", "colombo", "karachi", "lahore", "islamabad",
+# Full US state NAMES. Word-boundary matched so "Indiana" keeps (and does NOT
+# collide with the "india" country marker, which needs its own \b) and
+# "Ontario, California" keeps (California rescues the row; "ontario" is NOT a
+# foreign marker). "georgia"/"washington" resolve to the US state — the
+# far-commoner reading in these feeds — because no foreign COUNTRY marker
+# for them exists in the blocklist below.
+_US_STATE_NAMES = (
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+    "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana",
+    "maine", "maryland", "massachusetts", "michigan", "minnesota",
+    "mississippi", "missouri", "montana", "nebraska", "nevada",
+    "new hampshire", "new jersey", "new mexico", "new york",
+    "north carolina", "north dakota", "ohio", "oklahoma", "oregon",
+    "pennsylvania", "rhode island", "south carolina", "south dakota",
+    "tennessee", "texas", "utah", "vermont", "virginia", "washington",
+    "west virginia", "wisconsin", "wyoming", "district of columbia",
+    "puerto rico",
 )
-# Word-boundary matching — "india" must not fire inside "Indianapolis".
-_NON_US_RE = re.compile(
-    r"\b(" + "|".join(re.escape(m) for m in _NON_US_MARKERS) + r")\b",
+_US_STATE_NAME_RE = re.compile(
+    r"\b(" + "|".join(re.escape(m) for m in _US_STATE_NAMES) + r")\b",
+    re.IGNORECASE,
+)
+
+# --- Foreign COUNTRY / province markers -------------------------------------
+# Checked FIRST — an explicit non-US COUNTRY always drops, so "Remote - India"
+# and "Bengaluru, India" never reach the US tier. Word-boundary matched so
+# "india" NEVER fires inside "Indiana"/"Indianapolis".
+_NON_US_COUNTRY_MARKERS = (
+    "india", "canada", "united kingdom", "uk", "ireland", "poland",
+    "philippines", "mexico", "brazil", "china", "japan", "singapore",
+    "australia", "germany", "france", "spain", "italy", "netherlands",
+    "romania", "hungary", "czech", "israel", "egypt", "colombia",
+    "argentina", "costa rica", "malaysia", "vietnam", "thailand",
+    "indonesia", "switzerland", "sweden", "denmark", "norway", "finland",
+    "belgium", "austria", "portugal", "greece", "turkey",
+    "united arab emirates", "uae", "saudi", "qatar", "south africa",
+    "kenya", "nigeria", "hong kong", "taiwan", "korea", "new zealand",
+    "chile", "peru", "sri lanka", "pakistan", "bangladesh",
+)
+_NON_US_COUNTRY_RE = re.compile(
+    r"\b(" + "|".join(re.escape(m) for m in _NON_US_COUNTRY_MARKERS) + r")\b",
     re.IGNORECASE,
 )
 # Comma-anchored so "On-site" / "Ab initio" prose never matches — Canadian
 # postings write provinces as "Toronto, ON" / "Vancouver, BC".
 _CA_PROVINCE_RE = re.compile(r",\s*(on|bc|ab|qc|mb|sk|ns|nb|nl|pe)\b", re.IGNORECASE)
 
+# --- Foreign CITY markers ---------------------------------------------------
+# Checked AFTER the US-positive tier, so US namesakes rescued by their state
+# survive: "Paris, TX", "Warsaw, IN", "Melbourne, FL", "Dublin, OH",
+# "Vienna, VA", "London, KY", "Manchester, NH", "Vancouver, WA". A BARE
+# foreign hub city (no US signal) drops here.
+_NON_US_CITY_MARKERS = (
+    # India (tier-1 + tier-2 hubs + common spellings)
+    "pune", "bengaluru", "bangalore", "hyderabad", "chennai", "mumbai",
+    "new delhi", "delhi", "noida", "gurgaon", "gurugram", "kolkata",
+    "ahmedabad", "kochi", "cochin", "coimbatore", "trivandrum",
+    "thiruvananthapuram", "indore", "nagpur", "vadodara", "mysore",
+    "mysuru", "chandigarh", "jaipur", "bhubaneswar", "visakhapatnam",
+    "vizag",
+    # Canada
+    "toronto", "vancouver", "montreal", "mississauga", "ottawa", "calgary",
+    "waterloo",
+    # UK / Ireland / Europe
+    "london", "edinburgh", "glasgow", "belfast", "leeds", "manchester",
+    "dublin", "warsaw", "krakow", "gdansk", "bucharest", "budapest",
+    "prague", "lisbon", "madrid", "barcelona", "munich", "berlin",
+    "frankfurt", "amsterdam", "zurich", "geneva", "stockholm", "copenhagen",
+    "oslo", "helsinki", "brussels", "milan",
+    # MEA
+    "tel aviv", "cairo", "nairobi", "lagos", "dubai", "abu dhabi", "riyadh",
+    "doha",
+    # APAC / LatAm
+    "seoul", "taipei", "jakarta", "kuala lumpur", "ho chi minh", "hanoi",
+    "tokyo", "osaka", "sydney", "melbourne", "brisbane", "shanghai",
+    "beijing", "shenzhen", "makati", "manila", "taguig", "cebu",
+    "guadalajara", "monterrey", "sao paulo", "mexico city", "colombo",
+    "karachi", "lahore", "islamabad",
+)
+_NON_US_CITY_RE = re.compile(
+    r"\b(" + "|".join(re.escape(m) for m in _NON_US_CITY_MARKERS) + r")\b",
+    re.IGNORECASE,
+)
 
-def _geo_keep_us(loc_text: str) -> bool:
-    """Tiered US filter, applied to EVERY row when us_only is set.
+# Clear-remote tells with NO country attached -> KEEP (a foreign country in
+# the same string is already caught by _NON_US_COUNTRY_RE first, so
+# "Remote - India" drops before we get here).
+_REMOTE_RE = re.compile(
+    r"\b(remote|anywhere|work[ -]?from[ -]?home|wfh|virtual|telecommute)\b",
+    re.IGNORECASE,
+)
+# Workday multi-location rollups ("5 Locations", "Multiple Locations") — a
+# bare list-view row whose country the detail page resolves later.
+_MULTI_LOC_RE = re.compile(r"\blocations?\b", re.IGNORECASE)
 
-    1. Country-level US signal ("United States", "USA", "US") -> keep.
-    2. US state code -> keep. Runs BEFORE the marker tier so collisions like
-       "Paris, TX" / "Vienna, VA" / "Ontario, CA" are rescued.
-    3. Explicit non-US marker (country, foreign hub city, ", ON"-style
-       Canadian province) -> drop. Catches "Remote India" and "Hyderabad IN"
-       — which is why "remote" alone is NOT a keep signal earlier.
-    4. Ambiguous ("6 Locations", "Remote", bare city, empty) -> keep.
-       Dropping ambiguous rows would silently lose valid US roles; the
-       server-side facet already biased page 1 toward US where honored.
+
+def _geo_keep_us(loc_text: str, country_code: Optional[str] = None,
+                 *, defer_multi: bool = False) -> bool:
+    """HARD US geo filter, applied to EVERY row when us_only is set.
+
+    Decision order (keep clearly-US or clearly-remote, DROP everything
+    ambiguous — the product's hard-filter contract):
+
+    0. Authoritative enrichment ``country_code`` wins over any text heuristic:
+       "US" -> keep, any other non-empty value -> drop.
+    1. Explicit non-US COUNTRY / Canadian province -> DROP. Runs first so
+       "Remote - India", "Bengaluru, India", "Toronto, ON" never survive.
+    2. US country word ("United States"/"USA"/"US") or US state (CODE or full
+       NAME) -> KEEP. Runs before the foreign-CITY tier so US cities that
+       share a foreign name are rescued by their state: "Paris, TX",
+       "Warsaw, IN", "Dublin, OH", "Ontario, California", "Indiana".
+    3. Bare foreign hub CITY with no US signal -> DROP.
+    4. Clearly REMOTE with no foreign marker ("Remote", "Remote - US",
+       "Anywhere", "Work from home") -> KEEP.
+    5. Multi-location rollup ("N Locations") -> KEPT only at the LIST stage
+       (defer_multi=True) so detail enrichment can resolve the country;
+       dropped everywhere else.
+    6. Else (bare non-foreign city, empty/unknown, "N Locations" at serve
+       time) -> DROP. THIS is the hard-filter change: ambiguous used to KEEP.
+
+    Verified cases (see module __main__ scratch): "Bengaluru, India" DROP,
+    "Pune" DROP, "Remote" KEEP, "Remote - India" DROP, "Austin, TX" KEEP,
+    "Indiana" KEEP (NOT foreign), "Ontario, California" KEEP (NOT foreign),
+    "N Locations" DROP (list stage KEEP for enrichment), "" DROP.
     """
+    # 0. Authoritative geo from detail enrichment beats the text heuristic.
+    if country_code:
+        return country_code == "US"
     loc = (loc_text or "").strip().lower()
-    if not loc or "location" in loc:
-        return True
-    # Pre-tier: "Toronto" outranks the state-code rescue — Canadian rows like
-    # "CA-Toronto-York St" would otherwise be kept by the "ca" token.
+    if not loc:
+        return False  # empty / unknown -> DROP (was KEEP)
+    # 1. Explicit foreign COUNTRY / province.
+    if _NON_US_COUNTRY_RE.search(loc) or _CA_PROVINCE_RE.search(loc):
+        return False
+    # 1b. "Toronto" outranks the state-code tier — Workday's Canadian rows
+    # like "CA-Toronto-York St" would otherwise be kept by the "ca" token.
     if "toronto" in loc:
         return False
+    # 2. US country word or US state (code or full name).
     if "united states" in loc or "usa" in loc:
         return True
     if re.search(r"\b(us|u\.s\.)\b", loc):
         return True
-    if _US_STATE_RE.search(loc):
+    if _US_STATE_RE.search(loc) or _US_STATE_NAME_RE.search(loc):
         return True
-    if _NON_US_RE.search(loc):
+    # 3. Bare foreign hub city.
+    if _NON_US_CITY_RE.search(loc):
         return False
-    if _CA_PROVINCE_RE.search(loc):
-        return False
-    return True
+    # 4. Clear remote, no foreign marker.
+    if _REMOTE_RE.search(loc):
+        return True
+    # 5. Multi-location rollup — deferred at the list stage for enrichment.
+    if defer_multi and _MULTI_LOC_RE.search(loc):
+        return True
+    # 6. Ambiguous -> DROP.
+    return False
 
 
 def _fetch_tenant_term(
@@ -502,7 +590,10 @@ def _fetch_tenant_term(
             loc_text = (jp.get("locationsText") or "").strip()
             # Geo filtering ALWAYS runs — the facet is only a narrowing hint
             # (some tenants silently ignore it and return worldwide rows).
-            if us_only and not _geo_keep_us(loc_text):
+            # defer_multi keeps "N Locations" rollups so detail enrichment can
+            # resolve their country; the serve-time re-filter drops any that
+            # enrichment did not prove US.
+            if us_only and not _geo_keep_us(loc_text, defer_multi=True):
                 continue
             if location_lc:
                 haystack = loc_text.lower()
@@ -1332,9 +1423,11 @@ def run_workday_jobs_search(
         days = _days_ago(j.get("date_posted") or "", tz_offset)
         if days is None or days > WINDOW_DAYS:
             continue
-        # country_code is set by detail enrichment (possibly via a cached
-        # earlier run) — it outranks the locationsText heuristic.
-        if us_only and j.get("country_code") not in (None, "US"):
+        # Serve-time HARD geo: authoritative country_code (from detail
+        # enrichment, possibly via a cached earlier run) outranks the
+        # locationsText heuristic; unresolved "N Locations"/ambiguous rows
+        # (country_code None, no US/remote text) drop here (defer_multi off).
+        if us_only and not _geo_keep_us(j.get("location") or "", j.get("country_code")):
             continue
         j["days_ago"] = days
         # The card label must agree with the viewer-local bucket (the old
@@ -1391,7 +1484,7 @@ def run_workday_jobs_search(
         # detail country resolves "N Locations" rows definitively.
         jobs = [j for j in jobs
                 if j.get("days_ago") is not None and j["days_ago"] <= WINDOW_DAYS
-                and not (us_only and j.get("country_code") not in (None, "US"))]
+                and (not us_only or _geo_keep_us(j.get("location") or "", j.get("country_code")))]
         _rank(jobs)
         # Persist descriptions/exact dates/geo into the cache so repeat
         # searches serve them without re-fetching 200 detail pages.
