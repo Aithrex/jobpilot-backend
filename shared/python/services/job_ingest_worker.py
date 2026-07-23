@@ -711,6 +711,12 @@ def _listing_row(member: Dict[str, Any], raw_id: Any, *, title: str, url: str,
         "raw_posted_text": posted_text,
         "cost_class": inv.COST_CLASS_FREE,
         "source_quality": "direct",
+        # Registry provenance. Carried onto the posting so the authenticated
+        # feed tabs can filter by industry / company / ATS straight off the
+        # inventory instead of re-joining against the catalogs at read time.
+        "industry": member.get("industry") or "other",
+        "ats": member.get("ats") or ("workday" if member["source"] == SOURCE_WORKDAY else ""),
+        "tenant": member.get("slug") or member.get("tenant") or member["member_key"],
         "_detail_ref": detail_ref,
         "_member_key": member["member_key"],
     }

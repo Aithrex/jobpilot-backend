@@ -473,6 +473,12 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
         "posted_at_confidence": confidence,
         "source_quality": _safe_key(raw.get("source_quality"), 20) or "unknown",
         "cost_class": cost_class,
+        # Registry provenance, denormalized onto the posting so the feed tabs
+        # can filter by industry / ATS / company without re-joining the
+        # catalogs. Slug-safe: all three land in equality filters.
+        "industry": _safe_key(raw.get("industry"), 40) or "other",
+        "ats": _safe_key(raw.get("ats"), 30),
+        "tenant": _safe_key(raw.get("tenant"), 120),
         "normalization_version": NORMALIZATION_VERSION,
         "scoring_version": SCORING_VERSION,
         "content_hash": content_hash,
@@ -1018,7 +1024,7 @@ _CARD_PROJECTION = {
     "employment_type": 1, "posted_at": 1, "posted_at_confidence": 1,
     "cost_class": 1, "source_quality": 1, "content_hash": 1, "requirements": 1,
     "status": 1, "last_verified_at": 1, "description_ref": 1,
-    "description_chars": 1,
+    "description_chars": 1, "industry": 1, "ats": 1, "tenant": 1,
 }
 
 
@@ -1098,6 +1104,10 @@ def find_active_fresh(
     location_key: Optional[str] = None,
     work_mode: Optional[str] = None,
     seniority: Optional[str] = None,
+    source: Optional[str] = None,
+    industries: Optional[Iterable[str]] = None,
+    tenants: Optional[Iterable[str]] = None,
+    projection: Optional[Dict[str, Any]] = None,
     limit: int = 60,
     now: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
@@ -1155,9 +1165,24 @@ def find_active_fresh(
     sen = _safe_family(seniority, 20)
     if sen:
         query["seniority"] = sen
+
+    # Feed-tab filters. The authenticated tabs let a user narrow to a source, an
+    # industry set or a specific company; those used to be applied by choosing
+    # which catalog rows to crawl, which is meaningless once the crawl is
+    # scheduled rather than per-request. They are read filters now.
+    src = _safe_key(source, 60)
+    if src:
+        query["source"] = src
+    inds = [i for i in (_safe_key(i, 40) for i in (industries or [])) if i]
+    if inds:
+        query["industry"] = {"$in": inds} if len(inds) > 1 else inds[0]
+    tens = [t for t in (_safe_key(t, 120) for t in (tenants or [])) if t]
+    if tens:
+        query["tenant"] = {"$in": tens} if len(tens) > 1 else tens[0]
+
     return list(
         _postings()
-        .find(query, _CARD_PROJECTION)
+        .find(query, projection or _CARD_PROJECTION)
         .sort("posted_at", -1)
         .limit(max(1, int(limit)))
     )

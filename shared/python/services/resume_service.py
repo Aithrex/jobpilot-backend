@@ -747,6 +747,30 @@ def _consume_projects_diagnostic(result: Dict[str, Any]) -> None:
     result.setdefault("_diagnostics", {})["projects"] = diag
 
 
+def _feed_from_inventory(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Try to answer a feed tab from the canonical inventory.
+
+    Returns None whenever the inventory cannot answer honestly - mode disabled,
+    the requested slice is still warming, or anything at all went wrong - and
+    the caller then runs the legacy live crawl unchanged. Failure is never
+    surfaced to the user as an empty tab.
+    """
+    try:
+        from services import inventory_feed
+
+        if not inventory_feed.enabled():
+            return None
+        result = inventory_feed.build_feed(source, payload)
+        if result is not None:
+            logger.info("feed %s served from inventory: %d jobs",
+                        source, result.get("total", 0))
+        return result
+    except Exception as exc:
+        logger.warning("feed %s: inventory path failed (%s); falling back to crawl",
+                       source, type(exc).__name__)
+        return None
+
+
 def _stamp_job_logos(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Add `logo_url` to a search result/partial's `jobs` rows, in place.
 
@@ -1834,21 +1858,28 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             svc.complete_job(job_id, result)
 
         elif job_type == "workday_jobs":
-            from services.workday_jobs_service import run_workday_jobs_search
+            # ADR-003 read cutover. `_feed_from_inventory` answers from
+            # `job_postings` in milliseconds and returns None when the slice is
+            # not warm yet, in which case the legacy live crawl runs unchanged.
+            result = _feed_from_inventory("workday", payload)
+            if result is None:
+                from services.workday_jobs_service import run_workday_jobs_search
 
-            def _stream_workday_partial(partial: dict) -> None:
-                svc.update_job_partial(job_id, _stamp_job_logos(partial))
+                def _stream_workday_partial(partial: dict) -> None:
+                    svc.update_job_partial(job_id, _stamp_job_logos(partial))
 
-            result = run_workday_jobs_search(payload, partial_cb=_stream_workday_partial)
+                result = run_workday_jobs_search(payload, partial_cb=_stream_workday_partial)
             svc.complete_job(job_id, _stamp_job_logos(result))
 
         elif job_type == "career_pages":
-            from services.career_pages_service import run_career_pages_search
+            result = _feed_from_inventory("career-pages", payload)
+            if result is None:
+                from services.career_pages_service import run_career_pages_search
 
-            def _stream_career_partial(partial: dict) -> None:
-                svc.update_job_partial(job_id, _stamp_job_logos(partial))
+                def _stream_career_partial(partial: dict) -> None:
+                    svc.update_job_partial(job_id, _stamp_job_logos(partial))
 
-            result = run_career_pages_search(payload, partial_cb=_stream_career_partial)
+                result = run_career_pages_search(payload, partial_cb=_stream_career_partial)
             svc.complete_job(job_id, _stamp_job_logos(result))
 
         elif job_type == "mnc_jobs":
