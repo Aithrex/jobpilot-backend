@@ -2,6 +2,7 @@ import os
 import secrets
 import logging
 from datetime import timedelta
+from typing import Optional
 
 # Load environment variables from .env file if available (local development)
 try:
@@ -41,11 +42,30 @@ def _get_config_value(key: str, default: str = None) -> str:
     return os.getenv(key, default)
 
 
+# The development fallback secret, minted at most ONCE per process.
+_dev_jwt_secret: Optional[str] = None
+
+
 def _get_jwt_secret_key() -> str:
     """
     Get JWT secret key. In production, a secret must be configured (SSM or env).
     In development, generates a per-process fallback so tokens are invalidated on restart.
+
+    "Per-process" is the whole contract, and it used to be per-CALL:
+    `AppConfig.JWT_SECRET_KEY` is a property, so every service factory that read
+    it got a DIFFERENT random secret. A token minted by the auth service was
+    then rejected by the resume service with "Signature verification failed",
+    because they were never using the same key.
+
+    That is invisible anywhere a secret is actually configured - which is why it
+    survived: `.env` supplies one locally and SSM supplies one in production. It
+    only surfaces where four service apps are built in one process with no
+    secret set, i.e. CI.
+
+    Production is unaffected: an unconfigured secret still refuses to start.
     """
+    global _dev_jwt_secret
+
     value = _get_config_value('JWT_SECRET_KEY', None)
     if value:
         return value
@@ -55,7 +75,13 @@ def _get_jwt_secret_key() -> str:
             "JWT_SECRET_KEY must be set in production (via SSM or environment variable). "
             "Refusing to run with an unconfigured secret."
         )
-    return secrets.token_hex(32)
+    if _dev_jwt_secret is None:
+        _dev_jwt_secret = secrets.token_hex(32)
+        logger.warning(
+            "JWT_SECRET_KEY not configured - using a per-process development "
+            "secret. Tokens are invalidated on restart."
+        )
+    return _dev_jwt_secret
 
 
 class DBConfigMeta(type):
