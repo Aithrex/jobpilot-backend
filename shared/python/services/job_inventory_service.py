@@ -683,13 +683,36 @@ def mark_requirements_parsed(
         "extractor_version": EXTRACTOR_VERSION,
         "extracted_at": now,
     }
+    update: Dict[str, Any] = {"requirements": stored, "updated_at": now}
+
+    # Role-family upgrade. `role_family` is stamped from the TITLE alone at
+    # upsert time, and `classify_role` deliberately refuses to guess, so titles
+    # like "Sr. Forward Deployed Engineer" or "Partner Engineer: Partner
+    # Intelligence" land in "other" - unreachable by role-family retrieval even
+    # though the body says plainly what the job is. The extractor re-runs
+    # classification over the JD text, so when the title was unclassifiable and
+    # the body is not, adopt the body's answer.
+    #
+    # Strictly an upgrade: a family derived from the title is never overwritten
+    # by one derived from the body. A title is the employer's own summary and a
+    # body can mention many roles ("you will partner with our nursing staff").
+    body_family = _safe_family(payload.get("role_family"))
+    if body_family:
+        doc = _postings().find_one(
+            {"source": _safe_key(source, 60),
+             "source_job_id": _safe_str(source_job_id, 200)},
+            {"_id": 0, "role_family": 1},
+        )
+        if doc and (doc.get("role_family") or "other") == "other":
+            update["role_family"] = body_family
+
     res = _postings().update_one(
         {
             "source": _safe_key(source, 60),
             "source_job_id": _safe_str(source_job_id, 200),
             "content_hash": ch,
         },
-        {"$set": {"requirements": stored, "updated_at": now}},
+        {"$set": update},
     )
     return bool(res.matched_count)
 

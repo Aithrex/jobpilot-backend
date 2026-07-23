@@ -550,3 +550,82 @@ def test_triage_batches_the_existing_posting_lookup(db, s3):
     assert found["acme:REQ-7"]["description_chars"] == len(JD_BODY)
     assert inv.get_postings_map("career-pages", []) == {}
     assert inv.get_postings_map("career-pages", ["nope"]) == {}
+
+
+# ---------------------------------------------------------------------------
+# 9. Source-specific body assembly and role-family recovery
+# ---------------------------------------------------------------------------
+
+def test_lever_body_is_assembled_from_all_four_fields():
+    """`descriptionPlain` alone loses most Lever postings.
+
+    It is empty on a large share of real postings and, when present, holds only
+    the intro: the requirements live in the structured `lists` sections. Reading
+    only that field stored ~60% of Lever rows with no body, which made them
+    unscorable and unservable.
+    """
+    from services import job_ingest_worker as w
+
+    job = {
+        "id": "abc", "text": "Construction Inspector",
+        "descriptionPlain": "",                    # genuinely empty in the wild
+        "descriptionBodyPlain": "",
+        "lists": [
+            {"text": "What You'll Do:", "content": "<ul><li>Site inspection</li></ul>"},
+            {"text": "What You'll Bring:",
+             "content": "<ul><li>5 years of AutoCAD</li><li>OSHA 30</li></ul>"},
+        ],
+        "additionalPlain": "Benefits and EEO statement.",
+    }
+    body = w._lever_body(job)
+
+    assert "Site inspection" in body
+    assert "AutoCAD" in body
+    assert "OSHA 30" in body
+    assert "Benefits and EEO" in body
+    # Headings survive: fit_score._split_sections uses them for the
+    # required-vs-preferred split.
+    assert "What You'll Bring:" in body
+    assert "<li>" not in body, "list HTML must be flattened to text"
+
+    assert w._lever_body({"id": "x", "text": "t"}) == ""
+
+
+def test_requirements_can_upgrade_an_unclassified_role_family(db, s3):
+    """A title `classify_role` cannot read must not strand the posting.
+
+    `role_family` is stamped from the title alone, and the classifier refuses to
+    guess, so titles like "Sr. Forward Deployed Engineer" land in "other" and
+    become unreachable by role-family retrieval even when the body says plainly
+    what the job is.
+    """
+    raw = _raw(source_job_id="odd:1", title="Sr. Forward Deployed Specialist",
+               description=("We are hiring a registered nurse for our ICU. "
+                            "Requires an active RN license, BLS and ACLS."))
+    outcome = inv.upsert_posting(raw, now=NOW)
+    assert db.job_postings.find_one({"source_job_id": "odd:1"})["role_family"] == "other"
+
+    profile = fit_score.extract_requirements(raw["description"], raw["title"])
+    assert profile["role_family"] == "nursing", "the body classifies even when the title does not"
+    inv.mark_requirements_parsed("career-pages", "odd:1", outcome["content_hash"],
+                                 profile, now=NOW)
+
+    assert db.job_postings.find_one({"source_job_id": "odd:1"})["role_family"] == "nursing"
+    assert inv.find_active_fresh(role_families=["nursing"],
+                                 cost_classes=["free"], now=NOW)
+
+
+def test_a_title_derived_family_is_never_overwritten_by_the_body(db, s3):
+    """Upgrade only. A body can mention many roles ("you will partner with our
+    nursing staff"); the title is the employer's own summary."""
+    raw = _raw(source_job_id="eng:1", title="Senior Platform Engineer",
+               description="You will partner with our nursing staff. RN license a plus.")
+    outcome = inv.upsert_posting(raw, now=NOW)
+    stamped = db.job_postings.find_one({"source_job_id": "eng:1"})["role_family"]
+    assert stamped not in ("", "other")
+
+    profile = fit_score.extract_requirements(raw["description"], raw["title"])
+    inv.mark_requirements_parsed("career-pages", "eng:1", outcome["content_hash"],
+                                 profile, now=NOW)
+
+    assert db.job_postings.find_one({"source_job_id": "eng:1"})["role_family"] == stamped
