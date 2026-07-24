@@ -52,7 +52,13 @@ _PER_SOURCE_LIMIT = 50
 # decoupled from any absolute-URL config so this shared service has no edge
 # dependency. Auto-submit items prefer the concrete application page URL when
 # the approval carries one.
-_LINK_APPLICATIONS = "/applications"
+#
+# J (stale deep links): the migrated `/next` shell owns the applications surface
+# (jobpilot-frontend App.tsx: `/next/applications` → index redirects to the
+# `tracker` tab; Gmail-derived suggestions belong on the `inbox` tab). The legacy
+# bare `/applications` no longer routes.
+_LINK_APPLICATIONS = "/next/applications"
+_LINK_APPLICATIONS_INBOX = "/next/applications/inbox"
 
 
 def _now() -> datetime:
@@ -209,7 +215,8 @@ def _collect_inbox_suggestions(user_email: str) -> List[Tuple[Dict[str, Any], da
                 "inbox_suggestion", sid,
                 title=_title(s.get("company"), s.get("title"), "Inbox status update"),
                 detail=detail[:400],
-                deep_link=_LINK_APPLICATIONS,
+                # J: Gmail-derived suggestions land on the applications INBOX tab.
+                deep_link=_LINK_APPLICATIONS_INBOX,
                 action_label="Confirm status",
                 created_at=s.get("created_at"),
             ))

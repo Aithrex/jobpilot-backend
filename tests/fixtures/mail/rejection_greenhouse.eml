@@ -1,0 +1,30 @@
+Message-ID: <rej-0001@greenhouse.io>
+From: Greenhouse <no-reply@greenhouse.io>
+To: harshith.manne@pilotmail.co
+Subject: Update on your application to Acme
+Date: Tue, 21 Jul 2026 10:00:00 +0000
+Authentication-Results: mx.pilotmail.co; spf=pass smtp.mailfrom=greenhouse.io;
+ dkim=pass header.d=greenhouse.io; dmarc=pass header.from=greenhouse.io
+Received-SPF: pass (pilotmail.co: domain of greenhouse.io designates 1.2.3.4
+ as permitted sender)
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary="===============1889894297957251959=="
+
+--===============1889894297957251959==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Thank you for applying to Acme. After careful review we will not be moving fo=
+rward with your application at this time.
+
+--===============1889894297957251959==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<html><body><p>Thank you for applying to <b>Acme</b>.</p><p>After careful rev=
+iew we will not be moving forward with your application at this time.</p></bo=
+dy></html>
+
+--===============1889894297957251959==--

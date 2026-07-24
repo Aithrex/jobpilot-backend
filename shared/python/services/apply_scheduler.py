@@ -266,10 +266,10 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
     # 1. Re-drive stuck submissions (Oracle re-check). Rows sitting in the
     #    submit-pickup state get auto_apply_submit re-enqueued. The ledger's CAS
     #    transition guards make a double-submit structurally impossible, so a
-    #    re-drive is always idempotent. (STATUS_READY is the documented submit
-    #    pickup state; getattr keeps this forward-compatible if a later tranche
-    #    adds a dedicated waiting_verify status.)
-    redrive_status = getattr(als, "STATUS_WAITING_VERIFY", als.STATUS_READY)
+    #    re-drive is always idempotent. (F: `approved` is the submit-pickup state —
+    #    submit consumes approved/queued_for_execution; getattr keeps this
+    #    forward-compatible if a later tranche adds a dedicated waiting_verify.)
+    redrive_status = getattr(als, "STATUS_WAITING_VERIFY", als.STATUS_APPROVED)
     try:
         stuck = als.list_applications(email, status=redrive_status,
                                       limit=_MAX_REDRIVE_PER_USER)
@@ -346,9 +346,13 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
         except Exception as e:
             logger.warning("[apply_scheduler] gather enqueue failed (%s): %s", aid, e)
 
-        # Collect the rows that still need the user's go-ahead (autonomy ask/hold)
-        # for this tick's single approval email.
-        if (record.get("autonomy") or "ask") in ("ask", "hold"):
+        # F: approval emails fire ONLY once a row reaches `ready_for_review` — the
+        # manual-approval wait state — so we never email a link the user cannot yet
+        # act on (approve is tightened to ready_for_review). A freshly-created row
+        # is `queued`, so this tick's inline collection is normally empty; a
+        # dedicated ready_for_review nudge sweep drives these emails after gather
+        # lands the row (follow-up). canonical_status tolerates a legacy `ready`.
+        if als.canonical_status(record.get("status")) == als.STATUS_READY_FOR_REVIEW:
             fresh.append({"application_id": aid, "title": fields["title"],
                           "company": fields["company"], "location": fields["location"]})
 

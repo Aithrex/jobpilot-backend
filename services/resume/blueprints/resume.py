@@ -1055,6 +1055,22 @@ _APPLICATION_STATUSES = {
     "draft", "applied", "interviewing", "offer", "rejected", "withdrawn", "ghosted",
 }
 
+# E1 (defect E) — this route's status vocabulary mapped onto the canonical
+# OUTCOME axis (application_ledger_service.OUTCOME_STATUSES). The
+# tailoring_records.application mirror above stays authoritative until E3; this
+# map only feeds the additive write-through that ALSO lands the outcome on the
+# canonical `applications` row. "draft" is the pre-application state -> "none";
+# every other status maps to the same-named outcome.
+_STATUS_TO_OUTCOME = {
+    "draft": "none",
+    "applied": "applied",
+    "interviewing": "interviewing",
+    "offer": "offer",
+    "rejected": "rejected",
+    "withdrawn": "withdrawn",
+    "ghosted": "ghosted",
+}
+
 
 @resume_bp.route("/tailoring-records/<record_id>/application", methods=["PATCH"])
 @jwt_required()
@@ -1180,6 +1196,28 @@ def update_application(record_id):
                     )
             except Exception as e:
                 logger.warning("tailoring→saved_job sync failed: %s", e)
+
+        # E1 (defect E) — write-through to the canonical OUTCOME axis. When the
+        # user moves this record's application status, ALSO stamp the
+        # employer-response outcome on the canonical `applications` row
+        # (find-or-created, linked by tailoring_record_id). The
+        # tailoring_records mirror above stays authoritative until E3, so this is
+        # additive and best-effort: a ledger hiccup must never fail the user's
+        # tracker update — swallow to a WARN. Lazy import keeps the ledger off the
+        # cold-start path.
+        if status:
+            outcome = _STATUS_TO_OUTCOME.get(status)
+            if outcome:
+                try:
+                    from services import application_ledger_service as als
+                    als.set_outcome(
+                        user_email, record_id=record_id, outcome=outcome,
+                        source="user",
+                    )
+                except Exception as e:  # canonical write is non-authoritative in E1
+                    logger.warning(
+                        "PATCH /application: canonical set_outcome failed "
+                        "(record=%s): %s", str(record_id)[:24], e)
 
         record = db.tailoring_records.find_one(
             {"record_id": record_id, "user_email": user_email},

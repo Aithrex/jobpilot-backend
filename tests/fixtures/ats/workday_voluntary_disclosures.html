@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- Aithrex-owned synthetic fixture. Workday "Voluntary Disclosures" (EEO) step:
+     gender, race/ethnicity and protected-veteran status. These are PROTECTED /
+     LEGAL fields — the adapter must flag them (is_legal_attestation) and never
+     guess a value. Custom dropdowns key off data-automation-id. NEVER a real
+     employer. -->
+<html><head><meta charset="utf-8"><title>Voluntary Disclosures - Aithrex</title></head>
+<body class="wd-theme-canvas wd-blue">
+<div data-automation-id="voluntaryDisclosuresPage" class="wd-step">
+  <h1>Voluntary Disclosures</h1>
+  <p>Submission of this information is voluntary.</p>
+  <div data-automation-id="formField-gender" class="wd-field">
+    <button data-automation-id="gender" aria-haspopup="listbox" aria-label="Gender" type="button">Select One</button>
+  </div>
+  <div data-automation-id="formField-ethnicity" class="wd-field">
+    <button data-automation-id="ethnicity" aria-haspopup="listbox" aria-label="Race/Ethnicity" type="button">Select One</button>
+  </div>
+  <div data-automation-id="formField-veteranStatus" class="wd-field">
+    <button data-automation-id="veteranStatus" aria-haspopup="listbox" aria-label="Protected Veteran Status" type="button">Select One</button>
+  </div>
+  <div data-automation-id="pageFooter" class="wd-footer">
+    <button data-automation-id="pageFooterBackButton" type="button">Back</button>
+    <button data-automation-id="pageFooterNextButton" type="button">Save and Continue</button>
+  </div>
+</div>
+</body></html>

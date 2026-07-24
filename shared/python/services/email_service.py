@@ -78,10 +78,27 @@ def email_configured() -> bool:
 # Public API
 # ---------------------------------------------------------------------------
 
-def send_email(to_email: str, subject: str, html_body: str, text_body: Optional[str] = None) -> bool:
+def send_email(
+    to_email: str,
+    subject: str,
+    html_body: str,
+    text_body: Optional[str] = None,
+    *,
+    from_addr: Optional[str] = None,
+    reply_to: Optional[str] = None,
+    headers: Optional[dict] = None,
+) -> bool:
     """Send an email. Returns True if dispatched via the configured provider,
-    False if it fell back to console logging (dev) or failed. Never raises."""
-    from_addr = _from_address()
+    False if it fell back to console logging (dev) or failed. Never raises.
+
+    ``from_addr`` overrides the default EMAIL_FROM_ADDRESS sender — the managed
+    mailbox forwarder passes MAIL_FORWARD_FROM here so a forwarded notification
+    is sent from a JobPilot-owned verified sender, NEVER spoofing the recruiter.
+    ``reply_to`` overrides the default Reply-To (pass an empty string to suppress
+    it entirely). ``headers`` is a best-effort extra-header map (e.g.
+    ``{"X-JP-Forwarded": "1"}`` for the outbound loop marker); the transactional
+    providers below apply what they support."""
+    from_addr = from_addr or _from_address()
     text_body = text_body or _strip_html(html_body)
 
     # Skip addresses that have hard-bounced or complained — mailing them again
@@ -95,7 +112,10 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: Optional[
     except Exception:
         pass
 
-    if not email_configured():
+    # Gate on the EFFECTIVE sender (respecting a from_addr override), not just the
+    # default EMAIL_FROM_ADDRESS — otherwise a forward from MAIL_FORWARD_FROM would
+    # fall to the dev console whenever the default sender is unset.
+    if not from_addr or (_provider() == "zeptomail" and not _zepto_token()):
         logger.info(
             "[email:dev-fallback] (provider=%s not configured) To=%s | Subject=%s\n%s",
             _provider(), to_email, subject, text_body,
@@ -105,8 +125,14 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: Optional[
     provider = _provider()
     try:
         if provider == "zeptomail":
-            return _send_via_zeptomail(to_email, subject, html_body, text_body, from_addr)
-        return _send_via_ses(to_email, subject, html_body, text_body, from_addr)
+            return _send_via_zeptomail(
+                to_email, subject, html_body, text_body, from_addr,
+                reply_to=reply_to, headers=headers,
+            )
+        return _send_via_ses(
+            to_email, subject, html_body, text_body, from_addr,
+            reply_to=reply_to, headers=headers,
+        )
     except Exception as e:
         # Log the content so a dev/ops can still recover the link if the
         # provider is down.
@@ -122,7 +148,8 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: Optional[
 # ---------------------------------------------------------------------------
 
 def _send_via_zeptomail(
-    to_email: str, subject: str, html_body: str, text_body: str, from_addr: str
+    to_email: str, subject: str, html_body: str, text_body: str, from_addr: str,
+    *, reply_to: Optional[str] = None, headers: Optional[dict] = None,
 ) -> bool:
     """Send via the ZeptoMail transactional API (HTTPS, token auth). Raises on
     any HTTP/transport error so the caller's fallback logs the content."""
@@ -141,10 +168,16 @@ def _send_via_zeptomail(
         "htmlbody": html_body,
         "textbody": text_body,
     }
-    reply_to = _reply_to()
-    if reply_to:
-        rt_name, rt_email = parseaddr(reply_to)
-        payload["reply_to"] = [{"address": rt_email or reply_to, "name": rt_name or APP_NAME}]
+    # An explicit reply_to override wins (empty string suppresses Reply-To
+    # entirely); otherwise fall back to the configured default.
+    rt = reply_to if reply_to is not None else _reply_to()
+    if rt:
+        rt_name, rt_email = parseaddr(rt)
+        payload["reply_to"] = [{"address": rt_email or rt, "name": rt_name or APP_NAME}]
+    if headers:
+        # ZeptoMail forwards custom headers verbatim (used for the X-JP-Forwarded
+        # outbound loop marker). Best-effort: only string values.
+        payload["headers"] = {str(k): str(v) for k, v in headers.items()}
 
     resp = requests.post(
         _zepto_url(),
@@ -164,9 +197,15 @@ def _send_via_zeptomail(
 
 
 def _send_via_ses(
-    to_email: str, subject: str, html_body: str, text_body: str, from_addr: str
+    to_email: str, subject: str, html_body: str, text_body: str, from_addr: str,
+    *, reply_to: Optional[str] = None, headers: Optional[dict] = None,
 ) -> bool:
-    """Send via AWS SES (legacy path). Raises on error for the caller's fallback."""
+    """Send via AWS SES (legacy path). Raises on error for the caller's fallback.
+
+    Custom ``headers`` are not supported by the SES ``send_email`` (non-raw) API
+    and are ignored here — the managed-mailbox loop guard enforces on INBOUND
+    (``X-JP-Forwarded`` is read on the way in), so the outbound marker is a
+    best-effort belt-and-suspenders only."""
     import boto3  # bundled in the Lambda runtime
 
     client = boto3.client("ses", region_name=_ses_region())
@@ -181,9 +220,9 @@ def _send_via_ses(
             },
         },
     }
-    reply_to = _reply_to()
-    if reply_to:
-        params["ReplyToAddresses"] = [reply_to]
+    rt = reply_to if reply_to is not None else _reply_to()
+    if rt:
+        params["ReplyToAddresses"] = [rt]
     client.send_email(**params)
     return True
 

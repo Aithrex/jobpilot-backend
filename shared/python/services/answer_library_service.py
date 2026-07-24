@@ -322,6 +322,13 @@ for _q, _field, _cat, _kind in SEED_QUESTIONS:
 _SEED_EXACT: Dict[str, Tuple[str, str, str]] = {
     nk: (field, cat, kind) for nk, _t, field, cat, kind in _SEED_INDEX
 }
+# Reverse index: canonical field_id -> (category, kind). Lets resolve() and the
+# form-normalizer recover a question's category/kind straight from a stable
+# seed-bank field_id when the raw label alone did not classify (e.g. a recon
+# that already tagged the field). First mapping for a field_id wins.
+_FIELD_INDEX: Dict[str, Tuple[str, str]] = {}
+for _nk, _t, _field, _cat, _kind in _SEED_INDEX:
+    _FIELD_INDEX.setdefault(_field, (_cat, _kind))
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +442,26 @@ def _categorize(norm: str, tokens: FrozenSet[str]) -> Optional[Tuple[str, str, s
     return None
 
 
+def classify(text: str) -> Optional[Tuple[str, str, str]]:
+    """PUBLIC: classify a raw question label into ``(field_id, category, kind)``,
+    or ``None`` if unrecognized. The single seam the form-normalizer
+    (`apply_forms`) uses to derive a stable ``field_id`` from a recon label —
+    same deterministic classifier `resolve()` runs, so a normalized question's
+    ``field_id`` and `resolve()`'s per-question field always agree."""
+    norm, tokens = _normalize(text or "")
+    if not norm:
+        return None
+    return _categorize(norm, tokens)
+
+
+def field_category_kind(field_id: str) -> Optional[Tuple[str, str]]:
+    """PUBLIC: recover ``(category, kind)`` for a known seed-bank ``field_id``,
+    or ``None`` for an unmapped id. Lets a caller that already holds a stable
+    field_id (e.g. from recon) know whether it is a legal attestation without
+    re-parsing a label."""
+    return _FIELD_INDEX.get(field_id)
+
+
 # ---------------------------------------------------------------------------
 # Canonical profile — the ONLY source for filled answers (never a model).
 # ---------------------------------------------------------------------------
@@ -482,6 +509,7 @@ def _load_canonical(user_email: str) -> Dict[str, Any]:
                 return v
         return None
 
+    _start = _pref("available_start_date", "start_date", "availability", "earliest_start_date")
     values: Dict[str, Any] = {
         "full_name": full_name or None,
         "first_name": first or None,
@@ -494,13 +522,37 @@ def _load_canonical(user_email: str) -> Dict[str, Any]:
         "portfolio_url": (contact.get("portfolio") or "").strip() or None,
         "desired_salary": _pref("desired_salary", "salary_expectation", "expected_salary", "target_salary"),
         "notice_period": _pref("notice_period", "notice"),
-        "available_start_date": _pref("available_start_date", "start_date", "availability", "earliest_start_date"),
+        "available_start_date": _start,
+        # Bank uses ``earliest_start_date``; mirror the same declared value.
+        "earliest_start_date": _start,
         "willing_to_relocate": _pref("willing_to_relocate", "open_to_relocation", "relocate"),
         "years_experience": _pref("years_experience", "total_experience_years", "years_of_experience"),
+        # Additional bank (non-gated) logistics/screening fields — declared prefs
+        # only; absent -> the question stays unresolved (never a guess).
+        "how_did_you_hear": _pref("how_did_you_hear", "referral_source"),
+        "referral_name": _pref("referral_name", "referred_by"),
+        "remote_preference": _pref("remote_preference", "remote", "work_preference"),
+        "current_salary": _pref("current_salary", "present_salary"),
+        "currently_employed": _pref("currently_employed"),
+        "willing_to_travel": _pref("willing_to_travel"),
+        "has_drivers_license": _pref("has_drivers_license", "drivers_license"),
+        "highest_education": _pref("highest_education", "education_level"),
+        "degree": _pref("degree"),
+        "field_of_study": _pref("field_of_study", "major"),
+        "school": _pref("school", "university", "college"),
+        "graduation_year": _pref("graduation_year", "grad_year"),
+        "gpa": _pref("gpa"),
+        "certifications": _pref("certifications"),
     }
 
     legal = _load_legal(prefs, user_email)
-    return {"values": values, "legal": legal}
+    # Best-effort source versions for the answer provenance (never load-bearing).
+    values_version = (resume_doc.get("parsed_at") or resume_doc.get("resume_id")
+                      or resume_doc.get("_id"))
+    legal_version = prefs.get("updated_at") or prefs.get("_id") or "declared"
+    return {"values": values, "legal": legal,
+            "values_version": str(values_version) if values_version else None,
+            "legal_version": str(legal_version) if legal_version else None}
 
 
 def _load_legal(prefs: Dict[str, Any], user_email: str) -> Dict[str, Any]:
@@ -526,6 +578,30 @@ def _load_legal(prefs: Dict[str, Any], user_email: str) -> Dict[str, Any]:
             v = eeo.get(k) if eeo.get(k) not in (None, "") else eeo.get(short)
             if v not in (None, ""):
                 legal[k] = v
+
+    # Full-catalog gated fields (question_bank): every protected (EEO) / legal
+    # (work-auth + attestation) field the user DECLARED, read from a flat pref,
+    # or a nested prefs["eeo"] / prefs["legal"] / prefs["work_auth"] map. A
+    # declared "decline" IS an explicit value and is loaded here so the resolver's
+    # sensitivity gate can honor it. Anything undeclared stays ABSENT (→ ask).
+    try:
+        from services import application_question_bank as qb
+        gated = qb.gated_field_ids()
+    except Exception as e:  # pragma: no cover - parallel build / import issue
+        logger.warning("answer_library: question_bank unavailable: %s", e)
+        gated = frozenset()
+    _nested = [prefs.get(n) for n in ("eeo", "legal", "work_auth", "attestations")]
+    for fid in gated:
+        if legal.get(fid) not in (None, ""):
+            continue
+        v = prefs.get(fid)
+        if v in (None, ""):
+            for d in _nested:
+                if isinstance(d, dict) and d.get(fid) not in (None, ""):
+                    v = d.get(fid)
+                    break
+        if v not in (None, ""):
+            legal[fid] = v
 
     # Derive from the declared visa profile for anything still undeclared.
     try:
@@ -617,43 +693,349 @@ def _lookup_user_store(user_email: str, norm: str,
 # ---------------------------------------------------------------------------
 # resolve() — the main entry: classify + fill + escalate for a batch of Qs.
 # ---------------------------------------------------------------------------
-def resolve(user_email: str, questions: List[str]) -> Dict[str, Any]:
+def _empty_resolution() -> Dict[str, Any]:
+    """The no-op return: coverage 1.0 (nothing to fill), no gaps. Carries BOTH
+    the field-id-keyed ``resolved`` and the legacy text-keyed ``answers`` so a
+    caller of either contract reads a coherent, empty shape."""
+    return {"resolved": {}, "answers": {}, "unresolved": [], "coverage": 1.0,
+            "needs_generation": [], "has_novel_free_text": False,
+            "has_unconfirmed_legal_attestation": False}
+
+
+def _to_bool(val: Any) -> Optional[bool]:
+    """Coerce a declared value to a bool for polarity inversion, or None if it is
+    not clearly boolean (then invert is a no-op — never guess)."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("yes", "y", "true", "t", "1", "i am", "i do", "authorized"):
+            return True
+        if v in ("no", "n", "false", "f", "0", "i am not", "i do not"):
+            return False
+    return None
+
+
+def _apply_invert(val: Any, value_type: str, invert: bool) -> Any:
+    """Apply detected NEGATION polarity: for a Yes/No field asked in inverse
+    wording ("able to work WITHOUT sponsorship"), return the flipped boolean so
+    the answer submitted matches the user's actual declared stance. Non-boolean
+    values (and unparseable ones) pass through unchanged."""
+    if not invert:
+        return val
+    try:
+        from services import application_question_bank as qb
+        if value_type != qb.VT_BOOLEAN:
+            return val
+    except Exception:  # pragma: no cover - defensive
+        return val
+    b = _to_bool(val)
+    if b is None:
+        return val
+    return (not b)
+
+
+def _bank_category_kind(field_id: str, bank_meta: Dict[str, Any]) -> Tuple[str, str]:
+    """Map a bank field onto the legacy (category, kind) constants the autonomy
+    consumers understand. Prefers the seed-bank ``_FIELD_INDEX`` when the id is
+    shared, else derives from the bank category + value_type."""
+    ck = _FIELD_INDEX.get(field_id)
+    if ck is not None:
+        return ck
+    try:
+        from services import application_question_bank as qb
+    except Exception:  # pragma: no cover - defensive
+        return (bank_meta.get("category"), KIND_VALUE)
+    cat = bank_meta.get("category")
+    vt = bank_meta.get("value_type")
+    if cat == qb.CAT_EEO:
+        return (CAT_EEO, KIND_EEO)
+    if cat == qb.CAT_WORK_AUTH:
+        legacy = CAT_SPONSORSHIP if field_id == "requires_sponsorship" else (
+            CAT_VISA_STATUS if field_id in ("visa_status", "work_auth_country")
+            else CAT_WORK_AUTH)
+        return (legacy, KIND_BOOLEAN if vt == qb.VT_BOOLEAN else KIND_VALUE)
+    if vt == qb.VT_ESSAY:
+        return (CAT_ESSAY, KIND_ESSAY)
+    if vt == qb.VT_YEARS:
+        return (CAT_YEARS, KIND_YEARS)
+    if vt == qb.VT_BOOLEAN:
+        return (cat, KIND_BOOLEAN)
+    return (cat, KIND_VALUE)
+
+
+def _resolution(field_id: str, question_text: str, value: Any, source: str,
+                category: str, kind: str, sensitivity: Optional[str],
+                review_required: bool, *, confidence: float = 1.0,
+                source_version: Optional[str] = None,
+                field: Optional[str] = None) -> Dict[str, Any]:
+    """The canonical resolved-answer shape. Every filled answer carries its
+    provenance so the review UI / executor can audit it before submit."""
+    return {
+        "field_id": field_id,
+        "question_text": question_text,
+        "value": value,
+        "field": field or field_id,
+        "category": category,
+        "kind": kind,
+        "sensitivity": sensitivity,
+        "source": source,
+        "source_version": source_version,
+        "confidence": round(float(confidence), 4),
+        "review_required": bool(review_required),
+    }
+
+
+def resolve(user_email: str, questions: List[Any]) -> Dict[str, Any]:
     """Resolve a batch of form questions against the seed mappings + the user's
     canonical profile + their remembered answers.
 
-    For each question, in order:
-      1. classify it (`_categorize`);
-      2. LEGAL category  -> fill from DECLARED data only; else unresolved
-         (kind "legal_attestation") — never guessed;
-      3. ESSAY category  -> flag `needs_generation` (grounded generator handles
-         it) — never fabricated here;
-      4. other category  -> fill from the canonical profile (global mapping),
-         then the per-user store; else unresolved;
-      5. unrecognized    -> unresolved (kind "novel").
+    Two input shapes, one classifier:
 
-    Returns:
-      {
-        "answers": { question: {value, field, category, kind, source} },
-        "unresolved": [ {question, field, category, kind} ],
-        "coverage": float,                 # answered / total (essays & unresolved excluded)
-        "needs_generation": [ {question, category:"essay", kind:"essay"} ],
-        "has_novel_free_text": bool,       # any essay OR any novel screening Q
-        "has_unconfirmed_legal_attestation": bool,  # any undeclared legal Q
-      }
+      * NORMALIZED (auto-apply, the canonical path): a list of normalized
+        question dicts ``{field_id, label, type, required, is_legal_attestation,
+        options?}`` (see `apply_forms`). Returns a **field_id-keyed** map:
+          {
+            "resolved": { field_id: {value, field, category, kind, source,
+                                     confidence} },
+            "unresolved": [ field_id, ... ],
+            "coverage": float,                  # REQUIRED fields only
+            "needs_generation": [ {field_id, label, category, kind} ],
+            "has_novel_free_text": bool,
+            "has_unconfirmed_legal_attestation": bool,
+          }
 
-    `coverage` and `has_novel_free_text`/`has_unconfirmed_legal_attestation` are
-    exactly what autonomy_service.score()/decide() consume (see module doc).
+      * LEGACY (back-compat: the answer-library's own unit tests): a list of
+        raw question STRINGS. Returns the historical text-keyed ``answers`` map
+        (see `_resolve_legacy`). No production caller uses this path — the
+        auto-apply orchestrator is the only production consumer and passes
+        normalized dicts — but it is preserved so the library stays independently
+        testable by label.
+
+    Per question, in order: classify (`_categorize`); LEGAL → fill from DECLARED
+    data only, else unresolved (never guessed); ESSAY → flag `needs_generation`
+    (never fabricated here); other → canonical profile then the per-user store,
+    else unresolved; unrecognized → novel. `coverage`,
+    `has_novel_free_text` and `has_unconfirmed_legal_attestation` are exactly
+    what autonomy_service.score()/decide() consume (see module doc).
     """
+    if not user_email or not isinstance(questions, list):
+        return _empty_resolution()
+    # Normalized dicts vs. legacy strings. An all-dict (incl. empty) list takes
+    # the canonical field-id path; anything else is the legacy string path.
+    if all(isinstance(q, dict) for q in questions):
+        return _resolve_normalized(user_email, questions)
+    return _resolve_legacy(user_email, questions)
+
+
+def _resolve_normalized(user_email: str,
+                        questions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The canonical field-id-keyed resolution (see `resolve`)."""
+    resolved: Dict[str, Dict[str, Any]] = {}
+    unresolved: List[str] = []
+    needs_generation: List[Dict[str, Any]] = []
+    has_novel = False
+    has_unconfirmed_legal = False
+
+    # De-duped, sanitized view of the normalized questions.
+    prepared: List[Tuple[str, str, FrozenSet[str], bool, bool, bool, Optional[Tuple[str, str, str]]]] = []
+    seen_fids: set = set()
+    for q in questions[:_MAX_QUESTIONS]:
+        label = InputSanitizer.sanitize_string(
+            str(q.get("label") or q.get("text") or ""), max_length=2000)
+        raw_fid = q.get("field_id") or q.get("id")
+        field_id = InputSanitizer.sanitize_string(str(raw_fid or ""), max_length=200)
+        required = bool(q.get("required"))
+        flagged_legal = bool(q.get("is_legal_attestation"))
+        # Polarity from the normalizer's negation pass (e.g. "able to work WITHOUT
+        # sponsorship" -> invert the stored Yes/No). Never inferred here.
+        invert = bool(q.get("invert"))
+
+        norm, tokens = _normalize(label)
+        mapping = _categorize(norm, tokens)
+        # Recover (field, cat, kind) from a stable seed-bank field_id when the
+        # bare label did not classify (a recon may hand us a recognized id).
+        if mapping is None and field_id:
+            ck = _FIELD_INDEX.get(field_id)
+            if ck is not None:
+                mapping = (field_id, ck[0], ck[1])
+        # Choose the output key: the caller's stable field_id wins; else the
+        # classified field; else the normalized label (never silently dropped).
+        if not field_id:
+            field_id = (mapping[0] if mapping else "") or norm or label
+        if not field_id or field_id in seen_fids:
+            continue
+        seen_fids.add(field_id)
+        prepared.append((field_id, norm, tokens, required, flagged_legal, invert, mapping))
+
+    if not prepared:
+        return _empty_resolution()
+
+    canonical = _load_canonical(user_email)
+    values, legal = canonical["values"], canonical["legal"]
+    values_version = canonical.get("values_version")
+    legal_version = canonical.get("legal_version")
+    try:
+        from services import application_question_bank as qb
+    except Exception as e:  # pragma: no cover - parallel build / import issue
+        logger.warning("answer_library: question_bank unavailable: %s", e)
+        qb = None
+
+    required_total = 0
+    required_resolved = 0
+
+    for field_id, norm, tokens, required, flagged_legal, invert, mapping in prepared:
+        # ---------------------------------------------------------------
+        # BANK-FIRST resolution: when the field_id is a canonical catalog
+        # field, the question bank is authoritative for sensitivity + polarity
+        # and the sensitivity gate is enforced here (protected/legal with no
+        # DECLARED value -> needs_input, never a guess).
+        # ---------------------------------------------------------------
+        bank_meta = qb.get_field(field_id) if qb is not None else None
+        if bank_meta is not None:
+            b_category, b_kind = _bank_category_kind(field_id, bank_meta)
+            sensitivity = bank_meta["sensitivity"]
+            vtype = bank_meta["value_type"]
+            gated = sensitivity in (qb.SENS_PROTECTED, qb.SENS_LEGAL)
+
+            # Free-text / essay: grounded generation elsewhere, never here.
+            if bank_meta["category"] == qb.CAT_FREE_TEXT:
+                needs_generation.append({"field_id": field_id, "label": norm,
+                                         "category": CAT_ESSAY, "kind": KIND_ESSAY})
+                has_novel = True
+                continue
+
+            if required:
+                required_total += 1
+
+            if gated:
+                # DECLARED data only. A declared "decline" IS explicit → allowed.
+                val = legal.get(field_id)
+                if val not in (None, ""):
+                    out_val = _apply_invert(val, vtype, invert)
+                    resolved[field_id] = _resolution(
+                        field_id, norm, out_val, "declared", b_category, b_kind,
+                        sensitivity, review_required=True,
+                        source_version=legal_version)
+                    if required:
+                        required_resolved += 1
+                else:
+                    unresolved.append(field_id)
+                    has_unconfirmed_legal = True
+                continue
+
+            # Non-gated: canonical profile, then the per-user remembered store.
+            val = values.get(field_id)
+            src, sv = "profile", values_version
+            if val in (None, ""):
+                stored = _lookup_user_store(user_email, norm, tokens)
+                if stored is not None:
+                    val = stored.get("answer")
+                    src, sv = "user_store", str(stored.get("updated_at") or "") or None
+            if val not in (None, ""):
+                out_val = _apply_invert(val, vtype, invert)
+                review = (sensitivity != qb.SENS_SAFE) or (src == "user_store")
+                resolved[field_id] = _resolution(
+                    field_id, norm, out_val, src, b_category, b_kind, sensitivity,
+                    review_required=review, source_version=sv)
+                if required:
+                    required_resolved += 1
+            else:
+                unresolved.append(field_id)
+                if vtype in (qb.VT_BOOLEAN, qb.VT_SELECT, qb.VT_YEARS,
+                             qb.VT_MONEY, qb.VT_NUMBER, qb.VT_DATE):
+                    has_novel = True
+            continue
+
+        # ---------------------------------------------------------------
+        # LEGACY (non-bank) resolution — unchanged behavior.
+        # ---------------------------------------------------------------
+        if mapping is not None:
+            field, category, kind = mapping
+        elif flagged_legal:
+            # Flagged legal by recon but unclassifiable — treat as an unconfirmed
+            # legal attestation (err toward the never-fabricate guard).
+            field, category, kind = field_id, None, KIND_LEGAL
+        else:
+            # Unrecognized, non-legal → novel free-text risk.
+            if required:
+                required_total += 1
+            unresolved.append(field_id)
+            has_novel = True
+            continue
+
+        is_legal = flagged_legal or (category in LEGAL_CATEGORIES)
+
+        # Essays: grounded generation, never counted in coverage, never here.
+        if kind == KIND_ESSAY and not is_legal:
+            needs_generation.append({"field_id": field_id, "label": norm,
+                                     "category": category, "kind": KIND_ESSAY})
+            has_novel = True
+            continue
+
+        if required:
+            required_total += 1
+
+        # Legal attestations — DECLARED data only, never guessed.
+        if is_legal:
+            val = legal.get(field) if field else None
+            if val not in (None, ""):
+                resolved[field_id] = {"value": val, "field": field,
+                                      "category": category, "kind": kind,
+                                      "source": "declared", "confidence": 1.0}
+                if required:
+                    required_resolved += 1
+            else:
+                unresolved.append(field_id)
+                has_unconfirmed_legal = True
+            continue
+
+        # Global mapping — fill from the canonical profile.
+        val = values.get(field) if field else None
+        if val not in (None, ""):
+            resolved[field_id] = {"value": val, "field": field, "category": category,
+                                  "kind": kind, "source": "profile", "confidence": 1.0}
+            if required:
+                required_resolved += 1
+            continue
+
+        # Per-user remembered answer.
+        stored = _lookup_user_store(user_email, norm, tokens)
+        if stored is not None:
+            resolved[field_id] = {"value": stored.get("answer"), "field": field,
+                                  "category": category, "kind": kind,
+                                  "source": "user_store", "confidence": 1.0}
+            if required:
+                required_resolved += 1
+            continue
+
+        # Unresolved — a known field we simply have no declared value for.
+        unresolved.append(field_id)
+        if kind in (KIND_YEARS, KIND_VALUE, KIND_BOOLEAN):
+            has_novel = True
+
+    coverage = (required_resolved / required_total) if required_total else 1.0
+    return {
+        "resolved": resolved,
+        "unresolved": unresolved,
+        "coverage": round(coverage, 4),
+        "needs_generation": needs_generation,
+        "has_novel_free_text": bool(has_novel or needs_generation),
+        "has_unconfirmed_legal_attestation": has_unconfirmed_legal,
+    }
+
+
+def _resolve_legacy(user_email: str, questions: List[str]) -> Dict[str, Any]:
+    """Back-compat text-keyed resolution (list of raw question strings). Returns
+    ``answers`` keyed by question TEXT. Preserved for the library's own unit
+    tests; no production caller uses it (auto-apply passes normalized dicts)."""
     answers: Dict[str, Dict[str, Any]] = {}
     unresolved: List[Dict[str, Any]] = []
     needs_generation: List[Dict[str, Any]] = []
     has_novel = False
     has_unconfirmed_legal = False
-
-    if not user_email or not isinstance(questions, list):
-        return {"answers": {}, "unresolved": [], "coverage": 1.0,
-                "needs_generation": [], "has_novel_free_text": False,
-                "has_unconfirmed_legal_attestation": False}
 
     # Clean + dedupe questions (bounded). Preserve first-seen order.
     cleaned: List[Tuple[str, str, FrozenSet[str]]] = []
@@ -671,9 +1053,7 @@ def resolve(user_email: str, questions: List[str]) -> Dict[str, Any]:
         cleaned.append((q, norm, tokens))
 
     if not cleaned:
-        return {"answers": {}, "unresolved": [], "coverage": 1.0,
-                "needs_generation": [], "has_novel_free_text": False,
-                "has_unconfirmed_legal_attestation": False}
+        return _empty_resolution()
 
     canonical = _load_canonical(user_email)
     values, legal = canonical["values"], canonical["legal"]
@@ -691,7 +1071,6 @@ def resolve(user_email: str, questions: List[str]) -> Dict[str, Any]:
 
         field, category, kind = mapping
 
-        # 2. Legal attestations — declared data only, never guessed.
         if category in LEGAL_CATEGORIES:
             val = legal.get(field)
             if val not in (None, ""):
@@ -704,14 +1083,12 @@ def resolve(user_email: str, questions: List[str]) -> Dict[str, Any]:
                 has_unconfirmed_legal = True
             continue
 
-        # 3. Essays — flag for grounded generation, never fabricate here.
         if kind == KIND_ESSAY:
             needs_generation.append({"question": q, "field": field,
                                      "category": category, "kind": KIND_ESSAY})
             has_novel = True
             continue
 
-        # 4a. Global mapping — fill from the canonical profile.
         val = values.get(field)
         if val not in (None, ""):
             answers[q] = {"value": val, "field": field, "category": category,
@@ -719,7 +1096,6 @@ def resolve(user_email: str, questions: List[str]) -> Dict[str, Any]:
             resolved += 1
             continue
 
-        # 4b. Per-user remembered answer.
         stored = _lookup_user_store(user_email, norm, tokens)
         if stored is not None:
             answers[q] = {"value": stored.get("answer"), "field": field,
@@ -727,17 +1103,11 @@ def resolve(user_email: str, questions: List[str]) -> Dict[str, Any]:
             resolved += 1
             continue
 
-        # 5. Unresolved — a known field we simply have no declared value for.
         unresolved.append({"question": q, "field": field,
                            "category": category, "kind": kind})
-        # A bare unseen screening question is novel free-text risk too.
         if kind in (KIND_YEARS, KIND_VALUE, KIND_BOOLEAN):
             has_novel = True
 
-    # Essays are excluded from coverage (per the resolve() contract): they are
-    # already accounted for separately via needs_generation + has_novel_free_text,
-    # so counting them in the denominator here would penalize an essay twice and
-    # bias autonomy toward "ask"/"hold" more than intended.
     denom = total - len(needs_generation)
     coverage = (resolved / denom) if denom else 1.0
     return {

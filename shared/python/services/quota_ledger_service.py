@@ -70,6 +70,12 @@ def _safe_email(email) -> str:
     return email if isinstance(email, str) else ""
 
 
+def _safe_feature(feature) -> str:
+    """Equality-position guard for the feature key (reaches a counter/ledger
+    filter position)."""
+    return feature if isinstance(feature, str) and feature else ""
+
+
 # ---------------------------------------------------------------------------
 # Pool / counter key resolution (reuses usage_service pool semantics)
 # ---------------------------------------------------------------------------
@@ -264,6 +270,138 @@ def reserve_tailor(
         return False, [], get_usage(email)
 
     return True, [e["entry_id"] for e in entries], get_usage(email)
+
+
+# ---------------------------------------------------------------------------
+# Feature-parameterized reservation (defect G) — the exactly-once, atomic
+# counterpart to entitlements_service.check_and_increment for auto_submit /
+# autoapply_answer. Tailor KEEPS its pool-aware path (reserve_tailor) so it is
+# never double-counted; every other metered feature meters a solo per-email
+# counter whose per-plan cap + usage snapshot come from entitlements_service
+# (the single limit authority — never a second copy).
+# ---------------------------------------------------------------------------
+def _generic_usage(email: str, feature: str) -> Dict:
+    """Usage snapshot for a non-tailor feature, read from the ATOMIC quota
+    counter (not feature_usage) so reservations are reflected. Mirrors the
+    entitlements_service.get_usage shape byte-for-byte so a 429 body is
+    unchanged for the client."""
+    from services import entitlements_service as ent
+    date = ent._period_key(feature)
+    counter_id = counter_id_for(email, date, feature)
+    used = _counts_for([counter_id])
+    limit = ent.quota(email, feature)
+    resets = ent._resets_at(feature)
+    remaining = None if limit is None else max(0, limit - used)
+    return {
+        "feature": feature,
+        "used": used,
+        "limit": limit,
+        "remaining": remaining,
+        "unlimited": limit is None,
+        "period": ent.FEATURE_PERIODS.get(feature, ent.PERIOD_DAY),
+        "resets_at": resets.isoformat(),
+        "resets_in_seconds": int((resets - _now()).total_seconds()),
+    }
+
+
+def reserve(user_email: str, feature: str, n: int = 1,
+            idempotency_key: Optional[str] = None) -> Dict:
+    """Atomically reserve ``n`` slots of ``feature`` for the current period.
+
+    Returns ``{reserved: bool, entry_ids: [...], entry_id: first|None, usage}``.
+    The reservation is a single guarded ``$inc`` bounded below the plan limit —
+    no check-then-increment anywhere (the fix for the auto_submit /
+    autoapply_answer race). ``usage`` is post-reserve on success, pre-attempt on
+    denial (hand straight to the 429 body).
+
+    ``idempotency_key`` (per-feature): a redelivery with the same key returns the
+    SAME reservation without incrementing again — so an at-least-once Lambda /
+    replayed approval never double-reserves. Tailor delegates to the pool-aware
+    ``reserve_tailor`` (unchanged; never double-counted).
+    """
+    user_email = _safe_email(user_email)
+    feature = _safe_feature(feature)
+    n = max(1, int(n))
+
+    if feature == FEATURE_TAILOR:
+        allowed, entry_ids, usage = reserve_tailor(
+            user_email, n=n, idempotency_key=idempotency_key)
+        return {"reserved": allowed, "entry_ids": entry_ids,
+                "entry_id": entry_ids[0] if entry_ids else None, "usage": usage}
+
+    if not user_email or not feature:
+        return {"reserved": False, "entry_ids": [], "entry_id": None, "usage": {}}
+
+    from services import entitlements_service as ent
+
+    # Idempotent redelivery — same key, same feature → the existing reservation.
+    if idempotency_key:
+        existing = list(_ledger().find(
+            {"idempotency_key": str(idempotency_key), "feature": feature},
+            {"entry_id": 1}))
+        if existing:
+            eids = [e["entry_id"] for e in existing]
+            return {"reserved": True, "entry_ids": eids, "entry_id": eids[0],
+                    "usage": _generic_usage(user_email, feature)}
+
+    date = ent._period_key(feature)
+    counter_id = counter_id_for(user_email, date, feature)
+    limit = ent.quota(user_email, feature)
+
+    if limit is None:
+        # Unlimited plan: still ledger-track (so refunds/audit work), no cap guard.
+        _counters().update_one(
+            {"_id": counter_id},
+            {"$inc": {"count": int(n)}, "$set": {"updated_at": _now()}},
+            upsert=True)
+        reserved = True
+    else:
+        reserved = _atomic_reserve(counter_id, n, int(limit), int(limit))
+
+    if not reserved:
+        return {"reserved": False, "entry_ids": [], "entry_id": None,
+                "usage": _generic_usage(user_email, feature)}
+
+    now = _now()
+    entries = []
+    for i in range(n):
+        entry = {
+            "entry_id": uuid.uuid4().hex,
+            "user_email": user_email,
+            "feature": feature,
+            "date": date,
+            "counter_id": counter_id,
+            "state": "reserved",
+            "job_id": None,
+            "reserved_at": now,
+            "settled_at": None,
+        }
+        if idempotency_key and i == 0:
+            entry["idempotency_key"] = str(idempotency_key)
+        entries.append(entry)
+    try:
+        _ledger().insert_many(entries)
+    except Exception as e:
+        # Ledger write failed after the counter moved — give the slots back
+        # rather than silently over-charging.
+        logger.error("quota_ledger insert failed for %s (refunding %d slot(s)): %s",
+                     feature, n, e)
+        _counters().update_one(
+            {"_id": counter_id, "count": {"$gte": n}}, {"$inc": {"count": -n}})
+        if idempotency_key:
+            existing = list(_ledger().find(
+                {"idempotency_key": str(idempotency_key), "feature": feature},
+                {"entry_id": 1}))
+            if existing:
+                eids = [e["entry_id"] for e in existing]
+                return {"reserved": True, "entry_ids": eids, "entry_id": eids[0],
+                        "usage": _generic_usage(user_email, feature)}
+        return {"reserved": False, "entry_ids": [], "entry_id": None,
+                "usage": _generic_usage(user_email, feature)}
+
+    eids = [e["entry_id"] for e in entries]
+    return {"reserved": True, "entry_ids": eids, "entry_id": eids[0],
+            "usage": _generic_usage(user_email, feature)}
 
 
 def attach_job(entry_id: str, job_id: str) -> None:

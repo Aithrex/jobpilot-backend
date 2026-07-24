@@ -1275,7 +1275,21 @@ def _apply_status(user_email: str, record_id: str, status: str) -> bool:
         {"record_id": record_id, "user_email": user_email},
         {"$set": updates},
     )
-    return bool(res.matched_count)
+    matched = bool(res.matched_count)
+    if matched:
+        # E1: also project onto the canonical applications OUTCOME axis (the
+        # tailoring_records write above stays the authoritative mirror until E3).
+        # gmail's VALID_STATUSES are all members of OUTCOME_STATUSES, so the value
+        # maps 1:1. Lazy import avoids an import cycle + cold-start cost; any
+        # canonical-write hiccup is swallowed so it can never break the gmail flow.
+        try:
+            from services import application_ledger_service as _ledger
+            _ledger.set_outcome(
+                user_email, record_id=record_id, outcome=status, source="gmail"
+            )
+        except Exception as _e:  # pragma: no cover - defensive
+            logger.warning("gmail: canonical set_outcome failed (mirror stands): %s", _e)
+    return matched
 
 
 def sync_user(user_email: str) -> Dict[str, Any]:

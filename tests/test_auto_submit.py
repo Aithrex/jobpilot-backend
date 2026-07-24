@@ -347,6 +347,8 @@ if __name__ == "__main__":  # allow `python tests/test_auto_submit.py`
 # Extension ↔ auto-apply LEDGER bridge (the wired submit path)
 # ---------------------------------------------------------------------------
 def _ready_ledger_app(user=USER_A):
+    # F: the extension submit bridge surfaces APPROVED ledger rows (was `ready`).
+    # Drive the row through the F path: gathering → ready_for_review → approved.
     view, _ = als.create_application(
         user, company="Acme", title="Cloud Engineer",
         jd_text="Build AWS infra with Terraform and Kubernetes.",
@@ -354,7 +356,9 @@ def _ready_ledger_app(user=USER_A):
         apply_url="https://job-boards.greenhouse.io/acme/jobs/999")
     aid = view["application_id"]
     als.mark_gathering(user, aid)
-    als.mark_ready(user, aid, autonomy="auto", confidence_score=0.95, tailoring_record_id=None)
+    als.mark_ready_for_review(user, aid, autonomy="auto", confidence_score=0.95,
+                              tailoring_record_id=None)
+    als.approve(user, [aid], approved_by="system")
     return aid
 
 

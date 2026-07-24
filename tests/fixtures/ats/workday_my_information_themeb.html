@@ -1,0 +1,40 @@
+<!doctype html>
+<!-- Aithrex-owned synthetic fixture. The SAME Workday "My Information" step as theme
+     A, rendered under a DIFFERENT tenant theme (css-emerald-9xk2 / different DOM
+     wrappers). The data-automation-id hooks are IDENTICAL — proving detection, recon
+     and fill are theme-independent (they key off automation ids, not CSS). NEVER a
+     real employer. -->
+<html><head><meta charset="utf-8"><title>Careers - Aithrex</title></head>
+<body class="css-emerald-9xk2 tenant-theme-2">
+<section data-automation-id="myInformationPage" class="cx-panel cx-rounded">
+  <header class="cx-hd"><span>Your Information</span></header>
+  <fieldset class="cx-grp">
+    <div data-automation-id="formField-legalNameSection_firstName" class="cx-cell">
+      <span class="cx-lbl">First Name</span>
+      <input data-automation-id="legalNameSection_firstName" aria-label="First Name" type="text" required>
+    </div>
+    <div data-automation-id="formField-legalNameSection_lastName" class="cx-cell">
+      <span class="cx-lbl">Last Name</span>
+      <input data-automation-id="legalNameSection_lastName" aria-label="Last Name" type="text" required>
+    </div>
+    <div data-automation-id="formField-email" class="cx-cell">
+      <span class="cx-lbl">Email Address</span>
+      <input data-automation-id="email" aria-label="Email Address" type="email" required>
+    </div>
+    <div data-automation-id="formField-phone" class="cx-cell">
+      <span class="cx-lbl">Phone Number</span>
+      <input data-automation-id="phone-number" aria-label="Phone Number" type="tel">
+    </div>
+    <div data-automation-id="formField-resume" class="cx-cell">
+      <span class="cx-lbl">Resume</span>
+      <input data-automation-id="resume" aria-label="Resume" type="file">
+    </div>
+    <div data-automation-id="formField-source" class="cx-cell">
+      <button data-automation-id="source" aria-haspopup="listbox" aria-label="How did you hear about us?" type="button">Select One</button>
+    </div>
+  </fieldset>
+  <nav data-automation-id="pageFooter" class="cx-actions">
+    <button data-automation-id="pageFooterNextButton" type="button">Continue</button>
+  </nav>
+</section>
+</body></html>

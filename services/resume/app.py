@@ -128,6 +128,29 @@ def create_app():
     from blueprints.guest import guest_bp
     app.register_blueprint(guest_bp, url_prefix='/api/resume/guest')
 
+    # Managed Application Mailbox — inbound Cloudflare machine webhook
+    # (managed-mailbox-v1 §4). JWT-EXEMPT, HMAC-authed. Mounted UNDER
+    # /api/resume/mail-inbound so it rides the existing "ANY /api/resume/{proxy+}"
+    # edge route (no new Terraform route); the resume Lambda already has the
+    # S3 + Bedrock access the pipeline needs.
+    from blueprints.mail_inbound import mail_inbound_bp
+    app.register_blueprint(mail_inbound_bp, url_prefix='/api/resume/mail-inbound')
+
+    # Managed Application Mailbox — user-facing forwarding controls
+    # (managed-mailbox-v1 §1.2/§5). JWT-REQUIRED, owner-scoped. Mounted UNDER
+    # /api/resume/mailbox so it rides the existing "ANY /api/resume/{proxy+}"
+    # edge route (no new Terraform route).
+    from blueprints.mailbox import mailbox_bp
+    app.register_blueprint(mailbox_bp, url_prefix='/api/resume/mailbox')
+
+    # Executor callback surface — the AWS side of the GCP browser-execution plane
+    # (P5). JWT-EXEMPT, CAPABILITY/CALLBACK-token-authed machine routes for the
+    # private Cloud Run Playwright worker. Mounted UNDER /api/resume/executor so
+    # it rides the existing "ANY /api/resume/{proxy+}" edge route (NO new
+    # Terraform route); the resume Lambda already has the S3 + KMS access needed.
+    from blueprints.executor import executor_bp
+    app.register_blueprint(executor_bp, url_prefix='/api/resume/executor')
+
     @app.route('/api/health')
     def health():
         return {'status': 'healthy', 'service': 'resume-service', 'version': '2.0.0'}, 200

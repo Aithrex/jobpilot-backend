@@ -1,0 +1,17 @@
+{
+  "name": "jobpilot-mail-inbound-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Email Worker for the JobPilot managed-mailbox inbound path (managed-mailbox-v1 §4).",
+  "type": "module",
+  "main": "src/worker.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}

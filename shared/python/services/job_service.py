@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlencode
 
 import requests
+from pymongo import ASCENDING
 
 from utils.config import _get_config_value
 from utils.db_connect import DBConnect
@@ -306,7 +307,19 @@ class JobService:
                 expireAfterSeconds=APIFY_ACTOR_CACHE_TTL_SECONDS,
                 name="apify_actor_cache_cached_at_ttl",
             )
-            self.saved_jobs.create_index("job_id", unique=True)
+            # DEFECT L: saved_jobs dedup is PER-USER, not global. A source-prefixed
+            # job_id ("{source}:{id}") is a per-posting canonical id SHARED across
+            # users; a global unique on job_id alone made user B's save of a posting
+            # user A already saved raise DuplicateKeyError. The correct dedup key is
+            # (user_email, job_id): idempotent per user, collision-free across users.
+            # This compound also serves the hot {user_email} read prefix
+            # (get_saved_jobs). The old global job_id_1 index is dropped by
+            # scripts/migrate_indexes.py AFTER this compound exists (safe reindex).
+            self.saved_jobs.create_index(
+                [("user_email", ASCENDING), ("job_id", ASCENDING)],
+                unique=True,
+                name="user_email_job_id_unique",
+            )
             self.job_filter_preferences.create_index("user_email", unique=True)
             self.user_apify_keys.create_index("user_email", unique=True)
         except Exception as e:

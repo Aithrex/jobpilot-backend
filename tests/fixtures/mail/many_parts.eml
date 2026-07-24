@@ -1,0 +1,63 @@
+Message-ID: <manyparts-0001@corp.example>
+From: HR <hr@corp.example>
+To: harshith.manne@pilotmail.co
+Subject: Many parts
+Date: Tue, 21 Jul 2026 16:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============1752211316687875163=="
+
+--===============1752211316687875163==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+part zero
+
+--===============1752211316687875163==
+Content-Type: application/pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="a0.pdf"
+MIME-Version: 1.0
+
+JVBERi0xLjQgdGlueQ==
+
+--===============1752211316687875163==
+Content-Type: application/pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="a1.pdf"
+MIME-Version: 1.0
+
+JVBERi0xLjQgdGlueQ==
+
+--===============1752211316687875163==
+Content-Type: application/pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="a2.pdf"
+MIME-Version: 1.0
+
+JVBERi0xLjQgdGlueQ==
+
+--===============1752211316687875163==
+Content-Type: application/pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="a3.pdf"
+MIME-Version: 1.0
+
+JVBERi0xLjQgdGlueQ==
+
+--===============1752211316687875163==
+Content-Type: application/pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="a4.pdf"
+MIME-Version: 1.0
+
+JVBERi0xLjQgdGlueQ==
+
+--===============1752211316687875163==
+Content-Type: application/pdf
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="a5.pdf"
+MIME-Version: 1.0
+
+JVBERi0xLjQgdGlueQ==
+
+--===============1752211316687875163==--

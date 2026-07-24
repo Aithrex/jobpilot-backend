@@ -1,0 +1,19 @@
+<!doctype html>
+<!-- Aithrex-owned synthetic fixture. Mimics an Ashby-style form: id-keyed
+     _systemfield_* handles, an ashby-namespaced body class, a legal
+     work-authorization select, and a "Submit Application" button. NEVER a real
+     employer. -->
+<html><head><meta charset="utf-8"><title>Aithrex - Ashby</title></head>
+<body class="ashby-application-form">
+<form action="https://jobs.ashbyhq.com/aithrex/1234abcd-5678-90ef-1234/application" method="post">
+  <label for="_systemfield_name">Name</label>
+  <input id="_systemfield_name" name="_systemfield_name" type="text" required>
+  <label for="_systemfield_email">Email</label>
+  <input id="_systemfield_email" name="_systemfield_email" type="email" required>
+  <label for="_systemfield_resume">Resume</label>
+  <input id="_systemfield_resume" name="_systemfield_resume" type="file">
+  <label for="q_authorization">Are you legally authorized to work in the US?</label>
+  <select id="q_authorization" name="q_authorization"><option>Yes</option><option>No</option></select>
+  <button type="submit">Submit Application</button>
+</form>
+</body></html>

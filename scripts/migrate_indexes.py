@@ -145,13 +145,25 @@ INDEX_SPECS = [
      {"unique": True, "name": "user_date_feature_unique"}),
 
     # === saved_jobs =======================================================
-    # job_service:241 already creates saved_jobs.job_id unique (dedup). The HOT
-    # READ path is {user_email}: overview_service:57/98, recommendations:63/128,
-    # beta_features:232, daily_pipeline:146 — none indexed. Add it.
+    # DEFECT L FIX: dedup is PER-USER, not global. A source-prefixed job_id
+    # ("{source}:{id}", job_service:1588) is a per-posting canonical id SHARED
+    # across users; the OLD global unique on job_id alone (job_id_1) blocked user
+    # B from saving a posting user A already saved (upsert filter {job_id,
+    # user_email} matched nothing -> insert -> DuplicateKeyError on the global
+    # unique). The correct dedup key is (user_email, job_id): idempotent per user,
+    # collision-free across users. This compound ALSO serves the HOT {user_email}
+    # read prefix (overview_service:57/98, recommendations:63/128, beta_features:232,
+    # daily_pipeline:146), so the standalone user_email_idx below is now a redundant
+    # prefix — kept conservatively (harmless read-path duplicate; safe to drop later).
+    #
+    # SAFE REINDEX ORDER: run() (create pass) builds this compound unique BEFORE
+    # run_drops(POST_CREATE_DROP_INDEXES) drops the old job_id_1 — so there is never
+    # a window without per-user dedup protection. The compound build CANNOT fail on
+    # existing data: today at most one row exists per job_id (the global unique held),
+    # so no (user_email, job_id) pair can collide.
     ("saved_jobs", [("user_email", ASCENDING)], {"name": "user_email_idx"}),
-    # Re-assert the dedup index with PyMongo's default name so it matches the
-    # runtime-created one (job_service.create_index("job_id", unique=True)).
-    ("saved_jobs", [("job_id", ASCENDING)], {"unique": True, "name": "job_id_1"}),
+    ("saved_jobs", [("user_email", ASCENDING), ("job_id", ASCENDING)],
+     {"unique": True, "name": "user_email_job_id_unique"}),
 
     # === tailoring_records (application history) ===========================
     # record_id is a uuid4, queried as {record_id}/{record_id,user_email}
@@ -235,6 +247,16 @@ INDEX_SPECS = [
     ("applications", [("user_email", ASCENDING), ("status", ASCENDING)], {"name": "user_email_status"}),
     ("applications", [("posting_closes_at", ASCENDING)], {"sparse": True, "name": "posting_closes_at_sparse"}),
     ("applications", [("application_id", ASCENDING)], {"unique": True, "name": "application_id_unique"}),
+    # E1/E2 upsert race guard (defect E): set_outcome find-or-creates the
+    # canonical row on (user_email, tailoring_record_id). Unique PARTIAL (NOT
+    # plain sparse): a compound sparse index still indexes every doc carrying ANY
+    # keyed field (all rows have user_email), so a null tailoring_record_id would
+    # collide — the partial filter limits uniqueness to rows that actually link a
+    # tailored résumé, the set two concurrent mail/gmail/manual signals could
+    # duplicate. Mirrors application_ledger_service.ensure_indexes().
+    ("applications", [("user_email", ASCENDING), ("tailoring_record_id", ASCENDING)],
+     {"unique": True, "name": "user_email_tailoring_record_id_unique",
+      "partialFilterExpression": {"tailoring_record_id": {"$type": "string"}}}),
     # approval tokens (Tranche 1 §2)
     ("approval_tokens", [("jti", ASCENDING)], {"unique": True, "name": "jti_unique"}),
     ("approval_tokens", [("exp", ASCENDING)], {"expireAfterSeconds": 0, "name": "ttl_exp"}),
@@ -369,6 +391,67 @@ INDEX_SPECS = [
     ("email_ingress", [("purge_after", ASCENDING)], {"expireAfterSeconds": 0, "name": "ttl_purge_after"}),
     ("mail_ingress_suggestions", [("suggestion_id", ASCENDING)], {"unique": True, "name": "suggestion_id_unique"}),
     ("mail_ingress_suggestions", [("user_email", ASCENDING)], {"name": "by_user"}),
+
+    # === Managed Application Mailbox (managed-mailbox-v1 §2) ================
+    # Mirrors managed_mailbox_service.ensure_indexes() (names/keys/options MUST
+    # match so a runtime ensure_indexes call is a clean no-op re-assert). One
+    # mailbox per user; the mail_aliases.local_part unique index spans ALL
+    # states (active/paused/retired) — it is BOTH the collision race backstop
+    # for provision/rotate AND the §1.3 tombstone anti-recycle guard.
+    ("managed_mailboxes", [("user_email", ASCENDING)], {"unique": True, "name": "uniq_user_email"}),
+    ("managed_mailboxes", [("mailbox_id", ASCENDING)], {"unique": True, "name": "uniq_mailbox_id"}),
+    ("mail_aliases", [("local_part", ASCENDING)], {"unique": True, "name": "uniq_local_part"}),
+    ("mail_aliases", [("alias_id", ASCENDING)], {"unique": True, "name": "uniq_alias_id"}),
+    ("mail_aliases", [("mailbox_id", ASCENDING)], {"name": "by_mailbox_id"}),
+    ("mail_aliases", [("user_email", ASCENDING)], {"name": "by_user_email"}),
+
+    # === Managed Mailbox forwarding (managed-mailbox-v1 §1.2 / §8.1) ========
+    # mail_forward_verifications: mirrors managed_mailbox_service.ensure_indexes()
+    # (names/keys/options MUST match so a runtime ensure_indexes call is a clean
+    # no-op re-assert). token is the single-use claim key
+    # (confirm_forward_verification find_one({token})); user_email scopes the
+    # IDOR check; TTL (~24h) reaps un-clicked verification tokens.
+    ("mail_forward_verifications", [("token", ASCENDING)],
+     {"unique": True, "name": "uniq_fv_token"}),
+    ("mail_forward_verifications", [("user_email", ASCENDING)],
+     {"name": "fv_by_user_email"}),
+    ("mail_forward_verifications", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "fv_ttl_expires_at"}),
+    # mail_forward_counters: mail_forward_service._within_daily_cap does an atomic
+    # find_one_and_update(upsert) on {user_email, day} — the unique index is a
+    # CORRECTNESS requirement so concurrent Lambdas can't spawn twin counters and
+    # under-count the per-user daily forward cap.
+    ("mail_forward_counters", [("user_email", ASCENDING), ("day", ASCENDING)],
+     {"unique": True, "name": "user_email_day_unique"}),
+
+    # === Managed Mailbox inbound storage (managed-mailbox-v1 §2/§4) =========
+    # Mirrors mail_store_service.ensure_indexes() (names/keys MUST match so a
+    # runtime ensure_indexes call is a clean no-op re-assert).
+    # mail_threads: thread_id (uuid) unique; inbox list find({user_email})
+    # sort last_message_at desc; per-application thread lookup.
+    ("mail_threads", [("thread_id", ASCENDING)], {"unique": True, "name": "uniq_thread_id"}),
+    ("mail_threads", [("user_email", ASCENDING), ("last_message_at", DESCENDING)],
+     {"name": "user_last_message_at"}),
+    ("mail_threads", [("user_email", ASCENDING), ("application_id", ASCENDING)],
+     {"name": "user_application_id"}),
+    # mail_messages: the (alias_id, provider_message_id) unique index is the
+    # idempotency backstop (D8 — a re-delivered message can't double-store);
+    # message_id (uuid) unique; thread + unread reads.
+    ("mail_messages", [("alias_id", ASCENDING), ("provider_message_id", ASCENDING)],
+     {"unique": True, "name": "uniq_alias_provider_message_id"}),
+    ("mail_messages", [("message_id", ASCENDING)], {"unique": True, "name": "uniq_message_id"}),
+    ("mail_messages", [("thread_id", ASCENDING)], {"name": "by_thread_id"}),
+    ("mail_messages", [("user_email", ASCENDING), ("read", ASCENDING)], {"name": "user_read"}),
+    # mail_attachments: attachment_id (uuid) unique; per-message listing.
+    ("mail_attachments", [("attachment_id", ASCENDING)],
+     {"unique": True, "name": "uniq_attachment_id"}),
+    ("mail_attachments", [("message_id", ASCENDING)], {"name": "by_message_id"}),
+    # mail_commit_tokens: one-use two-phase-commit capability; TTL (~15 min)
+    # reaps expired/unused tokens. commit_token is the atomic claim key.
+    ("mail_commit_tokens", [("commit_token", ASCENDING)],
+     {"unique": True, "name": "uniq_commit_token"}),
+    ("mail_commit_tokens", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expires_at"}),
 
     # === Admin cockpit + Stripe billing bones (§6.9/§6.10).
     # stripe_events unique is a CORRECTNESS requirement (webhook idempotency).
@@ -652,6 +735,17 @@ DROP_INDEXES = [
     ("guest_sessions", "identity_resume_hashes"),
 ]
 
+# Indexes dropped AFTER the create pass (safe-reindex ordering). A superseded
+# UNIQUE index may be dropped only once its replacement exists, else there is a
+# window with no uniqueness enforcement. run_drops(POST_CREATE_DROP_INDEXES) is
+# therefore called in main() AFTER run() (create pass), never before.
+POST_CREATE_DROP_INDEXES = [
+    # DEFECT L: the global unique job_id_1 is superseded by the per-user compound
+    # unique user_email_job_id_unique (created above in run()). Dropping the global
+    # unique is what actually lets user B save a posting user A already saved.
+    ("saved_jobs", "job_id_1"),
+]
+
 
 def _fmt(keys, opts):
     key_str = ", ".join(f"{k}:{'desc' if d == DESCENDING else 'asc'}" for k, d in keys)
@@ -666,9 +760,9 @@ def _fmt(keys, opts):
     return f"{{{key_str}}}{suffix}"
 
 
-def run_drops(db, dry_run: bool):
+def run_drops(db, dry_run: bool, drops=DROP_INDEXES):
     """Drop superseded indexes (v1 → v2 migrations). Missing indexes skip."""
-    for coll, name in DROP_INDEXES:
+    for coll, name in drops:
         label = f"{coll}.{name}"
         if dry_run:
             print(f"  [would-drop]   {label}")
@@ -724,6 +818,9 @@ def main():
 
     run_drops(db, dry_run)
     created, existed, failed = run(db, dry_run)
+    # Safe-reindex ordering: drop superseded UNIQUE indexes ONLY after their
+    # replacements were built by the create pass above (DEFECT L: job_id_1).
+    run_drops(db, dry_run, POST_CREATE_DROP_INDEXES)
 
     print("\n== Summary by collection ==")
     all_colls = sorted({c for c, _, _ in INDEX_SPECS})

@@ -126,6 +126,14 @@ def get_all_secrets() -> Dict[str, str]:
         # secret for email_service when EMAIL_PROVIDER=zeptomail. Missing → the
         # service falls back to dev console logging (no mail sent).
         'ZEPTOMAIL_TOKEN': os.getenv('SSM_ZEPTOMAIL_TOKEN'),
+        # Managed Application Mailbox (managed-mailbox-v1 §7). Both stay unset
+        # until the neutral domain + Cloudflare Worker + SSE-KMS bucket exist and
+        # APPLY_MAILBOX_ENABLED flips on. MAIL_INBOUND_HMAC_SECRET is shared with
+        # the Cloudflare Email Worker's secret binding (HMAC-verifies the inbound
+        # webhook — NEVER the JWT secret). APPLY_MAIL_KMS_KEY_ID is the CMK id for
+        # the raw/attachment quarantine bucket.
+        'MAIL_INBOUND_HMAC_SECRET': os.getenv('SSM_MAIL_INBOUND_HMAC_SECRET'),
+        'APPLY_MAIL_KMS_KEY_ID': os.getenv('SSM_APPLY_MAIL_KMS_KEY_ID'),
     }
     
     # Filter out empty values
@@ -312,6 +320,14 @@ class SSMConfig:
     @property
     def ZEPTOMAIL_TOKEN(self) -> Optional[str]:
         return self._get('ZEPTOMAIL_TOKEN', 'ZEPTOMAIL_TOKEN')
+
+    @property
+    def MAIL_INBOUND_HMAC_SECRET(self) -> Optional[str]:
+        return self._get('MAIL_INBOUND_HMAC_SECRET', 'MAIL_INBOUND_HMAC_SECRET')
+
+    @property
+    def APPLY_MAIL_KMS_KEY_ID(self) -> Optional[str]:
+        return self._get('APPLY_MAIL_KMS_KEY_ID', 'APPLY_MAIL_KMS_KEY_ID')
 
     @property
     def ALLOWED_ORIGINS(self) -> str:

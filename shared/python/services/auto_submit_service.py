@@ -504,6 +504,91 @@ def list_pending_eligible(user_email: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# E2 (defect E) — fold `auto_submit_approvals` INTO the applications ledger.
+#
+# A THIN ADAPTER over the ledger's F approval states (ready_for_review / approved
+# / queued_for_execution) + the frozen approval_snapshot. New approvals go through
+# `ledger.approve()`; the pending queue reads canonical ledger rows LABELED with
+# their `status` + an `already_approved` flag (so defect H's FE renders an
+# already-approved row read-only instead of re-approvable). Legacy
+# `auto_submit_approvals` docs are STILL read (via list_pending_eligible) and are
+# NOT deleted during the transition. Dark-launch gated (AUTO_APPLY_APPROVAL_FOLD,
+# default OFF everywhere — dark until an operator flips it), mirroring the
+# AUTO_APPLY_RESERVE / AUTO_APPLY_PREPARE / AUTO_APPLY_MODES posture, so the live
+# queue is byte-identical until the flag is on.
+# ---------------------------------------------------------------------------
+# ready_for_review still AWAITS a go-ahead (already_approved False); approved /
+# queued_for_execution are cleared to submit + snapshot-frozen (F), surfaced
+# read-only (already_approved True).
+_FOLD_AWAITING: Tuple[str, ...] = ("ready_for_review",)
+_FOLD_APPROVED: Tuple[str, ...] = ("approved", "queued_for_execution")
+
+
+def approval_fold_enabled() -> bool:
+    """Dark-launch gate for E2's approval fold. Default OFF in ALL environments
+    (unlike the master `auto_submit_enabled`, which is dev-ON) so the pending
+    queue stays byte-identical until an operator flips AUTO_APPLY_APPROVAL_FOLD."""
+    raw = (_get_config_value("AUTO_APPLY_APPROVAL_FOLD", "") or "").strip().lower()
+    if raw in _FLAG_TRUE:
+        return True
+    if raw in _FLAG_FALSE:
+        return False
+    return False
+
+
+def list_canonical_approvals(user_email: str) -> List[Dict[str, Any]]:
+    """E2 thin ADAPTER: the auto-apply LEDGER rows that belong in the approval
+    queue, in the extension's pending-record shape, LABELED with the canonical
+    execution `status` + an `already_approved` flag.
+
+      * ready_for_review          -> already_approved False, eligible False
+                                     (awaits the user's go-ahead — H renders it
+                                      as an actionable review card).
+      * approved / queued_for_exec -> already_approved True, eligible True
+                                     (cleared to submit, snapshot frozen — H
+                                      renders it read-only, no second approve).
+
+    Dark-launch gated: returns [] until AUTO_APPLY_APPROVAL_FOLD is on, so the
+    live queue is unchanged. Owner-scoped; best-effort (never raises past here).
+    """
+    if not approval_fold_enabled():
+        return []
+    out: List[Dict[str, Any]] = []
+    try:
+        from services import application_ledger_service as als
+        for status in _FOLD_AWAITING + _FOLD_APPROVED:
+            already = status in _FOLD_APPROVED
+            for r in als.list_applications(user_email, status=status, limit=100):
+                url = r.get("apply_url")
+                out.append({
+                    "application_id": r.get("application_id"),
+                    "apply_url": url, "url": url,
+                    "status": status,
+                    "already_approved": already,
+                    # only an approved/queued row is cleared for the extension.
+                    "eligible": already,
+                    "ats": r.get("ats_family"),
+                    "title": r.get("title"), "company": r.get("company"),
+                    "source": "ledger",
+                })
+    except Exception as e:  # pragma: no cover - fold is best-effort
+        logger.warning("auto_submit canonical fold failed for %s: %s", user_email, e)
+    return out
+
+
+def approve_ledger(user_email: str, application_ids: Any, *,
+                   approved_by: str = "user", snapshot_provider: Any = None) -> int:
+    """E2 thin ADAPTER: route a NEW approval through the ledger's F approval edge
+    (`ready_for_review -> approved`, snapshot frozen) instead of minting a legacy
+    `auto_submit_approvals` doc. Idempotent + single-writer (see
+    application_ledger_service.approve): a row not yet in ready_for_review is left
+    untouched, and a replay never double-approves. Returns the count moved."""
+    from services import application_ledger_service as als
+    return als.approve(user_email, application_ids, approved_by=approved_by,
+                       snapshot_provider=snapshot_provider)
+
+
+# ---------------------------------------------------------------------------
 # Internal transition helpers
 # ---------------------------------------------------------------------------
 def _atomic_transition(approval_id: str, guard: Tuple[str, ...],

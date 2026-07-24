@@ -411,6 +411,21 @@ class BrowserExecutor(ExecutorAdapter):
                     user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                                 "Chrome/124.0 Safari/537.36"))
+                # P0-1 SSRF: for REAL http(s) navigation, intercept EVERY
+                # request/redirect/subresource/popup/download/ws and abort
+                # anything resolving to a private/loopback/link-local/metadata/
+                # reserved IP (DNS-rebinding pinned), and require the top-level
+                # target to be an https allow-listed ATS host. In production
+                # submit() only ever hands _drive an https ATS URL, so this always
+                # engages there; the offline test seam drives local ``file://``
+                # fixtures (never a real apply target) and is left untouched.
+                if (url or "").split(":", 1)[0].lower() in ("http", "https"):
+                    from services import ssrf_guard
+                    ssrf_guard.install_route_guard(context)
+                    allowed, reason = ssrf_guard.apply_url_allowed(url)
+                    if not allowed:
+                        logger.warning("browser submit: apply_url blocked (%s)", reason)
+                        return self._failed(f"blocked_url:{reason}")
                 page = context.new_page()
                 page.set_default_timeout(_FORM_TIMEOUT_MS)
                 page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
@@ -495,6 +510,16 @@ class BrowserExecutor(ExecutorAdapter):
             except Exception as e:
                 logger.info("fill skip %s: %s", fid, e)
                 skipped.append(fid)
+        if skipped:
+            # Selector-drift signal (spec §11): fields we expected to fill were
+            # not found — the leading indicator of an ATS template change. PII-free
+            # (COUNT only, never the field ids / values).
+            try:
+                from services import apply_metrics
+                apply_metrics.emit("selector_drift", adapter=self.name,
+                                   outcome="fields_missing", count=len(skipped))
+            except Exception:  # pragma: no cover - metrics never load-bearing
+                pass
         return filled, skipped
 
     def _fill_select(self, page, sel: str, value: str) -> None:
@@ -703,10 +728,26 @@ class BrowserExecutor(ExecutorAdapter):
 
     # -- helpers -------------------------------------------------------------
     def _shoot(self, page, application) -> Optional[str]:
+        """P1-SHOT: capture a BOUNDED confirmation-region proof, never a full-page
+        screenshot of a filled form (which would store name / contact / work-auth
+        / EEO / salary PII). Prefer the visible confirmation node; else a clipped
+        top viewport strip (the banner/confirmation lives at the top). Only falls
+        back to a viewport (NOT full_page) capture."""
+        png = None
         try:
-            png = page.screenshot(full_page=True)
+            el = self._visible_confirmation(page)
+            if el is not None:
+                png = el.screenshot()
         except Exception:
-            return None
+            png = None
+        if png is None:
+            try:
+                png = page.screenshot(clip={"x": 0, "y": 0, "width": 1280, "height": 320})
+            except Exception:
+                try:
+                    png = page.screenshot()   # viewport only — never full_page
+                except Exception:
+                    return None
         return self._save_screenshot(application, png)
 
     def _wall(self, kind: str, page, application, needs: list) -> Dict[str, Any]:
