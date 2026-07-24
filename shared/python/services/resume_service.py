@@ -1031,7 +1031,9 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             # a grounded, honest six-second recruiter read (PRO). The service loads
             # the resume and never fabricates; output is advisory, never written back.
             from services.recruiter_gaze_service import build_six_seconds
-            result = build_six_seconds(payload.get("user_email", ""))
+            result = build_six_seconds(
+                payload.get("user_email", ""), payload.get("fingerprint", "")
+            )
             svc.complete_job(job_id, result)
 
         elif job_type == "referral_draft":

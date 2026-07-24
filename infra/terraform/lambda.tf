@@ -116,6 +116,12 @@ resource "aws_lambda_function" "service" {
       # (503, never 401). Rotating the signal key orphans existing HMAC links.
       SSM_GUEST_SIGNAL_HMAC_KEY       = "${var.ssm_path_prefix}/guest-signal-hmac-key"
       SSM_GUEST_DOWNLOAD_TOKEN_SECRET = "${var.ssm_path_prefix}/guest-download-token-secret"
+
+      # Voice Graph (Compass addendum §6.12). ON in prod. Writing samples are
+      # Fernet-encrypted at rest via INTEGRATION_TOKEN_ENCRYPTION_KEY (falls back
+      # to GMAIL_TOKEN_ENCRYPTION_KEY) — both already wired above, so sample-save
+      # works. Unset would default OFF in prod (all routes 404); set explicitly.
+      VOICE_GRAPH_ENABLED = "true"
     }
   }
 

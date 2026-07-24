@@ -351,6 +351,15 @@ INDEX_SPECS = [
      {"name": "user_email_status"}),
     ("merge_candidates", [("candidate_id", ASCENDING)], {"unique": True, "name": "candidate_id_unique"}),
 
+    # === Recruiter's Six Seconds cache (§6.11.2) ==========================
+    # recruiter_gaze_service caches one read per user, keyed to the active
+    # resume version. _store_six_seconds: update_one({user_email}, upsert);
+    # get_cached_six_seconds: find_one({user_email, fingerprint}). One doc per
+    # user, so unique on user_email both enforces that and serves the read
+    # (equality on the unique prefix locates the single doc).
+    ("six_seconds_reads", [("user_email", ASCENDING)],
+     {"unique": True, "name": "user_email_unique"}),
+
     # === Sponsorship intel (§6.3) — upsert/lookup key is the normalized employer.
     ("sponsorship_signals", [("employer_norm", ASCENDING)],
      {"unique": True, "name": "employer_norm_unique"}),

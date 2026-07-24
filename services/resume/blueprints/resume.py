@@ -1997,12 +1997,37 @@ def get_job(job_id):
 @jwt_required()
 def six_seconds():
     user_email = get_jwt_identity()
-    from services import entitlements_service
+    from services import entitlements_service, recruiter_gaze_service
     from services.resume_service import get_resume_service, ResumeService
+    from services.resume_parser import ResumeParser
+
+    db = DBConnect().get_db()
+
+    # 1. A read needs a parsed resume. Check FIRST so a no-resume open never
+    #    spends quota — the tab auto-runs on mount, and charging before this
+    #    check silently pushed users into the upgrade wall before they had even
+    #    uploaded a resume. The FE handles this synchronous {error:no_resume}.
+    resume = ResumeParser(db).get_structured_resume(user_email=user_email)
+    if not resume or not resume.get("structured"):
+        return jsonify({"error": "no_resume"}), 200
+
+    fingerprint = recruiter_gaze_service.six_seconds_fingerprint(resume)
+    force = bool((request.get_json(silent=True) or {}).get("force"))
+
+    # 2. The read only changes when the resume changes. Serve a cached read for
+    #    the current resume version WITHOUT charging, so passively re-opening the
+    #    tab is free; only an explicit re-run (force) or a new resume version
+    #    spends a quota unit. The FE handles this synchronous result body.
+    if not force:
+        cached = recruiter_gaze_service.get_cached_six_seconds(user_email, fingerprint)
+        if cached:
+            return jsonify(cached), 200
+
+    # 3. Fresh compute — NOW gate + charge, before we spend on the LLM.
     allowed, usage = entitlements_service.check_and_increment(user_email, "six_seconds")
     if not allowed:
         return entitlements_service.upgrade_required_response(user_email, "six_seconds", usage)
-    payload = {"user_email": user_email}
+    payload = {"user_email": user_email, "fingerprint": fingerprint}
     job_id = get_resume_service().create_job("six_seconds", payload, user_email=user_email)
     ResumeService.invoke_async(job_id, "six_seconds", payload)
     return jsonify({"job_id": job_id}), 202
