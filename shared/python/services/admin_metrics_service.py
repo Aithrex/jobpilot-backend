@@ -319,8 +319,13 @@ def user_detail(user_email: str, redact: bool = True,
 
     db = _db()
     activity = {
-        "base_resumes": _safe_count(db.user_resumes, {"user_email": email, "type": "base"}),
-        "generated_resumes": _safe_count(db.user_resumes, {"user_email": email, "type": "generated"}),
+        # Resume Platform v3: base uploads live in resume_assets; generated
+        # files are the rendered version files on tailoring_records.
+        "base_resumes": _safe_count(db.resume_assets, {"user_email": email, "owner_type": "user"}),
+        "generated_resumes": _safe_count(
+            db.tailoring_records,
+            {"user_email": email, "versions.files.pdf.s3_key": {"$exists": True}},
+        ),
         "authored_resumes": _safe_count(db.authored_resumes, {"user_email": email}),
         "tailoring_sessions": _safe_count(db.tailoring_records, {"user_email": email, "deleted": {"$ne": True}}),
         "post_drafts": _safe_count(db.post_drafts, {"user_email": email}),

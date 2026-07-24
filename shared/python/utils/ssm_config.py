@@ -91,8 +91,9 @@ def get_all_secrets() -> Dict[str, str]:
         'JWT_SECRET_KEY': os.getenv('SSM_JWT_SECRET'),
         'IPINFO_TOKEN': os.getenv('SSM_IPINFO_TOKEN'),
         'JSEARCH_API_KEY': os.getenv('SSM_JSEARCH_API_KEY'),
-        'APIFY_API_KEY': os.getenv('SSM_APIFY_API_KEY'),
-        'APIFY_TOKEN': os.getenv('SSM_APIFY_TOKEN'),
+        # --- APIFY DISABLED (temporary) ---
+        # 'APIFY_API_KEY': os.getenv('SSM_APIFY_API_KEY'),
+        # 'APIFY_TOKEN': os.getenv('SSM_APIFY_TOKEN'),
         'JOB_SEARCH_PASSWORD_HASH': os.getenv('SSM_JOB_SEARCH_PASSWORD_HASH'),
         'GITHUB_PAT': os.getenv('SSM_GITHUB_PAT'),
         'GOOGLE_SIGNIN_CLIENT_ID': os.getenv('SSM_GOOGLE_SIGNIN_CLIENT_ID'),
@@ -110,6 +111,21 @@ def get_all_secrets() -> Dict[str, str]:
         # magic-links (NEVER the JWT secret). Fetched in the same batched
         # GetParameters call below (the loop chunks to the 10-per-call limit).
         'APPROVAL_LINK_SECRET': os.getenv('SSM_APPROVAL_LINK_SECRET'),
+        # Guest Onboarding — server-side salt for guest ip_hash. Without it,
+        # guest_service.hash_ip fails CLOSED (stores null, logs once).
+        'GUEST_IP_HASH_SALT': os.getenv('SSM_GUEST_IP_HASH_SALT'),
+        # Guest Onboarding v2 — keyed-HMAC secret for guest identity signals
+        # (emails/phones/resume signatures). Unset -> fail closed: signals are
+        # not stored or matched, quota subjects stay standalone.
+        'GUEST_SIGNAL_HMAC_KEY': os.getenv('SSM_GUEST_SIGNAL_HMAC_KEY'),
+        # Guest Onboarding v2 — HMAC secret for the short-lived guest download
+        # capability tokens. Unset -> issuing tokens fails closed (503-style
+        # message, never 401). NEVER reuse JWT_SECRET_KEY.
+        'GUEST_DOWNLOAD_TOKEN_SECRET': os.getenv('SSM_GUEST_DOWNLOAD_TOKEN_SECRET'),
+        # ZeptoMail (Zoho transactional email) Send Mail token — the transport
+        # secret for email_service when EMAIL_PROVIDER=zeptomail. Missing → the
+        # service falls back to dev console logging (no mail sent).
+        'ZEPTOMAIL_TOKEN': os.getenv('SSM_ZEPTOMAIL_TOKEN'),
     }
     
     # Filter out empty values
@@ -214,11 +230,16 @@ class SSMConfig:
 
     @property
     def APIFY_API_KEY(self) -> Optional[str]:
-        return self._get('APIFY_API_KEY', 'APIFY_API_KEY')
+        # --- APIFY DISABLED (temporary): never resolve an Apify key from
+        # SSM/env. Restore the original return to re-enable. ---
+        return None
+        # return self._get('APIFY_API_KEY', 'APIFY_API_KEY')
 
     @property
     def APIFY_TOKEN(self) -> Optional[str]:
-        return self._get('APIFY_TOKEN', 'APIFY_TOKEN')
+        # --- APIFY DISABLED (temporary) ---
+        return None
+        # return self._get('APIFY_TOKEN', 'APIFY_TOKEN')
 
     @property
     def JOB_SEARCH_PASSWORD_HASH(self) -> Optional[str]:
@@ -275,6 +296,22 @@ class SSMConfig:
     @property
     def APPROVAL_LINK_SECRET(self) -> Optional[str]:
         return self._get('APPROVAL_LINK_SECRET', 'APPROVAL_LINK_SECRET')
+
+    @property
+    def GUEST_IP_HASH_SALT(self) -> Optional[str]:
+        return self._get('GUEST_IP_HASH_SALT', 'GUEST_IP_HASH_SALT')
+
+    @property
+    def GUEST_SIGNAL_HMAC_KEY(self) -> Optional[str]:
+        return self._get('GUEST_SIGNAL_HMAC_KEY', 'GUEST_SIGNAL_HMAC_KEY')
+
+    @property
+    def GUEST_DOWNLOAD_TOKEN_SECRET(self) -> Optional[str]:
+        return self._get('GUEST_DOWNLOAD_TOKEN_SECRET', 'GUEST_DOWNLOAD_TOKEN_SECRET')
+
+    @property
+    def ZEPTOMAIL_TOKEN(self) -> Optional[str]:
+        return self._get('ZEPTOMAIL_TOKEN', 'ZEPTOMAIL_TOKEN')
 
     @property
     def ALLOWED_ORIGINS(self) -> str:

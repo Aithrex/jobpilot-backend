@@ -636,6 +636,10 @@ def queue_application():
             ats_family=data.get("ats_family"),
             tenant=data.get("tenant"),
             posting_closes_at=data.get("posting_closes_at"),
+            # Pins the canonical inventory row so the posting survives the
+            # rolling 7-day retention window (archived to S3, verified before
+            # any delete). Absent for postings that did not come from inventory.
+            posting_job_id=data.get("posting_job_id") or data.get("job_id"),
         )
 
         # Enqueue recon/gather for freshly-created (or requeued) rows so the

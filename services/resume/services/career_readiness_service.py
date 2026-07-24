@@ -195,10 +195,9 @@ def compute_readiness(email: str) -> Dict:
         proof_summary = "GitHub linked — real projects count"
     else:
         try:
-            rdoc = _db().user_resumes.find_one(
-                {"user_email": email, "structured": {"$exists": True}},
-                {"structured.projects": 1}, sort=[("parsed_at", -1)],
-            ) or {}
+            # Resume Platform v3: canonical read path (active resume asset).
+            from services import resume_access
+            rdoc = resume_access.get_active_structured(email) or {}
             nproj = len(((rdoc.get("structured") or {}).get("projects") or []))
         except Exception:
             nproj = 0

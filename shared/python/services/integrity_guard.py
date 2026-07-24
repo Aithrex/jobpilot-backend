@@ -605,7 +605,7 @@ class IntegrityGuard:
     ) -> Tuple[Dict[str, Any], List[str]]:
         """Replace en-dash / em-dash with ASCII hyphen-space in all candidate-
         facing text fields (summary, experience bullets, project bullets,
-        experience dates, education dates).
+        project names, experience dates, education dates).
 
         Strategy:
           - Spaced dash (` – ` / ` — `)        → ` - `
@@ -646,6 +646,11 @@ class IntegrityGuard:
             proj["bullets"] = [_strip(b) for b in (proj.get("bullets") or [])]
             if "dates" in proj:
                 proj["dates"] = _strip(proj["dates"])
+            # Generated project NAMES can carry an em-dash (e.g. "Toolkit — a
+            # personal library ..."); strip it too so no Unicode dash reaches
+            # the PDF via the name.
+            if "name" in proj:
+                proj["name"] = _strip(proj["name"])
 
         for edu in tailored.get("education", []) or []:
             if "dates" in edu:
@@ -726,6 +731,13 @@ class IntegrityGuard:
     # punctuation but a quoted bullet usually self-terminates.
     _TERMINAL_OK = (".", "!", "?", "\"", "'", ")", "]")
 
+    # Closing characters that can legitimately follow the "real" last
+    # character of a bullet (a quote or bracket wrapping the final clause).
+    # We peel these off to inspect the connector underneath — otherwise a
+    # bullet like "...migrated the service;)" reads as terminated (last char
+    # ')') and the dangling ';' survives to the page.
+    _TERMINAL_CLOSERS = ("\"", "'", ")", "]")
+
     # Punctuation we REPLACE with '.' (mid-thought connectors that look
     # broken when used as a bullet's terminal char).
     _TERMINAL_REPLACE = (";", ",", ":", "-", "—", "–")
@@ -748,15 +760,44 @@ class IntegrityGuard:
             stripped = text.rstrip()
             if not stripped:
                 return text
-            last = stripped[-1]
-            if last in self._TERMINAL_OK:
+
+            # Peel trailing closers (quotes/brackets that wrap the final
+            # clause) so we inspect the connector char underneath, not the
+            # closer itself. Without this, "...service;)" ends in ')' (a
+            # _TERMINAL_OK char) and the dangling ';' would survive.
+            closers = ""
+            body = stripped
+            while body and body[-1] in self._TERMINAL_CLOSERS:
+                closers = body[-1] + closers
+                body = body[:-1].rstrip()
+
+            if not body:
+                # Nothing but closing punctuation — leave untouched.
                 return stripped
+
+            last = body[-1]
+
+            # Collapse a dangling connector (e.g. "...Python;" or a
+            # semicolon-splice whose second clause got dropped): strip a run
+            # of trailing connector/space chars down to real content.
             if last in self._TERMINAL_REPLACE:
-                fixed = stripped[:-1].rstrip() + "."
+                trimmed = body
+                while trimmed and (trimmed[-1] in self._TERMINAL_REPLACE
+                                   or trimmed[-1].isspace()):
+                    trimmed = trimmed[:-1]
+                if not trimmed:
+                    return stripped
+                fixed = trimmed + "." + closers
                 fixes.append(f"{label}: '{last}' -> '.'")
                 return fixed
+
+            if last in self._TERMINAL_OK:
+                # Already terminated (with any wrapping closers reattached).
+                return body + closers
+
+            fixed = body + "." + closers
             fixes.append(f"{label}: appended '.'")
-            return stripped + "."
+            return fixed
 
         if tailored.get("summary"):
             tailored["summary"] = _fix(tailored["summary"], "summary")

@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import requests
 
 from services.career_pages_catalog import ATS_KINDS, CAREER_PAGES_CATALOG, INDUSTRIES
+from services.domain_classifier import user_role_noun_re
 from services.workday_jobs_service import (
     GLOBAL_KEEP,
     WINDOW_DAYS,
@@ -35,6 +36,7 @@ from services.workday_jobs_service import (
     _attach_feasibility,
     _attach_sponsorship,
     _build_match_regex,
+    _clamp_tz_offset,
     _days_ago,
     _derive_query_terms,
     _derive_skill_terms,
@@ -45,11 +47,16 @@ from services.workday_jobs_service import (
     _role_matchers,
     _score_jobs,
     _US_STATE_RE,
+    _US_STATE_NAME_RE,
+    _REMOTE_RE,
 )
 
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 8
+# ORC hosts (7k+ open reqs at JPMC) and Uber's search API run noticeably
+# slower than the board ATSes — give them a longer per-request budget.
+HEAVY_REQUEST_TIMEOUT = 15
 DETAIL_TIMEOUT = 6
 # The async runner is the RESUME Lambda (300s timeout in this repo, not the
 # legacy 900s monolith) — cap the fan-out to leave room for detail enrichment
@@ -129,6 +136,7 @@ _ATS_LABEL = {
     "smartrecruiters": "SmartRecruiters", "workable": "Workable",
     "recruitee": "Recruitee", "amazon": "Amazon Jobs",
     "eightfold": "Eightfold", "phenom": "Phenom",
+    "orc": "Oracle Recruiting", "uber": "Uber Careers",
 }
 
 # Explicit non-US markers for ATS location strings (board APIs often give
@@ -140,9 +148,10 @@ _COUNTRY_OK = {"us", "usa", "united states", "united states of america"}
 
 def _row(company: Dict[str, str], raw_id: Any, title: str, url: str,
          date_posted: str, location: str, description: str = "",
-         is_remote: Optional[bool] = None, country: str = "") -> Dict[str, Any]:
+         is_remote: Optional[bool] = None, country: str = "",
+         meta: str = "", exp: str = "") -> Dict[str, Any]:
     days = _days_ago(date_posted) if date_posted else None
-    return {
+    row = {
         "job_id": f"{company['ats']}:{company['slug']}:{raw_id}",
         "title": str(title or "").strip()[:200],
         "company": company["display_name"],
@@ -160,6 +169,20 @@ def _row(company: Dict[str, str], raw_id: Any, title: str, url: str,
                      else bool(_REMOTE_RE.search(location or "")),
         "source": _ATS_LABEL.get(company["ats"], company["ats"]),
     }
+    if meta:
+        # Inline board metadata (function / department / experience level) that
+        # the LIST endpoint already returned — folded into a SCORING-ONLY field
+        # so an on-topic but oddly-titled row ("Clinical Partner", function
+        # "Nursing") can earn skill/recall signal WITHOUT the extra per-job
+        # description fetch. Never the JD body (feasibility ignores it) and
+        # stripped before the response reaches the client.
+        row["_meta"] = str(meta).strip()[:400]
+    if exp:
+        # Structured experience-level label from the board ("Entry Level" /
+        # "Mid-Senior Level" / "Director") — a clean seniority signal for rows
+        # with no fetched description. Scoring-only; stripped before response.
+        row["_exp"] = str(exp).strip()[:40]
+    return row
 
 
 # ----------------------------------------------------------------------
@@ -173,7 +196,12 @@ def _fetch_greenhouse(c: Dict[str, str]) -> List[Dict[str, Any]]:
     r.raise_for_status()
     out = []
     for j in (r.json() or {}).get("jobs") or []:
-        date = j.get("first_published") or j.get("updated_at") or ""
+        # first_published ONLY. updated_at is an edit timestamp, not a posting
+        # date: falling back to it re-dated months-old reqs as "new" (and
+        # Greenhouse is over half the catalog, so it was the single biggest
+        # source of fake freshness). No first_published => the date is
+        # UNKNOWN, and an unknown date is correctly dropped downstream.
+        date = j.get("first_published") or ""
         out.append(_row(
             c, j.get("id"), j.get("title") or "", j.get("absolute_url") or "",
             _iso(date), ((j.get("location") or {}).get("name")) or ""))
@@ -240,12 +268,20 @@ def _fetch_smartrecruiters(c: Dict[str, str]) -> List[Dict[str, Any]]:
         for j in content:
             loc = j.get("location") or {}
             city = ", ".join(x for x in [loc.get("city"), loc.get("region")] if x)
+            # SmartRecruiters ships function/department/experience/industry
+            # labels inline (no description in the list response) — keep them.
+            meta = " · ".join(x for x in (
+                (j.get("function") or {}).get("label"),
+                (j.get("department") or {}).get("label"),
+                (j.get("experienceLevel") or {}).get("label"),
+                (j.get("industry") or {}).get("label")) if x)
             out.append(_row(
                 c, j.get("id"), j.get("name") or "",
                 f"https://jobs.smartrecruiters.com/{c['slug']}/{j.get('id')}",
                 _iso(j.get("releasedDate")), city,
                 is_remote=bool(loc.get("remote")) or None,
-                country=str(loc.get("country") or "")))
+                country=str(loc.get("country") or ""), meta=meta,
+                exp=(j.get("experienceLevel") or {}).get("label") or ""))
         offset += len(content)
         if len(content) < 100:
             break
@@ -260,11 +296,16 @@ def _fetch_workable(c: Dict[str, str]) -> List[Dict[str, Any]]:
     out = []
     for j in (r.json() or {}).get("jobs") or []:
         loc = ", ".join(x for x in [j.get("city"), j.get("state")] if x)
+        # Workable ships function/department/experience/industry inline.
+        meta = " · ".join(x for x in (
+            j.get("function"), j.get("department"),
+            j.get("experience"), j.get("industry")) if x)
         out.append(_row(
             c, j.get("shortcode") or j.get("code"), j.get("title") or "",
             j.get("url") or "", _iso(j.get("published_on")), loc,
             is_remote=bool(j.get("telecommuting")) or None,
-            country=str(j.get("country") or "")))
+            country=str(j.get("country") or ""), meta=meta,
+            exp=str(j.get("experience") or "")))
     return out
 
 
@@ -370,7 +411,9 @@ def _fetch_eightfold(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]
             positions = (r.json() or {}).get("positions") or []
         for j in positions:
             locs = j.get("locations") or ([j.get("location")] if j.get("location") else [])
-            posted = j.get("postedTs") or j.get("creationTs") or j.get("t_update") or j.get("t_create")
+            # Posting timestamps only — t_update/t_create are record-edit
+            # times and made stale reqs look freshly posted.
+            posted = j.get("postedTs") or j.get("creationTs")
             url = (j.get("canonicalPositionUrl")
                    or f"https://{host}/careers/job/{j.get('id')}?domain={domain}")
             out.append(_row(
@@ -414,10 +457,114 @@ def _fetch_phenom(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
     return out
 
 
+def _fetch_orc(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
+    """Oracle Recruiting Cloud (ORC) — public CandidateExperience JSON API.
+
+    Config-driven: any company hosting on {host}/hcmRestApi (JPMorgan Chase,
+    Oracle itself, ...). ONE request per company — the `finder` DSL carries
+    the keyword server-side, so no per-term fan-in. Every posting on an ORC
+    host belongs to that company, so no employer filtering is needed.
+    Endpoint verified live 2026-07-17 (jpmc.fa.oraclecloud.com,
+    eeho.fa.us2.oraclecloud.com).
+    """
+    host = c["host"]
+    site = (c.get("extra") or {}).get("site_number") or "CX_1"
+    kw = " ".join(t.strip() for t in terms if t.strip()).strip()
+    finder = f"findReqs;siteNumber={site}"
+    if kw:
+        finder += f",keyword={kw}"
+    finder += ",limit=25,sortBy=POSTING_DATES_DESC"
+    try:
+        r = _SESSION.get(
+            f"https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions",
+            params={"onlyData": "true",
+                    "expand": "requisitionList.secondaryLocations",
+                    "finder": finder},
+            timeout=HEAVY_REQUEST_TIMEOUT)
+        r.raise_for_status()
+        items = (r.json() or {}).get("items") or []
+        if not items:
+            return []
+        out: List[Dict[str, Any]] = []
+        for j in items[0].get("requisitionList") or []:
+            if not isinstance(j, dict):
+                continue
+            desc = " ".join(x for x in [
+                j.get("ShortDescriptionStr") or "",
+                j.get("ExternalQualificationsStr") or "",
+                j.get("ExternalResponsibilitiesStr") or ""] if x)
+            out.append(_row(
+                c, j.get("Id"), j.get("Title") or "",
+                f"https://{host}/hcmUI/CandidateExperience/en/sites/{site}"
+                f"/job/{j.get('Id')}",
+                _iso(j.get("PostedDate")),
+                j.get("PrimaryLocation") or "",
+                description=_html_to_text(desc)[:5000],
+                country=str(j.get("PrimaryLocationCountry") or "")))
+        logger.info("orc: %s returned %d rows (total=%s)",
+                    c.get("slug"), len(out), items[0].get("TotalJobsCount"))
+        return out
+    except Exception as e:
+        logger.warning("orc: %s fetch failed: %s", c.get("slug"), type(e).__name__)
+        return []
+
+
+def _fetch_uber(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
+    """Uber's first-party careers search API (single company, no config).
+
+    POST loadSearchJobsResults with the literal csrf token "x" (accepted
+    anonymously). Endpoint verified live 2026-07-17.
+    """
+    query = " ".join(t.strip() for t in terms if t.strip()).strip()
+    body = {"params": {"query": query, "location": []}, "page": 0, "limit": 25}
+    try:
+        r = _SESSION.post(
+            "https://www.uber.com/api/loadSearchJobsResults?localeCode=en",
+            json=body, headers={"x-csrf-token": "x"},
+            timeout=HEAVY_REQUEST_TIMEOUT)
+        r.raise_for_status()
+        data = (r.json() or {}).get("data") or {}
+        results = data.get("results") or []
+        total = data.get("totalResults")
+        if isinstance(total, dict):   # API returns {"low": N} on some builds
+            total = total.get("low")
+        out: List[Dict[str, Any]] = []
+        for j in results:
+            if not isinstance(j, dict):
+                continue
+            locs = [x for x in (j.get("allLocations") or []) if isinstance(x, dict)]
+            loc0 = locs[0] if locs else (
+                j.get("location") if isinstance(j.get("location"), dict) else {})
+            location = ", ".join(
+                str(x) for x in [loc0.get("city"), loc0.get("region"),
+                                 loc0.get("countryName")] if x)
+            if not location and isinstance(j.get("location"), str):
+                location = j["location"]
+            title = str(j.get("title") or "")
+            desc = _html_to_text(str(j.get("description") or ""))
+            out.append(_row(
+                c, j.get("id"), title,
+                f"https://www.uber.com/global/en/careers/list/{j.get('id')}/",
+                # creationDate only: updatedDate is an edit timestamp.
+                _iso(j.get("creationDate")),
+                location,
+                description=desc[:5000],
+                is_remote=bool(_REMOTE_RE.search(title + " " + desc)) or None,
+                country=str(loc0.get("country") or "")))
+        logger.info("uber: %s returned %d rows (total=%s)",
+                    c.get("slug"), len(out), total)
+        return out
+    except Exception as e:
+        logger.warning("uber: fetch failed: %s", type(e).__name__)
+        return []
+
+
 ENTERPRISE_FETCHERS: Dict[str, Callable[[Dict[str, str], List[str]], List[Dict[str, Any]]]] = {
     "amazon": _fetch_amazon,
     "eightfold": _fetch_eightfold,
     "phenom": _fetch_phenom,
+    "orc": _fetch_orc,
+    "uber": _fetch_uber,
 }
 
 # Hand-maintained (the auto-generated catalog covers board ATSes only).
@@ -456,17 +603,24 @@ ENTERPRISE_CATALOG: List[Dict[str, Any]] = [
 # ----------------------------------------------------------------------
 
 # Board ATSes often print BARE foreign hub cities ("Dublin", "London") with
-# no country — the Workday tiering keeps those because "Dublin, CA" is also
-# a US city. Only applied when the string carries no US signal at all.
+# no country. Checked AFTER the US-positive tier so US namesakes rescued by a
+# state survive ("Dublin, OH", "Paris, TX", "Melbourne, FL"); a bare foreign
+# city with no US signal drops. Word-boundary matched.
 _FOREIGN_CITY_RE = re.compile(
     r"\b(dublin|london|toronto|vancouver|montreal|ottawa|waterloo|singapore|"
     r"bangalore|bengaluru|hyderabad|chennai|pune|mumbai|delhi|noida|gurgaon|"
-    r"amsterdam|berlin|munich|paris|warsaw|krakow|tokyo|osaka|sydney|"
-    r"melbourne|tel aviv|sao paulo|mexico city|lisbon|madrid|barcelona|"
-    r"zurich|stockholm|copenhagen|oslo|helsinki|prague|bucharest|tallinn|"
-    r"athens|milan|rome|brussels|vienna|belgrade|zagreb|seoul|taipei|"
-    r"shanghai|beijing|hong kong|manila|jakarta|kuala lumpur|hanoi|cairo|"
-    r"lagos|nairobi|cape town|johannesburg|buenos aires|santiago|bogota|lima)\b",
+    r"gurugram|kolkata|ahmedabad|kochi|cochin|coimbatore|trivandrum|"
+    r"thiruvananthapuram|indore|nagpur|vadodara|mysore|mysuru|chandigarh|"
+    r"jaipur|bhubaneswar|visakhapatnam|vizag|mississauga|calgary|edinburgh|"
+    r"glasgow|belfast|leeds|manchester|amsterdam|berlin|munich|frankfurt|"
+    r"paris|warsaw|krakow|gdansk|tokyo|osaka|sydney|melbourne|brisbane|"
+    r"tel aviv|sao paulo|mexico city|lisbon|madrid|barcelona|"
+    r"zurich|geneva|stockholm|copenhagen|oslo|helsinki|prague|bucharest|"
+    r"tallinn|athens|milan|rome|brussels|vienna|belgrade|zagreb|seoul|taipei|"
+    r"shanghai|beijing|shenzhen|hong kong|manila|makati|taguig|cebu|jakarta|"
+    r"kuala lumpur|hanoi|ho chi minh|cairo|lagos|nairobi|cape town|"
+    r"johannesburg|buenos aires|santiago|bogota|lima|guadalajara|monterrey|"
+    r"colombo|karachi|lahore|islamabad|budapest|dubai|abu dhabi|riyadh|doha)\b",
     re.IGNORECASE)
 _US_WORD_RE = re.compile(r"united states|\busa\b|\bu\.s\.\b|remote[ -]+us\b",
                          re.IGNORECASE)
@@ -481,12 +635,28 @@ _FOREIGN_COUNTRY_RE = re.compile(
     r"korea|taiwan|argentina|chile|colombia|peru|costa rica|nigeria|kenya|"
     r"south africa|egypt|\buae\b|dubai|new zealand|estonia|latvia|"
     r"lithuania|greece|croatia|serbia|turkey|ukraine|bulgaria|slovakia|"
+    r"singapore|pakistan|bangladesh|sri lanka|qatar|saudi|hong kong|"
     r"latin america|south america|\bemea\b|\bapac\b|\bnsw\b|\bnz\b|\bau\b|"
     r"auckland|wellington|brisbane|perth)\b",
     re.IGNORECASE)
 
 
 def _keep_us(job: Dict[str, Any]) -> bool:
+    """HARD US filter for board rows — same keep/drop contract as
+    ``_geo_keep_us``: keep clearly-US or clearly-remote, DROP everything
+    ambiguous.
+
+    1. Authoritative ``country_hint`` from the ATS payload wins.
+    2. No location text -> keep only if the row is explicitly remote.
+    3. Explicit foreign COUNTRY -> DROP (before the US tier so "Canada -
+       Remote (ON, AB, or NS Only)" cannot be rescued by the "or"->Oregon
+       collision).
+    4. US word or US state (code OR name) -> KEEP (rescues "Dublin, OH",
+       "Paris, TX", "Ontario, California", "Indiana").
+    5. Bare foreign hub CITY -> DROP.
+    6. Clear remote, no foreign marker -> KEEP.
+    7. Else (ambiguous / bare non-foreign city) -> DROP (was: KEEP).
+    """
     hint = job.get("country_hint") or ""
     if hint:
         return hint in _COUNTRY_OK
@@ -497,12 +667,15 @@ def _keep_us(job: Dict[str, Any]) -> bool:
         return bool(job.get("is_remote"))
     if _FOREIGN_COUNTRY_RE.search(loc):
         return False
-    if _US_WORD_RE.search(loc) or _US_STATE_RE.search(loc):
-        return _geo_keep_us(loc)  # US signal present — normal tiering decides
+    if (_US_WORD_RE.search(loc) or _US_STATE_RE.search(loc)
+            or _US_STATE_NAME_RE.search(loc)):
+        return True
     if _FOREIGN_CITY_RE.search(loc):
         return False
-    # No country field — fall back to the Workday location-text tiering.
-    return _geo_keep_us(loc)
+    if _REMOTE_RE.search(loc):
+        return True
+    # Ambiguous (bare US-less city, "N Locations", unknown) -> DROP.
+    return False
 
 
 # ----------------------------------------------------------------------
@@ -519,12 +692,14 @@ _ROLE_NOUN_RE = re.compile(
 
 
 def _keep_relevant(jobs: List[Dict[str, Any]], term_res: List[re.Pattern],
-                   skill_res: List[re.Pattern]) -> List[Dict[str, Any]]:
+                   skill_res: List[re.Pattern],
+                   extra_role_re: Optional[re.Pattern] = None) -> List[Dict[str, Any]]:
     """Keep rows a Workday CXS search WOULD have retrieved, tiered:
       0 - a query term matches the title (best)
-      1 - the title carries an engineering role noun, or the description
-          mentions >=2 distinct resume skills (the differently-titled-but-
-          matching-skills recall path)
+      1 - the title carries a role noun (the built-in engineering net UNION the
+          user's own profession nouns via ``extra_role_re`` — so a nurse also
+          recalls 'Charge Nurse' rows), or the description mentions >=2 distinct
+          resume skills (the differently-titled-but-matching-skills recall path)
     The tier drives the per-company cap so term matches never lose their
     slot to generic engineer rows."""
     out = []
@@ -536,13 +711,15 @@ def _keep_relevant(jobs: List[Dict[str, Any]], term_res: List[re.Pattern],
             j["_tier"] = 0
             out.append(j)
             continue
-        if _ROLE_NOUN_RE.search(title):
+        if _ROLE_NOUN_RE.search(title) or (extra_role_re and extra_role_re.search(title)):
             j["matched_terms"] = []
             j["_tier"] = 1
             out.append(j)
             continue
-        desc = (j.get("description") or "").lower()
-        if desc and sum(1 for rx in skill_res if rx.search(desc)) >= 2:
+        # Include inline board metadata so a description-less row (SmartRecruiters
+        # / Workable) can still be recalled by skills its department/function names.
+        desc = ((j.get("description") or "") + " " + (j.get("_meta") or "")).lower()
+        if desc.strip() and sum(1 for rx in skill_res if rx.search(desc)) >= 2:
             j["matched_terms"] = []
             j["_tier"] = 1
             out.append(j)
@@ -748,6 +925,20 @@ def run_career_pages_search(
     us_only = bool(payload.get("us_only", True))
     force_refresh = bool(payload.get("force_refresh", False))
     user_email = str(payload.get("user_email") or "")
+    # Viewer timezone (recency in the USER's calendar day) + optional tighter
+    # fan-out budget for embedded callers (guest scan). See workday service.
+    tz_offset = _clamp_tz_offset(payload.get("tz_offset_minutes"))
+    try:
+        overall_timeout = min(OVERALL_TIMEOUT, max(30, int(payload.get("overall_timeout") or OVERALL_TIMEOUT)))
+    except (TypeError, ValueError):
+        overall_timeout = OVERALL_TIMEOUT
+    # Detail-enrichment cap for embedded callers (guest scan) — shrink only.
+    try:
+        _enrich_cap = int(payload.get("enrich_top")) if payload.get("enrich_top") else None
+    except (TypeError, ValueError):
+        _enrich_cap = None
+    enrich_top_n = min(DETAIL_ENRICH_TOP, _enrich_cap) if _enrich_cap else DETAIL_ENRICH_TOP
+    enrich_recent_n = min(DETAIL_ENRICH_RECENT, _enrich_cap) if _enrich_cap else DETAIL_ENRICH_RECENT
 
     rows = [
         r for r in list(CAREER_PAGES_CATALOG) + ENTERPRISE_CATALOG
@@ -756,7 +947,21 @@ def run_career_pages_search(
         and (not companies or r["slug"].lower() in companies)
     ]
     skills, resume_years = _load_resume_profile(user_email)
+    # Anonymous callers (guest scan) pass parsed skills/years directly so
+    # scoring quality matches an authed run. Never overrides a real profile.
+    if not user_email:
+        payload_skills = [str(s).strip() for s in (payload.get("resume_skills") or []) if str(s or "").strip()]
+        if payload_skills:
+            skills = payload_skills[:60]
+        try:
+            if payload.get("resume_years") is not None:
+                resume_years = max(0, int(payload["resume_years"]))
+        except (TypeError, ValueError):
+            pass
     title_terms = _derive_query_terms(titles, cap=MAX_QUERY_TERMS)
+    # Widen tier-1 recall to the user's OWN profession (a nurse also keeps
+    # "Charge Nurse"; a SWE is unchanged — this unions with the engineering net).
+    role_noun_re = user_role_noun_re(titles)
     skill_terms = _derive_skill_terms(skills, title_terms,
                                       cap=TOTAL_TERMS_CAP - len(title_terms))
     terms = title_terms + skill_terms
@@ -795,7 +1000,8 @@ def run_career_pages_search(
         def _provisional(j: Dict[str, Any]) -> Tuple[int, List[str]]:
             cached = prov_cache.get(j["job_id"])
             if cached is None:
-                blob = (j["title"] + "\n" + (j.get("description") or "")[:1500]).lower()
+                blob = (j["title"] + "\n" + (j.get("description") or "")[:1500]
+                        + "\n" + (j.get("_meta") or "")).lower()
                 tl = j["title"].lower()
                 tm = any(all(tok in tl for tok in m) for m in matchers)
                 matched = [s for s, rx in stream_rx if rx is not None and rx.search(blob)]
@@ -824,7 +1030,7 @@ def run_career_pages_search(
                                  "tenants_total": companies_total,
                                  "jobs_found": len(rows_snap)},
                     "jobs": [
-                        {k: v for k, v in j.items() if k != "description"}
+                        {k: v for k, v in j.items() if k not in ("description", "_meta", "_exp", "_fam_counts")}
                         for j in rows_snap[:STREAM_TOP]
                     ],
                     "total": len(rows_snap),
@@ -848,7 +1054,7 @@ def run_career_pages_search(
                       if j.get("days_ago") is not None and j["days_ago"] <= WINDOW_DAYS]
             if us_only:
                 jobs_c = [j for j in jobs_c if _keep_us(j)]
-            jobs_c = _keep_relevant(jobs_c, term_res, skill_res)
+            jobs_c = _keep_relevant(jobs_c, term_res, skill_res, role_noun_re)
             jobs_c.sort(key=lambda j: (j.get("_tier", 1), j.get("days_ago") or 0))
             jobs_c = jobs_c[:PER_COMPANY_KEEP]
             for j in jobs_c:
@@ -858,7 +1064,7 @@ def run_career_pages_search(
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
             futures = {pool.submit(_one_company, c): c for c in rows}
             try:
-                for fut in as_completed(futures, timeout=OVERALL_TIMEOUT):
+                for fut in as_completed(futures, timeout=overall_timeout):
                     c = futures[fut]
                     done += 1
                     try:
@@ -886,11 +1092,12 @@ def run_career_pages_search(
         companies_done = companies_total
         companies_with_results = len({j.get("tenant") for j in raw_jobs})
 
-    # Serve path: recompute recency, apply window + remote filters.
+    # Serve path: recompute recency IN THE VIEWER'S TIMEZONE, apply window +
+    # remote filters.
     jobs = []
     for j0 in raw_jobs:
         j = dict(j0)
-        days = _days_ago(j.get("date_posted") or "")
+        days = _days_ago(j.get("date_posted") or "", tz_offset)
         if days is None or days > WINDOW_DAYS:
             continue
         j["days_ago"] = days
@@ -904,7 +1111,7 @@ def run_career_pages_search(
             -(j.get("match_score") or 0),
             j.get("days_ago") if j.get("days_ago") is not None else 99))
 
-    jobs = _score_jobs(jobs, titles, skills, skill_terms)
+    jobs = _score_jobs(jobs, titles, skills, skill_terms, resume_years)
     _rank(jobs)
 
     if partial_cb:
@@ -913,19 +1120,19 @@ def run_career_pages_search(
                 "progress": {"tenants_done": companies_total,
                              "tenants_total": companies_total,
                              "jobs_found": len(jobs), "phase": "details"},
-                "jobs": [{k: v for k, v in j.items() if k != "description"}
+                "jobs": [{k: v for k, v in j.items() if k not in ("description", "_meta", "_exp", "_fam_counts")}
                          for j in jobs[:STREAM_TOP]],
                 "total": len(jobs), "streaming": True,
             })
         except Exception:
             pass
 
-    top = jobs[:DETAIL_ENRICH_TOP] + [
-        j for j in jobs[DETAIL_ENRICH_TOP:]
+    top = jobs[:enrich_top_n] + [
+        j for j in jobs[enrich_top_n:]
         if (j.get("days_ago") if j.get("days_ago") is not None else 99) <= 3
-    ][:DETAIL_ENRICH_RECENT]
+    ][:enrich_recent_n]
     if _enrich_details(top):
-        _score_jobs(top, titles, skills, skill_terms)
+        _score_jobs(top, titles, skills, skill_terms, resume_years)
         _rank(jobs)
         if coll is not None:
             by_id = {j["job_id"]: j for j in top if j.get("description")}
@@ -941,6 +1148,10 @@ def run_career_pages_search(
     _attach_sponsorship(jobs)
     _apply_career_sponsorship(jobs)
     _drain_pools()
+    for j in jobs:  # scoring-only signals — never exposed to the client
+        j.pop("_meta", None)
+        j.pop("_exp", None)
+        j.pop("_fam_counts", None)
 
     window_counts = {"today": 0, "d1": 0, "d3": 0, "d7": 0, "d30": 0}
     for j in jobs:

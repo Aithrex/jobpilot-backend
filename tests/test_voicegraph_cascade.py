@@ -16,7 +16,7 @@ import mongomock
 from utils import db_connect
 
 # Patch the Mongo singleton to an in-memory mock before importing the services.
-_MOCK_DB = mongomock.MongoClient()["portfolio_db"]
+_MOCK_DB = mongomock.MongoClient()["aspirely_db"]
 db_connect.DBConnect.get_db = lambda self=None: _MOCK_DB
 
 from services.voicegraph import store, privacy, consent  # noqa: E402

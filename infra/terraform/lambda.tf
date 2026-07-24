@@ -34,10 +34,17 @@ resource "aws_lambda_function" "service" {
       RESUME_S3_BUCKET   = aws_s3_bucket.resumes.bucket
       FRONTEND_URL       = var.frontend_url
       BACKEND_PUBLIC_URL = var.frontend_url
-      # Transactional + notification email sender (SES). Friendly-from; the
-      # aspirely.me domain must be a verified SES identity for sends to succeed.
+      # Transactional + notification email. EMAIL_PROVIDER selects the transport
+      # (zeptomail | ses); default is ses. We use ZeptoMail (Zoho transactional)
+      # because SES production access was denied — the aspirely.me domain must be
+      # a verified sender in ZeptoMail. From/Reply-To are shared across providers
+      # (email_service falls back to the SES_* names, so these stay authoritative).
+      EMAIL_PROVIDER   = "zeptomail"
       SES_FROM_ADDRESS = "Aspirely <no-reply@aspirely.me>"
       SES_REPLY_TO     = "support@aithrex.tech"
+      # ZeptoMail Send Mail token (SecureString via SSM). Non-US Mail Agents also
+      # need ZEPTOMAIL_API_URL (default is the .com host).
+      SSM_ZEPTOMAIL_TOKEN = "${var.ssm_path_prefix}/zeptomail-token"
       # Expected SNS topic for SES bounce/complaint feedback — the webhook
       # (POST /api/auth/ses-notifications) rejects messages from any other topic.
       SES_SNS_TOPIC_ARN = aws_sns_topic.ses_notifications.arn
@@ -79,6 +86,18 @@ resource "aws_lambda_function" "service" {
       # approve-links (§2), read as a SecureString via SSM_APPROVAL_LINK_SECRET.
       CREDENTIALS_KMS_KEY_ID    = aws_kms_key.credentials.arn
       SSM_APPROVAL_LINK_SECRET  = "${var.ssm_path_prefix}/approval-link-secret"
+
+      # Guest onboarding (no-signup /start flow). ON in prod. Server-side salt
+      # for guest ip_hash via SSM (unset ⇒ hash_ip fails closed, feature still
+      # works). Gate = env flag AND the admin `enabled` knob (default true).
+      GUEST_ONBOARDING_ENABLED = "true"
+      SSM_GUEST_IP_HASH_SALT   = "${var.ssm_path_prefix}/guest-ip-hash-salt"
+      # Guest v2. Both fail closed when unset: without the signal key, identity
+      # signals are neither stored nor matched (quota subjects stay standalone);
+      # without the download secret, guest download tokens cannot be minted
+      # (503, never 401). Rotating the signal key orphans existing HMAC links.
+      SSM_GUEST_SIGNAL_HMAC_KEY      = "${var.ssm_path_prefix}/guest-signal-hmac-key"
+      SSM_GUEST_DOWNLOAD_TOKEN_SECRET = "${var.ssm_path_prefix}/guest-download-token-secret"
     }
   }
 

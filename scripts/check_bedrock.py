@@ -18,16 +18,38 @@ if hasattr(sys.stdout, "reconfigure"):
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "shared" / "python"))
 sys.path.insert(0, str(ROOT))
-try:
-    from dotenv import load_dotenv
-    load_dotenv(ROOT / ".env")
-except ImportError:
-    pass
 
 import os
 
+# Diagnose the .env → environment handoff explicitly. load_dotenv does NOT
+# override variables already set in the shell, so a stale AWS_PROFILE in the
+# terminal silently wins over the project's .env — make that visible.
+_PROFILE_BEFORE = os.getenv("AWS_PROFILE")
+_DOTENV_LOADED = False
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+    _DOTENV_LOADED = True
+except ImportError:
+    pass
+
 
 def main():
+    print(f"Python: {sys.executable}")
+    if not _DOTENV_LOADED:
+        print(
+            "❌ python-dotenv is NOT installed in this interpreter — the project "
+            ".env was NOT loaded. Fix: pip install python-dotenv"
+        )
+    profile_now = os.getenv("AWS_PROFILE")
+    print(f".env loaded: {_DOTENV_LOADED} | AWS_PROFILE before .env: {_PROFILE_BEFORE!r} | in effect: {profile_now!r}")
+    if _PROFILE_BEFORE and _DOTENV_LOADED:
+        print(
+            f"⚠️  Your SHELL already had AWS_PROFILE={_PROFILE_BEFORE!r} set — .env "
+            "cannot override it. Clear it (PowerShell: Remove-Item Env:AWS_PROFILE) "
+            "or open a fresh terminal."
+        )
+
     region = os.getenv("BEDROCK_REGION") or os.getenv("AWS_REGION") or "us-east-1"
     has_key = bool(os.getenv("AWS_ACCESS_KEY_ID"))
     print(f"Region: {region} | AWS_ACCESS_KEY_ID set: {has_key}")
@@ -49,20 +71,27 @@ def main():
         from services.claude_client import claude_json, CLAUDE_FLASH, CLAUDE_PRO
         print(f"FLASH model: {CLAUDE_FLASH}")
         print(f"PRO   model: {CLAUDE_PRO}")
-        print("Calling FLASH with a tiny prompt…")
-        res = claude_json(
-            prompt='Return strict JSON: {"ok": true, "where": "bedrock"}',
-            model=CLAUDE_FLASH,
-            max_tokens=64,
-            temperature=0.0,
-            max_retries=1,
-            schema={"ok": bool, "where": str},
-        )
-        print("Reply:", res)
-        if res and res.get("ok") is True:
-            print("\n✅ Bedrock/Claude is working. AI features are live.")
-            return 0
-        print("\n⚠️  Got a response but not the expected shape — model access likely OK, check output above.")
+        # Model access is granted PER MODEL — the tailor pipeline needs both
+        # tiers (FLASH for extraction/verification, PRO for tailoring/JD).
+        ok = True
+        for label, model in (("FLASH", CLAUDE_FLASH), ("PRO", CLAUDE_PRO)):
+            print(f"Calling {label} with a tiny prompt…")
+            res = claude_json(
+                prompt='Return strict JSON: {"ok": true, "where": "bedrock"}',
+                model=model,
+                max_tokens=64,
+                temperature=0.0,
+                max_retries=1,
+                schema={"ok": bool, "where": str},
+            )
+            print(f"{label} reply:", res)
+            if not (res and str(res.get("ok")).lower() == "true"):
+                ok = False
+                print(f"⚠️  {label} responded but not with the expected shape.")
+        if ok:
+            print("\n✅ Bedrock/Claude is working on BOTH tiers. AI features are live.")
+        else:
+            print("\n⚠️  Got responses — model access is OK; check the shapes above.")
         return 0
     except Exception as e:
         msg = str(e)

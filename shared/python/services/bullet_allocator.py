@@ -59,9 +59,16 @@ Candidate = Dict[str, Any]
 Scorer = Callable[[Candidate, Dict[str, Any]], float]
 
 # --- Guardrail constants -------------------------------------------------
-_FLOOR_PER_ENTRY = 2          # min bullets kept per role / project (if supplied)
-_RECENCY_BONUS = 0.25         # tie-break weight nudging the most-recent role up
-_EXPERIENCE_PRIORITY = 1.0    # experience outranks projects when scores tie
+_FLOOR_PER_ENTRY = 2          # min bullets kept per role (if supplied)
+_FLOOR_RECENT_ROLE = 3        # the most-recent role is what recruiters read
+                              # first — it never renders thinner than this
+_RECENCY_BONUS = 0.5          # graded: /(entry_idx+1), so newest roles run
+                              # deeper (5-6 / 3-4 / 2) instead of flat counts
+_EXPERIENCE_PRIORITY = 2.5    # experience strongly outranks projects: generated
+                              # project bullets are keyword-dense BY CONSTRUCTION,
+                              # so a mild bias let them evict real experience
+                              # bullets in the greedy fill — a project bullet now
+                              # wins only when it is dramatically more JD-relevant
 # Hard ceilings matching what the model is asked to emit — defensive only.
 _MAX_EXP_BULLETS = 6
 _MAX_PROJ_BULLETS = 5
@@ -152,8 +159,10 @@ def _default_scorer(cand: Candidate, ctx: Dict[str, Any]) -> float:
     )
     if cand["section"] == "experience":
         score += _EXPERIENCE_PRIORITY
-        if cand["entry_idx"] == 0:       # most-recent role
-            score += _RECENCY_BONUS
+        # Graded recency: newest role gets the full bonus, each older role
+        # half as much — recruiters anchor on the top of the experience
+        # section, so depth should decay with age, not flatten.
+        score += _RECENCY_BONUS / (cand["entry_idx"] + 1)
     return score
 
 
@@ -216,6 +225,7 @@ def allocate_bullets(
     *,
     jd_analysis: Optional[Dict[str, Any]] = None,
     scorer: Optional[Scorer] = None,
+    max_pages: int = 1,
 ) -> Dict[str, Any]:
     """Select the page-fitting subset of model-proposed bullets by relevance.
 
@@ -239,7 +249,12 @@ def allocate_bullets(
     if not candidates:
         return tailored
 
-    avail = renderer._AVAIL_H
+    # Budget = one usable page by default; two pages when the caller opts into
+    # two-page rendering (Phase 5), so the allocator keeps the bullets a senior
+    # resume needs instead of evicting them to fit one page.
+    avail = renderer._AVAIL_H * max(1, max_pages)
+    # The measurement yardstick (_measure) renders at the densest 10pt tier for a
+    # SINGLE page; scale its result comparison by using the multi-page budget.
 
     # Group candidates by entry. Within an entry, order by relevance SCORE (not
     # the raw model rank) so the floor keeps each entry's most JD-relevant
@@ -256,11 +271,14 @@ def allocate_bullets(
     selected: Dict[Tuple[str, int], List[str]] = {}
     remaining: List[Candidate] = []
     for key, lst in by_entry.items():
-        section, _idx = key
+        section, idx = key
         if section == "experience":
-            floor = lst[:_FLOOR_PER_ENTRY]
+            # The most-recent role gets a deeper floor — it's the first
+            # (often only) thing a recruiter reads in the 7-second scan.
+            floor_n = _FLOOR_RECENT_ROLE if idx == 0 else _FLOOR_PER_ENTRY
+            floor = lst[:floor_n]
             selected[key] = [c["text"] for c in floor]
-            remaining.extend(lst[_FLOOR_PER_ENTRY:])
+            remaining.extend(lst[floor_n:])
         else:
             selected[key] = []           # no project floor
             remaining.extend(lst)        # every project bullet competes

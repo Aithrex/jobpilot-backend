@@ -430,3 +430,105 @@ def resolved_site_map() -> Dict[Tuple[str, str], str]:
     """Snapshot of the (tenant, host) → working site cache (for diagnostics)."""
     with _RESOLVED_LOCK:
         return dict(_RESOLVED_SITES)
+
+
+# ---------------------------------------------------------------------------
+# Job DETAIL enrichment (Resume Platform v3, matching spec 3.1)
+# ---------------------------------------------------------------------------
+# The list endpoint used above returns NO description, which starves the
+# deterministic scorer (title-only scoring). The CXS detail endpoint
+#   GET https://{tenant}.{host}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/{path}
+# returns {"jobPostingInfo": {"jobDescription": "<html>"}} for the same
+# postings. fetch_job_details resolves apply URLs (the exact shape this
+# module minted: {base}/en-US/{site}/{externalPath}) back to detail URLs and
+# fetches them in parallel, best effort, hard-bounded.
+
+_APPLY_URL_RE = re.compile(
+    r"^https://([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com/(?:en-US/)?([^/]+)/(job/.+)$",
+    re.IGNORECASE,
+)
+
+_DETAIL_TAG_RE = re.compile(r"<[^>]+>")
+_DETAIL_BLOCK_RE = re.compile(
+    r"</?(?:p|br|div|li|ul|ol|h[1-6]|tr|td|hr)\b[^>]*>", re.IGNORECASE
+)
+
+
+def _detail_html_to_text(html: str) -> str:
+    """Small dependency-free HTML → text for jobDescription payloads."""
+    if not html:
+        return ""
+    s = _DETAIL_BLOCK_RE.sub("\n", str(html))
+    s = _DETAIL_TAG_RE.sub("", s)
+    for ent, ch in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+                    ("&quot;", '"'), ("&#39;", "'"), ("&nbsp;", " ")):
+        s = s.replace(ent, ch)
+    s = re.sub(r"[ \t]+", " ", s)
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+
+def _fetch_one_detail(
+    apply_url: str, tenant: str, host: str, site: str, path: str, timeout: float
+) -> Tuple[str, str]:
+    url = f"https://{tenant}.{host}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/{path}"
+    try:
+        resp = requests.get(url, headers=_HEADERS, timeout=timeout)
+        if not resp.ok:
+            return apply_url, ""
+        data = resp.json()
+    except (requests.RequestException, ValueError):
+        return apply_url, ""
+    if not isinstance(data, dict):
+        return apply_url, ""
+    info = data.get("jobPostingInfo") or {}
+    if not isinstance(info, dict):
+        return apply_url, ""
+    return apply_url, _detail_html_to_text(str(info.get("jobDescription") or ""))[:15000]
+
+
+def fetch_job_details(
+    apply_urls: Sequence[str],
+    per_request_timeout: float = 6,
+    overall_budget: float = 12,
+    max_workers: int = 8,
+) -> Dict[str, str]:
+    """Fetch plain-text job descriptions for Workday CXS apply URLs.
+
+    Returns {apply_url: description} for every URL that resolved; URLs that
+    fail, time out, or don't match the CXS apply-URL shape are simply absent
+    (best effort — enrichment must never break matching). Parallel with a
+    per-request timeout and an overall wall-clock budget.
+    """
+    targets: List[Tuple[str, str, str, str, str]] = []
+    for u in apply_urls or []:
+        m = _APPLY_URL_RE.match(str(u or "").strip())
+        if m:
+            targets.append((str(u), m.group(1).lower(), m.group(2).lower(),
+                            m.group(3), m.group(4)))
+    if not targets or overall_budget <= 0:
+        return {}
+    out: Dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(targets)))) as pool:
+        futures = [
+            pool.submit(_fetch_one_detail, u, tenant, host, site, path,
+                        per_request_timeout)
+            for u, tenant, host, site, path in targets
+        ]
+        try:
+            for fut in as_completed(futures, timeout=overall_budget):
+                try:
+                    url, text = fut.result(timeout=per_request_timeout)
+                except Exception:
+                    continue
+                if text:
+                    out[url] = text
+        except TimeoutError:
+            for f in futures:
+                if not f.done():
+                    f.cancel()
+            logger.info(
+                "[workday-detail] overall budget hit; %d/%d details fetched",
+                len(out), len(targets),
+            )
+    return out

@@ -77,7 +77,9 @@ def create_app():
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['X-XSS-Protection'] = '0'
         response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-        if request.path.startswith('/api/'):
+        # /api/jobs/logo/* is a public immutable asset — the route sets its
+        # own long-lived Cache-Control; everything else stays no-store.
+        if request.path.startswith('/api/') and not request.path.startswith('/api/jobs/logo/'):
             response.headers['Cache-Control'] = 'no-store'
         return response
 
@@ -105,6 +107,8 @@ def create_app():
     app.register_blueprint(voice_graph_bp, url_prefix='/api/resume/voice-graph')
     from blueprints.sprint_hub import sprint_hub_bp
     app.register_blueprint(sprint_hub_bp, url_prefix='/api/resume/hub')
+    from blueprints.guest import guest_bp
+    app.register_blueprint(guest_bp, url_prefix='/api/resume/guest')
 
     # billing service
     from blueprints.billing import billing_bp

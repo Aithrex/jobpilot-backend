@@ -16,9 +16,9 @@ User-specific endpoints with S3 storage:
   7. GET  /status       → check active base resume for user
   8. GET  /versions     → list base resume versions
   9. GET  /generated    → list generated/tailored resumes
- 10. PUT  /active       → set active base resume
- 11. GET  /download-file/<s3_key> → download resume from S3
- 12. DELETE /file/<s3_key>        → delete resume from S3
+ 10. PUT  /active       → set active resume ({resume_id}, Resume Platform v3)
+ 11. GET  /download-file/<s3_key> → download resume from S3 (legacy keys)
+ 12. DELETE /file/<resume_id>     → delete a resume asset (S3 + doc + re-point)
 """
 
 import io
@@ -32,11 +32,10 @@ from utils.security import InputSanitizer, get_rate_limiter, get_client_ip
 from utils.db_connect import DBConnect
 from utils.datadog_metrics import dd_metric
 from services.s3_service import get_storage_service
-from services.usage_service import (
-    check_and_increment as _quota_check_and_increment,
-    check_quota as _quota_check,
-    get_usage as _get_usage,
-)
+from services.usage_service import get_usage as _get_usage
+# Atomic tailor quota (Resume Platform v3, spec 1.6): routes RESERVE before
+# dispatch; the worker settles completed, terminal failures refund.
+from services import quota_ledger_service as _quota_ledger
 
 
 def _quota_exceeded_response(usage: dict):
@@ -57,6 +56,8 @@ def _quota_exceeded_response(usage: dict):
         429,
     )
 from services.resume_versioning import (
+    MAX_VERSIONS_PER_RECORD,
+    VersionLimitError,
     canonical_content_hash,
     ensure_versions,
     find_version,
@@ -64,6 +65,14 @@ from services.resume_versioning import (
     append_version,
     serialize_record,
 )
+
+
+def _version_limit_response():
+    """Uniform 409 for the bounded-refinement cap (spec 1.5)."""
+    return (
+        jsonify({"error": "version_limit_reached", "limit": MAX_VERSIONS_PER_RECORD}),
+        409,
+    )
 
 resume_bp = Blueprint("resume", __name__)
 logger = logging.getLogger(__name__)
@@ -135,16 +144,30 @@ def tailor():
 
     try:
         user_email = get_jwt_identity()
-        allowed, usage = _quota_check_and_increment(user_email, 1)
+        # Atomic RESERVE before dispatch (spec 1.6) — no check-then-increment.
+        allowed, entry_ids, usage = _quota_ledger.reserve_tailor(
+            user_email,
+            idempotency_key=(data.get("idempotency_key") or None),
+        )
         if not allowed:
             return _quota_exceeded_response(usage)
 
         from services.resume_service import get_resume_service, ResumeService
 
         svc = get_resume_service()
-        payload = {"jd_analysis": jd_analysis, "user_email": user_email}
-        job_id = svc.create_job("tailor", payload, user_email=user_email)
-        ResumeService.invoke_async(job_id, "tailor", payload)
+        payload = {
+            "jd_analysis": jd_analysis,
+            "user_email": user_email,
+            "quota_entry_id": entry_ids[0],
+        }
+        try:
+            job_id = svc.create_job("tailor", payload, user_email=user_email)
+            _quota_ledger.attach_job(entry_ids[0], job_id)
+            ResumeService.invoke_async(job_id, "tailor", payload)
+        except Exception:
+            # Dispatch never happened — give the slot back before the 500.
+            _quota_ledger.refund_entry(entry_ids[0])
+            raise
         return jsonify({"job_id": job_id, "usage": usage}), 202
 
     except Exception as e:
@@ -183,16 +206,29 @@ def tailor_with_jd():
 
     try:
         user_email = get_jwt_identity()
-        allowed, usage = _quota_check_and_increment(user_email, 1)
+        # Atomic RESERVE before dispatch (spec 1.6) — no check-then-increment.
+        allowed, entry_ids, usage = _quota_ledger.reserve_tailor(
+            user_email,
+            idempotency_key=(data.get("idempotency_key") or None),
+        )
         if not allowed:
             return _quota_exceeded_response(usage)
 
         from services.resume_service import get_resume_service, ResumeService
 
         svc = get_resume_service()
-        payload = {"job_description": jd_text, "user_email": user_email}
-        job_id = svc.create_job("extract_and_tailor", payload, user_email=user_email)
-        ResumeService.invoke_async(job_id, "extract_and_tailor", payload)
+        payload = {
+            "job_description": jd_text,
+            "user_email": user_email,
+            "quota_entry_id": entry_ids[0],
+        }
+        try:
+            job_id = svc.create_job("extract_and_tailor", payload, user_email=user_email)
+            _quota_ledger.attach_job(entry_ids[0], job_id)
+            ResumeService.invoke_async(job_id, "extract_and_tailor", payload)
+        except Exception:
+            _quota_ledger.refund_entry(entry_ids[0])
+            raise
         return jsonify({"job_id": job_id, "usage": usage}), 202
 
     except Exception as e:
@@ -230,6 +266,22 @@ def regenerate():
 
     try:
         user_email = get_jwt_identity()
+
+        # Refinement policy (spec 1.5/1.6): regenerating WITHIN a record does
+        # NOT consume tailor quota — only NEW sessions reserve. The bounded
+        # version cap is enforced up front when the client names its record,
+        # so we never spend an LLM call whose result can't be saved.
+        record_id = InputSanitizer.sanitize_string(
+            str(data.get("record_id") or ""), max_length=64
+        )
+        if record_id:
+            rec = DBConnect().get_db().tailoring_records.find_one(
+                {"record_id": record_id, "user_email": user_email},
+                {"versions": 1},
+            )
+            if rec and len(rec.get("versions") or []) >= MAX_VERSIONS_PER_RECORD:
+                return _version_limit_response()
+
         from services.resume_service import get_resume_service, ResumeService
 
         svc = get_resume_service()
@@ -619,7 +671,23 @@ def batch_tailor():
 
     try:
         user_email = get_jwt_identity()
-        allowed, usage = _quota_check_and_increment(user_email, len(jd_list))
+
+        # Plan gate FIRST (spec 1.6): batch tailoring is a paid capability —
+        # free plans get the standard 403 upgrade_required shape.
+        from services import entitlements_service
+        if not entitlements_service.feature_allowed(user_email, "batch_tailor"):
+            return jsonify({
+                "error": "upgrade_required",
+                "feature": "batch_tailor",
+                "plan": entitlements_service.get_plan(user_email),
+                "required_plans": entitlements_service.required_plans_for("batch_tailor"),
+                "message": "This feature requires an upgraded plan.",
+            }), 403
+
+        # Atomic all-or-nothing RESERVE of n slots (spec 1.6).
+        allowed, entry_ids, usage = _quota_ledger.reserve_tailor(
+            user_email, n=len(jd_list)
+        )
         if not allowed:
             # Tell the user exactly how many would fit if they trimmed the batch.
             usage_msg = usage.copy()
@@ -631,21 +699,31 @@ def batch_tailor():
         svc = get_resume_service()
 
         jobs = []
-        for jd in jd_list:
-            # Each JD goes through: extract_jd → tailor (handled by batch_tailor_item job type)
-            payload = {
-                "jd_text": jd["text"].strip()[:15000],
-                "jd_title": jd.get("title", "").strip(),
-                "user_email": user_email,
-                # source_job_id ties the batch result back to a saved_jobs row
-                # when the batch was launched from the Daily Pipeline handoff.
-                # Without this the tailored result never updates the kanban
-                # nor increments the streak — it just lives in the jobs table.
-                "source_job_id": (jd.get("source_job_id") or "").strip() or None,
-            }
-            job_id = svc.create_job("batch_tailor_item", payload, user_email=user_email)
-            ResumeService.invoke_async(job_id, "batch_tailor_item", payload)
-            jobs.append({"job_id": job_id, "title": jd.get("title", "")})
+        dispatched = 0
+        try:
+            for jd, entry_id in zip(jd_list, entry_ids):
+                # Each JD goes through: extract_jd → tailor (handled by batch_tailor_item job type)
+                payload = {
+                    "jd_text": jd["text"].strip()[:15000],
+                    "jd_title": jd.get("title", "").strip(),
+                    "user_email": user_email,
+                    "quota_entry_id": entry_id,
+                    # source_job_id ties the batch result back to a saved_jobs row
+                    # when the batch was launched from the Daily Pipeline handoff.
+                    # Without this the tailored result never updates the kanban
+                    # nor increments the streak — it just lives in the jobs table.
+                    "source_job_id": (jd.get("source_job_id") or "").strip() or None,
+                }
+                job_id = svc.create_job("batch_tailor_item", payload, user_email=user_email)
+                _quota_ledger.attach_job(entry_id, job_id)
+                ResumeService.invoke_async(job_id, "batch_tailor_item", payload)
+                dispatched += 1
+                jobs.append({"job_id": job_id, "title": jd.get("title", "")})
+        except Exception:
+            # Refund every slot whose item never dispatched (dispatched items
+            # settle their own entries via complete_job/fail_job).
+            _quota_ledger.refund_entries(entry_ids[dispatched:])
+            raise
 
         return jsonify({"jobs": jobs, "usage": usage}), 202
 
@@ -831,14 +909,18 @@ def save_version(record_id):
             return jsonify({"error": "Record not found"}), 404
 
         versions, _ = ensure_versions(record)
-        version, created = append_version(
-            versions,
-            tailored_resume,
-            source=source,
-            parent_version_id=parent_version_id,
-            ats_scores=ats_scores,
-            user_feedback=user_feedback,
-        )
+        try:
+            version, created = append_version(
+                versions,
+                tailored_resume,
+                source=source,
+                parent_version_id=parent_version_id,
+                ats_scores=ats_scores,
+                user_feedback=user_feedback,
+            )
+        except VersionLimitError:
+            # Bounded refinement (spec 1.5): the 6th distinct version is refused.
+            return _version_limit_response()
         update = {
             "$set": {
                 "versions": versions,
@@ -895,20 +977,71 @@ def set_current_version(record_id):
 
 
 # ------------------------------------------------------------------
-# DELETE /api/resume/tailoring-records/<record_id> — Soft-delete a record
+# DELETE /api/resume/tailoring-records/<record_id> — Delete a record
 # ------------------------------------------------------------------
 @resume_bp.route("/tailoring-records/<record_id>", methods=["DELETE"])
 @jwt_required()
 def delete_tailoring_record(record_id):
+    """Delete a tailoring record AND its rendered files (spec section 2).
+
+    Every versions[].files[fmt].s3_key is deleted from S3 first, per-object
+    results inspected. Any S3 failure marks the record `deletion_pending`
+    (for the retention sweep) and returns 502 WITHOUT deleting the Mongo doc
+    — the stored refs are the only path back to the orphaned objects. Only a
+    fully clean S3 pass deletes the doc.
+    """
     user_email = get_jwt_identity()
     try:
         db = DBConnect().get_db()
-        result = db.tailoring_records.delete_one(
+        record = db.tailoring_records.find_one(
+            {"record_id": record_id, "user_email": user_email},
+            {"versions": 1},
+        )
+        if not record:
+            return jsonify({"error": "Record not found"}), 404
+
+        s3_keys = []
+        for version in record.get("versions") or []:
+            for f in (version.get("files") or {}).values():
+                if isinstance(f, dict) and f.get("s3_key"):
+                    s3_keys.append(f["s3_key"])
+
+        failed = 0
+        if s3_keys:
+            # Late import so the storage seam resolves at call time
+            # (test/monkeypatch friendly — mirrors DELETE /file/<resume_id>).
+            from services.s3_service import get_storage_service as _get_storage
+
+            storage = _get_storage()
+            for key in s3_keys:
+                try:
+                    storage.delete_resume(key)
+                except Exception as e:
+                    failed += 1
+                    logger.warning(
+                        "Record delete: S3 delete failed for record %s: %s",
+                        record_id, type(e).__name__,
+                    )
+
+        if failed:
+            db.tailoring_records.update_one(
+                {"record_id": record_id, "user_email": user_email},
+                {"$set": {"deletion_pending": True, "updated_at": datetime.utcnow()}},
+            )
+            return jsonify({
+                "error": "deletion_pending",
+                "message": (
+                    "Some generated files could not be removed yet. The record "
+                    "is queued for cleanup and will be deleted automatically."
+                ),
+                "files_deleted": len(s3_keys) - failed,
+                "files_pending": failed,
+            }), 502
+
+        db.tailoring_records.delete_one(
             {"record_id": record_id, "user_email": user_email}
         )
-        if not result.deleted_count:
-            return jsonify({"error": "Record not found"}), 404
-        return jsonify({"message": "Record deleted"}), 200
+        return jsonify({"message": "Record deleted", "files_deleted": len(s3_keys)}), 200
     except Exception as e:
         logger.exception("Delete tailoring record error: %s", e)
         return jsonify({"error": "Failed to delete record"}), 500
@@ -1657,22 +1790,53 @@ def mock_evaluate(record_id):
 # ------------------------------------------------------------------
 
 
+def _record_streak_once(col, record, user_email, tz=None):
+    """Fire the daily streak exactly once per record (guarded by the
+    `streak_recorded` flag). Worker-persisted records (spec 1.5) get their
+    streak when the client first checks in via /save-record."""
+    if record.get("streak_recorded"):
+        return
+    claimed = col.update_one(
+        {
+            "record_id": record.get("record_id"),
+            "user_email": user_email,
+            "streak_recorded": {"$ne": True},
+        },
+        {"$set": {"streak_recorded": True}},
+    )
+    if not claimed.modified_count:
+        return
+    try:
+        from services.streak_service import record_application
+        record_application(user_email, tz=tz)
+    except Exception as streak_err:
+        logger.warning(f"Streak update failed for {user_email}: {streak_err}")
+
+
 @resume_bp.route("/save-record", methods=["POST"])
 @jwt_required()
 def save_record():
-    """Store a complete tailoring session record for admin analytics.
-    Called automatically by the frontend after tailoring completes,
-    and updated again after ATS scoring (if performed)."""
+    """Store / settle a tailoring session record.
+
+    Resume Platform v3 (spec 1.5): the tailor workers persist the canonical
+    record themselves and return `record_id` in the job result — this route
+    is now idempotent-by-record_id (upsert): with a record_id it attaches
+    ats_scores + fires the once-per-record streak, NEVER creating a
+    duplicate; without one it dedups by initial content hash before falling
+    back to the legacy create path."""
     user_email = get_jwt_identity()
     data = request.get_json(force=True) or {}
 
-    record_id = data.get("record_id")  # None on first save, provided for ATS update
+    record_id = InputSanitizer.sanitize_string(
+        str(data.get("record_id") or ""), max_length=64
+    ) or None
     jd_text = data.get("jd_text", "")
     jd_analysis = data.get("jd_analysis")
     tailored_resume = data.get("tailored_resume")
     ats_scores = data.get("ats_scores")
     base_resume_filename = data.get("base_resume_filename", "")
     base_resume_s3_key = data.get("base_resume_s3_key", "")
+    user_tz = data.get("tz") or request.args.get("tz") or None
 
     if not record_id and (not jd_analysis or not tailored_resume):
         return jsonify({"error": "jd_analysis and tailored_resume are required"}), 400
@@ -1681,12 +1845,24 @@ def save_record():
         db = DBConnect().get_db()
         col = db.tailoring_records
 
+        existing = None
         if record_id:
-            # Update existing record — attach ATS scores to the current version
-            # and mirror them at the top level for legacy list queries.
             existing = col.find_one({"record_id": record_id, "user_email": user_email})
-            if not existing:
+            if not existing and (not jd_analysis or not tailored_resume):
                 return jsonify({"error": "Record not found"}), 404
+        elif tailored_resume:
+            # Worker-saved dedup: an identical initial version already exists
+            # (the FE didn't echo the record_id back) — settle onto it instead
+            # of creating a duplicate record.
+            content_hash = canonical_content_hash(tailored_resume)
+            existing = col.find_one(
+                {"user_email": user_email, "versions.content_hash": content_hash}
+            )
+
+        if existing:
+            # Idempotent settle — attach ATS scores to the current version
+            # and mirror them at the top level for legacy list queries.
+            rid = existing["record_id"]
             versions, _ = ensure_versions(existing)
             current_id = existing.get("current_version_id") or (
                 latest_version(versions) or {}
@@ -1696,25 +1872,27 @@ def save_record():
                     if ats_scores:
                         v["ats_scores"] = ats_scores
                     break
+            update_set = {
+                "versions": versions,
+                "current_version_id": current_id,
+                "updated_at": datetime.utcnow(),
+            }
+            if ats_scores:
+                update_set["ats_scores"] = ats_scores
+                update_set["ats_scored_at"] = datetime.utcnow()
             col.update_one(
-                {"record_id": record_id, "user_email": user_email},
-                {
-                    "$set": {
-                        "versions": versions,
-                        "current_version_id": current_id,
-                        "ats_scores": ats_scores,
-                        "ats_scored_at": datetime.utcnow(),
-                        "updated_at": datetime.utcnow(),
-                    }
-                },
+                {"record_id": rid, "user_email": user_email},
+                {"$set": update_set},
             )
-            return jsonify({"record_id": record_id, "updated": True}), 200
+            _record_streak_once(col, existing, user_email, tz=user_tz)
+            return jsonify({"record_id": rid, "updated": True}), 200
 
-        # Create new record with an initial version
+        # Create (legacy clients / upsert of a missing record_id) with an
+        # initial version.
         import uuid as _uuid
         from services.resume_versioning import build_initial_version
 
-        rid = str(_uuid.uuid4())
+        rid = record_id or str(_uuid.uuid4())
         initial = build_initial_version(
             tailored_resume, source="initial", ats_scores=ats_scores
         )
@@ -1729,6 +1907,7 @@ def save_record():
             "ats_scores": ats_scores,
             "versions": [initial],
             "current_version_id": initial["version_id"],
+            "streak_recorded": True,
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow(),
             "ats_scored_at": datetime.utcnow() if ats_scores else None,
@@ -1738,7 +1917,6 @@ def save_record():
 
         try:
             from services.streak_service import record_application
-            user_tz = data.get("tz") or request.args.get("tz") or None
             record_application(user_email, tz=user_tz)
         except Exception as streak_err:
             logger.warning(f"Streak update failed for {user_email}: {streak_err}")
@@ -2096,12 +2274,18 @@ def download():
             # a new version (source='edited') so nothing is lost.
             if target is None or target.get("content_hash") != content_hash:
                 if auto_save_on_edit:
-                    target, _ = append_version(
-                        versions,
-                        tailored,
-                        source=source if source in ("regenerated", "edited") else "edited",
-                        parent_version_id=target.get("version_id") if target else None,
-                    )
+                    try:
+                        target, _ = append_version(
+                            versions,
+                            tailored,
+                            source=source if source in ("regenerated", "edited") else "edited",
+                            parent_version_id=target.get("version_id") if target else None,
+                        )
+                    except VersionLimitError:
+                        # Bounded refinement (spec 1.5): edited content past
+                        # the cap can't be saved — refuse rather than render
+                        # an untracked variant.
+                        return _version_limit_response()
 
             # Cache hit? Serve from S3, no new row, no re-render.
             # The render_version guard ensures a format change in the renderer
@@ -2135,15 +2319,23 @@ def download():
             if not file_bytes or len(file_bytes) < 100:
                 return jsonify({"error": "Failed to generate document"}), 500
 
+            # NEW renders land under the v3 key scheme (spec section 2):
+            # tailoring/{record_id}/{version_id}/{render_version}.{fmt} —
+            # no user id, job title, or timestamp in the key. Old keys stay
+            # resolvable through the stored file refs.
             s3_key = None
             try:
-                user = db.users.find_one({"email": user_email})
-                if user:
-                    user_id = str(user["_id"])
-                    job_title = (jd_analysis or {}).get("job_title") or data.get("job_title", "untitled")
-                    s3_key = storage.upload_generated_resume(user_id, file_bytes, job_title, fmt)
+                s3_key = storage.upload_tailoring_file(
+                    record_id,
+                    target.get("version_id") or "v0",
+                    svc.renderer.RENDER_VERSION,
+                    file_bytes,
+                    fmt,
+                )
             except Exception as s3_err:
-                logger.warning(f"Failed to upload generated resume to S3: {s3_err}")
+                logger.warning(
+                    "Failed to upload tailoring file to S3: %s", type(s3_err).__name__
+                )
 
             # Attach file cache to the target version atomically.
             target.setdefault("files", {})
@@ -2197,6 +2389,9 @@ def download():
 # ------------------------------------------------------------------
 
 
+_MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
+
 @resume_bp.route("/upload", methods=["POST"])
 @jwt_required()
 def upload():
@@ -2205,6 +2400,11 @@ def upload():
     limiter = get_rate_limiter()
     if limiter.is_rate_limited(f"resume_upload:{client_ip}", max_requests=5, window_seconds=3600):
         return jsonify({"error": "Rate limit exceeded. Max 5 uploads per hour."}), 429
+
+    # Size gate BEFORE reading the body into memory, then a bounded read —
+    # mirrors the guest onboarding pattern (spec section 4).
+    if request.content_length and request.content_length > _MAX_UPLOAD_BYTES + 16 * 1024:
+        return jsonify({"error": "File too large (max 5 MB)"}), 400
 
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
@@ -2215,8 +2415,8 @@ def upload():
     ):
         return jsonify({"error": "Only PDF and DOCX files are accepted"}), 400
 
-    file_bytes = file.read()
-    if len(file_bytes) > 5 * 1024 * 1024:
+    file_bytes = file.read(_MAX_UPLOAD_BYTES + 1)
+    if len(file_bytes) > _MAX_UPLOAD_BYTES:
         return jsonify({"error": "File too large (max 5 MB)"}), 400
 
     is_pdf = file.filename.lower().endswith(".pdf")
@@ -2226,13 +2426,21 @@ def upload():
     original_filename = file.filename
 
     try:
+        import base64
         import hashlib
+        import os
 
+        from services import resume_access
         from services.resume_service import get_resume_service, ResumeService
         from services.resume_parser import ResumeParser
 
-        # Validate file structure (lightweight, no text extraction)
+        # Validate file structure (lightweight magic-byte checks).
         ResumeParser.validate_file(file_bytes, original_filename)
+        # DOCX zip-bomb guard BEFORE anything opens the archive (spec §4).
+        if original_filename.lower().endswith(".docx"):
+            from utils.zip_guard import guard_zip_archive
+
+            guard_zip_archive(file_bytes)
 
         # Content hash — used to skip LLM re-parse when the same file is
         # uploaded twice. Per-user (a user re-uploading the exact same bytes
@@ -2242,95 +2450,115 @@ def upload():
         db = DBConnect().get_db()
         svc = get_resume_service()
 
-        # Cache hit: same file already uploaded by this user AND already parsed.
-        # Cheap check FIRST: only load the (potentially large) parsed structured
-        # doc when a base hit exists. On cache misses this avoids a full doc
-        # fetch per upload.
-        existing_base = db.user_resumes.find_one(
-            {"user_email": user_email, "type": "base", "content_hash": content_hash}
+        # Dedup cache hit: this exact file was already uploaded AND parsed by
+        # this user — re-point the active pointer at the existing asset and
+        # synthesize an already-completed job (no LLM spend).
+        existing = db.resume_assets.find_one(
+            {
+                "user_email": user_email,
+                "content_hash": content_hash,
+                "parse_status": "parsed",
+            },
+            sort=[("created_at", -1)],
         )
-        existing_structured = (
-            svc.parser.get_structured_resume(user_email=user_email)
-            if existing_base and existing_base.get("s3_key")
-            else None
-        )
-        if (
-            existing_base
-            and existing_base.get("s3_key")
-            and existing_structured
-            and existing_structured.get("structured")
-            and existing_structured.get("content_hash") == content_hash
-        ):
-            # Reactivate this base doc; deactivate others.
-            db.user_resumes.update_many(
-                {"user_email": user_email, "type": "base"},
-                {"$set": {"is_active": False}},
+        if existing and existing.get("structured"):
+            existing_id = existing["resume_id"]
+            db.users.update_one(
+                {"email": user_email},
+                {
+                    "$set": {"active_resume_id": existing_id},
+                    "$unset": {"pending_active_resume_id": ""},
+                },
             )
-            db.user_resumes.update_one(
-                {"_id": existing_base["_id"]},
-                {"$set": {"is_active": True}},
-            )
-
-            # Synthesize an already-completed job so the frontend can poll
-            # the same /job/<id> endpoint and get the parsed result back
-            # without invoking the LLM at all.
             job_id = svc.create_job(
                 "upload_parse",
-                {"cached": True, "content_hash": content_hash, "user_email": user_email},
+                {
+                    "cached": True,
+                    "content_hash": content_hash,
+                    "user_email": user_email,
+                    "resume_id": existing_id,
+                },
                 user_email=user_email,
             )
-            svc.complete_job(job_id, {"parsed_resume": existing_structured})
-            logger.info(
-                "Resume upload cache HIT for %s (content_hash=%s) — skipping LLM parse",
-                user_email,
-                content_hash[:12],
+            svc.complete_job(
+                job_id,
+                {
+                    "parsed_resume": resume_access.shape_asset(existing),
+                    "resume_id": existing_id,
+                    "cached": True,
+                },
             )
-            return jsonify({"job_id": job_id, "cached": True}), 202
+            logger.info(
+                "Resume upload cache HIT (asset %s) — skipping LLM parse", existing_id
+            )
+            return jsonify({"job_id": job_id, "resume_id": existing_id, "cached": True}), 202
 
-        # Upload file to S3 and store metadata
-        try:
-            storage = get_storage_service()
-            user = db.users.find_one({"email": user_email})
-            if user:
-                user_id = str(user["_id"])
-                s3_key = storage.upload_base_resume(user_id, file_bytes, original_filename)
-                db.user_resumes.insert_one(
-                    {
-                        "user_email": user_email,
-                        "user_id": user_id,
-                        "type": "base",
-                        "s3_key": s3_key,
-                        "filename": original_filename,
-                        "uploaded_at": datetime.utcnow(),
-                        "size_bytes": len(file_bytes),
-                        "content_hash": content_hash,
-                        "is_active": True,
-                    }
-                )
-                # Deactivate previous base resumes
-                db.user_resumes.update_many(
-                    {"user_email": user_email, "type": "base", "s3_key": {"$ne": s3_key}},
-                    {"$set": {"is_active": False}},
-                )
-        except Exception as s3_err:
-            logger.warning(f"Failed to save resume to S3: {s3_err}")
-
-        # Async: create a job for multi-modal LLM parsing and return job_id immediately
-        import base64
-
-        file_b64 = base64.b64encode(file_bytes).decode("utf-8")
+        user = db.users.find_one({"email": user_email}, {"_id": 1})
+        user_id = str(user["_id"]) if user else None
         mime_type = ResumeParser.get_mime_type(original_filename)
 
+        # Resume Platform v3 write order (spec 1.1/2): Mongo asset doc FIRST
+        # (parse_status='pending'), S3 second under
+        # resume-assets/{resume_id}/original, then $set object_key.
+        resume_id = resume_access.create_pending_asset(
+            owner_type="user",
+            user_email=user_email,
+            user_id=user_id,
+            filename=original_filename,
+            mime_type=mime_type,
+            size_bytes=len(file_bytes),
+            content_hash=content_hash,
+        )
+
         payload = {
-            "file_base64": file_b64,
+            "resume_id": resume_id,
             "mime_type": mime_type,
-            "user_email": user_email,
             "content_hash": content_hash,
+            "user_email": user_email,
         }
+        try:
+            # Late import so the storage seam resolves at call time
+            # (test/monkeypatch friendly — mirrors the guest blueprint).
+            from services.s3_service import get_storage_service as _get_storage
+
+            object_key = _get_storage().upload_resume_asset(
+                resume_id, file_bytes, mime_type
+            )
+            try:
+                resume_access.attach_object_key(resume_id, object_key)
+            except Exception:
+                # Orphan rule: S3 write landed but the Mongo ref didn't —
+                # compensating delete in the same request path (best effort).
+                try:
+                    _get_storage().delete_resume(object_key)
+                except Exception:
+                    pass
+                raise
+            payload["object_key"] = object_key
+        except Exception as s3_err:
+            if os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+                # On Lambda there is no inline fallback (spec 1.3): the async
+                # payload must never carry file bytes.
+                resume_access.mark_asset_failed(resume_id, "storage_unavailable")
+                logger.error(
+                    "Resume upload: S3 unavailable for asset %s: %s",
+                    resume_id, type(s3_err).__name__,
+                )
+                return jsonify({"error": "storage_unavailable"}), 503
+            logger.warning(
+                "Resume upload: S3 unavailable, dev inline fallback for asset %s: %s",
+                resume_id, type(s3_err).__name__,
+            )
+            payload["file_bytes_b64_dev"] = base64.b64encode(file_bytes).decode("utf-8")
+
+        # Stamp the active-candidate — the worker promotes it on successful
+        # parse; a stale/failed parse can never overwrite a newer choice.
+        resume_access.stamp_pending_active(user_email, resume_id)
+
         job_id = svc.create_job("upload_parse", payload, user_email=user_email)
         ResumeService.invoke_async(job_id, "upload_parse", payload)
 
-        return jsonify({"job_id": job_id}), 202
+        return jsonify({"job_id": job_id, "resume_id": resume_id}), 202
 
     except ValueError as e:
         logger.error(f"File validation error: {e}")
@@ -2383,16 +2611,20 @@ def base_structured():
 @resume_bp.route("/status", methods=["GET"])
 @jwt_required()
 def status():
+    """Resume Platform v3: status is derived from `resume_assets` +
+    `users.active_resume_id` (the legacy user_resumes reads are gone)."""
     user_email = get_jwt_identity()
     try:
+        from services import resume_access
+
         db = DBConnect().get_db()
-        # Check for active base resume for this user
-        active_resume = db.user_resumes.find_one(
-            {"user_email": user_email, "type": "base", "is_active": True}
-        )
-        # Also check if any base file exists at all
-        any_base = active_resume or db.user_resumes.find_one(
-            {"user_email": user_email, "type": "base"}
+        active_asset = resume_access.get_active_asset(user_email)
+        has_base_file = bool(
+            (active_asset or {}).get("object_key")
+            or db.resume_assets.find_one(
+                {"user_email": user_email, "object_key": {"$ne": None}},
+                {"_id": 1},
+            )
         )
 
         from services.resume_service import get_resume_service
@@ -2404,7 +2636,7 @@ def status():
             # No structured/parsed resume found — but a base file might exist.
             # If so, attempt a re-parse from S3 (handles users whose parse
             # job failed or never completed after upload).
-            if any_base and any_base.get("s3_key"):
+            if has_base_file:
                 logger.info(
                     "Status: no parsed resume for %s but base file exists, attempting re-parse",
                     user_email,
@@ -2416,7 +2648,7 @@ def status():
                     jsonify(
                         {
                             "has_resume": False,
-                            "has_base_file": bool(any_base),
+                            "has_base_file": has_base_file,
                         }
                     ),
                     200,
@@ -2427,16 +2659,17 @@ def status():
             parsed_at = parsed_at.isoformat()
         response = {
             "has_resume": True,
-            "has_base_file": bool(any_base),
+            "has_base_file": has_base_file,
             "skills": resume.get("skills", []),
             "experience_years": resume.get("experience_years"),
             "job_titles": resume.get("job_titles", []),
             "summary": resume.get("summary", ""),
             "parsed_at": parsed_at,
         }
-        if active_resume:
-            response["s3_key"] = active_resume.get("s3_key", "")
-            response["filename"] = active_resume.get("filename", "")
+        if active_asset:
+            response["resume_id"] = active_asset.get("resume_id", "")
+            response["s3_key"] = active_asset.get("object_key") or ""
+            response["filename"] = active_asset.get("filename", "")
         return jsonify(response), 200
     except Exception as e:
         logger.error(f"Resume status error: {e}")
@@ -2451,17 +2684,40 @@ def status():
 @resume_bp.route("/versions", methods=["GET"])
 @jwt_required()
 def list_versions():
+    """List the user's uploaded resume assets (Resume Platform v3, spec 1.2).
+
+    Each row: {resume_id, filename, uploaded_at, size_bytes, parse_status,
+    is_active}.
+    """
     user_email = get_jwt_identity()
     db = DBConnect().get_db()
-    resumes = list(
-        db.user_resumes.find({"user_email": user_email, "type": "base"}, {"_id": 0}).sort(
-            "uploaded_at", -1
-        )
-    )
-    for r in resumes:
-        if "uploaded_at" in r and hasattr(r["uploaded_at"], "isoformat"):
-            r["uploaded_at"] = r["uploaded_at"].isoformat()
-    return jsonify({"versions": resumes}), 200
+    user = db.users.find_one({"email": user_email}, {"active_resume_id": 1}) or {}
+    active_id = user.get("active_resume_id")
+    versions = []
+    cursor = db.resume_assets.find(
+        {"user_email": user_email, "owner_type": "user"},
+        {
+            "_id": 0,
+            "resume_id": 1,
+            "filename": 1,
+            "created_at": 1,
+            "size_bytes": 1,
+            "parse_status": 1,
+        },
+    ).sort("created_at", -1)
+    for asset in cursor:
+        uploaded_at = asset.get("created_at")
+        if hasattr(uploaded_at, "isoformat"):
+            uploaded_at = uploaded_at.isoformat()
+        versions.append({
+            "resume_id": asset.get("resume_id", ""),
+            "filename": asset.get("filename", ""),
+            "uploaded_at": uploaded_at,
+            "size_bytes": int(asset.get("size_bytes") or 0),
+            "parse_status": asset.get("parse_status", ""),
+            "is_active": asset.get("resume_id") == active_id,
+        })
+    return jsonify({"versions": versions}), 200
 
 
 # ------------------------------------------------------------------
@@ -2493,20 +2749,34 @@ def list_generated():
 @resume_bp.route("/active", methods=["PUT"])
 @jwt_required()
 def set_active():
+    """PUT {resume_id} — atomically set users.active_resume_id (spec 1.2).
+
+    Validates ownership + parse_status='parsed', then $sets unconditionally
+    (and clears any pending stamp so an in-flight parse can never overwrite
+    this explicit choice).
+    """
     user_email = get_jwt_identity()
-    data = request.get_json()
-    s3_key = data.get("s3_key", "")
+    data = request.get_json(force=True, silent=True) or {}
+    resume_id = InputSanitizer.sanitize_string(str(data.get("resume_id") or ""), max_length=64)
+    if not resume_id:
+        return jsonify({"error": "resume_id is required"}), 400
     db = DBConnect().get_db()
-    # Deactivate all, then activate the chosen one
-    db.user_resumes.update_many(
-        {"user_email": user_email, "type": "base"}, {"$set": {"is_active": False}}
+    asset = db.resume_assets.find_one(
+        {"resume_id": resume_id, "user_email": user_email},
+        {"parse_status": 1},
     )
-    result = db.user_resumes.update_one(
-        {"user_email": user_email, "s3_key": s3_key}, {"$set": {"is_active": True}}
+    if not asset:
+        return jsonify({"error": "Resume not found"}), 404
+    if asset.get("parse_status") != "parsed":
+        return jsonify({"error": "resume_not_parsed"}), 409
+    db.users.update_one(
+        {"email": user_email},
+        {
+            "$set": {"active_resume_id": resume_id},
+            "$unset": {"pending_active_resume_id": ""},
+        },
     )
-    if result.modified_count:
-        return jsonify({"message": "Active resume updated"}), 200
-    return jsonify({"error": "Resume not found"}), 404
+    return jsonify({"message": "Active resume updated", "resume_id": resume_id}), 200
 
 
 # ------------------------------------------------------------------
@@ -2517,23 +2787,85 @@ def set_active():
 @resume_bp.route("/download-file/<path:s3_key>", methods=["GET"])
 @jwt_required()
 def download_file(s3_key):
+    """Download an owned file from S3.
+
+    Resume Platform v3: the path segment may be a `resume_id` (original-file
+    download of a resume_assets doc) OR a legacy/generated S3 key. Ownership
+    is always verified against a stored ref — the raw param never picks an
+    arbitrary object:
+      1. resume_id -> resume_assets (owner-scoped) -> object_key;
+      2. generated key -> tailoring_records versions[].files refs;
+      3. legacy user_resumes rows (old s3_key param form kept working).
+    """
     user_email = get_jwt_identity()
     db = DBConnect().get_db()
-    # Verify this resume belongs to the user
-    resume = db.user_resumes.find_one({"user_email": user_email, "s3_key": s3_key})
-    if not resume:
-        return jsonify({"error": "Resume not found"}), 404
-    storage = get_storage_service()
-    file_bytes = storage.get_resume(s3_key)
-    # Determine content type
-    content_type = "application/pdf" if s3_key.endswith(".pdf") else "application/octet-stream"
-    filename = resume.get("filename", "resume.pdf")
-    # Business metric: classify base vs generated/tailored from the key prefix.
-    variant = "generated" if "/generated/" in s3_key else "base"
+    param = str(s3_key or "")
+
+    # Late import so the storage seam resolves at call time (test-friendly).
+    from services.s3_service import get_storage_service as _get_storage
+    storage = _get_storage()
+
+    object_key = None
+    filename = "resume.pdf"
+    variant = "base"
+    mime_hint = None
+
+    if "/" not in param:
+        # Original-file download by resume_id (spec section 5/6 rewiring).
+        rid = InputSanitizer.sanitize_string(param, max_length=64)
+        asset = db.resume_assets.find_one(
+            {"resume_id": rid, "user_email": user_email}
+        )
+        if not asset or not asset.get("object_key"):
+            return jsonify({"error": "Resume not found"}), 404
+        object_key = asset["object_key"]
+        filename = asset.get("filename") or "resume.pdf"
+        mime_hint = asset.get("mime_type") or None
+    else:
+        # Generated/tailored file — ownership via the version file refs.
+        record = db.tailoring_records.find_one(
+            {
+                "user_email": user_email,
+                "$or": [
+                    {"versions.files.pdf.s3_key": param},
+                    {"versions.files.docx.s3_key": param},
+                ],
+            },
+            {"versions": 1},
+        )
+        if record:
+            variant = "generated"
+            object_key = param
+            for version in record.get("versions") or []:
+                for f in (version.get("files") or {}).values():
+                    if isinstance(f, dict) and f.get("s3_key") == param:
+                        filename = f.get("filename") or filename
+        else:
+            # Legacy rows (old key scheme referenced from user_resumes).
+            resume = db.user_resumes.find_one(
+                {"user_email": user_email, "s3_key": param}
+            )
+            if not resume:
+                return jsonify({"error": "Resume not found"}), 404
+            object_key = param
+            filename = resume.get("filename", "resume.pdf")
+            variant = "generated" if "/generated/" in param else "base"
+
+    file_bytes = storage.get_resume(object_key)
+    if mime_hint:
+        content_type = mime_hint
+    elif filename.lower().endswith(".docx") or object_key.endswith(".docx"):
+        content_type = (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+    elif filename.lower().endswith(".pdf") or object_key.endswith(".pdf"):
+        content_type = "application/pdf"
+    else:
+        content_type = "application/octet-stream"
     dd_metric(
         "portfolio.resume.download",
         1,
-        tags=[f"variant:{variant}", f"format:{'pdf' if s3_key.endswith('.pdf') else 'other'}"],
+        tags=[f"variant:{variant}", f"format:{'pdf' if content_type == 'application/pdf' else 'other'}"],
     )
     return send_file(
         io.BytesIO(file_bytes), mimetype=content_type, as_attachment=True, download_name=filename
@@ -2541,21 +2873,37 @@ def download_file(s3_key):
 
 
 # ------------------------------------------------------------------
-# DELETE /api/resume/file/<s3_key> — Delete a resume
+# DELETE /api/resume/file/<resume_id> — Delete a resume asset
 # ------------------------------------------------------------------
 
 
-@resume_bp.route("/file/<path:s3_key>", methods=["DELETE"])
+@resume_bp.route("/file/<resume_id>", methods=["DELETE"])
 @jwt_required()
-def delete_file(s3_key):
+def delete_file(resume_id):
+    """Delete a resume asset: S3 object + Mongo doc; if it was the active
+    resume, atomically re-point to the newest remaining parsed asset or
+    unset the pointer (spec 1.2 / 2)."""
     user_email = get_jwt_identity()
-    db = DBConnect().get_db()
-    resume = db.user_resumes.find_one({"user_email": user_email, "s3_key": s3_key})
-    if not resume:
+    rid = InputSanitizer.sanitize_string(str(resume_id or ""), max_length=64)
+    if not rid:
         return jsonify({"error": "Resume not found"}), 404
-    storage = get_storage_service()
-    storage.delete_resume(s3_key)
-    db.user_resumes.delete_one({"user_email": user_email, "s3_key": s3_key})
+    db = DBConnect().get_db()
+    asset = db.resume_assets.find_one({"resume_id": rid, "user_email": user_email})
+    if not asset:
+        return jsonify({"error": "Resume not found"}), 404
+    if asset.get("object_key"):
+        try:
+            from services.s3_service import get_storage_service as _get_storage
+
+            _get_storage().delete_resume(asset["object_key"])
+        except Exception as e:
+            # Best effort — a stray object is swept later; the doc delete
+            # and pointer re-point must still land.
+            logger.warning("Resume delete: S3 delete failed for asset %s: %s", rid, e)
+    db.resume_assets.delete_one({"resume_id": rid, "user_email": user_email})
+    from services import resume_access
+
+    resume_access.repoint_active_after_delete(user_email, rid)
     return jsonify({"message": "Resume deleted"}), 200
 
 

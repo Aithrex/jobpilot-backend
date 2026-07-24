@@ -79,13 +79,17 @@ CASCADE_COLLECTIONS: List[Tuple[str, str]] = [
     # --- identity / preferences / resumes ---
     ("user_preferences", "user_email"),
     ("user_resumes", "user_email"),
+    ("resume_assets", "user_email"),          # v3 canonical resume store
     ("password_reset_tokens", "user_email"),
     ("tailoring_records", "user_email"),
     ("feedback", "email"),
-    # --- usage / entitlements ---
+    # --- usage / entitlements / quota ledger (v3 §1.6) ---
     ("tailor_usage", "email"),
     ("feature_usage", "user_email"),
     ("entitlement_overrides", "user_email"),
+    ("quota_ledger", "user_email"),
+    # guest day-1 carry-in markers are keyed by the claiming account's email
+    ("guest_claim_carryins", "email"),
     # --- Voice Graph (all user_email-scoped) ---
     ("graph_nodes", "user_email"),
     ("graph_edges", "user_email"),
@@ -229,9 +233,33 @@ def hard_purge(email: str, exclude_job_id: Optional[str] = None) -> Dict[str, An
         report["errors"].append(f"resolve_user_id: {e}")
         logger.error("hard_purge: user_id resolve failed for %s: %s", _redact(email), e)
 
+    # Collect the user's resume_assets ids BEFORE the cascade deletes the
+    # docs — their S3 objects live under resume-assets/{resume_id}/ prefixes
+    # (Resume Platform v3 spec section 2) and must be version-purged too.
+    asset_resume_ids: List[str] = []
+    try:
+        owner_or: List[Dict[str, Any]] = [{"user_email": email}]
+        if user_id:
+            owner_or.append({"user_id": user_id})
+        for a in db.resume_assets.find({"$or": owner_or}, {"resume_id": 1}):
+            rid = str(a.get("resume_id") or "")
+            if rid:
+                asset_resume_ids.append(rid)
+    except Exception as e:
+        report["errors"].append(f"resume_assets_collect: {e}")
+
     # 1. Best-effort revoke provider OAuth tokens at the source (also deletes
     #    their own docs; the generic cascade mops up any remainder).
     report["providers"] = _revoke_providers(email)
+
+    # 1b. Guest data claimed by this account (Resume Platform v3 spec §2):
+    #     the claimed guest_sessions + their guest resume_assets docs +
+    #     job_match_snapshots + legacy resume_file_s3_keys, the linked-
+    #     accounts $pull (subject retained as abuse memory WITHOUT the
+    #     email), and quota_counters pool entries where the email is the
+    #     pool's sole member.
+    guest_s3_keys, guest_asset_ids = _purge_claimed_guest_data(db, email, report)
+    asset_resume_ids.extend(rid for rid in guest_asset_ids if rid not in asset_resume_ids)
 
     # 2. Generic Mongo cascade — one delete_many per keyed collection.
     for coll, key in CASCADE_COLLECTIONS:
@@ -246,22 +274,54 @@ def hard_purge(email: str, exclude_job_id: Optional[str] = None) -> Dict[str, An
             report["errors"].append(f"{coll}: {e}")
             logger.warning("hard_purge: %s delete failed for %s: %s", coll, _redact(email), e)
 
-    # 3. Purge the user's S3 objects ({user_id}/base/... and /generated/...).
+    # 3. Purge the user's S3 objects — VERSIONED deletes (the bucket keeps
+    #    noncurrent versions; a plain delete only writes a marker): the
+    #    {user_id}/ prefix, every resume-assets/{resume_id}/ prefix the user
+    #    owned, and the claimed guest sessions' legacy object keys.
+    storage_ok = True
     if user_id:
         try:
             report["s3_objects_deleted"] = _purge_s3_objects(user_id)
         except Exception as e:
+            storage_ok = False
             report["errors"].append(f"s3: {e}")
             logger.error("hard_purge: S3 purge failed for %s: %s", _redact(email), e)
-
-    # 4. Remove the identity record LAST.
     try:
-        res = db.users.delete_one({"email": email})
-        if res.deleted_count:
-            report["deleted"]["users"] = res.deleted_count
+        n, asset_errors = _purge_asset_objects(asset_resume_ids, guest_s3_keys)
+        report["s3_objects_deleted"] += n
+        if asset_errors:
+            storage_ok = False
+            report["errors"].extend(f"s3_asset: {e}" for e in asset_errors)
     except Exception as e:
-        report["errors"].append(f"users: {e}")
-        logger.error("hard_purge: users delete failed for %s: %s", _redact(email), e)
+        storage_ok = False
+        report["errors"].append(f"s3_assets: {e}")
+        logger.error("hard_purge: asset S3 purge failed for %s: %s", _redact(email), e)
+
+    # 4. Remove the identity record LAST — and only after storage cleanup
+    #    verified. On S3 failure the users doc is retained (flagged
+    #    purge_incomplete) so the idempotent re-run converges; per-store
+    #    Mongo failures stay fail-soft as before.
+    if storage_ok:
+        try:
+            res = db.users.delete_one({"email": email})
+            if res.deleted_count:
+                report["deleted"]["users"] = res.deleted_count
+        except Exception as e:
+            report["errors"].append(f"users: {e}")
+            logger.error("hard_purge: users delete failed for %s: %s", _redact(email), e)
+    else:
+        try:
+            db.users.update_one(
+                {"email": email},
+                {"$set": {"deletion_status": "purge_incomplete", "updated_at": _now()}},
+            )
+        except Exception:
+            pass
+        report["errors"].append("users: retained pending storage cleanup (re-run purge)")
+        logger.error(
+            "hard_purge: users doc retained for %s — storage cleanup unverified",
+            _redact(email),
+        )
 
     logger.info(
         "hard_purge complete for %s: %d collections cleared, %d s3 objects, %d errors",
@@ -269,6 +329,87 @@ def hard_purge(email: str, exclude_job_id: Optional[str] = None) -> Dict[str, An
         len(report["errors"]),
     )
     return report
+
+
+# ---------------------------------------------------------------------------
+# Claimed-guest-data purge (Resume Platform v3 spec §2 erasure additions).
+# ---------------------------------------------------------------------------
+def _purge_claimed_guest_data(
+    db, email: str, report: Dict[str, Any]
+) -> Tuple[List[str], List[str]]:
+    """Erase the guest world this account claimed. Fail-soft per store.
+
+    Returns (legacy_s3_keys, guest_asset_resume_ids) for the S3 phase.
+    The guest_quota_subjects docs themselves are RETAINED as abuse memory —
+    only the account email is $pull-ed from linked_accounts.
+    """
+    legacy_keys: List[str] = []
+    asset_ids: List[str] = []
+    guest_ids: List[str] = []
+    try:
+        sessions = list(db.guest_sessions.find(
+            {"$or": [{"claimed_by": email}, {"claim.email": email}]},
+            {"guest_id": 1, "resume_file_s3_keys": 1},
+        ))
+        guest_ids = [str(s["guest_id"]) for s in sessions if s.get("guest_id")]
+        for s in sessions:
+            legacy_keys.extend(k for k in (s.get("resume_file_s3_keys") or []) if k)
+    except Exception as e:
+        report["errors"].append(f"guest_sessions_collect: {e}")
+
+    if guest_ids:
+        try:
+            for a in db.resume_assets.find(
+                {"guest_id": {"$in": guest_ids}}, {"resume_id": 1}
+            ):
+                rid = str(a.get("resume_id") or "")
+                if rid:
+                    asset_ids.append(rid)
+            res = db.resume_assets.delete_many({"guest_id": {"$in": guest_ids}})
+            if res.deleted_count:
+                report["deleted"]["resume_assets_guest"] = res.deleted_count
+        except Exception as e:
+            report["errors"].append(f"resume_assets_guest: {e}")
+        try:
+            res = db.job_match_snapshots.delete_many({"guest_id": {"$in": guest_ids}})
+            if res.deleted_count:
+                report["deleted"]["job_match_snapshots"] = res.deleted_count
+        except Exception as e:
+            report["errors"].append(f"job_match_snapshots: {e}")
+        try:
+            res = db.guest_sessions.delete_many({"guest_id": {"$in": guest_ids}})
+            if res.deleted_count:
+                report["deleted"]["guest_sessions"] = res.deleted_count
+        except Exception as e:
+            report["errors"].append(f"guest_sessions: {e}")
+
+    # quota_counters pool entries where the email is the SOLE pool member —
+    # computed BEFORE the linked_accounts $pull. Shared pools keep their
+    # counters (they still meter the other linked accounts).
+    try:
+        import re as _re
+
+        subjects = list(db.guest_quota_subjects.find(
+            {"linked_accounts": email}, {"linked_accounts": 1}
+        ))
+        others = {
+            e for s in subjects for e in (s.get("linked_accounts") or [])
+            if isinstance(e, str) and e and e != email
+        }
+        if not others:
+            res = db.quota_counters.delete_many(
+                {"_id": {"$regex": f"^tailor:{_re.escape(email)}:"}}
+            )
+            if res.deleted_count:
+                report["deleted"]["quota_counters"] = res.deleted_count
+        db.guest_quota_subjects.update_many(
+            {"linked_accounts": email},
+            {"$pull": {"linked_accounts": email}},
+        )
+    except Exception as e:
+        report["errors"].append(f"guest_quota_subjects: {e}")
+
+    return legacy_keys, asset_ids
 
 
 # ---------------------------------------------------------------------------
@@ -312,30 +453,48 @@ def _revoke_providers(email: str) -> Dict[str, Any]:
 # S3 purge (isolated so tests can monkeypatch it — keeps the suite offline).
 # ---------------------------------------------------------------------------
 def _purge_s3_objects(user_id: str) -> int:
-    """Delete every S3 object under the ``{user_id}/`` prefix. Returns count."""
+    """VERSIONED delete of every S3 object under ``{user_id}/`` (the bucket
+    is versioned — a plain delete only writes a marker; erasure must remove
+    ALL versions, spec section 2). Returns the deleted count; raises when any
+    per-object delete failed so the caller knows storage cleanup is NOT
+    verified and retains the users doc for a retry."""
     from services.s3_service import get_storage_service
 
     storage = get_storage_service()
-    bucket = storage.bucket
-    if not bucket:
+    if not storage.bucket:
         logger.warning("S3 purge skipped: RESUME_S3_BUCKET unset")
         return 0
+    result = storage.delete_prefix_all_versions(f"{user_id}/")
+    if result.get("errors"):
+        raise RuntimeError(
+            f"versioned purge left {len(result['errors'])} object(s) under user prefix"
+        )
+    return int(result.get("deleted") or 0)
 
-    client = storage.client
-    prefix = f"{user_id}/"
+
+def _purge_asset_objects(
+    resume_ids: List[str], legacy_keys: Optional[List[str]] = None
+) -> Tuple[int, List[str]]:
+    """VERSIONED purge of the user's resume-assets/{resume_id}/ prefixes plus
+    any legacy guest object keys. Per-object results inspected; returns
+    (deleted_count, errors) — errors mean storage cleanup is unverified."""
+    from services.s3_service import get_storage_service
+
+    storage = get_storage_service()
+    if not storage.bucket:
+        if resume_ids or legacy_keys:
+            logger.warning("S3 asset purge skipped: RESUME_S3_BUCKET unset")
+        return 0, []
     deleted = 0
-    token: Optional[str] = None
-    while True:
-        kwargs = {"Bucket": bucket, "Prefix": prefix}
-        if token:
-            kwargs["ContinuationToken"] = token
-        resp = client.list_objects_v2(**kwargs)
-        keys = [{"Key": o["Key"]} for o in resp.get("Contents", [])]
-        if keys:
-            client.delete_objects(Bucket=bucket, Delete={"Objects": keys})
-            deleted += len(keys)
-        if resp.get("IsTruncated"):
-            token = resp.get("NextContinuationToken")
-        else:
-            break
-    return deleted
+    errors: List[str] = []
+    prefixes = [f"resume-assets/{rid}/" for rid in (resume_ids or [])]
+    # A full key is a valid prefix — legacy guest keys ride the same call.
+    prefixes += [str(k) for k in (legacy_keys or []) if k]
+    for prefix in prefixes:
+        try:
+            result = storage.delete_prefix_all_versions(prefix)
+            deleted += int(result.get("deleted") or 0)
+            errors.extend(result.get("errors") or [])
+        except Exception as e:
+            errors.append(f"{prefix.split('/', 1)[0]}/...: {e}")
+    return deleted, errors

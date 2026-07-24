@@ -73,7 +73,9 @@ def test_resume_only_fact_store():
     assert "res:exp:0:b0" in ids
     assert "res:edu:0" in ids
     assert "res:skills" in ids
-    assert store["sources"] == {"resume": True, "linkedin": False, "github": False}
+    assert store["sources"] == {
+        "resume": True, "linkedin": False, "github": False, "voicegraph": False,
+    }
 
     sheet = build_fact_sheet(store)
     assert "[F1]" in sheet

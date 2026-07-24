@@ -155,11 +155,10 @@ def _load_profile(user_email: str) -> Dict[str, Any]:
     db = DBConnect().get_db()
     profile: Dict[str, Any] = {"user_email": user_email}
     try:
-        resume = db.user_resumes.find_one(
-            {"user_email": user_email, "structured": {"$exists": True}},
-            {"_id": 0, "structured": 1},
-            sort=[("parsed_at", -1)],
-        )
+        # Resume Platform v3: canonical read path (users.active_resume_id ->
+        # resume_assets) — never a direct user_resumes scan.
+        from services import resume_access
+        resume = resume_access.get_active_structured(user_email)
         profile["structured"] = (resume or {}).get("structured") or {}
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("auto_apply: structured résumé load failed for %s: %s", user_email, e)

@@ -16,6 +16,8 @@ venv/
 .env
 .env.*
 !.env.example
+# Google OAuth verification correspondence — contains reviewer credentials in plaintext
+docs/google-verification/
 
 # AWS / deploy artifacts
 *.zip
@@ -35,3 +37,14 @@ crash.log
 .idea/
 .DS_Store
 Thumbs.db
+
+# Terraform saved plan files (may contain sensitive values)
+tfplan
+tfplan_*
+*.tfplan
+
+# Local dev log sink (services/*/app.py FileHandler) — never commit
+app.log
+
+# taxonomy_report.py scratch cache
+scripts/.titles_cache.txt

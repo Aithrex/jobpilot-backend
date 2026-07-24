@@ -127,26 +127,33 @@ _EXTRACTION_PROMPT = (
     "   header/footer artifacts in any field.\n"
     "9. If a section is not present in the resume, use an empty string or empty array.\n"
     "10. Every field must be a non-null string or array — never null.\n\n"
-    "SKILLS — STRICT VOCABULARY RULES (ATS-critical):\n"
-    "A. A 'skill' is a CONCRETE technology, tool, language, framework, library, platform,\n"
-    "   database, cloud service, or methodology TOKEN. Examples of valid skills:\n"
-    "   Python, Go, gRPC, FastAPI, Kubernetes, ECS, S3, Terraform, PostgreSQL, Kafka, Agile.\n"
-    "B. DO NOT extract architectural CONCEPTS as skills. Examples to REJECT as skills:\n"
-    "   'microservices', 'distributed systems', 'scalability', 'high availability',\n"
-    "   'cloud-native', 'event-driven architecture', 'containerization'. These belong in\n"
-    "   the summary or bullets, NOT in skills.\n"
-    "C. DO NOT extract SOFT SKILLS as skills (leadership, communication, mentoring,\n"
-    "   collaboration). These are not ATS keywords — leave them in summary/bullets.\n"
+    "SKILLS — CAPTURE RULES (ATS-critical). There are TWO sources of skills; treat them\n"
+    "differently:\n"
+    "1. EXPLICIT SKILLS SECTION — a dedicated 'Skills' / 'Technical Skills' / 'Core\n"
+    "   Competencies' / 'Technologies' section. EVERY item the user lists there MUST be\n"
+    "   captured — NEVER drop one, even if it is not a concrete tech token:\n"
+    "     - concrete tech tokens (Python, Go, Kubernetes, PostgreSQL, Terraform) → the\n"
+    "       relevant technical category;\n"
+    "     - architectural CONCEPTS (Distributed Systems, Microservices, Event-Driven\n"
+    "       Architecture, Scalability, High Availability) → put under 'Concepts &\n"
+    "       Methodologies';\n"
+    "     - professional / soft skills (Leadership, Communication, Mentoring,\n"
+    "       Collaboration) → put under 'Professional Skills'.\n"
+    "   If an explicit item fits no technical group, use one of those catch-all categories\n"
+    "   rather than discarding it.\n"
+    "2. INFERRED SKILLS — technologies mentioned in the summary, experience bullets, or\n"
+    "   project prose (NOT the Skills section). Here keep ATS discipline: extract ONLY\n"
+    "   concrete technology/tool/framework/language/database/cloud/methodology TOKENS. Do\n"
+    "   NOT promote prose concepts or soft skills to skills from bullets. Example: 'Built\n"
+    "   microservices using Go and gRPC on ECS' → extract 'Go', 'gRPC', 'ECS'; do NOT add\n"
+    "   'microservices'. NEVER invent a skill that is not present in the text.\n"
     "D. PRESERVE THE EXACT TOKEN AS WRITTEN. If the resume says 'AWS' use 'AWS' (not\n"
-    "   'Amazon Web Services'). If the resume says 'Postgres' use 'Postgres' (not\n"
-    "   'PostgreSQL'). If the resume says 'JS' use 'JS' (not 'JavaScript').\n"
+    "   'Amazon Web Services'). If it says 'Postgres' use 'Postgres' (not 'PostgreSQL').\n"
+    "   If it says 'JS' use 'JS' (not 'JavaScript').\n"
     "E. Each skill must appear in EXACTLY ONE category — no cross-category duplicates.\n"
-    "F. Extract skills from ALL sections (not just the Skills heading) — bullets and\n"
-    "   summary often contain technologies. Example: 'Built microservices using Go and\n"
-    "   gRPC on ECS' → extract 'Go', 'gRPC', 'ECS'. Do NOT extract 'microservices'.\n"
-    "G. Categorize into these groups when applicable: Languages, Frameworks & Libraries,\n"
-    "   Cloud & DevOps, Databases, Tools & Platforms, Methodologies. Add new groups\n"
-    "   only if no existing group fits.\n\n"
+    "F. Categorize into these groups when applicable: Languages, Frameworks & Libraries,\n"
+    "   Cloud & DevOps, Databases, Tools & Platforms, Concepts & Methodologies,\n"
+    "   Professional Skills. Add a new group only if none of these fits.\n\n"
     "CERTIFICATIONS — STRICT NO-FABRICATION RULE:\n"
     "- If the resume has a 'Certifications' / 'Certificates' / 'Licenses' section, OR if\n"
     "  certifications are explicitly named anywhere in the resume (e.g., a bullet says\n"
@@ -170,7 +177,9 @@ _EXTRACTION_PROMPT = (
     "  },\n"
     '  "summary": "Professional summary if present, otherwise empty string",\n'
     '  "skills": {\n'
-    '    "Category Name": ["Skill1", "Skill2"]\n'
+    '    "Languages": ["Python", "Go"],\n'
+    '    "Concepts & Methodologies": ["Distributed Systems", "Agile"],\n'
+    '    "Professional Skills": ["Leadership", "Mentoring"]\n'
     "  },\n"
     '  "experience": [\n'
     "    {\n"
@@ -237,21 +246,24 @@ _EXTRACTION_PROMPT_SLIM = (
     "7. Boilerplate: Do NOT include 'References available upon request', page numbers, or\n"
     "   header/footer artifacts in any field.\n"
     "8. If a section is absent, use an empty string or empty array. Never null.\n\n"
-    "SKILLS — STRICT VOCABULARY RULES (ATS-critical):\n"
-    "A. A 'skill' is a CONCRETE technology, tool, language, framework, library, platform,\n"
-    "   database, cloud service, or methodology TOKEN (e.g., Python, Kubernetes, Terraform,\n"
-    "   PostgreSQL, Kafka, Agile).\n"
-    "B. REJECT architectural CONCEPTS as skills: 'microservices', 'distributed systems',\n"
-    "   'scalability', 'high availability', 'cloud-native', 'containerization'. These belong\n"
-    "   in summary/bullets, NOT in skills.\n"
-    "C. REJECT SOFT SKILLS as skills (leadership, communication, mentoring). Leave them in\n"
-    "   summary/bullets.\n"
+    "SKILLS — CAPTURE RULES (ATS-critical). Two sources, treated differently:\n"
+    "1. EXPLICIT 'Skills' / 'Technical Skills' / 'Core Competencies' / 'Technologies'\n"
+    "   section: capture EVERY item the user lists — NEVER drop one. Concrete tech tokens\n"
+    "   go in tech categories; architectural CONCEPTS (Distributed Systems, Microservices,\n"
+    "   Event-Driven Architecture, Scalability) go under 'Concepts & Methodologies';\n"
+    "   professional/soft skills (Leadership, Communication, Mentoring) go under\n"
+    "   'Professional Skills'. Never discard an explicitly listed item — use a catch-all\n"
+    "   category if nothing else fits.\n"
+    "2. INFERRED from prose (summary/bullets/projects, NOT the Skills section): keep ATS\n"
+    "   discipline — extract ONLY concrete tech/tool/framework/language/database/cloud/\n"
+    "   methodology TOKENS ('Built microservices using Go and gRPC' → 'Go', 'gRPC'; do NOT\n"
+    "   add 'microservices'). NEVER invent a skill absent from the text.\n"
     "D. PRESERVE the exact token as written ('AWS' not 'Amazon Web Services'; 'Postgres'\n"
-    "   not 'PostgreSQL'; 'JS' not 'JavaScript'). The post-processing normalizer canonicalizes.\n"
+    "   not 'PostgreSQL'; 'JS' not 'JavaScript').\n"
     "E. Each skill must appear in EXACTLY ONE category — no cross-category duplicates.\n"
-    "F. Extract skills from ALL sections (bullets and summary often contain technologies).\n"
-    "G. Categorize into: Languages, Frameworks & Libraries, Cloud & DevOps, Databases,\n"
-    "   Tools & Platforms, Methodologies. Add new groups only if no existing group fits.\n\n"
+    "F. Categories: Languages, Frameworks & Libraries, Cloud & DevOps, Databases,\n"
+    "   Tools & Platforms, Concepts & Methodologies, Professional Skills. New group only\n"
+    "   if none fits.\n\n"
     "CERTIFICATIONS — STRICT NO-FABRICATION RULE:\n"
     "- Extract every entry from a 'Certifications' / 'Certificates' / 'Licenses' section,\n"
     "  OR named explicitly anywhere in the resume (e.g., a bullet 'Earned AWS Certified\n"
@@ -263,7 +275,7 @@ _EXTRACTION_PROMPT_SLIM = (
     "{\n"
     '  "contact": {"name":"","email":"","phone":"","linkedin":"","github":"","location":"","portfolio":""},\n'
     '  "summary": "",\n'
-    '  "skills": {"Category Name": ["Skill1", "Skill2"]},\n'
+    '  "skills": {"Languages":["Python"],"Concepts & Methodologies":["Distributed Systems"],"Professional Skills":["Leadership"]},\n'
     '  "experience": [{"title":"","company":"","location":"","dates":"","type":"","bullets":[]}],\n'
     '  "education": [{"degree":"","institution":"","location":"","dates":"","gpa":"","coursework":""}],\n'
     '  "projects": [{"name":"","dates":"","bullets":[],"tech":""}],\n'
@@ -293,9 +305,11 @@ class ResumeParser:
         """Initialize with a MongoDB database instance.
 
         Args:
-            db: pymongo Database object. The parser uses the 'user_resumes' collection.
+            db: pymongo Database object. Parsed content is stored in the
+                'resume_assets' collection (Resume Platform v3).
         """
-        self.user_resumes = db.user_resumes
+        self.db = db
+        self.resume_assets = db.resume_assets
 
     # ======================================================================
     # 1. FILE VALIDATION
@@ -426,11 +440,14 @@ class ResumeParser:
         )
 
         # Call the LLM (FLASH tier). Slim path needs far fewer output tokens because
-        # we no longer ask for raw_text or extracted_urls.
+        # we no longer ask for raw_text or extracted_urls. 8000 (was 6000) gives a
+        # rich skills + experience resume enough headroom to avoid truncation-repair
+        # or a silently clipped skills section; the extra ~2k output tokens is a small
+        # Haiku cost delta versus the correctness win of never dropping listed skills.
         result = claude_json(
             prompt=None,  # Prompt is embedded in the parts
             parts=parts,
-            max_tokens=6000 if use_slim else 24000,
+            max_tokens=8000 if use_slim else 24000,
             temperature=0.2,  # Low temp for factual extraction
             model=CLAUDE_FLASH,
             system=_PARSE_SYSTEM,  # trusted anchor; PDF/text parts are untrusted data
@@ -577,25 +594,50 @@ class ResumeParser:
 
     @staticmethod
     def _normalize_skills(result: dict) -> dict:
-        """Normalize extracted skill names to canonical forms.
+        """Deduplicate extracted skills WITHOUT dropping distinct user-listed tokens.
 
-        Applies the project's keyword normalizer to standardize abbreviations
-        and aliases (e.g., "JS" → "JavaScript", "k8s" → "Kubernetes").
-        This ensures accurate downstream matching in scoring and gap analysis.
+        History: this used to run the shared ``normalize_keywords`` over each
+        category, which dedups by *canonical alias* (first-occurrence-wins). The
+        ~800-entry alias map can over-merge genuinely distinct tokens a user
+        explicitly listed (e.g. collapsing "React Native" into "React", or two
+        near-aliases into one), silently discarding a skill the user wrote. For a
+        careers product that is a faithfulness bug: we must never drop what the
+        user listed.
+
+        Fix (local to skills; the shared normalizer is UNCHANGED so matching /
+        scoring callers keep their canonicalizing behavior): within each category
+        we dedup by the *exact lowercased raw token* and preserve the token exactly
+        as written (rule D). This collapses only true exact duplicates while letting
+        distinct tokens like "React" and "React Native" both survive. Downstream
+        matching (jd_match_scorer) canonicalizes at compare time, so we lose no
+        matching power by storing the verbatim token here.
 
         Args:
             result: Parsed resume dict with a 'skills' key.
 
         Returns:
-            The same dict with normalized skill values.
+            The same dict with de-duplicated skill values.
         """
-        from utils.keyword_normalizer import normalize_keywords
-
         skills = result.get("skills", {})
         if isinstance(skills, dict):
             for category in list(skills.keys()):
-                if isinstance(skills[category], list):
-                    skills[category] = normalize_keywords(skills[category])
+                values = skills[category]
+                if not isinstance(values, list):
+                    continue
+                seen: set = set()
+                deduped: list = []
+                for kw in values:
+                    if not isinstance(kw, str):
+                        continue
+                    token = kw.strip()
+                    if not token:
+                        continue
+                    key = token.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    deduped.append(token)
+                skills[category] = deduped
             result["skills"] = skills
         return result
 
@@ -632,10 +674,10 @@ class ResumeParser:
             link = link.strip()
             if "linkedin.com" in link.lower() and not linkedin_href:
                 linkedin_href = link
-                logger.info("Contact backfill: found LinkedIn PDF href: %s", link)
+                logger.info("Contact backfill: found LinkedIn PDF href")
             elif "github.com" in link.lower() and not github_href:
                 github_href = link
-                logger.info("Contact backfill: found GitHub PDF href: %s", link)
+                logger.info("Contact backfill: found GitHub PDF href")
 
         # Override GitHub immediately from href (authoritative)
         if github_href:
@@ -650,7 +692,7 @@ class ResumeParser:
             and "github.com" not in linkedin_val.lower()
         ):
             contact["linkedin"] = ""
-            logger.warning("Contact: cleared non-URL linkedin value '%s'", linkedin_val)
+            logger.warning("Contact: cleared non-URL linkedin value")
 
         # --- Email ---
         if not contact.get("email", "").strip():
@@ -740,9 +782,7 @@ class ResumeParser:
         # The PDF annotation URL is the single source of truth for LinkedIn.
         if linkedin_href:
             contact["linkedin"] = linkedin_href
-            logger.info(
-                "Contact backfill: LinkedIn FINAL override from PDF href: %s", linkedin_href
-            )
+            logger.info("Contact backfill: LinkedIn FINAL override from PDF href")
 
         # Normalize LinkedIn and GitHub URLs to canonical forms
         if contact.get("linkedin"):
@@ -756,7 +796,7 @@ class ResumeParser:
             original_name = contact["name"]
             normalized_name = ResumeParser._normalize_name(original_name)
             if original_name != normalized_name:
-                logger.info("Contact: normalized name '%s' → '%s'", original_name, normalized_name)
+                logger.info("Contact: normalized name casing")
             contact["name"] = normalized_name
 
         result["contact"] = contact
@@ -966,11 +1006,7 @@ class ResumeParser:
                         line = line.strip()
                         if uni_pattern.search(line) and len(line) < 100:
                             edu_entry["institution"] = _trim_institution(line)
-                            logger.info(
-                                "Education backfill: found institution '%s' near degree '%s'",
-                                edu_entry["institution"],
-                                degree,
-                            )
+                            logger.info("Education backfill: found institution near degree text")
                             break
 
             # Strategy 2: If still empty, search for university name patterns globally
@@ -979,10 +1015,7 @@ class ResumeParser:
                     line = line.strip()
                     if uni_pattern.search(line) and len(line) < 100 and not line.startswith("["):
                         edu_entry["institution"] = _trim_institution(line)
-                        logger.info(
-                            "Education backfill: found institution '%s' via global search",
-                            edu_entry["institution"],
-                        )
+                        logger.info("Education backfill: found institution via global search")
                         break
 
         return result
@@ -1138,75 +1171,72 @@ class ResumeParser:
         raw_text: str,
         user_email: str = "",
         content_hash: str = "",
+        resume_id: str = None,
     ) -> dict:
-        """Build flat status fields, persist to MongoDB, and return the document.
+        """Persist parsed content INTO the owning ``resume_assets`` doc.
 
-        This method is separated from upload_and_parse so the async job worker
-        can call it independently after LLM parsing completes.
-
-        Flat fields (skills, experience_years, job_titles, summary) are stored
-        alongside the full structured JSON for backward compatibility with
-        the GET /api/resume/status endpoint.
-
-        Storage model: per-user — the previous resume for this user is replaced.
+        Resume Platform v3 (spec 1.1): one asset doc per uploaded file,
+        written in place — never delete-then-insert. Flat status fields
+        (skills, experience_years, job_titles, summary, education,
+        certifications) are stored alongside the full structured JSON.
 
         Args:
             structured: Validated structured resume JSON.
             raw_text: Original extracted text (stored for fallback and repair).
             user_email: Email of the authenticated user (for scoping storage).
+            content_hash: sha256 of the original file bytes (dedup key).
+            resume_id: The owning asset's immutable id. When omitted (legacy
+                callers, e.g. guest-claim import), a new fileless asset is
+                created and adopted as active only if the user has none.
 
         Returns:
-            The stored document dict with _id removed.
+            The stored asset doc in the legacy resume-doc shape (_id removed,
+            ``s3_key`` alias present).
         """
-        # Derive flat status fields from the structured data
-        flat_skills = flatten_skills(structured)
-        job_titles = extract_job_titles(structured)
-        experience_years = self._estimate_experience_years(structured)
-        summary = structured.get("summary", "")
+        from services import resume_access
 
-        doc = {
-            "user_email": user_email,
-            "structured": structured,
-            "content_hash": content_hash,
-            "raw_text": raw_text[:_MAX_TEXT_CHARS],
-            "raw_text_length": len(raw_text),
-            "skills": flat_skills,
-            "experience_years": experience_years,
-            "job_titles": job_titles,
-            "summary": summary,
-            "education": [
-                {
-                    "degree": edu.get("degree", ""),
-                    "institution": edu.get("institution", ""),
-                    "year": (
-                        edu.get("dates", "").split("–")[-1].strip() if edu.get("dates") else ""
-                    ),
-                }
-                for edu in structured.get("education", [])
-            ],
-            # Mirror structured.certifications at the top level for backwards
-            # compat with status/list endpoints. Empty list when the resume
-            # had none — the parser prompt forbids fabrication.
-            "certifications": [
-                c for c in (structured.get("certifications") or []) if isinstance(c, str) and c.strip()
-            ],
-            "parsed_at": datetime.now(timezone.utc),
-        }
+        fields = resume_access.build_parsed_fields(
+            structured, raw_text, content_hash=content_hash
+        )
 
-        # Per-user storage (parsed/structured resume only):
-        # Don't delete "base" documents (type='base') which store the uploaded file metadata.
-        self.user_resumes.delete_many({"user_email": user_email, "structured": {"$exists": True}})
-        self.user_resumes.insert_one(doc)
+        if not resume_id:
+            resume_id = resume_access.create_pending_asset(
+                owner_type="user",
+                user_email=user_email or None,
+                filename="",
+                content_hash=content_hash,
+            )
+            asset = resume_access.save_parsed_fields(resume_id, fields)
+            if user_email:
+                # New fileless asset never steals an existing active pointer.
+                resume_access.adopt_active_if_unset(user_email, resume_id)
+            return resume_access.shape_asset(asset)
 
-        doc.pop("_id", None)
-        return doc
+        asset = resume_access.save_parsed_fields(resume_id, fields)
+        if asset is None:
+            # Defensive: unknown resume_id — create the asset so the parse
+            # result is never lost, then write into it.
+            resume_id = resume_access.create_pending_asset(
+                owner_type="user",
+                user_email=user_email or None,
+                filename="",
+                content_hash=content_hash,
+            )
+            asset = resume_access.save_parsed_fields(resume_id, fields)
+            if user_email:
+                resume_access.adopt_active_if_unset(user_email, resume_id)
+        return resume_access.shape_asset(asset)
 
     # ======================================================================
     # 4. RETRIEVAL
     # ======================================================================
 
     def get_structured_resume(self, user_email: str = "") -> Optional[Dict[str, Any]]:
-        """Retrieve the latest stored structured resume from MongoDB.
+        """Retrieve the user's ACTIVE structured resume.
+
+        Thin delegate to ``resume_access.get_active_structured`` (Resume
+        Platform v3): resolves ``users.active_resume_id`` -> ``resume_assets``.
+        Signature and return shape are unchanged for the 35+ call sites.
 
         Args:
             user_email: Email of the authenticated user (for scoping retrieval).
@@ -1215,30 +1245,16 @@ class ResumeParser:
             The resume document dict with _id removed, or None if no resume
             has been uploaded yet.
         """
-        # `user_resumes` contains both:
-        # - base resume docs: { type: 'base', s3_key, filename, ... } (no `structured`)
-        # - parsed/structured resume docs: { structured, raw_text, parsed_at, ... }
-        # Only return parsed/structured docs.
-        query = {"user_email": user_email, "structured": {"$exists": True}} if user_email else {}
-        resume = self.user_resumes.find_one(query, sort=[("parsed_at", -1)])
-        if resume:
-            resume.pop("_id", None)
-            # Backwards-compat: resumes parsed before name normalization may
-            # still hold ALL-CAPS names. Normalize on read so display is correct.
-            structured = resume.get("structured")
-            if isinstance(structured, dict):
-                contact = structured.get("contact")
-                if isinstance(contact, dict) and contact.get("name"):
-                    contact["name"] = ResumeParser._normalize_name(contact["name"])
-        return resume
+        from services import resume_access
+
+        return resume_access.get_active_structured(user_email=user_email)
 
     def ensure_structured_resume(self, user_email: str = "") -> Optional[Dict[str, Any]]:
-        """Return a structured resume, re-parsing from the base S3 file if needed.
+        """Return a structured resume, re-parsing the ACTIVE asset's original
+        file from S3 if its parse never completed (or failed).
 
-        Users who uploaded before the async parse flow (or whose parse job
-        failed) only have a `type='base'` doc with an S3 key — no `structured`
-        field. Without this fallback the tailor endpoint would reject them
-        even though their resume is sitting in S3.
+        Only the active asset is ever re-parsed — a stale sibling upload can
+        never resurrect itself through this path (spec 1.2).
         """
         resume = self.get_structured_resume(user_email=user_email)
         if resume and resume.get("structured"):
@@ -1250,30 +1266,22 @@ class ResumeParser:
             )
             return None
 
-        logger.info(
-            "ensure_structured_resume: no parsed resume for %s, searching for base file to re-parse",
-            user_email,
-        )
+        from services import resume_access
 
-        base = self.user_resumes.find_one(
-            {"user_email": user_email, "type": "base", "is_active": True}
-        ) or self.user_resumes.find_one(
-            {"user_email": user_email, "type": "base"},
-            sort=[("uploaded_at", -1)],
-        )
-        if not base or not base.get("s3_key"):
+        asset = resume_access.get_active_asset(user_email)
+        if not asset or not asset.get("object_key"):
             logger.warning(
-                "ensure_structured_resume: no base file doc with s3_key for %s (base doc exists: %s)",
+                "ensure_structured_resume: no re-parsable asset for %s (asset exists: %s)",
                 user_email,
-                bool(base),
+                bool(asset),
             )
             return None
 
+        resume_id = asset["resume_id"]
         logger.info(
-            "ensure_structured_resume: found base file for %s — s3_key=%s, filename=%s — attempting re-parse from S3",
+            "ensure_structured_resume: re-parsing asset %s for %s from S3",
+            resume_id,
             user_email,
-            base.get("s3_key"),
-            base.get("filename", "?"),
         )
 
         try:
@@ -1281,23 +1289,29 @@ class ResumeParser:
             import base64 as _b64
             import hashlib as _hashlib
 
-            file_bytes = get_storage_service().get_resume(base["s3_key"])
+            file_bytes = get_storage_service().get_resume(asset["object_key"])
             file_b64 = _b64.b64encode(file_bytes).decode("utf-8")
-            mime_type = self.get_mime_type(base.get("filename", "resume.pdf"))
-            content_hash = base.get("content_hash") or _hashlib.sha256(file_bytes).hexdigest()
+            mime_type = asset.get("mime_type") or self.get_mime_type(
+                asset.get("filename", "resume.pdf")
+            )
+            content_hash = asset.get("content_hash") or _hashlib.sha256(file_bytes).hexdigest()
             structured, raw_text = self.parse_to_structured("", file_b64, mime_type)
             result = self.save_parsed_resume(
-                structured, raw_text, user_email=user_email, content_hash=content_hash
+                structured,
+                raw_text,
+                user_email=user_email,
+                content_hash=content_hash,
+                resume_id=resume_id,
             )
+            resume_access.adopt_active_if_unset(user_email, resume_id)
             logger.info(
-                "ensure_structured_resume: successfully re-parsed resume for %s", user_email
+                "ensure_structured_resume: successfully re-parsed asset %s", resume_id
             )
             return result
         except Exception as e:
             logger.error(
-                "ensure_structured_resume: S3 reparse failed for %s (s3_key=%s): %s",
-                user_email,
-                base.get("s3_key"),
+                "ensure_structured_resume: S3 reparse failed for asset %s: %s",
+                resume_id,
                 e,
                 exc_info=True,
             )
@@ -1326,46 +1340,88 @@ class ResumeParser:
         Returns:
             Estimated total years of experience (minimum 1 if any work found,
             0 if no parseable dates exist).
-        """
-        total_months = 0
-        now = datetime.now()
-        current_year = now.year
-        current_month = now.month
 
+        v4: delegates to _experience_intervals_months — exact month-level
+        interval math WITH overlap merging, so concurrent roles never
+        double-count and numeric date formats (05/2021) parse too.
+        """
+        total_months = ResumeParser._experience_intervals_months(structured)
+        return max(1, total_months // 12) if total_months > 0 else 0
+
+    @staticmethod
+    def _experience_intervals_months(structured: dict) -> int:
+        """Exact total months of experience with OVERLAP MERGING.
+
+        Each experience entry's date string parses into a month-precision
+        (start, end) interval; overlapping intervals merge before summing, so
+        concurrent roles (a job + a parallel contract) never double-count —
+        the per-entry sum in _estimate_experience_years inflates exactly
+        those resumes. Handles "Jan 2020 - Dec 2022" (inclusive months),
+        "May 2021 - Present/Current/Now", year-only "2019 - 2021"
+        (Jan..Dec assumed), and numeric "05/2021 - 08/2023" / "2021-05".
+        Deterministic — no LLM anywhere. Returns 0 when nothing parses."""
+        now = datetime.now()
+        now_idx = now.year * 12 + (now.month - 1)
+
+        def _month_points(dates: str):
+            """Month-precision points in textual order: (pos, index, bare?)"""
+            points = []
+            covered = []
+            # Numeric MM/YYYY and YYYY-MM before the bare-year pass would
+            # otherwise split their digits.
+            for m in re.finditer(r"\b(0?[1-9]|1[0-2])\s*/\s*((?:19|20)\d{2})\b", dates):
+                points.append((m.start(), int(m.group(2)) * 12 + int(m.group(1)) - 1, False))
+                covered.append((m.start(), m.end()))
+            for m in re.finditer(r"\b((?:19|20)\d{2})\s*-\s*(0?[1-9]|1[0-2])\b(?!\s*\d)", dates):
+                points.append((m.start(), int(m.group(1)) * 12 + int(m.group(2)) - 1, False))
+                covered.append((m.start(), m.end()))
+            # "Month YYYY" pairs.
+            for m in _MONTH_PATTERN.finditer(dates):
+                year_m = _YEAR_PATTERN.search(dates, m.end())
+                if year_m and year_m.start() - m.end() <= 6:
+                    month_num = _MONTH_MAP.get(m.group(0).lower()[:3])
+                    if month_num:
+                        points.append((m.start(), int(year_m.group(0)) * 12 + month_num - 1, False))
+                        covered.append((m.start(), year_m.end()))
+            # Bare years not already claimed by a pair above.
+            for m in _YEAR_PATTERN.finditer(dates):
+                if not any(s <= m.start() < e for s, e in covered):
+                    points.append((m.start(), int(m.group(0)) * 12, True))
+            points.sort(key=lambda p: p[0])
+            return points
+
+        intervals = []
         for exp in structured.get("experience", []):
-            dates = exp.get("dates", "")
+            dates = str(exp.get("dates", "") or "")
             if not dates:
                 continue
+            pts = _month_points(dates)
+            if not pts:
+                continue
+            is_present = any(kw in dates.lower() for kw in _PRESENT_KEYWORDS)
+            start = pts[0][1]
+            if is_present:
+                end = now_idx
+            elif len(pts) >= 2:
+                end = pts[-1][1]
+                if pts[-1][2]:  # year-only end ("... - 2021") means through Dec
+                    end += 11
+            else:
+                end = start  # single dated point, no "present": one month
+            if end < start:
+                start, end = end, start
+            intervals.append((min(start, now_idx), min(end, now_idx)))
 
-            # Extract 4-digit years (e.g., 2020, 2023)
-            years = _YEAR_PATTERN.findall(dates)
-
-            # Extract month abbreviations (e.g., "Jan", "May", "December")
-            months = [m.group(0).lower()[:3] for m in _MONTH_PATTERN.finditer(dates)]
-
-            if len(years) >= 2:
-                # Date range with start and end years
-                try:
-                    start_year = int(years[0])
-                    end_year = int(years[-1])
-                    start_m = _MONTH_MAP.get(months[0], 1) if months else 1
-                    end_m = (
-                        _MONTH_MAP.get(months[-1] if len(months) >= 2 else "", 12) if months else 12
-                    )
-                    total_months += (end_year - start_year) * 12 + (end_m - start_m)
-                except (ValueError, IndexError):
-                    # Fallback: year-only calculation
-                    total_months += (int(years[-1]) - int(years[0])) * 12
-
-            elif len(years) == 1:
-                # Single year — check if it extends to "Present"
-                dates_lower = dates.lower()
-                if any(kw in dates_lower for kw in _PRESENT_KEYWORDS):
-                    try:
-                        start_year = int(years[0])
-                        start_m = _MONTH_MAP.get(months[0], 1) if months else 1
-                        total_months += (current_year - start_year) * 12 + (current_month - start_m)
-                    except (ValueError, IndexError):
-                        total_months += (current_year - int(years[0])) * 12
-
-        return max(1, total_months // 12) if total_months > 0 else 0
+        if not intervals:
+            return 0
+        intervals.sort()
+        total = 0
+        cur_start, cur_end = intervals[0]
+        for s, e in intervals[1:]:
+            if s <= cur_end + 1:
+                cur_end = max(cur_end, e)
+            else:
+                total += cur_end - cur_start + 1
+                cur_start, cur_end = s, e
+        total += cur_end - cur_start + 1
+        return total

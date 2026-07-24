@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 # Import METRIC_PATTERN from impact_engine for consistent metric detection
 from services.impact_engine import METRIC_PATTERN, WEAK_VERB_PHRASES
 
+# Shared prompt-rule kernel (Part D) — every bullet-writing LLM call here
+# interpolates these so it cooperates with the guards instead of emitting tokens
+# the guard later strips/penalizes.
+from services import prompt_rules
+
 # Target fill thresholds
 _TARGET_FILL = 0.90
 _OVERFLOW_SOFT = 0.95
@@ -80,6 +85,7 @@ class ContentAugmenter:
         original: Dict[str, Any],
         jd_analysis: Dict[str, Any],
         preserve_project_names: set | None = None,
+        allow_project_generation: bool = True,
     ) -> Dict[str, Any]:
         """Run all augmentation phases on a tailored resume.
 
@@ -93,6 +99,10 @@ class ContentAugmenter:
                 projects) that aren't in the original resume but must
                 survive. Without this, the strip silently discarded
                 pre-injected projects and forced Phase 1 to regenerate them.
+            allow_project_generation: experience-first policy gate (see
+                project_generator.project_generation_policy). False for
+                experienced candidates — Phase 1 is skipped and the page
+                budget goes to their real experience bullets instead.
 
         Returns:
             The augmented tailored resume dict.
@@ -166,10 +176,19 @@ class ContentAugmenter:
             len(tailored.get("experience", [])),
         )
 
-        # Phase 1: ALWAYS try project generation if under cap, regardless of fill.
-        # Uses batch generation (single LLM call for all needed projects).
+        # Phase 1: project generation — gated by the experience-first policy.
+        # Early-career resumes are expected to carry projects; experienced
+        # resumes get their page budget spent on real experience instead
+        # (generated filler projects read as padding to recruiters and evict
+        # experience bullets in the one-page allocation).
         projects = tailored.get("projects", [])
-        if len(projects) < _MAX_PROJECTS:
+        if not allow_project_generation:
+            logger.warning(
+                "ContentAugmenter Phase 1 SKIPPED by experience-first policy — "
+                "page budget goes to experience bullets"
+            )
+            diag["deep_project_skip"] = True
+        elif len(projects) < _MAX_PROJECTS:
             t0 = time.time()
             tailored = self._augment_projects(tailored, original, jd_analysis)
             fill = self._measure_fill(tailored)
@@ -663,21 +682,21 @@ class ContentAugmenter:
         prompt = (
             "You are expanding experience bullets for a resume to fill a one-page PDF.\n\n"
             "STRICT RULES:\n"
-            "1. Each bullet MUST be 150-220 characters long (2 full lines on the PDF).\n"
-            "2. Each bullet starts with a strong action verb: Built, Developed, Implemented, Designed, "
-            "Led, Optimized, Automated, Deployed, Reduced, Integrated, Configured, Streamlined, "
-            "Migrated, Established, Refactored, Monitored.\n"
-            "3. Each bullet follows: Action Verb + Technology/Context + Measurable Outcome.\n"
-            "4. Add REALISTIC approximate metrics to every bullet:\n"
-            "   - Use approximations: ~15%, 3x, 50+, 1K+ — never precise numbers\n"
-            "   - Scale to context: intern/personal project → small numbers (50+ users, ~200ms)\n"
-            "     Small company → medium (1K+ requests, ~20% improvement)\n"
-            "     Mid/large company → larger (10K+ users, ~30% reduction)\n"
-            "   - Prefer relative improvements (%, Nx) over absolute numbers\n"
-            "5. Ground every bullet in the candidate's ACTUAL skills and experience context below.\n"
-            "6. Do NOT fabricate companies, clients, or production systems.\n"
-            "7. Do NOT duplicate content from existing bullets.\n"
-            f"8. Naturally incorporate these JD keywords where relevant: {required_skills}\n"
+            f"1. {prompt_rules.experience_bullet_length_rule()}\n"
+            "2. Each bullet follows: Action Verb + Technology/Context + a concrete, "
+            "interview-defensible outcome (the candidate could expand it into a full "
+            "Situation-Task-Action-Result story).\n"
+            f"3. {prompt_rules.METRIC_HONESTY_RULE}\n"
+            f"4. {prompt_rules.BANNED_SYMBOLS_RULE}\n"
+            f"5. {prompt_rules.VERB_DIVERSITY_RULE}\n"
+            f"6. {prompt_rules.TERMINAL_PUNCTUATION_RULE}\n"
+            f"7. {prompt_rules.VOICE_RULE}\n"
+            "8. Ground every bullet in the candidate's ACTUAL skills and experience "
+            "context below. Do NOT fabricate companies, clients, or production systems, "
+            "and do NOT duplicate content from existing bullets.\n"
+            f"9. Naturally incorporate these JD keywords where relevant (do not stuff — "
+            f"aim for {prompt_rules.KEYWORD_COVERAGE_LOW}-{prompt_rules.KEYWORD_COVERAGE_HIGH}% "
+            f"coverage, not 100%): {required_skills}\n"
             f"   Additional keywords: {keywords}\n\n"
             f"Generate additional bullets for these entries:{entries_desc}\n\n"
             f"=== CANDIDATE CONTEXT ===\n{original_text}\n\n"
@@ -778,24 +797,28 @@ class ContentAugmenter:
         )
 
         prompt = (
-            "You are adding quantifiable impact to resume bullets that currently lack metrics.\n\n"
-            "STRICT RULES FOR REALISTIC METRICS:\n"
-            "1. Use ONLY approximate, realistic metrics — never precise numbers.\n"
-            "   GOOD: ~15%, 3x, 50+, 1K+, ~200ms, ~$10K\n"
-            "   BAD: 14.7%, exactly 1,247 users, $47,832\n"
-            "2. Scale metrics to the role context:\n"
-            f"   Context signals: {context_signals}\n"
-            "   - Intern/junior: 50+ users, ~200ms improvement, 3x faster, ~15% reduction\n"
-            "   - Mid-level: 1K+ requests/day, ~30% improvement, 5x throughput\n"
-            "   - Senior/lead: 10K+ users, ~40% cost reduction, 100K+ records\n"
-            "3. Derive metrics from the ACTION described — don't invent unrelated numbers.\n"
-            "   'Built REST API' → 'serving 1K+ requests/day' is reasonable\n"
-            "   'Optimized queries' → 'reducing latency by ~40%' is reasonable\n"
-            "   'Automated testing' → 'covering 200+ test cases' is reasonable\n"
-            "4. NEVER add revenue figures or exact dollar amounts.\n"
-            "5. Prefer relative improvements (%, Nx, time saved) over absolute numbers.\n"
-            "6. Keep the original meaning intact — only ADD a metric clause, don't rewrite.\n"
-            "7. Each enhanced bullet must be under 250 characters.\n\n"
+            "You are sharpening resume bullets that currently read as flat activity, "
+            "making each a concrete, interview-defensible accomplishment.\n\n"
+            "STRICT RULES:\n"
+            f"1. {prompt_rules.METRIC_HONESTY_RULE}\n"
+            "   Do NOT invent a number to satisfy this. If the action has no grounded "
+            "number, add a concrete OUTCOME clause instead (what changed as a result), "
+            "not a fabricated metric.\n"
+            f"   Context signals (for judging what scope is plausible, NOT numbers to "
+            f"insert): {context_signals}\n"
+            f"2. {prompt_rules.BANNED_SYMBOLS_RULE}\n"
+            "3. Derive the outcome from the ACTION described — don't attach unrelated "
+            "claims. Name what the work served, enabled, removed, or eliminated. "
+            "(e.g. built a service → what it served; ran a campaign → what it lifted; "
+            "closed the books → what it reduced; managed patients → the care outcome).\n"
+            "4. Dollar figures are allowed ONLY when the source already states them "
+            "(revenue, budget, savings are the core metric in finance/sales — keep a "
+            "grounded number, never invent one).\n"
+            "5. Keep the original meaning intact — only ADD an outcome/metric clause, "
+            "don't rewrite the action.\n"
+            f"6. {prompt_rules.TERMINAL_PUNCTUATION_RULE}\n"
+            f"7. Keep each enhanced bullet within {prompt_rules.EXPERIENCE_BULLET_MAX_CHARS} "
+            "characters.\n\n"
             f"Bullets to enhance:\n{bullets_list}\n\n"
             "Return a JSON object:\n"
             '{"enhanced_bullets": [\n'
@@ -1141,8 +1164,10 @@ class ContentAugmenter:
             "   what the bullet already says so the keyword shows up in use.\n"
             "4. Where it fits naturally, shape the bullet as 'Accomplished X, as measured by Y,\n"
             "   by doing Z' — using only numbers already present in the bullet.\n"
-            "5. Keep each bullet under 250 characters.\n"
-            "6. Only modify bullets where the keyword fits naturally; skip any that don't.\n\n"
+            f"5. {prompt_rules.BANNED_SYMBOLS_RULE}\n"
+            f"6. {prompt_rules.TERMINAL_PUNCTUATION_RULE}\n"
+            f"7. Keep each bullet within {prompt_rules.EXPERIENCE_BULLET_MAX_CHARS} characters.\n"
+            "8. Only modify bullets where the keyword fits naturally; skip any that don't.\n\n"
             f"Keywords to strengthen: {', '.join(under_represented)}\n\n"
             f"Current bullets:\n{bullets_text}\n\n"
             "Return a JSON object:\n"
@@ -1206,9 +1231,7 @@ class ContentAugmenter:
             "You are replacing weak opening verbs in resume bullets with strong action verbs.\n\n"
             "RULES:\n"
             "1. ONLY change the opening verb/phrase — keep the rest of the bullet identical.\n"
-            "2. Use strong verbs: Built, Developed, Implemented, Designed, Led, Optimized, "
-            "Automated, Deployed, Reduced, Integrated, Configured, Streamlined, Migrated, "
-            "Established, Refactored, Monitored, Engineered, Architected, Spearheaded.\n"
+            f"2. {prompt_rules.VERB_DIVERSITY_RULE}\n"
             "3. Choose the verb that best matches the action described.\n"
             "4. Do NOT change the content or meaning of the bullet.\n\n"
             f"Bullets to fix:\n{bullets_text}\n\n"
@@ -1291,16 +1314,11 @@ class ContentAugmenter:
             "    role, but not as the grammatical subject of the opening sentence.\n"
             "\n"
             "STYLE rules:\n"
-            "1. EXACTLY 3-4 sentences. Not 5, not 6.\n"
+            f"1. {prompt_rules.SUMMARY_RULE}\n"
             "2. Naturally mention the target role title and at least 3 of the required skills.\n"
             "3. Ground every claim in the candidate's actual experience below.\n"
             "4. Use plain, professional language. Direct, specific, no buzzwords.\n"
-            "5. BANNED WORDS — do NOT use ANY: 'Versatile', 'Proficient', 'Leverages',\n"
-            "   'extensive experience', 'proven track record', 'results-driven', 'passionate',\n"
-            "   'detail-oriented', 'highly skilled', 'seasoned', 'cutting-edge', 'innovative',\n"
-            "   'dynamic', 'self-motivated', 'Adept', 'dedicated', 'committed to excellence',\n"
-            "   'strong foundation', 'strong record', 'strong background', 'robust experience',\n"
-            "   'should have', 'candidates should'.\n"
+            f"5. {prompt_rules.banned_phrases_rule()}\n"
             "6. Do NOT start with an adjective.\n"
             "7. Do NOT start with 'I' or with the JD's job title verbatim.\n\n"
             "GOOD examples (match this voice):\n"

@@ -315,6 +315,48 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             job_id = get_resume_service().create_job("trend_aggregate", {}, "system@internal")
             ResumeService.invoke_async(job_id, "trend_aggregate", {})
             return {"job": name, "enqueued": job_id}
+        if name == "guest_retention":
+            # Guest Onboarding v2 — daily claim-aware retention sweep. Same
+            # system-actor bridge as trend_aggregate: enqueue the resume
+            # `_process_job` job `guest_retention_cleanup` (deletes ONLY
+            # expired UNCLAIMED guest sessions/records/jobs; retention_days=0
+            # → the job reports skipped). Also admin-invokable via
+            # POST /api/admin/guest-retention-cleanup.
+            from services.resume_service import get_resume_service, ResumeService
+            job_id = get_resume_service().create_job("guest_retention_cleanup", {}, "system@internal")
+            ResumeService.invoke_async(job_id, "guest_retention_cleanup", {})
+            return {"job": name, "enqueued": job_id}
+        if name == "ats_signal_aggregate":
+            # System/cron recompute of the cross-user (role, keyword) -> mean-ATS
+            # aggregate (Part B3). Same bridge pattern as trend_aggregate:
+            # system actor, no user_email, aggregate-only output. Not user-routable.
+            from services.resume_service import get_resume_service, ResumeService
+            job_id = get_resume_service().create_job("ats_signal_aggregate", {}, "system@internal")
+            ResumeService.invoke_async(job_id, "ats_signal_aggregate", {})
+            return {"job": name, "enqueued": job_id}
+        if name.startswith("ingest_"):
+            # ADR-003 canonical job inventory. One prefix branch covers every
+            # ingestion rule so adding a shard schedule is a Terraform-only
+            # change, not a code change:
+            #   ingest_workday / ingest_career_pages -> dispatch that source's
+            #       due shards (bounded per tick; `due_shards` excludes leased
+            #       and backed-off shards, which is the backpressure)
+            #   ingest_maintenance -> the retention sweep
+            # Both bridge to the resume `_process_job` job types of the same
+            # family, system actor, exactly like trend_aggregate above.
+            from services.resume_service import get_resume_service, ResumeService
+            if name == "ingest_maintenance":
+                job_type, payload = "job_ingest_maintenance", {}
+            else:
+                source = {"ingest_workday": "workday",
+                          "ingest_career_pages": "career-pages"}.get(name)
+                if source is None:
+                    logger.warning("[scheduled] unknown ingest rule: %s", name)
+                    return {"error": "unknown job", "name": name}
+                job_type, payload = "job_ingest_dispatch", {"source": source}
+            job_id = get_resume_service().create_job(job_type, payload, "system@internal")
+            ResumeService.invoke_async(job_id, job_type, payload)
+            return {"job": name, "enqueued": job_id}
         logger.warning("[scheduled] unknown job: %s", name)
         return {"error": "unknown job", "name": name}
     except Exception as e:

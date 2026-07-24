@@ -38,6 +38,15 @@ def create_app():
     app.config['JWT_SECRET_KEY'] = AppConfig.JWT_SECRET_KEY
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = AppConfig.JWT_ACCESS_TOKEN_EXPIRES
 
+    # Global request-body cap: 8MB (Resume Platform v3 spec section 4).
+    # Oversized bodies are rejected with 413 before route code runs; the
+    # handler below keeps the error shape JSON.
+    app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024
+
+    @app.errorhandler(413)
+    def _payload_too_large(_e):
+        return {"error": "file_too_large"}, 413
+
     allowed_origins = os.getenv(
         'ALLOWED_ORIGINS',
         'http://localhost:5173,http://localhost:5174,http://localhost:3000',
@@ -73,7 +82,9 @@ def create_app():
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['X-XSS-Protection'] = '0'
         response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-        if request.path.startswith('/api/'):
+        # /api/jobs/logo/* is a public immutable asset — the route sets its
+        # own long-lived Cache-Control; everything else stays no-store.
+        if request.path.startswith('/api/') and not request.path.startswith('/api/jobs/logo/'):
             response.headers['Cache-Control'] = 'no-store'
         return response
 

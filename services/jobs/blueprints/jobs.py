@@ -7,10 +7,15 @@ All endpoints require a valid JWT whose identity is the user's email.
 import logging
 import re
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, Response, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
-from utils.security import InputSanitizer, get_rate_limiter, get_client_ip
+from utils.security import (
+    InputSanitizer,
+    check_rate_limit,
+    get_client_ip,
+    get_rate_limiter,
+)
 
 jobs_bp = Blueprint("jobs", __name__)
 logger = logging.getLogger(__name__)
@@ -268,54 +273,57 @@ def _split_lines(value, max_items: int, max_len: int = 200) -> list:
 # Per-user Apify key (BYO) — GET status, PUT to set/update, DELETE to clear.
 # ------------------------------------------------------------------
 
-@jobs_bp.route("/apify-key", methods=["GET"])
-@jwt_required()
-def get_apify_key():
-    user_email = get_jwt_identity()
-    try:
-        from services.job_service import get_job_service
-        return jsonify(get_job_service().get_user_apify_key_status(user_email)), 200
-    except Exception as e:
-        logger.error(f"Get apify key error: {e}")
-        return jsonify({"error": "Failed to load key"}), 500
-
-
-@jobs_bp.route("/apify-key", methods=["PUT"])
-@jwt_required()
-def set_apify_key():
-    client_ip = get_client_ip(request)
-    limiter = get_rate_limiter()
-    if limiter.is_rate_limited(f"jobs_apify_key:{client_ip}", max_requests=10, window_seconds=300):
-        return jsonify({"error": "Rate limit exceeded"}), 429
-
-    user_email = get_jwt_identity()
-    data = request.get_json(silent=True) or {}
-    raw = data.get("apify_key", "")
-    if not isinstance(raw, str):
-        return jsonify({"error": "apify_key must be a string"}), 400
-    # Belt + braces: don't sanitize as 'string' here because the sanitizer
-    # may strip safe chars; we validate format inside the service.
-    try:
-        from services.job_service import get_job_service
-        result = get_job_service().set_user_apify_key(user_email, raw)
-        if not result.get("ok"):
-            return jsonify({"error": result.get("error", "Failed to save key")}), 400
-        return jsonify(result), 200
-    except Exception as e:
-        logger.error(f"Save apify key error: {e}")
-        return jsonify({"error": "Failed to save key"}), 500
-
-
-@jobs_bp.route("/apify-key", methods=["DELETE"])
-@jwt_required()
-def delete_apify_key():
-    user_email = get_jwt_identity()
-    try:
-        from services.job_service import get_job_service
-        return jsonify(get_job_service().delete_user_apify_key(user_email)), 200
-    except Exception as e:
-        logger.error(f"Delete apify key error: {e}")
-        return jsonify({"error": "Failed to remove key"}), 500
+# --- APIFY DISABLED (temporary): the BYO per-user Apify key endpoints are
+# turned off (GET/PUT/DELETE /api/jobs/apify-key). Uncomment this whole block
+# to re-enable. ---
+# @jobs_bp.route("/apify-key", methods=["GET"])
+# @jwt_required()
+# def get_apify_key():
+#     user_email = get_jwt_identity()
+#     try:
+#         from services.job_service import get_job_service
+#         return jsonify(get_job_service().get_user_apify_key_status(user_email)), 200
+#     except Exception as e:
+#         logger.error(f"Get apify key error: {e}")
+#         return jsonify({"error": "Failed to load key"}), 500
+#
+#
+# @jobs_bp.route("/apify-key", methods=["PUT"])
+# @jwt_required()
+# def set_apify_key():
+#     client_ip = get_client_ip(request)
+#     limiter = get_rate_limiter()
+#     if limiter.is_rate_limited(f"jobs_apify_key:{client_ip}", max_requests=10, window_seconds=300):
+#         return jsonify({"error": "Rate limit exceeded"}), 429
+#
+#     user_email = get_jwt_identity()
+#     data = request.get_json(silent=True) or {}
+#     raw = data.get("apify_key", "")
+#     if not isinstance(raw, str):
+#         return jsonify({"error": "apify_key must be a string"}), 400
+#     # Belt + braces: don't sanitize as 'string' here because the sanitizer
+#     # may strip safe chars; we validate format inside the service.
+#     try:
+#         from services.job_service import get_job_service
+#         result = get_job_service().set_user_apify_key(user_email, raw)
+#         if not result.get("ok"):
+#             return jsonify({"error": result.get("error", "Failed to save key")}), 400
+#         return jsonify(result), 200
+#     except Exception as e:
+#         logger.error(f"Save apify key error: {e}")
+#         return jsonify({"error": "Failed to save key"}), 500
+#
+#
+# @jobs_bp.route("/apify-key", methods=["DELETE"])
+# @jwt_required()
+# def delete_apify_key():
+#     user_email = get_jwt_identity()
+#     try:
+#         from services.job_service import get_job_service
+#         return jsonify(get_job_service().delete_user_apify_key(user_email)), 200
+#     except Exception as e:
+#         logger.error(f"Delete apify key error: {e}")
+#         return jsonify({"error": "Failed to remove key"}), 500
 
 
 @jobs_bp.route("/fetch-jd", methods=["POST"])
@@ -666,6 +674,9 @@ def workday_search():
         "us_only": us_only,
         "force_refresh": force_refresh,
         "user_email": user_email,
+        # Viewer timezone: "posted today" is computed in the USER's calendar
+        # day (service clamps to the real-world offset range).
+        "tz_offset_minutes": data.get("tz_offset_minutes"),
     }
     try:
         from services.resume_service import get_resume_service, ResumeService
@@ -720,6 +731,7 @@ def career_pages_search():
         "us_only": bool(data.get("us_only", True)),
         "force_refresh": bool(data.get("force_refresh", False)),
         "user_email": get_jwt_identity(),
+        "tz_offset_minutes": data.get("tz_offset_minutes"),
     }
     try:
         from services.resume_service import get_resume_service, ResumeService
@@ -730,6 +742,62 @@ def career_pages_search():
     except Exception as e:
         logger.error(f"Career pages search submit error: {e}")
         return jsonify({"error": "Failed to start Career Pages search"}), 500
+
+
+# ------------------------------------------------------------------
+# MNCs / Big Tech tab — third career-pages variant over the curated
+# MNC_CATALOG (board ATS + Workday CXS + enterprise platforms, with a
+# JSearch aggregator fallback for bot-walled companies). Same async
+# submit/poll pattern.
+# ------------------------------------------------------------------
+
+@jobs_bp.route("/mnc/catalog", methods=["GET"])
+@jwt_required()
+def mnc_catalog():
+    """Catalog metadata for the MNCs tab's sector/company filters."""
+    try:
+        from services.mnc_jobs_service import catalog_summary
+        return jsonify(catalog_summary()), 200
+    except Exception as e:
+        logger.error(f"MNC catalog error: {e}")
+        return jsonify({"error": "Failed to load MNC catalog"}), 500
+
+
+@jobs_bp.route("/mnc/search", methods=["POST"])
+@jwt_required()
+def mnc_search():
+    """Run an MNCs search across the verified MNC catalog.
+
+    Body mirrors /career-pages/search: titles, industries (sector keys),
+    companies (slugs), location, remote_only, us_only, force_refresh.
+    Returns: {"job_id": "..."} (202) — poll /api/resume/job/<id>.
+    """
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"jobs_mnc:{client_ip}", max_requests=6, window_seconds=300):
+        return jsonify({"error": "Rate limit exceeded. MNC searches are limited to 6 / 5 min."}), 429
+
+    data = request.get_json(silent=True) or {}
+    payload = {
+        "titles": _split_lines(data.get("titles"), max_items=40, max_len=120),
+        "industries": _split_lines(data.get("industries"), max_items=15, max_len=40),
+        "companies": _split_lines(data.get("companies"), max_items=100, max_len=60),
+        "location": InputSanitizer.sanitize_string(str(data.get("location") or ""), max_length=80),
+        "remote_only": bool(data.get("remote_only", False)),
+        "us_only": bool(data.get("us_only", True)),
+        "force_refresh": bool(data.get("force_refresh", False)),
+        "user_email": get_jwt_identity(),
+        "tz_offset_minutes": data.get("tz_offset_minutes"),
+    }
+    try:
+        from services.resume_service import get_resume_service, ResumeService
+        svc = get_resume_service()
+        job_id = svc.create_job("mnc_jobs", payload, user_email=payload["user_email"])
+        ResumeService.invoke_async(job_id, "mnc_jobs", payload)
+        return jsonify({"job_id": job_id}), 202
+    except Exception as e:
+        logger.error(f"MNC search submit error: {e}")
+        return jsonify({"error": "Failed to start MNC search"}), 500
 
 
 # ------------------------------------------------------------------
@@ -1037,13 +1105,22 @@ def pipeline_match_scores():
     """Score a batch of pipeline rows against the caller's parsed resume.
 
     Body: { "items": [{ "id": "...", "title": "...", "description": "..." }, ...] }
-    Returns: { "scores": { id: { match_score, matched_skills, missing_top, explain } },
-               "meta":   { resume_skill_count, has_resume } }
+    Returns: { "scores": { id: { score, band, confidence, score_version,
+                                 components, explanation, missing_requirements,
+                                 hard_constraints, ...legacy match_score/
+                                 matched_skills/missing_top } },
+               "meta":   { score_version, resume_skill_count, has_resume,
+                           resume_years, resume_role_families } }
+
+    ADR-002: this is the SAME shared fit engine the guest path and the feed
+    pipelines use, so an authenticated user and a guest looking at the same
+    posting see the same number. It replaced jd_match_scorer, whose
+    denominator came from the resume's own skill list.
 
     Stateless on the backend — the frontend fires this after a pipeline run
     lands and overlays the scores on the already-rendered tier groups. No
-    LLM call, no caching needed: the comparison is regex-against-skills,
-    fast enough to score 100 rows under ~50ms.
+    LLM call in this path (deterministic rules only), fast enough to score
+    100 rows well inside the request budget.
     """
     client_ip = get_client_ip(request)
     limiter = get_rate_limiter()
@@ -1060,8 +1137,8 @@ def pipeline_match_scores():
     items = items_raw[:200]
 
     try:
-        from services.jd_match_scorer import score_batch
-        scores, meta = score_batch(user_email, items)
+        from services.fit_score import score_batch_for_user
+        scores, meta = score_batch_for_user(user_email, items)
         return jsonify({"scores": scores, "meta": meta}), 200
     except Exception as e:
         logger.error(f"Pipeline match-scores error: {e}")
@@ -1135,3 +1212,217 @@ def delete_saved(job_id):
     except Exception as e:
         logger.error(f"Delete saved job error: {e}")
         return jsonify({"error": "Failed to delete job"}), 500
+
+
+# ------------------------------------------------------------------
+# GET /api/jobs/logo/<key> — public company-logo asset (cached favicon)
+# ------------------------------------------------------------------
+# Rides the existing ANY /api/jobs/{proxy+} edge route — NO new Terraform
+# prefix. PUBLIC (an <img> tag can't send Authorization) and never 401.
+# The key is format-validated (exactly 40 lowercase hex chars) BEFORE any
+# Mongo filter. The service NEVER fetches for a key without an existing
+# company_logos doc — docs are created only by the stamp/warm paths, which
+# derive keys from real scraped companies (no SSRF-by-hash oracle).
+_LOGO_KEY_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+@jobs_bp.route("/logo/<key>", methods=["GET"])
+def company_logo(key):
+    if not isinstance(key, str) or not _LOGO_KEY_RE.match(key):
+        return jsonify({"error": "Not found"}), 404
+
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"jobs_logo:{client_ip}", max_requests=300, window_seconds=300):
+        return jsonify({"error": "Rate limit exceeded"}), 429
+
+    try:
+        from services.company_logo_service import get_logo_bytes
+        got = get_logo_bytes(key)
+    except Exception as e:
+        logger.error(f"Logo serve error: {type(e).__name__}")
+        got = None
+    if not got:
+        # Unknown key, negative-cached miss, or fetch failure — all the same
+        # generic 404 (the FE falls back to a monogram).
+        return jsonify({"error": "Not found"}), 404
+
+    data, content_type = got
+    resp = Response(data, mimetype=content_type)
+    # Immutable: the key is a content-addressed sha1 of the company name and
+    # the underlying icon changes rarely; a week of edge/browser caching is
+    # safe. The app-level no-store hook carves this path out.
+    resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
+    return resp
+
+
+# ------------------------------------------------------------------
+# POST /api/jobs/guest/matches — Guest Onboarding job matching (NO JWT)
+# ------------------------------------------------------------------
+# Free direct sources ONLY (Workday CXS + Greenhouse/Lever/Ashby — the same
+# skip_apify=True path as the daily pipeline; no Apify, no paid actors),
+# scored with jd_match_scorer against the guest's parsed resume, filtered to
+# score >= guest_jobs_min_score, HARD-capped at guest_jobs_max (5) — the
+# server never returns more rows (no hidden locked rows for CSS to hide).
+# Each card carries a server-minted match_id (the only tailorable reference),
+# a deterministic `why`, and a public-filings `sponsorship` signal (or null).
+#
+# Cached per QUOTA SUBJECT per day (session-level fallback): a same-day
+# repeat call — even from a fresh guest_id of the same subject — returns the
+# cache synchronously (200, {cached:true}) and never re-spends the global
+# matches budget. A cache miss dispatches the scrape+score as an ASYNC job
+# (invariant #2 — the free-source fan-out blows past API Gateway's 29s),
+# returning 202 {job_id}; the FE polls GET /api/resume/guest/job/<id>?guest_id=.
+@jobs_bp.route("/guest/matches", methods=["POST"])
+def guest_matches():
+    from services import guest_challenge_service
+    from services import guest_service
+
+    if not guest_service.guest_onboarding_enabled():
+        return (
+            jsonify({
+                "error": "guest_onboarding_disabled",
+                "message": "Guest onboarding is currently unavailable. Please sign up to continue.",
+            }),
+            503,
+        )
+
+    client_ip = get_client_ip(request)
+    # Distributed (cross-Lambda-container) limit: a per-container dict cannot
+    # enforce "10 guest match runs per hour per client" when N containers each
+    # keep their own. Fails CLOSED - a match run fans out paid-adjacent scrapes
+    # and LLM scoring, so a Mongo blip must not open it up.
+    if check_rate_limit(
+        f"guest:matches:{client_ip}", max_requests=10, window_seconds=3600
+    ):
+        return jsonify({"error": "Rate limit exceeded"}), 429
+
+    data = request.get_json(force=True, silent=True) or {}
+    guest_id = guest_service.validate_guest_id(data.get("guest_id") or "")
+    if not guest_id:
+        return jsonify({"error": "A valid guest_id is required"}), 400
+    # Optional echoed device token — validated anti-abuse signal, never trusted.
+    guest_service.validate_device_token(data.get("device_token") or "")
+    # Optional seniority view over the day's scanned pool (instant re-rank,
+    # never a re-scan) + viewer timezone for local-day recency.
+    seniority = data.get("seniority")
+    requested_seniority = (
+        guest_service.normalize_seniority(seniority) if seniority is not None else None
+    )
+    tz_offset_minutes = data.get("tz_offset_minutes")
+
+    session = guest_service.get_session(guest_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+    if not ((session.get("resume") or {}).get("structured")):
+        return jsonify({"error": "Upload your resume first"}), 400
+
+    # Progressive challenge hook — BEFORE any budget spend (default: no-op).
+    ch = guest_challenge_service.maybe_challenge(
+        "matches", guest_service.hash_ip(client_ip), session.get("quota_subject_id")
+    )
+    if ch:
+        return (
+            jsonify({
+                "error": "challenge_required",
+                "provider": ch.get("provider"),
+                # Solve the widget, POST {challenge_id, solution} to
+                # /api/resume/guest/challenge/verify, then retry.
+                "challenge_id": ch.get("challenge_id"),
+                "message": "Please complete a quick verification to continue.",
+            }),
+            429,
+        )
+
+    try:
+        cached = guest_service.get_cached_matches(guest_id, requested_seniority)
+        if cached is not None:
+            # Same-day subject-level cache hit — must NOT consume the global
+            # daily scrape budget (re-uploads never re-spend the breaker).
+            # A seniority change lands here too: it re-slices the stored
+            # pool instantly — no re-scan, no quota.
+            return jsonify(cached), 200
+
+        # Cache MISS. The global counter is spent ONCE per (subject, date)
+        # (spec 3.7): the atomic matches_reserved guard on the quota subject
+        # decides whether this call is today's FIRST run (spend the breaker)
+        # or a retry after a failed run (re-dispatch WITHOUT re-spending).
+        run = guest_service.reserve_matches_run(guest_id)
+        if run.get("first"):
+            if not guest_service.try_reserve_global_matches():
+                guest_service.release_matches_run(guest_id)
+                return (
+                    jsonify({
+                        "error": "capacity",
+                        "global": True,
+                        "message": (
+                            "We've hit today's platform-wide limit for free guest "
+                            "job matching. Sign up (free) to continue — or try "
+                            "again tomorrow."
+                        ),
+                    }),
+                    429,
+                )
+        else:
+            prior_job_id = run.get("job_id")
+            if prior_job_id:
+                prior = guest_service.get_guest_job(prior_job_id, guest_id)
+                if prior and prior.get("status") == "processing":
+                    # Idempotent retry while today's run is still in flight.
+                    return jsonify({"job_id": prior_job_id, "existing": True}), 202
+                # Failed (or evaporated) run: re-dispatch, no second spend.
+
+        from services.resume_service import ResumeService
+
+        payload = {"guest_id": guest_id}
+        if requested_seniority:
+            payload["seniority"] = requested_seniority
+        try:
+            payload["tz_offset_minutes"] = int(tz_offset_minutes)
+        except (TypeError, ValueError):
+            pass
+
+        # --- fast path: serve synchronously from the canonical inventory ----
+        # The legacy path returns 202 + a job_id because matching used to crawl
+        # ~1,100 third-party hosts and take up to 210 seconds. Reading the
+        # inventory is one indexed query plus deterministic scoring, so there is
+        # nothing to wait for: the guest gets results in the response instead of
+        # a spinner and 2-second polling.
+        #
+        # `inventory_only=True` guarantees this cannot start a fan-out inside
+        # the 60s jobs Lambda: if the crawler has not warmed this role family it
+        # returns None and we fall through to the async job below, unchanged.
+        if guest_service.inventory_mode_enabled():
+            try:
+                result = guest_service.compute_guest_matches(
+                    guest_id,
+                    None,
+                    requested_seniority,
+                    payload.get("tz_offset_minutes", 0),
+                    inventory_only=True,
+                )
+            except Exception as sync_err:
+                logger.warning("Guest matches inventory fast path failed: %s", sync_err)
+                result = None
+            if result is not None:
+                # The run is genuinely spent: compute_guest_matches persisted
+                # today's snapshot, so a repeat call hits get_cached_matches.
+                return jsonify(result), 200
+
+        try:
+            job_id = guest_service.create_guest_job("guest_matches", payload, guest_id)
+            ResumeService.invoke_async(job_id, "guest_matches", payload)
+        except Exception:
+            if run.get("first"):
+                # The job never dispatched — free the reserved global slot
+                # and today's subject reservation (pre-dispatch rollback).
+                guest_service.release_global_matches()
+                guest_service.release_matches_run(guest_id)
+            raise
+        # Stamp AFTER a successful dispatch so a dispatch failure never pins
+        # a dead job onto today's reservation.
+        guest_service.attach_matches_job(guest_id, job_id)
+        return jsonify({"job_id": job_id}), 202
+    except Exception as e:
+        logger.error(f"Guest matches error: {e}")
+        return jsonify({"error": "Failed to compute job matches"}), 500

@@ -223,8 +223,15 @@ def check_pdf_parseability(
     elif isinstance(skills_dict, list):
         flat_skills.extend(s for s in skills_dict if isinstance(s, str))
 
-    text_low = text.lower()
-    skills_found = sum(1 for s in flat_skills if s and s.lower() in text_low)
+    # Whitespace-collapse both sides: a long skill entry (multi-word skills,
+    # umbrella entries like "AWS (EC2, S3, EKS, RDS)") can line-wrap in the
+    # rendered PDF, so the extracted text has a newline where the JSON has a
+    # space — a false extraction failure, not a real ATS problem.
+    text_low = re.sub(r"\s+", " ", text.lower())
+    skills_found = sum(
+        1 for s in flat_skills
+        if s and re.sub(r"\s+", " ", s.lower().strip()) in text_low
+    )
     skills_total = len([s for s in flat_skills if s])
 
     # --- Glyph corruption ---

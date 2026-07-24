@@ -134,6 +134,72 @@ def ops_set_override(email):
 
 
 # ---------------------------------------------------------------------------
+# Guest Onboarding runtime config (platform_config._id="guest_onboarding")
+# ---------------------------------------------------------------------------
+# The admin tailoring-control surface for the guest funnel: quotas, score
+# threshold, circuit breaker, retention — all editable at runtime, no deploy.
+# Validation (types + sane bounds) lives in platform_config_service so the
+# route stays thin. PUT writes audit fields (updated_at/updated_by).
+@admin_bp.route("/guest-config", methods=["GET"])
+@admin_required
+def guest_config_get():
+    from services import platform_config_service as pconfig
+    from services.guest_service import guest_onboarding_env_enabled
+
+    cfg = pconfig.get_guest_config(force_refresh=True)
+    cfg["updated_at"] = _iso(cfg.get("updated_at"))
+    # Surface the env kill-switch state so the admin UI can explain why the
+    # feature is off even when the runtime `enabled` knob is on.
+    cfg["env_flag_enabled"] = guest_onboarding_env_enabled()
+    return jsonify(cfg), 200
+
+
+@admin_bp.route("/guest-config", methods=["PUT"])
+@admin_required
+def guest_config_put():
+    from services import platform_config_service as pconfig
+    from services.guest_service import guest_onboarding_env_enabled
+
+    body = request.get_json(force=True, silent=True) or {}
+    clean, errors = pconfig.validate_guest_config_patch(body)
+    if errors:
+        return jsonify({"error": "invalid_config", "fields": errors}), 400
+    if not clean:
+        return jsonify({"error": "invalid_config", "fields": {"_body": "No valid keys provided"}}), 400
+    cfg = pconfig.update_guest_config(clean, updated_by=get_jwt_identity())
+    cfg["updated_at"] = _iso(cfg.get("updated_at"))
+    cfg["env_flag_enabled"] = guest_onboarding_env_enabled()
+    logger.info("guest-config updated by %s: keys=%s", get_jwt_identity(), sorted(clean.keys()))
+    return jsonify(cfg), 200
+
+
+@admin_bp.route("/guest-retention-cleanup", methods=["POST"])
+@admin_required
+def guest_retention_cleanup():
+    """Admin-invokable guest retention sweep (spec v2 §guest_retention_cleanup).
+
+    Enqueues the async `guest_retention_cleanup` job on the resume Lambda
+    (invoke_async rewrites -auth- → -resume-; long work never runs inline —
+    invariant #2). Deletes ONLY expired UNCLAIMED guest data per the runtime
+    `retention_days` knob (0 = keep forever → the job reports skipped).
+    EventBridge also fires this daily via the `guest_retention` schedule.
+    Poll the result at GET /api/resume/job/<job_id>.
+    """
+    try:
+        from services.resume_service import get_resume_service, ResumeService
+
+        job_id = get_resume_service().create_job(
+            "guest_retention_cleanup", {}, user_email=get_jwt_identity()
+        )
+        ResumeService.invoke_async(job_id, "guest_retention_cleanup", {})
+        logger.info("guest retention cleanup enqueued by %s", get_jwt_identity())
+        return jsonify({"job_id": job_id}), 202
+    except Exception as e:
+        logger.error("guest retention cleanup enqueue failed: %s", e)
+        return jsonify({"error": "Failed to start retention cleanup"}), 500
+
+
+# ---------------------------------------------------------------------------
 # Stats
 # ---------------------------------------------------------------------------
 @admin_bp.route("/stats", methods=["GET"])
@@ -154,9 +220,13 @@ def stats():
     users_7d = _safe(lambda: db.users.count_documents({"created_at": {"$gte": d7}}))
     users_30d = _safe(lambda: db.users.count_documents({"created_at": {"$gte": d30}}))
 
-    total_base = _safe(lambda: db.user_resumes.count_documents({"type": "base"}))
-    legacy_gen = _safe(lambda: db.user_resumes.count_documents({"type": "generated"}))
-    total_parsed = _safe(lambda: db.user_resumes.count_documents({"parsed": {"$exists": True}})) or total_base
+    # Resume Platform v3: base uploads live in resume_assets; generated files
+    # are the rendered version files on tailoring_records.
+    total_base = _safe(lambda: db.resume_assets.count_documents({"owner_type": "user"}))
+    legacy_gen = _safe(lambda: db.tailoring_records.count_documents(
+        {"versions.files.pdf.s3_key": {"$exists": True}}))
+    total_parsed = _safe(lambda: db.resume_assets.count_documents(
+        {"owner_type": "user", "parse_status": "parsed"})) or total_base
 
     total_tailoring = _safe(lambda: db.tailoring_records.count_documents({"deleted": {"$ne": True}}))
     tailoring_7d = _safe(lambda: db.tailoring_records.count_documents({"created_at": {"$gte": d7}}))
@@ -226,10 +296,12 @@ def users():
             "last_login": _iso(d.get("last_login")),
             "last_login_ip": d.get("last_login_ip"),
             "login_attempts": int(d.get("login_attempts", 0)),
-            "base_resumes": db.user_resumes.count_documents({"user_email": email, "type": "base"}),
-            "generated_resumes": db.user_resumes.count_documents({"user_email": email, "type": "generated"}),
+            "base_resumes": db.resume_assets.count_documents({"user_email": email, "owner_type": "user"}),
+            "generated_resumes": db.tailoring_records.count_documents(
+                {"user_email": email, "versions.files.pdf.s3_key": {"$exists": True}}),
             "tailoring_sessions": db.tailoring_records.count_documents({"user_email": email, "deleted": {"$ne": True}}),
-            "has_parsed_resume": db.user_resumes.count_documents({"user_email": email, "parsed": {"$exists": True}}) > 0,
+            "has_parsed_resume": db.resume_assets.count_documents(
+                {"user_email": email, "parse_status": "parsed"}) > 0,
             "daily_tailor_limit_custom": custom if isinstance(custom, int) else None,
             "daily_tailor_limit_effective": usage_service.get_user_limit(email),
             "tailored_today": today.get(email, 0),
@@ -285,15 +357,24 @@ def user_detail(email):
         "plan": u.get("plan") or "free",
         "auth_providers": u.get("auth_providers", []),
     }
-    base = list(db.user_resumes.find({"user_email": email, "type": "base"}).limit(50))
-    gen = list(db.user_resumes.find({"user_email": email, "type": "generated"}).limit(50))
-    parsed = next((r.get("parsed") for r in base if r.get("parsed")), None)
+    # Resume Platform v3: base uploads = resume_assets (heavy fields projected
+    # out); the parsed view = the active asset's structured content.
+    base = list(db.resume_assets.find(
+        {"user_email": email, "owner_type": "user"},
+        {"raw_text": 0},
+    ).sort("created_at", -1).limit(50))
+    parsed = next(
+        (r.get("structured") for r in base if r.get("structured")), None
+    )
+    for r in base:
+        r.pop("structured", None)
+        r.pop("quota_subject_id", None)  # server-only, never exposed
     records = list(db.tailoring_records.find({"user_email": email, "deleted": {"$ne": True}}).sort("created_at", -1).limit(100))
     return jsonify({
         "user": user,
         "parsed_resume": parsed,
         "base_resumes": [_clean(r) for r in base],
-        "generated_resumes": [_clean(r) for r in gen],
+        "generated_resumes": [],  # legacy user_resumes generated rows retired (v3)
         "tailoring_records": [_clean(r) for r in records],
     }), 200
 
@@ -345,7 +426,10 @@ def feedback_update(fid):
 @admin_bp.route("/resumes", methods=["GET"])
 @admin_required
 def resumes():
-    docs = list(_db().user_resumes.find({}).sort("parsed_at", -1).limit(500))
+    # Resume Platform v3: list resume_assets (heavy fields projected out).
+    docs = list(_db().resume_assets.find(
+        {}, {"structured": 0, "raw_text": 0, "quota_subject_id": 0}
+    ).sort("created_at", -1).limit(500))
     return jsonify({"resumes": [_clean(d) for d in docs]}), 200
 
 

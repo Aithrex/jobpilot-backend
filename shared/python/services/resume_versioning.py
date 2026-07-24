@@ -27,6 +27,23 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+# Resume Platform v3 (spec 1.5): versions are BOUNDED — max 5 per record
+# (structural cap `refinements_per_record`, free and premium alike for now).
+# The 6th refinement attempt surfaces as HTTP 409 version_limit_reached.
+MAX_VERSIONS_PER_RECORD = 5
+
+
+class VersionLimitError(Exception):
+    """Raised when appending would exceed MAX_VERSIONS_PER_RECORD.
+
+    Idempotent re-saves of unchanged content (content-hash match) never
+    raise — only a NEW version past the cap does.
+    """
+
+    def __init__(self, limit: int = MAX_VERSIONS_PER_RECORD):
+        self.limit = limit
+        super().__init__(f"version_limit_reached (max {limit} versions per record)")
+
 
 def _iso_utc(value: Any) -> Any:
     """Serialize a datetime as ISO with explicit UTC offset.
@@ -115,6 +132,9 @@ def append_version(
 
     Returns (version, created). `created=False` means the content was identical
     to the latest version and no new entry was added.
+
+    Raises VersionLimitError when a NEW version would exceed the bounded cap
+    (spec 1.5) — identical-content re-saves stay idempotent and never raise.
     """
     new_hash = canonical_content_hash(tailored)
     last = latest_version(versions)
@@ -124,6 +144,9 @@ def append_version(
         if ats_scores and not last.get("ats_scores"):
             last["ats_scores"] = ats_scores
         return last, False
+
+    if len(versions) >= MAX_VERSIONS_PER_RECORD:
+        raise VersionLimitError()
 
     next_number = (last.get("version_number") if last else 0) + 1
     version = {

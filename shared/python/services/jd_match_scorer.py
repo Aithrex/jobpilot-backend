@@ -1,6 +1,21 @@
 """
 JD Match Scorer — deterministic resume-vs-JD overlap scoring.
 
+SUPERSEDED by `services/fit_score.py` (ADR-002,
+docs/adr/2026-07-21-guest-discovery-freshness-and-fit.md). Do not build new
+callers on this module.
+
+Why it was replaced: the denominator here comes from the RESUME's own skill
+list, clamped to [8, 14] (see `score_one`). That measures "how much of this
+resume appears in this posting", not job fit, and it makes every matched
+skill worth a flat 7.14 points, so the 0-100 scale has only ~15 reachable
+values and ties are pervasive. `fit_score` derives required skills from the
+JOB DESCRIPTION and separates required from preferred.
+
+It is retained because `evals/test_fit_score_ranking.py` ranks the same
+labeled pool with both engines, so the improvement is a measured number
+rather than a claim.
+
 Reuses JD text the pipeline already scraped (no extra fetches, no LLM calls)
 to compute a fast per-job match score against the user's stored resume.
 
@@ -49,14 +64,11 @@ def _build_match_regex(skill_lower: str) -> Optional[re.Pattern]:
 
 
 def _load_user_skills(user_email: str) -> List[str]:
-    """Pull the user's most recent parsed resume, return deduped lowercase skills."""
+    """Pull the user's ACTIVE parsed resume (v3: resume_access resolves
+    users.active_resume_id -> resume_assets), return deduped lowercase skills."""
     try:
-        from utils.db_connect import DBConnect
-        db = DBConnect().get_db()
-        resume = db.user_resumes.find_one(
-            {"user_email": user_email, "structured": {"$exists": True}},
-            sort=[("parsed_at", -1)],
-        )
+        from services import resume_access
+        resume = resume_access.get_active_structured(user_email)
         if not resume:
             return []
         structured = resume.get("structured") or {}
@@ -81,15 +93,19 @@ def score_one(
     resume_skills: List[str],
     *,
     min_resume_skills: int = 8,
+    max_denom_skills: int = 14,
 ) -> Dict[str, Any]:
     """Score a single JD against a precompiled skill list.
 
     Returns dict with `match_score` (0..100), `matched_skills` (list[str]),
     `missing_top` (best-effort list[str]). Deterministic, no AI.
 
-    Scoring is `matched / max(min_resume_skills, total_skills) * 100`. The
-    `min_resume_skills` floor prevents a 3-skill resume from getting 100%
-    for any JD that mentions all three — small resumes need a wider denom.
+    Scoring is `matched / clamp(total_skills, min_resume_skills,
+    max_denom_skills) * 100`. The floor prevents a 3-skill resume from
+    getting 100% for any JD that mentions all three; the cap prevents the
+    opposite failure: a rich 28-skill resume would otherwise need 12 skills
+    named in one posting to reach a 40 score, so skill-heavy resumes scored
+    near zero everywhere and guests saw no matches at all.
     """
     if not resume_skills:
         return {"match_score": 0, "matched_skills": [], "missing_top": [],
@@ -111,7 +127,7 @@ def score_one(
         else:
             missing.append(sk)
 
-    denom = max(min_resume_skills, len(resume_skills))
+    denom = max(min_resume_skills, min(len(resume_skills), max_denom_skills))
     raw = (len(matched) / denom) * 100.0
     score = max(0, min(100, round(raw)))
     # Truncate matched list — the UI needs 8 names max, more is noise. Order

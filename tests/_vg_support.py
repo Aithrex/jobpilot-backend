@@ -52,7 +52,7 @@ from utils import db_connect  # noqa: E402
 if not getattr(db_connect.DBConnect, "_vg_suite_patched", False):
     _MOCK_CLIENT = mongomock.MongoClient()
     db_connect.DBConnect.get_db = (
-        lambda self=None, _c=_MOCK_CLIENT: _c["portfolio_db"]
+        lambda self=None, _c=_MOCK_CLIENT: _c["aspirely_db"]
     )
     db_connect.DBConnect._vg_suite_patched = True
 
@@ -78,6 +78,22 @@ def current_db():
     time, because tests/test_voicegraph_cascade.py installs its own
     module-level mongomock patch and the last import wins."""
     return db_connect.DBConnect().get_db()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """Rate limiting is now DISTRIBUTED (Mongo-backed), so the counters
+    survive in mongomock across tests in one pytest process just like the
+    process-global in-memory limiter does. Clear both before every test so
+    route tests stay order-independent."""
+    from utils.security import get_rate_limiter
+
+    get_rate_limiter()._requests.clear()
+    try:
+        current_db()["rate_limit_buckets"].delete_many({})
+    except Exception:
+        pass
+    yield
 
 
 @pytest.fixture()
