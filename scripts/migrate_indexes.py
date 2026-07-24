@@ -565,8 +565,13 @@ INDEX_SPECS = [
     # limit was (containers x limit). Buckets are keyed on _id
     # ("<scope>:<subject>:<window>") so the counter $inc rides the default
     # index; this TTL is purely reclamation of expired windows.
+    # NOTE: prod already carries this exact TTL index under Mongo's DEFAULT name
+    # `expires_at_1` (created lazily without an explicit name). Re-asserting it
+    # under a different name fails with IndexOptionsConflict (code 85, "already
+    # exists with a different name") — same key + same expireAfterSeconds, only
+    # the name differs. Pin to the existing name so this is an idempotent no-op.
     ("rate_limit_buckets", [("expires_at", ASCENDING)],
-     {"expireAfterSeconds": 0, "name": "ttl_expires_at"}),
+     {"expireAfterSeconds": 0, "name": "expires_at_1"}),
     # guest_challenges: issue -> verify -> redeem. Verification looks up by
     # challenge_id, so that must be unique; expiry drives both the one-time
     # semantics and reclamation. Without the TTL these accumulate forever,
