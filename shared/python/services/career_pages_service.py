@@ -641,7 +641,7 @@ _FOREIGN_COUNTRY_RE = re.compile(
     re.IGNORECASE)
 
 
-def _keep_us(job: Dict[str, Any]) -> bool:
+def _keep_us(job: Dict[str, Any], keep_ambiguous: bool = False) -> bool:
     """HARD US filter for board rows — same keep/drop contract as
     ``_geo_keep_us``: keep clearly-US or clearly-remote, DROP everything
     ambiguous.
@@ -655,7 +655,9 @@ def _keep_us(job: Dict[str, Any]) -> bool:
        "Paris, TX", "Ontario, California", "Indiana").
     5. Bare foreign hub CITY -> DROP.
     6. Clear remote, no foreign marker -> KEEP.
-    7. Else (ambiguous / bare non-foreign city) -> DROP (was: KEEP).
+    7. Else (ambiguous / bare non-foreign city) -> DROP, unless
+       ``keep_ambiguous`` (the pre-hardening lenient contract — see
+       ``_keep_us_lenient``, used by the guest ``GUEST_US_STRICT=0`` rollback).
     """
     hint = job.get("country_hint") or ""
     if hint:
@@ -674,8 +676,17 @@ def _keep_us(job: Dict[str, Any]) -> bool:
         return False
     if _REMOTE_RE.search(loc):
         return True
-    # Ambiguous (bare US-less city, "N Locations", unknown) -> DROP.
-    return False
+    # Ambiguous (bare US-less city, "N Locations", unknown).
+    return keep_ambiguous
+
+
+def _keep_us_lenient(job: Dict[str, Any]) -> bool:
+    """Lenient US keep-filter — the PRE-hardening contract: identical to
+    ``_keep_us`` but KEEPS ambiguous rows ("N Locations", bare non-foreign
+    city, unknown) instead of dropping them. Explicit foreign country/city is
+    still dropped. This is the rollback the guest ``GUEST_US_STRICT=0`` path
+    reverts to, kept separate so the board hard-filter above is unaffected."""
+    return _keep_us(job, keep_ambiguous=True)
 
 
 # ----------------------------------------------------------------------

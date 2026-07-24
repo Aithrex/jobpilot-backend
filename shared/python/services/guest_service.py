@@ -1536,11 +1536,12 @@ def guest_us_strict() -> bool:
 def is_us_confident(row: Dict[str, Any]) -> bool:
     """Does this posting carry POSITIVE evidence of being a US role?
 
-    Deliberately stricter than `career_pages_service._keep_us`, which keeps
-    ambiguous locations ("3 Locations", "Remote", "Getafe Area") on the
-    reasoning that dropping them loses real US roles. That trade is right for a
-    browse tab, where a user can see the location and judge, and wrong for a
-    guest preview: five cards are the product's entire first impression, and one
+    Deliberately stricter than the lenient `career_pages_service._keep_us_lenient`
+    (the `GUEST_US_STRICT=0` rollback), which keeps ambiguous locations
+    ("3 Locations", "Remote", "Getafe Area") on the reasoning that dropping them
+    loses real US roles. That trade is right for a browse tab, where a user can
+    see the location and judge, and wrong for a guest preview: five cards are the
+    product's entire first impression, and one
     posting in Hyderabad reads as "this tool does not understand me".
 
     So the burden of proof inverts here. Ambiguous means dropped, and the honest
@@ -1699,10 +1700,13 @@ def _fetch_from_inventory(
     # and the legacy scan enforced it by passing us_only=True down to the three
     # source services. Reusing their own `_keep_us` keeps one definition of
     # "is this a US role" across both retrieval paths.
-    from services.career_pages_service import _keep_us
+    from services.career_pages_service import _keep_us_lenient
 
     strict = guest_us_strict()
-    keep_us = is_us_confident if strict else _keep_us
+    # Lenient mode (GUEST_US_STRICT=0) is the rollback: it keeps ambiguous
+    # locations. `_keep_us` itself is now a HARD filter (drops ambiguous), so the
+    # rollback must use the dedicated lenient contract, not `_keep_us`.
+    keep_us = is_us_confident if strict else _keep_us_lenient
 
     rows: List[Dict[str, Any]] = []
     without_requirements = 0
