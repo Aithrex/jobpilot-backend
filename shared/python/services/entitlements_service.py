@@ -76,6 +76,8 @@ FEATURE_PERIODS = {
     "differentiation_analysis": PERIOD_DAY,  # Learning §6.6 — market-gap analysis
     "task_verify": PERIOD_DAY,               # Learning §6.6 — proof-of-work verification
     "completion_post": PERIOD_MONTH,         # Learning §6.6 — verified-win LinkedIn post
+    "sprint_generate": PERIOD_DAY,           # Sprint Hub — meter day-ticket generation
+    "hub_mentor": PERIOD_DAY,                # Sprint Hub — meter mentor chat turns
 }
 
 PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
@@ -85,21 +87,23 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "cover_letter": 2,
         "autoapply_answer": 10,
         "auto_submit": 5,             # opt-in auto-submit — conservative on free
-        "quiz": 3,
+        "quiz": None,                 # Learning Hub — free for all users
         "practice_question": 5,
         "mock_evaluate": 2,
         "salary": 3,
         "post_draft": 1,
-        "learning_plan_generate": 1,
+        "learning_plan_generate": None,  # Learning Hub — free for all users
         "authored_resume": 1,         # Voice Graph — §6.12.10 (raw mode is always free)
         "graph_extract": 5,           # Voice Graph — LLM extractions per day
         "six_seconds": 3,             # Recruiter's Six Seconds — §6.11.2
-        "differentiation_analysis": 1,  # Learning §6.6
-        "task_verify": 5,
+        "differentiation_analysis": None,  # Learning Hub — free for all users
+        "task_verify": None,          # Learning Hub — free for all users
+        "sprint_generate": None,      # Learning Hub — free for all users
+        "hub_mentor": None,           # Learning Hub — free for all users
         "completion_post": 1,
         # Structural caps (checked against live state, not time-windowed):
         "batch_tailor_max": 0,        # batch tailoring disabled on free
-        "active_learning_paths": 1,
+        "active_learning_paths": None,   # Learning Hub — free for all users
         "writing_samples": 1,         # Voice Graph — count of finalized samples
     },
     PREMIUM: {
@@ -119,6 +123,8 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "six_seconds": 30,
         "differentiation_analysis": 10,
         "task_verify": 50,
+        "sprint_generate": None,
+        "hub_mentor": None,
         "completion_post": 8,
         "batch_tailor_max": 10,
         "active_learning_paths": 5,
@@ -141,6 +147,8 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "six_seconds": 100,
         "differentiation_analysis": 100,
         "task_verify": None,
+        "sprint_generate": None,
+        "hub_mentor": None,
         "completion_post": None,
         "batch_tailor_max": 25,
         "active_learning_paths": None,

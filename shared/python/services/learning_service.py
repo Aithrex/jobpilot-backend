@@ -24,32 +24,52 @@ logger = logging.getLogger(__name__)
 XP_PER_MODULE = 50
 
 PLAN_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "title": {"type": "string"},
-        "summary": {"type": "string"},
-        "target_skills": {"type": "array", "items": {"type": "string"}},
-        "modules": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "week": {"type": "integer"},
-                    "title": {"type": "string"},
-                    "objective": {"type": "string"},
-                    "concepts": {"type": "array", "items": {"type": "string"}},
-                    "practice_task": {"type": "string"},
-                    "resource_queries": {"type": "array", "items": {"type": "string"}},
-                    "checkpoint": {"type": "string"},
-                    "inferred_skill": {"type": "string"},
-                },
-            },
-        },
-        "capstone": {
-            "type": "object",
-            "properties": {"title": {"type": "string"}, "description": {"type": "string"}},
-        },
-    },
+    "title": str,
+    "summary": str,
+    "target_skills": [str],
+    "modules": [{
+        "week": int,
+        "title": str,
+        "objective": str,
+        "concepts": [str],
+        "practice_task": str,
+        "resource_queries": [str],
+        "checkpoint": str,
+        "inferred_skill": str,
+    }],
+    "capstone": {"title": str, "description": str},
+}
+
+# Sprint format: one Jira-style ticket per day, each demanding pasted proof of
+# work. Shape is skill-agnostic — the skill/role/progression come from the
+# caller (see TYPESCRIPT_SPRINT) so new tracks are data, not new code.
+SPRINT_SCHEMA = {
+    "title": str,
+    "summary": str,
+    "target_skills": [str],
+    "days": [{
+        "day": int,
+        "title": str,
+        "business_context": str,
+        "task_instructions": [str],
+        "acceptance_criteria": [str],
+        "required_proof_instructions": str,
+    }],
+}
+
+TYPESCRIPT_SPRINT = {
+    "skill": "TypeScript",
+    "role": "Full-Stack / Backend Software Engineer",
+    "baseline": "Knows JavaScript, Node.js, and basic programming concepts.",
+    "progression": (
+        "- Days 1-3 (Core Foundations): Strict tsconfig setup, interfaces vs. type aliases, "
+        "optionals, unions, basic generics, and compiler error resolution.\n"
+        "- Days 4-7 (Real-World Application): Typing async functions, Promises, Express/REST "
+        "handlers, Zod schema validation, and utility types (Pick, Omit, Partial, Record).\n"
+        "- Days 8-10 (Advanced & Production): Generic constraints "
+        "(`<T extends Record<string, any>>`), custom Type Guards (`is` predicates), CI/CD "
+        "type-checking (`tsc --noEmit`), and converting legacy JS files to strict TS."
+    ),
 }
 
 
@@ -104,6 +124,52 @@ Also return a short `title` for the whole plan, a one-paragraph `summary`, and `
 Return STRICT JSON matching the schema."""
     plan = claude_json(prompt=prompt, model=CLAUDE_PRO, max_tokens=8000, temperature=0.4, schema=PLAN_SCHEMA)
     return plan or {}
+
+
+def generate_sprint(skill: str, role: str, baseline: str, progression: str,
+                    days: int = 10) -> Dict:
+    """Produce a day-by-day engineering sprint of Jira-style tickets.
+
+    Unlike `generate_plan` (weekly study modules), every day here is a ticket
+    with a business justification and an explicit proof-of-work demand, so
+    completion can be evidenced rather than self-reported.
+    """
+    prompt = f"""You are a Staff Technical Lead at an enterprise tech company. A software engineer on your team has a skill gap in {skill} and needs a hands-on, progressive {days}-day engineering sprint to reach production competency.
+
+Generate a complete {days}-day {skill} sprint where every day simulates a real Jira ticket.
+
+### Context:
+- Target Skill: {skill}
+- Target Role: {role}
+- Learner Baseline: {baseline}
+
+### Progression Plan:
+{progression}
+
+### Requirements for EACH Day (1 through {days}):
+1. day: Integer (1 to {days}).
+2. title: Short Jira-style ticket title (e.g., "TS-101: Configure Strict Compiler & User Service Contracts").
+3. business_context: 2-3 sentences explaining the real-world business reason for this work (e.g., "Production crashes occurred due to unchecked undefined user properties. We need strict compile-time types to prevent runtime panics.").
+4. task_instructions: Bulleted, step-by-step instructions of what code/files to write or refactor locally on their machine.
+5. acceptance_criteria: 3 to 4 testable bullet points defining done.
+6. required_proof_instructions: Explicit instructions on EXACTLY what files, terminal output, or compiler logs the engineer must copy/paste into the platform as proof of work.
+
+Also return a short `title` for the whole sprint, a one-paragraph `summary`, and `target_skills` (the full set of skills the sprint builds).
+
+Return STRICT JSON matching the schema. Do not wrap the JSON in markdown backticks or add introductory text."""
+    sprint = claude_json(
+        prompt=prompt,
+        model=CLAUDE_PRO,
+        max_tokens=8000,
+        temperature=0.3,
+        schema=SPRINT_SCHEMA,
+    )
+    return sprint or {}
+
+
+def generate_typescript_sprint() -> Dict:
+    """The TypeScript track — thin wrapper over `generate_sprint`."""
+    return generate_sprint(**TYPESCRIPT_SPRINT)
 
 
 def build_plan_job(payload: Dict) -> Dict:

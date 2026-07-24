@@ -102,6 +102,11 @@ def create_app():
     from blueprints.voice_graph import voice_graph_bp
     app.register_blueprint(voice_graph_bp, url_prefix='/api/resume/voice-graph')
 
+    # Sprint Learning Hub — mounted UNDER /api/resume so it rides the existing
+    # "ANY /api/resume/{proxy+}" edge route (no new Terraform route needed).
+    from blueprints.sprint_hub import sprint_hub_bp
+    app.register_blueprint(sprint_hub_bp, url_prefix='/api/resume/hub')
+
     @app.route('/api/health')
     def health():
         return {'status': 'healthy', 'service': 'resume-service', 'version': '2.0.0'}, 200

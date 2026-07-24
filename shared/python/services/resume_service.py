@@ -521,6 +521,22 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result = learning_verifier.build_verify_job(payload)
             svc.complete_job(job_id, result)
 
+        elif job_type == "sprint_verify":
+            # Sprint Hub — grade a day's proof-of-work repo against its ticket.
+            # Async because it downloads the repo and runs a PRO-tier judge:
+            # 40-60s, well past the API Gateway limit for an inline request.
+            from services import sprint_submission_service
+            result = sprint_submission_service.verify_job(payload)
+            svc.complete_job(job_id, result)
+
+        elif job_type == "sprint_generate":
+            # Sprint Learning Hub — AI-generate the day tickets for a path, write
+            # the shared sprint_paths doc, and resolve to the requesting user's
+            # stateful view so the client poll renders directly.
+            from services import sprint_generation_service
+            result = sprint_generation_service.generate_path_job(payload)
+            svc.complete_job(job_id, result)
+
         elif job_type == "learning_completion_post":
             # Learning loop payoff — draft a LinkedIn post for a VERIFIED task
             # (grounded in the real repo; bandit + cringe filter apply). publish.py
