@@ -52,18 +52,28 @@ def _now():
 
 
 def _generate_batch(role_label: str, difficulty: str, project_name: str,
-                    spine_slice: List[Dict]) -> List[Dict]:
+                    spine_slice: List[Dict], story_title: str = "",
+                    story_premise: str = "") -> List[Dict]:
     diff_label = career_paths.DIFFICULTY_LABELS.get(difficulty, difficulty)
     day_lines = "\n".join(
         f"- Day {sd['day']} (key: {sd['key']}): {sd['objective']}" for sd in spine_slice
     )
+    story_block = ""
+    if story_premise:
+        story_block = f"""
+
+STORY — this sprint is a chapter titled "{story_title}" in an ongoing narrative:
+{story_premise}
+Write the tickets as beats in THIS story — each day advances the arc, references
+the same product/company, and reads like the next thing that happens on the job.
+"""
     prompt = f"""You are an engineering manager writing Jira tickets for a real \
 sprint at a fast-moving tech company. Turn each day's objective into an \
 immersive, realistic engineering ticket for a {diff_label} {role_label}.
 
 The product/project is called "{project_name}". Keep every ticket consistent \
 with that same product so the days feel like one continuous body of work that \
-builds on itself.
+builds on itself.{story_block}
 
 Days to write (preserve the exact `day` number for each):
 {day_lines}
@@ -101,22 +111,37 @@ def generate_path(role_key: str, difficulty: str, season_id: str) -> List[Dict]:
     meta = career_paths.path_meta(role_key)
     role_label = meta["label"]
     spine = curriculum.spine_for_season(season_id)
+    season = curriculum.season_meta(season_id)
     project_name = f"{role_label} Platform"
+    story_title = season.get("title") or season.get("label") or ""
+    story_premise = (season.get("premise") or "").replace("{role}", role_label)
 
-    published = [sd for sd in spine if curriculum.is_published(sd["day"])]
+    published = [sd for sd in spine if curriculum.is_published(sd["day"], season_id)]
+
+    # Generate in small batches (5 days) run CONCURRENTLY — a bigger single call
+    # streams long enough to risk the Bedrock read timeout, and running batches
+    # in parallel keeps wall-clock ≈ one batch instead of the sum (a 10-day
+    # sprint finishes in ~one batch's time, not two).
+    BATCH = 5
+    batches = [published[i:i + BATCH] for i in range(0, len(published), BATCH)]
 
     raw: Dict[int, Dict] = {}
-    # Generate published days in batches of 7 (only Day 1 today, so one call).
-    for i in range(0, len(published), 7):
-        for t in _generate_batch(role_label, difficulty, project_name, published[i:i + 7]):
-            try:
-                raw[int(t.get("day"))] = t
-            except (TypeError, ValueError):
-                continue
+    if batches:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(4, len(batches))) as ex:
+            for tickets in ex.map(
+                lambda b: _generate_batch(role_label, difficulty, project_name, b, story_title, story_premise),
+                batches,
+            ):
+                for t in tickets:
+                    try:
+                        raw[int(t.get("day"))] = t
+                    except (TypeError, ValueError):
+                        continue
 
     days: List[Dict] = []
     for sd in spine:
-        if not curriculum.is_published(sd["day"]):
+        if not curriculum.is_published(sd["day"], season_id):
             # Placeholder — no AI content generated for unreleased days.
             days.append({"day": sd["day"], "key": sd["key"], "theme": sd["theme"],
                          "ticket": None, "published": False})

@@ -41,7 +41,7 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-def precheck(user_email: str, ctx: Dict, day_key: str) -> None:
+def precheck(user_email: str, ctx: Dict, day_key: str, tz_offset_minutes: int = 0) -> None:
     """Fast, network-free validation before queueing a verification job.
 
     Verification itself is slow (repo download + LLM judge) so it runs as an
@@ -55,7 +55,8 @@ def precheck(user_email: str, ctx: Dict, day_key: str) -> None:
         raise SubmissionError("Unknown challenge.", 404)
 
     progress = challenge_service.get_or_init_progress(user_email, ctx)
-    states = {d["key"]: d for d in challenge_service.compute_day_states(ctx["season_id"], progress)}
+    states = {d["key"]: d for d in challenge_service.compute_day_states(
+        ctx["season_id"], progress, tz_offset_minutes=tz_offset_minutes)}
     st = states.get(day_key)
     if not st:
         raise SubmissionError("Unknown challenge.", 404)
@@ -75,11 +76,13 @@ def verify_job(payload: Dict) -> Dict:
         payload.get("day_key", ""),
         note=payload.get("note", ""),
         evidence=payload.get("evidence") or {},
+        tz_offset_minutes=int(payload.get("tz_offset_minutes") or 0),
     )
 
 
 def submit(user_email: str, ctx: Dict, day_key: str,
-           note: str = "", evidence: Optional[Dict] = None) -> Dict:
+           note: str = "", evidence: Optional[Dict] = None,
+           tz_offset_minutes: int = 0) -> Dict:
     """Verify + complete a day. Returns the reward + refreshed view."""
     path_doc = challenge_service.get_path_doc(ctx["path_key"])
     if not path_doc or path_doc.get("status") != "ready":
@@ -90,7 +93,8 @@ def submit(user_email: str, ctx: Dict, day_key: str,
         raise SubmissionError("Unknown challenge.", 404)
 
     progress = challenge_service.get_or_init_progress(user_email, ctx)
-    states = {d["key"]: d for d in challenge_service.compute_day_states(ctx["season_id"], progress)}
+    states = {d["key"]: d for d in challenge_service.compute_day_states(
+        ctx["season_id"], progress, tz_offset_minutes=tz_offset_minutes)}
     st = states.get(day_key)
     if not st:
         raise SubmissionError("Unknown challenge.", 404)
@@ -164,7 +168,7 @@ def submit(user_email: str, ctx: Dict, day_key: str,
     fresh = _db().sprint_progress.find_one({"user_email": user_email, "path_key": ctx["path_key"]})
     reward = progress_service.on_day_completed(fresh, day_key, submission_id)
 
-    view = challenge_service.build_path_view(user_email, ctx)
+    view = challenge_service.build_path_view(user_email, ctx, tz_offset_minutes=tz_offset_minutes)
     completed_day = next((d for d in (view or {}).get("days", []) if d["key"] == day_key), None)
 
     return {

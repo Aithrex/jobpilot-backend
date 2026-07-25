@@ -90,8 +90,15 @@ class ClaudeProvider(LLMProvider):
         if self._client is not None:
             return self._client
         import boto3
+        from botocore.config import Config
         region = os.getenv("BEDROCK_REGION") or os.getenv("AWS_REGION_NAME") or os.getenv("AWS_REGION") or "us-east-1"
-        self._client = boto3.client("bedrock-runtime", region_name=region)
+        # boto3's default read_timeout is 60s — too short for large PRO
+        # generations (16k-token tailoring / multi-ticket sprint batches), which
+        # legitimately stream for 60-120s and otherwise die in a timeout→retry
+        # spiral. Raise it; keep our own app-level retry loop as the backstop.
+        read_timeout = int(os.getenv("BEDROCK_READ_TIMEOUT", "180"))
+        cfg = Config(read_timeout=read_timeout, connect_timeout=15, retries={"max_attempts": 0})
+        self._client = boto3.client("bedrock-runtime", region_name=region, config=cfg)
         return self._client
 
     def lazy_client(self):
