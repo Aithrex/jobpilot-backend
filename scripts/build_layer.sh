@@ -61,6 +61,19 @@ python -m pip install \
   --upgrade \
   --target "$PYDIR"
 
+# boto3/botocore/s3transfer are PROVIDED by the Lambda Python runtime. Bundling
+# them wastes ~50MB and pushed the layer past the 50MB `publish-layer-version`
+# --zip-file limit (RequestEntityTooLargeException). They stay in requirements.txt
+# for local/dev parity, but the LAYER must not ship them; Lambda uses its own.
+# (aws-xray-sdk is NOT runtime-provided — keep it.)
+echo ">> Stripping runtime-provided AWS SDK from the layer (boto3/botocore/s3transfer)"
+rm -rf "$PYDIR"/boto3 "$PYDIR"/boto3-*.dist-info \
+       "$PYDIR"/botocore "$PYDIR"/botocore-*.dist-info \
+       "$PYDIR"/s3transfer "$PYDIR"/s3transfer-*.dist-info
+# Drop bytecode caches left by the dependency install (keep .dist-info for the
+# rest — some libs read their own metadata at runtime).
+find "$PYDIR" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
 echo ">> Zipping -> build/layer.zip"
 if command -v zip >/dev/null 2>&1; then
   ( cd "$OUT" && zip -qr "$ROOT/build/layer.zip" python -x '*__pycache__*' )

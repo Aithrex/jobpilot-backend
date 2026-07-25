@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- Aithrex-owned synthetic fixture. Mimics a Greenhouse-style application form:
+     id-keyed fields, a react-select combobox (.select__control/.select__input),
+     an #application-confirmation node that stays hidden until real success, and a
+     "Submit application" button. NEVER a real employer. -->
+<html><head><meta charset="utf-8"><title>Apply - Aithrex</title></head>
+<body>
+<h1>Apply for Senior Backend Engineer at Aithrex</h1>
+<form id="application_form" action="https://boards.greenhouse.io/aithrex/jobs/4200" method="post">
+  <label for="first_name">First Name</label>
+  <input id="first_name" name="first_name" type="text" required>
+  <label for="last_name">Last Name</label>
+  <input id="last_name" name="last_name" type="text" required>
+  <label for="email">Email</label>
+  <input id="email" name="email" type="email" required>
+  <label for="phone">Phone</label>
+  <input id="phone" name="phone" type="tel">
+  <label for="resume">Resume/CV</label>
+  <input id="resume" name="resume" type="file">
+  <div class="select__control">
+    <label for="question_100">Will you now or in the future require visa sponsorship?</label>
+    <input id="question_100" name="question_100" class="select__input" role="combobox" required>
+  </div>
+  <label for="question_200">Why do you want this role?</label>
+  <textarea id="question_200" name="question_200"></textarea>
+  <input id="utm_source" name="utm_source" type="hidden" value="x">
+  <div id="application-confirmation" style="display:none"></div>
+  <button type="submit">Submit application</button>
+</form>
+</body></html>

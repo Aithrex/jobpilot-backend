@@ -218,6 +218,36 @@ def _load_records(email: str) -> List[Dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------- #
+# E3 (defect E) — canonical-preferred DUAL-READ. Prefer the canonical
+# `applications` ledger outcome for a record when one exists; else fall back to
+# tailoring_records.application.status (today's behavior — the char golden path,
+# since the goldens seed tailoring_records only). Writers dual-write the mirror
+# in E1 and the mirror is KEPT (its drop is a DEFERRED cleanup).
+# --------------------------------------------------------------------------- #
+def _canonical_overrides(email: str) -> Dict[str, str]:
+    """{record_id -> canonical funnel bucket} from the applications ledger — the
+    E3 dual-read preference. Best-effort: an empty map degrades cleanly to the
+    tailoring_records fallback."""
+    try:
+        from services import application_ledger_service as als
+        return als.outcome_buckets_for_records(email)
+    except Exception as e:  # pragma: no cover - dual-read is best-effort
+        logger.warning("pipeline_intel: canonical dual-read failed for %s: %s", email, e)
+        return {}
+
+
+def _effective_app(rec: Dict[str, Any], overrides: Dict[str, str]) -> Dict[str, Any]:
+    """The record's application dict with its status OVERRIDDEN by the canonical
+    ledger bucket when one exists (E3). Preserves applied_at / interview_dates
+    from the tailoring record so stage inference stays evidence-based."""
+    app = rec.get("application") or {}
+    bucket = overrides.get(rec.get("record_id"))
+    if bucket is None:
+        return app
+    return {**app, "status": bucket}
+
+
+# --------------------------------------------------------------------------- #
 # Cohort keying — role family + seniority, derived from application titles so
 # every user is keyed the SAME cheap way (one collection, no per-user resume
 # parse → apples-to-apples cohorts and a bounded read).
@@ -311,9 +341,10 @@ def funnel(user_email: str) -> Dict[str, Any]:
         return {"stages": [], "conversion": {}, "totals": {}, "untracked_stages": []}
 
     records = _load_records(email)
+    overrides = _canonical_overrides(email)
     applied = interview = offer = 0
     for r in records:
-        stage = _furthest_stage(r.get("application") or {})
+        stage = _furthest_stage(_effective_app(r, overrides))
         if stage >= 1:
             applied += 1
         if stage >= 2:

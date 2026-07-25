@@ -1,0 +1,18 @@
+<!doctype html>
+<!-- Aithrex-owned synthetic fixture. A Greenhouse-style form gated by a VISIBLE
+     reCAPTCHA challenge. The adapter must pause as waiting_human and NEVER attempt
+     to solve or bypass the challenge. -->
+<html><head><meta charset="utf-8"><title>Apply - Aithrex</title></head>
+<body>
+<form id="application_form" action="https://boards.greenhouse.io/aithrex/jobs/4200" method="post">
+  <input id="first_name" name="first_name" type="text" required>
+  <input id="email" name="email" type="email" required>
+  <div class="g-recaptcha" data-sitekey="aithrex-test-sitekey" style="width:302px;height:78px">
+     <iframe title="recaptcha challenge expires in two minutes"
+             src="https://www.google.com/recaptcha/api2/bframe?k=aithrex-test"
+             style="width:302px;height:78px"></iframe>
+  </div>
+  <div id="application-confirmation" style="display:none"></div>
+  <button type="submit">Submit application</button>
+</form>
+</body></html>

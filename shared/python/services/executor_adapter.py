@@ -116,6 +116,19 @@ SUBMIT_SUCCESS = "submitted"
 SUBMIT_WAITING_VERIFY = "waiting_verify"
 SUBMIT_FAILED = "failed"
 EXECUTOR_UNAVAILABLE = "executor_unavailable"
+# ASYNC-DISPATCH executors (e.g. CloudRunExecutor) don't drive the browser inline
+# — submit() hands the work to a remote fleet (a Cloud Task → Cloud Run worker)
+# and returns immediately. The terminal outcome (submitted / submission_unknown /
+# a wall / failed) arrives LATER on the executor callback surface, which finalizes
+# the ledger. The orchestrator treats SUBMIT_DISPATCHED as "in flight, leave the
+# row running" — NOT a success, NOT a failure. Synchronous executors (Stub / Ats /
+# Browser / LambdaInvoke) never return it, so their path is byte-identical.
+SUBMIT_DISPATCHED = "dispatched"
+# A submit whose FINAL outcome could not be confirmed (a timeout/lost connection
+# AFTER the Submit click). This is HELD, never auto-retried — re-driving an
+# ambiguous final submit risks a duplicate application. Distinct from SUBMIT_FAILED
+# (a clean, pre-submit, retryable failure).
+SUBMIT_UNKNOWN = "submission_unknown"
 # Oracle-hook "the thing is now usable" status (account created / wall cleared):
 ORACLE_READY = "ready"
 

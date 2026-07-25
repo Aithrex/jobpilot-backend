@@ -63,6 +63,42 @@ ASK = "ask"
 VALID_DECISIONS = (AUTO, HOLD, ASK)
 
 # ---------------------------------------------------------------------------
+# Explicit autonomy MODES (auto-apply-defects-plan.md "## Autonomy MODES").
+#
+# The mode is the SINGLE source of truth for HOW MUCH latitude the pipeline has,
+# and it sits OUTSIDE the per-application `decide()` brain: `decide()` computes a
+# raw auto|hold|ask, then the mode caps that decision (see
+# auto_apply_service._mode_decision). Stored on `auto_submit_settings.mode`;
+# managed_mailboxes.mode reads THROUGH to it (one source, no drift).
+#
+#   * copilot   — prepare-only. NO browser automation, NO executor dispatch, NO
+#                 submit; the user applies manually from the prepared answer
+#                 sheet. A raw `auto` is capped to `ask` and the row is flagged
+#                 manual_apply. `decide()` is effectively irrelevant (never auto).
+#   * approval  — every application waits for an explicit user approval regardless
+#                 of confidence: a raw `auto` is capped to `ask`.
+#   * autopilot — full auto (no per-application permission) — but ONLY after the
+#                 graduation gate (>= AUTOPILOT_GRADUATION_N user-approved
+#                 confirmations); below it, `auto` is capped to `ask`. Hard
+#                 never-fabricate rules (unconfirmed legal attestation -> ask)
+#                 still win, always.
+#
+# DECIDED (user, July 2026): there is NO implicit default — onboarding FORCES an
+# explicit pick. `get_mode` returns None until it is set, and the scheduler/
+# executor REFUSE to auto-act while it is unset (fail-safe). No default is ever
+# written here.
+# ---------------------------------------------------------------------------
+MODE_COPILOT = "copilot"
+MODE_APPROVAL = "approval"
+MODE_AUTOPILOT = "autopilot"
+VALID_MODES = (MODE_COPILOT, MODE_APPROVAL, MODE_AUTOPILOT)
+
+# Autopilot graduation gate: `auto` is honored only once the user has at least
+# this many canonical applications confirmed via a USER-approved path. LOCKED at
+# 10 (auto-apply-defects-plan.md "## Autonomy MODES").
+AUTOPILOT_GRADUATION_N = 10
+
+# ---------------------------------------------------------------------------
 # Threshold (per user, on auto_submit_settings.autonomy_threshold)
 # ---------------------------------------------------------------------------
 DEFAULT_AUTONOMY_THRESHOLD = 0.90
@@ -173,6 +209,79 @@ def set_autonomy_threshold(user_email: str, threshold: float) -> float:
         upsert=True,
     )
     return value
+
+
+# ---------------------------------------------------------------------------
+# Mode (per user, on auto_submit_settings.mode) — the SINGLE source of truth.
+# user_email is the trusted JWT identity (same convention as
+# get_autonomy_threshold), and lives on the SAME auto_submit_settings doc as the
+# opt-in + threshold, so the whole autonomy posture is one read/one write.
+# ---------------------------------------------------------------------------
+def get_mode(user_email: str) -> Optional[str]:
+    """The user's explicit autonomy mode, or None when unset.
+
+    None is deliberate — there is NO implicit default (onboarding forces the
+    pick), and the gather/executor path REFUSES to auto-act while it is None. A
+    stored value outside VALID_MODES normalizes to None (never silently trusted).
+    """
+    if not user_email or not isinstance(user_email, str):
+        return None
+    try:
+        doc = _settings().find_one({"user_email": user_email}, {"_id": 0, "mode": 1})
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("autonomy: mode read failed for %s: %s", user_email, e)
+        return None
+    mode = (doc or {}).get("mode")
+    return mode if mode in VALID_MODES else None
+
+
+def set_mode(user_email: str, mode: str) -> str:
+    """Persist the user's autonomy mode onto the existing auto_submit_settings doc
+    (upsert, coexisting with the opt-in + threshold). Validates the enum — a bad
+    value raises ValueError (the route maps it to 400, NEVER 401). No default is
+    written by any other path; this is the only writer of `mode`."""
+    if not user_email or not isinstance(user_email, str):
+        raise ValueError("user_email is required")
+    if mode not in VALID_MODES:
+        raise ValueError(f"mode must be one of {VALID_MODES}")
+    from datetime import datetime, timezone
+    _settings().update_one(
+        {"user_email": user_email},
+        {"$set": {"user_email": user_email, "mode": mode,
+                  "updated_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    return mode
+
+
+def autopilot_unlocked(user_email: str) -> bool:
+    """Autopilot graduation gate: has the user EARNED hands-off `auto`?
+
+    True once the user has at least AUTOPILOT_GRADUATION_N (10) canonical
+    `applications` that reached `confirmed` via a USER-approved path
+    (`approval_snapshot.approved_by == "user"`). Below that, autopilot's `auto` is
+    capped to `ask` (see auto_apply_service._mode_decision).
+
+    System-approved autopilot confirmations (`approved_by == "system"`) are
+    DELIBERATELY excluded: counting them would let autopilot bootstrap its own
+    unlock (the first 10 silent submits would graduate it with zero human
+    review). The gate must be earned by real user-reviewed approvals — a
+    documented anti-bootstrap choice.
+    """
+    if not user_email or not isinstance(user_email, str):
+        return False
+    try:
+        n = DBConnect().get_db().applications.count_documents({
+            "user_email": user_email,
+            # canonical terminal-good (application_ledger_service.STATUS_CONFIRMED)
+            "status": "confirmed",
+            "approval_snapshot.approved_by": "user",
+        })
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("autonomy: autopilot_unlocked count failed for %s: %s",
+                       user_email, e)
+        return False
+    return n >= AUTOPILOT_GRADUATION_N
 
 
 # ---------------------------------------------------------------------------

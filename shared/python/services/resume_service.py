@@ -36,7 +36,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from utils.db_connect import DBConnect
 
@@ -686,6 +686,93 @@ def _persist_tailoring_record(
         return None
 
 
+def _pin_rendered_pdf(user_email: str, record_id: str,
+                      tailored: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """Render a tailored résumé to PDF and PIN it under the IMMUTABLE v3 key
+    (``tailoring/{record_id}/{version_id}/{render_version}.pdf``), caching the
+    ref on the record's initial version. Returns ``(version_id, s3_key)``.
+
+    This is the immutable artifact the auto-apply submit path
+    (``browser_executor._resume_pdf_ref``) later resolves to PDF bytes, so a
+    submitted application always carries exactly the résumé that was pinned at
+    preparation time. Raises on a render/store failure so the caller can refund
+    the reserved tailor slot and never land the row in ``ready``.
+    """
+    from services.resume_versioning import canonical_content_hash
+    from services.s3_service import get_storage_service
+    from utils.db_connect import DBConnect as _DBC
+
+    svc = get_resume_service()
+    _db = _DBC().get_db()
+    rec = _db.tailoring_records.find_one(
+        {"record_id": record_id, "user_email": user_email}
+    )
+    if not rec:
+        raise ValueError("tailoring_record_not_found")
+    versions = rec.get("versions") or []
+    target = versions[-1] if versions else None
+    if not target:
+        raise ValueError("tailoring_record_has_no_version")
+    version_id = target.get("version_id")
+
+    pdf_bytes = svc.renderer.generate_pdf(tailored)
+    if not pdf_bytes or len(pdf_bytes) < 100:
+        raise ValueError("pdf_render_failed")
+
+    storage = get_storage_service()
+    s3_key = storage.upload_tailoring_file(
+        record_id, version_id or "v0", svc.renderer.RENDER_VERSION, pdf_bytes, "pdf"
+    )
+
+    target.setdefault("files", {})
+    target["files"]["pdf"] = {
+        "s3_key": s3_key,
+        "size_bytes": len(pdf_bytes),
+        "content_hash": canonical_content_hash(tailored),
+        "render_version": svc.renderer.RENDER_VERSION,
+        "rendered_at": datetime.now(timezone.utc),
+    }
+    _db.tailoring_records.update_one(
+        {"record_id": record_id, "user_email": user_email},
+        {"$set": {"versions": versions,
+                  "current_version_id": rec.get("current_version_id") or version_id,
+                  "updated_at": datetime.now(timezone.utc)}},
+    )
+    return version_id, s3_key
+
+
+def prepare_tailored_artifact(user_email: str, jd_text: str) -> Dict[str, Any]:
+    """Tailor the user's active résumé for a JD, persist a canonical
+    tailoring_records doc (``versions[0]`` immutable), and PIN a rendered PDF
+    under the immutable v3 S3 key. Returns ``{record_id, version_id, s3_key}``.
+
+    The ONE reusable "tailor for a JD and pin it" path the auto-apply prepare
+    phase (defect D) drives. It reuses the SAME tailor / persist / render
+    building blocks the ``tailor`` job branch uses — nothing about tailoring is
+    reimplemented here. Raises on ANY failure so the caller (auto_apply.prepare)
+    can refund the reserved tailor slot and route the row to ``needs_input``
+    (never ``ready``). Never fabricates résumé facts (the tailor's IntegrityGuard
+    still governs the content).
+    """
+    svc = get_resume_service()
+    resume = svc.parser.ensure_structured_resume(user_email=user_email)
+    if not resume or not resume.get("structured"):
+        raise ValueError("no_structured_resume")
+    structured = resume["structured"]
+
+    jd_analysis = svc.extract_jd(jd_text or "")
+    result = svc.tailor.tailor(structured, jd_analysis)
+
+    record_id = _persist_tailoring_record(
+        user_email, resume, jd_text or "", jd_analysis, result, "auto_apply_prepare"
+    )
+    if not record_id:
+        raise ValueError("tailoring_record_persist_failed")
+
+    version_id, s3_key = _pin_rendered_pdf(user_email, record_id, result)
+    return {"record_id": record_id, "version_id": version_id, "s3_key": s3_key}
+
+
 def _attach_ats_keyword_audit(result: Dict[str, Any], jd_analysis: Dict[str, Any]) -> None:
     """Re-run the deterministic keyword gap engine on the FINAL tailored
     resume so the UI can warn about JD keywords that didn't make it in.
@@ -944,7 +1031,9 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             # a grounded, honest six-second recruiter read (PRO). The service loads
             # the resume and never fabricates; output is advisory, never written back.
             from services.recruiter_gaze_service import build_six_seconds
-            result = build_six_seconds(payload.get("user_email", ""))
+            result = build_six_seconds(
+                payload.get("user_email", ""), payload.get("fingerprint", "")
+            )
             svc.complete_job(job_id, result)
 
         elif job_type == "referral_draft":
@@ -2072,6 +2161,23 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result = job_ingest_worker.run_maintenance(
                 verify_limit=int(payload.get("verify_limit") or 2000),
             )
+            svc.complete_job(job_id, result)
+
+        elif job_type == "auto_apply_prepare":
+            # Defect D — the REQUIRED tailored-résumé preparation phase. Reserves
+            # a tailor slot, tailors + pins an immutable artifact, writes
+            # tailoring_record_id back onto the ledger row, and only THEN lands
+            # the row in `ready`. Idempotency guard — Lambda async is
+            # at-least-once and re-tailoring would re-spend an LLM call; bail if
+            # this job already completed (prepare itself is also idempotent on a
+            # pinned artifact, so this is belt-and-suspenders).
+            existing = svc.get_job(job_id, user_email=payload.get("user_email", ""))
+            if existing and existing.get("status") == "completed":
+                logger.info(f"Skipping auto_apply_prepare job {job_id}: already completed")
+                return
+
+            from services.auto_apply_service import prepare
+            result = prepare(payload["application_id"], payload["user_email"])
             svc.complete_job(job_id, result)
 
         elif job_type == "auto_apply_gather":

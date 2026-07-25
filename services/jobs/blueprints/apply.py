@@ -23,6 +23,7 @@ issues from /api/auth and sends it as a Bearer token):
 """
 import logging
 from datetime import datetime
+from urllib.parse import quote
 
 from flask import Blueprint, request, jsonify, redirect, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -36,6 +37,7 @@ from services import application_ledger_service
 from services import approval_token_service
 from services import ats_credential_service
 from services import today_inbox_service
+from services import apply_onboarding_service
 
 apply_bp = Blueprint("apply", __name__)
 logger = logging.getLogger(__name__)
@@ -84,6 +86,32 @@ def _fill_cap_exceeded(user_email: str):
     ):
         return _fill_cap_response("daily", _MAX_FILLS_PER_DAY)
     return None
+
+
+def _charge_feature(user_email: str, feature: str, *, idempotency_key=None):
+    """Charge ONE unit of a metered feature, returning ``(allowed, usage)``.
+
+    Defect G: when ``AUTO_APPLY_RESERVE`` is on, spend via the ATOMIC
+    reserve+complete ledger (``quota_ledger_service`` — a single guarded ``$inc``,
+    no check-then-increment race) so ``auto_submit`` / ``autoapply_answer`` can
+    never be double-charged under concurrent Lambdas. Dark by default: the switch
+    OFF keeps the legacy ``check_and_increment`` metering byte-identical. The
+    per-plan cap is entitlements_service's, either way (never a second copy)."""
+    from utils.config import _get_config_value
+    reserve_on = str(
+        _get_config_value("AUTO_APPLY_RESERVE", "false") or "false"
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if not reserve_on:
+        return entitlements_service.check_and_increment(user_email, feature)
+    from services import quota_ledger_service as quota
+    res = quota.reserve(user_email, feature, n=1, idempotency_key=idempotency_key)
+    if not res.get("reserved"):
+        return False, res.get("usage") or {}
+    # Immediately settle — this is a synchronous spend (no async job to attach to),
+    # so the reserved slot is consumed on the spot.
+    for eid in (res.get("entry_ids") or []):
+        quota.complete_entry(eid)
+    return True, res.get("usage") or {}
 
 
 def _quota_exceeded_response(usage: dict):
@@ -222,7 +250,8 @@ def generate_answer():
 
         # Meter the DEDICATED autoapply_answer bucket, not the tailor bucket —
         # so the extension has its own quota and we don't double-count tailor.
-        allowed, usage = entitlements_service.check_and_increment(user_email, "autoapply_answer")
+        # G: atomic reserve+complete (no check-then-increment race) when enabled.
+        allowed, usage = _charge_feature(user_email, "autoapply_answer")
         if not allowed:
             return _quota_exceeded_response(usage)
 
@@ -355,6 +384,9 @@ def auto_submit_get_settings():
         # Merge the per-user autonomy threshold (confidence gate for hands-off
         # submit). Kept in a separate store, surfaced on the same settings blob.
         settings["autonomy_threshold"] = autonomy_service.get_autonomy_threshold(user_email)
+        # Explicit autonomy mode (copilot|approval|autopilot) — the SINGLE source
+        # of truth. null until onboarding forces the pick (no implicit default).
+        settings["mode"] = autonomy_service.get_mode(user_email)
         return jsonify(settings), 200
     except Exception as e:
         logger.exception("apply/auto-submit settings GET error: %s", e)
@@ -369,7 +401,13 @@ def auto_submit_put_settings():
         return disabled
     user_email = get_jwt_identity()
     data = request.get_json(silent=True) or {}
+    # Canonical key is `auto_submit_enabled` (matches GET + the FE type + storage).
+    # Accept the legacy `enabled` key transitionally so FE/BE deploy ordering can
+    # never strand the settings PUT at 400 during rollout (defect A). Remove the
+    # fallback once the FE ships the canonical key everywhere.
     enabled = data.get("auto_submit_enabled")
+    if enabled is None:
+        enabled = data.get("enabled")
     if not isinstance(enabled, bool):
         return jsonify({"error": "auto_submit_enabled (boolean) is required"}), 400
 
@@ -383,6 +421,23 @@ def auto_submit_put_settings():
         if not (0.0 <= float(threshold) <= 1.0):
             return jsonify({"error": "autonomy_threshold must be a number in [0, 1]"}), 400
 
+    # Optional explicit autonomy mode (copilot|approval|autopilot) — the SINGLE
+    # source of truth. Validate the enum BEFORE persisting; a bad value is a
+    # business error (400 — never 401).
+    #
+    # FRONTEND HANDOFF (frontend-engineer): no implicit default is ever written.
+    # Onboarding must add a step that FORCES the user to pick one of the three
+    # modes and PUTs it here; until it is set, GET returns mode:null and the
+    # auto-apply gather path REFUSES to auto-act (mode_required fail-safe). The FE
+    # should treat a mode_required/needs_onboarding signal (and a null mode) as
+    # "route the user to the onboarding mode picker".
+    mode = data.get("mode")
+    if mode is not None and mode not in autonomy_service.VALID_MODES:
+        return jsonify({
+            "error": "invalid_mode",
+            "message": f"mode must be one of {list(autonomy_service.VALID_MODES)}",
+        }), 400
+
     try:
         result = auto_submit_service.set_settings(user_email, enabled)
         if threshold is not None:
@@ -391,10 +446,59 @@ def auto_submit_put_settings():
             )
         else:
             result["autonomy_threshold"] = autonomy_service.get_autonomy_threshold(user_email)
+        if mode is not None:
+            autonomy_service.set_mode(user_email, mode)
+        result["mode"] = autonomy_service.get_mode(user_email)
         return jsonify(result), 200
     except Exception as e:
         logger.exception("apply/auto-submit settings PUT error: %s", e)
         return jsonify({"error": "Failed to save auto-submit settings"}), 500
+
+
+# ==================================================================
+# AUTO-APPLY ONBOARDING (QT2) — the ask-once declared-profile surface.
+#
+# GET returns the canonical question bank grouped by category (each field with
+# its sensitivity/options/required/default/current/missing) + ready_for_autoapply
+# + the autonomy mode. PUT validates each answer against the catalog and persists
+# it to the SAME declared store answer_library resolves from (user_preferences),
+# so a value declared here is immediately fillable by the executor — and never
+# fabricated (protected/EEO/legal are only ever user-declared). Rides the existing
+# /api/apply/* edge route — no new prefix. Business failures are 400 — never 401.
+# ==================================================================
+@apply_bp.route("/onboarding/questions", methods=["GET"])
+@jwt_required()
+def onboarding_questions():
+    user_email = get_jwt_identity()
+    try:
+        return jsonify(apply_onboarding_service.build_questions_payload(user_email)), 200
+    except Exception as e:
+        logger.exception("apply/onboarding questions error: %s", e)
+        return jsonify({"error": "Failed to load onboarding questions"}), 500
+
+
+@apply_bp.route("/onboarding/answers", methods=["PUT"])
+@jwt_required()
+def onboarding_answers():
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    answers = data.get("answers")
+    if not isinstance(answers, dict):
+        return jsonify({
+            "error": "invalid_answers",
+            "message": "answers (an object of {field_id: value}) is required",
+        }), 400
+    # Optional autonomy mode pick (copilot|approval|autopilot) — validated in the
+    # service against autonomy_service.VALID_MODES (a bad value is a 400).
+    mode = data.get("mode")
+    try:
+        payload = apply_onboarding_service.save_answers(user_email, answers, mode=mode)
+        return jsonify(payload), 200
+    except apply_onboarding_service.OnboardingError as e:
+        return jsonify({"error": e.error, "message": e.message}), e.status
+    except Exception as e:
+        logger.exception("apply/onboarding answers error: %s", e)
+        return jsonify({"error": "Failed to save onboarding answers"}), 500
 
 
 # ------------------------------------------------------------------
@@ -454,7 +558,12 @@ def auto_submit_approve():
             return fill_capped
 
         # Per-plan daily auto-submit cap (abuse/safety) — meter BEFORE creating.
-        allowed, usage = entitlements_service.check_and_increment(user_email, "auto_submit")
+        # G: atomic reserve+complete (no check-then-increment race). Keyed on the
+        # application so a duplicate approve (already short-circuited above) can
+        # never double-charge even if it slips through.
+        allowed, usage = _charge_feature(
+            user_email, "auto_submit",
+            idempotency_key=f"route-approve:{user_email}:{application_id}")
         if not allowed:
             return _quota_exceeded_response(usage)
 
@@ -499,14 +608,15 @@ def auto_submit_cancel():
 # GET /api/apply/auto-submit/pending — the eligible-to-submit queue
 # ------------------------------------------------------------------
 def _ledger_ready_as_pending(user_email: str) -> list:
-    """Bridge System B → the extension: auto-apply LEDGER rows in `ready` (either
-    user-approved or a clean `auto` decision) mapped to the extension's pending-
-    record shape. This is what lets the extension auto-submit pipeline
-    applications in the USER's own browser — the reliable path past reCAPTCHA that
-    the headless fleet cannot clear. Best-effort; never raises past the caller."""
+    """Bridge System B → the extension: auto-apply LEDGER rows that are APPROVED
+    (F: `approved` — a manual go-ahead or a clean `auto` system-approval, snapshot
+    frozen) mapped to the extension's pending-record shape. This is what lets the
+    extension auto-submit pipeline applications in the USER's own browser — the
+    reliable path past reCAPTCHA the headless fleet cannot clear. Best-effort;
+    never raises past the caller."""
     try:
         from services import application_ledger_service as ledger
-        rows = ledger.list_applications(user_email, status=ledger.STATUS_READY, limit=100)
+        rows = ledger.list_applications(user_email, status=ledger.STATUS_APPROVED, limit=100)
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("auto-submit pending: ledger bridge failed: %s", e)
         return []
@@ -518,7 +628,7 @@ def _ledger_ready_as_pending(user_email: str) -> list:
         out.append({
             "application_id": r.get("application_id"),
             "apply_url": url, "url": url,
-            "status": "approved",       # `ready` == approved-to-submit for the extension
+            "status": "approved",       # `approved` == cleared-to-submit for the extension
             "eligible": True,
             "ats": r.get("ats_family"),
             "title": r.get("title"), "company": r.get("company"),
@@ -538,7 +648,16 @@ def auto_submit_pending():
         resp = auto_submit_service.list_pending_eligible(user_email)  # {"pending":[...],"waiting":[...]}
         pending = list(resp.get("pending") or [])
         seen = {p.get("application_id") for p in pending}
-        for row in _ledger_ready_as_pending(user_email):
+        # E2 (defect E): when the approval fold is flipped on, surface CANONICAL
+        # ledger rows (ready_for_review + approved/queued_for_execution) LABELED
+        # with `status` + `already_approved` so H's FE can render approved rows
+        # read-only. Dark by default → the legacy `approved`-only bridge below
+        # runs unchanged until AUTO_APPLY_APPROVAL_FOLD is on.
+        if auto_submit_service.approval_fold_enabled():
+            bridge = auto_submit_service.list_canonical_approvals(user_email)
+        else:
+            bridge = _ledger_ready_as_pending(user_email)
+        for row in bridge:
             if row["application_id"] not in seen:
                 pending.append(row)
         resp["pending"] = pending
@@ -569,9 +688,19 @@ def auto_submit_mark_submitted():
     try:
         from services import application_ledger_service as ledger
         app = ledger.get_application(user_email, application_id)
-        if app and app.get("status") in (ledger.STATUS_READY, ledger.STATUS_SUBMITTING):
-            if app.get("status") == ledger.STATUS_READY:
-                ledger.mark_submitting(user_email, application_id)
+        # F: the extension submits an APPROVED row in the user's own browser. Walk
+        # it through the execution lease (approved → queued_for_execution →
+        # running → submitted) so the ledger reflects a real submission.
+        _bridge_states = (ledger.STATUS_APPROVED, ledger.STATUS_QUEUED_FOR_EXECUTION,
+                          ledger.STATUS_RUNNING)
+        if app and app.get("status") in _bridge_states:
+            st = app.get("status")
+            if st == ledger.STATUS_APPROVED:
+                ledger.transition(user_email, application_id,
+                                  ledger.STATUS_QUEUED_FOR_EXECUTION)
+                st = ledger.STATUS_QUEUED_FOR_EXECUTION
+            if st == ledger.STATUS_QUEUED_FOR_EXECUTION:
+                ledger.transition(user_email, application_id, ledger.STATUS_RUNNING)
             ledger.mark_submitted(user_email, application_id)
             return jsonify({"approval": {"application_id": application_id,
                                          "status": "submitted", "source": "ledger"}}), 200
@@ -830,24 +959,75 @@ _APPROVE_LINK_ERRORS = {
 }
 
 
-def _app_applications_url() -> str:
-    """The in-app applications view a `review` link (or a re-clicked one) lands on."""
+def _app_applications_url(token: str = "") -> str:
+    """The in-app applications view an approve/review link lands on.
+
+    J (stale deep links): the canonical applications route on the migrated `/next`
+    shell is ``/next/applications`` (jobpilot-frontend App.tsx — its index child
+    redirects to the `tracker` tab). The legacy bare ``/applications`` no longer
+    routes, so email approve/review links must target the `/next` route. Matches
+    the mailbox forward convention (``/next/applications/<thread>``).
+
+    P1-APPROVE-GET: for an approve/skip link the (unconsumed) ``token`` is passed
+    through as ``?approve=<token>`` so the authenticated confirmation surface can
+    submit it back via the CSRF-safe POST — the GET itself never mutates."""
     from utils.config import AppUrlsConfig
-    return f"{AppUrlsConfig.FRONTEND_URL}/applications"
+    base = f"{AppUrlsConfig.FRONTEND_URL}/next/applications"
+    if token:
+        return f"{base}?approve={quote(token, safe='')}"
+    return base
+
+
+def _perform_approval_action(action: str, user_email: str,
+                             application_ids: list) -> dict:
+    """The MUTATION behind an approve/skip magic-link — invoked ONLY from the
+    authenticated, CSRF-safe POST (never a bare GET). Returns a JSON-able result.
+
+    Mirrors the pre-P1-APPROVE-GET GET-handler body verbatim (F snapshot freeze +
+    instant submit), but now guarded by a real JWT identity + owner-bound token."""
+    if action in ("approve_all", "approve_one"):
+        # F: approve ONLY rows that reached `ready_for_review`, freezing an
+        # immutable snapshot per row (approved_by="user"). A row still gathering /
+        # awaiting answers is NOT approvable — `moved` is 0 and the client shows a
+        # plain "not ready yet" state (never an error, never 401).
+        from services import auto_apply_service as _aas
+        moved = application_ledger_service.approve(
+            user_email, application_ids, approved_by="user",
+            snapshot_provider=lambda aid: _aas.build_approval_snapshot(
+                user_email, aid))
+        if moved:
+            # Fire submission immediately on approval instead of waiting for the
+            # hourly sweep (best-effort; gated by AUTO_SUBMIT_ENABLED, idempotent
+            # with the sweep). This is what makes "approve → it applies" instant.
+            try:
+                _aas.request_immediate_submit(user_email, application_ids)
+            except Exception as _e:  # never let the response fail on this
+                logger.warning("approve-link immediate submit enqueue failed: %s", _e)
+        return {"action": action, "approved": moved, "ready": bool(moved)}
+
+    if action == "skip":
+        moved = application_ledger_service.user_skip(user_email, application_ids)
+        return {"action": action, "skipped": moved}
+
+    # Unreachable: the token action set is whitelisted at verify time.
+    return {"action": action, "noop": True}
 
 
 @apply_bp.route("/approve-link", methods=["GET"])
 def approve_link():
+    """PUBLIC, NON-MUTATING magic-link landing (P1-APPROVE-GET, control C17).
+
+    A GET must never mutate state (a prefetch, an email-scanner, a shared/leaked
+    link, or a CSRF cannot approve anything). This route only VERIFIES the signed
+    token (peek — the single use is NOT consumed) and 302-redirects into the app:
+      * `review`                      → the applications view;
+      * `approve_all|approve_one|skip`→ the applications view carrying the token as
+        ``?approve=<token>`` so the authenticated SPA can complete the action via
+        the CSRF-safe ``POST /api/apply/approve-link``.
+    Invalid/expired links show a self-contained page. NEVER 401."""
     token = request.args.get("token", "")
     try:
-        claim = approval_token_service.verify_and_claim(token)
-    except approval_token_service.TokenAlreadyUsed as e:
-        # Idempotent: the link already did its job. A re-clicked `review` still
-        # 302s into the app; other actions get a friendly "already done" page.
-        if (e.payload or {}).get("action") == "review":
-            return redirect(_app_applications_url(), code=302)
-        title, message = _APPROVE_LINK_ERRORS["link_already_used"]
-        return _approve_link_page(title, message, status=e.status)
+        claim = approval_token_service.verify(token)
     except approval_token_service.ApprovalTokenError as e:
         title, message = _APPROVE_LINK_ERRORS.get(
             e.error, ("Link problem", "This link could not be used.")
@@ -855,52 +1035,68 @@ def approve_link():
         return _approve_link_page(title, message, status=e.status)
 
     action = claim.get("action")
-    user_email = claim.get("user_email")
-    application_ids = claim.get("application_ids") or []
+    if action == "review":
+        return redirect(_app_applications_url(), code=302)
+    # approve_all / approve_one / skip: hand the still-unclaimed token to the
+    # authenticated confirmation surface — the GET itself performs NO mutation.
+    return redirect(_app_applications_url(token), code=302)
+
+
+@apply_bp.route("/approve-link", methods=["POST"])
+@jwt_required()
+def approve_link_confirm():
+    """AUTHENTICATED, CSRF-safe completion of a magic-link approval
+    (P1-APPROVE-GET). CSRF-safe because authorization is a JWT Bearer in the
+    Authorization header — an attacker page cannot forge it cross-site (no
+    ambient cookie). The single-use token is consumed HERE (verify_and_claim),
+    and the claim's owner MUST match the JWT identity. Business failures are
+    400/403/409 — NEVER 401."""
+    jwt_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    token = data.get("token") or request.args.get("token") or ""
+    if not token or not isinstance(token, str):
+        return jsonify({"error": "token is required"}), 400
 
     try:
-        if action == "review":
-            return redirect(_app_applications_url(), code=302)
+        claim = approval_token_service.verify_and_claim(token)
+    except approval_token_service.TokenAlreadyUsed as e:
+        # Idempotent single-use: the link already did its job. `review` is a
+        # harmless no-op; other actions report "already done" (409, never 401).
+        if (e.payload or {}).get("action") == "review":
+            return jsonify({"ok": True, "action": "review", "already_used": True}), 200
+        return jsonify({"error": "link_already_used",
+                        "message": "You've already used this link — no further "
+                                   "action was taken."}), 409
+    except approval_token_service.ApprovalTokenError as e:
+        # Signature/shape/expiry failure (403/503) — a broken link, not a bad JWT.
+        return jsonify({"error": e.error, "message": e.message}), e.status
 
-        if action in ("approve_all", "approve_one"):
-            moved = application_ledger_service.approve_to_ready(user_email, application_ids)
-            # Fire submission immediately on approval instead of waiting for the
-            # hourly sweep (best-effort; gated by AUTO_SUBMIT_ENABLED, idempotent
-            # with the sweep). This is what makes "approve → it applies" instant.
-            try:
-                from services.auto_apply_service import request_immediate_submit
-                request_immediate_submit(user_email, application_ids)
-            except Exception as _e:  # never let the confirmation page fail on this
-                logger.warning("approve-link immediate submit enqueue failed: %s", _e)
-            return _approve_link_page(
-                "Approved",
-                f"{moved} application{'s' if moved != 1 else ''} queued to apply — "
-                "we'll take it from here.",
-                status=200,
-            )
+    action = claim.get("action")
+    token_email = claim.get("user_email")
+    application_ids = claim.get("application_ids") or []
 
-        if action == "skip":
-            application_ledger_service.user_skip(user_email, application_ids)
-            return _approve_link_page(
-                "Skipped",
-                "Got it — we won't nudge you about these again.",
-                status=200,
-            )
+    # Owner binding: the token's subject MUST be the authenticated caller. A
+    # mismatch (a link claimed by the wrong signed-in account) is a business
+    # authorization failure — 403, never 401.
+    if not token_email or token_email != jwt_email:
+        logger.warning("approve-link POST owner mismatch for jti-scoped action")
+        return jsonify({"error": "not_authorized",
+                        "message": "This approval link is for a different account."}), 403
 
-        # Unreachable: verify_and_claim only returns whitelisted actions.
-        return _approve_link_page("Link problem", "This link could not be used.", status=400)
+    if action == "review":
+        return jsonify({"ok": True, "action": "review"}), 200
+
+    try:
+        result = _perform_approval_action(action, jwt_email, application_ids)
+        return jsonify({"ok": True, **result}), 200
     except application_ledger_service.ApplicationLedgerError as e:
-        status = e.status if e.status in (403, 409, 503) else 409
-        return _approve_link_page(
-            "Link problem", "We couldn't complete that action. Please open the app.", status=status
-        )
+        status = e.status if e.status in (400, 403, 409) else 409
+        return jsonify({"error": e.error, "message": e.message}), status
     except Exception as e:
-        logger.exception("apply/approve-link action error: %s", e)
-        return _approve_link_page(
-            "Something went wrong",
-            "We couldn't complete that action. Please open the app.",
-            status=503,
-        )
+        logger.exception("apply/approve-link POST action error: %s", e)
+        return jsonify({"error": "action_failed",
+                        "message": "We couldn't complete that action. Please open "
+                                   "the app."}), 500
 
 
 # ==================================================================

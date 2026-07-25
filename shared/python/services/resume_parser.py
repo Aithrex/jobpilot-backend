@@ -396,6 +396,7 @@ class ResumeParser:
         # If the PDF is image-based or extraction fails, local_text is empty
         # and we transparently fall back to the legacy FULL prompt path.
         local_text = ""
+        local_text_clean = ""  # best-effort extraction, kept even when "unhealthy"
         local_urls: list = []
         local_extract_status = "skipped"  # one of: skipped | ok | unhealthy | error | unavailable
         if file_base64:
@@ -433,10 +434,17 @@ class ResumeParser:
         t_local = time.perf_counter()
         use_slim = bool(local_text)
 
-        # Build provider-native parts (PDF + prompt, or text-only fallback).
+        # Claude reads a PDF natively (document block) but CANNOT read a DOCX —
+        # for any non-PDF upload the only content the model ever sees is the text
+        # we extracted locally, so it must be embedded into the prompt. Pass the
+        # best text we have (healthy > unhealthy > caller-supplied); the parts
+        # builder chooses PDF-document-block vs text-embedded based on mime type.
+        embed_text = local_text or local_text_clean or raw_text
+
+        # Build provider-native parts (PDF document block, or text-embedded prompt).
         # Provider knows its own multimodal payload shape.
         parts = self._build_extraction_parts(
-            raw_text, file_base64, mime_type, provider, base64, slim=use_slim
+            embed_text, file_base64, mime_type, provider, base64, slim=use_slim
         )
 
         # Call the LLM (FLASH tier). Slim path needs far fewer output tokens because
@@ -537,16 +545,19 @@ class ResumeParser:
     ) -> list:
         """Build provider-native parts for the resume extraction call.
 
-        Multi-modal path (preferred): delegates to `provider.build_pdf_parts`,
-        which returns provider-native content blocks (Claude document blocks).
+        PDF path (multi-modal): when the upload is a PDF, delegate to
+        `provider.build_pdf_parts`, which returns a native Claude document
+        block so the model reads the PDF directly.
 
-        Text-only fallback: returns a single text part wrapping the prompt
-        with embedded raw text. The provider's `json()` treats a single text
-        part as the equivalent of a plain `prompt=` argument.
+        Text-embedded path: for ANYTHING that is not a PDF (DOCX, or a
+        text-only/legacy call with no file bytes), Claude cannot read the raw
+        file, so the locally-extracted text (`raw_text`) is embedded into the
+        prompt. This is the ONLY way DOCX content reaches the model — passing
+        DOCX bytes to `build_pdf_parts` would silently yield an empty prompt.
 
         Args:
-            raw_text: Plain text from the resume (used for text-only fallback).
-            file_base64: Optional base64-encoded file for multi-modal input.
+            raw_text: Plain text from the resume, embedded for the non-PDF path.
+            file_base64: Optional base64-encoded file (used only for PDFs).
             mime_type: MIME type of the file (e.g., application/pdf).
             provider: The active LLMProvider instance.
             base64: base64 module (passed to avoid re-import).
@@ -559,7 +570,8 @@ class ResumeParser:
         """
         prompt_template = _EXTRACTION_PROMPT_SLIM if slim else _EXTRACTION_PROMPT
 
-        if file_base64:
+        is_pdf = (mime_type or "").lower() == "application/pdf"
+        if file_base64 and is_pdf:
             file_bytes = base64.b64decode(file_base64)
             tail = (
                 "Extract from the attached document."
@@ -576,10 +588,11 @@ class ResumeParser:
                 mime_type=mime_type,
             )
 
-        # Text-only fallback: provider.json accepts None for `parts` so we
-        # could pass `prompt=` instead, but the caller path here always uses
-        # parts. Build a single text part using the provider's PDF helper
-        # with empty bytes — providers degrade to text-only when no PDF.
+        # Non-PDF (DOCX) or no file bytes: embed the locally-extracted text.
+        # provider.json accepts None for `parts` so we could pass `prompt=`
+        # instead, but the caller path here always uses parts. Build a single
+        # text part using the provider's PDF helper with empty bytes — providers
+        # degrade to text-only when no PDF.
         # SSN stripped (parsing never needs it); phone kept (we extract contact.phone).
         # Tag as untrusted data so instructions embedded in the résumé aren't followed.
         prompt = prompt_template + "\n" + wrap_untrusted(

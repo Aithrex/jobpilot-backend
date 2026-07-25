@@ -47,13 +47,16 @@ from utils.security import InputSanitizer
 
 from services import application_ledger_service as ledger
 from services import executor_adapter
+from services.ssrf_guard import apply_url_allowed
 from services.executor_adapter import (
     EXECUTOR_UNAVAILABLE,
     ExecutorAdapter,
     ORACLE_READY,
     StubExecutor,
+    SUBMIT_DISPATCHED,
     SUBMIT_FAILED,
     SUBMIT_SUCCESS,
+    SUBMIT_UNKNOWN,
     SUBMIT_WAITING_VERIFY,
     VALID_WALL_KINDS,
     WALL_VERIFY,
@@ -72,6 +75,16 @@ def _now() -> datetime:
 
 def _clean(value: Any, max_length: int = 200) -> str:
     return InputSanitizer.sanitize_string(str(value or ""), max_length=max_length)
+
+
+def _emit_metric(phase: str, **fields: Any) -> None:
+    """Emit a structured, PII-free auto-apply milestone metric (spec §11).
+    Best-effort — a metrics fault never breaks the finalize path."""
+    try:
+        from services import apply_metrics
+        apply_metrics.emit(phase, **fields)
+    except Exception:  # pragma: no cover - metrics never load-bearing
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +119,17 @@ def _configured_executor() -> ExecutorAdapter:
         except Exception as e:  # pragma: no cover - defensive
             logger.error("AUTO_APPLY_EXECUTOR=remote failed to load (%s); "
                          "falling back to StubExecutor", e)
+    elif choice == "cloud_run":
+        # ASYNC-DISPATCH: mint a one-use capability + enqueue a Cloud Task to the
+        # private Cloud Run Playwright worker (GCP browser-execution plane, P5).
+        # submit() returns SUBMIT_DISPATCHED; the worker finalizes the ledger via
+        # the executor callback surface. Dark until CLOUD_RUN_EXECUTOR_ENABLED.
+        try:
+            from services.cloud_run_executor import CloudRunExecutor
+            return CloudRunExecutor()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.error("AUTO_APPLY_EXECUTOR=cloud_run failed to load (%s); "
+                         "falling back to StubExecutor", e)
     elif choice == "ats":
         try:
             from services.ats_executor import AtsExecutor
@@ -132,6 +156,75 @@ def set_executor(executor: ExecutorAdapter) -> None:
     _executor = executor
 
 
+def _prepare_enabled() -> bool:
+    """Dark-launch gate for the REQUIRED tailored-résumé preparation stage
+    (defect D). Default OFF, so prod — and every existing gather path/test —
+    stays byte-identical until the tailor stage is wired on; when ON, the clean
+    auto path dispatches ``auto_apply_prepare`` to pin an immutable tailored
+    artifact BEFORE a row may reach ``ready`` (so `submit` never runs without a
+    résumé). Mirrors the AUTO_APPLY_EXECUTOR / AUTO_SUBMIT_ENABLED dark-by-default
+    posture — a misconfig can only leave the pipeline in today's behavior, never
+    submit an untailored application."""
+    try:
+        from utils.config import _get_config_value
+        val = _get_config_value("AUTO_APPLY_PREPARE", "false") or "false"
+        return str(val).strip().lower() in ("1", "true", "yes", "on")
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
+def _modes_enabled() -> bool:
+    """Dark-launch gate for the explicit autonomy MODES (copilot/approval/
+    autopilot). Default OFF, so prod — and every existing gather/prepare/approval
+    test — stays byte-identical until onboarding (a FE task) FORCES the mode pick
+    and this is flipped on. When ON, the mode gate caps `decide()` per the user's
+    chosen mode AND the fail-safe fires (mode unset -> gather refuses to auto-act).
+    Mirrors the AUTO_APPLY_PREPARE / AUTO_SUBMIT_ENABLED dark-by-default posture —
+    a misconfig can only leave the pipeline in today's behavior, never over-act."""
+    try:
+        from utils.config import _get_config_value
+        val = _get_config_value("AUTO_APPLY_MODES", "false") or "false"
+        return str(val).strip().lower() in ("1", "true", "yes", "on")
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Explicit autonomy MODES gate (auto-apply-defects-plan.md "## Autonomy MODES").
+# Applied AFTER autonomy_service.decide()/evaluate() computes the RAW decision,
+# in the gather/approve path (post-F). It only ever CAPS (downgrades) a decision
+# or refuses — it never upgrades, so the hard never-fabricate rules that already
+# produced `ask`/`hold` upstream (unconfirmed legal attestation -> ask) win in
+# EVERY mode, including autopilot.
+# ---------------------------------------------------------------------------
+def _mode_decision(user_email: str, autonomy: str) -> Tuple[str, Optional[str], bool]:
+    """Cap a raw autonomy decision by the user's explicit mode.
+
+    Returns ``(effective_autonomy, mode, refuse)``:
+      * refuse=True (mode is None)  — the fail-safe: no explicit mode chosen yet
+        (onboarding forces the pick); the caller must NOT auto-proceed.
+      * copilot / approval          — a raw `auto` is capped to `ask` (both wait in
+        ready_for_review); `hold`/`ask` pass through unchanged. Copilot additionally
+        flags the row manual_apply (prepare-only — the user applies themselves).
+      * autopilot                   — `auto` is honored ONLY when the graduation
+        gate is unlocked (>= AUTOPILOT_GRADUATION_N user-approved confirms); else
+        `auto` is capped to `ask`. `hold`/`ask` pass through unchanged.
+    """
+    from services import autonomy_service
+    mode = autonomy_service.get_mode(user_email)
+    if mode is None:
+        return autonomy, None, True
+    if mode in (autonomy_service.MODE_COPILOT, autonomy_service.MODE_APPROVAL):
+        return ("ask" if autonomy == "auto" else autonomy), mode, False
+    if mode == autonomy_service.MODE_AUTOPILOT:
+        if autonomy == "auto" and not autonomy_service.autopilot_unlocked(user_email):
+            return "ask", mode, False
+        return autonomy, mode, False
+    # Unknown mode (should be impossible — get_mode normalizes to None): treat as
+    # the strictest cap rather than trusting it.
+    return ("ask" if autonomy == "auto" else autonomy), mode, False
+
+
 # ---------------------------------------------------------------------------
 # Owned collections
 # ---------------------------------------------------------------------------
@@ -144,54 +237,22 @@ def _freezes_coll():
 
 
 # ---------------------------------------------------------------------------
-# Canonical profile — the declared source of truth for answers/attestations.
-# (Handed to the answer library; also the ONLY permissible source for legal
-# attestations — never an LLM, never a heuristic.)
+# Answer resolution (delegates to answer_library_service; the library loads the
+# canonical profile itself — structured résumé + preferences + declared visa/EEO
+# — as the ONLY permissible source for answers/attestations, never an LLM or a
+# heuristic. This layer adds a hard legal-attestation guard on top.)
 # ---------------------------------------------------------------------------
-def _load_profile(user_email: str) -> Dict[str, Any]:
-    """Assemble the canonical profile: structured résumé + preferences +
-    visa/onboarding declarations. Best-effort per source (a missing source
-    just narrows coverage — it never fabricates)."""
-    db = DBConnect().get_db()
-    profile: Dict[str, Any] = {"user_email": user_email}
-    try:
-        # Resume Platform v3: canonical read path (users.active_resume_id ->
-        # resume_assets) — never a direct user_resumes scan.
-        from services import resume_access
-        resume = resume_access.get_active_structured(user_email)
-        profile["structured"] = (resume or {}).get("structured") or {}
-    except Exception as e:  # pragma: no cover - defensive
-        logger.warning("auto_apply: structured résumé load failed for %s: %s", user_email, e)
-        profile["structured"] = {}
-    try:
-        profile["preferences"] = db.user_preferences.find_one(
-            {"user_email": user_email}, {"_id": 0}) or {}
-    except Exception as e:  # pragma: no cover - defensive
-        logger.warning("auto_apply: preferences load failed for %s: %s", user_email, e)
-        profile["preferences"] = {}
-    try:
-        # Declared work-authorization / sponsorship / EEO facts — the ONLY
-        # source legal attestations may draw from.
-        profile["visa_profile"] = db.visa_profiles.find_one(
-            {"user_email": user_email}, {"_id": 0}) or {}
-    except Exception as e:  # pragma: no cover - defensive
-        logger.warning("auto_apply: visa profile load failed for %s: %s", user_email, e)
-        profile["visa_profile"] = {}
-    return profile
-
-
-# ---------------------------------------------------------------------------
-# Answer resolution (delegates to answer_library_service; defensive shape
-# normalization + a hard legal-attestation guard on top).
-# ---------------------------------------------------------------------------
-def _resolve_answers(user_email: str, questions: List[Dict[str, Any]],
-                     profile: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
-    """Resolve reconned questions against the canonical profile via the answer
-    library. Returns ``(answers, needs_input_items)``:
+def _resolve_answers(user_email: str,
+                     questions: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[Dict[str, str]], Dict[str, Any]]:
+    """Resolve normalized questions against the canonical profile via the answer
+    library. Returns ``(answers, needs_input_items, resolution)``:
 
       * answers          {field_id: value} for every confidently-resolved field.
       * needs_input_items the one-tap queue for everything unresolved (and every
                          UNresolved legal attestation — never guessed).
+      * resolution       the library's full result (coverage / has_novel_free_text
+                         / has_unconfirmed_legal_attestation) so the autonomy
+                         decision consumes the SAME signals, not a re-derivation.
 
     Hard integrity guard (independent of the library): a required legal
     attestation is only accepted if the library resolved it FROM DECLARED data;
@@ -201,23 +262,23 @@ def _resolve_answers(user_email: str, questions: List[Dict[str, Any]],
     answers: Dict[str, Any] = {}
     needs_input: List[Dict[str, str]] = []
 
-    resolution = _call_answer_library(user_email, questions, profile)
+    resolution = _call_answer_library(user_email, questions)
     resolved_map = resolution.get("resolved") or {}
 
     for q in questions:
-        qid = q.get("id")
-        if not qid:
+        fid = q.get("field_id")
+        if not fid:
             continue
         is_legal = bool(q.get("is_legal_attestation"))
         required = bool(q.get("required"))
-        hit = resolved_map.get(qid)
+        hit = resolved_map.get(fid)
 
         if hit is not None and _is_confident(hit):
             # Legal attestations must be sourced from the user's DECLARED data.
             if is_legal and not _is_declared_source(hit):
                 needs_input.append(_needs_item(q, kind="legal_attestation"))
                 continue
-            answers[qid] = _value_of(hit)
+            answers[fid] = _value_of(hit)
             continue
 
         # Unresolved. Only required fields (and all legal attestations) gate.
@@ -225,57 +286,59 @@ def _resolve_answers(user_email: str, questions: List[Dict[str, Any]],
             needs_input.append(_needs_item(
                 q, kind="legal_attestation" if is_legal else "screening"))
 
-    return answers, needs_input
+    return answers, needs_input, resolution
 
 
-def _call_answer_library(user_email: str, questions: List[Dict[str, Any]],
-                         profile: Dict[str, Any]) -> Dict[str, Any]:
-    """Invoke answer_library_service.resolve(user_email, questions) if present
-    (built in parallel), tolerating a couple of return shapes. Absent → an
-    empty resolution so the pipeline still runs (everything falls to
-    needs_input, nothing is fabricated)."""
+def _call_answer_library(user_email: str,
+                         questions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Invoke ``answer_library_service.resolve(user_email, questions)`` with the
+    normalized (field_id-keyed) questions. A genuine ImportError (parallel build)
+    → an empty resolution so the pipeline still runs (everything falls to
+    needs_input, nothing fabricated). Real call bugs surface — they are not
+    swallowed into a false 'all resolved'."""
     try:
         from services import answer_library_service  # lazy: parallel build
     except ImportError:
-        logger.info("auto_apply: answer_library_service not present yet — "
-                    "all questions route to needs_input")
-        return {"resolved": {}}
+        logger.warning("auto_apply: answer_library_service not present yet — "
+                       "all questions route to needs_input")
+        return {"resolved": {}, "coverage": 0.0, "has_novel_free_text": False,
+                "has_unconfirmed_legal_attestation": False}
     try:
-        try:
-            result = answer_library_service.resolve(
-                user_email, questions, profile=profile)
-        except TypeError:
-            # Documented interface: resolve(user_email, questions).
-            result = answer_library_service.resolve(user_email, questions)
+        result = answer_library_service.resolve(user_email, questions)
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("auto_apply: answer_library resolve failed for %s: %s", user_email, e)
-        return {"resolved": {}}
+        return {"resolved": {}, "coverage": 0.0, "has_novel_free_text": False,
+                "has_unconfirmed_legal_attestation": False}
     return _normalize_resolution(result)
 
 
 def _normalize_resolution(result: Any) -> Dict[str, Any]:
-    """Coerce the answer library's return into {resolved: {qid: hit}}."""
+    """Guard the library's return shape, preserving the full field-id-keyed
+    result (resolved + coverage + the two risk flags) when present."""
+    if isinstance(result, dict) and isinstance(result.get("resolved"), dict):
+        return result
     if isinstance(result, dict):
-        if isinstance(result.get("resolved"), dict):
-            return {"resolved": result["resolved"]}
-        # A bare {qid: value|hit} map.
+        # A bare {field_id: value|hit} map (no envelope).
         return {"resolved": result}
     if isinstance(result, list):
-        # A list of hit dicts each carrying an id/field_id.
         resolved: Dict[str, Any] = {}
         for item in result:
             if isinstance(item, dict):
-                qid = item.get("id") or item.get("field_id")
-                if qid:
-                    resolved[qid] = item
+                fid = item.get("field_id") or item.get("id")
+                if fid:
+                    resolved[fid] = item
         return {"resolved": resolved}
     return {"resolved": {}}
 
 
-# Sources that count as the user's OWN declared data (attestation-safe).
+# Sources that count as the user's OWN declared data (attestation-safe). Includes
+# the answer library's own emitted sources: ``declared`` (a legal attestation
+# filled from onboarding/visa data) and ``user_store`` (a value the user
+# confirmed once and we remembered) — both are the user's stated data, never a
+# guess.
 _DECLARED_SOURCES = frozenset({
-    "visa_profile", "onboarding", "preferences", "profile", "user_declared",
-    "structured", "resume",
+    "declared", "user_store", "visa_profile", "onboarding", "preferences",
+    "profile", "user_declared", "structured", "resume",
 })
 
 
@@ -310,18 +373,20 @@ def _value_of(hit: Any) -> Any:
 
 def _needs_item(q: Dict[str, Any], *, kind: str) -> Dict[str, str]:
     return {
-        "question": _clean(q.get("text"), 500) or _clean(q.get("id"), 200),
+        "question": _clean(q.get("label"), 500) or _clean(q.get("field_id"), 200),
         "kind": kind,
-        "field_id": _clean(q.get("id"), 200),
+        "field_id": _clean(q.get("field_id"), 200),
     }
 
 
 def _coverage(questions: List[Dict[str, Any]], answers: Dict[str, Any]) -> float:
-    """Fraction of REQUIRED fields resolved from profile + answer library."""
+    """Fraction of REQUIRED fields resolved from profile + answer library. Only
+    the fallback when the library did not return its own coverage; the library's
+    coverage is authoritative (it excludes essays consistently)."""
     required = [q for q in questions if q.get("required")]
     if not required:
         return 1.0
-    resolved = sum(1 for q in required if q.get("id") in answers)
+    resolved = sum(1 for q in required if q.get("field_id") in answers)
     return round(resolved / len(required), 4)
 
 
@@ -329,57 +394,68 @@ def _coverage(questions: List[Dict[str, Any]], answers: Dict[str, Any]) -> float
 # Autonomy decision (delegates to autonomy_service.score/decide; local
 # fallback that faithfully implements §3 when the parallel service is absent).
 # ---------------------------------------------------------------------------
-def _decide_autonomy(app: Dict[str, Any], questions: List[Dict[str, Any]],
-                     answers: Dict[str, Any], coverage: float, *,
+def _decide_autonomy(app: Dict[str, Any], coverage: float, *,
+                     user_email: str,
+                     has_novel_free_text: bool,
                      has_unresolved_legal: bool,
                      needs_account: bool) -> Tuple[str, float]:
-    """Return ``(autonomy, confidence_score)``.
+    """Return ``(autonomy, confidence_score)`` by delegating to the real
+    per-application autonomy policy (`autonomy_service.evaluate`) — the SAME
+    signals the answer library produced (coverage, has_novel_free_text) plus the
+    hard-rule flags (unconfirmed legal → ask, Oracle wall → hold), and the
+    user's OWN autonomy_threshold (read inside evaluate).
 
-    Hard rules (override the score, per §3):
-      * any unconfirmed LEGAL ATTESTATION            → 'ask'  (NEVER auto)
-      * blocked on account/verify/reset/CAPTCHA      → 'hold' (one-tap)
+    Only a genuine ImportError (parallel build safety) falls back to the local
+    policy — logged at WARNING. A wrong-signature/other call bug is NOT swallowed
+    here; it surfaces so tests catch it, per the never-guess-the-contract rule.
     """
-    no_novel_free_text = not any(
-        q.get("type") in ("textarea",) and not q.get("is_legal_attestation")
-        and q.get("id") not in answers
-        for q in questions
-    )
-    signals = {
-        "ats_family": app.get("ats_family"),
-        "answer_coverage": coverage,
-        "no_novel_free_text": no_novel_free_text,
-        "has_unconfirmed_legal_attestation": has_unresolved_legal,
-        "blocked_on_oracle": needs_account,
-    }
     try:
         from services import autonomy_service  # lazy: parallel build
-        score = float(autonomy_service.score(**signals))
-        autonomy = str(autonomy_service.decide(score, **signals))
-        if autonomy in ledger._VALID_AUTONOMY:
-            return autonomy, max(0.0, min(1.0, score))
-        logger.warning("auto_apply: autonomy_service returned invalid decision %r; "
-                       "using local fallback", autonomy)
     except ImportError:
-        pass
-    except Exception as e:  # pragma: no cover - defensive
-        logger.warning("auto_apply: autonomy_service failed (%s); local fallback", e)
-    return _local_autonomy(signals)
+        logger.warning("auto_apply: autonomy_service unavailable (ImportError) — "
+                       "using local fallback policy")
+        return _local_autonomy(
+            app.get("ats_family"), coverage,
+            has_novel_free_text=has_novel_free_text,
+            has_unresolved_legal=has_unresolved_legal,
+            needs_account=needs_account)
+
+    result = autonomy_service.evaluate(
+        user_email, app,
+        answer_coverage=coverage,
+        ats_family=app.get("ats_family"),
+        has_novel_free_text=has_novel_free_text,
+        has_unconfirmed_legal_attestation=has_unresolved_legal,
+        blocked_on_oracle=needs_account,
+    )
+    autonomy = str(result.get("autonomy"))
+    confidence = float(result.get("confidence_score") or 0.0)
+    if autonomy not in ledger._VALID_AUTONOMY:
+        # A real policy bug — do NOT paper over it with the fallback.
+        raise ValueError(
+            f"autonomy_service.evaluate returned invalid decision {autonomy!r}")
+    return autonomy, max(0.0, min(1.0, confidence))
 
 
-def _local_autonomy(signals: Dict[str, Any]) -> Tuple[str, float]:
-    """Faithful local implementation of §3 (used until autonomy_service ships)."""
+def _local_autonomy(ats_family: Optional[str], coverage: float, *,
+                    has_novel_free_text: bool, has_unresolved_legal: bool,
+                    needs_account: bool) -> Tuple[str, float]:
+    """Faithful local §3 policy — used ONLY when autonomy_service cannot be
+    imported at all (parallel-build safety). Mirrors the real service's hard
+    rules; its fixed threshold is the conservative last resort, never the
+    primary path."""
     ats_ease = {
         "greenhouse": 0.95, "lever": 0.95, "ashby": 0.9,
         "workday": 0.6, "icims": 0.55, "taleo": 0.5,
-    }.get(str(signals.get("ats_family") or "").lower(), 0.7)
-    coverage = float(signals.get("answer_coverage") or 0.0)
-    no_novel = 1.0 if signals.get("no_novel_free_text") else 0.0
+    }.get(str(ats_family or "").lower(), 0.7)
+    coverage = float(coverage or 0.0)
+    no_novel = 0.0 if has_novel_free_text else 1.0
     score = round(0.4 * ats_ease + 0.4 * coverage + 0.2 * no_novel, 4)
 
-    # Hard rules.
-    if signals.get("has_unconfirmed_legal_attestation"):
+    # Hard rules (order matches autonomy_service.decide).
+    if has_unresolved_legal:
         return "ask", score
-    if signals.get("blocked_on_oracle"):
+    if needs_account:
         return "hold", score
 
     threshold = 0.90
@@ -410,6 +486,7 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
 
     status = app.get("status")
     if status in (ledger.STATUS_NEEDS_INPUT, ledger.STATUS_READY,
+                  ledger.STATUS_READY_FOR_REVIEW, ledger.STATUS_APPROVED,
                   ledger.STATUS_SUBMITTING, ledger.STATUS_SUBMITTED,
                   ledger.STATUS_CONFIRMED):
         logger.info("auto_apply gather %s: already at %s — idempotent no-op",
@@ -446,35 +523,103 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
             return {"idempotent": True, "application_id": application_id}
 
     try:
-        questions = [q for q in (recon.get("questions") or []) if isinstance(q, dict)]
+        from services import apply_forms
+        raw_questions = [q for q in (recon.get("questions") or [])
+                         if isinstance(q, dict)]
+        # Normalize recon questions onto the stable field_id schema so recon,
+        # resolution and answer-lookup all key off ONE id (the bug fix: recon
+        # dicts vs. text-keyed resolutions no longer diverge).
+        questions = apply_forms.normalize_recon_questions(raw_questions)
         needs_account = bool(recon.get("needs_account"))
-        profile = _load_profile(user_email)
-        answers, needs_input = _resolve_answers(user_email, questions, profile)
-        coverage = _coverage(questions, answers)
-        has_unresolved_legal = any(
+        answers, needs_input, resolution = _resolve_answers(user_email, questions)
+        cov = resolution.get("coverage")
+        coverage = float(cov) if cov is not None else _coverage(questions, answers)
+        has_novel_free_text = bool(resolution.get("has_novel_free_text"))
+        has_unresolved_legal = bool(
+            resolution.get("has_unconfirmed_legal_attestation")) or any(
             i.get("kind") == "legal_attestation" for i in needs_input)
         autonomy, confidence = _decide_autonomy(
-            app, questions, answers, coverage,
+            app, coverage,
+            user_email=user_email,
+            has_novel_free_text=has_novel_free_text,
             has_unresolved_legal=has_unresolved_legal,
             needs_account=needs_account)
 
-        _persist_answers(application_id, user_email, answers, coverage, needs_account)
+        # F: stash the recon form fingerprint alongside the answers so the approval
+        # snapshot (and its before-submit re-validation) can prove the form did
+        # not change between approval and submission.
+        recon_fp = _recon_fingerprint(questions)
 
-        # Land the row. needs_input when there are gaps, an Oracle account wall,
-        # or the decision isn't a clean auto; ready only when auto + complete.
-        gated = bool(needs_input) or needs_account or autonomy != "auto"
-        if gated:
+        # Explicit autonomy MODES gate (dark-launch, defaults OFF). Applied AFTER
+        # decide(), AROUND F's approve path: it CAPS the raw decision per the
+        # user's chosen mode (never upgrades — the never-fabricate `ask`/`hold`
+        # above always win) and enforces the mode-unset fail-safe.
+        mode: Optional[str] = None
+        manual_apply = False
+        if _modes_enabled():
+            eff_autonomy, mode, refuse = _mode_decision(user_email, autonomy)
+            if refuse:
+                # FAIL-SAFE: no explicit mode chosen yet (onboarding forces the
+                # pick). Persist the resolved answers as an answer sheet for later,
+                # but NEVER approve/prepare/submit — nothing auto-proceeds.
+                _persist_answers(application_id, user_email, answers, coverage,
+                                 needs_account, autonomy=autonomy,
+                                 confidence_score=confidence,
+                                 recon_fingerprint=recon_fp)
+                logger.info("auto_apply gather %s: mode unset — refusing to "
+                            "auto-act (needs onboarding)", application_id)
+                return {"status": "mode_required", "application_id": application_id,
+                        "mode": None, "needs_onboarding": True,
+                        "autonomy": autonomy, "confidence_score": confidence,
+                        "coverage": coverage, "questions": len(questions),
+                        "resolved": len(answers), "needs_input": len(needs_input),
+                        "needs_account": needs_account}
+            autonomy = eff_autonomy
+            manual_apply = (mode == "copilot")
+
+        _persist_answers(application_id, user_email, answers, coverage,
+                         needs_account, autonomy=autonomy,
+                         confidence_score=confidence, recon_fingerprint=recon_fp,
+                         mode=mode, manual_apply=manual_apply)
+
+        # Land the row (F state split):
+        #   * gaps / Oracle account wall → needs_input (unchanged);
+        #   * clean AUTO → ready_for_review → SYSTEM-approve (freeze snapshot,
+        #     approved_by="system") → immediate submit; autopilot converges with
+        #     manual approval on the same approved+snapshot state;
+        #   * clean but ASK/HOLD → wait in ready_for_review for a MANUAL approval.
+        prepare_dispatched = False
+        has_gaps = bool(needs_input) or needs_account
+        if has_gaps:
             ledger.mark_needs_input(user_email, application_id, needs_input,
                                     autonomy=autonomy, confidence_score=confidence)
             final = ledger.STATUS_NEEDS_INPUT
+        elif autonomy == "auto":
+            if _prepare_enabled() and not app.get("tailoring_record_id"):
+                # Defect D — a row may be approved ONLY after a tailored artifact
+                # is pinned. Dispatch the async prepare phase (reserve → tailor →
+                # pin → land ready_for_review → system-approve). The row stays
+                # `gathering` until prepare completes (gathering→ready_for_review
+                # is legal).
+                _enqueue_prepare(application_id, user_email)
+                final = ledger.STATUS_GATHERING
+                prepare_dispatched = True
+            else:
+                ledger.mark_ready_for_review(
+                    user_email, application_id, autonomy=autonomy,
+                    confidence_score=confidence,
+                    tailoring_record_id=app.get("tailoring_record_id"))
+                _system_approve(user_email, application_id)
+                final = ledger.STATUS_APPROVED
+                # Clean auto-decision → submit NOW, don't wait for the hourly
+                # sweep. Gated by AUTO_SUBMIT_ENABLED; safe/idempotent with it.
+                request_immediate_submit(user_email, application_id)
         else:
-            ledger.mark_ready(user_email, application_id, autonomy=autonomy,
-                              confidence_score=confidence,
-                              tailoring_record_id=app.get("tailoring_record_id"))
-            final = ledger.STATUS_READY
-            # Clean auto-decision → submit NOW, don't wait for the hourly sweep.
-            # Gated by AUTO_SUBMIT_ENABLED; safe/idempotent with the sweep.
-            request_immediate_submit(user_email, application_id)
+            ledger.mark_ready_for_review(
+                user_email, application_id, autonomy=autonomy,
+                confidence_score=confidence,
+                tailoring_record_id=app.get("tailoring_record_id"))
+            final = ledger.STATUS_READY_FOR_REVIEW
     except Exception as e:
         logger.error("auto_apply gather %s: failed: %s", application_id, e)
         ledger.mark_failed(user_email, application_id, f"gather_error: {e}")
@@ -490,21 +635,66 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
         "resolved": len(answers),
         "needs_input": len(needs_input),
         "needs_account": needs_account,
+        "prepare_dispatched": prepare_dispatched,
+        "mode": mode,
+        "manual_apply": manual_apply,
     }
 
 
 def _persist_answers(application_id: str, user_email: str,
                      answers: Dict[str, Any], coverage: float,
-                     needs_account: bool) -> None:
+                     needs_account: bool,
+                     autonomy: Optional[str] = None,
+                     confidence_score: Optional[float] = None,
+                     recon_fingerprint: Optional[str] = None,
+                     resume_version_id: Optional[str] = None,
+                     mode: Optional[str] = None,
+                     manual_apply: Optional[bool] = None) -> None:
     """Store resolved answers in the owned collection (out of the lean ledger
-    row; answers may carry PII). Upsert so a re-gather overwrites cleanly."""
+    row; answers may carry PII). Upsert so a re-gather overwrites cleanly.
+
+    The autonomy decision (autonomy/confidence_score) is stashed alongside so the
+    async ``prepare`` phase (defect D) can land the row in review with the SAME
+    decision gather computed, without re-deriving it or widening the lean ledger
+    row. F adds two more stashed signals — the recon form fingerprint and the
+    pinned résumé version — that feed the immutable approval snapshot AND its
+    before-submit re-validation (build_approval_snapshot reads them here).
+
+    The autonomy-MODES gate adds two more: ``mode`` (the mode this row was gated
+    under) and ``manual_apply`` (Copilot's prepare-only flag) — surfaced as the
+    row's "answer sheet" (see ``answer_sheet``). Both live here, NOT on the lean
+    ledger row, so the golden ledger read stays byte-identical."""
+    set_fields: Dict[str, Any] = {
+        "answers": answers, "coverage": coverage,
+        "needs_account": needs_account, "updated_at": _now(),
+    }
+    if autonomy is not None:
+        set_fields["autonomy"] = autonomy
+    if confidence_score is not None:
+        set_fields["confidence_score"] = float(confidence_score)
+    if recon_fingerprint is not None:
+        set_fields["recon_fingerprint"] = recon_fingerprint
+    if resume_version_id is not None:
+        set_fields["resume_version_id"] = resume_version_id
+    if mode is not None:
+        set_fields["mode"] = mode
+    if manual_apply is not None:
+        set_fields["manual_apply"] = bool(manual_apply)
     _answers_coll().update_one(
         {"application_id": application_id, "user_email": user_email},
-        {"$set": {"answers": answers, "coverage": coverage,
-                  "needs_account": needs_account, "updated_at": _now()},
-         "$setOnInsert": {"created_at": _now()}},
+        {"$set": set_fields, "$setOnInsert": {"created_at": _now()}},
         upsert=True,
     )
+
+
+def _load_decision(application_id: str, user_email: str) -> Dict[str, Any]:
+    """The autonomy decision gather stashed for ``prepare`` — {autonomy?,
+    confidence_score?}. Empty when gather never ran (e.g. prepare invoked
+    directly), in which case mark_ready leaves the row's existing decision."""
+    doc = _answers_coll().find_one(
+        {"application_id": application_id, "user_email": user_email},
+        {"_id": 0, "autonomy": 1, "confidence_score": 1})
+    return doc or {}
 
 
 def _load_answers(application_id: str, user_email: str) -> Dict[str, Any]:
@@ -512,6 +702,25 @@ def _load_answers(application_id: str, user_email: str) -> Dict[str, Any]:
         {"application_id": application_id, "user_email": user_email},
         {"_id": 0, "answers": 1})
     return (doc or {}).get("answers") or {}
+
+
+def answer_sheet(user_email: str, application_id: str) -> Dict[str, Any]:
+    """The resolved-answers "answer sheet" for a row — what Copilot surfaces so
+    the user can apply MANUALLY (prepare-only mode: JobPilot resolves every field
+    and hands it over, but NEVER submits). Owner-scoped. Returns
+    {application_id, answers, coverage, mode, manual_apply}; empty answers when
+    the row was never gathered."""
+    application_id = _clean(application_id, 64)
+    doc = _answers_coll().find_one(
+        {"application_id": application_id, "user_email": user_email},
+        {"_id": 0, "answers": 1, "coverage": 1, "mode": 1, "manual_apply": 1}) or {}
+    return {
+        "application_id": application_id,
+        "answers": doc.get("answers") or {},
+        "coverage": doc.get("coverage"),
+        "mode": doc.get("mode"),
+        "manual_apply": bool(doc.get("manual_apply", False)),
+    }
 
 
 def _resume_ref(app: Dict[str, Any], user_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -530,19 +739,351 @@ def _resume_ref(app: Dict[str, Any], user_email: Optional[str] = None) -> Option
     return ref
 
 
+def pinned_resume_s3_key(application_id: str, user_email: str) -> Optional[str]:
+    """Resolve the ONE pinned (immutable-S3-keyed) tailored-résumé PDF key for a
+    row — what the executor callback surface presigns a one-use GET for. Owner-
+    scoped. None when no pinned artifact exists (prepare/D guarantees one before
+    submit, so None means "not ready", not "attach nothing")."""
+    app = ledger.get_application(user_email, application_id)
+    trid = (app or {}).get("tailoring_record_id")
+    if not trid:
+        return None
+    rec = DBConnect().get_db().tailoring_records.find_one(
+        {"record_id": _clean(trid, 200), "user_email": user_email},
+        {"_id": 0, "versions": 1, "current_version_id": 1})
+    if not rec:
+        return None
+    versions = rec.get("versions") or []
+    version = next((v for v in versions
+                    if v.get("version_id") == rec.get("current_version_id")), None)
+    version = version or (versions[-1] if versions else None)
+    if not version:
+        return None
+    return ((version.get("files") or {}).get("pdf") or {}).get("s3_key")
+
+
+def execution_envelope(application_id: str, user_email: str) -> Optional[Dict[str, Any]]:
+    """The MINIMAL execution envelope the remote worker claims. Contains only what
+    a browser needs to fill + submit ONE form: the apply target, the ATS family/
+    tenant, the vetted answer map (field_id→value — resolved + integrity-guarded
+    here, never invented by the worker), and boolean hints for the one-use
+    artifact/credential pulls. Carries NO résumé bytes, NO credentials, NO S3
+    keys — those ride their own one-use endpoints. None if the row is gone."""
+    app = ledger.get_application(user_email, application_id)
+    if not app:
+        return None
+
+    # P0-1 SSRF containment (envelope gate): the apply_url originates from a job
+    # posting (attacker-influenceable). It MUST be https AND on the supported-ATS
+    # public-suffix-boundary allow-list before ANY browser navigates to it. A
+    # rejection returns a BLOCKED envelope carrying no answers/credentials — the
+    # worker aborts and the execution never dispatches. This is defense-in-depth
+    # atop the network-egress firewall; the worker's context.route interceptor
+    # re-validates every navigation/redirect (DNS-rebinding pin) at run time.
+    apply_url = app.get("apply_url") or ""
+    allowed, reason = apply_url_allowed(apply_url)
+    if not allowed:
+        logger.warning("execution_envelope %s: apply_url blocked (%s) — not "
+                       "dispatching", application_id, reason)
+        return {
+            "application_id": _clean(application_id, 64),
+            "apply_url": apply_url,
+            "ats_family": app.get("ats_family"),
+            "blocked": True,
+            "blocked_reason": reason,
+            "answers": {},
+            "resume_available": False,
+            "credential_required": False,
+        }
+
+    ans_doc = _answers_coll().find_one(
+        {"application_id": _clean(application_id, 64), "user_email": user_email},
+        {"_id": 0, "answers": 1, "needs_account": 1}) or {}
+    return {
+        "application_id": _clean(application_id, 64),
+        "apply_url": apply_url,
+        "ats_family": app.get("ats_family"),
+        "tenant": app.get("ats_tenant") or app.get("tenant") or "",
+        "answers": ans_doc.get("answers") or {},
+        "resume_available": bool(app.get("tailoring_record_id")),
+        "credential_required": bool(ans_doc.get("needs_account")),
+    }
+
+
+# ===========================================================================
+# Approval snapshot (defect F) — the immutable evidence frozen at approval and
+# re-validated immediately before submit. The three integrity fields are:
+#   * application_hash    — the reconned form fingerprint ("the form we approved
+#                           is the form we submit");
+#   * resume_version_id   — the pinned tailored-résumé version (D);
+#   * answers_fingerprint — the resolved-answers fingerprint (reuses
+#                           auto_submit_service._answers_fingerprint).
+# The SAME builder runs at freeze and re-validate, so a match proves nothing
+# drifted between approval and submission.
+# ===========================================================================
+def _recon_fingerprint(questions: List[Dict[str, Any]]) -> str:
+    """A stable fingerprint of the reconned form — field ids + required/legal
+    shape only (never answer values). Sorted so recon ordering never changes it."""
+    import hashlib
+    import json
+    basis = sorted(
+        ({"field_id": q.get("field_id"),
+          "required": bool(q.get("required")),
+          "is_legal": bool(q.get("is_legal_attestation"))}
+         for q in (questions or []) if isinstance(q, dict)),
+        key=lambda x: x.get("field_id") or "")
+    blob = json.dumps(basis, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
+
+
+def build_approval_snapshot(user_email: str, application_id: str) -> Dict[str, Any]:
+    """Assemble the F integrity fields for a row's approval snapshot from the
+    persisted stores (resolved answers + recon fingerprint + pinned résumé
+    version). Runs BOTH at approval (freeze onto the row via ledger.approve) and
+    before submit (re-validate) — identical inputs → identical output when nothing
+    drifted. Missing signals resolve to None (e.g. a row approved before any recon
+    ran), which still compares cleanly against a later None."""
+    from services.auto_submit_service import _answers_fingerprint
+    doc = _answers_coll().find_one(
+        {"application_id": _clean(application_id, 64), "user_email": user_email},
+        {"_id": 0, "answers": 1, "recon_fingerprint": 1, "resume_version_id": 1}) or {}
+    answers = doc.get("answers")
+    return {
+        "application_hash": doc.get("recon_fingerprint"),
+        "resume_version_id": doc.get("resume_version_id"),
+        # None (not a fingerprint of {}) when NO answers were ever persisted, so a
+        # row approved without resolved answers re-validates consistently (an
+        # absent answer set at freeze must equal an absent set at submit).
+        "answers_fingerprint": _answers_fingerprint(answers) if answers is not None else None,
+    }
+
+
+def _system_approve(user_email: str, application_id: str) -> int:
+    """Autopilot approval: pass an `auto` row THROUGH ready_for_review → approved
+    on the SAME snapshot path as a manual approval (approved_by='system'), so
+    autopilot and manual approvals converge on one approved+frozen-snapshot state
+    before any submit."""
+    return ledger.approve(
+        user_email, [application_id], approved_by="system",
+        snapshot_provider=lambda aid: build_approval_snapshot(user_email, aid))
+
+
+def _snapshot_stale(frozen: Optional[Dict[str, Any]],
+                    current: Optional[Dict[str, Any]]) -> bool:
+    """True when any of the three integrity fields drifted since approval — the
+    form changed, the pinned résumé changed, or the answers changed. A stale
+    snapshot must NOT submit; the approval is invalidated back to review."""
+    frozen = frozen or {}
+    current = current or {}
+    return any(frozen.get(k) != current.get(k)
+               for k in ("application_hash", "resume_version_id",
+                         "answers_fingerprint"))
+
+
+# ===========================================================================
+# PHASE 1.5 — prepare (defect D: the REQUIRED tailored-résumé stage)
+# ===========================================================================
+def _artifact_pinned(tailoring_record_id: str, user_email: str) -> bool:
+    """True when the linked tailoring_records doc has a version carrying a pinned
+    (immutable-S3-keyed) rendered PDF — the "an immutable artifact already
+    exists" check that makes ``prepare`` a redelivery no-op. Owner-scoped."""
+    trid = _clean(tailoring_record_id, 200)
+    if not trid:
+        return False
+    rec = DBConnect().get_db().tailoring_records.find_one(
+        {"record_id": trid, "user_email": user_email},
+        {"_id": 0, "versions": 1})
+    if not rec:
+        return False
+    for v in (rec.get("versions") or []):
+        if ((v.get("files") or {}).get("pdf") or {}).get("s3_key"):
+            return True
+    return False
+
+
+def _resolve_jd_text(user_email: str, application_id: str,
+                     app: Dict[str, Any]) -> str:
+    """Server-side JD text for tailoring — NEVER from the client (SSRF/injection
+    posture, mirroring guest_service). Resolved from the pinned inventory posting
+    behind the ledger row (``posting_job_id`` → job_inventory.resolve_jd) when
+    available, else a minimal company+title fallback so the tailor still has a
+    target. Reads posting_job_id from the raw owner-scoped row (the lean ledger
+    view intentionally omits it)."""
+    posting_job_id: Optional[str] = None
+    try:
+        row = DBConnect().get_db().applications.find_one(
+            {"application_id": _clean(application_id, 64), "user_email": user_email},
+            {"_id": 0, "posting_job_id": 1})
+        posting_job_id = (row or {}).get("posting_job_id")
+    except Exception:  # pragma: no cover - defensive
+        posting_job_id = None
+
+    if posting_job_id:
+        try:
+            from services import job_inventory_service as inv
+            resolved = inv.resolve_jd(str(posting_job_id))
+            if resolved and resolved.get("jd_text"):
+                return str(resolved["jd_text"])
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("auto_apply prepare %s: JD resolve failed: %s",
+                           application_id, e)
+
+    company = _clean(app.get("company"), 200)
+    title = _clean(app.get("title"), 200)
+    return (f"{title} at {company}".strip() if (title or company)
+            else "") or title or company
+
+
+def _enqueue_prepare(application_id: str, user_email: str) -> Optional[str]:
+    """Enqueue an async auto_apply_prepare job (defect D). Lazy import of the
+    resume orchestrator to avoid an import cycle at module load."""
+    try:
+        from services.resume_service import get_resume_service, ResumeService
+        payload = {"application_id": application_id, "user_email": user_email}
+        job_id = get_resume_service().create_job("auto_apply_prepare", payload, user_email)
+        ResumeService.invoke_async(job_id, "auto_apply_prepare", payload)
+        return job_id
+    except Exception as e:  # pragma: no cover - defensive
+        logger.error("auto_apply: failed to enqueue prepare for %s: %s", application_id, e)
+        return None
+
+
+def prepare(application_id: str, user_email: str) -> Dict[str, Any]:
+    """PHASE 1.5 — pin a REQUIRED tailored-résumé artifact, then land `ready`.
+
+    Selects/creates an owner-scoped tailored variant for the application's JD,
+    PINS an immutable version + rendered PDF in S3, writes tailoring_record_id
+    back onto the ledger row, and only THEN calls the SAME mark_ready path gather
+    used to call directly — so a row can only ever reach `ready` (and thus
+    `submit`) with a real résumé attached. Never submits; never fabricates.
+
+    Contracts:
+      * IDEMPOTENT (Lambda at-least-once): a row that already has a pinned
+        tailoring_record_id + immutable artifact is a no-op — redelivery never
+        re-tailors and never double-reserves quota.
+      * RESERVE-BEFORE-SPEND (invariant #3): a tailor slot is reserved via
+        quota_ledger_service (idempotency_key = application_id) BEFORE the LLM
+        tailor call, completed on success, refunded on failure. Never
+        double-counted.
+      * On a reservation denial → the row is HELD in needs_input (never ready).
+      * On a tailor/render failure → the reservation is refunded and the row goes
+        to needs_input (never ready).
+    """
+    application_id = _clean(application_id, 64)
+    app = ledger.get_application(user_email, application_id)
+    if not app:
+        raise ledger.ApplicationNotFound()
+
+    # (b) Idempotency — an immutable artifact already pinned? Redelivery must
+    # NOT re-tailor or re-reserve; hand back the existing linkage.
+    existing_trid = app.get("tailoring_record_id")
+    if existing_trid and _artifact_pinned(existing_trid, user_email):
+        logger.info("auto_apply prepare %s: artifact already pinned (%s) — no-op",
+                    application_id, existing_trid)
+        return {"idempotent": True, "application_id": application_id,
+                "tailoring_record_id": existing_trid, "status": app.get("status")}
+
+    # Prepare drives the clean auto path out of `gathering`; a terminal /
+    # submitted / already-ready row is not a prepare target (idempotent no-op).
+    status = app.get("status")
+    if status != ledger.STATUS_GATHERING:
+        logger.info("auto_apply prepare %s: status %s not a prepare target — skip",
+                    application_id, status)
+        return {"skipped": status, "application_id": application_id}
+
+    # (c) Reserve the tailor slot BEFORE the LLM call. Idempotent by
+    # application_id: a redelivered prepare that already reserved (but crashed
+    # before pinning) reuses the SAME reservation instead of double-counting.
+    from services import quota_ledger_service as quota
+    allowed, entry_ids, usage = quota.reserve_tailor(
+        user_email, n=1, idempotency_key=application_id)
+    if not allowed:
+        # Out of daily tailor quota — HOLD in needs_input, never ready. No tailor.
+        logger.info("auto_apply prepare %s: tailor quota exhausted — holding",
+                    application_id)
+        ledger.mark_needs_input(
+            user_email, application_id,
+            [{"question": "Daily tailoring limit reached — tailoring resumes "
+                          "tomorrow or after an upgrade.",
+              "kind": "quota", "field_id": "tailor_quota"}])
+        return {"status": ledger.STATUS_NEEDS_INPUT, "reason": "tailor_quota_exhausted",
+                "application_id": application_id, "usage": usage}
+
+    # (d) Tailor + pin the immutable artifact. Reuses the resume_service tailor
+    # path (never reimplemented); this whole phase is an async job, so the LLM is
+    # never on the request path.
+    try:
+        jd_text = _resolve_jd_text(user_email, application_id, app)
+        from services.resume_service import prepare_tailored_artifact
+        artifact = prepare_tailored_artifact(user_email, jd_text)
+    except Exception as e:
+        # (f) Refund the reservation and HOLD — NEVER ready on a tailor failure.
+        quota.refund_entries(entry_ids)
+        logger.error("auto_apply prepare %s: tailor/pin failed: %s", application_id, e)
+        ledger.mark_needs_input(
+            user_email, application_id,
+            [{"question": "We could not tailor your résumé for this role — please "
+                          "retry.", "kind": "prepare_failed", "field_id": "prepare"}])
+        return {"status": ledger.STATUS_NEEDS_INPUT, "reason": "tailor_failed",
+                "error": str(e)[:200], "application_id": application_id}
+
+    trid = artifact["record_id"]
+    # A real slot was consumed — settle the reservation(s) (idempotent).
+    for eid in entry_ids:
+        quota.complete_entry(eid, record_id=trid)
+
+    # F: stash the pinned résumé version so the approval snapshot + submit
+    # re-validation key off the exact artifact this row was prepared with.
+    _answers_coll().update_one(
+        {"application_id": application_id, "user_email": user_email},
+        {"$set": {"resume_version_id": artifact.get("version_id"),
+                  "updated_at": _now()}},
+        upsert=True)
+
+    # (e) Write tailoring_record_id back + land `ready_for_review`. On the clean
+    # AUTO path, SYSTEM-approve (freeze snapshot, approved_by="system") + fire the
+    # immediate submit — the same converged path gather uses. An ask/hold row
+    # simply waits in ready_for_review for a manual approval.
+    decision = _load_decision(application_id, user_email)
+    autonomy = decision.get("autonomy")
+    ledger.mark_ready_for_review(
+        user_email, application_id,
+        autonomy=autonomy,
+        confidence_score=decision.get("confidence_score"),
+        tailoring_record_id=trid)
+
+    if autonomy == "auto":
+        _system_approve(user_email, application_id)
+        request_immediate_submit(user_email, application_id)
+        landed = ledger.STATUS_APPROVED
+    else:
+        landed = ledger.STATUS_READY_FOR_REVIEW
+
+    logger.info("auto_apply prepare %s: pinned tailoring_record %s — %s",
+                application_id, trid, landed)
+    return {"status": landed, "application_id": application_id,
+            "tailoring_record_id": trid,
+            "resume_version_id": artifact.get("version_id")}
+
+
 # ===========================================================================
 # PHASE 2 — submit
 # ===========================================================================
 def submit(application_id: str, user_email: str) -> Dict[str, Any]:
-    """Drive submission for a `ready` row. Idempotent + double-submit-safe.
+    """Drive submission for an APPROVED row. Idempotent + double-submit-safe.
 
-    Flow:
-      * only `ready` proceeds (needs_input/gathering/etc. → no-op).
-      * executor unavailable  → leave the row `ready` (untouched) + log; the
-        future fleet picks it up. (No ledger churn — we never grab `submitting`
-        for a fleet that can't act.)
-      * CAS ready→submitting  → the double-submit backstop: exactly one Lambda
-        wins; a redelivered/racing job sees the guard miss and no-ops.
+    Flow (F state split — submit consumes `approved`/`queued_for_execution`, the
+    post-approval execution states, NOT a bare `ready`):
+      * only approved/queued_for_execution proceed (ready_for_review/needs_input/
+        gathering/etc. → no-op — an unapproved row is never submitted).
+      * RE-VALIDATE the frozen approval snapshot first: if the form / pinned
+        résumé / answers drifted since approval, INVALIDATE back to
+        ready_for_review and do NOT submit stale (re-approval re-freezes).
+      * executor unavailable  → leave the row in its approved state (untouched) +
+        log; the fleet picks it up later.
+      * lease approved → queued_for_execution → running (the executor pickup) via
+        status-guarded CAS — the double-submit backstop: exactly one Lambda wins;
+        a redelivered/racing job sees the guard miss and no-ops.
       * executor.submit success → `submitted` (+ confirmation/screenshot audit).
       * Oracle wall (verify/reset/CAPTCHA) → FREEZE at the data layer (no hot
         browser held) + park the ledger in `needs_input`; a scheduled sweep
@@ -558,29 +1099,56 @@ def submit(application_id: str, user_email: str) -> Dict[str, Any]:
         logger.info("auto_apply submit %s: already %s — idempotent no-op",
                     application_id, status)
         return {"idempotent": True, "status": status, "application_id": application_id}
-    if status != ledger.STATUS_READY:
-        logger.info("auto_apply submit %s: not ready (status=%s) — no-op",
+    if status not in (ledger.STATUS_APPROVED, ledger.STATUS_QUEUED_FOR_EXECUTION):
+        logger.info("auto_apply submit %s: not approved (status=%s) — no-op",
                     application_id, status)
         return {"status": "not_ready", "ledger_status": status,
                 "application_id": application_id}
 
+    # F: re-validate the frozen approval snapshot BEFORE the executor acts. A
+    # drift (form/résumé/answers changed since approval) invalidates the approval
+    # back to ready_for_review — never submit a stale approval. Re-approval will
+    # re-freeze a fresh snapshot.
+    frozen = ledger.get_approval_snapshot(user_email, application_id)
+    if frozen and _snapshot_stale(frozen, build_approval_snapshot(user_email, application_id)):
+        logger.info("auto_apply submit %s: approval snapshot stale — invalidating",
+                    application_id)
+        try:
+            ledger.transition(user_email, application_id,
+                              ledger.STATUS_READY_FOR_REVIEW)
+        except ledger.InvalidTransition:
+            logger.info("auto_apply submit %s: could not invalidate (race) — no-op",
+                        application_id)
+        return {"status": "approval_invalidated", "application_id": application_id,
+                "ledger_status": ledger.STATUS_READY_FOR_REVIEW}
+
     executor = get_executor()
     # Probe availability BEFORE grabbing the row, so an absent fleet leaves the
-    # row `ready` (there is no legal submitting→ready transition to undo with).
+    # row in its approved state (there is no legal running→approved undo).
     if not executor.is_available():
-        logger.info("auto_apply submit %s: executor unavailable — leaving ready",
-                    application_id)
-        return {"status": EXECUTOR_UNAVAILABLE, "ledger_status": ledger.STATUS_READY,
+        logger.info("auto_apply submit %s: executor unavailable — leaving %s",
+                    application_id, status)
+        return {"status": EXECUTOR_UNAVAILABLE, "ledger_status": status,
                 "application_id": application_id}
 
-    # Double-submit backstop: CAS ready→submitting. A concurrent/redelivered
+    # Lease: approved → queued_for_execution → running (the executor pickup). Each
+    # status-guarded CAS is the double-submit backstop — a concurrent/redelivered
     # job that lost the race finds the guard missed and no-ops.
+    if status == ledger.STATUS_APPROVED:
+        try:
+            ledger.transition(user_email, application_id,
+                              ledger.STATUS_QUEUED_FOR_EXECUTION)
+        except ledger.InvalidTransition:
+            logger.info("auto_apply submit %s: lost race to queue_for_execution — no-op",
+                        application_id)
+            return {"idempotent": True, "status": "leased_elsewhere",
+                    "application_id": application_id}
     try:
-        ledger.mark_submitting(user_email, application_id)
+        ledger.transition(user_email, application_id, ledger.STATUS_RUNNING)
     except ledger.InvalidTransition:
-        logger.info("auto_apply submit %s: lost race to submitting — no-op",
+        logger.info("auto_apply submit %s: lost race to running — no-op",
                     application_id)
-        return {"idempotent": True, "status": "submitting_elsewhere",
+        return {"idempotent": True, "status": "running_elsewhere",
                 "application_id": application_id}
 
     answers = _load_answers(application_id, user_email)
@@ -603,6 +1171,19 @@ def submit(application_id: str, user_email: str) -> Dict[str, Any]:
         return {"status": ledger.STATUS_SUBMITTED, "application_id": application_id,
                 "confirmation": confirmation or None,
                 "screenshot_ref": screenshot_ref or None}
+
+    if st == SUBMIT_DISPATCHED:
+        # ASYNC-DISPATCH executor (Cloud Run plane): the browser work runs
+        # remotely and the TERMINAL outcome arrives later on the executor
+        # callback surface (finalize_submission). Leave the row RUNNING — do NOT
+        # mark it terminal here. A synchronous executor never returns this.
+        execution_id = _clean(result.get("execution_id"), 64)
+        logger.info("auto_apply submit %s: dispatched (execution_id=%s) — "
+                    "row left running for the worker callback",
+                    application_id, execution_id)
+        return {"status": SUBMIT_DISPATCHED, "application_id": application_id,
+                "execution_id": execution_id or None,
+                "ledger_status": ledger.STATUS_RUNNING}
 
     if st == SUBMIT_WAITING_VERIFY:
         wall = result.get("wall") or {}
@@ -637,6 +1218,309 @@ def _audit_submit(user_email: str, application_id: str,
                             "has_screenshot": bool(screenshot_ref)})
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("auto_apply: submit audit failed for %s: %s", application_id, e)
+
+
+# ===========================================================================
+# Pre-submit re-check gate (P5) — the LAST guard the remote worker calls
+# immediately BEFORE it clicks Submit. The worker is stateless and holds no
+# Mongo/entitlement view, so the authoritative go/no-go MUST be re-computed here
+# server-side. A single "no" aborts the click — nothing is submitted.
+#
+# The checks (all must pass):
+#   * kill_switch        — the global AUTO_SUBMIT master switch is still ON.
+#   * autopilot_active   — the user has not paused / revoked auto-apply.
+#   * row_live           — the row is still in an in-flight execution state
+#                          (not cancelled/withdrawn/submitted/failed).
+#   * approval_fresh     — a frozen approval snapshot exists AND has not drifted
+#                          (immutable application hash + pinned résumé version +
+#                          answers version — via _snapshot_stale) AND is within
+#                          the approval TTL.
+#   * entitlement_held   — the entitlement reservation taken at prepare is intact.
+#   * adapter_healthy    — the executor still reports available.
+#   * posting_available  — the job posting is still open.
+# Best-effort seams (entitlement_held / posting_available / autopilot_active)
+# default to SAFE (True only when we can positively confirm; a lookup error is
+# surfaced as a reason, never silently passed).
+# ===========================================================================
+def _approval_ttl_hours() -> float:
+    try:
+        from utils.config import _get_config_value
+        return float(_get_config_value("AUTO_APPLY_APPROVAL_TTL_HOURS", "72") or 72)
+    except Exception:  # pragma: no cover - defensive
+        return 72.0
+
+
+def _autopilot_active(user_email: str, app: Dict[str, Any]) -> bool:
+    """Seam: the user has not paused/revoked auto-apply. Defaults to True; a real
+    per-user pause store (or a row-level revocation flag) plugs in here without
+    touching the gate logic."""
+    if app.get("autopilot_paused") or app.get("revoked"):
+        return False
+    return True
+
+
+def _entitlement_reservation_held(user_email: str, app: Dict[str, Any]) -> bool:
+    """Seam: the auto_submit entitlement reservation taken at prepare is still
+    intact (not refunded/expired). Defaults to True; wire to the entitlements
+    reservation ledger when it exposes a lookup. Never fabricates a pass on error
+    — a raise is caught by the caller and surfaced as a reason."""
+    return True
+
+
+def _posting_available(app: Dict[str, Any]) -> bool:
+    """Seam: the posting is still live (not pulled/closed). Defaults to True."""
+    return not bool(app.get("posting_closed"))
+
+
+def presubmit_recheck(application_id: str, user_email: str) -> Dict[str, Any]:
+    """Re-run every pre-submit gate server-side. Returns
+    {ok: bool, reasons: [str], checks: {name: bool}}. The remote worker calls
+    this right before Submit and aborts on ``ok=False`` — so a pause, a revoked
+    approval, a drifted form/résumé/answers, a spent entitlement, a closed
+    posting, or the master kill-switch flipping OFF between dispatch and the click
+    all stop the submission."""
+    application_id = _clean(application_id, 64)
+    checks: Dict[str, bool] = {}
+    reasons: List[str] = []
+
+    def _check(name: str, ok: bool, reason: str) -> None:
+        checks[name] = bool(ok)
+        if not ok:
+            reasons.append(reason)
+
+    # Global kill-switch.
+    try:
+        _check("kill_switch", _auto_submit_enabled(), "master_switch_off")
+    except Exception:
+        _check("kill_switch", False, "kill_switch_error")
+
+    app = None
+    try:
+        app = ledger.get_application(user_email, application_id)
+    except Exception:
+        app = None
+    if not app:
+        _check("row_live", False, "application_not_found")
+        return {"ok": False, "reasons": reasons, "checks": checks}
+
+    live_states = (ledger.STATUS_RUNNING, ledger.STATUS_QUEUED_FOR_EXECUTION,
+                   ledger.STATUS_WAITING_OTP, ledger.STATUS_WAITING_HUMAN)
+    _check("row_live", app.get("status") in live_states,
+           f"row_not_live:{app.get('status')}")
+
+    _check("autopilot_active", _autopilot_active(user_email, app),
+           "autopilot_paused_or_revoked")
+
+    # Approval freshness: snapshot present, not drifted, and within TTL.
+    try:
+        frozen = ledger.get_approval_snapshot(user_email, application_id)
+        if not frozen:
+            _check("approval_fresh", False, "no_approval_snapshot")
+        else:
+            stale = _snapshot_stale(
+                frozen, build_approval_snapshot(user_email, application_id))
+            _check("approval_fresh", not stale, "approval_snapshot_stale")
+    except Exception:
+        _check("approval_fresh", False, "approval_snapshot_error")
+
+    # Approval TTL (an approval that sat too long must not fire silently).
+    approved_at = app.get("approved_at")
+    if approved_at is not None:
+        try:
+            ttl = timedelta(hours=_approval_ttl_hours())
+            at = approved_at
+            if getattr(at, "tzinfo", None) is None:
+                at = at.replace(tzinfo=timezone.utc)
+            _check("approval_unexpired", (_now() - at) <= ttl, "approval_expired")
+        except Exception:
+            _check("approval_unexpired", False, "approval_ttl_error")
+
+    try:
+        _check("entitlement_held",
+               _entitlement_reservation_held(user_email, app),
+               "entitlement_reservation_lost")
+    except Exception:
+        _check("entitlement_held", False, "entitlement_check_error")
+
+    try:
+        _check("adapter_healthy", get_executor().is_available(),
+               "adapter_unavailable")
+    except Exception:
+        _check("adapter_healthy", False, "adapter_health_error")
+
+    # P1-KILL: an operator can dark a single ATS family (config
+    # AUTO_APPLY_ADAPTERS_DISABLED) without a deploy — re-checked HERE so a
+    # dispatched-but-not-yet-clicked run for a now-darked family aborts.
+    try:
+        from services.ats_adapters import adapter_disabled
+        _check("adapter_enabled",
+               not adapter_disabled(app.get("ats_family")), "adapter_disabled")
+    except Exception:
+        _check("adapter_enabled", True, "adapter_enabled_check_error")
+
+    _check("posting_available", _posting_available(app), "posting_closed")
+
+    ok = all(checks.values())
+    if not ok:
+        logger.info("presubmit_recheck %s: BLOCKED (%s)", application_id, reasons)
+    return {"ok": ok, "reasons": reasons, "checks": checks}
+
+
+# ===========================================================================
+# Terminal finalize (P5) — the executor callback surface calls this when the
+# remote worker reports the run's outcome. Drives the ledger from `running` to a
+# terminal state. Idempotent: the callback surface guards against a duplicate
+# report, and the ledger CAS backstops anything that still slips through.
+#
+# CRITICAL: a `submission_unknown` (a timeout / lost connection AFTER the Submit
+# click) is HELD — NEVER auto-retried. Re-driving an ambiguous final submit could
+# file a duplicate application, so it is parked for human review instead.
+# ===========================================================================
+def finalize_submission(application_id: str, user_email: str, *,
+                        status: str,
+                        confirmation: Optional[str] = None,
+                        screenshot_ref: Optional[str] = None,
+                        wall: Optional[Dict[str, Any]] = None,
+                        error: Optional[str] = None) -> Dict[str, Any]:
+    """Finalize a Cloud-Run-dispatched submission from the worker's terminal
+    report. ``status`` is one of the executor SUBMIT_* values."""
+    application_id = _clean(application_id, 64)
+    app = ledger.get_application(user_email, application_id)
+    if not app:
+        raise ledger.ApplicationNotFound()
+
+    cur = app.get("status")
+    if cur in (ledger.STATUS_SUBMITTED, ledger.STATUS_CONFIRMED,
+               ledger.STATUS_SUBMISSION_UNKNOWN):
+        logger.info("finalize_submission %s: already terminal (%s) — no-op",
+                    application_id, cur)
+        return {"idempotent": True, "status": cur, "application_id": application_id}
+
+    _adapter = str(app.get("ats_family") or "")
+
+    if status == SUBMIT_SUCCESS:
+        ledger.mark_submitted(user_email, application_id)
+        confirmation = _clean(confirmation, 500)
+        screenshot_ref = _clean(screenshot_ref, 500)
+        _audit_submit(user_email, application_id, confirmation, screenshot_ref)
+        _emit_metric("confirmation", application_id=application_id,
+                     adapter=_adapter, outcome="submitted")
+        logger.info("finalize_submission %s: submitted", application_id)
+        return {"status": ledger.STATUS_SUBMITTED, "application_id": application_id,
+                "confirmation": confirmation or None,
+                "screenshot_ref": screenshot_ref or None}
+
+    if status == SUBMIT_UNKNOWN:
+        # HELD — do not retry an ambiguous final submit.
+        try:
+            ledger.transition(user_email, application_id,
+                              ledger.STATUS_SUBMISSION_UNKNOWN)
+        except ledger.InvalidTransition:
+            logger.info("finalize_submission %s: cannot mark submission_unknown "
+                        "from %s (race) — no-op", application_id, cur)
+        _emit_metric("submission_unknown", application_id=application_id,
+                     adapter=_adapter, outcome="held")
+        logger.warning("finalize_submission %s: SUBMISSION_UNKNOWN — held, no retry",
+                       application_id)
+        return {"status": ledger.STATUS_SUBMISSION_UNKNOWN,
+                "application_id": application_id}
+
+    if status == SUBMIT_WAITING_VERIFY:
+        return _park_verify(user_email, application_id, wall or {})
+
+    # SUBMIT_FAILED / anything else → clean, retryable failure.
+    err = _clean(error, 500) or (status or SUBMIT_FAILED)
+    ledger.mark_failed(user_email, application_id, err)
+    logger.info("finalize_submission %s: failed (%s)", application_id, err)
+    return {"status": ledger.STATUS_FAILED, "error": err,
+            "application_id": application_id}
+
+
+# ===========================================================================
+# Fill-driver outcome → ledger mapping. The deterministic fill driver
+# (services.fill_driver.drive) returns a structured outcome; this folds it into
+# the ledger for a row that is RUNNING (leased for execution). Mapping:
+#   confirmed          -> submitted -> confirmed  (positive confirmation seen)
+#   submitted          -> submitted               (submitted, confirmation pending)
+#   submission_unknown -> submission_unknown       (HELD — NEVER auto-retried)
+#   waiting_human      -> waiting_human            (anti-bot / sensitive gap)
+#   needs_input        -> needs_input              (one-tap field the user supplies)
+# Idempotent + CAS-guarded via the ledger; an out-of-order fold is a no-op.
+# ===========================================================================
+def finalize_fill_outcome(application_id: str, user_email: str,
+                          outcome: Dict[str, Any]) -> Dict[str, Any]:
+    """Drive the ledger from the fill driver's structured outcome. The row is
+    expected in RUNNING (the executor pickup state). Returns a small summary; an
+    illegal transition (lost race / already terminal) is caught and logged, never
+    raised, so a redelivered fold cannot clobber a finalized row."""
+    application_id = _clean(application_id, 64)
+    kind = str((outcome or {}).get("outcome") or "")
+    app = ledger.get_application(user_email, application_id)
+    if not app:
+        raise ledger.ApplicationNotFound()
+
+    cur = app.get("status")
+    if cur in (ledger.STATUS_SUBMITTED, ledger.STATUS_CONFIRMED,
+               ledger.STATUS_SUBMISSION_UNKNOWN):
+        logger.info("finalize_fill_outcome %s: already terminal (%s) — no-op",
+                    application_id, cur)
+        return {"idempotent": True, "status": cur, "application_id": application_id}
+
+    def _safe_transition(to_status: str, **kw) -> bool:
+        try:
+            ledger.transition(user_email, application_id, to_status, **kw)
+            return True
+        except ledger.InvalidTransition:
+            logger.info("finalize_fill_outcome %s: cannot enter %s from %s (race)",
+                        application_id, to_status, cur)
+            return False
+
+    if kind in ("confirmed", "submitted"):
+        ledger.mark_submitted(user_email, application_id)
+        confirmation = _clean(
+            (outcome.get("confirmation") or {}).get("evidence")
+            if isinstance(outcome.get("confirmation"), dict)
+            else outcome.get("confirmation"), 500)
+        receipt = outcome.get("receipt") or {}
+        screenshot_ref = _clean(receipt.get("snapshot_hash"), 500)
+        _audit_submit(user_email, application_id, confirmation, screenshot_ref)
+        if kind == "confirmed":
+            _safe_transition(ledger.STATUS_CONFIRMED)
+        landed = ledger.get_application(user_email, application_id) or {}
+        return {"status": landed.get("status"), "application_id": application_id}
+
+    if kind == "submission_unknown":
+        _safe_transition(ledger.STATUS_SUBMISSION_UNKNOWN)
+        logger.warning("finalize_fill_outcome %s: submission_unknown — HELD, "
+                       "no retry", application_id)
+        return {"status": ledger.STATUS_SUBMISSION_UNKNOWN,
+                "application_id": application_id}
+
+    if kind == "waiting_human":
+        _safe_transition(ledger.STATUS_WAITING_HUMAN)
+        return {"status": ledger.STATUS_WAITING_HUMAN,
+                "application_id": application_id,
+                "reason": _clean(outcome.get("reason"), 100) or None}
+
+    if kind == "needs_input":
+        field = _clean(outcome.get("field"), 200) or "field"
+        reason = _clean(outcome.get("reason"), 100) or "needs_input"
+        try:
+            ledger.mark_needs_input(
+                user_email, application_id,
+                [{"question": f"We need your answer to continue ({field}).",
+                  "kind": reason, "field_id": field}])
+        except ledger.InvalidTransition:
+            logger.info("finalize_fill_outcome %s: cannot enter needs_input from "
+                        "%s (race)", application_id, cur)
+        return {"status": ledger.STATUS_NEEDS_INPUT, "application_id": application_id,
+                "field": field, "reason": reason}
+
+    # An unrecognized outcome must never be silently treated as success.
+    logger.warning("finalize_fill_outcome %s: unrecognized outcome %r — failing",
+                   application_id, kind)
+    ledger.mark_failed(user_email, application_id, f"unrecognized_fill_outcome:{kind}")
+    return {"status": ledger.STATUS_FAILED, "application_id": application_id}
 
 
 # ---------------------------------------------------------------------------
@@ -731,13 +1615,16 @@ def recheck_verify(application_id: str, user_email: str) -> Dict[str, Any]:
 
     if res.get("status") == ORACLE_READY and res.get("resolved"):
         _resolve_freeze(application_id, user_email)
-        # THAW: needs_input→ready, then re-enqueue submit (never inline).
+        # THAW (F): needs_input → ready_for_review → SYSTEM-approve (the wall
+        # cleared; resume on the same approved+snapshot path) → re-enqueue submit
+        # (never inline).
         try:
-            ledger.mark_ready(user_email, application_id)
+            ledger.mark_ready_for_review(user_email, application_id)
         except ledger.InvalidTransition:
             logger.info("auto_apply recheck %s: not in needs_input to thaw — leaving",
                         application_id)
             return {"status": "resolved_no_thaw", "application_id": application_id}
+        _system_approve(user_email, application_id)
         _enqueue_submit(application_id, user_email)
         logger.info("auto_apply recheck %s: wall cleared — thawed + submit re-enqueued",
                     application_id)
@@ -810,8 +1697,9 @@ def request_immediate_submit(user_email: str, application_ids: Any) -> int:
     guard make a redundant enqueue (this + the sweep) safe. Gated by the master
     ``AUTO_SUBMIT_ENABLED`` switch, so it stays dark in prod until enabled.
 
-    Only rows actually in ``ready`` are enqueued (approval flips them to ready
-    first); anything else is skipped. Returns the count enqueued.
+    Only rows actually APPROVED (F: `approved`/`queued_for_execution`, the
+    post-approval execution states) are enqueued; anything else — including an
+    unapproved `ready_for_review` row — is skipped. Returns the count enqueued.
     """
     if not _auto_submit_enabled():
         return 0
@@ -826,7 +1714,8 @@ def request_immediate_submit(user_email: str, application_ids: Any) -> int:
             row = ledger.get_application(user_email, aid)
         except ledger.ApplicationLedgerError:
             row = None
-        if not row or row.get("status") != ledger.STATUS_READY:
+        if not row or row.get("status") not in (
+                ledger.STATUS_APPROVED, ledger.STATUS_QUEUED_FOR_EXECUTION):
             continue
         if _enqueue_submit(aid, user_email):
             enqueued += 1

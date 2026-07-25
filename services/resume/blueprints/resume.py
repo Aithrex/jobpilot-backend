@@ -1055,6 +1055,22 @@ _APPLICATION_STATUSES = {
     "draft", "applied", "interviewing", "offer", "rejected", "withdrawn", "ghosted",
 }
 
+# E1 (defect E) — this route's status vocabulary mapped onto the canonical
+# OUTCOME axis (application_ledger_service.OUTCOME_STATUSES). The
+# tailoring_records.application mirror above stays authoritative until E3; this
+# map only feeds the additive write-through that ALSO lands the outcome on the
+# canonical `applications` row. "draft" is the pre-application state -> "none";
+# every other status maps to the same-named outcome.
+_STATUS_TO_OUTCOME = {
+    "draft": "none",
+    "applied": "applied",
+    "interviewing": "interviewing",
+    "offer": "offer",
+    "rejected": "rejected",
+    "withdrawn": "withdrawn",
+    "ghosted": "ghosted",
+}
+
 
 @resume_bp.route("/tailoring-records/<record_id>/application", methods=["PATCH"])
 @jwt_required()
@@ -1180,6 +1196,28 @@ def update_application(record_id):
                     )
             except Exception as e:
                 logger.warning("tailoring→saved_job sync failed: %s", e)
+
+        # E1 (defect E) — write-through to the canonical OUTCOME axis. When the
+        # user moves this record's application status, ALSO stamp the
+        # employer-response outcome on the canonical `applications` row
+        # (find-or-created, linked by tailoring_record_id). The
+        # tailoring_records mirror above stays authoritative until E3, so this is
+        # additive and best-effort: a ledger hiccup must never fail the user's
+        # tracker update — swallow to a WARN. Lazy import keeps the ledger off the
+        # cold-start path.
+        if status:
+            outcome = _STATUS_TO_OUTCOME.get(status)
+            if outcome:
+                try:
+                    from services import application_ledger_service as als
+                    als.set_outcome(
+                        user_email, record_id=record_id, outcome=outcome,
+                        source="user",
+                    )
+                except Exception as e:  # canonical write is non-authoritative in E1
+                    logger.warning(
+                        "PATCH /application: canonical set_outcome failed "
+                        "(record=%s): %s", str(record_id)[:24], e)
 
         record = db.tailoring_records.find_one(
             {"record_id": record_id, "user_email": user_email},
@@ -1959,12 +1997,37 @@ def get_job(job_id):
 @jwt_required()
 def six_seconds():
     user_email = get_jwt_identity()
-    from services import entitlements_service
+    from services import entitlements_service, recruiter_gaze_service
     from services.resume_service import get_resume_service, ResumeService
+    from services.resume_parser import ResumeParser
+
+    db = DBConnect().get_db()
+
+    # 1. A read needs a parsed resume. Check FIRST so a no-resume open never
+    #    spends quota — the tab auto-runs on mount, and charging before this
+    #    check silently pushed users into the upgrade wall before they had even
+    #    uploaded a resume. The FE handles this synchronous {error:no_resume}.
+    resume = ResumeParser(db).get_structured_resume(user_email=user_email)
+    if not resume or not resume.get("structured"):
+        return jsonify({"error": "no_resume"}), 200
+
+    fingerprint = recruiter_gaze_service.six_seconds_fingerprint(resume)
+    force = bool((request.get_json(silent=True) or {}).get("force"))
+
+    # 2. The read only changes when the resume changes. Serve a cached read for
+    #    the current resume version WITHOUT charging, so passively re-opening the
+    #    tab is free; only an explicit re-run (force) or a new resume version
+    #    spends a quota unit. The FE handles this synchronous result body.
+    if not force:
+        cached = recruiter_gaze_service.get_cached_six_seconds(user_email, fingerprint)
+        if cached:
+            return jsonify(cached), 200
+
+    # 3. Fresh compute — NOW gate + charge, before we spend on the LLM.
     allowed, usage = entitlements_service.check_and_increment(user_email, "six_seconds")
     if not allowed:
         return entitlements_service.upgrade_required_response(user_email, "six_seconds", usage)
-    payload = {"user_email": user_email}
+    payload = {"user_email": user_email, "fingerprint": fingerprint}
     job_id = get_resume_service().create_job("six_seconds", payload, user_email=user_email)
     ResumeService.invoke_async(job_id, "six_seconds", payload)
     return jsonify({"job_id": job_id}), 202

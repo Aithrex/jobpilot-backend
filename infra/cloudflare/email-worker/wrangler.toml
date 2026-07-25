@@ -1,0 +1,30 @@
+name = "jobpilot-mail-inbound"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+
+# --- Email trigger -----------------------------------------------------------
+# Email Workers have NO wrangler-side trigger block. The binding is wired in the
+# Cloudflare dashboard: Email > Email Routing > Routing rules > Catch-all
+# address > Action = "Send to a Worker" > select this Worker (see README).
+# This Worker only RECEIVES mail; it does not send, so no `send_email` binding
+# is declared (outbound relay is ZeptoMail on the backend, spec §D5).
+
+# --- Variables (non-secret; safe to commit) ----------------------------------
+# Base URL of the two-phase backend endpoints (spec §4). The Worker appends
+# /slot and /commit. Rides the already-routed /api/resume/* edge — no new edge
+# route required (spec §4/§12).
+[vars]
+MAIL_INBOUND_URL = "https://aspirely.me/api/resume/mail-inbound/cloudflare"
+
+# --- Secret (NEVER committed) ------------------------------------------------
+# MAIL_INBOUND_HMAC_SECRET is a Worker SECRET, not a var. Set it out-of-band and
+# it becomes an encrypted binding at runtime (env.MAIL_INBOUND_HMAC_SECRET):
+#
+#   wrangler secret put MAIL_INBOUND_HMAC_SECRET
+#
+# Use the SAME value seeded into backend SSM at
+# {ssm_path_prefix}/mail-inbound-hmac-secret (spec §7). Do NOT put it here.
+
+# Optional: pin an env-scoped config, e.g.
+#   [env.staging]
+#   vars = { MAIL_INBOUND_URL = "https://staging.aspirely.me/api/resume/mail-inbound/cloudflare" }

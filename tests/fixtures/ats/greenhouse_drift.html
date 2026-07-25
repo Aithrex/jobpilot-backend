@@ -1,0 +1,19 @@
+<!doctype html>
+<!-- Aithrex-owned synthetic fixture. Selector-DRIFT variant of greenhouse_form:
+     the field ids/names have all changed (a silent template change). Still a
+     Greenhouse host, so detection succeeds, but the form fingerprint no longer
+     matches the pinned baseline -> repeated drift must open the circuit breaker. -->
+<html><head><meta charset="utf-8"><title>Apply - Aithrex</title></head>
+<body>
+<form id="jobapp_v2" action="https://boards.greenhouse.io/aithrex/jobs/4200" method="post">
+  <label for="applicant_given_name">First Name</label>
+  <input id="applicant_given_name" name="applicant_given_name" type="text" required>
+  <label for="applicant_family_name">Last Name</label>
+  <input id="applicant_family_name" name="applicant_family_name" type="text" required>
+  <label for="contact_email_v2">Email</label>
+  <input id="contact_email_v2" name="contact_email_v2" type="email" required>
+  <input id="resume" name="resume" type="file">
+  <div id="application-confirmation" style="display:none"></div>
+  <button type="submit">Submit application</button>
+</form>
+</body></html>

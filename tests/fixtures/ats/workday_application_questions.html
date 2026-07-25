@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- Aithrex-owned synthetic fixture. Workday "Application Questions" (questionnaire)
+     step. Includes a sponsorship question phrased in the INVERSE polarity ("able to
+     work WITHOUT requiring sponsorship") to exercise the normalizer's invert flag,
+     plus non-legal screening fields. Custom button-style dropdowns key off
+     data-automation-id. NEVER a real employer. -->
+<html><head><meta charset="utf-8"><title>Application Questions - Aithrex</title></head>
+<body class="wd-theme-canvas wd-blue">
+<div data-automation-id="questionnairePage" class="wd-step">
+  <h1>Application Questions</h1>
+  <div data-automation-id="formField-sponsorship" class="wd-field">
+    <button data-automation-id="sponsorshipRequired" aria-haspopup="listbox"
+            aria-label="Are you able to work without requiring visa sponsorship now or in the future?"
+            type="button">Select One</button>
+  </div>
+  <div data-automation-id="formField-yearsExperience" class="wd-field">
+    <label>Years of experience</label>
+    <input data-automation-id="yearsExperience" aria-label="How many years of professional experience do you have?" type="text" required>
+  </div>
+  <div data-automation-id="formField-howDidYouHear" class="wd-field">
+    <button data-automation-id="howDidYouHear" aria-haspopup="listbox" aria-label="How did you hear about us?" type="button">Select One</button>
+  </div>
+  <div data-automation-id="pageFooter" class="wd-footer">
+    <button data-automation-id="pageFooterBackButton" type="button">Back</button>
+    <button data-automation-id="pageFooterNextButton" type="button">Save and Continue</button>
+  </div>
+</div>
+</body></html>

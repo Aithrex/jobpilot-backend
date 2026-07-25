@@ -84,8 +84,26 @@ resource "aws_lambda_function" "service" {
       # secret) — the CMK the credential vault (kms_cipher.py) envelope-encrypts
       # under. APPROVAL_LINK_SECRET is the dedicated HMAC secret for signed
       # approve-links (§2), read as a SecureString via SSM_APPROVAL_LINK_SECRET.
-      CREDENTIALS_KMS_KEY_ID    = aws_kms_key.credentials.arn
-      SSM_APPROVAL_LINK_SECRET  = "${var.ssm_path_prefix}/approval-link-secret"
+      CREDENTIALS_KMS_KEY_ID   = aws_kms_key.credentials.arn
+      SSM_APPROVAL_LINK_SECRET = "${var.ssm_path_prefix}/approval-link-secret"
+
+      # Managed Application Mailbox (managed-mailbox-v1 §7). Declared here so the
+      # resume Lambda can read the feature's state + reach its store. The feature
+      # stays INERT until APPLY_MAIL_DOMAIN is set AND APPLY_MAILBOX_ENABLED
+      # flips true — held OFF until the neutral domain + Cloudflare Worker exist
+      # and staging smoke passes (spec §11/§12). The bucket + CMK below are now
+      # provisioned in managed_mailbox.tf, so we wire them directly.
+      APPLY_MAIL_DOMAIN     = ""
+      APPLY_MAILBOX_ENABLED = "false"
+      # Non-secret store identifiers (key id is NOT a secret — same rationale as
+      # CREDENTIALS_KMS_KEY_ID above; a plain env var is correct, no SSM needed).
+      APPLY_MAIL_BUCKET     = aws_s3_bucket.mail.bucket
+      APPLY_MAIL_KMS_KEY_ID = aws_kms_key.mail.arn
+      # Shared HMAC secret with the Cloudflare Worker's secret binding — the ONLY
+      # secret this feature adds. SecureString at this SSM path; seed the SAME
+      # value into the Worker via `wrangler secret put MAIL_INBOUND_HMAC_SECRET`
+      # (spec §7/§12). Unset ⇒ slot/commit HMAC verify fails closed (403).
+      SSM_MAIL_INBOUND_HMAC_SECRET = "${var.ssm_path_prefix}/mail-inbound-hmac-secret"
 
       # Guest onboarding (no-signup /start flow). ON in prod. Server-side salt
       # for guest ip_hash via SSM (unset ⇒ hash_ip fails closed, feature still
@@ -96,8 +114,14 @@ resource "aws_lambda_function" "service" {
       # signals are neither stored nor matched (quota subjects stay standalone);
       # without the download secret, guest download tokens cannot be minted
       # (503, never 401). Rotating the signal key orphans existing HMAC links.
-      SSM_GUEST_SIGNAL_HMAC_KEY      = "${var.ssm_path_prefix}/guest-signal-hmac-key"
+      SSM_GUEST_SIGNAL_HMAC_KEY       = "${var.ssm_path_prefix}/guest-signal-hmac-key"
       SSM_GUEST_DOWNLOAD_TOKEN_SECRET = "${var.ssm_path_prefix}/guest-download-token-secret"
+
+      # Voice Graph (Compass addendum §6.12). ON in prod. Writing samples are
+      # Fernet-encrypted at rest via INTEGRATION_TOKEN_ENCRYPTION_KEY (falls back
+      # to GMAIL_TOKEN_ENCRYPTION_KEY) — both already wired above, so sample-save
+      # works. Unset would default OFF in prod (all routes 404); set explicitly.
+      VOICE_GRAPH_ENABLED = "true"
     }
   }
 

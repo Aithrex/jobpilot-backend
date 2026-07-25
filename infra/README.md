@@ -78,6 +78,28 @@ Required GitHub Actions secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
 `../../jobpilot-frontend/infra/README.md` for the full cross-repo runbook +
 the Cloudflare DNS records.
 
+## Managed mailbox (Cloudflare + S3)
+
+The managed application mailbox inbound path (spec
+`../docs/specs/managed-mailbox-v1.md`) is provisioned but held **OFF** in prod
+(`APPLY_MAIL_DOMAIN=""`, `APPLY_MAILBOX_ENABLED="false"` in `lambda.tf`). In this
+repo:
+
+- `terraform/managed_mailbox.tf` — SSE-KMS S3 bucket (`mail/raw|text|html|att`),
+  a dedicated KMS CMK + least-privilege key policy, and an IAM policy on the
+  existing shared Lambda role granting **only** `s3:Get/PutObject` on
+  `<bucket>/mail/*` and `kms:GenerateDataKey/Decrypt` on that CMK. Vars
+  `mail_bucket_name`, `mail_raw_retention_days` in `variables.tf`.
+- `terraform/lambda.tf` wires `APPLY_MAIL_BUCKET`, `APPLY_MAIL_KMS_KEY_ID`
+  (non-secret) and `SSM_MAIL_INBOUND_HMAC_SECRET` (SecureString path) into the
+  Lambda env.
+- `cloudflare/email-worker/` — the thin Cloudflare Email Worker (two-phase
+  slot/commit handoff; presigned PUT to S3; HMAC-authed). Deploy is external.
+
+**No new API-Gateway/edge route** — the machine webhook rides
+`/api/resume/{proxy+}` and raw MIME goes straight to S3 (spec §4). Full external
+go-live runbook: [`../docs/ops/managed-mailbox-setup.md`](../docs/ops/managed-mailbox-setup.md).
+
 ## Cost allocation tags
 
 All resources are tagged `Project=jobpilot` / `Environment=prod` (+ `ManagedBy`,

@@ -284,7 +284,10 @@ def test_gather_with_real_recon_leaves_queued_state(led_db):
     # Recon succeeded → NOT the unavailable no-op path.
     assert result.get("status") != EXECUTOR_UNAVAILABLE
     row = als.get_application(USER_A, aid)
-    assert row["status"] in (als.STATUS_READY, als.STATUS_NEEDS_INPUT)
+    # F: the clean-auto landing is now ready_for_review → approved (was `ready`);
+    # an unresolved required/legal question still routes to needs_input.
+    assert row["status"] in (als.STATUS_READY_FOR_REVIEW, als.STATUS_APPROVED,
+                             als.STATUS_NEEDS_INPUT)
 
 
 def test_immediate_submit_enqueues_only_ready_rows(led_db, monkeypatch):
@@ -293,8 +296,11 @@ def test_immediate_submit_enqueues_only_ready_rows(led_db, monkeypatch):
         USER_A, company="A", title="Eng", jd_text=_JD, source="greenhouse",
         apply_url="https://boards.greenhouse.io/a/jobs/1")
     r_aid = ready["application_id"]
+    # F: submit is enqueued from `approved` (not `ready`) — seat the row there.
     als.mark_gathering(USER_A, r_aid)
-    als.mark_ready(USER_A, r_aid, autonomy="auto", confidence_score=0.95, tailoring_record_id=None)
+    als.mark_ready_for_review(USER_A, r_aid, autonomy="auto", confidence_score=0.95,
+                              tailoring_record_id=None)
+    als.approve(USER_A, [r_aid], approved_by="system")
 
     pending, _ = als.create_application(
         USER_A, company="B", title="Eng", jd_text=_JD + " variant", source="greenhouse",
@@ -317,8 +323,11 @@ def test_immediate_submit_gated_by_master_switch(led_db, monkeypatch):
         USER_A, company="A", title="Eng", jd_text=_JD, source="greenhouse",
         apply_url="https://boards.greenhouse.io/a/jobs/1")
     aid = ready["application_id"]
+    # F: seat the row in `approved` (submit's pickup state).
     als.mark_gathering(USER_A, aid)
-    als.mark_ready(USER_A, aid, autonomy="auto", confidence_score=0.95, tailoring_record_id=None)
+    als.mark_ready_for_review(USER_A, aid, autonomy="auto", confidence_score=0.95,
+                              tailoring_record_id=None)
+    als.approve(USER_A, [aid], approved_by="system")
 
     calls = []
     monkeypatch.setattr(aas, "_auto_submit_enabled", lambda: False)  # kill-switch OFF
@@ -342,8 +351,11 @@ def test_captcha_wall_surfaces_apply_url_for_human_handoff(led_db):
         USER_A, company="A", title="Eng", jd_text=_JD, source="greenhouse",
         ats_family="greenhouse", apply_url="https://boards.greenhouse.io/a/jobs/1")
     aid = view["application_id"]
+    # F: submit runs from `approved` — seat the row there before the captcha wall.
     als.mark_gathering(USER_A, aid)
-    als.mark_ready(USER_A, aid, autonomy="auto", confidence_score=0.95, tailoring_record_id=None)
+    als.mark_ready_for_review(USER_A, aid, autonomy="auto", confidence_score=0.95,
+                              tailoring_record_id=None)
+    als.approve(USER_A, [aid], approved_by="system")
 
     aas.set_executor(_CaptchaExecutor())
     res = aas.submit(aid, USER_A)
@@ -363,15 +375,16 @@ def test_submit_leaves_row_ready_when_fleet_unavailable(led_db):
         source="greenhouse", ats_family="greenhouse",
         apply_url="https://boards.greenhouse.io/gitlab/jobs/8565469002")
     aid = view["application_id"]
-    # Force the row to `ready` so submit() is reached.
+    # F: force the row to `approved` (submit's entry state) so submit() is reached.
     als.mark_gathering(USER_A, aid)
-    als.mark_ready(USER_A, aid, autonomy="auto", confidence_score=0.95,
-                   tailoring_record_id=None)
+    als.mark_ready_for_review(USER_A, aid, autonomy="auto", confidence_score=0.95,
+                              tailoring_record_id=None)
+    als.approve(USER_A, [aid], approved_by="system")
 
     aas.set_executor(AtsExecutor(session=_FakeSession(resp=_FakeResp(200, _GH_PAYLOAD))))
     result = aas.submit(aid, USER_A)
 
-    # is_available() is False → executor never grabs the row; stays ready.
+    # is_available() is False → executor never grabs the row; stays approved.
     assert result["status"] == EXECUTOR_UNAVAILABLE
     row = als.get_application(USER_A, aid)
-    assert row["status"] == als.STATUS_READY
+    assert row["status"] == als.STATUS_APPROVED
