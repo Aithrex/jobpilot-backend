@@ -83,6 +83,45 @@ Verify `MAIL_FORWARD_FROM` (e.g. `notifications@aspirely.me`) as a sender in
 ZeptoMail with SPF/DKIM passing (spec §7/§D5). Forwarding notifications are sent
 from this JobPilot-owned address — never spoofing the recruiter.
 
+### 7b. Reply-relay sending domain (optional — send replies FROM the alias)
+
+The privacy-preserving **reply-relay** lets a user answer a forwarded recruiter
+email straight from their own inbox: the forwarded copy's `Reply-To` is a
+per-thread reply-bound alias (`reply.<hex>@my-private-mail.com`), and the inbound
+reply is relayed back to the recruiter **without exposing the user's real
+address** (it is never an open relay — the sender must be the owner's *verified*
+`forward_to`, with aligned SPF/DKIM/DMARC).
+
+By default (`APPLY_MAIL_SEND_AS_ALIAS=false`) that relayed reply goes out **From
+`MAIL_FORWARD_FROM`** with a `"<first name> (via My Private Mail)"` display name —
+this works today with the already-verified `aspirely.me` sender, no extra DNS.
+
+To instead send the reply **From the user's primary managed alias**
+(`firstname.lastname@my-private-mail.com`), verify `my-private-mail.com` as a
+ZeptoMail **sending** domain first:
+
+1. **ZeptoMail → Domains → Add domain** → `my-private-mail.com`.
+2. ZeptoMail shows an **SPF** include and a **DKIM** CNAME/TXT selector. In
+   **Cloudflare DNS** for `my-private-mail.com` add:
+   - SPF: merge ZeptoMail's `include:` into the domain's `TXT v=spf1 …` record
+     (Cloudflare Email Routing already added one for inbound MX — append, do not
+     duplicate the record).
+   - DKIM: the CNAME/TXT selector ZeptoMail provides (e.g. `zmail._domainkey`).
+   - **DMARC already exists** for the domain — no change needed; alignment now
+     passes because SPF+DKIM authenticate `my-private-mail.com`.
+3. Wait for ZeptoMail to mark the domain **Verified**.
+4. Flip the flag on the backend (`infra/terraform/lambda.tf`) and redeploy:
+
+   ```
+   APPLY_MAIL_SEND_AS_ALIAS    = "true"
+   APPLY_MAIL_SENDING_VERIFIED = "true"
+   ```
+
+Until both are `true`, the relay keeps using the `MAIL_FORWARD_FROM` fallback
+sender. In **no** mode is the user's real email ever used as From or Reply-To —
+the recruiter's next reply always returns to the primary alias, which is then
+forwarded back to the user (closing the loop).
+
 ### 8. Staging round-trip, then flip the flag
 Send a test email to any `@<domain>` address. Confirm: Worker breadcrumbs via
 `npx wrangler tail` (sizes/message-id/status only), raw object under

@@ -25,10 +25,10 @@ Hard rules (spec §0 D5 + the forwarding requirements):
   - Outbound goes through ``email_service.send_email`` (ZeptoMail), from
     ``MAIL_FORWARD_FROM`` (JobPilot-owned, verified) with a DISPLAY NAME derived
     from the original sender. We NEVER spoof (the actual From address is ours).
-    Reply-To is the ORIGINAL sender so the user can reply from their inbox
-    (a privacy-preserving reply-relay via a thread-bound alias is the planned
-    follow-up — see ``reply_relay_stub``). We add ``X-JP-Forwarded: 1`` as an
-    outbound loop marker.
+    Reply-To is a PRIVACY-PRESERVING per-thread reply-bound alias
+    (``reply.<hex>@<APPLY_MAIL_DOMAIN>``), so a reply from the user's inbox routes
+    through ``relay_reply`` back to the recruiter without ever exposing the user's
+    real address. We add ``X-JP-Forwarded: 1`` as an outbound loop marker.
   - Send ONLY when the mailbox is not paused AND forwarding_enabled AND
     forward_to_verified AND forward_to is present AND forward_to is not
     suppressed. ``trust`` is a CORRELATION signal (it drives application STATUS),
@@ -45,8 +45,11 @@ Hard rules (spec §0 D5 + the forwarding requirements):
   - NEVER log the forward_to address, the subject, or the body — only booleans,
     reasons, and the thread_id.
 
-NOT in scope here (leave a clearly-named stub): the recruiter reply-relay /
-reply-bound-alias inbound relay — see ``reply_relay_stub``.
+ALSO here: the privacy-preserving REPLY-RELAY (``relay_reply``) — when the user
+answers a forwarded recruiter email from their own inbox, the reply lands on a
+per-thread reply-bound alias and is relayed back to the recruiter from a
+JobPilot-owned address, never exposing the user's real email and never as an open
+relay (every defense is fail-closed).
 """
 
 from __future__ import annotations
@@ -91,6 +94,29 @@ def _daily_cap() -> int:
         return max(0, int(str(raw).strip()))
     except (TypeError, ValueError):
         return _DAILY_CAP_DEFAULT
+
+
+_TRUE = {"1", "true", "yes", "on"}
+
+
+def _send_as_alias() -> bool:
+    """``APPLY_MAIL_SEND_AS_ALIAS`` (default OFF): when true, a relayed user reply
+    goes out FROM the user's PRIMARY managed alias
+    (``firstname.lastname@<APPLY_MAIL_DOMAIN>``) instead of the fallback
+    ``MAIL_FORWARD_FROM`` sender. Flip it ON only AFTER ``APPLY_MAIL_DOMAIN`` is
+    verified as a ZeptoMail sending domain (SPF/DKIM), which the operator asserts
+    via ``APPLY_MAIL_SENDING_VERIFIED`` — BOTH must be truthy. Either unset ->
+    fallback sender. NEVER the user's real email in either mode."""
+    flag = (_get_config_value("APPLY_MAIL_SEND_AS_ALIAS", "") or "").strip().lower()
+    if flag not in _TRUE:
+        return False
+    # The sending domain must also be asserted verified. Default: mirror the flag
+    # (setting SEND_AS_ALIAS=true is the operator's assertion) unless explicitly
+    # set false, so a deployment can arm/disarm with a single var.
+    verified = (_get_config_value("APPLY_MAIL_SENDING_VERIFIED", "") or "").strip().lower()
+    if verified == "":
+        return True
+    return verified in _TRUE
 
 
 def _unverified_mode() -> str:
@@ -447,11 +473,24 @@ def forward_notification(message_doc: Dict[str, Any]) -> Dict[str, Any]:
     display = _forward_display_name(message)
     from_header = f"{display} <{forward_from_email}>" if forward_from_email else forward_from
 
-    # Reply-To: the ORIGINAL sender so the user can reply straight from their
-    # inbox. FOLLOW-UP: a privacy-preserving reply-relay via a thread-bound alias
-    # (so the user's real address is never exposed to the recruiter) is the
-    # planned next step — see ``reply_relay_stub``.
-    reply_to = str(message.get("from_addr") or "").strip()
+    # Reply-To: a PRIVACY-PRESERVING per-thread reply-bound alias
+    # (``reply.<hex>@<APPLY_MAIL_DOMAIN>``) minted/reused for this (thread, sender),
+    # NOT the raw recruiter. When the user replies from their inbox, the reply
+    # lands on that alias and the inbound reply-relay (``relay_reply``) sends it on
+    # to the recruiter from a JobPilot-owned address — the user's real email is
+    # never exposed. Fail-safe: if minting is unavailable (no managed domain), fall
+    # back to the original sender so replying still works (no privacy relay).
+    correspondent = str(message.get("from_addr") or "").strip()
+    reply_to = correspondent
+    try:
+        reply_alias = mailbox.mint_reply_alias(
+            user_email, message.get("mailbox_id"), thread_id, correspondent
+        )
+        if reply_alias and "@" in str(reply_alias.get("address") or ""):
+            reply_to = reply_alias["address"]
+    except Exception as e:  # pragma: no cover - never fail the forward on minting
+        logger.warning("mail-forward: reply-alias mint failed: %s thread=%s",
+                       type(e).__name__, thread_id)
 
     try:
         from services import email_service
@@ -536,17 +575,193 @@ def send_forward_verification(forward_to: str, token: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# NOT IMPLEMENTED HERE — recruiter reply-relay (later P2 task)
+# Reply-relay — the user replies from their inbox; we relay to the recruiter
+# WITHOUT exposing the user's real address. NEVER an open relay (every defense
+# below is fail-closed).
 # ---------------------------------------------------------------------------
 
-def reply_relay_stub(*_args, **_kwargs):
-    """Intentional stub for the FUTURE recruiter reply-relay / reply-bound-alias
-    INBOUND relay: sending a user's reply from a per-thread reply-bound alias back
-    to the recruiter, and routing the recruiter's response back into the thread.
+def _reply_auth_aligned(spf: str, dkim: str, dmarc: str) -> bool:
+    """Auth-evidence gate for a relayed reply: the user's own message must carry
+    aligned/passing SPF/DKIM/DMARC (evidence the user's domain really sent it).
 
-    That is a two-way conversation surface with its own approval/vault/anti-spoof
-    controls and ships with the reply UI (managed-mailbox-v1 §5
-    ``/threads/<id>/reply`` -> ``{job_id}``). It is deliberately NOT built as part
-    of the safe notify-to-original-inbox forwarding path. Do NOT wire this into
-    the inbound commit path — forwarding here is notification-only."""
-    raise NotImplementedError("recruiter reply-relay is a later P2 task (reply UI)")
+    Fail-closed: a DMARC ``fail`` is rejected outright; a DMARC ``pass`` is the
+    strong alignment signal; when DMARC is absent/unknown we require BOTH SPF and
+    DKIM to pass. Anything else -> do not relay."""
+    spf = (spf or "").strip().lower()
+    dkim = (dkim or "").strip().lower()
+    dmarc = (dmarc or "").strip().lower()
+    if dmarc == "fail":
+        return False
+    if dmarc == "pass":
+        return True
+    return spf == "pass" and dkim == "pass"
+
+
+def _first_name_from(primary_alias: str, forward_to: str) -> str:
+    """A header-safe first name for the fallback relay display name. Derived from
+    the primary alias local part (``firstname.lastname`` -> ``Firstname``); never
+    exposes the user's real email (the local part of the MANAGED address only)."""
+    local = str(primary_alias or "").split("@", 1)[0]
+    first = (local.split(".", 1)[0] or "").strip()
+    if not first:
+        first = "Your contact"
+    first = InputSanitizer.sanitize_string(first, 60)
+    first = re.sub(r'[\r\n"<>]', "", first).strip()
+    return (first[:1].upper() + first[1:]) if first else "Your contact"
+
+
+def _reject(reason: str, thread_id: Optional[str] = None) -> Dict[str, Any]:
+    # NEVER log the sender / correspondent / subject / body — reason + thread only.
+    logger.info("mail-relay: not relayed reason=%s thread=%s", reason, thread_id or "-")
+    return {"relayed": False, "reason": reason}
+
+
+def relay_reply(
+    alias_info: Dict[str, Any],
+    envelope_from: str,
+    raw_bytes: bytes,
+    provider_message_id: str,
+) -> Dict[str, Any]:
+    """Relay a user's reply (received on a reply-bound alias) to the single bound
+    correspondent — NEVER an open relay. Every check below is fail-closed:
+
+      1. OWNER PROOF: the incoming From (and, when present, the envelope-from) MUST
+         equal the mailbox owner's VERIFIED ``forward_to`` (case-insensitive). A
+         recruiter or a spoofer hitting the reply alias fails here.
+      2. AUTH EVIDENCE: SPF/DKIM/DMARC on the incoming message must be aligned/pass.
+      3. LOOP GUARD: an ``X-JP-Relayed`` marker or a sender in our own managed /
+         relay domains is dropped (never relay our own mail).
+      4. SUPPRESSION + RATE LIMIT on the correspondent / owner.
+      5. RELAY OUT to the ONE bound ``correspondent_email`` ONLY (never from the
+         body): From = the primary managed alias (flag ON + sending domain
+         verified) or the fallback ``MAIL_FORWARD_FROM`` display sender — NEVER the
+         user's real email; Reply-To = the primary alias (so the recruiter's next
+         reply returns to it and is forwarded to the user again, closing the loop);
+         ``X-JP-Relayed: 1`` loop marker.
+      6. STORE the reply as ``outbound`` in the SAME thread (idempotent — the store
+         is the at-most-once send gate). Do NOT forward the user's own reply back.
+
+    Returns ``{relayed, reason}``; never raises."""
+    alias_info = alias_info or {}
+    user_email = InputSanitizer.sanitize_email(alias_info.get("user_email"))
+    thread_id = alias_info.get("thread_id")
+    correspondent = InputSanitizer.sanitize_email(alias_info.get("correspondent_email"))
+    primary_alias = str(alias_info.get("primary_alias") or "").strip()
+
+    if not user_email or not correspondent:
+        return _reject("relay_unbound", thread_id)
+
+    # --- Owner gates: forwarding destination must be present AND verified. ------
+    mb = mailbox.get_mailbox(user_email)
+    forward_to = str(mb.get("forward_to") or "").strip()
+    if not forward_to or not mb.get("forward_to_verified"):
+        return _reject("owner_unverified", thread_id)
+
+    # --- Parse the reply (reuse the ingest MIME parser + limits/sanitizer). -----
+    from services import mail_store_service as store
+    try:
+        parsed = store._parse_mime(raw_bytes or b"")
+    except store.MailRejected as e:
+        return _reject(f"malformed:{e.reason}", thread_id)
+
+    from_addr = str(parsed.get("from_addr") or "").strip().lower()
+    _, env_from_email = parseaddr(str(envelope_from or ""))
+    env_from_email = (env_from_email or "").strip().lower()
+    fwd = forward_to.lower()
+
+    # 1. OWNER PROOF — the reply must really be from the owner's verified inbox.
+    #    The MIME From must match; a present envelope-from must match too.
+    if from_addr != fwd:
+        return _reject("sender_not_owner", thread_id)
+    if env_from_email and env_from_email != fwd:
+        return _reject("sender_not_owner", thread_id)
+
+    # 2. AUTH EVIDENCE — SPF/DKIM/DMARC aligned/pass on the incoming message.
+    if not _reply_auth_aligned(parsed.get("spf"), parsed.get("dkim"), parsed.get("dmarc")):
+        return _reject("auth_unaligned", thread_id)
+
+    # 3. LOOP GUARD — never relay our own already-relayed/forwarded mail, and never
+    #    relay a "correspondent" that is one of our own domains.
+    if parsed.get("x_jp_relayed") or parsed.get("x_jp_forwarded"):
+        return _reject("loop_relayed_header", thread_id)
+    apply_domain = mailbox.apply_mail_domain()
+    corr_domain = correspondent.split("@", 1)[-1]
+    if apply_domain and corr_domain and (
+        corr_domain == apply_domain or corr_domain.endswith("." + apply_domain)
+    ):
+        return _reject("loop_own_domain", thread_id)
+    forward_from = _forward_from()
+    _, forward_from_email = parseaddr(forward_from)
+    forward_from_email = (forward_from_email or forward_from).strip().lower()
+    if forward_from_email and correspondent == forward_from_email:
+        return _reject("loop_self", thread_id)
+
+    # 4. SUPPRESSION on the correspondent (hard bounce / complaint).
+    try:
+        from services import email_suppression
+        if email_suppression.is_suppressed(correspondent):
+            return _reject("suppressed", thread_id)
+    except Exception:  # pragma: no cover - best effort
+        pass
+
+    # We need a real relay sender: either the primary alias (flag) or MAIL_FORWARD_FROM.
+    send_as_alias = _send_as_alias() and "@" in primary_alias
+    if not send_as_alias and not forward_from:
+        return _reject("relay_from_unconfigured", thread_id)
+
+    # 5. RATE LIMIT (per-user daily cap; reuse the forward idiom) — LAST, so only a
+    #    reply that would otherwise relay spends budget.
+    if not _within_daily_cap(user_email):
+        return _reject("rate_limited", thread_id)
+
+    # --- STORE first (idempotent) — the unique (alias_id, provider_message_id)
+    #     index is the at-most-once SEND gate. A Cloudflare retry re-stores nothing
+    #     and never re-sends. ---------------------------------------------------
+    if send_as_alias:
+        # From = the user's PRIMARY managed alias (verified sending domain).
+        from_shown = primary_alias
+        from_header = f"{_first_name_from(primary_alias, forward_to)} <{primary_alias}>"
+    else:
+        # Fallback: JobPilot-owned MAIL_FORWARD_FROM with a "(via My Private Mail)"
+        # display name. NEVER the user's real email.
+        from_shown = forward_from_email or forward_from
+        from_header = (
+            f"{_first_name_from(primary_alias, forward_to)} (via My Private Mail) "
+            f"<{forward_from_email}>"
+        ) if forward_from_email else forward_from
+
+    stored = store.store_outbound_reply(
+        alias_info, parsed, provider_message_id,
+        from_shown=from_shown, relay_to=correspondent,
+    )
+    if not stored.get("stored"):
+        return _reject("store_failed", thread_id)
+    if stored.get("deduplicated"):
+        # Already relayed on a prior commit — do NOT send again (idempotent).
+        return {"relayed": False, "reason": "duplicate"}
+
+    # --- SEND to the ONE bound correspondent only. -----------------------------
+    subject = parsed.get("subject") or "Re:"
+    safe_html = store._sanitize_html(parsed.get("html") or "")
+    text = parsed.get("text") or store._text_from_html(safe_html)
+    if not safe_html:
+        safe_html = f'<pre style="white-space:pre-wrap;font-family:inherit">{_esc(text)}</pre>'
+
+    reply_to_primary = primary_alias if "@" in primary_alias else (forward_from_email or forward_from)
+    try:
+        from services import email_service
+        ok = email_service.send_email(
+            correspondent,              # the SINGLE bound correspondent — nothing else
+            subject,
+            safe_html,
+            text,
+            from_addr=from_header,      # primary alias or fallback — NEVER the real email
+            reply_to=reply_to_primary,  # recruiter's next reply returns to the primary alias
+            headers={"X-JP-Relayed": "1"},  # loop marker
+        )
+    except Exception as e:  # pragma: no cover - send is best-effort
+        logger.warning("mail-relay: send raised: %s thread=%s", type(e).__name__, thread_id)
+        return {"relayed": False, "reason": "send_error"}
+
+    logger.info("mail-relay: relayed=%s thread=%s", bool(ok), thread_id)
+    return {"relayed": bool(ok), "reason": "relayed" if ok else "send_failed"}

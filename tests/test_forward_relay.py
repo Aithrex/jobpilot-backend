@@ -205,8 +205,12 @@ def test_forward_relays_full_real_content(env, sent):
     assert FORWARD_FROM in call["from_addr"]
     assert "(via My Private Mail)" in call["from_addr"]
     assert "greenhouse.io" not in call["from_addr"]
-    # Reply-To = the ORIGINAL sender so the user replies from their inbox.
-    assert call["reply_to"] == "no-reply@greenhouse.io"
+    # Reply-To = a privacy-preserving per-thread reply-bound alias (NOT the raw
+    # recruiter) so the user's reply routes through the relay, hiding their real
+    # address. The recruiter is never exposed as the Reply-To.
+    assert call["reply_to"].startswith("reply.")
+    assert call["reply_to"].endswith(f"@{DOMAIN}")
+    assert call["reply_to"] != "no-reply@greenhouse.io"
     # Outbound loop marker.
     assert call["headers"] == {"X-JP-Forwarded": "1"}
     # ORIGINAL subject preserved (NOT a generic subject-less notice).
@@ -255,9 +259,12 @@ def test_full_pipeline_relays_real_greenhouse_body(env, sent):
     assert "moving forward" in blob
     # ORIGINAL subject preserved.
     assert call["subject"] == "Update on your application to Acme"
-    # Sender is ours; reply goes to the recruiter.
+    # Sender is ours; reply routes through a privacy-preserving reply-bound alias
+    # (never the raw recruiter).
     assert FORWARD_FROM in call["from_addr"]
-    assert call["reply_to"] == "no-reply@greenhouse.io"
+    assert call["reply_to"].startswith("reply.")
+    assert call["reply_to"].endswith(f"@{DOMAIN}")
+    assert call["reply_to"] != "no-reply@greenhouse.io"
 
 
 # ---------------------------------------------------------------------------

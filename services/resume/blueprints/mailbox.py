@@ -333,11 +333,13 @@ def get_mailbox_attachment(attachment_id):
 
 # ===========================================================================
 # Reply — DEFERRED (managed-mailbox-v1 §5 ``/threads/<id>/reply`` -> {job_id}).
-# Intentionally returns 501: the recruiter reply-relay / reply-bound-alias is a
-# later P2 task that ships with the reply UI (see
-# ``mail_forward_service.reply_relay_stub``). 501 is not 401 — it never trips
-# the FE force-logout; the FE simply hides the reply affordance until this
-# lands. Do NOT wire a real send here.
+# Intentionally returns 501: this is the IN-APP compose-a-reply surface (the user
+# types a reply in the web UI), which ships with the reply UI as a later P2 task.
+# NOTE: the EMAIL reply-relay — a user answering a forwarded recruiter email from
+# their OWN inbox — IS live, handled inbound via the reply-bound alias +
+# ``mail_forward_service.relay_reply`` (see blueprints/mail_inbound.py commit).
+# 501 is not 401 — it never trips the FE force-logout; the FE simply hides the
+# in-app reply affordance until this lands. Do NOT wire a real send here.
 # ===========================================================================
 
 @mailbox_bp.route("/threads/<thread_id>/reply", methods=["POST"])

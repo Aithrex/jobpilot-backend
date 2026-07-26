@@ -185,8 +185,12 @@ def test_forward_sent_when_all_gates_pass(env, sent):
     assert FORWARD_FROM in call["from_addr"]
     assert "(via My Private Mail)" in call["from_addr"]
     assert "greenhouse.io" not in (call["from_addr"] or "")
-    # Reply-To = the ORIGINAL sender so the user can reply from their inbox.
-    assert call["reply_to"] == "no-reply@greenhouse.io"
+    # Reply-To = a privacy-preserving per-thread reply-bound alias (NOT the raw
+    # recruiter), so a reply from the user's inbox routes through the relay and
+    # never exposes their real address.
+    assert call["reply_to"].startswith("reply.")
+    assert call["reply_to"].endswith(f"@{DOMAIN}")
+    assert call["reply_to"] != "no-reply@greenhouse.io"
     # Outbound loop marker present.
     assert call["headers"] == {"X-JP-Forwarded": "1"}
     # ORIGINAL subject preserved (not a generic notice).

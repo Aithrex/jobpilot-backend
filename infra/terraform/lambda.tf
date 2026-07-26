@@ -103,6 +103,14 @@ resource "aws_lambda_function" "service" {
       # inbox — JobPilot-owned, verified in ZeptoMail (aspirely.me domain), NEVER
       # the recruiter. Empty => forwarding stays inert.
       MAIL_FORWARD_FROM = "notifications@aspirely.me"
+      # Reply-relay sending mode (privacy-preserving reply back to the recruiter).
+      # Held OFF until my-private-mail.com is verified as a ZeptoMail sending
+      # domain (SPF/DKIM in Cloudflare — see docs/ops/managed-mailbox-setup.md
+      # "Reply-relay sending domain"). OFF => relay From = MAIL_FORWARD_FROM with a
+      # "(via My Private Mail)" display; ON => relay From = the user's PRIMARY
+      # managed alias. NEVER the user's real email in either mode.
+      APPLY_MAIL_SEND_AS_ALIAS    = "false"
+      APPLY_MAIL_SENDING_VERIFIED = "false"
       # Shared HMAC secret with the Cloudflare Worker's secret binding — the ONLY
       # secret this feature adds. SecureString at this SSM path; seed the SAME
       # value into the Worker via `wrangler secret put MAIL_INBOUND_HMAC_SECRET`

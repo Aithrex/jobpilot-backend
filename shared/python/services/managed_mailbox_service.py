@@ -395,7 +395,15 @@ def resolve_alias(envelope_to_or_local: str) -> Optional[Dict[str, Any]]:
     forever but can never receive again). Unknown -> None. Input is treated as
     fully untrusted (this runs on webhook data): it is normalized to the minted
     local-part alphabet before it ever reaches a Mongo filter, so injection input
-    like ``$ne`` simply fails to match."""
+    like ``$ne`` simply fails to match.
+
+    A ``reply_bound`` alias (a per-thread reply-relay address) resolves ONLY while
+    ``active`` (never ``paused``) and carries the extra binding a relay needs:
+    ``kind``, ``thread_id``, ``correspondent_email`` (the SINGLE address the user's
+    reply may be relayed to — never taken from the body), and ``primary_alias``
+    (the address the recruiter's next reply returns to). This is the anti-open-
+    relay contract: the inbound relay handler binds the outbound recipient to this
+    resolved ``correspondent_email`` and to nothing else."""
     local = _normalize_inbound_local(envelope_to_or_local)
     if not local:
         return None
@@ -403,6 +411,22 @@ def resolve_alias(envelope_to_or_local: str) -> Optional[Dict[str, Any]]:
     if not doc:
         return None
     state = doc.get("state")
+    kind = doc.get("kind")
+    if kind == "reply_bound":
+        # Reply-relay aliases resolve ONLY while active — a paused/retired one
+        # must never relay (fail-closed).
+        if state != "active":
+            return None
+        return {
+            "user_email": doc.get("user_email"),
+            "mailbox_id": doc.get("mailbox_id"),
+            "alias_id": doc.get("alias_id"),
+            "state": state,
+            "kind": "reply_bound",
+            "thread_id": doc.get("thread_id"),
+            "correspondent_email": doc.get("correspondent_email"),
+            "primary_alias": doc.get("primary_alias"),
+        }
     if state not in ("active", "paused"):
         return None  # retired tombstone — never reveal an owner
     return {
@@ -410,7 +434,109 @@ def resolve_alias(envelope_to_or_local: str) -> Optional[Dict[str, Any]]:
         "mailbox_id": doc.get("mailbox_id"),
         "alias_id": doc.get("alias_id"),
         "state": state,
+        "kind": kind or "primary",
     }
+
+
+# ---------------------------------------------------------------------------
+# Reply-bound alias minting (per-thread, per-correspondent — reply-relay)
+# ---------------------------------------------------------------------------
+
+# How many opaque ``reply.<hex>`` candidates to try before giving up. Each is a
+# fresh 16-hex-char random token; a collision is astronomically unlikely, so the
+# loop exists only for the DuplicateKeyError race backstop.
+_REPLY_MINT_ATTEMPTS = 6
+
+
+def mint_reply_alias(
+    user_email: str,
+    mailbox_id: Optional[str],
+    thread_id: str,
+    correspondent_email: str,
+) -> Optional[Dict[str, Any]]:
+    """Mint (or reuse) an unguessable per-thread reply-bound alias
+    ``reply.<hex>@<APPLY_MAIL_DOMAIN>`` bound to a single ``correspondent_email``.
+
+    IDEMPOTENT per ``(user_email, thread_id, correspondent_email)`` — a thread that
+    already has a reply alias for this correspondent reuses it (a stable Reply-To
+    across every forwarded message in the thread). The local part is unique across
+    ALL alias states (the existing ``uniq_local_part`` index — the anti-recycle
+    guard), so the address can never be reassigned.
+
+    ``user_email`` is the OWNER (D7); every value is sanitized before it reaches a
+    Mongo filter (invariant #4). Returns the alias doc, or None when the owner has
+    no mailbox / the correspondent is unusable (the caller then falls back to the
+    raw sender so forwarding still works)."""
+    email = InputSanitizer.sanitize_email(user_email)
+    if not email:
+        return None
+    corr = InputSanitizer.sanitize_email(correspondent_email)
+    tid = InputSanitizer.sanitize_string(str(thread_id or ""), 64)
+    if not corr or not tid:
+        return None
+
+    mb = _mailboxes().find_one({"user_email": email})
+    if not mb:
+        return None
+    mbx_id = InputSanitizer.sanitize_string(str(mailbox_id or mb.get("mailbox_id") or ""), 64)
+    primary_alias = (
+        _aliases().find_one({"alias_id": mb.get("primary_alias_id")}) or {}
+    ).get("address")
+
+    # Idempotent reuse: an ACTIVE reply alias already bound to this (thread,
+    # correspondent) for this owner. Values are sanitized, so no operator smuggling.
+    existing = _aliases().find_one(
+        {
+            "user_email": email,
+            "kind": "reply_bound",
+            "state": "active",
+            "thread_id": tid,
+            "correspondent_email": corr,
+        }
+    )
+    if existing:
+        return existing
+
+    domain = apply_mail_domain()
+    for _ in range(_REPLY_MINT_ATTEMPTS):
+        local = "reply." + secrets.token_hex(8)
+        if _aliases().find_one({"local_part": local}):
+            continue
+        address = f"{local}@{domain}" if domain else local
+        doc = {
+            "alias_id": "ralias_" + secrets.token_hex(8),
+            "mailbox_id": mbx_id or None,
+            "user_email": email,
+            "local_part": local,
+            "address": address,
+            "kind": "reply_bound",
+            "state": "active",
+            "thread_id": tid,
+            "correspondent_email": corr,
+            "primary_alias": primary_alias,
+            "created_at": _now(),
+        }
+        try:
+            _aliases().insert_one(doc)
+            return doc
+        except DuplicateKeyError:
+            # A concurrent mint may have created the (thread, correspondent) one —
+            # reuse it; otherwise the random local collided (astronomically rare),
+            # so advance to a fresh token.
+            won = _aliases().find_one(
+                {
+                    "user_email": email,
+                    "kind": "reply_bound",
+                    "state": "active",
+                    "thread_id": tid,
+                    "correspondent_email": corr,
+                }
+            )
+            if won:
+                return won
+            continue
+    logger.warning("managed_mailbox: failed to mint a reply alias (thread=%s)", tid)
+    return None
 
 
 # ---------------------------------------------------------------------------

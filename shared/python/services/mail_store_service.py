@@ -388,6 +388,10 @@ def _parse_mime(raw_bytes: bytes) -> Dict[str, Any]:
         # capture presence only (a bool) — the value is never trusted. Absent ->
         # not forwarded.
         "x_jp_forwarded": bool(msg.get("X-JP-Forwarded")),
+        # Reply-relay loop marker: a message we already RELAYED out (to a
+        # recruiter) must never be relayed again if it ever loops back into a
+        # reply-bound alias. Presence-only bool; value never trusted.
+        "x_jp_relayed": bool(msg.get("X-JP-Relayed")),
     }
 
 
@@ -589,6 +593,14 @@ def mint_commit_token(
             "envelope_from": envelope_from,
             "message_id": message_id,
             "raw_s3_key": raw_s3_key,
+            # Reply-relay binding (present only for a reply-bound alias): the commit
+            # route reads these to route the message to the relay instead of the
+            # normal store-as-inbound path. The bound correspondent is the ONLY
+            # address a relayed reply may go to (never taken from the body).
+            "kind": alias_info.get("kind"),
+            "thread_id": alias_info.get("thread_id"),
+            "correspondent_email": alias_info.get("correspondent_email"),
+            "primary_alias": alias_info.get("primary_alias"),
             "used": False,
             "done": bool(done),
             "created_at": _now(),
@@ -1404,10 +1416,11 @@ def maybe_forward(message_doc: Dict[str, Any]) -> Dict[str, Any]:
     inbound commit (the message is already durably stored). Returns a small
     ``{sent: bool, reason}`` result for logging/tests.
 
-    NOTE: this is ONLY the notify-to-original-inbox half. The recruiter
-    reply-relay / reply-bound-alias INBOUND relay (a real two-way conversation
-    from the user's inbox back to the recruiter) is a separate, later P2 task
-    that ships with the reply UI — see ``mail_forward_service.reply_relay_stub``.
+    NOTE: this is ONLY the notify-to-original-inbox half. The INBOUND reply-relay
+    (a user answering from their own inbox, relayed back to the recruiter) is
+    handled separately by ``relay_reply`` below — the commit route branches to it
+    when the resolved alias is ``reply_bound``, so a user's own reply is NEVER
+    forwarded back to the user here.
     """
     try:
         from services.mail_forward_service import forward_notification
@@ -1415,3 +1428,153 @@ def maybe_forward(message_doc: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:  # pragma: no cover - forwarding is best-effort
         logger.warning("maybe_forward: forward_notification raised: %s", type(e).__name__)
         return {"sent": False, "reason": "error"}
+
+
+# ---------------------------------------------------------------------------
+# Reply-relay — privacy-preserving user reply back to the correspondent
+# (managed-mailbox-v1 §5 reply + Forwarding "never an open relay"). The
+# open-relay DEFENSES + the outbound SEND live in ``mail_forward_service`` (the
+# relay module, which already owns the rate/suppression/loop guards); THIS module
+# owns only the durable STORE of the outbound reply into the thread.
+# ---------------------------------------------------------------------------
+
+def relay_reply(
+    alias_info: Dict[str, Any],
+    envelope_from: str,
+    raw_bytes: bytes,
+    provider_message_id: str,
+) -> Dict[str, Any]:
+    """Handle an inbound message addressed to a REPLY-BOUND alias: verify it is
+    really the mailbox owner replying, then relay it — and ONLY it — to the single
+    pre-bound correspondent. Delegates to ``mail_forward_service.relay_reply``
+    (kept beside the other relay guards). NEVER raises into the commit path —
+    a relay failure must not fail the inbound commit. Returns ``{relayed, reason}``.
+    """
+    try:
+        from services.mail_forward_service import relay_reply as _relay
+        return _relay(alias_info, envelope_from, raw_bytes, provider_message_id)
+    except Exception as e:  # pragma: no cover - relay is best-effort
+        logger.warning("relay_reply: raised: %s", type(e).__name__)
+        return {"relayed": False, "reason": "error"}
+
+
+def store_outbound_reply(
+    alias_info: Dict[str, Any],
+    parsed: Dict[str, Any],
+    provider_message_id: str,
+    *,
+    from_shown: str,
+    relay_to: str,
+) -> Dict[str, Any]:
+    """Durably store a RELAYED user reply as an ``outbound`` message in the SAME
+    thread the reply-bound alias is pinned to (so the Inbox shows the two-way
+    conversation), idempotently on ``(alias_id, provider_message_id)``.
+
+    The caller (``mail_forward_service.relay_reply``) runs every open-relay defense
+    BEFORE calling this, and only SENDS when this returns ``deduplicated=False`` —
+    so the unique ``(alias_id, provider_message_id)`` index is the at-most-once
+    send gate (a Cloudflare retry re-stores nothing and never re-sends). All ids
+    are our own / sanitized; nothing untrusted reaches an operator position.
+
+    Returns ``{message_id, thread_id, deduplicated}``. The sanitized bodies are
+    written to S3 exactly like an inbound message so thread detail can render them.
+    """
+    user_email = InputSanitizer.sanitize_email((alias_info or {}).get("user_email"))
+    alias_id = _san((alias_info or {}).get("alias_id"), 64)
+    thread_id = _san((alias_info or {}).get("thread_id"), 64)
+    mailbox_id = (alias_info or {}).get("mailbox_id")
+    pmid = _san(provider_message_id, 998)
+    if not user_email or not alias_id or not thread_id:
+        return {"message_id": None, "thread_id": thread_id, "deduplicated": False,
+                "stored": False}
+
+    # Idempotency pre-check (same idiom as ingest_committed).
+    existing = _messages().find_one(
+        {"alias_id": alias_id, "provider_message_id": pmid},
+        {"_id": 0, "message_id": 1, "thread_id": 1},
+    )
+    if existing:
+        return {"message_id": existing.get("message_id"),
+                "thread_id": existing.get("thread_id"), "deduplicated": True,
+                "stored": True}
+
+    received_at = _now()
+    message_id = "msg_" + secrets.token_hex(12)
+    user_hash = _sha256(user_email)
+    bucket = _apply_mail_bucket()
+    kms = _kms_key_id()
+
+    safe_html = _sanitize_html(parsed.get("html") or "")
+    text = parsed.get("text") or _text_from_html(safe_html)
+
+    text_s3_key = f"mail/text/{user_hash}/{message_id}.txt"
+    safe_html_s3_key = None
+    try:
+        storage = get_storage_service()
+        storage.put_object_bytes(
+            text_s3_key, (text or "").encode("utf-8"), bucket=bucket,
+            content_type="text/plain; charset=utf-8", kms_key_id=kms,
+        )
+        if safe_html:
+            safe_html_s3_key = f"mail/html/{user_hash}/{message_id}.sanitized.html"
+            storage.put_object_bytes(
+                safe_html_s3_key, safe_html.encode("utf-8"), bucket=bucket,
+                content_type="text/html; charset=utf-8", kms_key_id=kms,
+            )
+    except Exception:  # pragma: no cover - a body-store blip must not lose the row
+        text_s3_key = None
+
+    message_doc = {
+        "message_id": message_id,
+        "provider_message_id": pmid,
+        "thread_id": thread_id,
+        "user_email": user_email,
+        "alias_id": alias_id,
+        "mailbox_id": mailbox_id,
+        "direction": "outbound",
+        # From is the address WE sent as (primary alias or the fallback relay
+        # sender) — NEVER the user's real email. to_addr is the single bound
+        # correspondent.
+        "from_addr": from_shown,
+        "from_name": "You",
+        "to_addr": relay_to,
+        "subject": parsed.get("subject") or "",
+        "received_at": received_at,
+        "spf": parsed.get("spf"),
+        "dkim": parsed.get("dkim"),
+        "dmarc": parsed.get("dmarc"),
+        "text_s3_key": text_s3_key,
+        "safe_html_s3_key": safe_html_s3_key,
+        "size_bytes": len((text or "").encode("utf-8")),
+        "part_count": parsed.get("part_count", 0),
+        "attachment_ids": [],
+        "read": True,           # the user's own reply is not "unread"
+        "is_phishing_reported": False,
+        "relayed": True,
+        "from_domain": parsed.get("from_domain"),
+        "x_jp_forwarded": parsed.get("x_jp_forwarded", False),
+        "x_jp_relayed": True,   # we relayed it out with the X-JP-Relayed marker
+        "created_at": received_at,
+    }
+    try:
+        _messages().insert_one(message_doc)
+    except DuplicateKeyError:
+        prior = _messages().find_one(
+            {"alias_id": alias_id, "provider_message_id": pmid},
+            {"_id": 0, "message_id": 1, "thread_id": 1},
+        ) or {}
+        return {"message_id": prior.get("message_id"),
+                "thread_id": prior.get("thread_id"), "deduplicated": True,
+                "stored": True}
+
+    snippet = " ".join((text or "").split())[:160]
+    _threads().update_one(
+        {"thread_id": thread_id, "user_email": user_email},
+        {
+            "$set": {"last_message_at": received_at, "updated_at": received_at,
+                     "snippet": snippet, "last_from": "You"},
+            "$inc": {"message_count": 1},
+        },
+    )
+    return {"message_id": message_id, "thread_id": thread_id, "deduplicated": False,
+            "stored": True}

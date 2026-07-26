@@ -173,6 +173,36 @@ def cloudflare_commit():
         logger.warning("mail-inbound commit: raw sha256 mismatch")
         return {"error": "sha256_mismatch"}, 422
 
+    # A REPLY-BOUND alias means this is the USER REPLYING from their own inbox —
+    # handle it as a privacy-preserving RELAY back to the single bound
+    # correspondent (never an open relay; every defense is fail-closed), NOT a
+    # normal store-as-inbound. The reply is stored as an OUTBOUND message in the
+    # same thread and is NEVER forwarded back to the user.
+    if token.get("kind") == "reply_bound":
+        relay_info = {
+            "user_email": token.get("user_email"),
+            "mailbox_id": token.get("mailbox_id"),
+            "alias_id": token.get("alias_id"),
+            "kind": "reply_bound",
+            "thread_id": token.get("thread_id"),
+            "correspondent_email": token.get("correspondent_email"),
+            "primary_alias": token.get("primary_alias"),
+        }
+        outcome = store.relay_reply(
+            relay_info,
+            token.get("envelope_from") or "",
+            raw_bytes,
+            token.get("message_id") or "",
+        )
+        # 2xx either way — the Worker's job (deliver the raw) is done; whether we
+        # relayed is our internal decision (a rejected/duplicate reply is not an
+        # error the Worker should retry).
+        return {
+            "ok": True,
+            "relayed": bool(outcome.get("relayed")),
+            "thread_id": token.get("thread_id"),
+        }, 200
+
     try:
         result = store.ingest_committed(
             alias_info=alias_info,
