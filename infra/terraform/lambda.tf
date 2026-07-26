@@ -99,6 +99,10 @@ resource "aws_lambda_function" "service" {
       # CREDENTIALS_KMS_KEY_ID above; a plain env var is correct, no SSM needed).
       APPLY_MAIL_BUCKET     = aws_s3_bucket.mail.bucket
       APPLY_MAIL_KMS_KEY_ID = aws_kms_key.mail.arn
+      # Outbound relay sender for forwarding a recruiter email to the user's real
+      # inbox — JobPilot-owned, verified in ZeptoMail (aspirely.me domain), NEVER
+      # the recruiter. Empty => forwarding stays inert.
+      MAIL_FORWARD_FROM = "notifications@aspirely.me"
       # Shared HMAC secret with the Cloudflare Worker's secret binding — the ONLY
       # secret this feature adds. SecureString at this SSM path; seed the SAME
       # value into the Worker via `wrangler secret put MAIL_INBOUND_HMAC_SECRET`
