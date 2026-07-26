@@ -94,7 +94,7 @@ resource "aws_lambda_function" "service" {
       # and staging smoke passes (spec §11/§12). The bucket + CMK below are now
       # provisioned in managed_mailbox.tf, so we wire them directly.
       APPLY_MAIL_DOMAIN     = "my-private-mail.com"
-      APPLY_MAILBOX_ENABLED = "false"
+      APPLY_MAILBOX_ENABLED = "true"
       # Non-secret store identifiers (key id is NOT a secret — same rationale as
       # CREDENTIALS_KMS_KEY_ID above; a plain env var is correct, no SSM needed).
       APPLY_MAIL_BUCKET     = aws_s3_bucket.mail.bucket
