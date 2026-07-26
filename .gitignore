@@ -48,3 +48,7 @@ app.log
 
 # taxonomy_report.py scratch cache
 scripts/.titles_cache.txt
+
+# Cloudflare Wrangler local cache
+.wrangler/
+**/.wrangler/
