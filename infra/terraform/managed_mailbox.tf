@@ -174,7 +174,11 @@ resource "aws_s3_bucket_policy" "mail_tls_only" {
 data "aws_iam_policy_document" "mail" {
   statement {
     sid       = "ManagedMailboxS3Objects"
-    actions   = ["s3:GetObject", "s3:PutObject"]
+    # DeleteObject is required so deleting a thread (DELETE /mailbox/threads/<id>)
+    # can purge the raw MIME + rendered text/html from S3, not just the Mongo
+    # metadata — otherwise the objects orphan (AccessDenied). Still object-level,
+    # mail/* prefix only; no ListBucket / bucket-wide actions.
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
     resources = ["${aws_s3_bucket.mail.arn}/mail/*"]
   }
 
