@@ -13,8 +13,13 @@ compatibility_date = "2025-01-01"
 # Base URL of the two-phase backend endpoints (spec §4). The Worker appends
 # /slot and /commit. Rides the already-routed /api/resume/* edge — no new edge
 # route required (spec §4/§12).
+# NOTE: target the DIRECT API Gateway endpoint, NOT the aspirely.me CloudFront
+# domain. CloudFront rewrites backend 4xx/5xx to the SPA index.html (200 text/html)
+# for client-side routing, which would corrupt the two-phase protocol (the Worker
+# would see 200 HTML instead of the real 403/404/JSON). The direct HTTP API URL
+# returns the real status codes + JSON. (terraform output: api_endpoint)
 [vars]
-MAIL_INBOUND_URL = "https://aspirely.me/api/resume/mail-inbound/cloudflare"
+MAIL_INBOUND_URL = "https://ibzxphe9fl.execute-api.us-east-1.amazonaws.com/api/resume/mail-inbound/cloudflare"
 
 # --- Secret (NEVER committed) ------------------------------------------------
 # MAIL_INBOUND_HMAC_SECRET is a Worker SECRET, not a var. Set it out-of-band and
