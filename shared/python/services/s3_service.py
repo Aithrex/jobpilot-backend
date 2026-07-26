@@ -30,8 +30,16 @@ class ResumeStorageService:
     def client(self):
         if self._client is None:
             import boto3
+            from botocore.config import Config
 
-            self._client = boto3.client("s3")
+            # SigV4 is REQUIRED for SSE-KMS presigned PUTs signed with temporary
+            # (assumed-role) credentials: the default SigV2 presign returns HTTP
+            # 400 on the KMS-encrypted mail bucket (the Worker's raw-MIME upload).
+            # SigV4 is the modern default and works for every S3 op, so forcing it
+            # globally is safe. region_name is picked up from AWS_REGION.
+            self._client = boto3.client(
+                "s3", config=Config(signature_version="s3v4")
+            )
         return self._client
 
     @property
