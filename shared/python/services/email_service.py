@@ -175,9 +175,11 @@ def _send_via_zeptomail(
         rt_name, rt_email = parseaddr(rt)
         payload["reply_to"] = [{"address": rt_email or rt, "name": rt_name or APP_NAME}]
     if headers:
-        # ZeptoMail forwards custom headers verbatim (used for the X-JP-Forwarded
-        # outbound loop marker). Best-effort: only string values.
-        payload["headers"] = {str(k): str(v) for k, v in headers.items()}
+        # ZeptoMail's custom-header field is `mime_headers` (NOT `headers` — a top-
+        # level `headers` key returns TM_3301 "extra key found ... target:[headers]"
+        # and drops the send). Used for the X-JP-Forwarded outbound loop marker.
+        # Best-effort: only string values.
+        payload["mime_headers"] = {str(k): str(v) for k, v in headers.items()}
 
     resp = requests.post(
         _zepto_url(),
