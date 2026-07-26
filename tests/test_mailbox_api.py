@@ -72,6 +72,10 @@ class FakeStorage:
     def generate_presigned_get(self, key, *, bucket=None, expiry=300):
         return f"https://s3.local/get/{key}?ttl={expiry}"
 
+    def delete_object(self, key, *, bucket=None):
+        self.objects.pop(key, None)
+        return True
+
 
 @pytest.fixture()
 def env(monkeypatch):
@@ -440,6 +444,46 @@ def test_report_phishing_flips_trust_and_flag(app):
 
 
 # ---------------------------------------------------------------------------
+# delete thread — owner-scoped hard delete of thread + messages + attachments
+# ---------------------------------------------------------------------------
+
+def test_delete_thread_removes_thread_messages_attachments(app, fake_s3):
+    res = _ingest(OWNER, "Harshith Manne", OWNER_ADDR, "pdf_attachment.eml", "<o-1@corp>")
+    tid, mid = res["thread_id"], res["message_id"]
+    assert _db().mail_messages.count_documents({"thread_id": tid}) == 1
+    assert _db().mail_attachments.count_documents({"message_id": mid}) >= 1
+    # Bodies exist in S3 before the delete.
+    assert fake_s3.objects, "expected stored S3 objects before delete"
+
+    resp = app.test_client().delete(
+        f"/api/resume/mailbox/threads/{tid}", headers=_hdr(app, OWNER)
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["deleted"]["messages"] == 1
+    assert body["deleted"]["attachments"] >= 1
+
+    # Everything is gone, owner-scoped.
+    assert _db().mail_threads.count_documents({"thread_id": tid}) == 0
+    assert _db().mail_messages.count_documents({"thread_id": tid}) == 0
+    assert _db().mail_attachments.count_documents({"message_id": mid}) == 0
+
+
+def test_delete_foreign_thread_is_404_and_deletes_nothing(app):
+    other = _ingest(OTHER, "Other Person", OTHER_ADDR, "pdf_attachment.eml", "<x-1@corp>")
+    mailbox.provision(OWNER, "Harshith Manne")
+    resp = app.test_client().delete(
+        f"/api/resume/mailbox/threads/{other['thread_id']}", headers=_hdr(app, OWNER)
+    )
+    assert resp.status_code == 404
+    assert resp.status_code != 401
+    # OTHER's thread + message untouched.
+    assert _db().mail_threads.count_documents({"thread_id": other["thread_id"]}) == 1
+    assert _db().mail_messages.count_documents({"thread_id": other["thread_id"]}) == 1
+
+
+# ---------------------------------------------------------------------------
 # reply — deferred (501, never 401)
 # ---------------------------------------------------------------------------
 
@@ -468,6 +512,7 @@ def test_reply_is_deferred_501(app):
     ("post", "/api/resume/mailbox/threads/thr_x/attach"),
     ("post", "/api/resume/mailbox/threads/thr_x/detach"),
     ("post", "/api/resume/mailbox/threads/thr_x/report-phishing"),
+    ("delete", "/api/resume/mailbox/threads/thr_x"),
     ("get", "/api/resume/mailbox/attachments/att_x"),
 ])
 def test_endpoints_require_jwt(app, method, path):

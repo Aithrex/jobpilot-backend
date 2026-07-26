@@ -1,27 +1,40 @@
-"""Managed Application Mailbox — SAFE forwarding (notify-to-original-inbox).
+"""Managed Application Mailbox — PLAIN FULL-CONTENT relay (Hide-My-Email style).
 
-This is the "user gets the rejection at their ORIGINAL email" half of the
-Greenhouse acceptance scenario (managed-mailbox-v1 §8.1 step 7). When an inbound
-message is durably stored by ``mail_store_service.ingest_committed`` and the
-commit route calls ``maybe_forward``, we send a SANITIZED notification to the
-user's verified original inbox — from a JobPilot-owned sender, never the
-recruiter.
+This is the "user gets the recruiter's message at their ORIGINAL inbox" half of
+the managed mailbox. When an inbound message is durably stored by
+``mail_store_service.ingest_committed`` and the commit route calls
+``maybe_forward``, we reconstruct and RELAY THE REAL EMAIL (like Apple Hide My
+Email / SimpleLogin) to the user's verified ``forward_to`` — from a JobPilot-
+owned sender, never spoofing the recruiter.
 
-What we send (the DEFAULT and only path here) is deliberately minimal and safe:
-  - the employer/company, the subject, and the deterministic status suggestion
-    (e.g. "looks like: Rejected"),
-  - a SECURE DEEP LINK to ``${FRONTEND_URL}/next/applications/<thread_id>`` (the
-    app auth-gates it; there is NO token in the link),
-  - NEVER the raw recruiter MIME/body, and NEVER any attachment.
+What we send (plain full-content relay):
+  - the ORIGINAL subject,
+  - the ALREADY-SANITIZED html body (remote images neutralized, scripts/forms
+    stripped at ingest) as the html part + the extracted text as the text part,
+  - a small banner + a compact "Manage in <app>" link
+    (``${FRONTEND_URL}/next/applications/<thread_id>``) so the body IS the real
+    message, not a redirect,
+  - a one-line note for CLEAN attachments (bytes are NOT relayed yet — follow-up).
+
+What we SKIP (message filter — ``should_forward``): system noise. OTP /
+verification / verify-or-confirm-your-email / activate-account / password-reset /
+magic-login-link mail is never relayed (during auto-apply an application OTP is
+captured by the EXECUTOR, not surfaced to the user).
 
 Hard rules (spec §0 D5 + the forwarding requirements):
   - Outbound goes through ``email_service.send_email`` (ZeptoMail), from
-    ``MAIL_FORWARD_FROM`` (JobPilot-owned, verified). From/Reply-To are NEVER the
-    recruiter's address — we do not spoof. We add ``X-JP-Forwarded: 1`` as an
+    ``MAIL_FORWARD_FROM`` (JobPilot-owned, verified) with a DISPLAY NAME derived
+    from the original sender. We NEVER spoof (the actual From address is ours).
+    Reply-To is the ORIGINAL sender so the user can reply from their inbox
+    (a privacy-preserving reply-relay via a thread-bound alias is the planned
+    follow-up — see ``reply_relay_stub``). We add ``X-JP-Forwarded: 1`` as an
     outbound loop marker.
   - Send ONLY when the mailbox is not paused AND forwarding_enabled AND
     forward_to_verified AND forward_to is present AND forward_to is not
-    suppressed.
+    suppressed. ``trust`` is a CORRELATION signal (it drives application STATUS),
+    NOT a forwarding gate — full content is relayed regardless of trust.
+    ``MAIL_FORWARD_UNVERIFIED_MODE=suppress`` is an optional kill-switch to
+    suppress everything unverified (default OFF = forward).
   - OPEN-RELAY / LOOP GUARD: never forward a message whose sender is our own
     ``APPLY_MAIL_DOMAIN`` or equals ``MAIL_FORWARD_FROM`` (self/loop), or that
     already carried ``X-JP-Forwarded`` on the way in.
@@ -40,9 +53,10 @@ from __future__ import annotations
 
 import html as _html
 import logging
+import re
 from datetime import datetime, timezone
 from email.utils import parseaddr
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from utils.config import _get_config_value, AppUrlsConfig
 from utils.db_connect import DBConnect
@@ -80,17 +94,18 @@ def _daily_cap() -> int:
 
 
 def _unverified_mode() -> str:
-    """How to forward an UNVERIFIED (uncorrelated) message (P1-FWD-TRUST / spec
-    §8/D8):
+    """Optional kill-switch for UNVERIFIED (uncorrelated) mail:
 
-      - ``generic`` (DEFAULT): still alert the user, but with a subject-less,
-        employer-less GENERIC notice — never surface attacker-controlled text.
-      - ``suppress``: send nothing for unverified mail.
+      - ``forward`` (DEFAULT): relay full content for ALL non-noise mail,
+        regardless of trust. ``trust`` is a correlation signal that drives the
+        application STATUS suggestion — it is NOT a forwarding gate. This is the
+        plain full-content relay the product wants.
+      - ``suppress``: send NOTHING for unverified mail (opt-in lockdown for a
+        deployment that wants to relay only correlated recruiter mail).
 
-    Anything other than ``suppress`` (incl. unset) is ``generic`` so the user is
-    still safely alerted by default."""
+    Anything other than ``suppress`` (incl. unset) is ``forward``."""
     raw = (_get_config_value("MAIL_FORWARD_UNVERIFIED_MODE", "") or "").strip().lower()
-    return "suppress" if raw == "suppress" else "generic"
+    return "suppress" if raw == "suppress" else "forward"
 
 
 def _now() -> datetime:
@@ -130,114 +145,183 @@ def _within_daily_cap(user_email: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Notification builder (sanitized — never the raw recruiter body)
+# Message filter — forward MEANINGFUL mail, skip system noise
 # ---------------------------------------------------------------------------
 
 def _esc(value: Any) -> str:
     return _html.escape(str(value or ""), quote=True)
 
 
-def _status_label(message: Dict[str, Any], thread: Dict[str, Any]) -> Optional[str]:
-    """Best available deterministic status suggestion, if any: the message's
-    classification first, then the thread's status_suggestion. Returns a Title
-    Cased label (e.g. ``Rejected``) or None."""
-    classification = message.get("classification") or {}
-    suggested = classification.get("status") if isinstance(classification, dict) else None
-    if not suggested:
-        sugg = thread.get("status_suggestion") or {}
-        if isinstance(sugg, dict):
-            suggested = sugg.get("suggested")
-    if not suggested:
-        return None
-    return str(suggested).replace("_", " ").strip().title() or None
+# Deterministic system-noise detectors. OTP / verification / verify-or-confirm-
+# your-email / activate-account / password-reset / magic-login-link mail is
+# transactional and the user did not ask us to relay it. We match on the subject
+# + extracted text; ANY hit -> noise (skip). Ordered list of standalone signals.
+_NOISE_PATTERNS = [
+    re.compile(r"\bone[\s\-]?time\s+(?:code|passcode|password|pin|link|token)\b", re.I),
+    re.compile(r"\b(?:verification|security|login|log[\s\-]?in|sign[\s\-]?in|"
+               r"access|auth(?:entication)?|confirmation)\s+code\b", re.I),
+    re.compile(r"\bpass\s?code\b", re.I),
+    re.compile(r"\bverify\s+your\s+(?:e[\s\-]?mail(?:\s+address)?|account|identity|"
+               r"sign[\s\-]?in|login)\b", re.I),
+    re.compile(r"\bconfirm(?:ing)?\s+your\s+(?:e[\s\-]?mail(?:\s+address)?|account)\b", re.I),
+    re.compile(r"\bactivate\s+your\s+account\b", re.I),
+    re.compile(r"\b(?:reset|set|change)\s+your\s+password\b", re.I),
+    re.compile(r"\bpassword\s+reset\b", re.I),
+    re.compile(r"\b(?:sign[\s\-]?in|log[\s\-]?in|magic|one[\s\-]?time)\s+link\b", re.I),
+    re.compile(r"\byour\s+(?:otp|one[\s\-]?time\s+password)\b", re.I),
+    re.compile(r"\bverification\s+(?:code|link|email|required)\b", re.I),
+]
+
+# A standalone 4-8 digit code counts as noise ONLY alongside an OTP-ish context
+# word — so a salary figure or "500 applicants" in a recruiter email is never
+# mistaken for a one-time code.
+_OTP_CONTEXT = re.compile(
+    r"\b(?:code|otp|passcode|pin|verify|verification|confirm|authenticate|2fa|mfa)\b", re.I
+)
+_STANDALONE_CODE = re.compile(r"(?<![\w])\d{4,8}(?![\w])")
 
 
-def build_notification(message: Dict[str, Any], thread: Dict[str, Any], deep_link: str) -> Dict[str, str]:
-    """Build the sanitized forward notification (subject/html/text). All
-    recruiter-derived text (employer, subject) is HTML-escaped; the raw body is
-    NEVER included."""
-    employer = message.get("from_name") or message.get("from_domain") or "the employer"
-    subject_in = message.get("subject") or thread.get("subject") or "your application"
-    status = _status_label(message, thread)
+def should_forward(message: Dict[str, Any]) -> Tuple[bool, str]:
+    """Decide whether a stored message is MEANINGFUL mail to relay to the user's
+    real inbox, or SYSTEM NOISE to skip.
 
-    if status:
-        subject = f"Update on your application — looks like: {status}"
-        headline = f"Update on your application — looks like: {status}"
+    Returns ``(forward, category)``:
+      * ``(False, "system_noise")`` — an OTP / verification code / verify-or-
+        confirm-your-email / activate-account / password-reset / magic-login-link
+        email.  ┌─ OTP-CAPTURE HOOK ─┐  During auto-apply an APPLICATION OTP is
+        meant for the EXECUTOR (application-OTP capture is a SEPARATE feature),
+        never the user's inbox; here we simply DO NOT forward system_noise.
+      * ``(True, "application")`` — everything else: recruiter replies,
+        application received / confirmation, interview, assessment, offer,
+        rejection, general correspondence.
+
+    Deterministic (regex on subject + already-sanitized text). ``message`` is a
+    plain dict supplying ``subject`` and ``text`` — both are treated as DATA."""
+    subject = str(message.get("subject") or "")
+    text = str(message.get("text") or "")
+    blob = f"{subject}\n{text}"
+
+    for pat in _NOISE_PATTERNS:
+        if pat.search(blob):
+            return False, "system_noise"
+    if _OTP_CONTEXT.search(blob) and _STANDALONE_CODE.search(blob):
+        return False, "system_noise"
+
+    # AMBIGUOUS-CASE HOOK: a FLASH classify-only pass (closed schema, no state
+    # mutation — see ``mail_ingress_service.classify``) could refine borderline
+    # cases here. Deterministic-only for now keeps the hot path offline + cheap.
+    return True, "application"
+
+
+# ---------------------------------------------------------------------------
+# Full-content relay builders
+# ---------------------------------------------------------------------------
+
+def _fetch_bodies(message: Dict[str, Any]) -> Tuple[str, str]:
+    """Fetch the SANITIZED text + html bodies from S3 (the SAME objects the read
+    API serves via ``mail_store_service._message_view``). Best-effort: a
+    missing/failed fetch yields empty strings so the forward degrades to a short
+    notice rather than crashing the commit path."""
+    from services import mail_store_service as store
+    try:
+        storage = store.get_storage_service()
+        bucket = store._apply_mail_bucket()
+    except Exception:  # pragma: no cover - defensive
+        return "", ""
+    text = ""
+    tk = message.get("text_s3_key")
+    if tk:
+        try:
+            text = storage.get_object_bytes(tk, bucket=bucket).decode("utf-8", "replace")
+        except Exception:
+            text = ""
+    safe_html = ""
+    hk = message.get("safe_html_s3_key")
+    if hk:
+        try:
+            safe_html = storage.get_object_bytes(hk, bucket=bucket).decode("utf-8", "replace")
+        except Exception:
+            safe_html = ""
+    return text, safe_html
+
+
+def _clean_attachment_count(message_id: str) -> int:
+    """Count CLEAN (downloadable) attachments on a message. Suspicious/blocked
+    ones are NEVER referenced in the forward."""
+    try:
+        return int(_db().mail_attachments.count_documents(
+            {"message_id": message_id, "scan_verdict": "clean"}
+        ))
+    except Exception:  # pragma: no cover - defensive
+        return 0
+
+
+def _forward_display_name(message: Dict[str, Any]) -> str:
+    """Display name for the forwarded From: the ORIGINAL sender, tagged so the
+    user sees who really wrote it while the ACTUAL From address stays
+    ``MAIL_FORWARD_FROM`` (we never spoof). Sanitized to a single header-safe
+    token (no CR/LF/quotes/angle brackets — header-injection defense)."""
+    original = str(message.get("from_name") or message.get("from_addr") or "").strip()
+    original = InputSanitizer.sanitize_string(original, 120)
+    original = re.sub(r'[\r\n"<>]', "", original).strip()
+    if not original:
+        original = "A recruiter"
+    return f"{original} (via My Private Mail)"
+
+
+def build_forward(
+    message: Dict[str, Any],
+    thread: Dict[str, Any],
+    *,
+    text: str,
+    safe_html: str,
+    manage_link: str,
+    alias: str,
+    clean_attachments: int,
+) -> Dict[str, str]:
+    """Reconstruct the REAL email to relay: the ORIGINAL subject, the sanitized
+    html body + extracted text, and a small banner with a compact "Manage in
+    <app>" link. The body IS the real message — the banner is the only thing we
+    add. Everything WE inject (alias / link / attachment note) is escaped; the
+    recruiter body was already sanitized at ingest."""
+    subject = message.get("subject") or (thread or {}).get("subject") or "New message"
+
+    att_html = ""
+    att_text = ""
+    if clean_attachments:
+        att_html = (
+            f'<div style="margin-top:6px">{int(clean_attachments)} attachment(s) '
+            f'available in your {_esc(APP_NAME)} inbox.</div>'
+        )
+        att_text = (
+            f"\n{int(clean_attachments)} attachment(s) available in your {APP_NAME} inbox."
+        )
+
+    banner_html = (
+        '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
+        'font-size:12px;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;'
+        'border-radius:8px;padding:10px 12px;margin:0 0 14px">'
+        f'Forwarded by My Private Mail for {_esc(alias)}. '
+        f'<a href="{_esc(manage_link)}" style="color:#4f46e5;text-decoration:none">'
+        f'Manage in {_esc(APP_NAME)}</a>.'
+        f'{att_html}'
+        '</div>'
+    )
+
+    if safe_html:
+        body_html = safe_html
+    elif text:
+        body_html = f'<pre style="white-space:pre-wrap;font-family:inherit">{_esc(text)}</pre>'
     else:
-        subject = "New message about your application"
-        headline = "New message about your application"
+        body_html = '<p>(This message had no readable text content — open it in the app.)</p>'
+    html = banner_html + body_html
 
-    body_html = (
-        '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
-        'max-width:520px;margin:auto;color:#0f172a">'
-        f'<h2 style="margin:0 0 12px">{_esc(headline)}</h2>'
-        f'<p style="color:#444;line-height:1.6">You have a new message from '
-        f'<strong>{_esc(employer)}</strong> about a role you applied to.</p>'
-        f'<p style="color:#444;line-height:1.6;margin:8px 0"><strong>Subject:</strong> '
-        f'{_esc(subject_in)}</p>'
-        + (f'<p style="color:#444;line-height:1.6"><strong>Looks like:</strong> '
-           f'{_esc(status)}</p>' if status else '')
-        + '<p style="margin:24px 0">'
-        f'<a href="{_esc(deep_link)}" style="background:#4f46e5;color:#fff;padding:12px 20px;'
-        'border-radius:8px;text-decoration:none;display:inline-block;font-weight:600">'
-        'Open in ' + _esc(APP_NAME) + '</a></p>'
-        '<p style="color:#888;font-size:13px;line-height:1.6">For your security we do not '
-        'include the full message here — open it in the app to read and reply.</p>'
-        '</div>'
+    footer_text = (
+        f"\n\n--\nForwarded by My Private Mail for {alias}. "
+        f"Manage in {APP_NAME}: {manage_link}{att_text}"
     )
-
-    text_lines = [
-        headline,
-        "",
-        f"You have a new message from {employer} about a role you applied to.",
-        f"Subject: {subject_in}",
-    ]
-    if status:
-        text_lines.append(f"Looks like: {status}")
-    text_lines += [
-        "",
-        f"Open it in {APP_NAME}: {deep_link}",
-        "",
-        "For your security we do not include the full message here — open it in "
-        "the app to read and reply.",
-    ]
-    return {"subject": subject, "html": body_html, "text": "\n".join(text_lines)}
-
-
-def build_generic_notification(deep_link: str) -> Dict[str, str]:
-    """Build the GENERIC forward notification for an UNVERIFIED (uncorrelated,
-    possibly guessable-alias-spoofed) message (P1-FWD-TRUST / spec §8/D8).
-
-    It alerts the user that a new message arrived and links them into the app —
-    but includes NO attacker-controlled content: no sender/employer, no subject,
-    no body, no status. The ONLY variable is the secure in-app deep link (which
-    the app auth-gates). ``deep_link`` is HTML-escaped by the caller/here."""
-    headline = f"You have a new message in your {APP_NAME} inbox"
-
-    body_html = (
-        '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
-        'max-width:520px;margin:auto;color:#0f172a">'
-        f'<h2 style="margin:0 0 12px">{_esc(headline)}</h2>'
-        '<p style="color:#444;line-height:1.6">A new message arrived at your '
-        f'{_esc(APP_NAME)} application inbox. For your security we have not included '
-        'any of its content here — open it in the app to review it safely.</p>'
-        '<p style="margin:24px 0">'
-        f'<a href="{_esc(deep_link)}" style="background:#4f46e5;color:#fff;padding:12px 20px;'
-        'border-radius:8px;text-decoration:none;display:inline-block;font-weight:600">'
-        'Open in ' + _esc(APP_NAME) + '</a></p>'
-        '</div>'
-    )
-
-    text_lines = [
-        headline,
-        "",
-        f"A new message arrived at your {APP_NAME} application inbox. For your "
-        "security we have not included any of its content here — open it in the "
-        "app to review it safely.",
-        "",
-        f"Open it in {APP_NAME}: {deep_link}",
-    ]
-    return {"subject": headline, "html": body_html, "text": "\n".join(text_lines)}
+    body_text = text or "(This message had no readable text content — open it in the app.)"
+    return {"subject": subject, "html": html, "text": body_text + footer_text}
 
 
 # ---------------------------------------------------------------------------
@@ -316,19 +400,24 @@ def forward_notification(message_doc: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:  # pragma: no cover - best effort
         pass
 
-    # --- Trust gate (P1-FWD-TRUST / spec §8/D8). -----------------------------
-    # A message is FULLY UNTRUSTED unless correlation upgraded it to "verified"
-    # (domain+timing matched a real submitted application). An UNVERIFIED
-    # (uncorrelated, possibly guessable-alias-spoofed) message must NEVER push an
-    # attacker-controlled Subject/employer/body into the user's real inbox
-    # (T15). Fail-safe: anything that is not exactly "verified" is untrusted.
-    #   verified -> full sanitized notification (subject/employer + deep link);
-    #   unverified + generic (default) -> a subject-less GENERIC "new message"
-    #                notice (still alerts the user, safely);
-    #   unverified + suppress -> send nothing.
-    # We use the MESSAGE's own trust (per-message correlation), not the thread's:
-    # a spoofed message that lands in an otherwise-verified thread must not
-    # inherit that thread's trust.
+    # --- Message filter: relay MEANINGFUL mail, skip system noise. -----------
+    # Fetch the sanitized bodies (same S3 objects the read API serves) so we can
+    # (a) run the deterministic noise filter on the REAL text and (b) relay the
+    # real message. A body-fetch failure degrades to a short notice (never crash).
+    text, safe_html = _fetch_bodies(message)
+
+    forward_ok, category = should_forward({"subject": message.get("subject"), "text": text})
+    if not forward_ok:
+        # OTP / verification / magic-login / password-reset — never relayed.
+        # (During auto-apply an application OTP is captured by the executor.)
+        return _skip(category, thread_id)
+
+    # --- Trust is a CORRELATION signal, NOT a forwarding gate. ----------------
+    # Full content is relayed for ALL non-noise mail regardless of trust (trust
+    # still drives the application STATUS suggestion elsewhere). The optional
+    # MAIL_FORWARD_UNVERIFIED_MODE=suppress kill-switch (default OFF = forward)
+    # lets a deployment relay only correlated recruiter mail. Fail-safe: anything
+    # not exactly "verified" is unverified.
     is_verified = str(message.get("trust") or "").strip().lower() == "verified"
     if not is_verified and _unverified_mode() == "suppress":
         # Skip BEFORE spending rate budget — a suppressed message never sends.
@@ -338,18 +427,31 @@ def forward_notification(message_doc: Dict[str, Any]) -> Dict[str, Any]:
     if not _within_daily_cap(user_email):
         return _skip("rate_limited", thread_id)
 
-    # --- Build + send the sanitized notification. ----------------------------
+    # --- Reconstruct + send the REAL email (plain full-content relay). --------
     thread = _db().mail_threads.find_one({"thread_id": thread_id}) or {}
     base = AppUrlsConfig.FRONTEND_URL
     safe_thread = InputSanitizer.sanitize_string(str(thread_id or ""), 64)
-    deep_link = f"{base}/next/applications/{safe_thread}"
+    manage_link = f"{base}/next/applications/{safe_thread}"
+    alias = str(mb.get("address") or message.get("to_addr") or "your managed address")
+    clean_attachments = _clean_attachment_count(message_id)
 
-    # Verified -> full sanitized notification; unverified -> generic (no
-    # attacker-controlled subject/employer/body, deep link only).
-    if is_verified:
-        tmpl = build_notification(message, thread, deep_link)
-    else:
-        tmpl = build_generic_notification(deep_link)
+    tmpl = build_forward(
+        message, thread,
+        text=text, safe_html=safe_html,
+        manage_link=manage_link, alias=alias,
+        clean_attachments=clean_attachments,
+    )
+
+    # From: JobPilot-owned MAIL_FORWARD_FROM with a display name derived from the
+    # ORIGINAL sender — we NEVER spoof (the actual From address is ours).
+    display = _forward_display_name(message)
+    from_header = f"{display} <{forward_from_email}>" if forward_from_email else forward_from
+
+    # Reply-To: the ORIGINAL sender so the user can reply straight from their
+    # inbox. FOLLOW-UP: a privacy-preserving reply-relay via a thread-bound alias
+    # (so the user's real address is never exposed to the recruiter) is the
+    # planned next step — see ``reply_relay_stub``.
+    reply_to = str(message.get("from_addr") or "").strip()
 
     try:
         from services import email_service
@@ -358,15 +460,15 @@ def forward_notification(message_doc: Dict[str, Any]) -> Dict[str, Any]:
             tmpl["subject"],
             tmpl["html"],
             tmpl["text"],
-            from_addr=forward_from,          # JobPilot-owned, NEVER the recruiter
-            reply_to="",                     # no Reply-To to the recruiter
-            headers={"X-JP-Forwarded": "1"},  # outbound loop marker
+            from_addr=from_header,             # JobPilot-owned sender + via display name
+            reply_to=reply_to,                 # original sender (reply-relay is a follow-up)
+            headers={"X-JP-Forwarded": "1"},   # outbound loop marker
         )
     except Exception as e:  # pragma: no cover - send is best-effort
         logger.warning("mail-forward: send raised: %s thread=%s", type(e).__name__, thread_id)
         return {"sent": False, "reason": "send_error"}
 
-    logger.info("mail-forward: forwarded=%s thread=%s", bool(ok), thread_id)
+    logger.info("mail-forward: forwarded=%s category=%s thread=%s", bool(ok), category, thread_id)
     return {"sent": bool(ok), "reason": "sent" if ok else "send_failed"}
 
 

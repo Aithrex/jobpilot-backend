@@ -1,15 +1,17 @@
-"""Managed Application Mailbox — SAFE forwarding (notify-to-original-inbox).
+"""Managed Application Mailbox — PLAIN full-content forwarding to the user inbox.
 
 The "user gets the rejection at their ORIGINAL email" half of the Greenhouse
-acceptance scenario (managed-mailbox-v1 §8.1 step 7). Fully offline: Mongo is
-mongomock (conftest/_vg_support), S3 is a FakeStorage, and ``email_service.send_email``
-is monkeypatched to CAPTURE every send (no ZeptoMail/SES/network). We assert:
+acceptance scenario (managed-mailbox-v1 §8.1 step 7), redesigned as a Hide-My-
+Email-style relay. Fully offline: Mongo is mongomock (conftest/_vg_support), S3
+is a FakeStorage, and ``email_service.send_email`` is monkeypatched to CAPTURE
+every send (no ZeptoMail/SES/network). We assert:
 
   * a forward is sent ONLY when enabled + verified + not-paused + not-suppressed,
     and each gate INDIVIDUALLY blocks it;
-  * the sender is MAIL_FORWARD_FROM and From/Reply-To is NEVER the recruiter;
-  * the body is the sanitized notification (no raw recruiter body) and carries
-    the ``/next/applications/<thread_id>`` deep link;
+  * From = MAIL_FORWARD_FROM with a "(via My Private Mail)" display name (never
+    the recruiter — no spoof); Reply-To = the ORIGINAL sender;
+  * the body is the REAL sanitized message (full content) + a compact
+    ``/next/applications/<thread_id>`` manage link — NOT the retired generic notice;
   * the open-relay / loop guards (own domain / self / X-JP-Forwarded) block;
   * the per-user daily rate cap skips the overflow;
   * the verification mint/confirm flow, its OLD-destination + IDOR rejections,
@@ -62,10 +64,19 @@ class FakeStorage:
         return key
 
     def get_object_bytes(self, key, *, bucket=None):
+        if key not in self.objects:
+            raise KeyError(key)
         return self.objects[key]
 
     def generate_presigned_put(self, key, *, bucket=None, content_type=None, kms_key_id=None, expiry=900):
         return {"url": f"https://s3.local/{key}", "headers": {}}
+
+    def generate_presigned_get(self, key, *, bucket=None, expiry=300):
+        return f"https://s3.local/get/{key}?ttl={expiry}"
+
+    def delete_object(self, key, *, bucket=None):
+        self.objects.pop(key, None)
+        return True
 
 
 @pytest.fixture()
@@ -81,6 +92,10 @@ def env(monkeypatch):
         db[c].delete_many({})
     mailbox.ensure_indexes()
     store.ensure_indexes()
+    # Patch S3 so seeded messages can persist (and the relay can re-read) bodies.
+    fake = FakeStorage()
+    import services.s3_service as s3
+    monkeypatch.setattr(s3, "get_storage_service", lambda: fake)
     return monkeypatch
 
 
@@ -119,18 +134,29 @@ def _enable_forwarding(*, verified=True, paused=False, forward_to=FWD_TO, enable
 
 def _seed_message(*, from_addr="no-reply@greenhouse.io", from_domain="greenhouse.io",
                   x_jp_forwarded=False, status="rejected", subject="Update on your application",
-                  user_email=OWNER, trust="verified"):
+                  user_email=OWNER, trust="verified",
+                  text="Thank you for applying. After careful review we will not be moving forward.",
+                  safe_html="<p>Thank you for applying to <b>Acme</b>.</p>"):
     # Ingested messages ALWAYS carry a trust verdict (correlate sets it); default
-    # to "verified" here so these full-notification tests model a correlated
-    # message. The P1-FWD-TRUST gate is exercised in test_mail_security_controls.
+    # to "verified" here. The plain full-content relay re-reads the sanitized
+    # bodies from S3, so we persist them to the patched FakeStorage and record the
+    # keys on the message (exactly as ingest_committed would).
     mid = "msg_" + secrets.token_hex(8)
     tid = "thr_" + secrets.token_hex(8)
+    bucket = store._apply_mail_bucket()
+    storage = store.get_storage_service()
+    text_key = f"mail/text/seed/{mid}.txt"
+    html_key = f"mail/html/seed/{mid}.html" if safe_html else None
+    storage.put_object_bytes(text_key, (text or "").encode("utf-8"), bucket=bucket)
+    if html_key:
+        storage.put_object_bytes(html_key, safe_html.encode("utf-8"), bucket=bucket)
     _db().mail_messages.insert_one({
         "message_id": mid, "provider_message_id": "pm_" + secrets.token_hex(6),
         "thread_id": tid, "user_email": user_email,
         "alias_id": "alias_x", "direction": "inbound",
         "from_addr": from_addr, "from_name": "Greenhouse", "from_domain": from_domain,
-        "subject": subject, "trust": trust,
+        "to_addr": ALIAS_ADDR, "subject": subject, "trust": trust,
+        "text_s3_key": text_key, "safe_html_s3_key": html_key,
         "classification": {"status": status} if status else None,
         "x_jp_forwarded": x_jp_forwarded,
     })
@@ -142,7 +168,7 @@ def _seed_message(*, from_addr="no-reply@greenhouse.io", from_domain="greenhouse
 
 
 # ---------------------------------------------------------------------------
-# Happy path — sent + sender + sanitized body + deep link
+# Happy path — plain full-content relay (real subject/body, our From, reply-to)
 # ---------------------------------------------------------------------------
 
 def test_forward_sent_when_all_gates_pass(env, sent):
@@ -154,26 +180,27 @@ def test_forward_sent_when_all_gates_pass(env, sent):
     assert len(sent) == 1
     call = sent[0]
     assert call["to"] == FWD_TO
-    # Sender is MAIL_FORWARD_FROM; From/Reply-To is NEVER the recruiter.
-    assert call["from_addr"] == FORWARD_FROM
+    # From = MAIL_FORWARD_FROM (JobPilot-owned) + a "(via My Private Mail)"
+    # display name; the recruiter address is NEVER the From (no spoof).
+    assert FORWARD_FROM in call["from_addr"]
+    assert "(via My Private Mail)" in call["from_addr"]
     assert "greenhouse.io" not in (call["from_addr"] or "")
-    assert "greenhouse.io" not in (call["reply_to"] or "")
+    # Reply-To = the ORIGINAL sender so the user can reply from their inbox.
+    assert call["reply_to"] == "no-reply@greenhouse.io"
     # Outbound loop marker present.
     assert call["headers"] == {"X-JP-Forwarded": "1"}
-    # Deterministic status suggestion surfaced.
-    assert "Rejected" in call["subject"]
-    # Secure deep link (no token) into the app.
+    # ORIGINAL subject preserved (not a generic notice).
+    assert call["subject"] == "Update on your application"
+    # The REAL body is delivered (full content) + a compact manage-in-app link.
+    assert "Thank you for applying" in call["html"]
+    assert "moving forward" in call["text"].lower()
     deep = f"{FRONTEND}/next/applications/{res['thread_id']}"
     assert deep in call["html"]
     assert deep in call["text"]
 
 
-def test_forward_body_is_sanitized_notification_not_raw(env, sent, monkeypatch):
-    # Full pipeline: ingest a real Greenhouse rejection to S3, then forward.
-    fake = FakeStorage()
-    import services.s3_service as s3
-    monkeypatch.setattr(s3, "get_storage_service", lambda: fake)
-
+def test_forward_body_is_full_real_content_not_generic(env, sent):
+    # Full pipeline: ingest a real Greenhouse rejection to S3, then relay it.
     _enable_forwarding()
     _db().tailoring_records.insert_one({
         "record_id": "rec-1", "user_email": OWNER,
@@ -192,12 +219,15 @@ def test_forward_body_is_sanitized_notification_not_raw(env, sent, monkeypatch):
     assert len(sent) == 1
     html = sent[0]["html"]
     text = sent[0]["text"]
-    # The RAW recruiter body is never included in the notification.
-    assert "careful review" not in html.lower()
-    assert "careful review" not in text.lower()
-    assert "moving forward" not in html.lower()
-    # Only the safe surface + deep link.
+    # The REAL recruiter body IS delivered (plain full-content relay).
+    blob = (html + text).lower()
+    assert "careful review" in blob
+    assert "moving forward" in blob
+    # ORIGINAL subject + compact manage link (body IS the message, not a redirect).
+    assert sent[0]["subject"] == "Update on your application to Acme"
     assert f"{FRONTEND}/next/applications/{res['thread_id']}" in html
+    # NOT the retired generic notice.
+    assert "we do not include the full message" not in blob
 
 
 # ---------------------------------------------------------------------------

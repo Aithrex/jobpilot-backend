@@ -9,12 +9,14 @@ Two controls from ``docs/security/auto-apply-audit.md``:
     replay (same provider_message_id, already stored) does NOT consume budget;
     the per-sender-domain cap trips independently of the per-alias caps.
 
-  * P1-FWD-TRUST — the forwarding trust gate. A VERIFIED (correlated) message
-    forwards the full sanitized notification (subject/employer + deep link); an
-    UNVERIFIED (uncorrelated, possibly guessable-alias-spoofed) message forwards
-    a GENERIC notice with NO attacker-controlled subject/employer/body (asserted
-    absent) but still the secure deep link; the suppress toggle honors "send
-    nothing".
+  * P1-FWD-TRUST — trust is DECOUPLED from forwarding. The mailbox is a plain
+    full-content relay: BOTH verified (correlated) AND unverified (uncorrelated)
+    mail forward the REAL message (original subject + sanitized body), from
+    MAIL_FORWARD_FROM (never spoofing) with Reply-To = the original sender. Trust
+    is retained only as the correlation signal for application STATUS — it never
+    downgrades or blocks a forward. The optional MAIL_FORWARD_UNVERIFIED_MODE=
+    suppress kill-switch still honors "send nothing" for unverified mail; the
+    loop / suppression / rate guards still hold.
 
 Both are fully offline (no AWS, no Bedrock, no network); ``email_service.send_email``
 is captured.
@@ -239,6 +241,9 @@ def env(monkeypatch):
         db[c].delete_many({})
     mailbox.ensure_indexes()
     store.ensure_indexes()
+    fake = FakeStorage()
+    import services.s3_service as s3
+    monkeypatch.setattr(s3, "get_storage_service", lambda: fake)
     return monkeypatch
 
 
@@ -262,20 +267,28 @@ def _enable_forwarding():
     _db().managed_mailboxes.update_one({"user_email": OWNER}, {"$set": {"forward_to_verified": True}})
 
 
-# Attacker-controlled strings a spoofed recruiter would try to smuggle in.
-EVIL_SUBJECT = "URGENT wire transfer to attacker@evil.example NOW"
-EVIL_EMPLOYER = "Evil Phishing Corp"
+RECRUITER_SUBJECT = "Update on your application to Acme"
+RECRUITER_BODY = "We would like to invite you to interview. Please pick a slot."
 
 
-def _seed(*, trust, subject=EVIL_SUBJECT, from_name=EVIL_EMPLOYER, status="rejected"):
+def _seed(*, trust, subject=RECRUITER_SUBJECT, from_name="Acme Recruiting",
+          text=RECRUITER_BODY, safe_html="<p>Interview invitation.</p>", status="rejected"):
     mid = "msg_" + secrets.token_hex(8)
     tid = "thr_" + secrets.token_hex(8)
+    bucket = store._apply_mail_bucket()
+    storage = store.get_storage_service()
+    text_key = f"mail/text/seed/{mid}.txt"
+    html_key = f"mail/html/seed/{mid}.html" if safe_html else None
+    storage.put_object_bytes(text_key, (text or "").encode("utf-8"), bucket=bucket)
+    if html_key:
+        storage.put_object_bytes(html_key, safe_html.encode("utf-8"), bucket=bucket)
     _db().mail_messages.insert_one({
         "message_id": mid, "provider_message_id": "pm_" + secrets.token_hex(6),
         "thread_id": tid, "user_email": OWNER, "alias_id": "alias_x",
         "direction": "inbound", "from_addr": "no-reply@corp.example",
         "from_name": from_name, "from_domain": "corp.example",
-        "subject": subject, "trust": trust,
+        "to_addr": OWNER_ADDR, "subject": subject, "trust": trust,
+        "text_s3_key": text_key, "safe_html_s3_key": html_key,
         "classification": {"status": status} if status else None,
         "x_jp_forwarded": False,
     })
@@ -287,39 +300,36 @@ def _seed(*, trust, subject=EVIL_SUBJECT, from_name=EVIL_EMPLOYER, status="rejec
     return {"thread_id": tid, "message_id": mid, "deduplicated": False}
 
 
-def test_verified_message_forwards_full_subject_and_employer(env, sent):
+def test_verified_message_relays_full_content(env, sent):
     _enable_forwarding()
-    res = _seed(trust="verified", subject="Update on your application", from_name="Greenhouse")
+    res = _seed(trust="verified")
     out = fwd.forward_notification(res)
 
     assert out == {"sent": True, "reason": "sent"}
     call = sent[0]
-    # Full sanitized notification: status + employer + subject surfaced.
-    assert "Rejected" in call["subject"]
-    assert "Greenhouse" in call["html"]
-    assert "Update on your application" in call["html"]
-    # Secure deep link present.
+    # Plain full-content relay: ORIGINAL subject + real body, our From, reply-to.
+    assert call["subject"] == RECRUITER_SUBJECT
+    assert "invite you to interview" in call["text"]
+    assert FORWARD_FROM in call["from_addr"]
+    assert call["reply_to"] == "no-reply@corp.example"
+    # Compact manage link still present (the body IS the message, not a redirect).
     deep = f"{FRONTEND}/next/applications/{res['thread_id']}"
     assert deep in call["html"] and deep in call["text"]
 
 
-def test_unverified_message_forwards_generic_without_untrusted_subject(env, sent):
+def test_unverified_message_still_relays_full_content(env, sent):
+    # Trust is DECOUPLED: unverified mail forwards the SAME full content — no
+    # downgrade to a generic notice (the product wants the real message).
     _enable_forwarding()
-    res = _seed(trust="unverified")               # default mode = generic
+    res = _seed(trust="unverified")
     out = fwd.forward_notification(res)
 
     assert out == {"sent": True, "reason": "sent"}
     call = sent[0]
-    # The attacker-controlled subject/employer are ABSENT from every outbound
-    # field — nothing untrusted reaches the user's real inbox.
-    for field in (call["subject"], call["html"], call["text"]):
-        assert EVIL_SUBJECT not in field
-        assert EVIL_EMPLOYER not in field
-        assert "wire transfer" not in field.lower()
-    # It is still a real alert with the secure in-app deep link.
-    deep = f"{FRONTEND}/next/applications/{res['thread_id']}"
-    assert deep in call["html"] and deep in call["text"]
-    assert "new message" in call["subject"].lower()
+    assert call["subject"] == RECRUITER_SUBJECT
+    assert "invite you to interview" in call["text"]
+    assert FORWARD_FROM in call["from_addr"]
+    assert call["reply_to"] == "no-reply@corp.example"
 
 
 def test_unverified_suppress_toggle_sends_nothing(env, sent):
@@ -331,22 +341,23 @@ def test_unverified_suppress_toggle_sends_nothing(env, sent):
 
 
 def test_verified_still_full_under_suppress_mode(env, sent):
-    # The suppress toggle only gates UNVERIFIED mail; verified still forwards.
+    # The suppress kill-switch only gates UNVERIFIED mail; verified still forwards.
     env.setenv("MAIL_FORWARD_UNVERIFIED_MODE", "suppress")
     _enable_forwarding()
-    res = _seed(trust="verified", subject="Update on your application", from_name="Greenhouse")
+    res = _seed(trust="verified")
     out = fwd.forward_notification(res)
     assert out == {"sent": True, "reason": "sent"}
-    assert "Update on your application" in sent[0]["html"]
+    assert sent[0]["subject"] == RECRUITER_SUBJECT
 
 
-def test_missing_trust_is_treated_as_unverified(env, sent):
-    # Fail-safe: a message with no/blank trust verdict is NOT treated as verified.
+def test_missing_trust_still_relays_full_content(env, sent):
+    # Fail-safe: a blank trust verdict is treated as unverified — which, with the
+    # default (forward) mode, STILL relays full content (trust never blocks it).
     _enable_forwarding()
-    res = _seed(trust="")                          # no verdict -> untrusted
+    res = _seed(trust="")
     out = fwd.forward_notification(res)
-    assert out["sent"] is True                     # generic (default mode)
-    assert EVIL_SUBJECT not in sent[0]["html"]
+    assert out["sent"] is True
+    assert sent[0]["subject"] == RECRUITER_SUBJECT
 
 
 if __name__ == "__main__":

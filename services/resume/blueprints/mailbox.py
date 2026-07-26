@@ -299,6 +299,19 @@ def report_thread_phishing(thread_id):
     return jsonify({"ok": True}), 200
 
 
+@mailbox_bp.route("/threads/<thread_id>", methods=["DELETE"])
+@jwt_required()
+def delete_mailbox_thread(thread_id):
+    """Delete a thread + its messages + attachments (owner-scoped), best-effort
+    removing their S3 objects. Not the owner's thread -> 404 (never 403/leak,
+    never 401). Returns ``{ok, deleted:{messages, attachments}}``."""
+    user_email = get_jwt_identity()
+    deleted = store.delete_thread(user_email, thread_id)
+    if deleted is None:
+        return jsonify({"error": "thread_not_found"}), 404
+    return jsonify({"ok": True, "deleted": deleted}), 200
+
+
 # ===========================================================================
 # Attachments (§5) — short-TTL presigned GET; quarantined -> 403
 # ===========================================================================

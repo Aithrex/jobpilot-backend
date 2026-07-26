@@ -1324,6 +1324,69 @@ def report_phishing(user_email: str, thread_id: str) -> bool:
     return True
 
 
+def delete_thread(user_email: str, thread_id: str) -> Optional[Dict[str, int]]:
+    """Owner-scoped HARD delete of a thread + its messages + attachments, plus a
+    best-effort delete of their S3 objects (raw MIME / text / sanitized html /
+    attachment bytes).
+
+    Returns ``{messages, attachments}`` deleted-counts, or None (route -> 404)
+    when the thread is not the user's — a cross-user id is indistinguishable from
+    a missing one (no IDOR leak). ``user_email``/``thread_id`` are sanitized and
+    the ``message_id`` list fed to ``$in`` is our OWN stored ids (never user
+    input), so nothing untrusted ever reaches an operator position (invariant #4).
+    Logs only the thread id + counts — never sender/subject/body."""
+    email = InputSanitizer.sanitize_email(user_email)
+    tid = _san(thread_id, 64)
+    if not email or not tid:
+        return None
+    if not _threads().find_one({"thread_id": tid, "user_email": email}, {"_id": 1}):
+        return None
+
+    bucket = _apply_mail_bucket()
+    try:
+        storage = get_storage_service()
+    except Exception:  # pragma: no cover - defensive
+        storage = None
+
+    def _rm(key: Optional[str]) -> None:
+        # Best-effort: a failed/absent S3 delete never blocks the DB delete.
+        if not key or storage is None:
+            return
+        deleter = getattr(storage, "delete_object", None)
+        if not deleter:
+            return
+        try:
+            deleter(key, bucket=bucket)
+        except Exception:  # pragma: no cover - best effort cleanup
+            pass
+
+    # Collect S3 keys (owner-scoped) BEFORE the rows are gone.
+    messages = list(_messages().find({"thread_id": tid, "user_email": email}))
+    message_ids = [m.get("message_id") for m in messages if m.get("message_id")]
+    for m in messages:
+        _rm(m.get("raw_s3_key"))
+        _rm(m.get("text_s3_key"))
+        _rm(m.get("safe_html_s3_key"))
+
+    att_deleted = 0
+    if message_ids:
+        att_filter = {"user_email": email, "message_id": {"$in": message_ids}}
+        for a in _attachments().find(att_filter):
+            _rm(a.get("s3_key"))
+        att_deleted = int(_attachments().delete_many(att_filter).deleted_count or 0)
+
+    msg_deleted = int(
+        _messages().delete_many({"thread_id": tid, "user_email": email}).deleted_count or 0
+    )
+    _threads().delete_one({"thread_id": tid, "user_email": email})
+
+    logger.info(
+        "mail-store: deleted thread=%s messages=%d attachments=%d",
+        tid, msg_deleted, att_deleted,
+    )
+    return {"messages": msg_deleted, "attachments": att_deleted}
+
+
 # ---------------------------------------------------------------------------
 # Forwarding — SAFE notify-to-original-inbox path (managed-mailbox-v1 §4.2/§8.1)
 # ---------------------------------------------------------------------------

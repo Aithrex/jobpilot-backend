@@ -548,6 +548,22 @@ class ResumeStorageService:
         logger.info("Stored object %s (%d bytes)", _redact_key(s3_key), len(body or b""))
         return s3_key
 
+    def delete_object(self, s3_key: str, *, bucket: str = None) -> bool:
+        """Best-effort delete of a single object from an explicit bucket (used by
+        the managed-mailbox thread delete to clean up raw MIME / text / sanitized
+        html / attachment bytes). Idempotent: a missing object is not an error.
+        Returns True on a successful delete call, False otherwise — never raises,
+        so a cleanup hiccup can't block the owner-scoped DB delete."""
+        target = bucket or self.bucket
+        if not target or not s3_key:
+            return False
+        try:
+            self.client.delete_object(Bucket=target, Key=s3_key)
+            return True
+        except Exception as e:
+            logger.warning("Failed to delete object %s: %s", _redact_key(s3_key), e)
+            return False
+
     @staticmethod
     def _sanitize_filename(name: str) -> str:
         """Sanitize a string for use in S3 keys.
