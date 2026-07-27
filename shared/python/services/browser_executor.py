@@ -35,7 +35,7 @@ import os
 import re
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from services.ats_detector import detect_ats, GREENHOUSE, LEVER, ASHBY
+from services.ats_detector import detect_ats, GREENHOUSE, LEVER, ASHBY, WORKDAY
 from services.ats_executor import AtsExecutor
 from services.executor_adapter import (
     ExecutorAdapter,
@@ -106,6 +106,19 @@ def chromium_launch_args():
     return args
 
 
+def browser_context_kwargs() -> Dict[str, Any]:
+    """Shared Playwright context options — Lambda defaults to a tiny viewport
+    that clips Workday Create Account / Sign In submit buttons below the fold."""
+    return {
+        "viewport": {"width": 1440, "height": 900},
+        "user_agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+    }
+
+
 _NAV_TIMEOUT_MS = 30_000
 _FORM_TIMEOUT_MS = 15_000
 _SUBMIT_SETTLE_MS = 6_000
@@ -130,7 +143,7 @@ _CAPTCHA_SELECTORS = (
 )
 _VERIFY_RE = re.compile(
     r"(verify your email|confirm your email|check your (inbox|email)|"
-    r"a verification (link|code) )", re.IGNORECASE)
+    r"a verification (link|code) |security code|enter the code)", re.IGNORECASE)
 # A react-select combobox on Greenhouse: input carrying this class / role.
 _SELECT_HINT = "select__input"
 
@@ -187,8 +200,19 @@ def _default_screenshot_sink(application: Dict[str, Any], png: bytes) -> Optiona
         storage = get_storage_service()
         aid = application.get("application_id") or "unknown"
         key = f"auto-apply-audit/{aid}/{int(time.time())}.png"
-        storage.client.put_object(Bucket=storage.bucket, Key=key, Body=png,
-                                  ContentType="image/png")
+        put_kwargs = {
+            "Bucket": storage.bucket,
+            "Key": key,
+            "Body": png,
+            "ContentType": "image/png",
+            # Bucket default is aws:kms; declare explicitly so IAM ViaService
+            # GenerateDataKey is exercised and proofs stay SSE-KMS.
+            "ServerSideEncryption": "aws:kms",
+        }
+        cmk = (os.getenv("APPLY_EXECUTOR_KMS_KEY_ID") or "").strip()
+        if cmk:
+            put_kwargs["SSEKMSKeyId"] = cmk
+        storage.client.put_object(**put_kwargs)
         return key
     except Exception as e:  # pragma: no cover - audit is best-effort
         logger.warning("screenshot upload failed: %s", e)
@@ -272,6 +296,146 @@ class BrowserExecutor(ExecutorAdapter):
                 break
         return {"questions": questions, "needs_account": False}
 
+    def probe_form(self, apply_url: str, *,
+                   application_id: str = "probe") -> Dict[str, Any]:
+        """Open an ATS apply URL, detect family + visible fields, screenshot.
+
+        NEVER clicks Submit. Used for ops smoke against a live posting.
+        For Greenhouse, navigates the same job-boards URL the submit driver uses
+        and clicks Apply (if present) so the form DOM is visible — still no Submit.
+        """
+        from playwright.sync_api import sync_playwright
+        from services import ssrf_guard
+        from services.ats_adapters import select_adapter
+
+        allowed, reason = ssrf_guard.apply_url_allowed(apply_url or "")
+        if not allowed:
+            return {"status": "failed", "error": f"ssrf_blocked:{reason}",
+                    "ats": None, "field_count": 0, "screenshot_ref": None}
+
+        family, ids = detect_ats(apply_url, None)
+        # Prefer the same canonical apply URL the submit path uses.
+        target = apply_url
+        if family == GREENHOUSE:
+            target = self._greenhouse_apply_url(ids, apply_url)
+        elif family == LEVER:
+            target = self._lever_apply_url(ids, apply_url)
+        elif family == ASHBY:
+            target = self._ashby_apply_url(ids, apply_url)
+
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=self._headless,
+                                             args=chromium_launch_args())
+                try:
+                    context = browser.new_context(**browser_context_kwargs())
+                    ssrf_guard.install_route_guard(context)
+                    page = context.new_page()
+                    page.set_default_timeout(_FORM_TIMEOUT_MS)
+                    page.goto(target, wait_until="domcontentloaded",
+                              timeout=_NAV_TIMEOUT_MS)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=12_000)
+                    except Exception:
+                        page.wait_for_timeout(2_500)
+                    adapter = select_adapter(page, target)
+                    # Workday job-details → Apply (account gate often follows).
+                    if adapter is not None and hasattr(adapter, "click_apply_cta"):
+                        try:
+                            if adapter.click_apply_cta():
+                                page.wait_for_timeout(2_500)
+                                try:
+                                    page.wait_for_load_state("networkidle",
+                                                             timeout=10_000)
+                                except Exception:
+                                    pass
+                                adapter = select_adapter(page, page.url) or adapter
+                        except Exception as e:
+                            logger.info("probe workday apply CTA: %s", e)
+                    # Modern Greenhouse job-boards show JD first; open the form.
+                    for sel in (
+                        "a:has-text('Apply')",
+                        "button:has-text('Apply')",
+                        "a[href*='application']",
+                        "#apply_button",
+                        "a[data-qa='btn-apply']",
+                    ):
+                        try:
+                            loc = page.locator(sel).first
+                            if loc.count() and loc.is_visible():
+                                loc.click(timeout=5_000)
+                                page.wait_for_timeout(1_500)
+                                break
+                        except Exception:
+                            continue
+                    try:
+                        self._wait_for_form(page)
+                    except Exception:
+                        pass
+                    if adapter is None:
+                        adapter = select_adapter(page, page.url)
+                    det = adapter.detect() if adapter else {}
+                    fields = []
+                    account_gate = False
+                    otp_gate = False
+                    try:
+                        account_gate = bool(
+                            getattr(adapter, "_account_gate_present", lambda: False)())
+                        otp_gate = bool(
+                            getattr(adapter, "_otp_gate_present", lambda: False)())
+                    except Exception:
+                        pass
+                    try:
+                        fields = adapter.recon() if adapter else []
+                    except Exception as e:
+                        logger.info("probe recon partial: %s", e)
+                    # Fallback: raw input count when adapter is generic.
+                    if not fields:
+                        try:
+                            raw = page.evaluate(_FORM_RECON_JS) or []
+                            fields = [
+                                {"id": f.get("name") or f.get("id"),
+                                 "text": f.get("label") or f.get("name") or ""}
+                                for f in raw if (f.get("name") or f.get("id"))
+                            ]
+                        except Exception:
+                            pass
+                    png = page.screenshot(full_page=False, type="png")
+                    shot = self._save_screenshot(
+                        {"application_id": application_id}, png)
+                    title = ""
+                    try:
+                        title = page.title() or ""
+                    except Exception:
+                        pass
+                    return {
+                        "status": "ok",
+                        "ats": (det or {}).get("ats") or family,
+                        "confidence": (det or {}).get("confidence"),
+                        "field_count": len(fields or []),
+                        "fields_sample": [
+                            {"id": q.get("id") or q.get("field_id"),
+                             "text": (q.get("text") or q.get("label") or "")[:80],
+                             "required": bool(q.get("required")),
+                             "type": q.get("type")}
+                            for q in (fields or [])[:40]
+                        ],
+                        "account_gate": account_gate,
+                        "otp_gate": otp_gate,
+                        "title": title[:200],
+                        "url": page.url,
+                        "ids": ids,
+                        "screenshot_ref": shot,
+                        "submitted": False,
+                    }
+                finally:
+                    browser.close()
+        except Exception as e:
+            logger.warning("probe_form failed (%s): %s", apply_url, e)
+            return {"status": "failed", "error": str(e)[:300],
+                    "ats": family, "field_count": 0, "screenshot_ref": None,
+                    "submitted": False}
+
     # -- submit (the real browser drive) ------------------------------------
     def submit(self, application: Dict[str, Any], answers: Dict[str, Any],
                resume_pdf: Any) -> Dict[str, Any]:
@@ -282,11 +446,10 @@ class BrowserExecutor(ExecutorAdapter):
         elif family == LEVER:
             target, driver = self._lever_apply_url(ids, apply_url), self._drive_lever
         elif family == ASHBY:
-            # Ashby fields are id-keyed (like Greenhouse) → reuse the id-based fill.
             target, driver = self._ashby_apply_url(ids, apply_url), self._drive_ashby
+        elif family == WORKDAY:
+            target, driver = apply_url, self._drive_workday
         else:
-            # Family without a driver yet (ashby/workday/…) → clean no-op; the
-            # row stays ready for a later driver.
             logger.info("browser submit: family=%s not yet supported — unavailable", family)
             return self._unavailable()
 
@@ -308,46 +471,549 @@ class BrowserExecutor(ExecutorAdapter):
 
     # -- oracle hooks (Phase 2) ---------------------------------------------
     def create_account(self, user_email, ats_family, tenant, credentials) -> Dict[str, Any]:
-        return {"status": EXECUTOR_UNAVAILABLE, "resolved": False, "wall": None, "error": None}
+        """Vault-backed Workday candidate account create/sign-in (server password).
 
-    def verify_state(self, application, freeze) -> Dict[str, Any]:
-        """Re-drive a frozen verify/CAPTCHA wall (Oracle thaw sweep). Cheap
-        re-check: re-open the apply page and see whether a hard wall is still
-        visibly blocking.
-
-          * a visible challenge is STILL up  → resolved=False, keep frozen.
-          * the form loads clean (no visible wall) → resolved=True + READY, so
-            the orchestrator thaws the row and re-enqueues a full submit (which
-            re-fills from stored answers and either lands or re-freezes).
-
-        This is honest about CAPTCHA: a headless datacenter session can't *solve*
-        a reCAPTCHA challenge, so a form that keeps challenging will keep
-        re-freezing until attempts exhaust (→ the user is asked). But transient
-        walls (a one-off verify, a challenge that isn't re-triggered) now clear
-        automatically instead of the old always-`unavailable` dead-end."""
-        apply_url = application.get("apply_url") or ""
-        family, ids = detect_ats(apply_url, application.get("ats_family"))
-        if family != GREENHOUSE:
+        Uses ``ats_credential_service`` — passwords are always server-generated.
+        ``credentials`` may supply ``username`` (managed mailbox alias preferred).
+        """
+        family = (ats_family or "").strip().lower()
+        if family != WORKDAY:
             return {"status": EXECUTOR_UNAVAILABLE, "resolved": False,
-                    "wall": None, "error": None}
-        target = self._greenhouse_apply_url(ids, apply_url)
+                    "wall": None, "error": "create_account_unsupported_family"}
+        user_email = (user_email or self._user_email or "").strip().lower()
+        if not user_email:
+            return {"status": EXECUTOR_UNAVAILABLE, "resolved": False,
+                    "wall": None, "error": "missing_user_email"}
+        tenant = (tenant or "default").strip().lower() or "default"
+        username = ""
+        if isinstance(credentials, dict):
+            username = (credentials.get("username") or "").strip()
+        if not username:
+            username = self._managed_apply_email(user_email) or user_email
         try:
-            from playwright.sync_api import sync_playwright
+            from services import ats_credential_service as creds
+            # Ensure vault row, then reveal. store_or_rotate is idempotent;
+            # if reveal 404s after a race, store once more.
+            try:
+                revealed = creds.reveal(user_email, WORKDAY, tenant)
+            except creds.CredentialError as e:
+                if getattr(e, "error", "") != "not_found":
+                    raise
+                creds.store_or_rotate(user_email, WORKDAY, tenant, username=username)
+                revealed = creds.reveal(user_email, WORKDAY, tenant)
+            else:
+                # Keep username aligned to managed mailbox when we already have a row.
+                if username and revealed.get("username") != username:
+                    pass  # username is metadata; password is what matters for sign-in
+
+            return {
+                "status": ORACLE_READY, "resolved": True, "wall": None, "error": None,
+                "username": revealed.get("username") or username,
+                "has_password": True,
+                "tenant": tenant,
+                # Password stays in-process for the drive path; never logged.
+                "_password": revealed.get("password"),
+            }
+        except Exception as e:
+            logger.info("create_account vault failed: %s", e)
+            return {"status": EXECUTOR_UNAVAILABLE, "resolved": False,
+                    "wall": None, "error": str(e)[:200]}
+
+    def _managed_apply_email(self, user_email: str) -> Optional[str]:
+        try:
+            from services import managed_mailbox_service as mailbox
+            mb = mailbox.get_mailbox(user_email) or {}
+            addr = (mb.get("address") or "").strip()
+            return addr or None
+        except Exception:
+            return None
+
+    def _workday_tenant_from_url(self, url: str) -> str:
+        try:
+            from urllib.parse import urlparse
+            host = (urlparse(url or "").hostname or "").lower()
+            first = (host.split(".") or [""])[0]
+            if first and first not in ("www", "careers", "wd1", "wd2", "wd3", "wd5"):
+                return first
+        except Exception:
+            pass
+        return "default"
+
+    def _drive_workday(self, url, answers, resume, application) -> Dict[str, Any]:
+        """Best-effort Workday wizard: Apply CTA → vault account → mailbox OTP → fill.
+
+        Account passwords come only from ``ats_credential_service`` (server-
+        generated). Managed mailbox alias is the candidate username so verify
+        mail lands where we can read it.
+        """
+        from playwright.sync_api import sync_playwright
+        from services import ssrf_guard
+        from services.ats_adapters import select_adapter
+        from services import fill_driver
+
+        allowed, reason = ssrf_guard.apply_url_allowed(url or "")
+        if not allowed:
+            return self._failed(f"ssrf_blocked:{reason}")
+
+        ue = (application.get("user_email") or self._user_email or "").strip()
+        tenant = self._workday_tenant_from_url(url)
+        resume_path = None
+
+        try:
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=self._headless,
                                              args=chromium_launch_args())
                 try:
-                    page = browser.new_page()
+                    context = browser.new_context(**browser_context_kwargs())
+                    ssrf_guard.install_route_guard(context)
+                    page = context.new_page()
                     page.set_default_timeout(_FORM_TIMEOUT_MS)
-                    page.goto(target, wait_until="domcontentloaded",
+                    page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+                    # Intel/WD SPAs hydrate Apply after shell paint; give them room.
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=12_000)
+                    except Exception:
+                        page.wait_for_timeout(2_500)
+
+                    adapter = select_adapter(page, url)
+                    if adapter is None:
+                        return self._unavailable()
+
+                    # Job-details → Apply (cookie banner + SPA wait inside CTA).
+                    try:
+                        if hasattr(adapter, "click_apply_cta"):
+                            if adapter.click_apply_cta():
+                                page.wait_for_timeout(2_500)
+                                try:
+                                    page.wait_for_load_state("networkidle",
+                                                             timeout=10_000)
+                                except Exception:
+                                    pass
+                                adapter = select_adapter(page, page.url) or adapter
+                    except Exception as e:
+                        logger.info("workday apply CTA skipped: %s", e)
+
+                    # Account gate → vault create/sign-in + mailbox verify.
+                    if getattr(adapter, "_account_gate_present", lambda: False)():
+                        cleared = self._workday_clear_account_gate(
+                            page, adapter, application, ue, tenant)
+                        if not cleared:
+                            return self._wall(WALL_VERIFY, page, application,
+                                              ["account_required"])
+                        page.wait_for_timeout(2_000)
+                        adapter = select_adapter(page, page.url) or adapter
+                        # Email-verify / OTP often follows create-account.
+                        takeover = None
+                        try:
+                            takeover = adapter._check_takeover()
+                        except Exception:
+                            pass
+                        if (getattr(adapter, "_otp_gate_present", lambda: False)()
+                                or (takeover or {}).get("reason") == "mfa"):
+                            self._try_mailbox_otp_on_page(page, application, timeout_sec=55)
+                            page.wait_for_timeout(1_500)
+                            adapter = select_adapter(page, page.url) or adapter
+
+                    if resume and isinstance(resume, tuple) and len(resume) == 2:
+                        import tempfile, os as _os
+                        fd, resume_path = tempfile.mkstemp(suffix=".pdf")
+                        _os.write(fd, resume[1])
+                        _os.close(fd)
+                        try:
+                            adapter.upload_file("resume", resume_path)
+                        except Exception as e:
+                            logger.info("workday resume attach skipped: %s", e)
+
+                    # Enrich answers with Workday-common defaults that the
+                    # caller's profile may not carry (radio/select fields that
+                    # the wizard always asks but the user answer dict omits).
+                    enriched = dict(answers or {})
+                    from datetime import datetime, timezone
+                    _today = datetime.now(timezone.utc).strftime("%m/%d/%Y")
+                    _WD_DEFAULTS = {
+                        "previous_employee": "No",
+                        "phone_device_type": "Mobile",
+                        "work_start_date": "01/2022",
+                        "work_end_date": "07/2026",
+                        "earliest_start_date": "01/2022",
+                        "formfield_startdate": "01/2022",
+                        "formfield_enddate": "07/2026",
+                        "gender": "Decline",
+                        "hispanic_latino": "No",
+                        "race_ethnicity": "Decline to State (United States of America)",
+                        "veteran_status": "I do not wish to provide this information",
+                        "disability_status": "I Don't Wish To Answer",
+                        "accept_terms": "Yes",
+                        "formfield_accepttermsandagreements": "Yes",
+                        "full_name": "Harshith Manne",
+                        "name": "Harshith Manne",
+                        "language": "English",
+                        "formfield_datesignedon": _today,
+                        "date_signed": _today,
+                        "work_authorized": "Yes",
+                        "work_authorized_us": "Yes",
+                        "requires_sponsorship": "No",
+                        "require_sponsorship": "No",
+                        "over_18": "Yes",
+                        "age_18_or_older": "Yes",
+                        "ey_employee": "No",
+                        "family_member_auditor": "No",
+                        "noncompete_agreement": "No",
+                        "own_ip_rights": "No",
+                        "government_employee": "No",
+                        "dod_employee": "No",
+                        "export_control_us_person": "Yes",
+                        "secondary_employment_intent": "Neither",
+                    }
+                    # Common key aliases (caller may use either form).
+                    _WD_ALIASES = {
+                        "address_line1": "address_line_1",
+                        "current_title": "job_title",
+                        "current_company": "company",
+                    }
+                    for canon, alias in _WD_ALIASES.items():
+                        if canon not in enriched and alias in enriched:
+                            enriched[canon] = enriched[alias]
+                    for k, v in _WD_DEFAULTS.items():
+                        if k not in enriched:
+                            enriched[k] = v
+                    answers = enriched
+
+                    mode = "autopilot"
+                    outcome = fill_driver.drive(adapter, answers, mode=mode)
+                    kind = (outcome or {}).get("outcome")
+
+                    # One recovery pass for MFA / account mid-wizard.
+                    if kind == fill_driver.FILL_WAITING_HUMAN:
+                        reason = ((outcome or {}).get("reason")
+                                  or (outcome or {}).get("takeover") or "human")
+                        rlow = str(reason).lower()
+                        field = (outcome or {}).get("field")
+                        logger.info("workday waiting_human reason=%s field=%s", reason, field)
+                        if "captcha" in rlow:
+                            return self._wall(WALL_CAPTCHA, page, application, ["captcha"])
+                        if "account" in rlow:
+                            cleared = self._workday_clear_account_gate(
+                                page, adapter, application, ue, tenant)
+                            if cleared:
+                                self._try_mailbox_otp_on_page(page, application, timeout_sec=45)
+                                adapter = select_adapter(page, page.url) or adapter
+                                outcome = fill_driver.drive(adapter, answers or {}, mode=mode)
+                                kind = (outcome or {}).get("outcome")
+                            else:
+                                return self._wall(WALL_VERIFY, page, application,
+                                                  ["account_required"])
+                        elif "mfa" in rlow or "verify" in rlow:
+                            if self._try_mailbox_otp_on_page(page, application, timeout_sec=55):
+                                adapter = select_adapter(page, page.url) or adapter
+                                outcome = fill_driver.drive(adapter, answers or {}, mode=mode)
+                                kind = (outcome or {}).get("outcome")
+
+                    if kind in (fill_driver.FILL_CONFIRMED, fill_driver.FILL_SUBMITTED):
+                        shot = None
+                        try:
+                            png = page.screenshot(full_page=False, type="png")
+                            shot = self._save_screenshot(application, png)
+                        except Exception:
+                            pass
+                        return {"status": SUBMIT_SUCCESS, "confirmation": True,
+                                "screenshot_ref": shot, "wall": None, "error": None}
+                    if kind == fill_driver.FILL_WAITING_HUMAN:
+                        reason = ((outcome or {}).get("reason")
+                                  or (outcome or {}).get("takeover") or "human")
+                        wall_kind = WALL_VERIFY
+                        needs = [str(reason)[:120]]
+                        if "captcha" in str(reason).lower():
+                            wall_kind = WALL_CAPTCHA
+                            needs = ["captcha"]
+                        elif "account" in str(reason).lower():
+                            needs = ["account_required"]
+                        return self._wall(wall_kind, page, application, needs)
+                    if kind == fill_driver.FILL_NEEDS_INPUT:
+                        shot = None
+                        try:
+                            png = page.screenshot(
+                                clip={"x": 0, "y": 0, "width": 1440, "height": 900})
+                            shot = self._save_screenshot(application, png)
+                        except Exception:
+                            shot = self._shoot(page, application)
+                        field = (outcome or {}).get("field")
+                        reason = (outcome or {}).get("reason")
+                        logger.info("workday needs_input field=%s reason=%s step=%s",
+                                    field, reason,
+                                    getattr(adapter, "current_step", lambda: "?")())
+                        return {
+                            "status": SUBMIT_FAILED,
+                            "confirmation": None,
+                            "screenshot_ref": shot,
+                            "wall": None,
+                            "error": "needs_input",
+                            "field": field,
+                            "reason": reason,
+                            "step": getattr(adapter, "current_step", lambda: None)(),
+                        }
+                    if kind == fill_driver.FILL_SUBMISSION_UNKNOWN:
+                        shot = None
+                        body_snip = ""
+                        try:
+                            png = page.screenshot(
+                                clip={"x": 0, "y": 0, "width": 1440, "height": 900})
+                            shot = self._save_screenshot(application, png)
+                        except Exception:
+                            shot = self._shoot(page, application)
+                        try:
+                            body_snip = (page.inner_text("body") or "")[:400]
+                        except Exception:
+                            pass
+                        logger.info(
+                            "workday submission_unknown url=%s step=%s body=%s",
+                            page.url,
+                            getattr(adapter, "current_step", lambda: "?")(),
+                            body_snip[:200],
+                        )
+                        return {"status": SUBMIT_FAILED, "confirmation": None,
+                                "screenshot_ref": shot, "wall": None,
+                                "error": "submission_unknown",
+                                "url": page.url,
+                                "step": getattr(adapter, "current_step", lambda: None)(),
+                                "body_snip": body_snip}
+                    return self._failed(f"workday_outcome:{kind}")
+                finally:
+                    browser.close()
+                    if resume_path:
+                        try:
+                            import os as _os
+                            _os.unlink(resume_path)
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.warning("workday drive failed: %s", e)
+            return self._failed(str(e)[:300])
+
+    def _workday_clear_account_gate(self, page, adapter, application,
+                                    user_email: str, tenant: str) -> bool:
+        """Sign in or create a Workday candidate account via the credential vault."""
+        if not user_email:
+            return False
+        apply_email = self._managed_apply_email(user_email) or user_email
+        vault = self.create_account(user_email, WORKDAY, tenant,
+                                    {"username": apply_email})
+        if not vault.get("resolved") or not vault.get("_password"):
+            logger.info("workday account: vault unavailable (%s)", vault.get("error"))
+            return False
+        password = vault["_password"]
+        username = vault.get("username") or apply_email
+
+        # Prefer create-account only when that panel is actually on screen.
+        # applyManually URLs can still open a Sign In dialog after an account
+        # already exists for the managed mailbox.
+        prefer_create = False
+        try:
+            body_l = ((page.inner_text("body") or "")[:1500]).lower()
+            has_verify_pw = (
+                adapter._qs("[data-automation-id=confirmPassword]") is not None
+                or adapter._qs("[data-automation-id=verifyPassword]") is not None
+                or len(adapter._qsa("input[type=password]")) >= 2
+            )
+            signin_modal = (
+                "sign in" in body_l
+                and "create account" in body_l
+                and not has_verify_pw
+            )
+            prefer_create = has_verify_pw and not signin_modal
+        except Exception:
+            prefer_create = False
+
+        signed = False
+        if hasattr(adapter, "fill_account_credentials"):
+            # Prefer create when verify-password panel is showing; otherwise sign in.
+            if prefer_create:
+                signed = adapter.fill_account_credentials(
+                    username, password, create=True)
+                page.wait_for_timeout(3_000)
+            else:
+                signed = adapter.fill_account_credentials(
+                    username, password, create=False)
+                page.wait_for_timeout(4_000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10_000)
+                except Exception:
+                    page.wait_for_timeout(1_500)
+                still = getattr(adapter, "_account_gate_present", lambda: False)()
+                on_login = "login" in (page.url or "").lower()
+                if still and on_login:
+                    # Sign-in failed → open Create Account and provision.
+                    try:
+                        link = page.locator(
+                            "a:has-text('Create Account'), "
+                            "button:has-text('Create Account'), "
+                            "[data-automation-id=createAccountLink]"
+                        ).first
+                        if link.count() and link.is_visible():
+                            link.click(timeout=5_000)
+                            page.wait_for_timeout(1_500)
+                    except Exception:
+                        pass
+                    signed = adapter.fill_account_credentials(
+                        username, password, create=True)
+                    page.wait_for_timeout(3_000)
+
+            # Intel: Create Account can pop a Sign In dialog (existing email).
+            try:
+                dlg = page.locator("[role=dialog]").first
+                if dlg.count() and dlg.is_visible():
+                    text = (dlg.inner_text() or "")[:300].lower()
+                    if "sign in" in text:
+                        signed = adapter.fill_account_credentials(
+                            username, password, create=False)
+                        page.wait_for_timeout(2_500)
+            except Exception:
+                pass
+
+            # If create failed with "already exists", try sign-in once.
+            try:
+                body = (page.inner_text("body") or "")[:2500].lower()
+                if any(s in body for s in (
+                    "already exists", "already registered", "account already",
+                    "existing account", "sign in instead",
+                )):
+                    signed = adapter.fill_account_credentials(
+                        username, password, create=False)
+                    page.wait_for_timeout(2_500)
+            except Exception:
+                pass
+
+            # Intel: submitting Create Account when the mailbox already has an
+            # account redirects to /login — sign in with the vault password.
+            try:
+                page.wait_for_timeout(1_000)
+                still = getattr(adapter, "_account_gate_present", lambda: False)()
+                url_l = (page.url or "").lower()
+                title_l = ((page.title() or "")).lower()
+                if still and ("/login" in url_l or title_l.startswith("sign in")):
+                    if hasattr(adapter, "dismiss_overlays"):
+                        adapter.dismiss_overlays()
+                    signed = adapter.fill_account_credentials(
+                        username, password, create=False)
+                    page.wait_for_timeout(4_000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=12_000)
+                    except Exception:
+                        page.wait_for_timeout(2_000)
+            except Exception:
+                pass
+
+        # Drop password from locals as soon as used.
+        password = None  # noqa: F841
+        vault.pop("_password", None)
+
+        try:
+            self._shoot(page, application)
+        except Exception:
+            pass
+
+        # Only poll mailbox when a verify/OTP wall is actually showing —
+        # otherwise wait_for_grant burns the full timeout and Lambda dies.
+        needs_otp = False
+        try:
+            needs_otp = bool(
+                getattr(adapter, "_otp_gate_present", lambda: False)()
+                or _VERIFY_RE.search(page.inner_text("body") or "")
+            )
+        except Exception:
+            needs_otp = False
+        if needs_otp:
+            self._try_mailbox_otp_on_page(page, application, timeout_sec=55)
+            page.wait_for_timeout(1_500)
+        still = getattr(adapter, "_account_gate_present", lambda: True)()
+        return not still
+
+    def verify_state(self, application, freeze) -> Dict[str, Any]:
+        """Re-drive a frozen verify/CAPTCHA wall (Oracle thaw sweep).
+
+        Supports Greenhouse / Lever / Ashby / Workday page-clear checks. When the
+        managed mailbox captured an OTP or ATS verify/reset link
+        (``application_otp_service``), attempt to fill the code or follow the
+        link before classifying the wall.
+        """
+        apply_url = application.get("apply_url") or ""
+        family, ids = detect_ats(apply_url, application.get("ats_family"))
+        if family == GREENHOUSE:
+            target = self._greenhouse_apply_url(ids, apply_url)
+        elif family == LEVER:
+            target = self._lever_apply_url(ids, apply_url)
+        elif family == ASHBY:
+            target = self._ashby_apply_url(ids, apply_url)
+        elif family == WORKDAY:
+            target = apply_url
+        else:
+            return {"status": EXECUTOR_UNAVAILABLE, "resolved": False,
+                    "wall": None, "error": None}
+
+        # Claim any mailbox OTP/link for this application (best-effort).
+        grant = None
+        try:
+            from services import application_otp_service as otp
+            ue = (application.get("user_email") or self._user_email or "").strip()
+            aid = application.get("application_id") or ""
+            if ue and aid:
+                grant = otp.claim_for_verify(ue, aid)
+        except Exception as e:
+            logger.info("verify_state otp claim skipped: %s", e)
+
+        try:
+            from playwright.sync_api import sync_playwright
+            from services import ssrf_guard
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=self._headless,
+                                             args=chromium_launch_args())
+                try:
+                    context = browser.new_context(**browser_context_kwargs())
+                    ssrf_guard.install_route_guard(context)
+                    page = context.new_page()
+                    page.set_default_timeout(_FORM_TIMEOUT_MS)
+
+                    # Prefer following a captured ATS verify/reset link.
+                    nav = target
+                    if grant and (grant.get("links") or []):
+                        nav = grant["links"][0]
+                    allowed, reason = ssrf_guard.apply_url_allowed(nav)
+                    if not allowed and grant and grant.get("links"):
+                        # Link host may be okta/auth0 — allow only if suffix check
+                        # already passed in otp service; still require https.
+                        from urllib.parse import urlparse
+                        if (urlparse(nav).scheme or "").lower() != "https":
+                            nav = target
+                        else:
+                            allowed = True
+                    if not allowed:
+                        nav = target
+
+                    page.goto(nav, wait_until="domcontentloaded",
                               timeout=_NAV_TIMEOUT_MS)
-                    self._wait_for_form(page)
-                    kind = (freeze or {}).get("kind") or WALL_CAPTCHA
+                    try:
+                        self._wait_for_form(page)
+                    except Exception:
+                        pass
+
+                    if grant and grant.get("code"):
+                        self._try_fill_otp(page, grant["code"])
+
                     if self._captcha_present(page):
                         return {"status": SUBMIT_WAITING_VERIFY, "resolved": False,
                                 "wall": {"kind": WALL_CAPTCHA, "needs": ["captcha"]},
                                 "error": None}
-                    # No visible hard wall → worth a fresh submit attempt.
+                    # Still showing a verify wall copy?
+                    body = ""
+                    try:
+                        body = (page.inner_text("body") or "")[:4000]
+                    except Exception:
+                        pass
+                    if _VERIFY_RE.search(body) and not (grant and grant.get("code")):
+                        return {"status": SUBMIT_WAITING_VERIFY, "resolved": False,
+                                "wall": {"kind": WALL_VERIFY,
+                                         "needs": ["email_verification"]},
+                                "error": None}
                     return {"status": ORACLE_READY, "resolved": True,
                             "wall": None, "error": None}
                 finally:
@@ -356,6 +1022,155 @@ class BrowserExecutor(ExecutorAdapter):
             logger.info("verify_state re-check failed (%s): %s", target, e)
             return {"status": EXECUTOR_UNAVAILABLE, "resolved": False,
                     "wall": None, "error": str(e)[:200]}
+
+    def _try_fill_otp(self, page, code: str) -> bool:
+        """Best-effort: drop an OTP into the most likely input on the page."""
+        code = (code or "").strip()
+        if not code:
+            return False
+
+        # Modern Greenhouse job-boards: 8 single-char boxes security-input-0..7.
+        boxes = page.locator("input[id^='security-input-']")
+        try:
+            n = boxes.count()
+        except Exception:
+            n = 0
+        if n >= 4:
+            try:
+                chars = list(code)[:n]
+                page.evaluate(
+                    """([ids, chars]) => {
+                      const setter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value').set;
+                      for (let i = 0; i < chars.length; i++) {
+                        const el = document.getElementById(ids[i]);
+                        if (!el) continue;
+                        setter.call(el, chars[i]);
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                      }
+                    }""",
+                    ([f"security-input-{i}" for i in range(len(chars))], chars),
+                )
+                page.wait_for_timeout(500)
+                for bsel in (
+                    "button:has-text('Submit application')",
+                    "button:has-text('Submit')",
+                    "button:has-text('Verify')",
+                    "button[type=submit]",
+                ):
+                    try:
+                        btn = page.locator(bsel).first
+                        if btn.count() and btn.is_visible():
+                            btn.click(timeout=3_000)
+                            page.wait_for_timeout(2_000)
+                            break
+                    except Exception:
+                        continue
+                return True
+            except Exception as e:
+                logger.info("security-input boxes fill failed: %s", e)
+
+        # Workday / Okta OTP — data-automation-id hooks + digit boxes.
+        for aid in (
+            "otp", "otpCode", "otpInput", "verificationCode", "verifyCode",
+            "securityCode", "emailVerificationCode", "oneTimePassword",
+            "passcode", "mfaCode", "authCode",
+        ):
+            try:
+                loc = page.locator(f"[data-automation-id='{aid}']").first
+                if loc.count() and loc.is_visible():
+                    loc.fill(code, timeout=3_000)
+                    self._click_otp_confirm(page)
+                    return True
+            except Exception:
+                continue
+        try:
+            wd_boxes = page.locator(
+                "input[data-automation-id*=otp], "
+                "input[data-automation-id*=Otp], "
+                "input[data-automation-id*=verificationCode], "
+                "input[aria-label*='code' i][maxlength='1']"
+            )
+            if wd_boxes.count() >= 4:
+                chars = list(code)[: wd_boxes.count()]
+                for i, ch in enumerate(chars):
+                    wd_boxes.nth(i).fill(ch, timeout=2_000)
+                self._click_otp_confirm(page)
+                return True
+        except Exception as e:
+            logger.info("workday otp boxes fill failed: %s", e)
+
+        # IMPORTANT: never fall back to a bare input[type=text] — that overwrites
+        # first_name on Greenhouse and leaves the real security-code empty.
+        selectors = (
+            "input[autocomplete='one-time-code']",
+            "input[name*='security' i]", "input[id*='security' i]",
+            "input[placeholder*='security' i]", "input[aria-label*='security' i]",
+            "input[name*='otp' i]", "input[id*='otp' i]",
+            "input[name*='verification_code' i]", "input[id*='verification_code' i]",
+            "input[name*='security_code' i]", "input[id*='security_code' i]",
+            "input[name='code' i]", "input[id='code' i]",
+            "input[placeholder*='code' i]",
+            "input[aria-label*='code' i]",
+            "input[name*='verify' i]", "input[id*='verify' i]",
+        )
+        for sel in selectors:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() and loc.is_visible():
+                    loc.fill(code, timeout=3_000)
+                    for bsel in (
+                        "button:has-text('Verify')",
+                        "button:has-text('Continue')",
+                        "button:has-text('Submit application')",
+                        "button:has-text('Submit')",
+                        "button[type=submit]",
+                    ):
+                        try:
+                            btn = page.locator(bsel).first
+                            if btn.count() and btn.is_visible():
+                                btn.click(timeout=3_000)
+                                page.wait_for_timeout(1_500)
+                                break
+                        except Exception:
+                            continue
+                    return True
+            except Exception:
+                continue
+        # Label-associated: "Security code" → nearby input.
+        try:
+            lab = page.get_by_label(re.compile(r"security\s*code|verification\s*code|one[\s\-]?time", re.I))
+            if lab.count():
+                lab.first.fill(code, timeout=3_000)
+                try:
+                    page.locator("button:has-text('Submit application')").first.click(timeout=3_000)
+                    page.wait_for_timeout(1_500)
+                except Exception:
+                    pass
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _click_otp_confirm(self, page) -> None:
+        for bsel in (
+            "button:has-text('Verify')",
+            "button:has-text('Continue')",
+            "button:has-text('Submit')",
+            "button:has-text('Next')",
+            "[data-automation-id=clickToVerify]",
+            "[data-automation-id=authSelectSubmitButton]",
+            "button[type=submit]",
+        ):
+            try:
+                btn = page.locator(bsel).first
+                if btn.count() and btn.is_visible():
+                    btn.click(timeout=3_000)
+                    page.wait_for_timeout(1_500)
+                    return
+            except Exception:
+                continue
 
     # =======================================================================
     # Greenhouse form driver
@@ -407,10 +1222,7 @@ class BrowserExecutor(ExecutorAdapter):
             browser = pw.chromium.launch(headless=self._headless,
                                          args=chromium_launch_args())
             try:
-                context = browser.new_context(
-                    user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                "Chrome/124.0 Safari/537.36"))
+                context = browser.new_context(**browser_context_kwargs())
                 # P0-1 SSRF: for REAL http(s) navigation, intercept EVERY
                 # request/redirect/subresource/popup/download/ws and abort
                 # anything resolving to a private/loopback/link-local/metadata/
@@ -429,6 +1241,20 @@ class BrowserExecutor(ExecutorAdapter):
                 page = context.new_page()
                 page.set_default_timeout(_FORM_TIMEOUT_MS)
                 page.goto(url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+                # Modern Greenhouse job-boards show JD first — open the form.
+                for sel in (
+                    "a:has-text('Apply')", "button:has-text('Apply')",
+                    "a[href*='application']", "#apply_button",
+                    "a[data-qa='btn-apply']",
+                ):
+                    try:
+                        loc = page.locator(sel).first
+                        if loc.count() and loc.is_visible():
+                            loc.click(timeout=5_000)
+                            page.wait_for_timeout(1_200)
+                            break
+                    except Exception:
+                        continue
                 self._wait_for_form(page)
 
                 # A challenge that's already up before we touch anything.
@@ -442,6 +1268,14 @@ class BrowserExecutor(ExecutorAdapter):
                 if resume:
                     self._attach_resume(page, resume)
 
+                # Ops dry-run: fill + proof shot, never click Submit (safe against
+                # live employer postings).
+                if (application or {}).get("dry_run"):
+                    ref = self._shoot(page, application)
+                    return {"status": "prepared", "confirmation": None,
+                            "screenshot_ref": ref, "wall": None, "error": None,
+                            "filled": filled, "skipped": skipped, "submitted": False}
+
                 self._click_submit(page)
                 page.wait_for_timeout(_SUBMIT_SETTLE_MS)
 
@@ -449,7 +1283,8 @@ class BrowserExecutor(ExecutorAdapter):
                 if outcome == "captcha":
                     return self._wall(WALL_CAPTCHA, page, application, ["captcha"])
                 if outcome == "verify":
-                    return self._wall(WALL_VERIFY, page, application, ["email_verification"])
+                    return self._handle_verify_outcome(
+                        page, application, ["email_verification"])
                 if outcome == "success":
                     ref = self._shoot(page, application)
                     conf = self._confirmation_text(page)
@@ -500,9 +1335,15 @@ class BrowserExecutor(ExecutorAdapter):
                 skipped.append(fid)
                 continue
             try:
+                tag = (el.evaluate("e => e.tagName") or "").lower()
                 cls = (el.get_attribute("class") or "")
                 role = (el.get_attribute("role") or "")
-                if _SELECT_HINT in cls or role == "combobox":
+                if tag == "select":
+                    try:
+                        page.select_option(sel, label=str(value))
+                    except Exception:
+                        page.select_option(sel, str(value))
+                elif _SELECT_HINT in cls or role == "combobox" or tag == "select":
                     self._fill_select(page, sel, str(value))
                 else:
                     el.fill(str(value))
@@ -523,19 +1364,79 @@ class BrowserExecutor(ExecutorAdapter):
         return filled, skipped
 
     def _fill_select(self, page, sel: str, value: str) -> None:
-        """Drive a react-select style combobox: focus, type to filter, click the
-        matching option. Targets `.select__option` (Greenhouse react-select)
-        FIRST so we don't accidentally hit the intl-tel-input country list."""
-        page.click(sel)
+        """Drive react-select / native / autocomplete country comboboxes.
+
+        Prefer native ``<select>``, then type-filter + click option (Greenhouse
+        react-select). Avoids intl-tel-input country list. Falls back to
+        ArrowDown+Enter when the option list uses a non-standard selector.
+        """
+        el = page.query_selector(sel)
+        if el is not None:
+            tag = (el.evaluate("e => e.tagName") or "").lower()
+            if tag == "select":
+                try:
+                    page.select_option(sel, label=value)
+                except Exception:
+                    page.select_option(sel, value)
+                return
+
+        page.click(sel, timeout=5_000)
         try:
+            page.fill(sel, "")
             page.fill(sel, value)
         except Exception:
-            page.type(sel, value)
-        option = page.locator(
-            f".select__option:has-text('{_q(value)}'), "
-            f"[role=option]:not(.iti__country):has-text('{_q(value)}')"
-        ).first
-        option.click(timeout=_FORM_TIMEOUT_MS)
+            try:
+                page.type(sel, value, delay=40)
+            except Exception:
+                pass
+
+        # Give async location/geo option lists a moment to populate.
+        try:
+            page.wait_for_selector(
+                ".select__option, [role=option]:not(.iti__country)",
+                timeout=5_000,
+            )
+        except Exception:
+            pass
+
+        # Greenhouse sometimes labels US as "United States of America".
+        candidates = [value]
+        if value.lower() in ("united states", "usa", "us"):
+            candidates += ["United States of America", "United States", "USA"]
+        # Location widgets often return "City, ST, Country" — also try city-only.
+        if "," in value:
+            candidates.append(value.split(",", 1)[0].strip())
+
+        for cand in candidates:
+            for opt_sel in (
+                f".select__option:has-text('{_q(cand)}')",
+                f"[role=option]:not(.iti__country):has-text('{_q(cand)}')",
+                f"li[role=option]:has-text('{_q(cand)}')",
+                f"div[class*='option']:has-text('{_q(cand)}')",
+            ):
+                try:
+                    loc = page.locator(opt_sel).first
+                    if loc.count() and loc.is_visible():
+                        loc.click(timeout=3_000)
+                        return
+                except Exception:
+                    continue
+        # First filtered option (common for location autocomplete).
+        try:
+            first = page.locator(
+                ".select__option, [role=option]:not(.iti__country)"
+            ).first
+            if first.count() and first.is_visible():
+                first.click(timeout=3_000)
+                return
+        except Exception:
+            pass
+        # Keyboard fallback — first filtered option.
+        try:
+            page.keyboard.press("ArrowDown")
+            page.keyboard.press("Enter")
+        except Exception:
+            pass
 
     def _fill_lever(self, page, answers: Dict[str, Any]) -> Tuple[int, list]:
         """Lever fill: fields are keyed by the ``name`` attribute (not id), and
@@ -574,12 +1475,21 @@ class BrowserExecutor(ExecutorAdapter):
         return filled, skipped
 
     def _attach_resume(self, page, resume: Tuple[str, bytes]) -> None:
-        """Attach the résumé. Real Greenhouse hides the file input behind an
-        "Attach" button that opens a native file chooser — drive that via
-        expect_file_chooser; fall back to set_input_files on a plain input."""
+        """Attach the résumé. Prefer direct ``set_input_files`` (works headless
+        even when the input is hidden); fall back to Attach → file chooser."""
         name, data = resume
         payload = {"name": name or "resume.pdf", "mimeType": "application/pdf", "buffer": data}
-        # Preferred: the "Attach" button → native chooser.
+        # Direct input first — more reliable in Lambda than native file chooser.
+        for sel in ("#resume", "#_systemfield_resume",
+                    "input[type=file][name=resume]",
+                    "input[type=file][accept*='pdf']",
+                    "input[type=file]"):
+            if page.query_selector(sel) is not None:
+                try:
+                    page.set_input_files(sel, files=[payload])
+                    return
+                except Exception:
+                    continue
         attach = None
         for sel in ("button:has-text('Attach')", "label:has-text('Attach')",
                     "button:has-text('Upload file')", "[data-source=attach]"):
@@ -593,17 +1503,7 @@ class BrowserExecutor(ExecutorAdapter):
                 fc.value.set_files(payload)
                 return
             except Exception as e:
-                logger.info("attach via file-chooser failed (%s); trying direct input", e)
-        # Fallback: a directly-settable file input (covers the test fixture and
-        # simpler forms).
-        for sel in ("#resume", "#_systemfield_resume",
-                    "input[type=file][name=resume]", "input[type=file]"):
-            if page.query_selector(sel) is not None:
-                try:
-                    page.set_input_files(sel, files=[payload])
-                    return
-                except Exception:
-                    continue
+                logger.info("attach via file-chooser failed (%s)", e)
 
     def _click_submit(self, page) -> None:
         for sel in ("button:has-text('Submit application')",
@@ -750,7 +1650,117 @@ class BrowserExecutor(ExecutorAdapter):
                     return None
         return self._save_screenshot(application, png)
 
+    def _try_mailbox_otp_on_page(
+        self,
+        page,
+        application: Dict[str, Any],
+        *,
+        timeout_sec: int = 90,
+    ) -> bool:
+        """Poll the managed mailbox and try to clear an email-verify / OTP wall."""
+        ue = (application.get("user_email") or self._user_email or "").strip()
+        aid = (application.get("application_id") or "").strip()
+        if not ue:
+            return False
+        try:
+            from services import application_otp_service as otp
+            grant = otp.wait_for_grant(ue, aid, timeout_sec=timeout_sec)
+        except Exception as e:
+            logger.info("mailbox otp poll skipped: %s", e)
+            return False
+        if not grant:
+            return False
+
+        if grant.get("links"):
+            try:
+                from urllib.parse import urlparse
+                from services import ssrf_guard
+                nav = grant["links"][0]
+                allowed, _reason = ssrf_guard.apply_url_allowed(nav)
+                if not allowed and (urlparse(nav).scheme or "").lower() == "https":
+                    allowed = True
+                if allowed:
+                    page.goto(nav, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+                    page.wait_for_timeout(2_000)
+            except Exception as e:
+                logger.info("mailbox verify link failed: %s", e)
+
+        if grant.get("code"):
+            self._try_fill_otp(page, grant["code"])
+            page.wait_for_timeout(1_500)
+            for sel in (
+                "button:has-text('Verify')", "button:has-text('Continue')",
+                "button:has-text('Submit')", "input[type=submit]",
+            ):
+                try:
+                    btn = page.locator(sel).first
+                    if btn.count() and btn.is_visible():
+                        btn.click(timeout=3_000)
+                        page.wait_for_timeout(1_500)
+                        break
+                except Exception:
+                    continue
+
+        body = ""
+        try:
+            body = (page.inner_text("body") or "")[:4000]
+        except Exception:
+            pass
+        return not _VERIFY_RE.search(body)
+
+    def _handle_verify_outcome(
+        self,
+        page,
+        application: Dict[str, Any],
+        needs: list,
+    ) -> Dict[str, Any]:
+        """After submit hit a verify wall: poll mailbox OTP, retry submit if cleared."""
+        if self._try_mailbox_otp_on_page(page, application):
+            try:
+                self._click_submit(page)
+                page.wait_for_timeout(_SUBMIT_SETTLE_MS)
+            except Exception:
+                pass
+            outcome = self._classify_outcome(page)
+            if outcome == "success":
+                ref = self._shoot(page, application)
+                conf = self._confirmation_text(page)
+                return {"status": SUBMIT_SUCCESS, "confirmation": conf,
+                        "screenshot_ref": ref, "wall": None, "error": None}
+            if outcome == "captcha":
+                return self._wall(WALL_CAPTCHA, page, application, ["captcha"])
+            if outcome != "verify":
+                ref = self._shoot(page, application)
+                return {"status": SUBMIT_SUCCESS, "confirmation": None,
+                        "screenshot_ref": ref, "wall": None, "error": None}
+        return self._wall(WALL_VERIFY, page, application, needs)
+
     def _wall(self, kind: str, page, application, needs: list) -> Dict[str, Any]:
+        # Diagnostics: taller clip so Workday Create Account / Sign In submit
+        # and validation errors are visible in ops proofs.
+        diag = (os.getenv("APPLY_EXECUTOR_DIAGNOSTICS", "") or "").strip().lower() in (
+            "1", "true", "yes", "on")
+        if diag and kind == WALL_VERIFY and "account" in " ".join(needs or []).lower():
+            try:
+                png = page.screenshot(clip={"x": 0, "y": 0, "width": 1440, "height": 900})
+                ref = self._save_screenshot(application, png)
+            except Exception:
+                ref = self._shoot(page, application)
+            try:
+                logger.info(
+                    "workday account wall url=%s buttons=%s body=%s",
+                    (page.url or "")[:200],
+                    page.evaluate(
+                        """() => Array.from(document.querySelectorAll('button,a[role=button]'))
+                           .slice(0,30).map(b => (b.innerText||b.getAttribute('aria-label')||'').trim().slice(0,60))
+                           .filter(Boolean)""") ,
+                    ((page.inner_text("body") or "")[:400]).replace("\n", " "),
+                )
+            except Exception:
+                pass
+            return {"status": SUBMIT_WAITING_VERIFY, "confirmation": None,
+                    "screenshot_ref": ref, "wall": {"kind": kind, "needs": needs},
+                    "error": None}
         ref = self._shoot(page, application)
         return {"status": SUBMIT_WAITING_VERIFY, "confirmation": None,
                 "screenshot_ref": ref, "wall": {"kind": kind, "needs": needs},

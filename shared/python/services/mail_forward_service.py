@@ -434,8 +434,7 @@ def forward_notification(message_doc: Dict[str, Any]) -> Dict[str, Any]:
 
     forward_ok, category = should_forward({"subject": message.get("subject"), "text": text})
     if not forward_ok:
-        # OTP / verification / magic-login / password-reset — never relayed.
-        # (During auto-apply an application OTP is captured by the executor.)
+        # Ingest already captured OTP (see mail_store_service._maybe_capture_application_otp).
         return _skip(category, thread_id)
 
     # --- Trust is a CORRELATION signal, NOT a forwarding gate. ----------------

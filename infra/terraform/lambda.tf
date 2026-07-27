@@ -134,6 +134,20 @@ resource "aws_lambda_function" "service" {
       # to GMAIL_TOKEN_ENCRYPTION_KEY) — both already wired above, so sample-save
       # works. Unset would default OFF in prod (all routes 404); set explicitly.
       VOICE_GRAPH_ENABLED = "true"
+
+      # Auto-apply AWS browser fleet (Playwright container Lambda).
+      # Stage-4 armed for easy ATS (Greenhouse / Lever / Ashby) + Workday
+      # best-effort. LinkedIn/generic stay disabled. Kill via AUTO_SUBMIT_ENABLED
+      # or EXECUTOR_REMOTE_ENABLED without a deploy.
+      AUTO_APPLY_EXECUTOR           = "remote"
+      EXECUTOR_REMOTE_ENABLED       = "true"
+      APPLY_EXECUTOR_FUNCTION       = "${var.project}-apply-executor-${var.environment}"
+      AUTO_SUBMIT_ENABLED           = "true"
+      AUTO_APPLY_ADAPTERS_DISABLED  = "linkedin,generic"
+      AUTO_APPLY_PREPARE            = "true"
+      AUTO_APPLY_MODES              = "true"
+      AUTO_APPLY_RESERVE            = "true"
+      AUTO_APPLY_APPROVAL_FOLD      = "true"
     }
   }
 

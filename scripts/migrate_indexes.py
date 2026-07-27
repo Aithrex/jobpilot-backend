@@ -272,6 +272,13 @@ INDEX_SPECS = [
     ("auto_apply_answers", [("user_email", ASCENDING), ("application_id", ASCENDING)], {"unique": True, "name": "user_application_unique"}),
     ("auto_apply_freezes", [("user_email", ASCENDING), ("application_id", ASCENDING)], {"unique": True, "name": "user_application_unique"}),
     ("auto_apply_freezes", [("status", ASCENDING), ("next_check_at", ASCENDING)], {"name": "status_next_check"}),
+    # Managed-mailbox OTP grants (application_otp_service.ensure_indexes)
+    ("application_otp_grants", [("user_email", ASCENDING), ("message_id", ASCENDING)],
+     {"unique": True, "name": "user_message_unique"}),
+    ("application_otp_grants", [("user_email", ASCENDING), ("application_id", ASCENDING), ("status", ASCENDING)],
+     {"name": "user_app_status"}),
+    ("application_otp_grants", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expires_at"}),
     # self-growing answer library
     ("application_answer_library", [("user_email", ASCENDING), ("norm_key", ASCENDING)], {"unique": True, "name": "user_email_norm_key_unique"}),
 

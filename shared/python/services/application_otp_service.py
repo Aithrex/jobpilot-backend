@@ -1,0 +1,333 @@
+"""Application OTP / verify-link capture from the managed mailbox.
+
+When ATS mail arrives as ``system_noise`` (OTP, email-verify, password-reset,
+magic-login), we DO NOT forward it to the user's real inbox. Instead this module:
+
+  1. Extracts a short OTP code and/or https verify/reset links (ATS-host only).
+  2. Binds them to an active auto-apply freeze (``waiting_verify``) for the
+     mailbox owner when one exists.
+  3. Exposes ``claim_for_verify`` so ``BrowserExecutor.verify_state`` can fill the
+     code or follow the link, then report ``ORACLE_READY``.
+
+Fail-closed, best-effort, never raises into the mail commit path.
+"""
+from __future__ import annotations
+
+import logging
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
+
+_TTL_MINUTES = 30
+_OTP_RE = re.compile(r"(?<![\w])(\d{4,8})(?![\w])")
+_OTP_CONTEXT = re.compile(
+    r"\b(?:code|otp|passcode|pin|verify|verification|confirm|authenticate|"
+    r"2fa|mfa|security|one[\s\-]?time)\b",
+    re.I,
+)
+# Workday / Okta often put the code near the keyword in either order.
+_OTP_NEAR_CODE = re.compile(
+    r"(?:"
+    r"(?<![\w])(\d{4,8})(?![\w]).{0,48}\b(?:code|passcode|otp|pin|verification)\b|"
+    r"\b(?:code|passcode|otp|pin|verification)\b.{0,48}(?<![\w])(\d{4,8})(?![\w])"
+    r")",
+    re.I,
+)
+# Greenhouse "security code" is often alphanumeric (e.g. ORZTYWie), not digits.
+_ALPHA_OTP_RE = re.compile(
+    r"(?:security\s+code|verification\s+code|one[\s\-]?time(?:\s+(?:pass)?code)?|"
+    r"passcode|otp)\b[^\nA-Za-z0-9]{0,80}\b([A-Za-z0-9]{6,12})\b",
+    re.I,
+)
+_H1_CODE_RE = re.compile(r"<h1[^>]*>\s*([A-Za-z0-9]{6,12})\s*</h1>", re.I)
+_WORKDAY_FROM = re.compile(r"@(?:.*\.)?workday\.com$", re.I)
+# Digit / word matches that are almost never OTPs.
+_OTP_DENY = {
+    "2024", "2025", "2026", "2027", "2028", "10011", "10001", "0000", "1234",
+    "passcode", "password", "security", "verify", "confirm", "greenhouse",
+    "application", "code", "your", "this", "paste",
+}
+
+
+def _plausible_code(cand: Optional[str]) -> Optional[str]:
+    if not cand:
+        return None
+    c = cand.strip()
+    if not c or c.lower() in _OTP_DENY:
+        return None
+    # Pure digits 4–8, or mixed/upper alphanumeric 6–12 (Greenhouse style).
+    if c.isdigit():
+        return c if 4 <= len(c) <= 8 and c not in _OTP_DENY else None
+    if not re.fullmatch(r"[A-Za-z0-9]{6,12}", c):
+        return None
+    # Reject all-lowercase dictionary-ish tokens; real GH codes are mixed/upper.
+    if c.islower():
+        return None
+    return c
+_HREF_RE = re.compile(r"""href=["'](https?://[^"']+)["']""", re.I)
+_BARE_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.I)
+_LINK_HINT = re.compile(
+    r"(verify|confirm|activate|reset|password|sign[\s\-]?in|magic|one[\s\-]?time)",
+    re.I,
+)
+
+# Links we will auto-follow must stay on ATS (or closely related) hosts — SSRF
+# defense for password-reset / magic-login clicks.
+_ATS_HOST_SUFFIXES = (
+    "greenhouse.io", "grnh.se", "lever.co", "ashbyhq.com",
+    "myworkdayjobs.com", "myworkdaysite.com", "myworkday.com",
+    "workday.com", "okta.com", "auth0.com",
+)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _db():
+    from utils.db_connect import DBConnect
+    return DBConnect().get_db()
+
+
+def _coll():
+    return _db().application_otp_grants
+
+
+def _ats_host_ok(url: str) -> bool:
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    return any(host == s or host.endswith("." + s) for s in _ATS_HOST_SUFFIXES)
+
+
+def extract_otp_payload(
+    subject: str,
+    text: str,
+    html: str = "",
+    from_addr: str = "",
+) -> Dict[str, Any]:
+    """Pull a one-time code and/or verify links from mail bodies."""
+    blob = f"{subject or ''}\n{text or ''}\n{html or ''}"
+    code = None
+
+    # Prefer alphanumeric security codes (Greenhouse) before digit OTP.
+    for m in _H1_CODE_RE.finditer(html or ""):
+        code = _plausible_code(m.group(1))
+        if code:
+            break
+    if not code:
+        for m in _ALPHA_OTP_RE.finditer(blob):
+            code = _plausible_code(m.group(1))
+            if code:
+                break
+
+    if not code and _OTP_CONTEXT.search(blob):
+        for m in _OTP_RE.finditer(blob):
+            code = _plausible_code(m.group(1))
+            if code:
+                break
+    if not code:
+        m = _OTP_NEAR_CODE.search(blob)
+        if m:
+            code = _plausible_code(m.group(1) or m.group(2))
+
+    from_workday = bool(_WORKDAY_FROM.search((from_addr or "").strip()))
+    def link_ok(u: str) -> bool:
+        return _ats_host_ok(u) and (
+            _LINK_HINT.search(u)
+            or _LINK_HINT.search(subject or "")
+            or (from_workday and "workday" in (urlparse(u).hostname or "").lower())
+        )
+
+    links: List[str] = []
+    for m in _HREF_RE.finditer(html or ""):
+        u = m.group(1).strip()
+        if link_ok(u):
+            links.append(u)
+    for m in _BARE_URL_RE.finditer(text or ""):
+        u = m.group(0).rstrip(").,;")
+        if link_ok(u):
+            links.append(u)
+    # de-dupe preserve order
+    seen = set()
+    uniq = []
+    for u in links:
+        if u not in seen:
+            seen.add(u)
+            uniq.append(u)
+    return {"code": code, "links": uniq[:5]}
+
+
+def _active_freeze(user_email: str) -> Optional[Dict[str, Any]]:
+    """Most recent waiting_verify freeze for this user (mailbox → auto-apply)."""
+    try:
+        doc = (_db().auto_apply_freezes
+               .find({"user_email": user_email, "status": "waiting_verify"})
+               .sort("updated_at", -1)
+               .limit(1))
+        rows = list(doc)
+        return rows[0] if rows else None
+    except Exception as e:
+        logger.warning("application_otp: freeze lookup failed: %s", e)
+        return None
+
+
+def capture_from_noise_message(
+    *,
+    user_email: str,
+    message_id: str,
+    subject: str,
+    text: str,
+    html: str = "",
+    from_addr: str = "",
+    application_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Store an OTP/link grant when system_noise mail arrives for an active freeze.
+
+    Safe to call always — no-ops when nothing extractable / no freeze.
+    """
+    user_email = (user_email or "").strip().lower()
+    if not user_email:
+        return {"captured": False, "reason": "no_user"}
+
+    payload = extract_otp_payload(subject, text, html, from_addr=from_addr)
+    if not payload.get("code") and not payload.get("links"):
+        return {"captured": False, "reason": "nothing_extracted"}
+
+    freeze = _active_freeze(user_email)
+    app_id = application_id or (freeze or {}).get("application_id")
+    if not app_id:
+        # Keep the grant unbound briefly — verify_state can still claim by user.
+        app_id = None
+
+    now = _now()
+    doc = {
+        "user_email": user_email,
+        "application_id": app_id,
+        "message_id": message_id,
+        "from_addr": (from_addr or "")[:200],
+        "subject": (subject or "")[:300],
+        "code": payload.get("code"),
+        "links": payload.get("links") or [],
+        "status": "available",
+        "created_at": now,
+        "expires_at": now + timedelta(minutes=_TTL_MINUTES),
+        "kind": (freeze or {}).get("kind") or "verify",
+    }
+    try:
+        _coll().update_one(
+            {"user_email": user_email, "message_id": message_id},
+            {"$set": doc},
+            upsert=True,
+        )
+        logger.info(
+            "application_otp: captured grant user=%s app=%s code=%s links=%d",
+            user_email, app_id, bool(payload.get("code")), len(payload.get("links") or []),
+        )
+        # Nudge any waiting_verify freeze so the thaw sweep retries immediately.
+        if freeze and freeze.get("application_id"):
+            try:
+                _db().auto_apply_freezes.update_one(
+                    {
+                        "user_email": user_email,
+                        "application_id": freeze.get("application_id"),
+                        "status": "waiting_verify",
+                    },
+                    {"$set": {"next_check_at": now, "updated_at": now}},
+                )
+            except Exception as e:
+                logger.warning("application_otp: freeze nudge failed: %s", e)
+        return {"captured": True, "application_id": app_id,
+                "has_code": bool(payload.get("code")),
+                "link_count": len(payload.get("links") or [])}
+    except Exception as e:
+        logger.warning("application_otp: store failed: %s", e)
+        return {"captured": False, "reason": "store_error"}
+
+
+def wait_for_grant(
+    user_email: str,
+    application_id: str,
+    *,
+    timeout_sec: int = 90,
+    poll_sec: float = 3.0,
+) -> Optional[Dict[str, Any]]:
+    """Poll Mongo until an OTP grant is available, then claim it.
+
+    Used by the browser executor while a verify wall is on screen — the ATS
+    email often lands a few seconds after the form asks for a code.
+    """
+    import time
+
+    user_email = (user_email or "").strip().lower()
+    application_id = (application_id or "").strip()
+    if not user_email:
+        return None
+    deadline = time.time() + max(5, int(timeout_sec or 90))
+    poll_sec = max(1.0, float(poll_sec or 3.0))
+    while time.time() < deadline:
+        grant = claim_for_verify(user_email, application_id)
+        if grant:
+            return grant
+        time.sleep(poll_sec)
+    return None
+
+
+def ensure_indexes() -> None:
+    """Idempotent indexes — run from scripts/migrate_indexes.py only."""
+    col = _coll()
+    col.create_index(
+        [("user_email", 1), ("message_id", 1)],
+        unique=True,
+        name="user_message_unique",
+    )
+    col.create_index(
+        [("user_email", 1), ("application_id", 1), ("status", 1)],
+        name="user_app_status",
+    )
+    col.create_index(
+        [("expires_at", 1)],
+        expireAfterSeconds=0,
+        name="ttl_expires_at",
+    )
+
+
+def claim_for_verify(user_email: str, application_id: str) -> Optional[Dict[str, Any]]:
+    """Atomically claim one available grant for this user/app (or user-unbound)."""
+    user_email = (user_email or "").strip().lower()
+    application_id = (application_id or "").strip()
+    now = _now()
+    q: Dict[str, Any] = {
+        "user_email": user_email,
+        "status": "available",
+        "expires_at": {"$gt": now},
+        "$or": [
+            {"application_id": application_id},
+            {"application_id": None},
+            {"application_id": {"$exists": False}},
+        ],
+    }
+    try:
+        doc = _coll().find_one_and_update(
+            q,
+            {"$set": {"status": "claimed", "claimed_at": now,
+                      "application_id": application_id}},
+            sort=[("created_at", -1)],
+        )
+        if not doc:
+            return None
+        return {
+            "code": doc.get("code"),
+            "links": list(doc.get("links") or []),
+            "message_id": doc.get("message_id"),
+            "from_addr": doc.get("from_addr"),
+        }
+    except Exception as e:
+        logger.warning("application_otp: claim failed: %s", e)
+        return None

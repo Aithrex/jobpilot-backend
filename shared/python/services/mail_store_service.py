@@ -727,13 +727,13 @@ def correlate(user_email: str, from_domain: str, received_at: datetime) -> Dict[
     """Bind an inbound message to a real application, EVIDENCE-only.
 
     Returns ``{trust, application_id, suggestion}``. ``trust`` is ``verified``
-    ONLY when the sender's domain matches the employer/ATS domain of an
-    application the user actually SUBMITTED before ``received_at``; otherwise
-    ``unverified``.
+    when the sender's domain matches an employer/ATS domain of either:
+      * an application the user SUBMITTED before ``received_at``, OR
+      * an in-flight auto-apply row (running / needs_input / waiting_otp /
+        waiting_human / submitting) — so OTP/verify mail mid-apply correlates.
 
-    This function NEVER mutates application state — an ``unverified`` (or even a
-    ``verified``) message only carries a suggestion; the tracker transition is a
-    separate, code-gated decision made elsewhere (D8)."""
+    This function NEVER mutates application state.
+    """
     result: Dict[str, Any] = {"trust": "unverified", "application_id": None, "suggestion": None}
 
     email = InputSanitizer.sanitize_email(user_email)
@@ -743,8 +743,43 @@ def correlate(user_email: str, from_domain: str, received_at: datetime) -> Dict[
     if not dom:
         return result
 
-    # Owner-scoped read; from_domain is compared in Python, never placed in the
-    # Mongo filter (so it can never occupy an operator position).
+    # 1) In-flight auto-apply ledger rows (OTP arrives BEFORE submitted_at).
+    try:
+        from services import application_ledger_service as ledger
+        inflight = {
+            ledger.STATUS_RUNNING, ledger.STATUS_NEEDS_INPUT, ledger.STATUS_SUBMITTING,
+            getattr(ledger, "STATUS_WAITING_OTP", "waiting_otp"),
+            getattr(ledger, "STATUS_WAITING_HUMAN", "waiting_human"),
+            getattr(ledger, "STATUS_READY", "ready"),
+            getattr(ledger, "STATUS_READY_FOR_REVIEW", "ready_for_review"),
+            getattr(ledger, "STATUS_QUEUED_FOR_EXECUTION", "queued_for_execution"),
+        }
+        for row in _db().applications.find(
+            {"user_email": email, "status": {"$in": list(inflight)}},
+            {"_id": 0, "application_id": 1, "employer_domain": 1, "ats_domain": 1,
+             "apply_url": 1},
+        ).limit(50):
+            emp = str(row.get("employer_domain") or row.get("ats_domain") or "").lower()
+            if not emp:
+                # Derive a coarse domain hint from the apply URL host.
+                try:
+                    from urllib.parse import urlparse
+                    emp = (urlparse(row.get("apply_url") or "").hostname or "").lower()
+                except Exception:
+                    emp = ""
+            if emp and _domain_match(dom, emp):
+                result["trust"] = "verified"
+                result["application_id"] = row.get("application_id")
+                result["suggestion"] = {
+                    "suggested": None,
+                    "confidence": 0.0,
+                    "reason": "domain matched in-flight auto-apply application",
+                }
+                return result
+    except Exception as e:
+        logger.warning("mail-store correlate inflight failed: %s", e)
+
+    # 2) Submitted tailoring_records (post-submit recruiter mail).
     try:
         cursor = _db().tailoring_records.find(
             {"user_email": email},
@@ -771,7 +806,7 @@ def correlate(user_email: str, from_domain: str, received_at: datetime) -> Dict[
             result["trust"] = "verified"
             result["application_id"] = rec.get("record_id")
             result["suggestion"] = {
-                "suggested": None,  # LLM classification (async) fills this
+                "suggested": None,
                 "confidence": 0.0,
                 "reason": "domain+timing correlated to a submitted application",
             }
@@ -1040,7 +1075,52 @@ def ingest_committed(
         "mail-store: stored message thread=%s parts=%d attachments=%d trust=%s",
         thread_id, parsed["part_count"], len(attachment_docs), corr["trust"],
     )
+    _maybe_capture_application_otp(
+        user_email=user_email,
+        message_id=message_id,
+        subject=parsed["subject"],
+        text=text,
+        html=safe_html,
+        from_addr=parsed["from_addr"],
+        application_id=corr.get("application_id") or (thread or {}).get("application_id"),
+    )
     return {"thread_id": thread_id, "message_id": message_id, "deduplicated": False}
+
+
+def _maybe_capture_application_otp(
+    *,
+    user_email: str,
+    message_id: str,
+    subject: str,
+    text: str,
+    html: str,
+    from_addr: str,
+    application_id: Optional[str],
+) -> None:
+    """Capture OTP / verify links on ingest — independent of forwarding settings.
+
+    Previously capture only ran inside ``forward_notification`` after mailbox
+    gates (forwarding_enabled, forward_to, etc.), so OTP mail was silently
+  dropped when relay was off — the common auto-apply setup.
+    """
+    try:
+        from services.mail_forward_service import should_forward
+        from services import application_otp_service as otp
+
+        forward_ok, _category = should_forward({"subject": subject, "text": text})
+        if forward_ok:
+            return
+        otp.capture_from_noise_message(
+            user_email=user_email,
+            message_id=message_id,
+            subject=subject,
+            text=text or "",
+            html=html or "",
+            from_addr=from_addr or "",
+            application_id=application_id,
+        )
+    except Exception as e:  # pragma: no cover - never fail ingest
+        logger.warning("mail-store: otp capture skipped: %s", type(e).__name__)
 
 
 def _sha256_bytes(data: bytes) -> str:

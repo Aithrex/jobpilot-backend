@@ -886,11 +886,17 @@ class WorkdayAdapter(AtsAdapter):
 
     # Wizard step markers (data-automation-id of the active step panel) → step name.
     _STEP_MARKERS = (
+        ("applyFlowMyInfoPage", "my_information"),
         ("myInformationPage", "my_information"),
+        ("applyFlowMyExperiencePage", "my_experience"),
         ("myExperiencePage", "my_experience"),
+        ("applyFlowQuestionnairePage", "application_questions"),
         ("questionnairePage", "application_questions"),
+        ("applyFlowVoluntaryDisclosuresPage", "voluntary_disclosures"),
         ("voluntaryDisclosuresPage", "voluntary_disclosures"),
+        ("applyFlowSelfIdentificationPage", "self_identify"),
         ("selfIdentificationPage", "self_identify"),
+        ("applyFlowReviewPage", "review"),
         ("reviewPage", "review"),
     )
 
@@ -898,6 +904,14 @@ class WorkdayAdapter(AtsAdapter):
     _ACCOUNT_AUTOMATION_IDS = (
         "signInContent", "signInFormo", "createAccountLink", "signInLink",
         "createAccountSubmitButton", "signInSubmitButton", "backToSignInLink",
+        "createAccountHeader", "authView", "loginPanel",
+    )
+
+    # OTP / email-verify controls (theme-independent automation hooks).
+    _OTP_AUTOMATION_IDS = (
+        "otp", "otpCode", "otpInput", "verificationCode", "verifyCode",
+        "securityCode", "emailVerificationCode", "oneTimePassword",
+        "passcode", "mfaCode", "authCode",
     )
 
     # Workday job path: /job/[location/]{title_or_slug}  → req id trails after '_'.
@@ -962,12 +976,82 @@ class WorkdayAdapter(AtsAdapter):
             el.click()
         except Exception:  # pragma: no cover - defensive
             pass
+        # Wait for Workday to transition to the next step.
+        if self._page is not None:
+            try:
+                self._page.wait_for_timeout(2_000)
+                self._page.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:
+                try:
+                    self._page.wait_for_timeout(3_000)
+                except Exception:
+                    pass
+        self._current_step = self.current_step()
         return True
 
+    def upload_file(self, field: str, path: str) -> Dict[str, Any]:
+        """Attach a résumé/PDF into Workday's hidden file-upload input.
+
+        Workday uses ``data-automation-id=file-upload-input-ref`` (often hidden);
+        Playwright ``set_input_files`` works on hidden inputs. Falls back to the
+        Select files → file-chooser path.
+        """
+        name = os.path.basename(str(path or "")) or "resume.pdf"
+        key = self._canonical_key(field)
+        self._uploads[key] = name
+        self._resume_path = path  # keep for mid-wizard re-attach
+        if not path or self._page is None:
+            return {"field": key, "filename": name, "found": False}
+        page = self._page
+        # Direct set_input_files on the Workday hook (preferred).
+        for sel in (
+            "[data-automation-id='file-upload-input-ref']",
+            "input[type=file][data-automation-id*=file]",
+            "input[type=file]",
+        ):
+            try:
+                loc = page.locator(sel).first
+                if loc.count():
+                    loc.set_input_files(path, timeout=10_000)
+                    page.wait_for_timeout(1_000)
+                    logger.info("workday resume uploaded via %s", sel)
+                    return {"field": key, "filename": name, "found": True}
+            except Exception as e:
+                logger.info("workday upload via %s failed: %s", sel, e)
+        # Fallback: click Select files → native chooser.
+        try:
+            btn = page.locator("[data-automation-id='select-files']").first
+            if btn.count():
+                with page.expect_file_chooser(timeout=8_000) as fc:
+                    btn.click(timeout=5_000)
+                fc.value.set_files(path)
+                page.wait_for_timeout(1_000)
+                return {"field": key, "filename": name, "found": True}
+        except Exception as e:
+            logger.info("workday upload file-chooser failed: %s", e)
+        return {"field": key, "filename": name, "found": False}
+
+    def _ensure_resume_uploaded(self) -> None:
+        """Re-attach résumé if a Workday file input is on the current step."""
+        path = getattr(self, "_resume_path", None)
+        if not path or self._page is None:
+            return
+        try:
+            if self._page.query_selector("[data-automation-id='file-upload-input-ref']") \
+                    or self._page.query_selector("input[type=file]"):
+                # Skip if a file name already appears in the attachments panel.
+                body = self._body_text() or ""
+                if ".pdf" in body.lower() and "upload a file" in body.lower():
+                    # Still try — Workday may show the label without a file.
+                    pass
+                self.upload_file("resume", path)
+        except Exception as e:
+            logger.info("workday mid-wizard resume skip: %s", e)
+
     def recon(self) -> List[Dict[str, Any]]:
+        # Resume upload lives on My Experience — attach whenever the hook is present.
+        self._ensure_resume_uploaded()
         qs = super().recon()
-        # Cache the wizard position alongside the normalized fields so the executor
-        # knows whether to advance (Next) or submit (Review).
         self._current_step = self.current_step()
         self._has_next_step = self.has_next_step()
         return qs
@@ -977,24 +1061,116 @@ class WorkdayAdapter(AtsAdapter):
     # =====================================================================
     def _extract_raw_fields(self) -> List[Dict[str, Any]]:
         raw: List[Dict[str, Any]] = []
-        seen = set()
+        seen: set = set()
         self._widget_by_handle: Dict[str, str] = {}
+        # Map formField handle → child input element for fill().
+        self._formfield_child: Dict[str, Any] = {}
         candidates: List[Tuple[Any, str]] = []
+
+        # Pass 1: direct data-automation-id on input/textarea/select/button.
         for el in self._qsa("input[data-automation-id]"):
             candidates.append((el, "input"))
         for el in self._qsa("textarea[data-automation-id]"):
             candidates.append((el, "textarea"))
         for el in self._qsa("select[data-automation-id]"):
             candidates.append((el, "select"))
-        # Workday's custom button-style dropdowns / multiselects.
         for el in self._qsa("button[data-automation-id][aria-haspopup=listbox]"):
             candidates.append((el, "dropdown"))
 
+        # Pass 2: Workday puts data-automation-id on WRAPPER DIVs
+        # (e.g. formField-legalName--firstName) with plain inputs inside.
+        for wrapper in self._qsa("div[data-automation-id^='formField-']"):
+            wrapper_aid = (self._attr(wrapper, "data-automation-id") or "").strip()
+            if not wrapper_aid or wrapper_aid in seen:
+                continue
+            if not self._visible(wrapper):
+                continue
+            # Skip section/container wrappers that aren't real fields.
+            if wrapper_aid in (
+                "formField-disabilityForm",  # CC-305 section chrome
+            ):
+                continue
+            # Skip Workday multiselect containers (pre-filled dropdowns
+            # like Country/Region phone code).
+            if self._qsa_within(wrapper, "[data-automation-id='multiSelectContainer']"):
+                continue
+            # Look for an input/textarea/select child inside the wrapper.
+            child = None
+            child_kind = "text"
+            # Check radio buttons first.
+            radios = self._qsa_within(wrapper, "input[type=radio]")
+            if radios:
+                child = radios[0]
+                child_kind = "radio"
+            # Check Workday custom dropdown BEFORE standard inputs
+            # (dropdowns also contain hidden search inputs inside).
+            if child is None:
+                btns = self._qsa_within(wrapper, "button[aria-haspopup=listbox]")
+                if btns:
+                    child = btns[0]
+                    child_kind = "dropdown"
+            # Then standard input/textarea/select (skip if dropdown found).
+            if child is None:
+                for tag in ("input", "textarea", "select"):
+                    children = self._qsa_within(wrapper, tag)
+                    for ch in children:
+                        if tag == "input":
+                            itype = (self._attr(ch, "type") or "text").lower()
+                            if itype in ("hidden", "submit", "button", "reset",
+                                         "image", "file", "password", "radio"):
+                                continue
+                        child = ch
+                        child_kind = tag
+                        break
+                    if child:
+                        break
+            if child is None:
+                continue
+            # Dedupe: skip if the child was already captured by pass 1.
+            child_aid = self._attr(child, "data-automation-id") or ""
+            if child_aid and child_aid in seen:
+                continue
+            seen.add(wrapper_aid)
+            if child_kind == "radio":
+                qtype, widget = QTYPE_SELECT, "radio"
+            elif child_kind == "textarea":
+                qtype, widget = QTYPE_TEXTAREA, "textarea"
+            elif child_kind == "select":
+                qtype, widget = QTYPE_SELECT, "select"
+            elif child_kind == "dropdown":
+                qtype, widget = QTYPE_SELECT, "dropdown"
+            else:
+                itype = (self._attr(child, "type") or "text").lower()
+                qtype = _INPUT_TYPE_MAP.get(itype, QTYPE_TEXT)
+                widget = ("checkbox" if itype == "checkbox"
+                          else "date" if itype == "date" else "text")
+            label = self._label_for_wrapper(wrapper, child, wrapper_aid)
+            required = (self._attr(child, "required") is not None
+                        or self._attr(child, "aria-required") == "true"
+                        or self._attr(wrapper, "aria-required") == "true")
+            # Also detect Workday's asterisk pattern in wrapper text.
+            if not required:
+                wtext = self._text(wrapper) or ""
+                if "*" in wtext[:80]:
+                    required = True
+            self._widget_by_handle[wrapper_aid] = widget
+            self._formfield_child[wrapper_aid] = child
+            raw.append({
+                "id": wrapper_aid, "text": label, "type": qtype,
+                "required": bool(required),
+                "is_legal_attestation": _is_legal(label),
+            })
+            if len(raw) >= _MAX_QUESTIONS:
+                return raw
+
+        # Process pass 1 candidates.
         for el, kind in candidates:
             handle = (self._attr(el, "data-automation-id") or "").strip()
             if not handle or handle in seen:
                 continue
             if any(handle.startswith(p) for p in _EXECUTOR_SUPPLIED):
+                continue
+            if not self._visible(el):
                 continue
             if kind == "input":
                 itype = (self._attr(el, "type") or "text").lower()
@@ -1009,7 +1185,7 @@ class WorkdayAdapter(AtsAdapter):
                 qtype, widget = QTYPE_TEXTAREA, "textarea"
             elif kind == "select":
                 qtype, widget = QTYPE_SELECT, "select"
-            else:  # Workday custom dropdown button
+            else:
                 qtype, widget = QTYPE_SELECT, "dropdown"
 
             seen.add(handle)
@@ -1024,6 +1200,41 @@ class WorkdayAdapter(AtsAdapter):
             if len(raw) >= _MAX_QUESTIONS:
                 break
         return raw
+
+    def _qsa_within(self, parent, selector: str) -> list:
+        """Query all matching children inside a parent element."""
+        try:
+            return parent.query_selector_all(selector) or []
+        except Exception:
+            return []
+
+    def _label_for_wrapper(self, wrapper, child, handle: str) -> str:
+        """Extract label from a Workday formField wrapper div. Prefer the
+        wrapper's question text over generic child aria-labels (Month/Year/
+        Select One/Search) that Workday puts on inner controls."""
+        _GENERIC = {
+            "month", "year", "day", "search", "select one", "select one required",
+            "required", "select", "type to add",
+        }
+        # Prefer wrapper text first (contains the real question).
+        wtext = (self._text(wrapper) or "").strip()
+        if wtext:
+            for noise in ("Select One", "Required", "use right and left arrows",
+                          "current value is", "Drop files here", "orSelect files",
+                          "Type to Add Skills", "0 items selected"):
+                idx = wtext.find(noise)
+                if idx > 10:
+                    wtext = wtext[:idx]
+            wtext = re.sub(r"\*+\s*$", "", wtext).strip()
+            wtext = re.sub(r"^\d+\)\s*\*?\s*", "", wtext).strip()
+            wtext = re.sub(r"\*+$", "", wtext).strip()
+            if wtext and wtext.lower() not in _GENERIC:
+                return wtext[:160]
+        for a in ("aria-label", "title", "placeholder"):
+            v = self._attr(child, a)
+            if v and v.strip() and v.strip().lower() not in _GENERIC:
+                return v.strip()
+        return self._humanize(handle.replace("formField-", ""))
 
     def _label_for(self, el, handle: str) -> str:
         """Workday labels: the ``aria-label`` on the control is the stable,
@@ -1043,11 +1254,28 @@ class WorkdayAdapter(AtsAdapter):
         return s.strip().lower() or (handle or "field")
 
     def _find_element(self, handle: str):
-        """Resolve a field by its ``data-automation-id`` (the deterministic key)."""
+        """Resolve a field by its ``data-automation-id`` (the deterministic key).
+        For ``formField-*`` handles, returns the child input inside the wrapper."""
         if not handle:
             return None
+        # Check cached formField child map first.
+        child = getattr(self, "_formfield_child", {}).get(handle)
+        if child is not None:
+            return child
+        # Direct automation-id match.
         for el in self._qsa("[data-automation-id]"):
             if self._attr(el, "data-automation-id") == handle:
+                # If it's a wrapper div, find the input inside.
+                tag = (getattr(el, "tag_name", None) or
+                       self._attr(el, "tagName") or "").lower()
+                if tag in ("div", "span", "section"):
+                    for itag in ("input", "textarea", "select"):
+                        children = self._qsa_within(el, itag)
+                        for ch in children:
+                            itype = (self._attr(ch, "type") or "text").lower()
+                            if itype not in ("hidden", "submit", "button",
+                                             "reset", "image", "file"):
+                                return ch
                 return el
         return None
 
@@ -1061,22 +1289,332 @@ class WorkdayAdapter(AtsAdapter):
         surfaces instead of writing a wrong-but-plausible value into the snapshot."""
         key = self._canonical_key(field_id)
         handle = self._handle_for(key)
-        el = self._find_element(handle)
+        el = self._find_visible_element(handle)
         if el is None:
             return {"field_id": key, "handle": handle, "found": False,
                     "status": "needs_input", "value": None,
                     "reason": "no data-automation-id match on current step"}
         widget = getattr(self, "_widget_by_handle", {}).get(handle, "text")
-        if widget in ("text", "textarea", "date", "checkbox", "radio"):
-            try:
-                el.fill(value)
-            except Exception as e:  # pragma: no cover - defensive
-                logger.info("workday fill set failed %s: %s", field_id, e)
+        # Workday date widgets: separate Month + Year inputs inside the wrapper.
+        if handle in ("formField-startDate", "formField-endDate") \
+                or "Date" in (handle or "") \
+                or widget == "date":
+            if self._fill_month_year(handle, str(value)):
+                self._filled[key] = value
+                return {"field_id": key, "handle": handle, "found": True,
+                        "status": "filled", "widget": "date", "value": value}
+            return {"field_id": key, "handle": handle, "found": True,
+                    "status": "needs_input", "value": None,
+                    "reason": "date_fill_failed"}
+        if widget == "radio":
+            # For radio groups inside formField wrappers, click the matching
+            # label/radio by value text (e.g. "Yes"/"No").
+            filled = self._fill_radio(handle, str(value))
+            if not filled:
+                return {"field_id": key, "handle": handle, "found": True,
+                        "status": "needs_input", "value": None,
+                        "reason": "radio option '%s' not found" % value}
+        elif widget in ("text", "textarea", "date", "checkbox"):
+            if widget == "checkbox":
+                # Multi-option checkbox groups: click the option by label text.
+                val_s = str(value).strip()
+                if val_s.lower() not in ("1", "true", "yes", "y", "on", "checked",
+                                          "0", "false", "no", "n", "off", ""):
+                    if self._fill_radio(handle, val_s):  # same label-click path
+                        self._filled[key] = value
+                        return {"field_id": key, "handle": handle, "found": True,
+                                "status": "filled", "widget": "checkbox", "value": value}
+                want = val_s.lower() in ("1", "true", "yes", "y", "on", "checked")
+                try:
+                    checked = False
+                    try:
+                        checked = bool(el.is_checked())
+                    except Exception:
+                        pass
+                    if want != checked:
+                        try:
+                            el.click(timeout=5_000)
+                        except TypeError:
+                            el.click()
+                except Exception as e:
+                    logger.info("workday checkbox fill failed %s: %s", field_id, e)
+                    return {"field_id": key, "handle": handle, "found": True,
+                            "status": "needs_input", "value": None,
+                            "reason": "checkbox_failed:%s" % e}
+            else:
+                try:
+                    try:
+                        el.scroll_into_view_if_needed(timeout=3_000)
+                    except Exception:
+                        pass
+                    try:
+                        el.fill(str(value), timeout=8_000)
+                    except TypeError:
+                        el.fill(str(value))
+                except Exception as e:  # pragma: no cover - defensive
+                    logger.info("workday fill set failed %s: %s", field_id, e)
+                    try:
+                        if self._page is not None and hasattr(self._page, "locator"):
+                            loc = self._page.locator(
+                                "[data-automation-id=%s]" % handle).first
+                            if loc.count() and loc.is_visible():
+                                loc.fill(str(value), timeout=8_000, force=True)
+                            else:
+                                return {"field_id": key, "handle": handle,
+                                        "found": False, "status": "needs_input",
+                                        "value": None, "reason": "not_visible:%s" % e}
+                        else:
+                            return {"field_id": key, "handle": handle,
+                                    "found": False, "status": "needs_input",
+                                    "value": None, "reason": str(e)[:120]}
+                    except Exception as e2:
+                        logger.info("workday fill retry failed %s: %s", field_id, e2)
+                        return {"field_id": key, "handle": handle, "found": False,
+                                "status": "needs_input", "value": None,
+                                "reason": str(e2)[:120]}
+        elif widget == "dropdown":
+            # Workday custom dropdown: click button → wait for listbox → click option.
+            filled_dd = self._fill_dropdown(handle, el, str(value))
+            if not filled_dd:
+                return {"field_id": key, "handle": handle, "found": True,
+                        "status": "needs_input", "value": None,
+                        "reason": "dropdown option '%s' not found" % value}
         # Custom dropdown/select widgets: the live Playwright driver actuates them
         # via this same automation id; self._filled is the authoritative record.
         self._filled[key] = value
         return {"field_id": key, "handle": handle, "found": True,
                 "status": "filled", "widget": widget, "value": value}
+
+    def _fill_month_year(self, handle: str, value: str) -> bool:
+        """Fill Workday's split Month[/Day]/Year date widget (MM/YYYY or MM/DD/YYYY)."""
+        if self._page is None or not hasattr(self._page, "locator"):
+            return True
+        v = (value or "").strip()
+        month = day = year = None
+        m = re.match(r"^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$", v)
+        if m:
+            month, day, year = str(int(m.group(1))), str(int(m.group(2))), m.group(3)
+        else:
+            m = re.match(r"^(\d{1,2})[/\-](\d{4})$", v)
+            if m:
+                month, year = str(int(m.group(1))), m.group(2)
+            else:
+                m = re.match(r"^(\d{4})[/\-](\d{1,2})$", v)
+                if m:
+                    year, month = m.group(1), str(int(m.group(2)))
+        if not month or not year:
+            return False
+        try:
+            wrapper = self._page.locator("[data-automation-id=%s]" % handle)
+            if not wrapper.count():
+                return False
+            # Prefer typing the full date into the month spinbutton — Workday
+            # auto-advances across day/year segments for MM/DD/YYYY widgets.
+            month_inp = wrapper.locator(
+                "[data-automation-id='dateSectionMonth-input']").first
+            if not month_inp.count():
+                return False
+            try:
+                month_inp.scroll_into_view_if_needed(timeout=3_000)
+            except Exception:
+                pass
+            typed = v if day else ("%s/%s" % (month, year))
+            try:
+                month_inp.click(timeout=3_000, force=True)
+                month_inp.press("Control+a")
+                month_inp.type(typed, delay=35)
+                month_inp.press("Tab")
+                self._page.wait_for_timeout(400)
+                return True
+            except Exception as e1:
+                logger.info("workday date type-full failed: %s", e1)
+            # Fallback: set each spinbutton via native value setter.
+            day_inp = wrapper.locator(
+                "[data-automation-id='dateSectionDay-input']").first
+            year_inp = wrapper.locator(
+                "[data-automation-id='dateSectionYear-input']").first
+            pairs = [(month_inp, month)]
+            if day and day_inp.count():
+                pairs.append((day_inp, day))
+            if year_inp.count():
+                pairs.append((year_inp, year))
+            for loc, val in pairs:
+                try:
+                    loc.evaluate(
+                        """(el, v) => {
+                          const setter = Object.getOwnPropertyDescriptor(
+                            window.HTMLInputElement.prototype, 'value').set;
+                          el.focus();
+                          setter.call(el, v);
+                          el.dispatchEvent(new Event('input', {bubbles:true}));
+                          el.dispatchEvent(new Event('change', {bubbles:true}));
+                          el.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));
+                        }""", val)
+                except Exception as e2:
+                    logger.info("workday date segment set failed: %s", e2)
+                    return False
+            try:
+                year_inp.press("Tab")
+            except Exception:
+                pass
+            self._page.wait_for_timeout(400)
+            return True
+        except Exception as e:
+            logger.info("workday fill_month_year failed %s: %s", handle, e)
+            return False
+
+
+    def _fill_dropdown(self, handle: str, el, value: str) -> bool:
+        """Actuate a Workday custom dropdown by clicking the button, waiting for
+        the listbox popup, and clicking the option that matches ``value``."""
+        if self._page is None or not hasattr(self._page, "locator"):
+            return True  # FakePage — just record the value
+        try:
+            # Find and click the dropdown button inside the wrapper.
+            wrapper_loc = self._page.locator(
+                "[data-automation-id=%s]" % handle)
+            btn = wrapper_loc.locator("button[aria-haspopup=listbox]").first
+            if not btn.count():
+                btn = wrapper_loc.locator("button").first
+            if not btn.count():
+                return False
+            # If already shows desired value, skip.
+            current = (btn.text_content() or "").strip()
+            if current.lower() == value.lower():
+                return True
+            btn.scroll_into_view_if_needed(timeout=3_000)
+            btn.click(timeout=5_000)
+            self._page.wait_for_timeout(500)
+            # Look for the listbox popup and click the matching option.
+            listbox = self._page.locator("[role=listbox]")
+            candidates = [value]
+            # Decline / prefer-not synonyms for EEO fields.
+            vl = value.lower()
+            if any(tok in vl for tok in ("decline", "do not wish", "prefer not", "don't wish",
+                                          "do not want", "don't want")):
+                candidates.extend([
+                    "Decline to self-identify", "I do not wish to answer",
+                    "I don't wish to answer", "Prefer not to say",
+                    "I do not want to answer", "I Don't Wish To Answer",
+                    "Decline To Self Identify", "Choose not to disclose",
+                    "Decline to State (United States of America)",
+                    "Decline",
+                    "I don't wish to answer",
+                    "No, I do not have a disability",
+                    "No, I Don't Have A Disability, Or A History/Record Of Having A Disability",
+                ])
+            if listbox.count():
+                for cand in candidates:
+                    option = listbox.get_by_text(cand, exact=False).first
+                    if option.count():
+                        option.click(timeout=5_000)
+                        self._page.wait_for_timeout(300)
+                        return True
+            # Fallback: Workday sometimes uses [data-automation-id=promptOption].
+            options = self._page.locator("[data-automation-id=promptOption]")
+            for i in range(min(options.count(), 80)):
+                opt = options.nth(i)
+                text = (opt.text_content() or "").strip()
+                tl = text.lower()
+                for cand in candidates:
+                    if cand.lower() in tl or tl in cand.lower():
+                        opt.click(timeout=5_000)
+                        self._page.wait_for_timeout(300)
+                        return True
+            # Close dropdown if no match found.
+            self._page.keyboard.press("Escape")
+            return False
+        except Exception as e:
+            logger.info("workday fill_dropdown failed %s: %s", handle, e)
+            try:
+                self._page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return False
+
+    def _fill_radio(self, handle: str, value: str) -> bool:
+        """Click the radio option whose label matches ``value`` inside a
+        formField wrapper or automation-id group. Returns True on success."""
+        val_lower = value.strip().lower()
+        # Find the wrapper div.
+        wrapper = None
+        for el in self._qsa("[data-automation-id]"):
+            if self._attr(el, "data-automation-id") == handle:
+                wrapper = el
+                break
+        if wrapper is None:
+            return False
+        # Find all radio inputs and their labels inside.
+        radios = self._qsa_within(wrapper, "input[type=radio]")
+        for radio in radios:
+            # Check associated label: Workday uses <label for=id>.
+            rid = self._attr(radio, "id") or ""
+            label_el = self._qs('label[for="%s"]' % rid) if rid else None
+            label_text = (self._text(label_el) or "").strip().lower() if label_el else ""
+            if label_text == val_lower:
+                try:
+                    radio.scroll_into_view_if_needed(timeout=3_000)
+                except Exception:
+                    pass
+                try:
+                    radio.click(timeout=5_000)
+                except TypeError:
+                    radio.click()
+                return True
+            # Also try clicking the label itself.
+        # Fallback: use page locator to click by text.
+        if self._page is not None and hasattr(self._page, "locator"):
+            try:
+                wrapper_loc = self._page.locator(
+                    "[data-automation-id=%s]" % handle)
+                label_loc = wrapper_loc.get_by_text(value, exact=True)
+                if label_loc.count():
+                    label_loc.first.click(timeout=5_000)
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _find_visible_element(self, handle: str):
+        """Prefer a visible automation-id match (hidden prior-step clones exist).
+
+        For ``formField-*`` handles, returns the child input inside the wrapper.
+        Falls back to the first match so the FakePage fixture harness (and
+        partially hydrated pages) still resolve handles.
+        """
+        if not handle:
+            return None
+        # Check cached formField child map first.
+        child = getattr(self, "_formfield_child", {}).get(handle)
+        if child is not None:
+            return child
+        matches = []
+        for el in self._qsa("[data-automation-id]"):
+            if self._attr(el, "data-automation-id") == handle:
+                matches.append(el)
+        for el in matches:
+            if self._visible(el):
+                # If wrapper div, dig into child input.
+                tag = (getattr(el, "tag_name", None) or
+                       self._attr(el, "tagName") or "").lower()
+                if tag in ("div", "span", "section"):
+                    # For dropdowns/radios, return the wrapper itself so
+                    # _fill_dropdown / _fill_radio can operate on it.
+                    widget = getattr(self, "_widget_by_handle", {}).get(
+                        handle, "text")
+                    if widget in ("dropdown", "radio"):
+                        return el
+                    for itag in ("input", "textarea", "select"):
+                        children = self._qsa_within(el, itag)
+                        for ch in children:
+                            itype = (self._attr(ch, "type") or "text").lower()
+                            if itype not in ("hidden", "submit", "button",
+                                             "reset", "image", "file"):
+                                return ch
+                return el
+        if matches:
+            return self._find_element(handle) or matches[0]
+        return None
 
     # =====================================================================
     # Human-takeover: account gate is a HARD boundary here
@@ -1119,6 +1657,8 @@ class WorkdayAdapter(AtsAdapter):
             return {"reason": TAKEOVER_CAPTCHA, "evidence": ["captcha_challenge_visible"]}
         if _MFA_RE.search(self._body_text()):
             return {"reason": TAKEOVER_MFA, "evidence": ["mfa_or_otp_prompt"]}
+        if self._otp_gate_present():
+            return {"reason": TAKEOVER_MFA, "evidence": ["otp_automation_id"]}
         if self._account_gate_present():
             return {"reason": TAKEOVER_ACCOUNT_REQUIRED,
                     "evidence": self._account_evidence()}
@@ -1126,6 +1666,423 @@ class WorkdayAdapter(AtsAdapter):
         if novel:
             return {"reason": TAKEOVER_NOVEL_LEGAL, "evidence": novel}
         return None
+
+    def _otp_gate_present(self) -> bool:
+        """True when a Workday/Okta OTP input is on screen."""
+        for aid in self._OTP_AUTOMATION_IDS:
+            if self._qs("[data-automation-id=%s]" % aid) is not None:
+                return True
+            # Case-sensitive contains — automation ids are camelCase.
+            if self._qs("[data-automation-id*=%s]" % aid) is not None:
+                return True
+        try:
+            if self._qs("input[autocomplete=one-time-code]") is not None:
+                return True
+        except Exception:
+            pass
+        return False
+
+    def dismiss_overlays(self) -> None:
+        """Cookie / OneTrust / GDPR banners that intercept Apply clicks."""
+        if self._page is None:
+            return
+        for sel in (
+            "button:has-text('Accept Cookies')",
+            "button:has-text('Accept All')",
+            "button:has-text('Accept all')",
+            "button:has-text('I Accept')",
+            "button:has-text('Agree')",
+            "button:has-text('Decline')",  # Intel: still clears overlay
+            "[data-automation-id=legalNoticeAcceptButton]",
+            "[data-automation-id=legalNoticeDeclineButton]",
+            "#onetrust-accept-btn-handler",
+            "button#onetrust-accept-btn-handler",
+            "[id*=onetrust] button:has-text('Accept')",
+            "button[aria-label*='Accept']",
+        ):
+            try:
+                loc = self._page.locator(sel).first
+                if loc.count() and loc.is_visible():
+                    loc.click(timeout=2_500, force=True)
+                    self._page.wait_for_timeout(400)
+                    return
+            except Exception:
+                continue
+
+    def click_apply_cta(self) -> bool:
+        """Open the application wizard from a job-details / Apply landing page.
+
+        Workday tenants are SPAs: wait for hydration, clear cookie banners, then
+        click Apply (role/text + automation-id). Uses Playwright locators so
+        ``:has-text`` / role queries work reliably.
+        """
+        if self._page is None:
+            return False
+        page = self._page
+        self.dismiss_overlays()
+        # Wait for SPA Apply control (Intel / classic WD posting shells).
+        for wait_sel in (
+            "[data-automation-id=adventureButton]",
+            "[data-automation-id=jobPostingApplyButton]",
+            "[data-automation-id=applyButton]",
+            "button:has-text('Apply')",
+            "a:has-text('Apply')",
+        ):
+            try:
+                page.wait_for_selector(wait_sel, state="visible", timeout=8_000)
+                break
+            except Exception:
+                continue
+        self.dismiss_overlays()
+
+        selectors = (
+            "[data-automation-id=adventureButton]",
+            "[data-automation-id=jobPostingApplyButton]",
+            "[data-automation-id=applyButton]",
+            "a[data-automation-id*=Apply]",
+            "button[data-automation-id*=Apply]",
+            "button:has-text('Apply Manually')",
+            "a:has-text('Apply Manually')",
+            "button:has-text('Apply')",
+            "a:has-text('Apply')",
+        )
+        before = page.url
+        for sel in selectors:
+            try:
+                loc = page.locator(sel).first
+                if not loc.count():
+                    continue
+                if not loc.is_visible():
+                    continue
+                loc.scroll_into_view_if_needed(timeout=3_000)
+                try:
+                    loc.click(timeout=5_000)
+                except Exception:
+                    loc.click(timeout=5_000, force=True)
+                page.wait_for_timeout(1_200)
+                # Intel / WD: "Start Your Application" chooser modal.
+                self._click_application_path()
+                # Success: URL change, account gate, or form fields appeared.
+                if page.url != before:
+                    return True
+                if self._account_gate_present() or self._otp_gate_present():
+                    return True
+                if (self._qs("[data-automation-id=email]")
+                        or self._qs("input[type=email]")
+                        or self._qs("[data-automation-id=file-upload-input-ref]")
+                        or self._qs("input[data-automation-id*=formField]")):
+                    return True
+                # Still on JD but click registered — treat as ok so caller waits.
+                return True
+            except Exception:
+                continue
+        # get_by_role last resort (exact name Apply).
+        try:
+            btn = page.get_by_role("button", name="Apply", exact=True)
+            if btn.count():
+                btn.first.click(timeout=5_000, force=True)
+                page.wait_for_timeout(1_200)
+                self._click_application_path()
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _click_application_path(self) -> bool:
+        """Chooser modal after Apply: Prefer Apply Manually (account/wizard)."""
+        if self._page is None:
+            return False
+        page = self._page
+        for sel in (
+            "[data-automation-id=applyManually]",
+            "button:has-text('Apply Manually')",
+            "a:has-text('Apply Manually')",
+            "[data-automation-id=autofillWithResume]",
+            "button:has-text('Autofill with Resume')",
+            "button:has-text('Apply with Resume')",
+        ):
+            try:
+                loc = page.locator(sel).first
+                if not loc.count() or not loc.is_visible():
+                    continue
+                loc.click(timeout=5_000)
+                page.wait_for_timeout(1_500)
+                return True
+            except Exception:
+                continue
+        return False
+
+    def fill_account_credentials(self, email: str, password: str, *,
+                                 create: bool = False) -> bool:
+        """Fill sign-in or create-account form. Returns True if submit clicked."""
+        if self._page is None:
+            return False
+        page = self._page
+
+        if create:
+            # Never click header "Sign In" — it opens a modal over Create Account.
+            link = self._qs("[data-automation-id=createAccountLink]")
+            if link is not None:
+                try:
+                    link.click()
+                    page.wait_for_timeout(600)
+                except Exception:
+                    pass
+            # Close a stray Sign In dialog if it covers the create form.
+            self._dismiss_signin_overlay()
+        else:
+            self.dismiss_overlays()
+            # Already on a Sign In form → do not click header "Sign In" (resets).
+            already = (
+                self._qs("[data-automation-id=email]") is not None
+                or self._qs("input[type=email]") is not None
+                or self._qs("input[type=password]") is not None
+            )
+            if not already:
+                for sel in (
+                    "[data-automation-id=signInLink]",
+                    "button:has-text('Sign In')",
+                    "a:has-text('Sign In')",
+                ):
+                    try:
+                        loc = page.locator(sel).first
+                        if loc.count() and loc.is_visible():
+                            loc.click(timeout=2_500)
+                            page.wait_for_timeout(600)
+                            break
+                    except Exception:
+                        continue
+            # If Sign In form says create instead, follow Create Account when asked.
+            try:
+                body_l = ((page.inner_text("body") or "")[:800]).lower()
+                if "don't have an account" in body_l or "create account" in body_l:
+                    # Prefer create when vault has never succeeded for this tenant
+                    # and Sign In would just bounce — caller decides via create flag.
+                    pass
+            except Exception:
+                pass
+
+        # Prefer fields inside the active dialog / create panel.
+        # Do NOT scope to a bare ``form`` — Intel login embeds a honeypot form
+        # ("Enter website") that steals the first email/password match.
+        root = page
+        for scope in (
+            "[data-automation-id=createAccountSection]",
+            "[data-automation-id=signInContent]",
+            "[data-automation-id=authView]",
+            "[role=dialog]",
+            "section:has(h1:has-text('Sign In'))",
+            "section:has(h2:has-text('Sign In'))",
+            "div:has(> h1:has-text('Sign In'))",
+            "div:has(> h2:has-text('Create Account'))",
+        ):
+            try:
+                loc = page.locator(scope).first
+                if loc.count() and loc.is_visible():
+                    root = loc
+                    break
+            except Exception:
+                continue
+
+        def _find(sel: str):
+            try:
+                loc = root.locator(sel).first
+                if loc.count():
+                    return loc
+            except Exception:
+                pass
+            try:
+                loc = page.locator(sel).first
+                if loc.count():
+                    return loc
+            except Exception:
+                pass
+            return None
+
+        email_el = (_find("[data-automation-id=email]")
+                    or _find("input[type=email]")
+                    or _find("input[autocomplete=username]")
+                    or _find("input[name=email]")
+                    or _find("input[id*=email i]"))
+        if email_el is None:
+            try:
+                email_el = page.get_by_label(re.compile(r"email\s*address", re.I)).first
+                if not email_el.count():
+                    email_el = None
+            except Exception:
+                email_el = None
+        pass_el = (_find("[data-automation-id=password]")
+                   or _find("input[type=password]")
+                   or _find("input[name=password]")
+                   or _find("input[autocomplete=current-password]")
+                   or _find("input[autocomplete=new-password]"))
+        if pass_el is None:
+            try:
+                pass_el = page.get_by_label(re.compile(r"^password$", re.I)).first
+                if not pass_el.count():
+                    pass_el = None
+            except Exception:
+                pass_el = None
+        if email_el is None or pass_el is None:
+            return False
+        try:
+            email_el.fill(email, timeout=5_000)
+            pass_el.fill(password, timeout=5_000)
+        except Exception:
+            try:
+                email_el.click()
+                email_el.fill("")
+                email_el.type(email, delay=20)
+                pass_el.click()
+                pass_el.fill("")
+                pass_el.type(password, delay=20)
+            except Exception:
+                return False
+
+        if create:
+            confirm = (_find("[data-automation-id=confirmPassword]")
+                       or _find("[data-automation-id=verifyPassword]")
+                       or _find("input[name*=confirm][type=password]")
+                       or _find("input[aria-label*='Verify'][type=password]")
+                       or _find("input[aria-label*='Confirm'][type=password]"))
+            if confirm is None:
+                try:
+                    pwds = page.locator("input[type=password]")
+                    if pwds.count() >= 2:
+                        confirm = pwds.nth(1)
+                except Exception:
+                    confirm = None
+            if confirm is not None:
+                try:
+                    confirm.fill(password, timeout=5_000)
+                except Exception:
+                    pass
+
+        if create:
+            btn_sels = (
+                "[data-automation-id=createAccountSubmitButton]",
+                "button:has-text('Create Account')",
+                "button:has-text('Create account')",
+                "button[type=submit]",
+            )
+        else:
+            btn_sels = (
+                "[data-automation-id=signInSubmitButton]",
+                "button[data-automation-id=signInSubmitButton]",
+                "button[type=submit]",
+            )
+        clicked = False
+        for sel in btn_sels:
+            try:
+                btn = root.locator(sel).first if hasattr(root, "locator") else None
+                if btn is None or not btn.count():
+                    btn = page.locator(sel).first
+                if not btn.count() or not btn.is_visible():
+                    continue
+                if create and "sign" in sel.lower():
+                    continue
+                try:
+                    btn.scroll_into_view_if_needed(timeout=3_000)
+                except Exception:
+                    pass
+                btn.click(timeout=5_000)
+                page.wait_for_timeout(1_200)
+                clicked = True
+                break
+            except Exception:
+                continue
+        if not clicked and create:
+            try:
+                btn = page.get_by_role("button", name=re.compile(r"create\s*account", re.I))
+                if btn.count():
+                    btn.first.scroll_into_view_if_needed(timeout=3_000)
+                    btn.first.click(timeout=5_000)
+                    page.wait_for_timeout(1_200)
+                    clicked = True
+            except Exception:
+                pass
+        if not clicked and not create:
+            # Prefer the Sign In control nearest the password field — never the
+            # header/nav "Sign In" which resets the form.
+            try:
+                # Stable Workday automation id first.
+                btn = page.locator("[data-automation-id=signInSubmitButton]").first
+                if btn.count() and btn.is_visible():
+                    btn.scroll_into_view_if_needed(timeout=3_000)
+                    btn.click(timeout=5_000, force=True)
+                    page.wait_for_timeout(1_200)
+                    clicked = True
+            except Exception:
+                pass
+            if not clicked:
+                try:
+                    candidates = page.locator(
+                        "button:has-text('Sign In'), button:has-text('Sign in')")
+                    n = candidates.count()
+                    chosen = None
+                    for i in range(n):
+                        c = candidates.nth(i)
+                        if not c.is_visible():
+                            continue
+                        box = c.bounding_box() or {}
+                        # Header is typically y < 80; form submit is mid-page.
+                        if (box.get("y") or 0) < 100:
+                            continue
+                        chosen = c
+                    if chosen is None and n:
+                        chosen = candidates.last if n > 1 else candidates.first
+                    if chosen is not None:
+                        chosen.scroll_into_view_if_needed(timeout=3_000)
+                        chosen.click(timeout=5_000, force=True)
+                        page.wait_for_timeout(1_200)
+                        clicked = True
+                except Exception:
+                    pass
+        # Verify credentials stuck in the email control (catch header-reset races).
+        try:
+            if email_el is not None:
+                got = (email_el.input_value() or "").strip()
+                if got and got.lower() != (email or "").strip().lower():
+                    logger.info("workday auth email mismatch after fill")
+        except Exception:
+            pass
+        return clicked
+
+    def _dismiss_signin_overlay(self) -> None:
+        """Close a Sign In dialog that overlays the Create Account panel."""
+        if self._page is None:
+            return
+        page = self._page
+        for sel in (
+            "[role=dialog] button[aria-label=Close]",
+            "[role=dialog] button[aria-label=close]",
+            "[role=dialog] button:has-text('×')",
+            "[data-automation-id=click_close]",
+            "[data-automation-id=closeButton]",
+            "div[role=dialog] button >> nth=0",
+        ):
+            try:
+                # Only dismiss if dialog title looks like Sign In and create
+                # fields remain behind it.
+                dlg = page.locator("[role=dialog]").first
+                if not dlg.count() or not dlg.is_visible():
+                    return
+                text = (dlg.inner_text() or "")[:200].lower()
+                if "sign in" not in text and "sign-in" not in text:
+                    return
+                btn = page.locator(sel).first
+                if btn.count() and btn.is_visible():
+                    btn.click(timeout=2_000, force=True)
+                    page.wait_for_timeout(400)
+                    return
+            except Exception:
+                continue
+        # Escape key as last resort.
+        try:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+        except Exception:
+            pass
 
     def _human(self, reason: str, evidence: Any) -> Dict[str, Any]:
         """Enrich the pending action with a concrete Workday next step + the wizard
@@ -1142,21 +2099,101 @@ class WorkdayAdapter(AtsAdapter):
         pa["action"] = action_map.get(reason, pa.get("action", "submit"))
         pa["ats"] = self.family
         pa["current_step"] = self.current_step()
+        # True = we will NOT invent an account without the vault path. The
+        # browser executor may still create/sign-in via ats_credential_service.
         pa["never_auto_create_account"] = (reason == TAKEOVER_ACCOUNT_REQUIRED)
         out["pending_action"] = pa
         return out
 
     # =====================================================================
-    # Confirmation (Workday marks it with a confirmation automation id)
+    # Submit + Confirmation
     # =====================================================================
+    _WD_CONFIRM_AIDS = (
+        "confirmationMessage", "confirmationMessagePanel",
+        "appliedSuccessfully", "applicationSubmitted",
+        "jobApplicationConfirmation", "submittedSuccessfully",
+    )
+    _WD_CONFIRM_RE = re.compile(
+        r"(thank you for (?:your )?appl(?:y|ication)|"
+        r"application (?:has been |was )?(?:successfully )?(?:submitted|received|sent)|"
+        r"we(?:['’`]ve| have) received your application|"
+        r"successfully submitted|"
+        r"your application (?:is|has been) (?:complete|submitted)|"
+        r"application complete)",
+        re.IGNORECASE,
+    )
+
+    def _click_submit(self) -> bool:
+        """Click Workday's Review-step Submit (pageFooterSubmitButton) once."""
+        el = self._qs("[data-automation-id=pageFooterSubmitButton]")
+        if el is None:
+            # Fall back to any button labelled Submit Application / Submit.
+            for btn in self._qsa("button"):
+                t = (self._text(btn) or "").strip().lower()
+                if t in ("submit", "submit application", "submit my application"):
+                    el = btn
+                    break
+        if el is None:
+            return super()._click_submit()
+        self._submit_clicks += 1
+        try:
+            try:
+                el.scroll_into_view_if_needed(timeout=3_000)
+            except Exception:
+                pass
+            try:
+                el.click(timeout=8_000)
+            except TypeError:
+                el.click()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.info("workday submit click failed: %s", e)
+            return False
+        # SPA confirmation paints after the POST settles.
+        if self._page is not None:
+            try:
+                self._page.wait_for_timeout(2_500)
+                self._page.wait_for_load_state("networkidle", timeout=15_000)
+            except Exception:
+                try:
+                    self._page.wait_for_timeout(3_000)
+                except Exception:
+                    pass
+        return True
+
     def detect_confirmation(self) -> Dict[str, Any]:
         evidence: List[Dict[str, Any]] = []
-        for el in self._qsa("[data-automation-id*=confirmation]"):
-            if self._visible(el):
-                t = self._text(el)
-                evidence.append({"automation_id": self._attr(el, "data-automation-id"),
-                                 "text": t[:200]})
+        for aid in self._WD_CONFIRM_AIDS:
+            el = self._qs("[data-automation-id=%s]" % aid)
+            if el is not None and self._visible(el):
+                t = self._text(el) or aid
+                evidence.append({"automation_id": aid, "text": t[:200]})
                 break
+        if not evidence:
+            for el in self._qsa("[data-automation-id*=confirmation]"):
+                if self._visible(el):
+                    t = self._text(el)
+                    if t:
+                        evidence.append({
+                            "automation_id": self._attr(el, "data-automation-id"),
+                            "text": t[:200],
+                        })
+                        break
+        # URL heuristics — Workday often redirects to /confirmation or Candidate Home.
+        url = (self._url or "")
+        if self._page is not None:
+            try:
+                url = self._page.url or url
+            except Exception:
+                pass
+        url_l = url.lower()
+        if any(tok in url_l for tok in (
+                "/confirmation", "applied=true", "applicationsuccess",
+                "candidatehome", "/myapplications")):
+            evidence.append({"url": url[:200]})
+        body = self._body_text()
+        m = self._WD_CONFIRM_RE.search(body or "")
+        if m:
+            evidence.append({"text_match": m.group(0)[:120]})
         base = super().detect_confirmation()
         evidence.extend(base.get("evidence", []))
         return {"confirmed": bool(evidence), "evidence": evidence}

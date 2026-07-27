@@ -201,11 +201,49 @@ def drive(adapter, answers: Dict[str, Any], *,
                 return _out(FILL_NEEDS_INPUT, adapter_family=family, steps=steps,
                             field=fid, reason="field_not_on_page",
                             review_snapshot=adapter.review_snapshot())
+            if res.get("status") == "needs_input" and required:
+                return _out(FILL_NEEDS_INPUT, adapter_family=family, steps=steps,
+                            field=fid, reason=res.get("reason") or "fill_failed",
+                            review_snapshot=adapter.review_snapshot())
 
         # Multi-step wizard: advance to the next step until the terminal Review.
         if adapter.has_next_step() and adapter.current_step() != "review":
             if not adapter.advance_step():
                 break
+            # Mid-wizard wall (Workday MFA / account overlay after Next).
+            check = getattr(adapter, "_check_takeover", None)
+            if callable(check):
+                try:
+                    wall = check()
+                except Exception:
+                    wall = None
+                if wall:
+                    return _out(
+                        FILL_WAITING_HUMAN,
+                        adapter_family=family,
+                        steps=steps,
+                        reason=wall.get("reason"),
+                        takeover=wall,
+                        pending_action={"action": wall.get("reason"),
+                                        "ats": family},
+                        review_snapshot=adapter.review_snapshot(),
+                    )
+            # If validation blocked advance, surface it instead of spinning.
+            # Only treat explicit Workday "Errors Found" banners as blocking —
+            # generic role=alert nodes are too noisy mid-wizard.
+            try:
+                body = ""
+                if getattr(adapter, "_page", None) is not None:
+                    body = (adapter._page.inner_text("body") or "")[:3000]
+                has_banner = "errors found" in body.lower()
+                errs = adapter.capture_validation_errors() or [] if has_banner else []
+            except Exception:
+                errs = []
+            if errs:
+                return _out(FILL_NEEDS_INPUT, adapter_family=family, steps=steps,
+                            reason="validation_failed", errors=errs,
+                            field=(errs[0] or {}).get("field"),
+                            review_snapshot=adapter.review_snapshot())
             continue
         break
 
@@ -217,6 +255,13 @@ def drive(adapter, answers: Dict[str, Any], *,
         return _out(FILL_PREPARED, adapter_family=family, steps=steps,
                     review_snapshot=review_snapshot,
                     current_step=adapter.current_step())
+
+    # Refuse to submit while still mid-wizard (Next still present).
+    if adapter.has_next_step() and adapter.current_step() != "review":
+        return _out(FILL_NEEDS_INPUT, adapter_family=family, steps=steps,
+                    reason="stuck_mid_wizard",
+                    field=adapter.current_step(),
+                    review_snapshot=review_snapshot)
 
     # approval / autopilot: the approval gate + presubmit re-check already ran
     # upstream (the worker calls /precheck immediately before this). Submit.

@@ -78,22 +78,26 @@ for the stage's gate window before advancing. Never skip a stage in prod.
 - **Rollback:** shrink the cohort allow-list; `APPLY_MAILBOX_ENABLED=false` stops
   mail ingress/forward.
 
-### Stage 4 — Limited autopilot (headless submit, dispatched)
-- Flip ON: `AUTO_SUBMIT_ENABLED=true`, `AUTO_APPLY_EXECUTOR=cloud_run`,
-  `CLOUD_RUN_EXECUTOR_ENABLED=true`. Limit to a SMALL user allow-list + a small
+### Stage 4 — Limited autopilot (headless submit, AWS remote fleet)
+- Flip ON: `AUTO_SUBMIT_ENABLED=true`, `AUTO_APPLY_EXECUTOR=remote`,
+  `EXECUTOR_REMOTE_ENABLED=true`. Limit to a SMALL user allow-list + a small
   set of ATS families (leave the rest in `AUTO_APPLY_ADAPTERS_DISABLED`).
-- What runs: the private Cloud Run worker claims a one-use capability, fills,
-  re-checks the pre-submit gate, clicks, uploads a CMK-encrypted receipt
-  (P1-ENC), and reports terminal. `submission_unknown` is HELD, never retried.
+- What runs: the AWS `jobpilot-apply-executor` Playwright Lambda fills the form,
+  clicks submit (or freezes on CAPTCHA), uploads an SSE-KMS proof screenshot
+  under `auto-apply-audit/`, and returns a terminal status. `submission_unknown`
+  is HELD, never retried.
 - Gate: `submission_unknown` (#4) ≤ threshold; success rate (#3) ≥ Stage 3;
-  cost/attempt (#7) within budget; DLQ depth 0.
+  cost/attempt (#7) within budget; no sustained Errors/Throttles alarms.
 - **Rollback (fast → full):**
   1. `AUTO_SUBMIT_ENABLED=false` — the master switch; re-checked inside
      `presubmit_recheck`, so it STOPS in-flight runs BEFORE the click.
-  2. `CLOUD_RUN_EXECUTOR_ENABLED=false` — stops new dispatch (rows fall back to
-     the Lambda/extension path, left in `approved`/`running` for later).
+  2. `EXECUTOR_REMOTE_ENABLED=false` — stops new Lambda fleet invokes (rows stay
+     `approved`/`ready` for a later attempt).
   3. `AUTO_APPLY_EXECUTOR=ats` (or `stub`) — swaps the executor back.
   4. Per-family: add the offending ATS to `AUTO_APPLY_ADAPTERS_DISABLED`.
+
+  > GCP `cloud_run` remains an alternate plane in code but is **not** the Stage-4
+  > path; prefer AWS remote for scale-to-zero cost.
 
 ### Stage 5 — GA
 - Widen the user allow-list to all eligible plans; empty
@@ -109,7 +113,7 @@ for the stage's gate window before advancing. Never skip a stage in prod.
 | Symptom | First flip |
 |---|---|
 | Any submit-safety doubt | `AUTO_SUBMIT_ENABLED=false` (stops the click, in-flight too) |
-| Dispatch/worker misbehaving | `CLOUD_RUN_EXECUTOR_ENABLED=false` |
+| Dispatch/fleet misbehaving | `EXECUTOR_REMOTE_ENABLED=false` |
 | One ATS failing | add family to `AUTO_APPLY_ADAPTERS_DISABLED` |
 | Quota mis-metering | `AUTO_APPLY_RESERVE=false` (revert to legacy metering) |
 | Mail plane issue | `APPLY_MAILBOX_ENABLED=false` |

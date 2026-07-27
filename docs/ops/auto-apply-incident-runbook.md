@@ -29,9 +29,12 @@ Cross-links: `docs/ops/auto-apply-observability.md` (the alarms that page you),
   inside `auto_apply_service.presubmit_recheck` (the LAST gate before the click),
   so it stops **in-flight** runs BEFORE they submit, not just new ones. Setting it
   false also makes the whole `/api/apply/auto-submit/*` surface return 404.
-- `CLOUD_RUN_EXECUTOR_ENABLED=false` — stops new Cloud Task dispatch to the private
-  worker. Rows fall back to the extension/Lambda path (left `approved`/`running`).
+- `EXECUTOR_REMOTE_ENABLED=false` — stops new invokes of the AWS Playwright
+  `jobpilot-apply-executor` fleet. Rows stay `approved`/`ready` for later.
 - `AUTO_APPLY_EXECUTOR=stub` — swaps the executor to the inert stub (no ATS I/O).
+
+  > If an alternate GCP `cloud_run` plane is ever armed, also flip
+  > `CLOUD_RUN_EXECUTOR_ENABLED=false`. Production Stage-4 uses AWS `remote`.
 
 ### 1.2 Per-adapter (dark one ATS family without a deploy)
 - `AUTO_APPLY_ADAPTERS_DISABLED="greenhouse,workday"` (csv). Read by
@@ -69,7 +72,9 @@ Cross-links: `docs/ops/auto-apply-observability.md` (the alarms that page you),
 
 ## 3. Drain / DLQ the queue
 
-- **Pause dispatch (source):** `CLOUD_RUN_EXECUTOR_ENABLED=false` stops new tasks
+- **Pause dispatch (source):** `EXECUTOR_REMOTE_ENABLED=false` stops new AWS
+  Playwright fleet invokes (and `CLOUD_RUN_EXECUTOR_ENABLED=false` if that
+  alternate plane is ever armed).
   being enqueued. Existing tasks keep flowing to the worker unless you also pause
   the queue.
 - **Pause the queue (sink):** pause the Cloud Tasks queue in GCP
@@ -112,8 +117,8 @@ Work the backlog by hand:
 In order, fastest blast-radius reduction first (all config-only):
 
 1. `AUTO_SUBMIT_ENABLED=false` — stops the click everywhere, in-flight included.
-2. `CLOUD_RUN_EXECUTOR_ENABLED=false` — stops new dispatch.
-3. Pause the Cloud Tasks queue (GCP) — stops delivery of already-enqueued tasks.
+2. `EXECUTOR_REMOTE_ENABLED=false` — stops new AWS Playwright fleet invokes.
+3. `AUTO_APPLY_EXECUTOR=stub` — inert executor (no ATS I/O).
 4. `APPLY_MAILBOX_ENABLED=false` — stops mail ingress/forward (halts inbound
    triggers + notifications).
 5. `AUTO_APPLY_PREPARE=false` + `AUTO_APPLY_MODES=false` — stops the prepare stage
