@@ -1,25 +1,40 @@
-"""Managed Application Mailbox — PLAIN FULL-CONTENT relay (Hide-My-Email style).
+"""Managed Application Mailbox — LINK-ONLY notification to the personal inbox.
 
-This is the "user gets the recruiter's message at their ORIGINAL inbox" half of
-the managed mailbox. When an inbound message is durably stored by
+This is the "tell the user at their ORIGINAL inbox that something happened" half
+of the managed mailbox. When an inbound message is durably stored by
 ``mail_store_service.ingest_committed`` and the commit route calls
-``maybe_forward``, we reconstruct and RELAY THE REAL EMAIL (like Apple Hide My
-Email / SimpleLogin) to the user's verified ``forward_to`` — from a JobPilot-
-owned sender, never spoofing the recruiter.
+``maybe_forward``, we send a SHORT POINTER to the user's ``forward_to`` — from a
+JobPilot-owned sender, never spoofing the recruiter.
 
-What we send (plain full-content relay):
-  - the ORIGINAL subject,
-  - the ALREADY-SANITIZED html body (remote images neutralized, scripts/forms
-    stripped at ingest) as the html part + the extracted text as the text part,
-  - a small banner + a compact "Manage in <app>" link
-    (``${FRONTEND_URL}/app/apply/<thread_id>``) so the body IS the real
-    message, not a redirect,
-  - a one-line note for CLEAN attachments (bytes are NOT relayed yet — follow-up).
+Two halves, two policies (spec §6):
+  - the IN-APP inbox keeps EVERYTHING (``ingest_committed`` stores every message
+    unconditionally — nothing here drops content);
+  - the PERSONAL inbox gets an ALLOW-LIST only, as a link.
 
-What we SKIP (message filter — ``should_forward``): system noise. OTP /
-verification / verify-or-confirm-your-email / activate-account / password-reset /
-magic-login-link mail is never relayed (during auto-apply an application OTP is
-captured by the EXECUTOR, not surfaced to the user).
+What we send (link-only notification):
+  - the ORIGINAL subject on the header,
+  - a one-line headline derived from the allow-listed classifier status
+    ("<Employer> wants to interview you"),
+  - a clean-attachment count, and one "Read it in <app>" button
+    (``${FRONTEND_URL}/app/apply/<thread_id>``).
+  The recruiter's BODY is deliberately NOT relayed — it stays in-app, which is
+  the entire point of the managed mailbox and keeps recruiter content out of a
+  third-party inbox.
+
+What we SKIP (``should_forward``, now an ALLOW-LIST — silence is the default):
+  - ``system_noise`` — OTP / verification / activate-account / password-reset /
+    magic-login-link mail (during auto-apply an application OTP is captured by
+    the EXECUTOR, not surfaced to the user);
+  - ``not_allowlisted`` — anything the closed-schema classifier
+    (``mail_ingress_service.classify``) does not land on an employer-response
+    status, INCLUDING unclassifiable mail: an allow-list fails closed. The
+    message is still fully readable in-app.
+
+DOUBLE-NOTIFY: ``applied`` (the ATS "we received your application" confirmation)
+is excluded by default because ``apply_scheduler``'s end-of-day
+``apply_daily_summary`` already reports every application submitted that day.
+The digest owns "we applied for you"; this path owns "the employer got back to
+you". See ``_allowed_statuses``.
 
 Hard rules (spec §0 D5 + the forwarding requirements):
   - Outbound goes through ``email_service.send_email`` (ZeptoMail), from
@@ -31,8 +46,10 @@ Hard rules (spec §0 D5 + the forwarding requirements):
     real address. We add ``X-JP-Forwarded: 1`` as an outbound loop marker.
   - Send ONLY when the mailbox is not paused AND forwarding_enabled AND
     forward_to_verified AND forward_to is present AND forward_to is not
-    suppressed. ``trust`` is a CORRELATION signal (it drives application STATUS),
-    NOT a forwarding gate — full content is relayed regardless of trust.
+    suppressed. (Auto-provision now satisfies all of these out of the box:
+    forward_to = the user's OWN registered address, enabled + verified.)
+    ``trust`` is a CORRELATION signal (it drives application STATUS), NOT a
+    forwarding gate — the notification is sent regardless of trust.
     ``MAIL_FORWARD_UNVERIFIED_MODE=suppress`` is an optional kill-switch to
     suppress everything unverified (default OFF = forward).
   - OPEN-RELAY / LOOP GUARD: never forward a message whose sender is our own
@@ -97,6 +114,7 @@ def _daily_cap() -> int:
 
 
 _TRUE = {"1", "true", "yes", "on"}
+_FALSE = {"0", "false", "no", "off"}
 
 
 def _send_as_alias() -> bool:
@@ -207,36 +225,115 @@ _OTP_CONTEXT = re.compile(
 _STANDALONE_CODE = re.compile(r"(?<![\w])\d{4,8}(?![\w])")
 
 
-def should_forward(message: Dict[str, Any]) -> Tuple[bool, str]:
-    """Decide whether a stored message is MEANINGFUL mail to relay to the user's
-    real inbox, or SYSTEM NOISE to skip.
+def is_system_noise(message: Dict[str, Any]) -> bool:
+    """Deterministic, offline, free: is this OTP / verification / activate-
+    account / password-reset / magic-login-link mail?
 
-    Returns ``(forward, category)``:
-      * ``(False, "system_noise")`` — an OTP / verification code / verify-or-
-        confirm-your-email / activate-account / password-reset / magic-login-link
-        email.  ┌─ OTP-CAPTURE HOOK ─┐  During auto-apply an APPLICATION OTP is
-        meant for the EXECUTOR (application-OTP capture is a SEPARATE feature),
-        never the user's inbox; here we simply DO NOT forward system_noise.
-      * ``(True, "application")`` — everything else: recruiter replies,
-        application received / confirmation, interview, assessment, offer,
-        rejection, general correspondence.
-
-    Deterministic (regex on subject + already-sanitized text). ``message`` is a
-    plain dict supplying ``subject`` and ``text`` — both are treated as DATA."""
-    subject = str(message.get("subject") or "")
-    text = str(message.get("text") or "")
-    blob = f"{subject}\n{text}"
-
+    ┌─ OTP-CAPTURE HOOK ─┐ During auto-apply an APPLICATION OTP is meant for the
+    EXECUTOR (``application_otp_service``), never the user's inbox — this is the
+    predicate ``mail_store_service._maybe_capture_application_otp`` keys on.
+    ``message`` supplies ``subject`` and ``text``; both are treated as DATA."""
+    blob = f"{str(message.get('subject') or '')}\n{str(message.get('text') or '')}"
     for pat in _NOISE_PATTERNS:
         if pat.search(blob):
-            return False, "system_noise"
-    if _OTP_CONTEXT.search(blob) and _STANDALONE_CODE.search(blob):
+            return True
+    return bool(_OTP_CONTEXT.search(blob) and _STANDALONE_CODE.search(blob))
+
+
+def _allowed_statuses() -> set:
+    """The ALLOW-LIST: which classifier statuses earn a personal-inbox ping.
+
+    Default = employer RESPONSES only — ``viewed``, ``oa_sent``,
+    ``interview_invite``, ``offer``, ``rejected``, ``ghosted``.
+
+    ``applied`` (the ATS "we received your application" confirmation) is
+    DELIBERATELY EXCLUDED: ``apply_scheduler``'s end-of-day
+    ``apply_daily_summary`` already reports every application submitted that day
+    ("Applied for you (N)"), so per-event forwarding of the matching ATS
+    acknowledgement would double-notify the same event. The digest owns
+    "we applied for you"; per-event forwarding owns "the employer got back to
+    you". Set ``MAIL_FORWARD_INCLUDE_APPLIED=true`` to re-arm confirmations if
+    the digest is ever turned off. ``MAIL_FORWARD_ALLOWLIST`` (comma-separated)
+    overrides the set wholesale; unknown names are dropped (the closed
+    ``STATUS_ENUM`` is the authority — config can never widen it)."""
+    from services.mail_ingress_service import STATUS_ENUM
+    raw = (_get_config_value("MAIL_FORWARD_ALLOWLIST", "") or "").strip()
+    if raw:
+        return {s for s in (p.strip().lower() for p in raw.split(",")) if s in STATUS_ENUM}
+    allowed = set(STATUS_ENUM) - {"applied"}
+    include_applied = (_get_config_value("MAIL_FORWARD_INCLUDE_APPLIED", "") or "").strip().lower()
+    if include_applied in _TRUE:
+        allowed.add("applied")
+    return allowed
+
+
+def _classify_status(message: Dict[str, Any]) -> Optional[str]:
+    """Resolve this message to a closed-schema status, reusing the EXISTING
+    classifier (``mail_ingress_service.classify`` — Claude Haiku/FLASH via the
+    provider abstraction, closed ``STATUS_ENUM``, prompt-injection hardened).
+
+    A classification already stored on the message doc wins (free); otherwise we
+    run one FLASH pass. Returns None when there is no signal, when the classifier
+    is unavailable, or when the caller supplied no classification CONTEXT (see
+    ``should_forward``). Never raises."""
+    stored = message.get("classification")
+    if isinstance(stored, dict):
+        status = str(stored.get("status") or "").strip().lower()
+        if status:
+            return status
+
+    if (_get_config_value("MAIL_FORWARD_CLASSIFY_ENABLED", "") or "").strip().lower() in _FALSE:
+        return None
+
+    try:
+        from services.mail_ingress_service import classify
+        result = classify(
+            str(message.get("from_domain") or ""),
+            str(message.get("subject") or ""),
+            str(message.get("text") or ""),
+        )
+    except Exception as e:  # pragma: no cover - classifier already degrades internally
+        logger.warning("mail-forward: classify failed: %s", type(e).__name__)
+        return None
+    return (result or {}).get("status")
+
+
+def should_forward(message: Dict[str, Any]) -> Tuple[bool, str]:
+    """ALLOW-LIST gate for the PERSONAL inbox (spec §6).
+
+    The in-app inbox keeps EVERYTHING — ``mail_store_service.ingest_committed``
+    stores every message unconditionally and nothing here changes that. Only the
+    relay to the user's own email is filtered, and it is filtered POSITIVELY:
+    silence is the default, a ping is the exception.
+
+    Two stages:
+      1. ``is_system_noise`` — deterministic, offline DENY of OTP/verification
+         noise -> ``(False, "system_noise")``.
+      2. ALLOW-LIST on the classifier status (``_allowed_statuses``) ->
+         ``(True, "<status>")``. Anything else -> ``(False, "not_allowlisted")``,
+         INCLUDING an unclassifiable message: an allow-list fails CLOSED, and the
+         message is still fully readable in-app.
+
+    CONTEXT CONTRACT: stage 2 needs ``from_domain`` (and/or a stored
+    ``classification``) to classify. A caller that passes only ``{subject,
+    text}`` is using this purely as a NOISE oracle — notably
+    ``mail_store_service._maybe_capture_application_otp``, which must NOT gain an
+    LLM call or a changed capture trigger — and gets the stage-1 verdict only:
+    ``(True, "application")``."""
+    if is_system_noise(message):
         return False, "system_noise"
 
-    # AMBIGUOUS-CASE HOOK: a FLASH classify-only pass (closed schema, no state
-    # mutation — see ``mail_ingress_service.classify``) could refine borderline
-    # cases here. Deterministic-only for now keeps the hot path offline + cheap.
-    return True, "application"
+    has_context = bool(message.get("from_domain")) or isinstance(
+        message.get("classification"), dict
+    )
+    if not has_context:
+        # Noise-oracle callers: stage 1 only (no LLM, unchanged semantics).
+        return True, "application"
+
+    status = _classify_status(message)
+    if status and status in _allowed_statuses():
+        return True, status
+    return False, "not_allowlisted"
 
 
 # ---------------------------------------------------------------------------
@@ -295,59 +392,83 @@ def _forward_display_name(message: Dict[str, Any]) -> str:
     return f"{original} (via My Private Mail)"
 
 
+# Human-readable headline per allow-listed classifier status. `{sender}` is the
+# escaped original sender; the closed STATUS_ENUM is the only key space.
+_STATUS_HEADLINE = {
+    "viewed": "{sender} viewed your application",
+    "oa_sent": "{sender} sent you an assessment",
+    "interview_invite": "{sender} wants to interview you",
+    "offer": "{sender} sent you an offer",
+    "rejected": "{sender} passed on your application",
+    "ghosted": "{sender} went quiet on your application",
+    "applied": "{sender} received your application",
+}
+
+
 def build_forward(
     message: Dict[str, Any],
     thread: Dict[str, Any],
     *,
-    text: str,
-    safe_html: str,
     manage_link: str,
     alias: str,
     clean_attachments: int,
+    category: str = "",
+    sender: str = "",
 ) -> Dict[str, str]:
-    """Reconstruct the REAL email to relay: the ORIGINAL subject, the sanitized
-    html body + extracted text, and a small banner with a compact "Manage in
-    <app>" link. The body IS the real message — the banner is the only thing we
-    add. Everything WE inject (alias / link / attachment note) is escaped; the
-    recruiter body was already sanitized at ingest."""
+    """Build the LINK-ONLY notification (spec §6).
+
+    The personal inbox gets a POINTER, not a copy: who it is from, what kind of
+    update it is (the allow-listed classifier status), and one button into the
+    app. The full message body, the sanitized html and the attachments stay
+    IN-APP — that is the whole point of the managed mailbox, and it also means we
+    never re-emit recruiter content into a third-party inbox.
+
+    Everything we inject (sender / alias / link / status) is HTML-escaped, and the
+    ONLY untrusted strings that appear are the subject (header, sanitized by the
+    caller's send path) and the sender display name."""
     subject = message.get("subject") or (thread or {}).get("subject") or "New message"
+    who = _esc(sender or "An employer")
+    headline = _STATUS_HEADLINE.get(category, "{sender} replied about your application").format(
+        sender=who
+    )
 
     att_html = ""
     att_text = ""
     if clean_attachments:
         att_html = (
-            f'<div style="margin-top:6px">{int(clean_attachments)} attachment(s) '
-            f'available in your {_esc(APP_NAME)} inbox.</div>'
+            f'<p style="margin:0 0 4px;font-size:13px;color:#64748b">'
+            f'{int(clean_attachments)} attachment(s) included.</p>'
         )
-        att_text = (
-            f"\n{int(clean_attachments)} attachment(s) available in your {APP_NAME} inbox."
-        )
+        att_text = f"\n{int(clean_attachments)} attachment(s) included."
 
-    banner_html = (
+    html = (
         '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
-        'font-size:12px;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;'
-        'border-radius:8px;padding:10px 12px;margin:0 0 14px">'
-        f'Forwarded by My Private Mail for {_esc(alias)}. '
-        f'<a href="{_esc(manage_link)}" style="color:#4f46e5;text-decoration:none">'
-        f'Manage in {_esc(APP_NAME)}</a>.'
+        'max-width:480px;margin:auto;color:#0f172a">'
+        f'<h2 style="margin:0 0 8px;font-size:17px">{headline}</h2>'
+        f'<p style="margin:0 0 4px;color:#475569;font-size:14px">'
+        f'Subject: {_esc(subject)}</p>'
         f'{att_html}'
+        f'<p style="margin:0 0 20px;color:#64748b;font-size:13px">'
+        f'The full message is waiting in your {_esc(APP_NAME)} inbox — we keep the '
+        f'content there so your personal inbox stays clean.</p>'
+        f'<p style="margin:0 0 20px">'
+        f'<a href="{_esc(manage_link)}" style="background:#4f46e5;color:#fff;'
+        'padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block;'
+        f'font-weight:600">Read it in {_esc(APP_NAME)}</a></p>'
+        f'<p style="margin:0;color:#94a3b8;font-size:12px">Sent to your private '
+        f'application address {_esc(alias)}.</p>'
         '</div>'
     )
 
-    if safe_html:
-        body_html = safe_html
-    elif text:
-        body_html = f'<pre style="white-space:pre-wrap;font-family:inherit">{_esc(text)}</pre>'
-    else:
-        body_html = '<p>(This message had no readable text content — open it in the app.)</p>'
-    html = banner_html + body_html
-
-    footer_text = (
-        f"\n\n--\nForwarded by My Private Mail for {alias}. "
-        f"Manage in {APP_NAME}: {manage_link}{att_text}"
+    text = (
+        f"{sender or 'An employer'} — update on your application\n\n"
+        f"Subject: {subject}{att_text}\n\n"
+        f"The full message is waiting in your {APP_NAME} inbox — we keep the content "
+        f"there so your personal inbox stays clean.\n\n"
+        f"Read it in {APP_NAME}: {manage_link}\n\n"
+        f"Sent to your private application address {alias}."
     )
-    body_text = text or "(This message had no readable text content — open it in the app.)"
-    return {"subject": subject, "html": html, "text": body_text + footer_text}
+    return {"subject": subject, "html": html, "text": text}
 
 
 # ---------------------------------------------------------------------------
@@ -426,23 +547,32 @@ def forward_notification(message_doc: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:  # pragma: no cover - best effort
         pass
 
-    # --- Message filter: relay MEANINGFUL mail, skip system noise. -----------
-    # Fetch the sanitized bodies (same S3 objects the read API serves) so we can
-    # (a) run the deterministic noise filter on the REAL text and (b) relay the
-    # real message. A body-fetch failure degrades to a short notice (never crash).
-    text, safe_html = _fetch_bodies(message)
+    # --- ALLOW-LIST filter: ping only for application-status events. ----------
+    # Fetch the sanitized text (the same S3 object the read API serves) so the
+    # noise filter + the classifier see the REAL body. The body is NEVER relayed —
+    # it is classifier input only; the notification we send is link-only.
+    # A body-fetch failure degrades to an empty text (never crash).
+    text, _safe_html = _fetch_bodies(message)
 
-    forward_ok, category = should_forward({"subject": message.get("subject"), "text": text})
+    forward_ok, category = should_forward({
+        "subject": message.get("subject"),
+        "text": text,
+        "from_domain": message.get("from_domain"),
+        "classification": message.get("classification"),
+    })
     if not forward_ok:
-        # Ingest already captured OTP (see mail_store_service._maybe_capture_application_otp).
+        # system_noise: ingest already captured any OTP (see
+        # mail_store_service._maybe_capture_application_otp).
+        # not_allowlisted: the message IS in the in-app inbox — we just don't
+        # ping the personal inbox for it.
         return _skip(category, thread_id)
 
     # --- Trust is a CORRELATION signal, NOT a forwarding gate. ----------------
-    # Full content is relayed for ALL non-noise mail regardless of trust (trust
-    # still drives the application STATUS suggestion elsewhere). The optional
+    # The allow-listed notification is sent regardless of trust (trust still
+    # drives the application STATUS suggestion elsewhere). The optional
     # MAIL_FORWARD_UNVERIFIED_MODE=suppress kill-switch (default OFF = forward)
-    # lets a deployment relay only correlated recruiter mail. Fail-safe: anything
-    # not exactly "verified" is unverified.
+    # lets a deployment notify only for correlated recruiter mail. Fail-safe:
+    # anything not exactly "verified" is unverified.
     is_verified = str(message.get("trust") or "").strip().lower() == "verified"
     if not is_verified and _unverified_mode() == "suppress":
         # Skip BEFORE spending rate budget — a suppressed message never sends.
@@ -452,7 +582,7 @@ def forward_notification(message_doc: Dict[str, Any]) -> Dict[str, Any]:
     if not _within_daily_cap(user_email):
         return _skip("rate_limited", thread_id)
 
-    # --- Reconstruct + send the REAL email (plain full-content relay). --------
+    # --- Build + send the LINK-ONLY notification (content stays in-app). ------
     thread = _db().mail_threads.find_one({"thread_id": thread_id}) or {}
     base = AppUrlsConfig.FRONTEND_URL
     safe_thread = InputSanitizer.sanitize_string(str(thread_id or ""), 64)
@@ -462,9 +592,10 @@ def forward_notification(message_doc: Dict[str, Any]) -> Dict[str, Any]:
 
     tmpl = build_forward(
         message, thread,
-        text=text, safe_html=safe_html,
         manage_link=manage_link, alias=alias,
         clean_attachments=clean_attachments,
+        category=category,
+        sender=str(message.get("from_name") or message.get("from_addr") or ""),
     )
 
     # From: JobPilot-owned MAIL_FORWARD_FROM with a display name derived from the

@@ -305,11 +305,35 @@ FIELDS: List[Dict[str, Any]] = [
        options=["Neither", "No", "None"],
        default_policy=POLICY_CONFIRM_DEFAULT),
 
+    # Generic "do you know/are you related to someone here" question. Listed
+    # BEFORE previous_employee so a relatives question that also names
+    # "subsidiaries" is not swallowed by the previously-worked-here field, and
+    # AFTER family_member_auditor so the EY-specific auditor-conflict wording
+    # still wins. Its aliases all require an explicit RELATIVE token, so no
+    # previously-employed phrasing can reach it.
+    _f("relatives_employed", "Do you have relatives or friends employed here?",
+       CAT_SCREENING, SENS_SAFE, VT_BOOLEAN, "select",
+       [r"any relatives", r"friends or relatives", r"relatives or friends",
+        r"(?:relative|family member|spouse|friend)s?.{0,60}(?:employed|work(?:s|ing|ed)?)"
+        r" (?:by|at|for|with|here)",
+        r"(?:relative|family member|spouse)s?.{0,40}(?:currently )?(?:employed|works? here)",
+        r"related to (?:any )?(?:current |former )?employee",
+        r"know (?:anyone|someone).{0,30}(?:works?|employed) (?:here|at)",
+        r"family members? (?:currently )?(?:employed|working)"],
+       options=["Yes", "No"], default_policy=POLICY_CONFIRM_DEFAULT),
+
     _f("previous_employee", "Have you previously been employed by this company?",
        CAT_SCREENING, SENS_SAFE, VT_SELECT, "select",
        [r"previously been (?:directly )?employed", r"previous(?:ly)? (?:employed|worker)",
         r"former (?:employee|contractor)", r"currently or have you previously",
-        r"previously (?:been|worked) (?:at|for|with)", r"candidateIsPreviousWorker"],
+        r"previously (?:been|worked) (?:at|for|with)", r"candidateIsPreviousWorker",
+        # Subsidiary / affiliate / parent wording — the same question, phrased the
+        # way large employers ask it ("…this company or any of its subsidiaries").
+        r"(?:employed|worked|work).{0,60}(?:subsidiar|affiliate|parent company)",
+        r"(?:subsidiar(?:y|ies)|affiliates?).{0,40}(?:employ|work)",
+        r"or any of its subsidiar", r"or (?:any of )?its affiliate",
+        r"ever (?:been )?(?:employed|worked) (?:by|at|for|with)",
+        r"are you a (?:former|rehire|boomerang)", r"eligible for rehire"],
        options=["Yes", "No"], default_policy=POLICY_CONFIRM_DEFAULT),
 
     # ================= LOGISTICS (confirm_default) ======================
@@ -365,7 +389,14 @@ FIELDS: List[Dict[str, Any]] = [
        default_policy=POLICY_CONFIRM_DEFAULT),
     _f("currently_employed", "Are you currently employed?", CAT_LOGISTICS,
        SENS_SAFE, VT_BOOLEAN, "radio",
-       [r"currently employed", r"are you employed", r"current employment status",
+       # The subject must be the CANDIDATE. Guard the loose "currently employed"
+       # alias against a relatives question ("Are any of your family members
+       # currently employed by us?") — logistics is matched before screening, so
+       # without this it would steal `relatives_employed` and submit the
+       # candidate's own employment status as the answer to a different question.
+       [r"(?<!members )(?<!member )(?<!relatives )(?<!relative )(?<!friends )"
+        r"(?<!friend )(?<!spouse )currently employed",
+        r"are you employed", r"current employment status",
         r"presently employed"],
        negations=[r"not currently employed", r"currently unemployed"],
        default_policy=POLICY_CONFIRM_DEFAULT),

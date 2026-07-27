@@ -1,15 +1,18 @@
-"""Managed Application Mailbox — PLAIN FULL-CONTENT relay (Hide-My-Email style).
+"""Managed Application Mailbox — LINK-ONLY notification + ALLOW-LIST filter.
 
-The redesigned forwarder: instead of a sanitized SUMMARY + deep link, we relay
-the REAL email to the user's verified inbox — original subject, sanitized body,
-From = MAIL_FORWARD_FROM with a "(via My Private Mail)" display name (never
-spoofing), Reply-To = original sender, X-JP-Forwarded loop marker. A message
-FILTER (``should_forward``) skips system noise (OTP / verification / magic-login
-/ password-reset). Trust is decoupled from forwarding (unverified still relays
-full content); the loop / suppression / rate / kill-switch guards all remain.
+AUTOAPPLY_REPAIR_SPEC §6 inverted this path. The in-app inbox keeps EVERYTHING;
+the user's personal inbox now gets only an ALLOW-LIST of application-status
+events (``mail_ingress_service.classify``'s closed STATUS_ENUM), delivered as a
+LINK-ONLY notification — the recruiter body stays in-app.
 
-Fully offline: Mongo is mongomock, S3 is a FakeStorage, and
-``email_service.send_email`` is captured (no ZeptoMail/SES/network).
+Still asserted here: From = MAIL_FORWARD_FROM with a "(via My Private Mail)"
+display name (never spoofing), Reply-To = a per-thread reply-bound alias,
+X-JP-Forwarded loop marker, the deterministic system-noise deny, trust decoupled
+from forwarding, and the loop / suppression / rate / kill-switch guards.
+
+Fully offline: Mongo is mongomock, S3 is a FakeStorage, the CLASSIFIER is a
+deterministic stub (no Bedrock), and ``email_service.send_email`` is captured
+(no ZeptoMail/SES/network).
 """
 from __future__ import annotations
 
@@ -87,6 +90,40 @@ def env(monkeypatch):
     import services.s3_service as s3
     monkeypatch.setattr(s3, "get_storage_service", lambda: fake)
     return fake
+
+
+# Deterministic stand-in for the Haiku classifier (no Bedrock in tests). Maps
+# the seeded bodies onto the closed STATUS_ENUM; first match wins, so the mixed
+# "thank you for applying … not moving forward" rejection lands on `rejected`.
+_FAKE_STATUS = (
+    ("moving forward", "rejected"),
+    ("careful review", "rejected"),
+    ("interview", "interview_invite"),
+    ("assessment", "oa_sent"),
+    ("pleased to extend an offer", "offer"),
+    ("received your application", "applied"),
+    ("thank you for applying", "applied"),
+)
+
+
+@pytest.fixture(autouse=True)
+def classifier(monkeypatch):
+    """Patch ``mail_ingress_service.classify`` (the allow-list's status oracle).
+    ``mail_forward_service`` imports it INSIDE the call, so patching the module
+    attribute is enough."""
+    import services.mail_ingress_service as ingress
+
+    def _fake(from_domain, subject, body_text):
+        blob = f"{subject or ''}\n{body_text or ''}".lower()
+        for needle, status in _FAKE_STATUS:
+            if needle in blob:
+                return {"status": status, "confidence": 0.95, "company": "",
+                        "role": "", "event_at": None, "evidence_sentence": ""}
+        return {"status": None, "confidence": 0.0, "company": "", "role": "",
+                "event_at": None, "evidence_sentence": ""}
+
+    monkeypatch.setattr(ingress, "classify", _fake)
+    return _fake
 
 
 @pytest.fixture()
@@ -187,10 +224,10 @@ def test_forward_notification_skips_noise_message(env, sent):
 
 
 # ---------------------------------------------------------------------------
-# Full-content relay — the REAL email, not a summary/deep-link notice
+# Link-only notification — a POINTER into the app, never the recruiter body
 # ---------------------------------------------------------------------------
 
-def test_forward_relays_full_real_content(env, sent):
+def test_forward_sends_link_only_notification(env, sent):
     _enable_forwarding()
     res = _seed_message(env)
     out = fwd.forward_notification(res)
@@ -213,29 +250,29 @@ def test_forward_relays_full_real_content(env, sent):
     assert call["reply_to"] != "no-reply@greenhouse.io"
     # Outbound loop marker.
     assert call["headers"] == {"X-JP-Forwarded": "1"}
-    # ORIGINAL subject preserved (NOT a generic subject-less notice).
+    # ORIGINAL subject preserved on the header (so the ping is scannable).
     assert call["subject"] == "Update on your application"
-    # The REAL sanitized body is delivered (full content), plus a compact
-    # manage-in-app link (the body IS the message, not a redirect).
-    assert "Thank you for applying" in call["html"]
-    assert "moving forward" in call["text"].lower()
+    # A status headline + the deep link, in BOTH parts.
     manage = f"{FRONTEND}/app/apply/{res['thread_id']}"
     assert manage in call["html"] and manage in call["text"]
+    assert "passed on your application" in call["html"]
 
 
-def test_forward_is_not_the_old_generic_notice(env, sent):
+def test_forward_body_is_never_relayed(env, sent):
+    """The whole point of link-only: recruiter CONTENT stays in-app."""
     _enable_forwarding()
-    res = _seed_message(env)
-    fwd.forward_notification(res)
-    call = sent[0]
-    # The retired generic/summary notice used these strings — assert they're gone.
-    assert "New message about your application" not in call["subject"]
-    assert "new message in your" not in call["subject"].lower()
-    assert "we do not include the full message" not in call["html"].lower()
-    assert "open it in the app to read and reply" not in call["text"].lower()
+    fwd.forward_notification(_seed_message(
+        env,
+        text="Thank you for applying. After careful review we will not be moving forward. "
+             "SECRET-BODY-MARKER",
+        safe_html="<p>SECRET-HTML-MARKER</p>",
+    ))
+    blob = (sent[0]["html"] + sent[0]["text"])
+    assert "SECRET-BODY-MARKER" not in blob
+    assert "SECRET-HTML-MARKER" not in blob
 
 
-def test_full_pipeline_relays_real_greenhouse_body(env, sent):
+def test_full_pipeline_sends_link_only_for_greenhouse_rejection(env, sent):
     from datetime import timedelta
     _enable_forwarding()
     _db().tailoring_records.insert_one({
@@ -254,9 +291,12 @@ def test_full_pipeline_relays_real_greenhouse_body(env, sent):
     assert out["sent"] is True
     call = sent[0]
     blob = (call["html"] + call["text"]).lower()
-    # The REAL recruiter message is delivered end-to-end (full-content relay).
-    assert "careful review" in blob
-    assert "moving forward" in blob
+    # The in-app inbox still stores the FULL message (no content drop at ingest).
+    stored = _db().mail_messages.find_one({"message_id": res["message_id"]})
+    assert stored["text_s3_key"]
+    # ...but the personal inbox only gets the pointer.
+    assert "careful review" not in blob
+    assert f"{FRONTEND}/app/apply/{res['thread_id']}" in call["html"]
     # ORIGINAL subject preserved.
     assert call["subject"] == "Update on your application to Acme"
     # Sender is ours; reply routes through a privacy-preserving reply-bound alias
@@ -268,10 +308,10 @@ def test_full_pipeline_relays_real_greenhouse_body(env, sent):
 
 
 # ---------------------------------------------------------------------------
-# Trust decoupled — unverified still relays full content (no downgrade)
+# Trust decoupled — unverified still notifies (no downgrade)
 # ---------------------------------------------------------------------------
 
-def test_unverified_still_relays_full_content(env, sent):
+def test_unverified_still_notifies(env, sent):
     _enable_forwarding()
     res = _seed_message(env, trust="unverified", subject="Interview invitation",
                         text="We would like to invite you to interview.")
@@ -279,13 +319,13 @@ def test_unverified_still_relays_full_content(env, sent):
 
     assert out == {"sent": True, "reason": "sent"}
     call = sent[0]
-    # Same full content as a verified message — trust does NOT downgrade it.
+    # Same notification as a verified message — trust does NOT downgrade it.
     assert call["subject"] == "Interview invitation"
-    assert "invite you to interview" in call["text"]
+    assert "wants to interview you" in call["html"]
     assert FORWARD_FROM in call["from_addr"]
 
 
-def test_missing_trust_still_relays_full_content(env, sent):
+def test_missing_trust_still_notifies(env, sent):
     _enable_forwarding()
     res = _seed_message(env, trust="", subject="Interview invitation",
                         text="We would like to invite you to interview.")
@@ -318,8 +358,8 @@ def test_clean_attachment_note_present(env, sent):
     res = _seed_message(env, clean_attachments=2)
     fwd.forward_notification(res)
     call = sent[0]
-    assert "2 attachment(s) available in your" in call["html"]
-    assert "2 attachment(s) available in your" in call["text"]
+    assert "2 attachment(s) included" in call["html"]
+    assert "2 attachment(s) included" in call["text"]
 
 
 # ---------------------------------------------------------------------------
@@ -364,8 +404,10 @@ def test_daily_cap_still_enforced(env, sent, monkeypatch):
 
 def test_body_fetch_failure_degrades_gracefully(env, sent):
     _enable_forwarding()
-    # Message points at S3 keys that were never written -> fetch fails; the
-    # forward must degrade to a short notice, not crash.
+    # Message points at S3 keys that were never written -> fetch fails. The
+    # notification is link-only anyway, so a body it never sends must not crash
+    # it; the STORED classification supplies the allow-list status without an
+    # LLM call.
     mid = "msg_" + secrets.token_hex(8)
     tid = "thr_" + secrets.token_hex(8)
     _db().mail_messages.insert_one({
@@ -373,6 +415,7 @@ def test_body_fetch_failure_degrades_gracefully(env, sent):
         "direction": "inbound", "from_addr": "no-reply@greenhouse.io",
         "from_name": "Greenhouse", "from_domain": "greenhouse.io", "to_addr": ALIAS_ADDR,
         "subject": "Update on your application", "trust": "verified",
+        "classification": {"status": "rejected"},
         "text_s3_key": "mail/text/missing.txt", "safe_html_s3_key": "mail/html/missing.html",
         "x_jp_forwarded": False,
     })
@@ -381,6 +424,108 @@ def test_body_fetch_failure_degrades_gracefully(env, sent):
     out = fwd.forward_notification({"thread_id": tid, "message_id": mid, "deduplicated": False})
     assert out["sent"] is True
     assert sent[0]["subject"] == "Update on your application"
+
+
+# ---------------------------------------------------------------------------
+# The ALLOW-LIST itself (spec §6) — silence is the default
+# ---------------------------------------------------------------------------
+
+def test_unclassifiable_mail_is_not_forwarded_but_stays_in_app(env, sent):
+    """An allow-list FAILS CLOSED: no status -> no personal-inbox ping. The
+    message is untouched in the in-app inbox."""
+    _enable_forwarding()
+    res = _seed_message(env, subject="Our weekly engineering newsletter",
+                        text="Here are this week's articles from our blog.",
+                        safe_html="<p>Newsletter</p>")
+    out = fwd.forward_notification(res)
+    assert out == {"sent": False, "reason": "not_allowlisted"}
+    assert sent == []
+    # In-app inbox keeps EVERYTHING — the message is still stored.
+    assert _db().mail_messages.find_one({"message_id": res["message_id"]}) is not None
+
+
+def test_classifier_outage_fails_closed(env, sent, monkeypatch):
+    import services.mail_ingress_service as ingress
+
+    def _boom(*a, **k):
+        raise RuntimeError("bedrock down")
+
+    monkeypatch.setattr(ingress, "classify", _boom)
+    _enable_forwarding()
+    out = fwd.forward_notification(_seed_message(env))
+    assert out == {"sent": False, "reason": "not_allowlisted"}
+    assert sent == []
+
+
+def test_application_confirmation_defers_to_the_daily_digest(env, sent):
+    """`applied` is NOT allow-listed by default: apply_scheduler's end-of-day
+    apply_daily_summary already reports every application submitted that day, so
+    per-event forwarding of the ATS acknowledgement would double-notify."""
+    _enable_forwarding()
+    out = fwd.forward_notification(_seed_message(
+        env, subject="Application received",
+        text="We received your application and will be in touch.",
+        safe_html="<p>Received</p>",
+    ))
+    assert out == {"sent": False, "reason": "not_allowlisted"}
+    assert sent == []
+
+
+def test_include_applied_flag_re_arms_confirmations(env, sent, monkeypatch):
+    monkeypatch.setenv("MAIL_FORWARD_INCLUDE_APPLIED", "true")
+    _enable_forwarding()
+    out = fwd.forward_notification(_seed_message(
+        env, subject="Application received",
+        text="We received your application and will be in touch.",
+        safe_html="<p>Received</p>",
+    ))
+    assert out == {"sent": True, "reason": "sent"}
+    assert "received your application" in sent[0]["html"]
+
+
+@pytest.mark.parametrize("subject,text,headline", [
+    ("Interview invitation", "We would like to invite you to interview.",
+     "wants to interview you"),
+    ("Next steps", "Please complete the online assessment.", "sent you an assessment"),
+    ("Your offer", "We are pleased to extend an offer.", "sent you an offer"),
+    ("Update on your application", "After careful review we will not be moving forward.",
+     "passed on your application"),
+])
+def test_allowlisted_statuses_each_notify(env, sent, subject, text, headline):
+    _enable_forwarding()
+    out = fwd.forward_notification(
+        _seed_message(env, subject=subject, text=text, safe_html=f"<p>{text}</p>")
+    )
+    assert out == {"sent": True, "reason": "sent"}
+    assert headline in sent[0]["html"]
+
+
+def test_allowlist_config_override_is_closed_to_status_enum(env, sent, monkeypatch):
+    # Only `offer` forwards; the bogus name is dropped (STATUS_ENUM is authority).
+    monkeypatch.setenv("MAIL_FORWARD_ALLOWLIST", "offer, not_a_status")
+    _enable_forwarding()
+    assert fwd.forward_notification(_seed_message(
+        env, subject="Update", text="After careful review we will not be moving forward.",
+    )) == {"sent": False, "reason": "not_allowlisted"}
+    assert fwd.forward_notification(_seed_message(
+        env, subject="Your offer", text="We are pleased to extend an offer.",
+    )) == {"sent": True, "reason": "sent"}
+
+
+def test_noise_oracle_callers_get_the_deterministic_verdict_only(env, monkeypatch):
+    """`mail_store_service._maybe_capture_application_otp` calls should_forward
+    with ONLY {subject, text} as a NOISE oracle. That path must never gain an LLM
+    call nor change its capture trigger."""
+    import services.mail_ingress_service as ingress
+
+    def _boom(*a, **k):  # any classifier call here is a bug
+        raise AssertionError("classifier must not run without context")
+
+    monkeypatch.setattr(ingress, "classify", _boom)
+    assert fwd.should_forward({"subject": "Update on your application",
+                               "text": "We will not be moving forward."}) == (True, "application")
+    assert fwd.should_forward({"subject": "Your verification code",
+                               "text": "Your code is 483920."}) == (False, "system_noise")
 
 
 if __name__ == "__main__":

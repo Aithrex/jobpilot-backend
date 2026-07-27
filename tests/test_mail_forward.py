@@ -99,6 +99,40 @@ def env(monkeypatch):
     return monkeypatch
 
 
+# Deterministic stand-in for the Haiku classifier that backs the §6 allow-list
+# (no Bedrock in tests). First match wins, so the mixed "thank you for applying
+# … not moving forward" rejection lands on `rejected`.
+_FAKE_STATUS = (
+    ("moving forward", "rejected"),
+    ("careful review", "rejected"),
+    ("interview", "interview_invite"),
+    ("assessment", "oa_sent"),
+    ("pleased to extend an offer", "offer"),
+    ("received your application", "applied"),
+    ("thank you for applying", "applied"),
+)
+
+
+@pytest.fixture(autouse=True)
+def classifier(monkeypatch):
+    """Patch ``mail_ingress_service.classify`` — the allow-list's status oracle.
+    ``mail_forward_service`` imports it INSIDE the call, so patching the module
+    attribute is enough. Keeps the suite fully offline."""
+    import services.mail_ingress_service as ingress
+
+    def _fake(from_domain, subject, body_text):
+        blob = f"{subject or ''}\n{body_text or ''}".lower()
+        for needle, status in _FAKE_STATUS:
+            if needle in blob:
+                return {"status": status, "confidence": 0.95, "company": "",
+                        "role": "", "event_at": None, "evidence_sentence": ""}
+        return {"status": None, "confidence": 0.0, "company": "", "role": "",
+                "event_at": None, "evidence_sentence": ""}
+
+    monkeypatch.setattr(ingress, "classify", _fake)
+    return _fake
+
+
 @pytest.fixture()
 def sent(monkeypatch):
     """Capture every email_service.send_email call (no real provider)."""
@@ -193,18 +227,20 @@ def test_forward_sent_when_all_gates_pass(env, sent):
     assert call["reply_to"] != "no-reply@greenhouse.io"
     # Outbound loop marker present.
     assert call["headers"] == {"X-JP-Forwarded": "1"}
-    # ORIGINAL subject preserved (not a generic notice).
+    # ORIGINAL subject preserved on the header.
     assert call["subject"] == "Update on your application"
-    # The REAL body is delivered (full content) + a compact manage-in-app link.
-    assert "Thank you for applying" in call["html"]
-    assert "moving forward" in call["text"].lower()
+    # LINK-ONLY (spec §6): a status headline + the deep link in BOTH parts; the
+    # recruiter body is NOT relayed — it stays in the in-app inbox.
     deep = f"{FRONTEND}/app/apply/{res['thread_id']}"
     assert deep in call["html"]
     assert deep in call["text"]
+    assert "passed on your application" in call["html"]
+    assert "Thank you for applying" not in call["html"]
+    assert "moving forward" not in call["text"].lower()
 
 
-def test_forward_body_is_full_real_content_not_generic(env, sent):
-    # Full pipeline: ingest a real Greenhouse rejection to S3, then relay it.
+def test_forward_is_link_only_and_inbox_keeps_everything(env, sent):
+    # Full pipeline: ingest a real Greenhouse rejection to S3, then notify.
     _enable_forwarding()
     _db().tailoring_records.insert_one({
         "record_id": "rec-1", "user_email": OWNER,
@@ -222,16 +258,16 @@ def test_forward_body_is_full_real_content_not_generic(env, sent):
     assert out["sent"] is True
     assert len(sent) == 1
     html = sent[0]["html"]
-    text = sent[0]["text"]
-    # The REAL recruiter body IS delivered (plain full-content relay).
-    blob = (html + text).lower()
-    assert "careful review" in blob
-    assert "moving forward" in blob
-    # ORIGINAL subject + compact manage link (body IS the message, not a redirect).
+    blob = (html + sent[0]["text"]).lower()
+    # The IN-APP inbox kept the full message (no content drop at ingest)...
+    stored = _db().mail_messages.find_one({"message_id": res["message_id"]})
+    assert stored["text_s3_key"] and stored["safe_html_s3_key"]
+    # ...while the personal inbox got only the pointer.
+    assert "careful review" not in blob
+    assert "moving forward" not in blob
+    # ORIGINAL subject + the "read it in app" link.
     assert sent[0]["subject"] == "Update on your application to Acme"
     assert f"{FRONTEND}/app/apply/{res['thread_id']}" in html
-    # NOT the retired generic notice.
-    assert "we do not include the full message" not in blob
 
 
 # ---------------------------------------------------------------------------
@@ -261,8 +297,11 @@ def test_unverified_destination_blocks_forward(env, sent):
 
 def test_no_destination_blocks_forward(env, sent):
     mailbox.provision(OWNER, "Harshith Manne")
-    # forwarding on but no forward_to set.
-    mailbox.set_forwarding(OWNER, True, None)
+    # Provisioning now DEFAULTS forward_to to the owner's registered address
+    # (spec §6), so a destination-less mailbox is a legacy/hand-cleared one.
+    _db().managed_mailboxes.update_one(
+        {"user_email": OWNER}, {"$set": {"forwarding_enabled": True, "forward_to": None}}
+    )
     out = fwd.forward_notification(_seed_message())
     assert out == {"sent": False, "reason": "no_forward_to"}
     assert sent == []

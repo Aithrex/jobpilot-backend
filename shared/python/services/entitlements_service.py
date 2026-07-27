@@ -64,6 +64,7 @@ FEATURE_PERIODS = {
     "cover_letter": PERIOD_DAY,
     "autoapply_answer": PERIOD_MONTH,  # grounded open-ended answers (monthly pool)
     "auto_submit": PERIOD_MONTH,       # opt-in auto-submit — monthly application pool
+    "auto_apply_daily": PERIOD_DAY,    # unattended fan-out throttle — see below
     "quiz": PERIOD_DAY,
     "practice_question": PERIOD_DAY,
     "mock_evaluate": PERIOD_DAY,
@@ -80,6 +81,30 @@ FEATURE_PERIODS = {
     "hub_mentor": PERIOD_DAY,                # Sprint Hub — meter mentor chat turns
 }
 
+# ---------------------------------------------------------------------------
+# Unattended fan-out blast radius (`auto_apply_daily`).
+#
+# `auto_submit` is a MONTHLY pool and premium_plus is unlimited on it, which
+# means that before this existed there was NO bound on how fast auto-apply
+# could burn. `apply_match_sweep` runs every 15 minutes (96 ticks/day) and the
+# Auto Aggressive per-tick cap is 50, so an unlimited-plan user could have had
+# ~4,800 applications attempted in a single unattended day.
+#
+# This is a SAFETY throttle, not a plan lever — it is intentionally the SAME
+# number on every plan. Nobody, on any tier, gets 100 unattended applications a
+# day by accident; raising it is a deliberate per-user
+# `entitlement_overrides.limits.auto_apply_daily` decision. It is metered per
+# ENQUEUE (the moment the sweep commits to an application), never refunded, so
+# a downstream failure still consumes blast radius. That asymmetry is the
+# point: the cap bounds attempts, not successes.
+#
+# It does NOT replace or double-count the monthly `auto_submit` pool — that one
+# is charged later, at approval (application_ledger_service._AUTO_SUBMIT_FEATURE
+# via quota_ledger reservation). Two different questions: "how many this month"
+# vs "how fast, unattended".
+# ---------------------------------------------------------------------------
+DEFAULT_DAILY_AUTO_APPLY_CAP = 20
+
 PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
     FREE: {
         "tailor": 5,
@@ -87,6 +112,7 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "cover_letter": 2,
         "autoapply_answer": 25,
         "auto_submit": 25,            # free: 25 auto-apply submissions / month
+        "auto_apply_daily": DEFAULT_DAILY_AUTO_APPLY_CAP,  # safety throttle, not a plan lever
         "quiz": None,                 # Learning Hub — free for all users
         "practice_question": 5,
         "mock_evaluate": 2,
@@ -112,6 +138,7 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "cover_letter": None,
         "autoapply_answer": 300,
         "auto_submit": 200,           # premium: 200 auto-apply submissions / month
+        "auto_apply_daily": DEFAULT_DAILY_AUTO_APPLY_CAP,  # same throttle on every plan
         "quiz": 20,
         "practice_question": 30,
         "mock_evaluate": 15,
@@ -136,6 +163,10 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "cover_letter": None,
         "autoapply_answer": None,
         "auto_submit": None,          # soft cap; effectively unlimited
+        # NOT None. "Unlimited monthly" must not mean "unbounded per day" — an
+        # unattended 15-minute sweep with no daily bound is the ~4,800/day
+        # failure mode described above. Admin override raises it per user.
+        "auto_apply_daily": DEFAULT_DAILY_AUTO_APPLY_CAP,
         "quiz": None,
         "practice_question": None,
         "mock_evaluate": None,

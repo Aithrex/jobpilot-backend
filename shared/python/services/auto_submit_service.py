@@ -549,7 +549,15 @@ def list_pending_eligible(user_email: str) -> Dict[str, Any]:
 _FOLD_AWAITING: Tuple[str, ...] = ("ready_for_review",)
 _FOLD_APPROVED: Tuple[str, ...] = ("approved", "queued_for_execution")
 _FOLD_ATTENTION: Tuple[str, ...] = (
-    "needs_input", "waiting_human", "submission_unknown",
+    # spec §4: `unsupported` is surfaced HONESTLY (with its user-facing message)
+    # rather than vanishing from the tab or masquerading as an error.
+    #
+    # `failed` is here for the same reason. It used to be absent from every fold
+    # bucket AND from the FE status union, so a row that failed outright simply
+    # disappeared from the Auto-Apply tab — the user was left believing the
+    # application was still in flight. A terminal failure the user can see is
+    # strictly better than silence; the FE renders it via StatusRowCard.
+    "needs_input", "waiting_human", "submission_unknown", "unsupported", "failed",
 )
 _ACCOUNT_GATE_PROMPT = (
     "Sign in or create an account on the employer's career site to continue."
@@ -639,9 +647,69 @@ def list_canonical_approvals(user_email: str) -> List[Dict[str, Any]]:
                     if reason:
                         payload["reason"] = reason
                 out.append(payload)
+        _stamp_fold_answers(user_email, out)
+        _stamp_fold_undo(user_email, out)
     except Exception as e:  # pragma: no cover - fold is best-effort
         logger.warning("auto_submit canonical fold failed for %s: %s", user_email, e)
     return out
+
+
+def _stamp_fold_answers(user_email: str, rows: List[Dict[str, Any]]) -> None:
+    """Attach `answers_snapshot` (the resolved {field_id: value} answer sheet) to
+    every folded row, in ONE query.
+
+    Without it the FE review card renders "No application questions to review" —
+    a folded row carried no answers at all, because the fold reads the LEAN ledger
+    row while the answers live in `auto_apply_answers` (they carry PII and are
+    deliberately kept off the ledger). Best-effort: a read failure leaves the rows
+    untouched rather than emptying the queue."""
+    ids = [r.get("application_id") for r in rows if r.get("application_id")]
+    if not ids:
+        return
+    try:
+        from services.auto_apply_service import _answers_coll
+        cursor = _answers_coll().find(
+            {"user_email": user_email, "application_id": {"$in": ids}},
+            {"_id": 0, "application_id": 1, "answers": 1, "coverage": 1})
+        by_id = {d.get("application_id"): d for d in cursor}
+    except Exception as e:  # pragma: no cover - best-effort enrichment
+        logger.warning("auto_submit fold answers stamp failed for %s: %s",
+                       user_email, e)
+        return
+    for row in rows:
+        doc = by_id.get(row.get("application_id")) or {}
+        answers = doc.get("answers")
+        row["answers_snapshot"] = answers if isinstance(answers, dict) else {}
+        row["answers_count"] = len(row["answers_snapshot"])
+        if doc.get("coverage") is not None:
+            row["coverage"] = doc.get("coverage")
+
+
+def _stamp_fold_undo(user_email: str, rows: List[Dict[str, Any]]) -> None:
+    """Attach `undo_until` (+ `approved_at`) to every APPROVED folded row, in ONE
+    query, derived from the frozen approval snapshot's `approved_at` +
+    UNDO_WINDOW_SECONDS — the same cancel buffer a legacy System-A approval has.
+    Without it the approved card shows no cancel window at all."""
+    ids = [r.get("application_id") for r in rows
+           if r.get("already_approved") and r.get("application_id")]
+    if not ids:
+        return
+    try:
+        from services import application_ledger_service as als
+        snapshots = als.approval_snapshots(user_email, ids)
+    except Exception as e:  # pragma: no cover - best-effort enrichment
+        logger.warning("auto_submit fold undo stamp failed for %s: %s", user_email, e)
+        return
+    for row in rows:
+        snap = snapshots.get(row.get("application_id"))
+        if not snap:
+            continue
+        approved_at = _as_aware(snap.get("approved_at"))
+        if approved_at is None:
+            continue
+        row["approved_at"] = _iso(approved_at)
+        row["undo_until"] = _iso(
+            approved_at + timedelta(seconds=UNDO_WINDOW_SECONDS))
 
 
 def approve_ledger(user_email: str, application_ids: Any, *,
@@ -654,6 +722,43 @@ def approve_ledger(user_email: str, application_ids: Any, *,
     from services import application_ledger_service as als
     return als.approve(user_email, application_ids, approved_by=approved_by,
                        snapshot_provider=snapshot_provider)
+
+
+def approve_ledger_detailed(user_email: str, application_ids: Any, *,
+                            approved_by: str = "user",
+                            snapshot_provider: Any = None) -> Dict[str, Any]:
+    """Detailed peer of `approve_ledger` — returns
+    {approved, approved_ids, over_quota, usage, not_approvable} so the IN-APP
+    approve route can tell "advanced the canonical row" from "over the auto_submit
+    cap" (429) from "this id has no reviewable ledger row" (fall back to the
+    legacy System-A record). Same single-writer/idempotency guarantees."""
+    from services import application_ledger_service as als
+    return als.approve_with_result(user_email, application_ids,
+                                   approved_by=approved_by,
+                                   snapshot_provider=snapshot_provider)
+
+
+def cancel_ledger(user_email: str, application_id: str) -> bool:
+    """Undo the canonical side of an in-app approval: `approved` /
+    `queued_for_execution` -> `cancelled` (a legal pre-submit abort). Returns True
+    when the row was actually cancelled; False when there is no ledger row, or it
+    already left the cancellable window (the executor leased it). Best-effort —
+    the System-A cancel is the caller's primary action and must not fail on this."""
+    try:
+        from services import application_ledger_service as als
+        row = als.get_application(user_email, application_id)
+        if not row or row.get("status") not in (
+                als.STATUS_APPROVED, als.STATUS_QUEUED_FOR_EXECUTION):
+            # ready_for_review is deliberately NOT cancellable here: undoing an
+            # approval must never silently discard an application the user only
+            # ever wanted to review (that is `skip`, an explicit action).
+            return False
+        als.transition(user_email, application_id, als.STATUS_CANCELLED)
+        return True
+    except Exception as e:
+        logger.info("auto_submit cancel_ledger: no canonical cancel for %s (%s)",
+                    application_id, e)
+        return False
 
 
 # ---------------------------------------------------------------------------

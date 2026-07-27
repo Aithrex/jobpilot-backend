@@ -2163,6 +2163,22 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             )
             svc.complete_job(job_id, result)
 
+        elif job_type == "apply_match_sweep":
+            # Spec §5 — unattended new-posting -> auto-apply fan-out, on a
+            # 15-minute EventBridge tick (scheduled_jobs.dispatch_scheduled).
+            # System actor, no user_email: it fans out over every opted-in user
+            # itself, per-user error-isolated.
+            #
+            # NO idempotency bail here, deliberately. A duplicate at-least-once
+            # delivery is already a no-op by construction: `dedup_gate` + the
+            # unique (user_email, job_identity) index reject a second row for
+            # the same posting, the daily-cap reservation is idempotent on that
+            # same identity, and the watermark only ever moves forward. Re-
+            # running the sweep is strictly cheaper than skipping a real one.
+            from services import apply_match_sweep
+            result = apply_match_sweep.run_match_sweep()
+            svc.complete_job(job_id, result)
+
         elif job_type == "auto_apply_prepare":
             # Defect D — the REQUIRED tailored-résumé preparation phase. Reserves
             # a tailor slot, tailors + pins an immutable artifact, writes

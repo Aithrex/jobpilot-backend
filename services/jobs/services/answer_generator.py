@@ -261,7 +261,7 @@ class AnswerGenerator:
         "structured" key of base_resume_doc) and the job context. Returns an
         empty list on failure so the caller can surface a clean error.
         """
-        from services.claude_client import claude_json, CLAUDE_PRO
+        from services.claude_client import claude_json, CLAUDE_FLASH
         from schemas.resume_schemas import flatten_skills, build_resume_text
         from utils.llm_safety import redact_pii_for_model, wrap_untrusted, guarded_system
 
@@ -335,7 +335,11 @@ class AnswerGenerator:
                 prompt,
                 max_tokens=2500,
                 temperature=0.7,  # higher than the deterministic generators — we WANT variety
-                model=CLAUDE_PRO,
+                # FLASH (Haiku 4.5) per CLAUDE.md invariant 5 / repair spec §7:
+                # short, grounded application free-text is an extraction-shaped
+                # task, not a tailoring one — PRO here was a tier error that cost
+                # ~10x per answer for no measurable quality gain.
+                model=CLAUDE_FLASH,
                 schema=_ANSWER_SCHEMA,
                 system=guarded_system(
                     "You write a job-application answer in the CANDIDATE'S OWN "
@@ -368,3 +372,142 @@ class AnswerGenerator:
 
         logger.info("AnswerGenerator: produced %d/%d variants", len(variants), n_variants)
         return variants
+
+
+# ---------------------------------------------------------------------------
+# needs_generation consumer — the gather-path entry point (repair spec §7).
+# ---------------------------------------------------------------------------
+# `answer_library_service.resolve()` emits `needs_generation` for every free-text
+# field it will NOT answer ("why this company", "why you", cover letter,
+# "anything else"). Before this it had ZERO consumers, so an essay-bearing form
+# always fell to needs_input and the user was asked to write it themselves.
+_GENERATABLE_FIELD_IDS = frozenset({
+    "cover_letter", "why_company", "why_you", "additional_info", "essay",
+})
+
+# Bound the per-application LLM spend: a form with ten essay boxes must not fan
+# out to ten Bedrock calls.
+_MAX_GENERATED_FIELDS = 4
+
+
+def generate_free_text_answers(
+    user_email: str,
+    needs_generation: List[Dict[str, Any]],
+    *,
+    job_description: str = "",
+    company: str = "",
+    role: str = "",
+    base_resume_doc: Optional[Dict[str, Any]] = None,
+    max_fields: int = _MAX_GENERATED_FIELDS,
+) -> Dict[str, Dict[str, Any]]:
+    """Generate grounded free-text answers for a resolve()'s ``needs_generation``.
+
+    ── CONTRACT for the auto-apply gather path ─────────────────────────────────
+        generate_free_text_answers(
+            user_email: str,
+            needs_generation: List[dict],   # resolve()["needs_generation"] verbatim
+            *,
+            job_description: str = "",
+            company: str = "",
+            role: str = "",
+            base_resume_doc: Optional[dict] = None,   # else loaded from resume_assets
+            max_fields: int = 4,
+        ) -> Dict[str, Dict[str, Any]]
+
+        returns { field_id: { "field_id", "value", "source": "generated",
+                              "confidence": 0.6, "review_required": True,
+                              "kind": "essay", "angle": str } }
+
+    Merge the result into ``resolve()["resolved"]`` before the coverage /
+    autonomy decision, then flatten with ``fill_driver.flatten_resolved``.
+
+    HARD RULES:
+      * GROUNDED ONLY IN THE RÉSUMÉ. `AnswerGenerator.generate` wraps the résumé,
+        question and JD as untrusted data and forbids inventing employers,
+        metrics or projects (IntegrityGuard posture). No résumé -> ``{}``; we do
+        not write an essay out of nothing.
+      * ``review_required`` is ALWAYS True. Generated prose is never auto-submitted
+        without appearing on the review card.
+      * NOT ENTITLEMENT-GATED HERE. This spends Bedrock tokens. The CALLER must
+        run `entitlements_service.require_feature(...)` /
+        `check_and_increment(email, feature)` BEFORE calling it (CLAUDE.md
+        invariant 3) — this function is a pure generator, not a route.
+      * Never raises. Any per-field failure is logged and that field is simply
+        absent from the result (it stays in needs_input).
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    if not user_email or not isinstance(needs_generation, list) or not needs_generation:
+        return out
+
+    if base_resume_doc is None:
+        try:
+            from services import resume_access
+            base_resume_doc = resume_access.get_active_structured(user_email) or {}
+        except Exception as e:
+            logger.warning("generate_free_text_answers: resume load failed for %s: %s",
+                           user_email, e)
+            return out
+    structured = (base_resume_doc or {}).get("structured") or {}
+    if not structured:
+        logger.info("generate_free_text_answers: no structured résumé for %s — "
+                    "nothing to ground on, skipping generation", user_email)
+        return out
+
+    try:
+        cap = max(1, min(int(max_fields or _MAX_GENERATED_FIELDS),
+                         _MAX_GENERATED_FIELDS))
+    except (TypeError, ValueError):
+        cap = _MAX_GENERATED_FIELDS
+
+    generator = AnswerGenerator()
+    for item in needs_generation:
+        if len(out) >= cap:
+            break
+        if not isinstance(item, dict):
+            continue
+        field_id = str(item.get("field_id") or "").strip()
+        if not field_id or field_id in out:
+            continue
+        # Only the known free-text catalog ids (plus the legacy "essay" id) —
+        # never a field the resolver merely failed to classify.
+        if field_id not in _GENERATABLE_FIELD_IDS:
+            continue
+        # `question` is the raw form label; `label` is the normalized fallback.
+        question = str(item.get("question") or item.get("label") or "").strip()
+        if not question:
+            continue
+
+        try:
+            variants = generator.generate(
+                question=question,
+                base_resume_doc=base_resume_doc,
+                job_description=job_description or "",
+                company=company or "",
+                role=role or "",
+                n_variants=1,
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("generate_free_text_answers: %s failed: %s", field_id, e)
+            continue
+        if not variants:
+            continue
+
+        out[field_id] = {
+            "field_id": field_id,
+            "question_text": question,
+            "value": variants[0]["answer"],
+            "angle": variants[0].get("angle") or "Answer",
+            "field": field_id,
+            "category": "essay",
+            "kind": "essay",
+            "sensitivity": "safe",
+            "source": "generated",
+            "source_version": None,
+            "confidence": 0.6,
+            # Generated prose ALWAYS goes to the review card first.
+            "review_required": True,
+        }
+
+    logger.info("generate_free_text_answers: generated %d/%d free-text answers",
+                len(out), len(needs_generation))
+    return out

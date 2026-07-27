@@ -244,12 +244,24 @@ class TestReadyGate:
 class TestNeverFabricate:
     def test_undeclared_eeo_is_never_inferred(self, onb_db):
         _seed_contact(onb_db)
-        # No gender declared anywhere -> the resolver leaves it unresolved and
-        # flags an unconfirmed legal/EEO attestation (never a guess).
+        # No gender declared anywhere. Repair spec §0 rule 3: the resolver may
+        # auto-select the DECLINE option (declining asserts NOTHING about the
+        # candidate) — but it must NEVER infer an actual demographic value, and
+        # it must not report an unconfirmed attestation for it.
         res = lib.resolve(USER, [_nq("gender", _GENDER_Q, required=True, is_legal=True)])
-        assert "gender" not in res["resolved"]
-        assert "gender" in res["unresolved"]
-        assert res["has_unconfirmed_legal_attestation"] is True
+        hit = res["resolved"]["gender"]
+        assert hit["value"] == qb.DECLINE
+        assert hit["source"] == lib.SOURCE_POLICY_DECLINE
+        assert hit["review_required"] is True
+        assert hit["value"] not in qb.get_field("gender")["options"][:3]  # not Male/Female/Non-binary
+        assert res["has_unconfirmed_legal_attestation"] is False
+
+    def test_auto_declined_eeo_is_not_shown_as_declared(self, onb_db):
+        """The auto-decline is a submittable ANSWER, not a DECLARATION — the
+        onboarding card must still show the EEO question as unanswered."""
+        _seed_contact(onb_db)
+        gender, _cat = _find_field(onb.build_questions_payload(USER), "gender")
+        assert gender["current_value"] is None
 
     def test_declared_decline_is_used(self, onb_db):
         onb.save_answers(USER, {"disability_status": qb.DECLINE})

@@ -152,12 +152,33 @@ def verify_forwarding():
 @mailbox_bp.route("", methods=["GET"])
 @jwt_required()
 def get_mailbox():
-    """Current mailbox state for the inbox header. Not provisioned yet ->
-    ``{provisioned: false}`` (200, never 401). Owner-scoped by JWT."""
+    """Current mailbox state for the inbox header. Owner-scoped by JWT.
+
+    The mailbox is AUTO-PROVISIONED at signup (spec §6), so ``provisioned:false``
+    now only happens for accounts created before that landed (or when the signup
+    best-effort call failed). We self-heal here rather than showing the user a
+    "create my address" prompt — provisioning is idempotent and is a pure DB
+    write. It stays best-effort: a failure degrades to the old
+    ``{provisioned:false}`` shape (200, never 401).
+
+    ``name_pending`` self-repair: an alias auto-minted at signup had no name to
+    slug (the register form collects only email + password), so it is an opaque
+    ``career.<hex>`` stopgap. Once a name IS resolvable (profile or parsed
+    resume) we upgrade it to ``firstname.lastname`` — but only while nobody has
+    mailed the old address (see ``repair_local_part``)."""
     user_email = get_jwt_identity()
     mb = mailbox.get_mailbox(user_email)
     if not mb.get("provisioned"):
-        return jsonify({"provisioned": False}), 200
+        try:
+            mb = mailbox.provision(user_email, _resolve_display_name(user_email))
+        except Exception as e:  # pragma: no cover - self-heal is best-effort
+            logger.warning("mailbox auto-provision on read failed: %s", type(e).__name__)
+            return jsonify({"provisioned": False}), 200
+    elif mb.get("name_pending"):
+        try:
+            mb = mailbox.repair_local_part(user_email, _resolve_display_name(user_email))
+        except Exception as e:  # pragma: no cover - repair is best-effort
+            logger.warning("mailbox local-part repair failed: %s", type(e).__name__)
     return jsonify(_with_unread(mb, user_email)), 200
 
 

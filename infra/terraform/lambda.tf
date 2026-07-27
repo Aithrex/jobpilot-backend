@@ -87,12 +87,16 @@ resource "aws_lambda_function" "service" {
       CREDENTIALS_KMS_KEY_ID   = aws_kms_key.credentials.arn
       SSM_APPROVAL_LINK_SECRET = "${var.ssm_path_prefix}/approval-link-secret"
 
-      # Managed Application Mailbox (managed-mailbox-v1 §7). Declared here so the
-      # resume Lambda can read the feature's state + reach its store. The feature
-      # stays INERT until APPLY_MAIL_DOMAIN is set AND APPLY_MAILBOX_ENABLED
-      # flips true — held OFF until the neutral domain + Cloudflare Worker exist
-      # and staging smoke passes (spec §11/§12). The bucket + CMK below are now
-      # provisioned in managed_mailbox.tf, so we wire them directly.
+      # Managed Application Mailbox (managed-mailbox-v1 §7). This `environment`
+      # block is inside `for_each = var.service_config`, so EVERY service Lambda
+      # (auth · jobs · resume · billing) already receives these vars — auth NEEDS
+      # APPLY_MAIL_DOMAIN because `auth.register` / `oauth_service.upsert_user`
+      # now auto-provision the mailbox at signup (AUTOAPPLY_REPAIR_SPEC §6);
+      # without the domain `provision()` would mint a bare local part with no
+      # host. Do NOT move these into a per-service override. The feature stays
+      # INERT until APPLY_MAIL_DOMAIN is set AND APPLY_MAILBOX_ENABLED flips true
+      # (spec §11/§12). The bucket + CMK below are provisioned in
+      # managed_mailbox.tf, so we wire them directly.
       APPLY_MAIL_DOMAIN     = "my-private-mail.com"
       APPLY_MAILBOX_ENABLED = "true"
       # Non-secret store identifiers (key id is NOT a secret — same rationale as

@@ -37,9 +37,15 @@ except the single cheap read of the user's threshold:
         * else resolvable by one tap        -> "hold"  (one-tap review queue)
         * else                              -> "ask"   (gather more / escalate)
 
-  The per-user `autonomy_threshold` (default 0.90) lives on the SAME
+  The per-user `autonomy_threshold` (default 0.75) lives on the SAME
   `auto_submit_settings` doc as the opt-in toggle (Tranche 1 §3), so a user's
   autonomy appetite is one read alongside their master opt-in.
+
+  A SECOND, unrelated threshold also lives on that doc: `match_threshold`
+  (0-100, default 65). That one gates JOB MATCH (`fit_score`) for the
+  new-posting sweep and has NOTHING to do with form-fillability. See the
+  comment above `DEFAULT_MATCH_THRESHOLD` — conflating the two breaks
+  `decide()`.
 
 Layering: the route still enforces the master `AUTO_SUBMIT_ENABLED` kill-switch,
 the per-user opt-in, and entitlement/quota BEFORE any submit acts on an "auto"
@@ -108,8 +114,23 @@ AUTOPILOT_GRADUATION_N = 10
 
 # ---------------------------------------------------------------------------
 # Threshold (per user, on auto_submit_settings.autonomy_threshold)
+#
+# 0.75, LOWERED from 0.90 (July 2026). 0.90 was structurally UNREACHABLE for
+# every account-gated vendor, which silently disabled auto-submit for the ATS
+# that matters most. The arithmetic (see ATS_EASE + the weights below):
+#
+#     max achievable = 0.50*1.0 + 0.30*ats_ease + 0.20*1.0 = 0.70 + 0.30*ease
+#
+#   greenhouse/lever (0.95) -> 0.985   ashby (0.92) -> 0.976
+#   workday          (0.50) -> 0.850   unknown (0.60) -> 0.880
+#
+# A Workday application with PERFECT answer coverage and NO essay tops out at
+# 0.85, so at a 0.90 threshold `decide()` could never return "auto" for one -
+# no matter how good the job match was. 0.75 leaves every implemented vendor
+# reachable while still demanding real coverage (Workday needs >= 0.80).
+# `max_achievable_score()` below makes that invariant testable.
 # ---------------------------------------------------------------------------
-DEFAULT_AUTONOMY_THRESHOLD = 0.90
+DEFAULT_AUTONOMY_THRESHOLD = 0.75
 
 # How far BELOW the threshold a score may fall and still be "resolvable by one
 # tap" (→ hold) rather than "ask". Used only when the caller does not tell us
@@ -122,23 +143,48 @@ HOLD_BAND = 0.15
 # Higher = a clean, single-form, predictable autofill; lower = multi-step,
 # JS-heavy, state-resetting flows where a silent submit is riskier. Unknown
 # families get a cautious-moderate default. Keys are lowercased ats_family.
+#
+# HONESTY NOTE (July 2026): this table used to list 17 vendors, which read as
+# "we support 17 ATSs". We do not. Only the four in IMPLEMENTED_ATS below have
+# a real fill+submit path (`browser_executor` / `ats_executor`); iCIMS,
+# SmartRecruiters and Workable are DETECTED by `ats_detector` but have no
+# executor, and everything else is unsupported (spec §4). The unimplemented
+# entries are kept ONLY so that a detected-but-unsupported row scores honestly
+# low instead of falling into the cautious-moderate unknown default — they are
+# not a support claim. `application_ledger_service.STATUS_UNSUPPORTED` is what
+# actually surfaces the gap to the user.
 # ---------------------------------------------------------------------------
+
+# The vendors with a real end-to-end executor. This tuple is the support claim;
+# ATS_EASE is only a scoring weight.
+IMPLEMENTED_ATS: tuple = ("greenhouse", "lever", "ashby", "workday")
+
 ATS_EASE: Dict[str, float] = {
-    "greenhouse": 0.95,
-    "lever": 0.95,
-    "ashby": 0.92,
+    # --- implemented: fill + submit ----------------------------------------
+    "greenhouse": 0.95,    # single clean form
+    "lever": 0.95,         # single clean form
+    "ashby": 0.92,         # single form, some dynamic sections
+    "workday": 0.50,       # multi-page, ACCOUNT-GATED, state-resetting.
+                           # Caps the blended score at 0.85 — see the threshold
+                           # note above; do not raise this to paper over a
+                           # threshold problem, it is an honest difficulty
+                           # weight and `max_achievable_score()` asserts it.
+    # --- detected by ats_detector, NO executor yet (spec §4) ---------------
+    # These never auto-submit today; they route to `unsupported`. The weights
+    # are retained so that if/when an executor lands, the score is already
+    # calibrated rather than defaulting to the unknown 0.60.
     "workable": 0.85,
     "smartrecruiters": 0.80,
+    "icims": 0.55,
+    # --- not detected, not implemented: reference weights only -------------
     "jazzhr": 0.80,
     "breezy": 0.80,
     "recruitee": 0.80,
     "linkedin": 0.88,      # LinkedIn Easy Apply — short, structured
     "indeed": 0.70,
     "bamboohr": 0.70,
-    "icims": 0.55,
     "successfactors": 0.50,
     "taleo": 0.45,
-    "workday": 0.50,       # multi-page, account-gated, state-resetting
     "brassring": 0.45,
     "oracle": 0.45,
 }
@@ -169,6 +215,30 @@ def ats_ease(ats_family: Optional[str]) -> float:
     if not ats_family or not isinstance(ats_family, str):
         return _DEFAULT_ATS_EASE
     return ATS_EASE.get(ats_family.strip().lower(), _DEFAULT_ATS_EASE)
+
+
+def max_achievable_score(ats_family: Optional[str]) -> float:
+    """The BEST score `score()` can return for this ATS: perfect answer coverage
+    and no novel free-text. Anything above this is structurally unreachable.
+
+    Exists because a threshold above this number is not "conservative", it is a
+    silent OFF switch for that vendor — the 0.90/Workday defect. Tests assert
+    `DEFAULT_AUTONOMY_THRESHOLD <= max_achievable_score(v)` for every vendor in
+    IMPLEMENTED_ATS so the defect cannot come back by a table edit.
+    """
+    return _clamp01(_W_COVERAGE * 1.0 + _W_ATS_EASE * ats_ease(ats_family)
+                    + _W_NO_NOVEL * 1.0)
+
+
+def threshold_reachable(ats_family: Optional[str], threshold: float) -> bool:
+    """Can an application on this ATS ever reach `threshold`? False means the
+    row can only ever be hold/ask — worth logging, never worth silently
+    overriding the user's stored preference."""
+    try:
+        th = max(0.0, min(1.0, float(threshold)))
+    except (TypeError, ValueError):
+        return False
+    return max_achievable_score(ats_family) >= th
 
 
 def _settings():
@@ -213,6 +283,77 @@ def set_autonomy_threshold(user_email: str, threshold: float) -> float:
     _settings().update_one(
         {"user_email": user_email},
         {"$set": {"user_email": user_email, "autonomy_threshold": value,
+                  "updated_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    return value
+
+
+# ---------------------------------------------------------------------------
+# MATCH threshold (per user, on auto_submit_settings.match_threshold)
+#
+# STRICTLY SEPARATE from `autonomy_threshold` above. Conflating them breaks
+# `decide()`, so the difference is spelled out here once:
+#
+#   autonomy_threshold  0.0-1.0  FORM-FILLABILITY. "Can we fill and submit this
+#                                form unattended?" = 0.50*coverage +
+#                                0.30*ats_ease + 0.20*no_novel. Consumed by
+#                                `decide()`. Says NOTHING about the job.
+#   match_threshold     0-100    JOB MATCH. `fit_score.score_one()['match_score']`
+#                                — how well the RESUME fits the POSTING. Consumed
+#                                by `apply_match_sweep` to decide whether a newly
+#                                discovered posting is worth an application at
+#                                all. Says NOTHING about the form.
+#
+# 65 is the bottom of the fit_score "good match" band (fit_score.BANDS), which
+# is the same line the guest/feed surfaces already draw. Below it we do not
+# spend an application slot unattended.
+# ---------------------------------------------------------------------------
+DEFAULT_MATCH_THRESHOLD = 65
+
+
+def get_match_threshold(user_email: str) -> int:
+    """Read the user's `match_threshold` (0-100) from auto_submit_settings.
+
+    Defaults to 65 when unset, malformed, or on any read error. Clamped to
+    [0, 100] so a bad stored value can never widen the auto-apply band. A
+    threshold of 101+ is impossible by clamping; 100 means "only a perfect
+    fit", which is a valid (effectively off) stance.
+    """
+    if not user_email:
+        return DEFAULT_MATCH_THRESHOLD
+    try:
+        doc = _settings().find_one(
+            {"user_email": user_email}, {"_id": 0, "match_threshold": 1}
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("autonomy: match threshold read failed for %s: %s", user_email, e)
+        return DEFAULT_MATCH_THRESHOLD
+    raw = (doc or {}).get("match_threshold")
+    if raw is None:
+        return DEFAULT_MATCH_THRESHOLD
+    try:
+        return max(0, min(100, int(round(float(raw)))))
+    except (TypeError, ValueError):
+        return DEFAULT_MATCH_THRESHOLD
+
+
+def set_match_threshold(user_email: str, threshold: Any) -> int:
+    """Persist the user's match_threshold onto the SAME auto_submit_settings doc
+    (upsert), so the whole autonomy posture stays one read / one write. Clamps to
+    [0, 100]; returns the stored value. A non-numeric value raises ValueError —
+    the route maps that to 400, NEVER 401.
+    """
+    if not user_email or not isinstance(user_email, str):
+        raise ValueError("user_email is required")
+    try:
+        value = max(0, min(100, int(round(float(threshold)))))
+    except (TypeError, ValueError):
+        raise ValueError("match_threshold must be a number between 0 and 100")
+    from datetime import datetime, timezone
+    _settings().update_one(
+        {"user_email": user_email},
+        {"$set": {"user_email": user_email, "match_threshold": value,
                   "updated_at": datetime.now(timezone.utc)}},
         upsert=True,
     )
@@ -404,9 +545,17 @@ def evaluate(user_email: str,
     `auto_apply_gather` job stamps onto the ledger row (autonomy + confidence).
 
     Returns {"confidence_score": float, "autonomy": "auto"|"hold"|"ask",
-             "threshold": float}. Reads the user's threshold exactly once and
-    reuses it for the decision.
+             "threshold": float, "threshold_reachable": bool}. Reads the user's
+    threshold exactly once and reuses it for the decision.
+
+    `threshold_reachable` is False when the user's stored threshold is above
+    what this ATS can EVER score (the 0.90-vs-Workday defect). We log it rather
+    than clamping it: silently overriding an explicit user setting would be
+    worse than a row that never auto-submits. The live signal is what tells an
+    operator to fix the setting.
     """
+    if not ats_family and isinstance(application, dict):
+        ats_family = application.get("ats_family")
     th = get_autonomy_threshold(user_email)
     s = score(application, answer_coverage, ats_family, has_novel_free_text)
     decision = decide(
@@ -415,4 +564,11 @@ def evaluate(user_email: str,
         resolvable_by_one_tap=resolvable_by_one_tap,
         threshold=th,
     )
-    return {"confidence_score": s, "autonomy": decision, "threshold": th}
+    reachable = threshold_reachable(ats_family, th)
+    if not reachable:
+        logger.warning(
+            "autonomy: threshold %.2f is UNREACHABLE on ats=%s (max %.3f) — "
+            "this row can never auto-submit; lower the user's autonomy_threshold",
+            th, str(ats_family or "unknown"), max_achievable_score(ats_family))
+    return {"confidence_score": s, "autonomy": decision, "threshold": th,
+            "threshold_reachable": reachable}

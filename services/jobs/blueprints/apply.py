@@ -524,6 +524,33 @@ def onboarding_answers():
         return jsonify({"error": "Failed to save onboarding answers"}), 500
 
 
+def _approve_ledger_row(user_email: str, application_id: str) -> dict:
+    """Advance the CANONICAL ledger row behind an in-app approval (System B),
+    freezing the F approval snapshot — the same edge the emailed magic link
+    takes. Returns the detailed approve result
+    ({approved, over_quota, usage, ...}); an empty dict when this id has no
+    reviewable ledger row (a pure extension/System-A approval), so the caller
+    falls back to the legacy path unchanged. Best-effort: a ledger fault is
+    logged and degrades to the legacy path, never a 500 on the approval."""
+    try:
+        row = application_ledger_service.get_application(user_email, application_id)
+    except Exception as e:
+        logger.info("approve: ledger lookup miss for %s (%s)", application_id, e)
+        return {}
+    if not row:
+        return {}
+    try:
+        from services import auto_apply_service as _aas
+        return auto_submit_service.approve_ledger_detailed(
+            user_email, [application_id], approved_by="user",
+            snapshot_provider=lambda aid: _aas.build_approval_snapshot(
+                user_email, aid))
+    except Exception as e:
+        logger.warning("approve: ledger approve failed for %s: %s",
+                       application_id, e)
+        return {}
+
+
 # ------------------------------------------------------------------
 # POST /api/apply/auto-submit/approve — create/approve an approval record
 # ------------------------------------------------------------------
@@ -580,20 +607,57 @@ def auto_submit_approve():
         if fill_capped is not None:
             return fill_capped
 
-        # Per-plan daily auto-submit cap (abuse/safety) — meter BEFORE creating.
-        # G: atomic reserve+complete (no check-then-increment race). Keyed on the
-        # application so a duplicate approve (already short-circuited above) can
-        # never double-charge even if it slips through.
-        allowed, usage = _charge_feature(
-            user_email, "auto_submit",
-            idempotency_key=f"route-approve:{user_email}:{application_id}")
-        if not allowed:
-            return _quota_exceeded_response(usage)
+        # ---------------------------------------------------------------
+        # THE FIX (spec §3 "also fix in the same pass"): advance the CANONICAL
+        # ledger row, exactly as the emailed magic link does.
+        #
+        # Before this, an in-app approve wrote ONLY the System-A
+        # `auto_submit_approvals` record: the ledger row stayed `ready_for_review`
+        # forever, `request_immediate_submit` skipped it (it needs approved/
+        # queued_for_execution) and the hourly sweep skipped it (it redrives
+        # `approved`) — so the application was NEVER submitted. Same call shape as
+        # _perform_approval_action: approve (freeze the snapshot) then fire the
+        # submit job immediately.
+        # ---------------------------------------------------------------
+        ledger_result = _approve_ledger_row(user_email, application_id)
+        if ledger_result.get("over_quota"):
+            # Defect-G reservation denied inside ledger.approve — the row is NOT
+            # approved and NOTHING was charged. 429 (never 401).
+            return _quota_exceeded_response(ledger_result.get("usage") or {})
+        ledger_advanced = bool(ledger_result.get("approved"))
+
+        # Per-plan auto-submit cap (abuse/safety) — meter BEFORE creating.
+        # EXACTLY ONE charge per approval: when the reservation ledger is on,
+        # `application_ledger_service.approve` already reserved (and settles) the
+        # slot for the row it advanced, so charging here too would DOUBLE-BILL.
+        # Every other path (no canonical row, or reservation gated off) keeps the
+        # legacy route-level metering as the single charge.
+        if ledger_advanced and application_ledger_service.reserve_enabled():
+            usage = ledger_result.get("usage") or {}
+        else:
+            # G: atomic reserve+complete (no check-then-increment race). Keyed on
+            # the application so a duplicate approve (already short-circuited
+            # above) can never double-charge even if it slips through.
+            allowed, usage = _charge_feature(
+                user_email, "auto_submit",
+                idempotency_key=f"route-approve:{user_email}:{application_id}")
+            if not allowed:
+                return _quota_exceeded_response(usage)
 
         record, created = auto_submit_service.create_approval(
             user_email, application_id, answers, source="in_app", url=application_url
         )
-        return jsonify({"approval": record, "created": created, "usage": usage}), 201
+        if ledger_advanced:
+            # Instant "approve → it applies". Best-effort + idempotent with the
+            # sweep; a dispatch failure must never fail the approval response.
+            try:
+                from services import auto_apply_service as _aas
+                _aas.request_immediate_submit(user_email, [application_id])
+            except Exception as _e:
+                logger.warning("approve: immediate submit enqueue failed for %s: %s",
+                               application_id, _e)
+        return jsonify({"approval": record, "created": created, "usage": usage,
+                        "ledger_approved": ledger_advanced}), 201
     except auto_submit_service.AutoSubmitError as e:
         return _auto_submit_error(e)
     except Exception as e:
@@ -619,8 +683,21 @@ def auto_submit_cancel():
         return jsonify({"error": "application_id is required"}), 400
     try:
         record = auto_submit_service.cancel_approval(user_email, application_id)
-        return jsonify({"approval": record}), 200
+        # Undo the CANONICAL side too, or the ledger row would still submit while
+        # the UI says "cancelled" (the in-app approve now advances it). Only an
+        # approved / queued_for_execution row is cancellable; once the executor
+        # leased it, this is a logged no-op and the record still reads cancelled.
+        ledger_cancelled = auto_submit_service.cancel_ledger(user_email, application_id)
+        return jsonify({"approval": record,
+                        "ledger_cancelled": ledger_cancelled}), 200
     except auto_submit_service.AutoSubmitError as e:
+        # No System-A record (e.g. a pure canonical row): still honour the undo on
+        # the ledger side rather than telling the user "not found" while the row
+        # marches on to submission.
+        if auto_submit_service.cancel_ledger(user_email, application_id):
+            return jsonify({"approval": {"application_id": application_id,
+                                         "status": "cancelled", "source": "ledger"},
+                            "ledger_cancelled": True}), 200
         return _auto_submit_error(e)
     except Exception as e:
         logger.exception("apply/auto-submit cancel error: %s", e)
@@ -670,7 +747,12 @@ def auto_submit_pending():
     try:
         resp = auto_submit_service.list_pending_eligible(user_email)  # {"pending":[...],"waiting":[...]}
         pending = list(resp.get("pending") or [])
+        # Dedupe against BOTH buckets: an in-app approval creates a System-A
+        # record that sits in `waiting` for its 60s undo window while the fold
+        # bridge already reports the same canonical row — deduping only against
+        # `pending` rendered that row TWICE for the whole undo window.
         seen = {p.get("application_id") for p in pending}
+        seen |= {w.get("application_id") for w in (resp.get("waiting") or [])}
         # E2 (defect E): when the approval fold is flipped on, surface CANONICAL
         # ledger rows (ready_for_review + approved/queued_for_execution +
         # needs_input/waiting_human/submission_unknown) LABELED with `status` +
@@ -818,6 +900,78 @@ def queue_application():
     except Exception as e:
         logger.exception("apply/queue error: %s", e)
         return jsonify({"error": "Failed to queue application"}), 500
+
+
+# ==================================================================
+# RESUME-AFTER-ANSWER (AUTOAPPLY_REPAIR_SPEC §3) — the loop that makes
+# `needs_input` recoverable instead of a terminal dead end.
+#
+# The user answers the questions gather could not resolve; we bank each answer in
+# the answer library (so it is never asked again), re-resolve what is still open,
+# and either return the SHRUNKEN `remaining` list or advance the row to
+# ready_for_review — honouring the autonomy mode, so aggressive/autopilot goes
+# straight through approve + submit. Thin route: validate + authorize + delegate;
+# all of the logic is auto_apply_service.resume_after_answers.
+#
+# Rides the existing /api/apply/* edge route (jobs Lambda) — no new Terraform
+# prefix needed. Business failures are 400/403/404/409/429 — NEVER 401.
+# ==================================================================
+_MAX_NEEDS_INPUT_ANSWERS_BYTES = 64 * 1024
+
+
+@apply_bp.route("/needs-input/answer", methods=["POST"])
+@jwt_required()
+@entitlements_service.require_feature("auto_apply")
+def needs_input_answer():
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+
+    # Sanitize the identifier BEFORE it can reach a Mongo filter.
+    application_id = InputSanitizer.sanitize_string(
+        data.get("application_id") or "", max_length=64)
+    if not application_id:
+        return jsonify({"error": "invalid_request",
+                        "message": "application_id is required"}), 400
+
+    answers = data.get("answers")
+    if not isinstance(answers, dict):
+        return jsonify({
+            "error": "invalid_answers",
+            "message": "answers (an object of {field_id: value}) is required",
+        }), 400
+    try:
+        import json as _json
+        if len(_json.dumps(answers, default=str)) > _MAX_NEEDS_INPUT_ANSWERS_BYTES:
+            return jsonify({"error": "invalid_answers",
+                            "message": "answers payload too large"}), 400
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid_answers",
+                        "message": "answers is not serializable"}), 400
+
+    # Imported OUTSIDE the try so the typed-error handlers below always resolve.
+    from services import auto_apply_service
+
+    try:
+        result = auto_apply_service.resume_after_answers(
+            user_email, application_id, answers)
+        if result.pop("quota_exceeded", False):
+            # The answers ARE saved and the row IS in review — the user is just
+            # out of auto-submit slots, so it waits for an approve/upgrade. 429
+            # per the §3 contract, with the full state so the FE can still render.
+            body, status = _quota_exceeded_response(result.pop("usage", {}) or {})
+            payload = body.get_json()
+            payload.update(result)
+            return jsonify(payload), status
+        return jsonify(result), 200
+    except auto_apply_service.AutoApplyError as e:
+        # 400 invalid_answers / 409 not_in_needs_input — never 401.
+        return jsonify({"error": e.error, "message": e.message}), e.status
+    except application_ledger_service.ApplicationLedgerError as e:
+        return jsonify({"error": e.error, "message": e.message}), e.status
+    except Exception as e:
+        logger.exception("apply/needs-input answer error: %s", e)
+        return jsonify({"error": "resume_failed",
+                        "message": "We couldn't save your answers. Please try again."}), 500
 
 
 # ==================================================================

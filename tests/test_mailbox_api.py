@@ -135,10 +135,16 @@ def _seed_application(email, record_id, domain="greenhouse.io", hours_before=1):
 # GET /mailbox before/after provision
 # ---------------------------------------------------------------------------
 
-def test_get_mailbox_before_provision(app):
+def test_get_mailbox_self_heals_when_unprovisioned(app):
+    # Spec §6: provisioning is automatic — a legacy account with no mailbox is
+    # provisioned on read rather than being shown a "create my address" prompt.
     resp = app.test_client().get("/api/resume/mailbox", headers=_hdr(app, OWNER))
     assert resp.status_code == 200
-    assert resp.get_json() == {"provisioned": False}
+    body = resp.get_json()
+    assert body["provisioned"] is True
+    assert body["address"].endswith("@pilotmail.co")
+    assert body["forward_to"] == OWNER
+    assert body["forward_to_verified"] is True
 
 
 def test_get_mailbox_after_provision(app):

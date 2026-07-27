@@ -117,6 +117,11 @@ STATUS_WAITING_HUMAN = "waiting_human"             # a human-handoff wall mid-ru
 STATUS_SUBMISSION_UNKNOWN = "submission_unknown"   # submit attempted, outcome unknown
 STATUS_CANCELLED = "cancelled"                     # pre-submit user/system abort
 STATUS_UNSUPPORTED = "unsupported"                 # ATS/site not supportable
+# The user-facing sentence a row carries when it lands in `unsupported` (spec §4).
+# Stored on the row (in `error`) so every reader — the fold payload, the daily
+# email, the FE card — renders the SAME honest message instead of an error code.
+UNSUPPORTED_MESSAGE = ("We can't auto-apply to this employer's system yet — "
+                       "please apply manually.")
 STATUS_WITHDRAWN = "withdrawn"                      # post-submit user withdrawal
 # Canonical peer of `failed` — a canonical-only label (an OUTPUT of
 # canonical_status). NOT a valid ledger status and NOT a transition target: the
@@ -912,6 +917,16 @@ def _reserve_enabled() -> bool:
         return False
 
 
+def reserve_enabled() -> bool:
+    """PUBLIC read of the defect-G reservation gate, for callers that must know
+    WHO charges the auto_submit slot. When True, `approve()` reserves the slot
+    itself (atomic, idempotency-keyed), so a route that also metered the feature
+    would DOUBLE-CHARGE — the route must skip its own charge for rows it advances
+    through `approve()`. When False, `approve()` never touches quota and the
+    legacy route-level metering remains the single charge."""
+    return _reserve_enabled()
+
+
 def _auto_submit_idempotency_key(application_id: str,
                                  snapshot: Optional[Dict[str, Any]]) -> str:
     """The reservation idempotency key = application_id + a fingerprint of the
@@ -994,6 +1009,16 @@ def transition(user_email: str, application_id: str, to_status: str, *,
         set_fields["confirmed_at"] = now
     elif to_status == STATUS_FAILED:
         set_fields["error"] = _clean_str(error, 2000) or "unknown_error"
+    elif to_status == STATUS_WAITING_HUMAN and error:
+        # A human-handoff hold carries its REASON in the same field every reader
+        # already surfaces (the fold payload reads `error` as the card's reason).
+        # Only set when a reason was passed, so existing callers are unchanged.
+        set_fields["error"] = _clean_str(error, 2000)
+    elif to_status == STATUS_UNSUPPORTED:
+        # Spec §4: an unsupported ATS is surfaced HONESTLY, not as an error — the
+        # row carries the user-facing sentence the FE renders verbatim. Distinct
+        # from `failed` (retryable): this posting will never be automatable by us.
+        set_fields["error"] = _clean_str(error, 2000) or UNSUPPORTED_MESSAGE
     elif to_status == STATUS_NEEDS_INPUT:
         set_fields["needs_input"] = _sanitize_needs_input(needs_input)
     elif to_status == STATUS_READY:
@@ -1054,6 +1079,38 @@ def mark_needs_input(user_email: str, application_id: str, questions: Any, *,
                       confidence_score=confidence_score)
 
 
+def update_needs_input(user_email: str, application_id: str,
+                       questions: Any) -> Dict[str, Any]:
+    """Rewrite the one-tap queue of a row that STAYS in `needs_input`.
+
+    The answer loop (spec §3) shrinks the queue as questions get answered, which
+    is NOT a transition (needs_input -> needs_input is not — and must not become —
+    a legal edge). This is the only sanctioned way to edit the list in place: a
+    status-guarded CAS on `needs_input`, so it can never touch a row that already
+    advanced (a lost race raises InvalidTransition/404 exactly like `transition`).
+    """
+    user_email = _require_email(user_email)
+    application_id = _clean_str(application_id, 64)
+    if not application_id:
+        raise InvalidApplicationInput("application_id is required")
+    items = _sanitize_needs_input(questions)
+    updated = _atomic_transition(user_email, application_id,
+                                 (STATUS_NEEDS_INPUT,), {"needs_input": items})
+    if updated is not None:
+        _audit(user_email, "application_needs_input_updated",
+               application_id=application_id,
+               meta={"needs_input_count": len(items)})
+        return _view(updated)
+    current = _applications().find_one(
+        {"application_id": application_id, "user_email": user_email},
+        {"_id": 0, "status": 1},
+    )
+    if current is None:
+        raise ApplicationNotFound()
+    raise InvalidTransition(
+        f"cannot update needs_input from '{current.get('status')}'")
+
+
 def mark_ready(user_email: str, application_id: str, *,
                autonomy: Optional[str] = None,
                confidence_score: Optional[float] = None,
@@ -1090,6 +1147,25 @@ def mark_confirmed(user_email: str, application_id: str) -> Dict[str, Any]:
 
 def mark_failed(user_email: str, application_id: str, error: str) -> Dict[str, Any]:
     return transition(user_email, application_id, STATUS_FAILED, error=error)
+
+
+def mark_waiting_human(user_email: str, application_id: str,
+                       reason: Optional[str] = None) -> Dict[str, Any]:
+    """Hand a RUNNING row back to the human (a `prepared` copilot fill, or a wall
+    the executor cannot clear). `reason` is the user-facing sentence the Attention
+    card renders. Not a failure — the row stays live and re-approvable."""
+    return transition(user_email, application_id, STATUS_WAITING_HUMAN,
+                      error=reason)
+
+
+def mark_unsupported(user_email: str, application_id: str,
+                     message: Optional[str] = None) -> Dict[str, Any]:
+    """Spec §4: this employer's ATS/site is not automatable by us — a HONEST,
+    non-retryable terminal (never a `failed` we would silently re-drive). Legal
+    from preparing / queued_for_execution / running (see _TRANSITION_GUARDS).
+    `message` defaults to the user-facing UNSUPPORTED_MESSAGE."""
+    return transition(user_email, application_id, STATUS_UNSUPPORTED,
+                      error=message or UNSUPPORTED_MESSAGE)
 
 
 def requeue(user_email: str, application_id: str) -> Dict[str, Any]:
@@ -1245,8 +1321,9 @@ def _build_approval_snapshot(fields: Optional[Dict[str, Any]],
     }
 
 
-def approve(user_email: str, application_ids: Any, *, approved_by: str = "user",
-            snapshot_provider: Any = None) -> int:
+def approve_with_result(user_email: str, application_ids: Any, *,
+                        approved_by: str = "user",
+                        snapshot_provider: Any = None) -> Dict[str, Any]:
     """F: approve the user's listed `ready_for_review` rows (tolerating a legacy
     `ready`) → `approved`, FREEZING an immutable snapshot on each.
 
@@ -1262,17 +1339,27 @@ def approve(user_email: str, application_ids: Any, *, approved_by: str = "user",
     `snapshot_provider(application_id) -> dict` optionally supplies the per-row
     integrity fields (application_hash / resume_version_id / answers_fingerprint /
     policy_version / consent_version); a build failure degrades to an empty
-    snapshot (the approval still records who/when). Returns the number approved.
+    snapshot (the approval still records who/when).
 
-    (G HOOK: reserve the auto_submit entitlement here, right before the CAS, keyed
+    Returns the DETAILED outcome so a caller (the in-app approve route) can tell
+    "approved" from "over quota" from "not approvable" — three outcomes the bare
+    count collapses into 0:
+
+        {"approved": int, "approved_ids": [...],
+         "over_quota": [...], "usage": {...},     # G reservation denial
+         "not_approvable": [...]}                 # wrong state / lost race
+
+    (G: the auto_submit entitlement is reserved here, right before the CAS, keyed
     on application_id + snapshot, so a redelivery reuses the reservation.)
     """
     from pymongo import ReturnDocument
 
     user_email = _require_email(user_email)
     ids = _clean_id_list(application_ids)
+    result: Dict[str, Any] = {"approved": 0, "approved_ids": [],
+                              "over_quota": [], "usage": {}, "not_approvable": []}
     if not ids:
-        return 0
+        return result
     approvable = list(_APPROVABLE_STATUSES) + list(_APPROVABLE_LEGACY)
     moved = 0
     for aid in ids:
@@ -1308,6 +1395,8 @@ def approve(user_email: str, application_ids: Any, *, approved_by: str = "user",
                 # transition) this row.
                 _audit(user_email, "application_approve_over_quota",
                        application_id=aid, meta={"feature": _AUTO_SUBMIT_FEATURE})
+                result["over_quota"].append(aid)
+                result["usage"] = res.get("usage") or result["usage"]
                 continue
             reservation = {"feature": _AUTO_SUBMIT_FEATURE,
                            "entry_ids": res.get("entry_ids") or [],
@@ -1332,13 +1421,27 @@ def approve(user_email: str, application_ids: Any, *, approved_by: str = "user",
         # reuses it — no double charge; we intentionally do not refund here.
         if updated is not None:
             moved += 1
+            result["approved_ids"].append(aid)
             _audit(user_email, "application_approved", application_id=aid,
                    meta={"approved_by": snapshot["approved_by"],
                          "has_snapshot": any(
                              snapshot.get(k) for k in
                              ("application_hash", "resume_version_id",
                               "answers_fingerprint"))})
-    return moved
+        else:
+            result["not_approvable"].append(aid)
+    result["approved"] = moved
+    return result
+
+
+def approve(user_email: str, application_ids: Any, *, approved_by: str = "user",
+            snapshot_provider: Any = None) -> int:
+    """Count-returning face of `approve_with_result` (the historical signature —
+    every existing caller/test uses this). Semantics are unchanged: the number of
+    rows moved `ready_for_review` → `approved` with a frozen snapshot."""
+    return approve_with_result(user_email, application_ids,
+                               approved_by=approved_by,
+                               snapshot_provider=snapshot_provider)["approved"]
 
 
 # Back-compat alias for the pre-F name. NOTE the semantics changed under F: it now
@@ -1361,6 +1464,31 @@ def get_approval_snapshot(user_email: str,
         {"application_id": application_id, "user_email": user_email},
         {"_id": 0, "approval_snapshot": 1})
     return (rec or {}).get("approval_snapshot")
+
+
+def approval_snapshots(user_email: str,
+                       application_ids: Any) -> Dict[str, Dict[str, Any]]:
+    """Bulk peer of `get_approval_snapshot`: {application_id -> frozen snapshot}
+    for the listed rows, owner-scoped, in ONE query. Rows without a snapshot are
+    absent from the map. Used by the approval-fold payload (which needs
+    `approved_at` to derive the undo window for a whole page of rows without N
+    round trips). Best-effort: any read failure degrades to an empty map."""
+    user_email = _require_email(user_email)
+    ids = _clean_id_list(application_ids)
+    if not ids:
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        cursor = _applications().find(
+            {"user_email": user_email, "application_id": {"$in": ids}},
+            {"_id": 0, "application_id": 1, "approval_snapshot": 1})
+        for rec in cursor:
+            snap = rec.get("approval_snapshot")
+            if isinstance(snap, dict) and rec.get("application_id"):
+                out[rec["application_id"]] = snap
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("approval_snapshots read failed for %s: %s", user_email, e)
+    return out
 
 
 def user_skip(user_email: str, application_ids: Any) -> int:

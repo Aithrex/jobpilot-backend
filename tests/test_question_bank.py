@@ -252,14 +252,21 @@ class TestOptionMatching:
 # ---------------------------------------------------------------------------
 class TestSensitivityGate:
     @pytest.mark.parametrize("field_id,label", [
-        ("gender", "What is your gender?"),
-        ("race_ethnicity", "What is your race/ethnicity?"),
-        ("veteran_status", "Are you a protected veteran?"),
-        ("disability_status", "Do you have a disability?"),
         ("criminal_history", "Have you ever been convicted of a felony?"),
+        ("work_authorized_us", "Are you legally authorized to work in the US?"),
+        ("requires_sponsorship", "Do you require visa sponsorship?"),
+        ("over_18", "Are you at least 18 years old?"),
+        ("citizenship_countries", "Please enter your country of citizenship"),
+        ("background_check_consent", "Do you consent to a background check?"),
+        ("drug_test_consent", "Do you consent to a drug test?"),
+        ("export_control_us_person", "Are you a U.S. person for export control?"),
     ])
-    def test_undeclared_sensitive_is_needs_input_never_guessed(self, bank_db,
-                                                               field_id, label):
+    def test_undeclared_legal_is_needs_input_never_guessed(self, bank_db,
+                                                           field_id, label):
+        """Repair spec §0 rule 1: work-auth, sponsorship, citizenship, export
+        control, age, criminal history and consents are NEVER auto-defaulted —
+        only a DECLARED value fills them. The EEO decline exemption (rule 3)
+        must not leak into this set."""
         _seed_resume(bank_db, {"contact": {"name": "Alice Smith",
                                             "email": "alice@aspirely.me"}})
         out = lib.resolve(USER, [_nq(label, required=True)])
@@ -267,6 +274,53 @@ class TestSensitivityGate:
         assert field_id in out["unresolved"]
         assert out["has_unconfirmed_legal_attestation"] is True
         assert out["coverage"] == 0.0
+
+    @pytest.mark.parametrize("field_id,label", [
+        ("gender", "What is your gender?"),
+        ("race_ethnicity", "What is your race/ethnicity?"),
+        ("hispanic_latino", "Are you Hispanic or Latino?"),
+        ("veteran_status", "Are you a protected veteran?"),
+        ("disability_status", "Do you have a disability?"),
+    ])
+    def test_undeclared_protected_eeo_auto_declines(self, bank_db,
+                                                    field_id, label):
+        """Repair spec §0 rule 3 / §2 step 5: a PROTECTED EEO field with
+        ``default_policy == decline_default`` auto-selects the decline option.
+        Declining asserts nothing, so nothing is fabricated — and the whole
+        application is no longer hard-blocked by
+        ``has_unconfirmed_legal_attestation``."""
+        _seed_resume(bank_db, {"contact": {"name": "Alice Smith",
+                                            "email": "alice@aspirely.me"}})
+        out = lib.resolve(USER, [_nq(label, required=True)])
+        hit = out["resolved"][field_id]
+        assert hit["source"] == lib.SOURCE_POLICY_DECLINE
+        assert hit["review_required"] is True
+        # The value is a real decline option, never an inferred demographic.
+        assert qb._option_concept(qb._norm(str(hit["value"]))) == "decline"
+        assert out["has_unconfirmed_legal_attestation"] is False
+        assert out["coverage"] == 1.0
+
+    def test_auto_decline_uses_this_forms_own_wording(self, bank_db):
+        """When recon captured the form's live options we submit ITS wording,
+        not our canonical string."""
+        out = lib.resolve(USER, [{
+            "field_id": "gender", "label": "Gender", "required": True,
+            "is_legal_attestation": True, "invert": False,
+            "options": ["Male", "Female", "I don't wish to answer"],
+        }])
+        assert out["resolved"]["gender"]["value"] == "I don't wish to answer"
+
+    def test_no_decline_option_on_form_stays_unresolved(self, bank_db):
+        """A form that offers no decline option gets NO auto-default — we do not
+        pick a demographic to fill the gap."""
+        out = lib.resolve(USER, [{
+            "field_id": "gender", "label": "Gender", "required": True,
+            "is_legal_attestation": True, "invert": False,
+            "options": ["Male", "Female"],
+        }])
+        assert out["resolved"] == {}
+        assert "gender" in out["unresolved"]
+        assert out["has_unconfirmed_legal_attestation"] is True
 
     def test_declared_decline_is_resolved(self, bank_db):
         bank_db.user_preferences.insert_one(

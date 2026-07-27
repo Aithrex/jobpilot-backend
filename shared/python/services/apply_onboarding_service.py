@@ -92,6 +92,13 @@ _COMMON_DEFAULTS: Dict[str, Any] = {
     "country": "United States of America",
 }
 
+# Resolution sources that are DERIVED rather than DECLARED. They are valid
+# answers to submit, but they must not appear as the onboarding questionnaire's
+# ``current_value`` — that field means "you have this on file".
+_DERIVED_SOURCES = frozenset({
+    answer_lib.SOURCE_POLICY_DECLINE, answer_lib.SOURCE_RESUME_MATCH,
+})
+
 # Accepted truthy/falsy spellings for a Yes/No field submitted as a string.
 _TRUE_STRINGS = frozenset({"yes", "y", "true", "t", "1"})
 _FALSE_STRINGS = frozenset({"no", "n", "false", "f", "0"})
@@ -166,6 +173,14 @@ def _declared_view(user_email: str) -> Dict[str, Any]:
         res = answer_lib.resolve(user_email, questions)
         for fid, meta in (res.get("resolved") or {}).items():
             val = meta.get("value") if isinstance(meta, dict) else None
+            # `current_value` must mean "the user actually has this on file".
+            # The resolver ALSO emits values it DERIVED rather than read: the
+            # protected-EEO auto-decline (spec §0.3) and the résumé worked-here
+            # escalation (spec §1). Those are legitimate ANSWERS to submit, but
+            # they are not DECLARATIONS — surfacing them here would tell the user
+            # they had answered an EEO question they never touched.
+            if isinstance(meta, dict) and meta.get("source") in _DERIVED_SOURCES:
+                continue
             if val not in (None, ""):
                 view[fid] = val
     except Exception as e:  # pragma: no cover - defensive; a resolver hiccup
@@ -304,6 +319,71 @@ def _coerce_and_validate(field: Dict[str, Any], value: Any) -> Any:
     return sval
 
 
+def declare_fields(user_email: str, answers: Dict[str, Any], *,
+                   strict: bool = True) -> Dict[str, Any]:
+    """Validate + persist catalog answers to the DECLARED store — the lean core
+    `save_answers` (and the auto-apply needs-input resume path) share.
+
+    Writes validated values as flat ``user_preferences[field_id]`` keys, which is
+    exactly where `answer_library_service._load_canonical` / `_load_legal` read
+    from, so a value declared here is immediately fillable by the executor with
+    provenance ``declared``.
+
+      * ``strict=True``  (the onboarding route) — the first unknown field_id or
+        invalid value raises `OnboardingError` (400) and NOTHING is persisted
+        (all-or-nothing, so a partial payload never half-writes).
+      * ``strict=False`` (`answer_library_service.remember_many`) — bad fields are
+        skipped and reported; the good ones still persist. Used where the user is
+        answering an ATS question one tap at a time and one odd value must not
+        discard the rest.
+
+    Returns ``{"declared": [field_id, ...], "rejected": {field_id: reason}}``.
+    """
+    if not user_email:
+        raise OnboardingError("invalid_request", "authentication required", 400)
+    if not isinstance(answers, dict):
+        raise OnboardingError(
+            "invalid_answers", "answers must be an object of {field_id: value}", 400)
+
+    validated: Dict[str, Any] = {}
+    rejected: Dict[str, str] = {}
+    for raw_fid, raw_val in answers.items():
+        fid = InputSanitizer.sanitize_string(str(raw_fid or ""), max_length=200)
+        field = qb.get_field(fid)
+        if field is None or field["category"] in _EXCLUDED_CATEGORIES:
+            if strict:
+                raise OnboardingError(
+                    "unknown_field", f"Unknown onboarding field_id: {fid}", 400)
+            rejected[fid or str(raw_fid)[:80]] = "unknown_field"
+            continue
+        try:
+            validated[fid] = _coerce_and_validate(field, raw_val)
+        except OnboardingError:
+            if strict:
+                raise
+            rejected[fid] = "invalid_value"
+
+    if validated:
+        now = datetime.now(timezone.utc)
+        # field_ids are catalog-whitelisted ([a-z0-9_]) — safe as $set keys; the
+        # user_email filter is the trusted JWT identity (never an operator).
+        set_doc: Dict[str, Any] = dict(validated)
+        set_doc["user_email"] = user_email
+        set_doc["onboarding_updated_at"] = now
+        try:
+            _prefs().update_one(
+                {"user_email": user_email},
+                {"$set": set_doc},
+                upsert=True,
+            )
+        except Exception as e:
+            logger.exception("onboarding: persist failed for %s: %s", user_email, e)
+            raise OnboardingError(
+                "persist_failed", "Failed to save onboarding answers", 500)
+
+    return {"declared": sorted(validated.keys()), "rejected": rejected}
+
+
 def save_answers(user_email: str, answers: Dict[str, Any],
                  mode: Optional[str] = None) -> Dict[str, Any]:
     """Persist onboarding answers to the declared store and return the refreshed
@@ -334,32 +414,7 @@ def save_answers(user_email: str, answers: Dict[str, Any],
             f"mode must be one of {list(autonomy_service.VALID_MODES)}", 400)
 
     # Validate + coerce EVERY answer before persisting anything (all-or-nothing).
-    validated: Dict[str, Any] = {}
-    for raw_fid, raw_val in answers.items():
-        fid = InputSanitizer.sanitize_string(str(raw_fid or ""), max_length=200)
-        field = qb.get_field(fid)
-        if field is None or field["category"] in _EXCLUDED_CATEGORIES:
-            raise OnboardingError(
-                "unknown_field", f"Unknown onboarding field_id: {fid}", 400)
-        validated[fid] = _coerce_and_validate(field, raw_val)
-
-    if validated:
-        now = datetime.now(timezone.utc)
-        # field_ids are catalog-whitelisted ([a-z0-9_]) — safe as $set keys; the
-        # user_email filter is the trusted JWT identity (never an operator).
-        set_doc: Dict[str, Any] = dict(validated)
-        set_doc["user_email"] = user_email
-        set_doc["onboarding_updated_at"] = now
-        try:
-            _prefs().update_one(
-                {"user_email": user_email},
-                {"$set": set_doc},
-                upsert=True,
-            )
-        except Exception as e:
-            logger.exception("onboarding: persist failed for %s: %s", user_email, e)
-            raise OnboardingError(
-                "persist_failed", "Failed to save onboarding answers", 500)
+    declare_fields(user_email, answers, strict=True)
 
     if mode is not None:
         autonomy_service.set_mode(user_email, mode)

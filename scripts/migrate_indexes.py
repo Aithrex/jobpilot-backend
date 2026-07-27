@@ -613,7 +613,11 @@ INDEX_SPECS = [
 
     # === job_postings (ADR-003 canonical inventory) =======================
     # Every spec below is derived from a real query in
-    # shared/python/services/job_inventory_service.py; the function is named in
+    # shared/python/services/job_inventory_service.py (one exception, named in
+    # its own comment: `active_cost_first_seen_at` serves
+    # services/apply_match_sweep.py, the only reader that scans by
+    # first_seen_at rather than posted_at).
+    # The function is named in
     # the comment. Compound key order is equality -> sort -> range throughout.
     # Each one is verified with explain("executionStats") by
     # scripts/explain_job_inventory.py — run it after applying this migration.
@@ -655,6 +659,29 @@ INDEX_SPECS = [
     ("job_postings", [("status", ASCENDING), ("cost_class", ASCENDING),
                       ("posted_at", DESCENDING)],
      {"name": "active_cost_posted_at"}),
+    # NEW-SINCE-WATERMARK retrieval: apply_match_sweep._new_postings issues
+    #   {status:"active", cost_class:"free", first_seen_at:{$gt:watermark},
+    #    posted_at_confidence:{$ne:"unknown"}, role_family:{$in:[...]}}
+    #   sort {first_seen_at: 1}   limit CANDIDATE_LIMIT
+    # Equality (status, cost_class) -> sort+range (first_seen_at asc). This is a
+    # DIFFERENT axis from every index above: those are all keyed on `posted_at`
+    # (when the EMPLOYER published), while the sweep needs "what did WE first
+    # see since I last looked" — the only marker that is monotonic per crawl and
+    # therefore safe as a resumable cursor (`$setOnInsert` in
+    # job_inventory_service.upsert_posting). No existing index can serve it: the
+    # compound ones lead with status but then diverge on posted_at, so a
+    # first_seen_at range degrades to a filtered scan of the whole active set.
+    # Measured need: 18.6k live docs and growing, swept every 15 minutes (96
+    # COLLSCANs/day without this).
+    # role_family stays a RESIDUAL filter rather than a key field: it arrives as
+    # an $in of 1-4 families and putting it between the equalities and the sort
+    # key would force a blocking in-memory sort on the watermark cursor, which
+    # is the one thing the sweep cannot afford (it must read in first_seen_at
+    # order to advance the watermark without skipping rows).
+    # first_seen_at is ASCENDING in the key to match the sort direction exactly.
+    ("job_postings", [("status", ASCENDING), ("cost_class", ASCENDING),
+                      ("first_seen_at", ASCENDING)],
+     {"name": "active_cost_first_seen_at"}),
     # Location-scoped retrieval: find_active_fresh(location_key=...) adds
     # {"locations.key": <eq>}. `locations` is an array, so this index is
     # MULTIKEY. MEASURED (scripts/explain_job_inventory.py, 1000-doc scratch
