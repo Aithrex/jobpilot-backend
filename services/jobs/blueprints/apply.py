@@ -672,10 +672,12 @@ def auto_submit_pending():
         pending = list(resp.get("pending") or [])
         seen = {p.get("application_id") for p in pending}
         # E2 (defect E): when the approval fold is flipped on, surface CANONICAL
-        # ledger rows (ready_for_review + approved/queued_for_execution) LABELED
-        # with `status` + `already_approved` so H's FE can render approved rows
-        # read-only. Dark by default → the legacy `approved`-only bridge below
-        # runs unchanged until AUTO_APPLY_APPROVAL_FOLD is on.
+        # ledger rows (ready_for_review + approved/queued_for_execution +
+        # needs_input/waiting_human/submission_unknown) LABELED with `status` +
+        # `already_approved` so H's FE can render approved rows read-only and
+        # attention holds in their own section. Dark by default → the legacy
+        # `approved`-only bridge below runs unchanged until AUTO_APPLY_APPROVAL_FOLD
+        # is on.
         if auto_submit_service.approval_fold_enabled():
             bridge = auto_submit_service.list_canonical_approvals(user_email)
         else:

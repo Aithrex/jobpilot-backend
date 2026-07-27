@@ -243,8 +243,8 @@ class BrowserExecutor(ExecutorAdapter):
 
     # -- recon --------------------------------------------------------------
     def recon_form(self, apply_url: str, ats_family: Optional[str]) -> Dict[str, Any]:
-        """Greenhouse recon is cheap HTTP (delegate to AtsExecutor). Lever/Ashby
-        expose no public question API, so recon their form in the browser."""
+        """Greenhouse recon is cheap HTTP (delegate to AtsExecutor). Lever/Ashby/
+        Workday expose no public question API, so recon their form in the browser."""
         family, ids = detect_ats(apply_url, ats_family)
         if family == LEVER:
             return self._recon_browser(self._lever_apply_url(ids, apply_url),
@@ -252,7 +252,104 @@ class BrowserExecutor(ExecutorAdapter):
         if family == ASHBY:
             return self._recon_browser(self._ashby_apply_url(ids, apply_url),
                                        family, {"_systemfield_resume"}, ())
+        if family == WORKDAY:
+            return self._recon_workday(apply_url)
         return self._recon.recon_form(apply_url, ats_family)
+
+    def _recon_workday(self, apply_url: str) -> Dict[str, Any]:
+        """Open a Workday job → Apply CTA → adapter.recon() on the first step.
+
+        Account/OTP gates are reported via ``needs_account`` so gather can land
+        ``needs_input`` instead of silently leaving the row ``queued`` forever
+        (AtsExecutor has no Workday question API).
+        """
+        from playwright.sync_api import sync_playwright
+        from services import ssrf_guard
+        from services.ats_adapters import select_adapter, WorkdayAdapter
+
+        allowed, reason = ssrf_guard.apply_url_allowed(apply_url or "")
+        if not allowed:
+            logger.info("workday recon ssrf_blocked:%s url=%s", reason, apply_url)
+            return {"questions": [], "needs_account": False, "status": EXECUTOR_UNAVAILABLE}
+
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=self._headless,
+                                             args=chromium_launch_args())
+                try:
+                    context = browser.new_context(**browser_context_kwargs())
+                    ssrf_guard.install_route_guard(context)
+                    page = context.new_page()
+                    page.set_default_timeout(_FORM_TIMEOUT_MS)
+                    page.goto(apply_url, wait_until="domcontentloaded",
+                              timeout=_NAV_TIMEOUT_MS)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=12_000)
+                    except Exception:
+                        page.wait_for_timeout(2_500)
+
+                    adapter = select_adapter(page, apply_url) or WorkdayAdapter(page, apply_url)
+                    if hasattr(adapter, "click_apply_cta"):
+                        try:
+                            if adapter.click_apply_cta():
+                                page.wait_for_timeout(2_500)
+                                try:
+                                    page.wait_for_load_state("networkidle",
+                                                             timeout=10_000)
+                                except Exception:
+                                    pass
+                                adapter = select_adapter(page, page.url) or adapter
+                        except Exception as e:
+                            logger.info("workday recon apply CTA: %s", e)
+
+                    needs_account = False
+                    try:
+                        needs_account = bool(
+                            getattr(adapter, "_account_gate_present", lambda: False)()
+                            or getattr(adapter, "_otp_gate_present", lambda: False)())
+                    except Exception:
+                        pass
+
+                    raw_qs = []
+                    try:
+                        raw_qs = adapter.recon() if adapter else []
+                    except Exception as e:
+                        logger.info("workday recon partial: %s", e)
+
+                    # Map adapter shape → gather's normalize_recon_questions input.
+                    questions = []
+                    for q in raw_qs or []:
+                        if not isinstance(q, dict):
+                            continue
+                        qid = (q.get("recon_id") or q.get("id") or q.get("field_id")
+                               or q.get("handle") or "")
+                        label = (q.get("label") or q.get("text") or qid or "").strip()
+                        if not qid and not label:
+                            continue
+                        questions.append({
+                            "id": str(qid or label)[:200],
+                            "text": label[:300],
+                            "type": q.get("type") or "text",
+                            "required": bool(q.get("required")),
+                            "is_legal_attestation": bool(q.get("is_legal_attestation")),
+                            "options": q.get("options") or [],
+                        })
+                        if len(questions) >= 120:
+                            break
+
+                    # Empty questions + account gate still counts as a successful
+                    # recon (gather can pause for credentials). Only hard-fail when
+                    # we got neither fields nor a recognizable gate.
+                    if not questions and not needs_account:
+                        logger.info("workday recon empty url=%s", apply_url)
+                        return {"questions": [], "needs_account": False,
+                                "status": EXECUTOR_UNAVAILABLE}
+                    return {"questions": questions, "needs_account": needs_account}
+                finally:
+                    browser.close()
+        except Exception as e:
+            logger.warning("workday recon failed (%s): %s", apply_url, e)
+            return {"questions": [], "needs_account": False, "status": EXECUTOR_UNAVAILABLE}
 
     def _recon_browser(self, target: str, family: str, exclude_names: set,
                        legal_prefixes: tuple) -> Dict[str, Any]:

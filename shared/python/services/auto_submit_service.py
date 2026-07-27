@@ -543,9 +543,17 @@ def list_pending_eligible(user_email: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # ready_for_review still AWAITS a go-ahead (already_approved False); approved /
 # queued_for_execution are cleared to submit + snapshot-frozen (F), surfaced
-# read-only (already_approved True).
+# read-only (already_approved True). Attention statuses hand the row BACK to the
+# human (never approvable) — without them the Auto-Apply tab looks empty while
+# gather has correctly parked rows in needs_input / waiting_human / etc.
 _FOLD_AWAITING: Tuple[str, ...] = ("ready_for_review",)
 _FOLD_APPROVED: Tuple[str, ...] = ("approved", "queued_for_execution")
+_FOLD_ATTENTION: Tuple[str, ...] = (
+    "needs_input", "waiting_human", "submission_unknown",
+)
+_ACCOUNT_GATE_PROMPT = (
+    "Sign in or create an account on the employer's career site to continue."
+)
 
 
 def approval_fold_enabled() -> bool:
@@ -560,6 +568,33 @@ def approval_fold_enabled() -> bool:
     return False
 
 
+def _fold_needs_input(user_email: str, row: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Ledger needs_input list, plus a synthetic account-gate prompt when gather
+    parked the row on ``needs_account`` with an empty question list (common on
+    Workday login walls) so the FE Attention card has something to show."""
+    items = [i for i in (row.get("needs_input") or []) if isinstance(i, dict)]
+    if items or row.get("status") != "needs_input":
+        return items
+    aid = row.get("application_id")
+    if not aid:
+        return items
+    try:
+        from services.auto_apply_service import _answers_coll
+        ans = _answers_coll().find_one(
+            {"application_id": aid, "user_email": user_email},
+            {"_id": 0, "needs_account": 1},
+        ) or {}
+    except Exception:  # pragma: no cover - best-effort enrichment
+        return items
+    if ans.get("needs_account"):
+        return [{
+            "question": _ACCOUNT_GATE_PROMPT,
+            "kind": "account",
+            "field_id": "ats_account",
+        }]
+    return items
+
+
 def list_canonical_approvals(user_email: str) -> List[Dict[str, Any]]:
     """E2 thin ADAPTER: the auto-apply LEDGER rows that belong in the approval
     queue, in the extension's pending-record shape, LABELED with the canonical
@@ -571,6 +606,9 @@ def list_canonical_approvals(user_email: str) -> List[Dict[str, Any]]:
       * approved / queued_for_exec -> already_approved True, eligible True
                                      (cleared to submit, snapshot frozen — H
                                       renders it read-only, no second approve).
+      * needs_input / waiting_human / submission_unknown
+                                  -> already_approved False, eligible False
+                                     (attention holds — H's FE Attention section).
 
     Dark-launch gated: returns [] until AUTO_APPLY_APPROVAL_FOLD is on, so the
     live queue is unchanged. Owner-scoped; best-effort (never raises past here).
@@ -580,11 +618,11 @@ def list_canonical_approvals(user_email: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     try:
         from services import application_ledger_service as als
-        for status in _FOLD_AWAITING + _FOLD_APPROVED:
+        for status in _FOLD_AWAITING + _FOLD_APPROVED + _FOLD_ATTENTION:
             already = status in _FOLD_APPROVED
             for r in als.list_applications(user_email, status=status, limit=100):
                 url = r.get("apply_url")
-                out.append({
+                payload = {
                     "application_id": r.get("application_id"),
                     "apply_url": url, "url": url,
                     "status": status,
@@ -594,7 +632,13 @@ def list_canonical_approvals(user_email: str) -> List[Dict[str, Any]]:
                     "ats": r.get("ats_family"),
                     "title": r.get("title"), "company": r.get("company"),
                     "source": "ledger",
-                })
+                }
+                if status in _FOLD_ATTENTION:
+                    payload["needs_input"] = _fold_needs_input(user_email, r)
+                    reason = r.get("error") or r.get("reason")
+                    if reason:
+                        payload["reason"] = reason
+                out.append(payload)
     except Exception as e:  # pragma: no cover - fold is best-effort
         logger.warning("auto_submit canonical fold failed for %s: %s", user_email, e)
     return out

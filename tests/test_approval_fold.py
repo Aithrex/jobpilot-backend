@@ -88,6 +88,48 @@ class TestCanonicalFold:
         assert ass.approve_ledger(USER, [aid], approved_by="system") == 1
         assert als.get_application(USER, aid)["status"] == als.STATUS_APPROVED
 
+    def test_needs_input_surfaces_in_attention_payload(self, db, monkeypatch):
+        monkeypatch.setenv("AUTO_APPLY_APPROVAL_FOLD", "true")
+        view, _ = als.create_application(
+            USER, company="EnergyHub", title="SWE",
+            jd_text="Build support tooling.",
+            source="greenhouse", ats_family="greenhouse",
+            apply_url="https://job-boards.greenhouse.io/energyhub/jobs/1")
+        aid = view["application_id"]
+        als.mark_gathering(USER, aid)
+        gaps = [{"question": "Alarm.com dealer?", "kind": "screening",
+                 "field_id": "q1"}]
+        als.mark_needs_input(USER, aid, gaps, autonomy="ask", confidence_score=0.7)
+        rows = ass.list_canonical_approvals(USER)
+        rec = next((r for r in rows if r["application_id"] == aid), None)
+        assert rec is not None
+        assert rec["status"] == "needs_input"
+        assert rec["already_approved"] is False
+        assert rec["eligible"] is False
+        assert rec["needs_input"][0]["question"] == "Alarm.com dealer?"
+
+    def test_account_gate_gets_synthetic_needs_input(self, db, monkeypatch):
+        monkeypatch.setenv("AUTO_APPLY_APPROVAL_FOLD", "true")
+        view, _ = als.create_application(
+            USER, company="Wells Fargo", title="SWE",
+            jd_text="Java full stack.",
+            source="workday", ats_family="workday",
+            apply_url="https://wf.wd1.myworkdayjobs.com/job/1")
+        aid = view["application_id"]
+        als.mark_gathering(USER, aid)
+        als.mark_needs_input(USER, aid, [], autonomy="hold", confidence_score=0.65)
+        # Gather persisted needs_account on the answer sheet with an empty gap list.
+        db.auto_apply_answers.insert_one({
+            "application_id": aid, "user_email": USER,
+            "needs_account": True, "answers": {}, "coverage": 1.0,
+        })
+        rows = ass.list_canonical_approvals(USER)
+        rec = next((r for r in rows if r["application_id"] == aid), None)
+        assert rec is not None
+        assert rec["status"] == "needs_input"
+        assert rec["needs_input"]
+        assert "account" in rec["needs_input"][0]["question"].lower()
+
 
 # ---------------------------------------------------------------------------
 # Route: /auto-submit/pending prefers the fold when the flag is on
