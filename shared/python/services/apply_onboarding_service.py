@@ -67,19 +67,29 @@ _CATEGORY_ORDER = [
     qb.CAT_LOGISTICS, qb.CAT_SCREENING, qb.CAT_LEGAL,
 ]
 
-# The READY gate (spec: "Required set (contact + work_auth + sponsorship) blocks
-# auto-apply until filled"). All must have a declared/derived value before the
-# pipeline may auto-act. EEO/legal are deliberately NOT here — they are voluntary
-# and default to decline.
+# The READY gate blocks auto-apply until every field needed to fill a typical
+# ATS wizard (Workday My Information + Experience + work-auth) is declared.
+# EEO / most legal attestations stay voluntary (decline-default) and are NOT
+# here — except over_18, which almost every form requires.
 READY_REQUIRED_FIELDS = (
-    "full_name", "email", "phone",
+    # Identity / contact
+    "full_name", "first_name", "last_name", "email",
+    "phone", "phone_device_type",
+    "address_line1", "city", "state", "postal_code", "country",
+    # Work authorization (never guessed)
     "work_authorized_us", "requires_sponsorship",
+    # Experience block used by Workday / Greenhouse
+    "current_title", "current_company", "work_start_date", "role_description",
+    # Universal screening
+    "over_18",
 )
 
 # Sensible one-tap-confirm defaults for a few logistics fields (the user just
 # accepts). Everything else defaults to None (no guessed value).
 _COMMON_DEFAULTS: Dict[str, Any] = {
     "how_did_you_hear": "Company website",
+    "phone_device_type": "Mobile",
+    "country": "United States of America",
 }
 
 # Accepted truthy/falsy spellings for a Yes/No field submitted as a string.
@@ -97,9 +107,15 @@ def _onboarding_fields() -> List[Dict[str, Any]]:
 
 
 def _is_required(field: Dict[str, Any]) -> bool:
-    """Per-field `required` flag = the catalog's ``required_onboarding`` policy
-    (the factual work-auth set the form filler cannot proceed without)."""
-    return field["default_policy"] == qb.POLICY_REQUIRED_ONBOARDING
+    """Per-field `required` flag = READY set ∪ catalog ``required_onboarding``.
+
+    READY fields gate opt-in completion; catalog ``required_onboarding`` covers
+    additional work-auth facts the filler cannot invent.
+    """
+    return (
+        field["field_id"] in READY_REQUIRED_FIELDS
+        or field["default_policy"] == qb.POLICY_REQUIRED_ONBOARDING
+    )
 
 
 def _decline_option(field: Dict[str, Any]) -> Optional[str]:

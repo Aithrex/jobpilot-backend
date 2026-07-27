@@ -311,7 +311,10 @@ def test_verified_message_relays_full_content(env, sent):
     assert call["subject"] == RECRUITER_SUBJECT
     assert "invite you to interview" in call["text"]
     assert FORWARD_FROM in call["from_addr"]
-    assert call["reply_to"] == "no-reply@corp.example"
+    # Privacy-preserving reply-bound alias (reply.<hex>@APPLY_MAIL_DOMAIN), not
+    # the raw recruiter address — inbound reply-relay keeps the user's email private.
+    assert str(call["reply_to"]).startswith("reply.")
+    assert str(call["reply_to"]).endswith("@pilotmail.co")
     # Compact manage link still present (the body IS the message, not a redirect).
     deep = f"{FRONTEND}/next/applications/{res['thread_id']}"
     assert deep in call["html"] and deep in call["text"]
@@ -329,7 +332,8 @@ def test_unverified_message_still_relays_full_content(env, sent):
     assert call["subject"] == RECRUITER_SUBJECT
     assert "invite you to interview" in call["text"]
     assert FORWARD_FROM in call["from_addr"]
-    assert call["reply_to"] == "no-reply@corp.example"
+    assert str(call["reply_to"]).startswith("reply.")
+    assert str(call["reply_to"]).endswith("@pilotmail.co")
 
 
 def test_unverified_suppress_toggle_sends_nothing(env, sent):

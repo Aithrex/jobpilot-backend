@@ -372,6 +372,24 @@ def jobs_client(monkeypatch):
 
 
 def test_settings_put_get_round_trips_mode(mdb, jobs_client):
+    # Enabling submit requires a complete READY profile.
+    import services.apply_onboarding_service as onb
+    mdb.resume_assets.insert_one({
+        "resume_id": "asset-a", "owner_type": "user", "user_email": USER,
+        "structured": {"contact": {
+            "name": "Alice Smith", "email": USER, "phone": "+1-555-0100"}},
+        "parse_status": "parsed", "parsed_at": "2026-01-01T00:00:00+00:00",
+    })
+    onb.save_answers(USER, {
+        "phone_device_type": "Mobile",
+        "address_line1": "1 Main St", "city": "Phoenix", "state": "Arizona",
+        "postal_code": "85001", "country": "United States of America",
+        "work_authorized_us": True, "requires_sponsorship": False,
+        "current_title": "Software Engineer", "current_company": "Acme Inc",
+        "work_start_date": "01/2022",
+        "role_description": "Built and shipped product features.",
+        "over_18": True,
+    })
     put = jobs_client("put", "/api/apply/auto-submit/settings",
                       json={"auto_submit_enabled": True, "mode": "autopilot"})
     assert put.status_code == 200

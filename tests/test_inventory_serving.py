@@ -23,7 +23,10 @@ from services import fit_score
 from services import job_content_store as store
 from services import job_inventory_service as inv
 
-NOW = datetime(2026, 7, 22, 12, 0, 0, tzinfo=timezone.utc)
+# Anchor "now" to wall-clock so the 7-day freshness window stays valid in CI
+# months after the suite was written (a fixed 2026-07-22 NOW ages out of the
+# window and every inventory retrieval returns 0 rows).
+NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
 COLLECTIONS = ("job_postings", "job_source_state", "job_ingestion_runs",
                "job_match_snapshots")

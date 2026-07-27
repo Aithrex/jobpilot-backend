@@ -62,8 +62,8 @@ FEATURE_PERIODS = {
     "tailor": PERIOD_DAY,
     "ats_scores": PERIOD_DAY,
     "cover_letter": PERIOD_DAY,
-    "autoapply_answer": PERIOD_DAY,
-    "auto_submit": PERIOD_DAY,         # opt-in auto-submit — daily abuse/safety cap
+    "autoapply_answer": PERIOD_MONTH,  # grounded open-ended answers (monthly pool)
+    "auto_submit": PERIOD_MONTH,       # opt-in auto-submit — monthly application pool
     "quiz": PERIOD_DAY,
     "practice_question": PERIOD_DAY,
     "mock_evaluate": PERIOD_DAY,
@@ -85,8 +85,8 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "tailor": 5,
         "ats_scores": 5,
         "cover_letter": 2,
-        "autoapply_answer": 10,
-        "auto_submit": 10,            # opt-in auto-submit — free tier daily cap (public release)
+        "autoapply_answer": 25,
+        "auto_submit": 25,            # free: 25 auto-apply submissions / month
         "quiz": None,                 # Learning Hub — free for all users
         "practice_question": 5,
         "mock_evaluate": 2,
@@ -110,8 +110,8 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "tailor": 30,
         "ats_scores": None,
         "cover_letter": None,
-        "autoapply_answer": 100,
-        "auto_submit": 50,
+        "autoapply_answer": 300,
+        "auto_submit": 200,           # premium: 200 auto-apply submissions / month
         "quiz": 20,
         "practice_question": 30,
         "mock_evaluate": 15,

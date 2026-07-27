@@ -89,8 +89,14 @@ _ALIAS_CASES = {
     "race_ethnicity": [
         "What is your race/ethnicity?",                                 # GH
         "Please identify your race",                                    # Lever
-        "Are you Hispanic or Latino?",                                  # Ashby
+        "Which race most accurately describes how you identify?",       # Ashby
         "Race/Ethnicity",                                               # Workday
+    ],
+    "hispanic_latino": [
+        "Are you Hispanic or Latino?",                                  # Ashby / Workday
+        "Hispanic or Latino",
+        "Do you identify as Hispanic or Latino?",
+        "Are you Hispanic?",                                            # short alias
     ],
     "veteran_status": [
         "Are you a protected veteran?",                                 # GH

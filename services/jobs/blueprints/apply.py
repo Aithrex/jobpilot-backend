@@ -440,6 +440,25 @@ def auto_submit_put_settings():
     if use_tailored is not None and not isinstance(use_tailored, bool):
         return jsonify({"error": "use_tailored_resume must be a boolean"}), 400
 
+    # Opting IN requires a complete fill profile (READY set). Opting out is always OK.
+    # Validated after enum checks so invalid_mode / bad threshold stay precise.
+    if enabled is True:
+        try:
+            payload = apply_onboarding_service.build_questions_payload(user_email)
+            if not payload.get("ready_for_autoapply"):
+                return jsonify({
+                    "error": "profile_incomplete",
+                    "message": "Complete your auto-apply profile before enabling submit.",
+                    "required_fields": payload.get("required_fields") or [],
+                    "ready_for_autoapply": False,
+                }), 400
+        except Exception as e:
+            logger.warning("auto_submit ready check failed for %s: %s", user_email, e)
+            return jsonify({
+                "error": "profile_incomplete",
+                "message": "Could not verify your auto-apply profile. Complete Setup and try again.",
+            }), 400
+
     try:
         result = auto_submit_service.set_settings(
             user_email, enabled, use_tailored_resume=use_tailored,

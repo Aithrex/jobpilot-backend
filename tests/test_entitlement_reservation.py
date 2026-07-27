@@ -28,8 +28,8 @@ USER = "reserve.user@aspirely.me"
 _JD = "We are hiring a backend engineer to build distributed systems in Python."
 
 # GOLDEN auto_submit cap numbers — G must preserve these while fixing atomicity.
-FREE_AUTO_SUBMIT_CAP = 10
-PREMIUM_AUTO_SUBMIT_CAP = 50
+FREE_AUTO_SUBMIT_CAP = 25
+PREMIUM_AUTO_SUBMIT_CAP = 200
 PREMIUM_PLUS_AUTO_SUBMIT_CAP = None
 
 _COLLECTIONS = (
@@ -49,7 +49,7 @@ def db():
         name="user_email_job_identity_unique")
     d.applications.create_index(
         [("application_id", 1)], unique=True, name="application_id_unique")
-    d.users.insert_one({"email": USER, "plan": "free"})   # auto_submit cap 10
+    d.users.insert_one({"email": USER, "plan": "free"})   # auto_submit cap 25/mo
     return d
 
 
@@ -64,7 +64,8 @@ def reserve_on(monkeypatch):
 # Helpers
 # ---------------------------------------------------------------------------
 def _auto_submit_counter_id():
-    return ql.counter_id_for(USER, feature="auto_submit")
+    return ql.counter_id_for(
+        USER, date=ent._period_key("auto_submit"), feature="auto_submit")
 
 
 def _auto_submit_count(db):
@@ -126,7 +127,7 @@ class TestGenericReserveAtomicity:
 
     def test_reserve_respects_entitlements_cap_numbers(self, db):
         # The cap comes from entitlements_service — assert both the NUMBERS and
-        # that reserve enforces exactly that many (10 free auto_submits, then block).
+        # that reserve enforces exactly that many (25 free auto_submits, then block).
         assert ent.PLAN_LIMITS[ent.FREE]["auto_submit"] == FREE_AUTO_SUBMIT_CAP
         assert ent.PLAN_LIMITS[ent.PREMIUM]["auto_submit"] == PREMIUM_AUTO_SUBMIT_CAP
         assert ent.PLAN_LIMITS[ent.PREMIUM_PLUS]["auto_submit"] == PREMIUM_PLUS_AUTO_SUBMIT_CAP

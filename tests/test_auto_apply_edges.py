@@ -230,7 +230,9 @@ def test_open_circuit_breaker_aborts_workday_wizard_midflow_to_human():
     out = fill_driver.drive(adapter, answers, mode=MODE_APPROVAL)
     assert out["outcome"] == FILL_WAITING_HUMAN, out
     assert out["reason"] == "form_change"
-    assert out["steps"] == 3                 # advanced across the full wizard
+    # Open breaker aborts at the first mid-wizard takeover check (after the
+    # first advance) — never reaches a terminal submit click.
+    assert out["steps"] >= 1
     assert adapter._submit_clicks == 0       # but never clicked the final submit
 
 

@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+playwright = pytest.importorskip("playwright")
+
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ats"
 
 

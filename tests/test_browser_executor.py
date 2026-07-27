@@ -121,10 +121,10 @@ def test_lever_recon_extracts_questions():
 
 def test_submit_family_gate_unsupported_is_unavailable():
     ex = _executor([])
-    # Workday has no driver yet → clean unavailable (no browser launched).
+    # Unknown / unsupported ATS family → clean unavailable (no browser launched).
     app = {"application_id": "x",
-           "apply_url": "https://acme.wd1.myworkdayjobs.com/en-US/careers/job/1",
-           "ats_family": "workday"}
+           "apply_url": "https://acme.taleo.net/careersection/jobdetail.ftl?job=1",
+           "ats_family": "taleo"}
     res = ex.submit(app, _ANSWERS, {"tailoring_record_id": "t1"})
     assert res["status"] == EXECUTOR_UNAVAILABLE
 

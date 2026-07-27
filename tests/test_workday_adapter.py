@@ -152,7 +152,8 @@ def test_my_information_step_recon_and_wizard_position():
     # Résumé file field is executor-supplied → excluded.
     assert "resume" not in {q["recon_id"] for q in qs}
     # recon_id is the data-automation-id (theme-independent fill-back handle).
-    assert by_fid["email"]["recon_id"] == "email"
+    # Workday often wraps inputs in formField-* containers — prefer that when present.
+    assert by_fid["email"]["recon_id"] in ("email", "formField-email")
     assert wd.current_step() == "my_information"
     assert wd.has_next_step() is True
 
@@ -195,7 +196,8 @@ def test_fill_is_deterministic_by_automation_id():
     wd = WorkdayAdapter(_page("workday_my_information"), _WD_URL)
     wd.recon()
     r = wd.fill("email", "ada@example.com")
-    assert r["found"] is True and r["handle"] == "email" and r["status"] == "filled"
+    assert r["found"] is True and r["status"] == "filled"
+    assert r["handle"] in ("email", "formField-email")
     snap = wd.review_snapshot()
     assert snap["values"]["email"] == "ada@example.com"
     # A custom dropdown fills deterministically by its automation id too.

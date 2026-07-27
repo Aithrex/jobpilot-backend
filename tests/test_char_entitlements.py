@@ -1,7 +1,7 @@
 """CHARACTERIZATION — asserts CURRENT behavior to guard the E/F/G refactor;
 update deliberately when that behavior is intentionally changed.
 
-Scope: entitlements_service metering for the "auto_submit" daily cap — the
+Scope: entitlements_service metering for the "auto_submit" monthly cap — the
 billing semantics defect G ("atomic check_and_increment") must PRESERVE while it
 fixes the atomicity race. We are NOT asserting atomicity here (that IS the bug G
 fixes under concurrency); we pin the cap NUMBERS and the single-threaded cap
@@ -12,8 +12,8 @@ The cap numbers are captured as module constants below so a later change to
 PLAN_LIMITS is visible as a diff in THIS file, not a surprise in production.
 
 Runs fully offline (mongomock; no network). Deterministic within a run: the
-feature_usage counter is keyed by the UTC period ("day"), and every assertion is
-made against a freshly-cleared counter within a single day.
+feature_usage counter is keyed by the UTC period ("month"), and every assertion is
+made against a freshly-cleared counter within a single month.
 """
 import pytest
 
@@ -25,8 +25,8 @@ FEATURE = "auto_submit"
 
 # GOLDEN cap numbers for the metered auto_submit feature. A later change to
 # PLAN_LIMITS[...]["auto_submit"] MUST update these deliberately.
-FREE_CAP = 5
-PREMIUM_CAP = 50
+FREE_CAP = 25
+PREMIUM_CAP = 200
 PREMIUM_PLUS_CAP = None          # None == unlimited (soft-capped elsewhere)
 
 FREE_USER = "free@aspirely.me"
@@ -46,8 +46,8 @@ def ent_db():
 # Cap constants (golden) — the numbers G must preserve
 # ---------------------------------------------------------------------------
 class TestCapConstants:
-    def test_auto_submit_is_a_daily_metered_feature(self):
-        assert ent.FEATURE_PERIODS[FEATURE] == ent.PERIOD_DAY
+    def test_auto_submit_is_a_monthly_metered_feature(self):
+        assert ent.FEATURE_PERIODS[FEATURE] == ent.PERIOD_MONTH
 
     def test_plan_limits_are_this_golden(self):
         assert ent.PLAN_LIMITS[ent.FREE][FEATURE] == FREE_CAP

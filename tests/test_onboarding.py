@@ -56,6 +56,26 @@ def _seed_contact(d, email=USER, name="Alice Smith",
     })
 
 
+def _seed_ready_profile(d, email=USER):
+    """Declare every READY_REQUIRED_FIELDS value (contact comes from résumé)."""
+    _seed_contact(d, email=email)
+    onb.save_answers(email, {
+        "phone_device_type": "Mobile",
+        "address_line1": "1 Main St",
+        "city": "Phoenix",
+        "state": "Arizona",
+        "postal_code": "85001",
+        "country": "United States of America",
+        "work_authorized_us": True,
+        "requires_sponsorship": False,
+        "current_title": "Software Engineer",
+        "current_company": "Acme Inc",
+        "work_start_date": "01/2022",
+        "role_description": "Built and shipped product features.",
+        "over_18": True,
+    })
+
+
 def _nq(field_id, label, *, required=False, is_legal=False, type="text"):
     return {"field_id": field_id, "label": label, "type": type,
             "required": required, "is_legal_attestation": is_legal}
@@ -183,24 +203,38 @@ class TestSaveAnswers:
 
 
 # ---------------------------------------------------------------------------
-# The READY gate: contact + work_auth + sponsorship
+# The READY gate: contact + address + work_auth + experience + over_18
 # ---------------------------------------------------------------------------
 class TestReadyGate:
     def test_ready_flips_true_once_required_set_present(self, onb_db):
         _seed_contact(onb_db)                     # contact from the résumé
         assert onb.build_questions_payload(USER)["ready_for_autoapply"] is False
 
-        # work-auth alone is not enough — sponsorship still missing.
-        onb.save_answers(USER, {"work_authorized_us": True})
+        # work-auth alone is not enough — address / experience still missing.
+        onb.save_answers(USER, {"work_authorized_us": True,
+                                "requires_sponsorship": False})
         assert onb.build_questions_payload(USER)["ready_for_autoapply"] is False
 
-        onb.save_answers(USER, {"requires_sponsorship": False})
+        _seed_ready_profile(onb_db)
         assert onb.build_questions_payload(USER)["ready_for_autoapply"] is True
 
     def test_missing_contact_keeps_not_ready(self, onb_db):
-        # work-auth declared but NO résumé/contact -> still not ready.
-        onb.save_answers(USER, {"work_authorized_us": True,
-                                "requires_sponsorship": False})
+        # Full profile except résumé/contact -> still not ready.
+        onb.save_answers(USER, {
+            "phone_device_type": "Mobile",
+            "address_line1": "1 Main St",
+            "city": "Phoenix",
+            "state": "Arizona",
+            "postal_code": "85001",
+            "country": "United States of America",
+            "work_authorized_us": True,
+            "requires_sponsorship": False,
+            "current_title": "Software Engineer",
+            "current_company": "Acme Inc",
+            "work_start_date": "01/2022",
+            "role_description": "Built and shipped product features.",
+            "over_18": True,
+        })
         assert onb.build_questions_payload(USER)["ready_for_autoapply"] is False
 
 
