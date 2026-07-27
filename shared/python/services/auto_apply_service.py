@@ -288,7 +288,8 @@ def _freezes_coll():
 # heuristic. This layer adds a hard legal-attestation guard on top.)
 # ---------------------------------------------------------------------------
 def _resolve_answers(user_email: str,
-                     questions: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[Dict[str, str]], Dict[str, Any]]:
+                     questions: List[Dict[str, Any]],
+                     company: str = "") -> Tuple[Dict[str, Any], List[Dict[str, str]], Dict[str, Any]]:
     """Resolve normalized questions against the canonical profile via the answer
     library. Returns ``(answers, needs_input_items, resolution)``:
 
@@ -307,7 +308,7 @@ def _resolve_answers(user_email: str,
     answers: Dict[str, Any] = {}
     needs_input: List[Dict[str, str]] = []
 
-    resolution = _call_answer_library(user_email, questions)
+    resolution = _call_answer_library(user_email, questions, company=company)
     resolved_map = resolution.get("resolved") or {}
 
     for q in questions:
@@ -335,7 +336,8 @@ def _resolve_answers(user_email: str,
 
 
 def _call_answer_library(user_email: str,
-                         questions: List[Dict[str, Any]]) -> Dict[str, Any]:
+                         questions: List[Dict[str, Any]],
+                         company: str = "") -> Dict[str, Any]:
     """Invoke ``answer_library_service.resolve(user_email, questions)`` with the
     normalized (field_id-keyed) questions. A genuine ImportError (parallel build)
     → an empty resolution so the pipeline still runs (everything falls to
@@ -349,7 +351,12 @@ def _call_answer_library(user_email: str,
         return {"resolved": {}, "coverage": 0.0, "has_novel_free_text": False,
                 "has_unconfirmed_legal_attestation": False}
     try:
-        result = answer_library_service.resolve(user_email, questions)
+        # `company` drives the spec §1 résumé escalation (answer "Yes" to
+        # "have you worked here?" when the résumé shows this employer). It can
+        # only ever raise an answer to Yes, never assert "No", so passing it is
+        # safe; omitting it silently disables the escalation.
+        result = answer_library_service.resolve(user_email, questions,
+                                                company=company or "")
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("auto_apply: answer_library resolve failed for %s: %s", user_email, e)
         return {"resolved": {}, "coverage": 0.0, "has_novel_free_text": False,
@@ -384,6 +391,17 @@ def _normalize_resolution(result: Any) -> Dict[str, Any]:
 _DECLARED_SOURCES = frozenset({
     "declared", "user_store", "visa_profile", "onboarding", "preferences",
     "profile", "user_declared", "structured", "resume",
+    # spec §0.3 / §1. Without these two, a legitimately-resolved answer is
+    # bounced straight back to needs_input and the work that produces them is
+    # inert:
+    #   policy_decline — a protected-EEO "prefer not to answer". Declining
+    #     asserts nothing about the user, so it is not a fabrication.
+    #   resume_match   — a résumé-derived escalation to "Yes" (e.g. the user
+    #     HAS worked at this company). It can only ever raise an answer to Yes,
+    #     never assert "No", so it cannot understate an obligation.
+    # Kept as distinct strings rather than folded into "declared" because
+    # neither is something the user actually declared; provenance stays honest.
+    "policy_decline", "resume_match",
 })
 
 
@@ -576,7 +594,8 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
         # dicts vs. text-keyed resolutions no longer diverge).
         questions = apply_forms.normalize_recon_questions(raw_questions)
         needs_account = bool(recon.get("needs_account"))
-        answers, needs_input, resolution = _resolve_answers(user_email, questions)
+        answers, needs_input, resolution = _resolve_answers(
+            user_email, questions, company=str(app.get("company") or ""))
         cov = resolution.get("coverage")
         coverage = float(cov) if cov is not None else _coverage(questions, answers)
         has_novel_free_text = bool(resolution.get("has_novel_free_text"))
@@ -1004,7 +1023,8 @@ def resume_after_answers(user_email: str, application_id: str,
     still_missing: List[Dict[str, str]] = []
     if open_items:
         newly, still_missing, resolution = _resolve_answers(
-            user_email, [_question_from_needs_item(i) for i in open_items])
+            user_email, [_question_from_needs_item(i) for i in open_items],
+            company=str(app.get("company") or ""))
         if newly:
             stored.update(newly)
             _merge_answers(application_id, user_email, stored)

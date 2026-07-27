@@ -255,7 +255,7 @@ def test_autopilot_auto_reaches_approved_with_system_snapshot(led_db, monkeypatc
     aas.set_executor(_ReconExecutor())
     # Force a clean auto decision with no gaps.
     monkeypatch.setattr(aas, "_resolve_answers",
-                        lambda ue, qs: ({"email": "a@b.co"}, [],
+                        lambda ue, qs, **_kw: ({"email": "a@b.co"}, [],
                                         {"coverage": 1.0, "has_novel_free_text": False,
                                          "has_unconfirmed_legal_attestation": False}))
     monkeypatch.setattr(aas, "_decide_autonomy",
@@ -274,7 +274,7 @@ def test_autopilot_auto_reaches_approved_with_system_snapshot(led_db, monkeypatc
 def test_ask_waits_in_ready_for_review(led_db, monkeypatch):
     aas.set_executor(_ReconExecutor())
     monkeypatch.setattr(aas, "_resolve_answers",
-                        lambda ue, qs: ({"email": "a@b.co"}, [],
+                        lambda ue, qs, **_kw: ({"email": "a@b.co"}, [],
                                         {"coverage": 1.0, "has_novel_free_text": False,
                                          "has_unconfirmed_legal_attestation": False}))
     monkeypatch.setattr(aas, "_decide_autonomy",
