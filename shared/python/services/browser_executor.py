@@ -110,7 +110,7 @@ def browser_context_kwargs() -> Dict[str, Any]:
     """Shared Playwright context options — Lambda defaults to a tiny viewport
     that clips Workday Create Account / Sign In submit buttons below the fold."""
     return {
-        "viewport": {"width": 1440, "height": 900},
+        "viewport": {"width": 1440, "height": 1100},
         "user_agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -575,6 +575,26 @@ class BrowserExecutor(ExecutorAdapter):
                     except Exception:
                         page.wait_for_timeout(2_500)
 
+                    def _already_applied() -> bool:
+                        try:
+                            body = (page.inner_text("body") or "").lower()
+                        except Exception:
+                            body = ""
+                        return ("already applied" in body
+                                or "you've already applied" in body
+                                or "you have already applied" in body)
+
+                    if _already_applied():
+                        shot = None
+                        try:
+                            png = page.screenshot(full_page=False, type="png")
+                            shot = self._save_screenshot(application, png)
+                        except Exception:
+                            pass
+                        return {"status": SUBMIT_SUCCESS, "confirmation": True,
+                                "screenshot_ref": shot, "wall": None, "error": None,
+                                "already_applied": True}
+
                     adapter = select_adapter(page, url)
                     if adapter is None:
                         return self._unavailable()
@@ -592,6 +612,17 @@ class BrowserExecutor(ExecutorAdapter):
                                 adapter = select_adapter(page, page.url) or adapter
                     except Exception as e:
                         logger.info("workday apply CTA skipped: %s", e)
+
+                    if _already_applied():
+                        shot = None
+                        try:
+                            png = page.screenshot(full_page=False, type="png")
+                            shot = self._save_screenshot(application, png)
+                        except Exception:
+                            pass
+                        return {"status": SUBMIT_SUCCESS, "confirmation": True,
+                                "screenshot_ref": shot, "wall": None, "error": None,
+                                "already_applied": True}
 
                     # Account gate → vault create/sign-in + mailbox verify.
                     if getattr(adapter, "_account_gate_present", lambda: False)():
@@ -614,6 +645,27 @@ class BrowserExecutor(ExecutorAdapter):
                             page.wait_for_timeout(1_500)
                             adapter = select_adapter(page, page.url) or adapter
 
+                    # Recover Workday "Something went wrong — please refresh" shells
+                    # that appear after account gate / SPA navigations.
+                    for _ in range(2):
+                        try:
+                            if hasattr(adapter, "recover_error_page") and adapter.recover_error_page():
+                                page.wait_for_timeout(1_500)
+                                adapter = select_adapter(page, page.url) or adapter
+                                # If refresh dumped us back on the posting, re-open Apply.
+                                if hasattr(adapter, "click_apply_cta") and adapter.click_apply_cta():
+                                    page.wait_for_timeout(2_000)
+                                    adapter = select_adapter(page, page.url) or adapter
+                                    if getattr(adapter, "_account_gate_present", lambda: False)():
+                                        self._workday_clear_account_gate(
+                                            page, adapter, application, ue, tenant)
+                                        adapter = select_adapter(page, page.url) or adapter
+                            else:
+                                break
+                        except Exception as e:
+                            logger.info("workday error-shell recover skipped: %s", e)
+                            break
+
                     if resume and isinstance(resume, tuple) and len(resume) == 2:
                         import tempfile, os as _os
                         fd, resume_path = tempfile.mkstemp(suffix=".pdf")
@@ -634,10 +686,21 @@ class BrowserExecutor(ExecutorAdapter):
                         "previous_employee": "No",
                         "phone_device_type": "Mobile",
                         "work_start_date": "01/2022",
-                        "work_end_date": "07/2026",
+                        "work_end_date": "06/2026",
                         "earliest_start_date": "01/2022",
                         "formfield_startdate": "01/2022",
-                        "formfield_enddate": "07/2026",
+                        "formfield_enddate": "06/2026",
+                        "currently_work_here": "No",
+                        "role_description": (
+                            "Built and shipped full-stack AI career platform features "
+                            "across React/TypeScript frontends and Flask/Python APIs, "
+                            "including resume tooling, job matching, and automation flows."
+                        ),
+                        "job_description": (
+                            "Built and shipped full-stack AI career platform features "
+                            "across React/TypeScript frontends and Flask/Python APIs, "
+                            "including resume tooling, job matching, and automation flows."
+                        ),
                         "gender": "Decline",
                         "hispanic_latino": "No",
                         "race_ethnicity": "Decline to State (United States of America)",
@@ -666,12 +729,17 @@ class BrowserExecutor(ExecutorAdapter):
                         "dod_employee": "No",
                         "export_control_us_person": "Yes",
                         "secondary_employment_intent": "Neither",
+                        "citizenship_countries": "United States of America",
+                        "countries_of_citizenship": "United States of America",
                     }
                     # Common key aliases (caller may use either form).
                     _WD_ALIASES = {
                         "address_line1": "address_line_1",
                         "current_title": "job_title",
                         "current_company": "company",
+                        "formfield_country": "country",
+                        "formfield_datesignedon": "date_signed",
+                        "formfield_disabilityform": "disability_status",
                     }
                     for canon, alias in _WD_ALIASES.items():
                         if canon not in enriched and alias in enriched:
@@ -732,6 +800,117 @@ class BrowserExecutor(ExecutorAdapter):
                             needs = ["account_required"]
                         return self._wall(wall_kind, page, application, needs)
                     if kind == fill_driver.FILL_NEEDS_INPUT:
+                        # Recover error shell mid-wizard then retry once.
+                        try:
+                            if hasattr(adapter, "recover_error_page") and adapter.recover_error_page():
+                                adapter = select_adapter(page, page.url) or adapter
+                                outcome = fill_driver.drive(adapter, answers or {}, mode=mode)
+                                kind = (outcome or {}).get("outcome")
+                                if kind in (fill_driver.FILL_CONFIRMED, fill_driver.FILL_SUBMITTED):
+                                    shot = None
+                                    try:
+                                        png = page.screenshot(full_page=False, type="png")
+                                        shot = self._save_screenshot(application, png)
+                                    except Exception:
+                                        pass
+                                    return {"status": SUBMIT_SUCCESS, "confirmation": True,
+                                            "screenshot_ref": shot, "wall": None, "error": None}
+                        except Exception as e:
+                            logger.info("workday mid-wizard recover skipped: %s", e)
+                        # One more date/disability retry when Self Identify validation fails.
+                        field = (outcome or {}).get("field") or ""
+                        reason = (outcome or {}).get("reason") or ""
+                        errors = (outcome or {}).get("errors") or []
+                        err_blob = " ".join(
+                            str((e or {}).get("message") or "") for e in errors
+                        ).lower()
+                        body_l = ""
+                        try:
+                            body_l = (page.inner_text("body") or "").lower()
+                        except Exception:
+                            pass
+                        # Intel / Workday compliance: secondary employment + citizenship.
+                        if ("secondary" in err_blob or "secondary" in body_l
+                                or "citizenship" in err_blob or reason == "validation_failed"):
+                            try:
+                                for label in ("Neither", "Neither/Ninguno", "No"):
+                                    try:
+                                        loc = page.get_by_text(label, exact=False).first
+                                        if loc.count():
+                                            loc.click(force=True, timeout=4_000)
+                                            break
+                                    except Exception:
+                                        pass
+                                # Citizenship countries (not Yes/No).
+                                try:
+                                    cit = page.locator(
+                                        "textarea, input[type=text]"
+                                    ).filter(has_text="")
+                                    # Prefer a field near citizenship wording via JS clear+type.
+                                    for sel in (
+                                        "textarea",
+                                        "[data-automation-id*=citizenship] input",
+                                        "[data-automation-id*=citizenship] textarea",
+                                    ):
+                                        try:
+                                            loc = page.locator(sel).first
+                                            if loc.count() and loc.is_visible():
+                                                # Only overwrite if current value looks like Yes/No.
+                                                cur = ""
+                                                try:
+                                                    cur = (loc.input_value() or "").strip().lower()
+                                                except Exception:
+                                                    cur = ""
+                                                if cur in ("", "yes", "no", "yes/si", "si"):
+                                                    loc.fill("United States of America")
+                                                    break
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                                page.wait_for_timeout(800)
+                                outcome = fill_driver.drive(adapter, answers or {}, mode=mode)
+                                kind = (outcome or {}).get("outcome")
+                                if kind in (fill_driver.FILL_CONFIRMED, fill_driver.FILL_SUBMITTED):
+                                    shot = None
+                                    try:
+                                        png = page.screenshot(full_page=False, type="png")
+                                        shot = self._save_screenshot(application, png)
+                                    except Exception:
+                                        pass
+                                    return {"status": SUBMIT_SUCCESS, "confirmation": True,
+                                            "screenshot_ref": shot, "wall": None, "error": None}
+                            except Exception as e:
+                                logger.info("workday compliance retry failed: %s", e)
+                        if "date" in str(field).lower() or reason == "validation_failed":
+                            try:
+                                today = datetime.now(timezone.utc).strftime("%m/%d/%Y")
+                                if hasattr(adapter, "_fill_month_year"):
+                                    adapter._fill_month_year(
+                                        "selfIdentifiedDisabilityData--dateSignedOn-dateSectionMonth-input",
+                                        today)
+                                if hasattr(adapter, "_fill_radio"):
+                                    adapter._fill_radio(
+                                        "formField-disabilityForm", "I Don't Wish To Answer")
+                                # Also try page-wide disability text click.
+                                try:
+                                    page.get_by_text("I Don't Wish To Answer", exact=False).first.click(
+                                        force=True, timeout=5_000)
+                                except Exception:
+                                    pass
+                                outcome = fill_driver.drive(adapter, answers or {}, mode=mode)
+                                kind = (outcome or {}).get("outcome")
+                                if kind in (fill_driver.FILL_CONFIRMED, fill_driver.FILL_SUBMITTED):
+                                    shot = None
+                                    try:
+                                        png = page.screenshot(full_page=False, type="png")
+                                        shot = self._save_screenshot(application, png)
+                                    except Exception:
+                                        pass
+                                    return {"status": SUBMIT_SUCCESS, "confirmation": True,
+                                            "screenshot_ref": shot, "wall": None, "error": None}
+                            except Exception as e:
+                                logger.info("workday self-id retry failed: %s", e)
                         shot = None
                         try:
                             png = page.screenshot(

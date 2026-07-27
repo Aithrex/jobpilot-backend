@@ -258,6 +258,30 @@ def drive(adapter, answers: Dict[str, Any], *,
 
     # Refuse to submit while still mid-wizard (Next still present).
     if adapter.has_next_step() and adapter.current_step() != "review":
+        # Prefer surfacing an Errors Found banner over a generic stuck reason.
+        try:
+            body = ""
+            if getattr(adapter, "_page", None) is not None:
+                body = (adapter._page.inner_text("body") or "")[:4000]
+            errs = []
+            if "errors found" in body.lower():
+                errs = adapter.capture_validation_errors() or []
+                if not errs:
+                    # Pull the first numbered error line from the banner text.
+                    for line in body.splitlines():
+                        ls = line.strip()
+                        if ls.lower().startswith("error") or (
+                                len(ls) > 20 and "required" in ls.lower()):
+                            errs.append({"field": None, "message": ls[:240],
+                                         "evidence": "errors_found_banner"})
+                            break
+            if errs:
+                return _out(FILL_NEEDS_INPUT, adapter_family=family, steps=steps,
+                            reason="validation_failed", errors=errs,
+                            field=(errs[0] or {}).get("field") or "validation",
+                            review_snapshot=review_snapshot)
+        except Exception:
+            pass
         return _out(FILL_NEEDS_INPUT, adapter_family=family, steps=steps,
                     reason="stuck_mid_wizard",
                     field=adapter.current_step(),

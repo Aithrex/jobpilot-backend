@@ -1392,6 +1392,12 @@ class WorkdayAdapter(AtsAdapter):
                                 "reason": str(e2)[:120]}
         elif widget == "dropdown":
             # Workday custom dropdown: click button → wait for listbox → click option.
+            # Guard: never try to pick a phone number as a dropdown option
+            # (misclassified Phone Device Type → phone). Coerce to Mobile.
+            val_s = str(value).strip()
+            if re.fullmatch(r"[\d\s\-\+\(\)\.]{7,}", val_s) and "phone" in (handle or "").lower():
+                value = "Mobile"
+                val_s = "Mobile"
             filled_dd = self._fill_dropdown(handle, el, str(value))
             if not filled_dd:
                 return {"field_id": key, "handle": handle, "found": True,
@@ -1501,46 +1507,101 @@ class WorkdayAdapter(AtsAdapter):
                             handle, month_inp.count(), year_inp.count())
                 return False
 
-            def _type_seg(loc, digits: str) -> None:
-                loc.scroll_into_view_if_needed(timeout=3_000)
-                loc.click(timeout=3_000, force=True)
-                # Clear existing (Control+a / Meta+a then Backspace).
+            # Already correct? Treat as success (avoids flaky viewport clicks).
+            try:
+                mv0 = (month_inp.input_value() or "").strip()
+                yv0 = (year_inp.input_value() or "").strip()
+                if (mv0.lstrip("0") == month.lstrip("0") or mv0 == month) and (
+                        yv0 == year or yv0.endswith(year[-2:])):
+                    return True
+            except Exception:
+                pass
+
+            # Experience dates are MM/YYYY — only Self Identify / full dates need day.
+            # Prefer visible day segment; hidden day inputs must not be typed into.
+            day_visible = False
+            try:
+                day_visible = bool(day_inp.count() and day_inp.is_visible())
+            except Exception:
+                day_visible = bool(day_inp.count())
+            need_day = day_visible and (
+                bool(re.search(r"[/\-]\d{1,2}[/\-]\d{4}", v))
+                or "dateSignedOn" in (handle or "")
+                or "date_signed" in (handle or "").lower()
+            )
+
+            def _scroll(loc) -> None:
                 try:
-                    loc.press("Control+a")
+                    handle_el = loc.element_handle(timeout=2_000)
+                    if handle_el is not None:
+                        page.evaluate(
+                            "(el) => el.scrollIntoView({block:'center', inline:'nearest'})",
+                            handle_el,
+                        )
+                        page.wait_for_timeout(100)
                 except Exception:
                     pass
-                loc.press("Backspace")
-                loc.type(digits, delay=50)
 
-            _type_seg(month_inp, month)
-            month_inp.press("Tab")
-            page.wait_for_timeout(150)
-            if day_inp.count():
-                _type_seg(day_inp, day)
-                day_inp.press("Tab")
-                page.wait_for_timeout(150)
-            _type_seg(year_inp, year)
-            year_inp.press("Tab")
-            page.wait_for_timeout(300)
+            def _display_ok() -> bool:
+                """Match the visible date string Workday renders (more reliable
+                than spinbutton input_value, which often returns a partial)."""
+                try:
+                    root = page.locator("[data-automation-id=%s]" % handle)
+                    if not root.count():
+                        root = month_inp.locator(
+                            "xpath=ancestor::*[contains(@data-automation-id,'date') "
+                            "or contains(@data-automation-id,'Date')][1]")
+                    text = (root.inner_text(timeout=2_000) or "").replace(" ", "")
+                except Exception:
+                    text = ""
+                if need_day:
+                    targets = (
+                        f"{month}/{day}/{year}",
+                        f"{int(month)}/{int(day)}/{year}",
+                        f"{month}{day}{year}",
+                    )
+                else:
+                    targets = (
+                        f"{month}/{year}",
+                        f"{int(month)}/{year}",
+                        f"{month}{year}",
+                    )
+                return any(t in text for t in targets)
 
-            # Verify — reject partials like "07//".
-            try:
-                mv = (month_inp.input_value() or "").strip()
-                yv = (year_inp.input_value() or "").strip()
-                dv = (day_inp.input_value() or "").strip() if day_inp.count() else day
-            except Exception:
-                mv = yv = dv = ""
-            ok_m = mv.lstrip("0") == month.lstrip("0") or mv == month
-            ok_y = yv == year or yv.endswith(year[-2:])
-            ok_d = (not day_inp.count()) or dv.lstrip("0") == day.lstrip("0") or dv == day
-            if ok_m and ok_y and ok_d:
+            if _display_ok():
                 return True
-            logger.info(
-                "workday date verify failed handle=%s got m=%r d=%r y=%r want %s/%s/%s",
-                handle, mv, dv, yv, month, day, year,
-            )
-            # Last resort: JS setters + input events on each segment.
-            for loc, digits in ((month_inp, month), (day_inp, day), (year_inp, year)):
+
+            # Workday date spinbuttons auto-advance after 2 digits. Type the
+            # whole date as one continuous digit stream into the month input —
+            # do NOT Tab between segments (that is what produces values like
+            # month='2' day='27' year='2026').
+            stream = f"{month}{day}{year}" if need_day else f"{month}{year}"
+            _scroll(month_inp)
+            typed = False
+            try:
+                try:
+                    month_inp.click(force=True, timeout=5_000)
+                except Exception:
+                    try:
+                        month_inp.evaluate("el => el.focus()")
+                    except Exception:
+                        pass
+                page.keyboard.press("Control+a")
+                page.keyboard.press("Backspace")
+                page.keyboard.type(stream, delay=70)
+                typed = True
+            except Exception as e:
+                logger.info("workday date keyboard stream failed %s: %s", handle, e)
+
+            page.wait_for_timeout(300)
+            if _display_ok():
+                return True
+
+            # Per-segment JS setter fallback (no clicks).
+            segs = [(month_inp, month), (year_inp, year)]
+            if need_day:
+                segs.insert(1, (day_inp, day))
+            for loc, digits in segs:
                 if not loc.count():
                     continue
                 try:
@@ -1553,16 +1614,27 @@ class WorkdayAdapter(AtsAdapter):
                           el.dispatchEvent(new Event('input', {bubbles:true}));
                           el.dispatchEvent(new Event('change', {bubbles:true}));
                           el.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));
-                          el.blur();
                         }""", digits)
                 except Exception:
                     pass
             page.wait_for_timeout(200)
+
             try:
-                yv2 = (year_inp.input_value() or "").strip()
-                return bool(yv2) and (yv2 == year or yv2.endswith(year[-2:]))
+                mv = (month_inp.input_value() or "").strip()
+                yv = (year_inp.input_value() or "").strip()
+                dv = (day_inp.input_value() or "").strip() if need_day else ""
             except Exception:
-                return False
+                mv = yv = dv = ""
+            ok_m = mv.lstrip("0") == month.lstrip("0") or mv == month
+            ok_y = yv == year or yv.endswith(year[-2:])
+            ok_d = (not need_day) or dv.lstrip("0") == day.lstrip("0") or dv == day
+            if _display_ok() or (ok_m and ok_y and ok_d):
+                return True
+            logger.info(
+                "workday date verify failed handle=%s got m=%r d=%r y=%r want %s/%s/%s typed=%s",
+                handle, mv, dv, yv, month, day if need_day else "--", year, typed,
+            )
+            return False
         except Exception as e:
             logger.info("workday fill_month_year failed %s: %s", handle, e)
             return False
@@ -1829,6 +1901,53 @@ class WorkdayAdapter(AtsAdapter):
                     return
             except Exception:
                 continue
+
+    def recover_error_page(self) -> bool:
+        """Intel/Workday sometimes lands on 'Something went wrong — refresh'.
+
+        Returns True if an error shell was detected and a recovery action ran
+        (reload or refresh control). Callers should re-select the adapter after.
+        """
+        if self._page is None:
+            return False
+        page = self._page
+        try:
+            body = (page.inner_text("body") or "")[:4000]
+        except Exception:
+            body = ""
+        if not re.search(r"something went wrong|please refresh the page", body, re.I):
+            return False
+        logger.info("workday error shell detected — recovering")
+        # Prefer an in-page Refresh control if present.
+        for sel in (
+            "button:has-text('Refresh')",
+            "a:has-text('Refresh')",
+            "button:has-text('Try again')",
+            "button:has-text('Retry')",
+        ):
+            try:
+                loc = page.locator(sel).first
+                if loc.count() and loc.is_visible():
+                    loc.click(timeout=3_000, force=True)
+                    page.wait_for_timeout(2_500)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=12_000)
+                    except Exception:
+                        pass
+                    return True
+            except Exception:
+                continue
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=60_000)
+            page.wait_for_timeout(2_000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=12_000)
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            logger.info("workday error-shell reload failed: %s", e)
+            return False
 
     def click_apply_cta(self) -> bool:
         """Open the application wizard from a job-details / Apply landing page.
@@ -2240,7 +2359,9 @@ class WorkdayAdapter(AtsAdapter):
         r"we(?:['’`]ve| have) received your application|"
         r"successfully submitted|"
         r"your application (?:is|has been) (?:complete|submitted)|"
-        r"application complete)",
+        r"application complete|"
+        r"you(?:['’`]ve| have) already applied|"
+        r"already applied for this job)",
         re.IGNORECASE,
     )
 
