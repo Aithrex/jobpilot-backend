@@ -269,14 +269,14 @@ class TestDeepLinksJ:
         load_service_app("jobs")                  # registers blueprints.apply
         from blueprints.apply import _app_applications_url
         url = _app_applications_url()
-        assert url == "https://app.test/next/applications"
-        assert "/next/applications" in url
-        assert not url.endswith("/applications") or url.endswith("/next/applications")
+        assert url == "https://app.test/app/apply"
+        assert "/app/apply" in url
+        assert not url.endswith("/applications") or url.endswith("/app/apply")
 
     def test_today_inbox_link_constants_are_next_based(self):
         import services.today_inbox_service as inbox
-        assert inbox._LINK_APPLICATIONS == "/next/applications"
-        assert inbox._LINK_APPLICATIONS_INBOX == "/next/applications/inbox"
+        assert inbox._LINK_APPLICATIONS == "/app/apply"
+        assert inbox._LINK_APPLICATIONS_INBOX == "/app/apply/inbox"
 
 
 # ---------------------------------------------------------------------------

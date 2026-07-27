@@ -986,16 +986,16 @@ def _app_applications_url(token: str = "") -> str:
     """The in-app applications view an approve/review link lands on.
 
     J (stale deep links): the canonical applications route on the migrated `/next`
-    shell is ``/next/applications`` (jobpilot-frontend App.tsx — its index child
+    shell is ``/app/apply`` (jobpilot-frontend App.tsx — its index child
     redirects to the `tracker` tab). The legacy bare ``/applications`` no longer
     routes, so email approve/review links must target the `/next` route. Matches
-    the mailbox forward convention (``/next/applications/<thread>``).
+    the mailbox forward convention (``/app/apply/<thread>``).
 
     P1-APPROVE-GET: for an approve/skip link the (unconsumed) ``token`` is passed
     through as ``?approve=<token>`` so the authenticated confirmation surface can
     submit it back via the CSRF-safe POST — the GET itself never mutates."""
     from utils.config import AppUrlsConfig
-    base = f"{AppUrlsConfig.FRONTEND_URL}/next/applications"
+    base = f"{AppUrlsConfig.FRONTEND_URL}/app/apply"
     if token:
         return f"{base}?approve={quote(token, safe='')}"
     return base

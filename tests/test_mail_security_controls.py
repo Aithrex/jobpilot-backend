@@ -316,7 +316,7 @@ def test_verified_message_relays_full_content(env, sent):
     assert str(call["reply_to"]).startswith("reply.")
     assert str(call["reply_to"]).endswith("@pilotmail.co")
     # Compact manage link still present (the body IS the message, not a redirect).
-    deep = f"{FRONTEND}/next/applications/{res['thread_id']}"
+    deep = f"{FRONTEND}/app/apply/{res['thread_id']}"
     assert deep in call["html"] and deep in call["text"]
 
 

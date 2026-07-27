@@ -219,7 +219,7 @@ def test_forward_relays_full_real_content(env, sent):
     # manage-in-app link (the body IS the message, not a redirect).
     assert "Thank you for applying" in call["html"]
     assert "moving forward" in call["text"].lower()
-    manage = f"{FRONTEND}/next/applications/{res['thread_id']}"
+    manage = f"{FRONTEND}/app/apply/{res['thread_id']}"
     assert manage in call["html"] and manage in call["text"]
 
 

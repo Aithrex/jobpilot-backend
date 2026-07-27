@@ -12,7 +12,7 @@ What we send (plain full-content relay):
   - the ALREADY-SANITIZED html body (remote images neutralized, scripts/forms
     stripped at ingest) as the html part + the extracted text as the text part,
   - a small banner + a compact "Manage in <app>" link
-    (``${FRONTEND_URL}/next/applications/<thread_id>``) so the body IS the real
+    (``${FRONTEND_URL}/app/apply/<thread_id>``) so the body IS the real
     message, not a redirect,
   - a one-line note for CLEAN attachments (bytes are NOT relayed yet — follow-up).
 
@@ -456,7 +456,7 @@ def forward_notification(message_doc: Dict[str, Any]) -> Dict[str, Any]:
     thread = _db().mail_threads.find_one({"thread_id": thread_id}) or {}
     base = AppUrlsConfig.FRONTEND_URL
     safe_thread = InputSanitizer.sanitize_string(str(thread_id or ""), 64)
-    manage_link = f"{base}/next/applications/{safe_thread}"
+    manage_link = f"{base}/app/apply/{safe_thread}"
     alias = str(mb.get("address") or message.get("to_addr") or "your managed address")
     clean_attachments = _clean_attachment_count(message_id)
 
@@ -536,7 +536,7 @@ def send_forward_verification(forward_to: str, token: str) -> bool:
         pass
 
     base = AppUrlsConfig.FRONTEND_URL
-    link = f"{base}/next/settings/mailbox/verify-forward?token={_html.escape(str(token), quote=True)}"
+    link = f"{base}/app/settings/mailbox/verify-forward?token={_html.escape(str(token), quote=True)}"
     subject = f"Confirm forwarding for your {APP_NAME} mailbox"
     html_body = (
         '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'

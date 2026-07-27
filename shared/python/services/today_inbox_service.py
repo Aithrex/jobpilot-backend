@@ -54,11 +54,11 @@ _PER_SOURCE_LIMIT = 50
 # the approval carries one.
 #
 # J (stale deep links): the migrated `/next` shell owns the applications surface
-# (jobpilot-frontend App.tsx: `/next/applications` → index redirects to the
+# (jobpilot-frontend App.tsx: `/app/apply` → index redirects to the
 # `tracker` tab; Gmail-derived suggestions belong on the `inbox` tab). The legacy
 # bare `/applications` no longer routes.
-_LINK_APPLICATIONS = "/next/applications"
-_LINK_APPLICATIONS_INBOX = "/next/applications/inbox"
+_LINK_APPLICATIONS = "/app/apply"
+_LINK_APPLICATIONS_INBOX = "/app/apply/inbox"
 
 
 def _now() -> datetime:

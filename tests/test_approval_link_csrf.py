@@ -118,7 +118,7 @@ def test_get_approve_link_does_not_mutate_row_stays_ready_for_review(db, app):
 
     # 302 to the confirmation surface, carrying the token — never mutating.
     assert resp.status_code == 302
-    assert "/next/applications" in resp.headers["Location"]
+    assert "/app/apply" in resp.headers["Location"]
     assert "approve=" in resp.headers["Location"]
 
     # The row is UNTOUCHED and no snapshot was frozen.
@@ -136,7 +136,7 @@ def test_get_review_link_redirects_without_token_param(db, app):
     resp = _plain_client(app).get(f"/api/apply/approve-link?token={token}")
     assert resp.status_code == 302
     loc = resp.headers["Location"]
-    assert loc.endswith("/next/applications")   # review carries no ?approve token
+    assert loc.endswith("/app/apply")   # review carries no ?approve token
     # A review GET never mutates and never consumes the token.
     row = db.approval_tokens.find_one({"user_email": USER})
     assert row["used"] is False

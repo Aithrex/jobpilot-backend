@@ -11,7 +11,7 @@ every send (no ZeptoMail/SES/network). We assert:
   * From = MAIL_FORWARD_FROM with a "(via My Private Mail)" display name (never
     the recruiter — no spoof); Reply-To = the ORIGINAL sender;
   * the body is the REAL sanitized message (full content) + a compact
-    ``/next/applications/<thread_id>`` manage link — NOT the retired generic notice;
+    ``/app/apply/<thread_id>`` manage link — NOT the retired generic notice;
   * the open-relay / loop guards (own domain / self / X-JP-Forwarded) block;
   * the per-user daily rate cap skips the overflow;
   * the verification mint/confirm flow, its OLD-destination + IDOR rejections,
@@ -198,7 +198,7 @@ def test_forward_sent_when_all_gates_pass(env, sent):
     # The REAL body is delivered (full content) + a compact manage-in-app link.
     assert "Thank you for applying" in call["html"]
     assert "moving forward" in call["text"].lower()
-    deep = f"{FRONTEND}/next/applications/{res['thread_id']}"
+    deep = f"{FRONTEND}/app/apply/{res['thread_id']}"
     assert deep in call["html"]
     assert deep in call["text"]
 
@@ -229,7 +229,7 @@ def test_forward_body_is_full_real_content_not_generic(env, sent):
     assert "moving forward" in blob
     # ORIGINAL subject + compact manage link (body IS the message, not a redirect).
     assert sent[0]["subject"] == "Update on your application to Acme"
-    assert f"{FRONTEND}/next/applications/{res['thread_id']}" in html
+    assert f"{FRONTEND}/app/apply/{res['thread_id']}" in html
     # NOT the retired generic notice.
     assert "we do not include the full message" not in blob
 

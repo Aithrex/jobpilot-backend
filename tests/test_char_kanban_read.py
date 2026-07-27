@@ -188,7 +188,7 @@ class TestTodayInbox:
         item = out["items"][0]
         assert item["id"] == "needs_input:app-1"       # id namespaced by kind
         assert item["kind"] == "needs_input"
-        assert item["deep_link"] == "/next/applications"
+        assert item["deep_link"] == "/app/apply"
         assert item["action_label"] == "Review & answer"
         # single question -> its text becomes the detail line.
         assert item["detail"] == "Desired salary?"
