@@ -263,18 +263,33 @@ def _jd_body(doc: Dict[str, Any]) -> str:
 
 
 def _hydrate(docs: List[Dict[str, Any]], limit: int = HYDRATE_LIMIT
-             ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]], int]:
+             ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]], int,
+                        Optional[datetime]]:
     """Inventory docs -> scoreable rows.
 
-    Returns ``(rows, context_by_job_id, dropped_no_evidence)``. A row is
-    produced ONLY when we have requirements the scorer can measure — either a
-    persisted `requirements` profile from the ingestion path, or a deterministic
-    extraction off the JD body. Rows without either are DROPPED: `fit_score`
-    caps a body-less posting at 45 ("this fit is based on the job title alone"),
-    and an unattended application must never be placed on that basis.
+    Returns ``(rows, context_by_job_id, dropped_no_evidence, examined_max)``. A
+    row is produced ONLY when we have requirements the scorer can measure —
+    either a persisted `requirements` profile from the ingestion path, or a
+    deterministic extraction off the JD body. Rows without either are DROPPED:
+    `fit_score` caps a body-less posting at 45 ("this fit is based on the job
+    title alone"), and an unattended application must never be placed on that
+    basis.
 
     `context_by_job_id` carries the jd_text and vendor fields the ledger write
     needs, keyed by the canonical inventory job_id.
+
+    `examined_max` is the high-water `first_seen_at` over EVERY doc this call
+    actually looked at — surviving rows AND dropped ones. It is what the caller
+    advances the cursor to, and it is returned from here (rather than derived
+    from `context`) because a context-only high-water mark LIVELOCKS: a window
+    in which every candidate is dropped for no readable evidence yields an empty
+    context, so the cursor never moves, the same candidates are re-read (and
+    their bodies re-fetched) every 15 minutes forever, and postings behind the
+    stuck window are never reached — auto-apply silently stops for that user.
+    A doc we stopped BEFORE examining (the I/O budget below) is deliberately NOT
+    included, which is what keeps the cursor lossless. The trade-off is explicit:
+    a posting whose body we could not read is skipped for good rather than
+    re-attempted forever — re-reading it never made it readable.
     """
     from services import fit_score
     from services.inventory_feed import _row_from_posting
@@ -283,32 +298,44 @@ def _hydrate(docs: List[Dict[str, Any]], limit: int = HYDRATE_LIMIT
     context: Dict[str, Dict[str, Any]] = {}
     dropped = 0
     hydrated = 0
+    examined_max: Optional[datetime] = None
+
+    def _examined(doc: Dict[str, Any]) -> None:
+        nonlocal examined_max
+        seen = _as_aware(doc.get("first_seen_at"))
+        if isinstance(seen, datetime) and (examined_max is None or seen > examined_max):
+            examined_max = seen
+
     for doc in docs:
         job_id = str(doc.get("job_id") or "")
         if not job_id:
+            _examined(doc)
             continue
         row = _row_from_posting(doc, tz_offset=0)
         if row is None:      # no usable posted_at -> ADR-001 exclusion
             dropped += 1
+            _examined(doc)
             continue
 
         reqs = doc.get("requirements")
         jd_text = ""
         if not fit_score.has_job_requirements(reqs):
             if hydrated >= limit:
-                # Out of I/O budget this tick. Leave it for the next one: the
-                # watermark is advanced only over rows we actually examined.
+                # Out of I/O budget this tick. Leave it for the next one: this
+                # doc is NOT marked examined, so the watermark stops short of it.
                 break
             hydrated += 1
             jd_text = _jd_body(doc)
             reqs = fit_score.extract_requirements(jd_text, row.get("title") or "")
             if not fit_score.has_job_requirements(reqs):
                 dropped += 1
+                _examined(doc)
                 continue
 
         row["_requirements"] = reqs
         row["job_id"] = job_id
         rows.append(row)
+        _examined(doc)
         context[job_id] = {
             "jd_text": jd_text,
             "ats_family": (doc.get("ats")
@@ -316,7 +343,7 @@ def _hydrate(docs: List[Dict[str, Any]], limit: int = HYDRATE_LIMIT
             "tenant": doc.get("tenant") or "",
             "first_seen_at": _as_aware(doc.get("first_seen_at")),
         }
-    return rows, context, dropped
+    return rows, context, dropped, examined_max
 
 
 def _still_open(job_id: str) -> bool:
@@ -458,18 +485,14 @@ def run_user_sweep(user_email: str) -> Dict[str, Any]:
     if not docs:
         return out
 
-    rows, context, dropped = _hydrate(docs)
+    # `examined_max` is the high-water mark of every candidate `_hydrate` looked
+    # at — INCLUDING the ones it dropped. Deriving it from `context` (surviving
+    # rows only) livelocked the cursor whenever a whole window was dropped for no
+    # readable evidence. `_hydrate` still stops short of anything it did not
+    # examine (its I/O budget), so the cursor stays lossless.
+    rows, context, dropped, examined_max = _hydrate(docs)
     out["no_evidence"] = dropped
     out["scored"] = len(rows)
-
-    # The high-water mark of rows we actually EXAMINED. `_hydrate` may stop
-    # early on its I/O budget, so this is computed from what came back, never
-    # from the query's last row — that is what makes the cursor lossless.
-    examined_max: Optional[datetime] = None
-    for job_id, ctx in context.items():
-        seen = ctx.get("first_seen_at")
-        if isinstance(seen, datetime) and (examined_max is None or seen > examined_max):
-            examined_max = seen
 
     if rows:
         # Reuse the shared scorer (the same engine the feed tabs and the guest
@@ -547,12 +570,18 @@ def _enqueue_one(user_email: str, row: Dict[str, Any], ctx: Dict[str, Any],
 
     # THE per-day blast-radius cap. A guarded atomic $inc under the plan limit —
     # no check-then-increment, so overlapping ticks cannot both slip through.
-    # The idempotency key is the (user, posting) identity, so an at-least-once
-    # redelivery of the sweep charges the slot exactly once.
-    reservation = {"reserved": False, "entry_ids": []}
+    # The idempotency key is the (USER, posting) identity: `identity` alone is
+    # NOT unique to a user — `job_postings` is shared inventory, so every user
+    # who matches one posting derives the SAME hash. Without the user_email
+    # prefix the key namespace is cross-tenant: the second user's reserve found
+    # the FIRST user's entry, returned `reserved: True` with its own counter
+    # untouched (so the 20/day cap stopped binding for everyone but the first
+    # user), and a refund handed back a slot belonging to someone else.
+    reservation = {"reserved": False, "entry_ids": [], "replayed": False}
     try:
-        reservation = ql.reserve(user_email, DAILY_CAP_FEATURE,
-                                 idempotency_key=f"{DAILY_CAP_FEATURE}:{identity}")
+        reservation = ql.reserve(
+            user_email, DAILY_CAP_FEATURE,
+            idempotency_key=f"{DAILY_CAP_FEATURE}:{user_email}:{identity}")
     except Exception as e:
         logger.warning("[match_sweep] daily cap reserve failed: %s", type(e).__name__)
         return "error"
@@ -562,8 +591,15 @@ def _enqueue_one(user_email: str, row: Dict[str, Any], ctx: Dict[str, Any],
         return "daily_capped"
 
     def _refund() -> None:
+        # A REPLAYED reservation charged nothing (the key matched a live entry
+        # from a concurrent or redelivered tick), so refunding it would hand back
+        # a slot the OTHER tick's real application still owes — the row exists and
+        # nothing is charged for it. Only ever give back what this call took.
+        if reservation.get("replayed"):
+            return
         try:
-            ql.refund_entries(reservation.get("entry_ids") or [])
+            ql.refund_entries(reservation.get("entry_ids") or [],
+                              user_email=user_email)
         except Exception:  # pragma: no cover - refund is best effort
             pass
 

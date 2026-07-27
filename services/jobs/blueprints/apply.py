@@ -551,6 +551,28 @@ def _approve_ledger_row(user_email: str, application_id: str) -> dict:
         return {}
 
 
+def _unapprove_ledger_row(user_email: str, application_id: str) -> bool:
+    """Roll an approval back to `ready_for_review` — the compensating action when
+    the approval RESPONSE is a failure.
+
+    Without this, a row advanced to `approved` before a charge that then fails is
+    a REAL filed application: `apply_scheduler` redrives `approved` rows into
+    `auto_apply_submit` on the next hourly tick, while the caller was told 429.
+    `approved -> ready_for_review` is the existing approval-INVALIDATION edge
+    (it also voids the frozen snapshot and releases any reservation), so a fresh
+    approval later re-freezes and re-reserves cleanly. Best-effort: a rollback
+    fault is logged, never a 500 on top of the original failure."""
+    try:
+        application_ledger_service.transition(
+            user_email, application_id,
+            application_ledger_service.STATUS_READY_FOR_REVIEW)
+        return True
+    except Exception as e:
+        logger.error("approve: ROLLBACK FAILED for %s (%s) — row may stay "
+                     "approved after a failed charge", application_id, e)
+        return False
+
+
 # ------------------------------------------------------------------
 # POST /api/apply/auto-submit/approve — create/approve an approval record
 # ------------------------------------------------------------------
@@ -619,6 +641,23 @@ def auto_submit_approve():
         # _perform_approval_action: approve (freeze the snapshot) then fire the
         # submit job immediately.
         # ---------------------------------------------------------------
+        # QUOTA ORDER. `_approve_ledger_row` ADVANCES the canonical row, and
+        # `apply_scheduler` redrives `approved` rows into `auto_apply_submit` on
+        # the next hourly tick — so a quota denial AFTER the advance files a real
+        # application while the response says 429. With the reservation ledger ON,
+        # `approve()` reserves before its own CAS and that order is already right.
+        # The LEGACY metering path (AUTO_APPLY_RESERVE off — the documented
+        # rollback lever, so the branch must be correct, not just untested) needs a
+        # NON-INCREMENTING pre-check here. The atomic charge stays where it is:
+        # charging before the CAS would bill rows that turn out not to be
+        # approvable at all.
+        reserve_on = application_ledger_service.reserve_enabled()
+        if not reserve_on:
+            allowed, usage = entitlements_service.check_quota(
+                user_email, "auto_submit")
+            if not allowed:
+                return _quota_exceeded_response(usage)
+
         ledger_result = _approve_ledger_row(user_email, application_id)
         if ledger_result.get("over_quota"):
             # Defect-G reservation denied inside ledger.approve — the row is NOT
@@ -629,10 +668,18 @@ def auto_submit_approve():
         # Per-plan auto-submit cap (abuse/safety) — meter BEFORE creating.
         # EXACTLY ONE charge per approval: when the reservation ledger is on,
         # `application_ledger_service.approve` already reserved (and settles) the
-        # slot for the row it advanced, so charging here too would DOUBLE-BILL.
+        # slot — either for the row it just advanced, or on an EARLIER approval of
+        # the same row (the emailed magic link), whose reservation is still frozen
+        # on the row while this CAS misses (`approved` is not an approvable state).
+        # Keying this branch off `ledger_advanced` ALONE therefore dropped a
+        # magic-link-approved row into the route-level charge and reserved the SAME
+        # approval a second time under a different key (counter 1 -> 2).
         # Every other path (no canonical row, or reservation gated off) keeps the
         # legacy route-level metering as the single charge.
-        if ledger_advanced and application_ledger_service.reserve_enabled():
+        if reserve_on and (
+                ledger_advanced
+                or application_ledger_service.has_auto_submit_reservation(
+                    user_email, application_id)):
             usage = ledger_result.get("usage") or {}
         else:
             # G: atomic reserve+complete (no check-then-increment race). Keyed on
@@ -642,6 +689,11 @@ def auto_submit_approve():
                 user_email, "auto_submit",
                 idempotency_key=f"route-approve:{user_email}:{application_id}")
             if not allowed:
+                # The pre-check above passed but the atomic charge lost a
+                # concurrent race. NEVER leave an `approved` row behind a 429 —
+                # the hourly sweep would submit it.
+                if ledger_advanced:
+                    _unapprove_ledger_row(user_email, application_id)
                 return _quota_exceeded_response(usage)
 
         record, created = auto_submit_service.create_approval(

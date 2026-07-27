@@ -267,6 +267,43 @@ def _allowed_statuses() -> set:
     return allowed
 
 
+# A relay into the user's PERSONAL inbox is an automatic action, so it requires a
+# CONFIDENT classification. ``mail_ingress_service`` caps a classification whose
+# evidence quote is missing or not actually in the body at
+# ``_UNGROUNDED_CONFIDENCE_CAP`` (0.60) precisely so a hallucinated verdict can
+# never drive one; this floor therefore sits ABOVE that cap. Overridable via
+# ``MAIL_FORWARD_CONFIDENCE_FLOOR`` (a value at/below the ungrounded cap would
+# re-open that hole, so it is clamped).
+_CONFIDENCE_FLOOR_DEFAULT = 0.65
+
+
+def _confidence_floor() -> float:
+    from services.mail_ingress_service import _UNGROUNDED_CONFIDENCE_CAP
+    raw = (_get_config_value("MAIL_FORWARD_CONFIDENCE_FLOOR", "") or "").strip()
+    floor = _CONFIDENCE_FLOOR_DEFAULT
+    if raw:
+        try:
+            floor = float(raw)
+        except (TypeError, ValueError):
+            floor = _CONFIDENCE_FLOOR_DEFAULT
+    # Never below the ungrounded cap + epsilon: an ungrounded call must not relay.
+    return max(floor, _UNGROUNDED_CONFIDENCE_CAP + 0.01)
+
+
+def _confident_enough(result: Any) -> bool:
+    """Is this classification confident enough to justify a personal-inbox relay?
+
+    A classification carrying NO ``confidence`` field is a verdict written by our
+    own deterministic code rather than a model score, and is honoured as-is (the
+    classifier path always emits one). A malformed score fails CLOSED."""
+    if not isinstance(result, dict) or "confidence" not in result:
+        return True
+    try:
+        return float(result.get("confidence") or 0.0) >= _confidence_floor()
+    except (TypeError, ValueError):
+        return False
+
+
 def _classify_status(message: Dict[str, Any]) -> Optional[str]:
     """Resolve this message to a closed-schema status, reusing the EXISTING
     classifier (``mail_ingress_service.classify`` — Claude Haiku/FLASH via the
@@ -274,31 +311,38 @@ def _classify_status(message: Dict[str, Any]) -> Optional[str]:
 
     A classification already stored on the message doc wins (free); otherwise we
     run one FLASH pass. Returns None when there is no signal, when the classifier
-    is unavailable, or when the caller supplied no classification CONTEXT (see
-    ``should_forward``). Never raises."""
+    is unavailable, or when the verdict is not CONFIDENT enough to relay
+    (``_confident_enough``). Never raises."""
     stored = message.get("classification")
-    if isinstance(stored, dict):
-        status = str(stored.get("status") or "").strip().lower()
-        if status:
-            return status
+    result: Any = stored
+    if not (isinstance(stored, dict) and str(stored.get("status") or "").strip()):
+        if (_get_config_value("MAIL_FORWARD_CLASSIFY_ENABLED", "") or ""
+                ).strip().lower() in _FALSE:
+            return None
+        try:
+            from services.mail_ingress_service import classify
+            result = classify(
+                str(message.get("from_domain") or ""),
+                str(message.get("subject") or ""),
+                str(message.get("text") or ""),
+            )
+        except Exception as e:  # pragma: no cover - classifier degrades internally
+            logger.warning("mail-forward: classify failed: %s", type(e).__name__)
+            return None
 
-    if (_get_config_value("MAIL_FORWARD_CLASSIFY_ENABLED", "") or "").strip().lower() in _FALSE:
+    status = str((result or {}).get("status") or "").strip().lower()
+    if not status:
         return None
-
-    try:
-        from services.mail_ingress_service import classify
-        result = classify(
-            str(message.get("from_domain") or ""),
-            str(message.get("subject") or ""),
-            str(message.get("text") or ""),
-        )
-    except Exception as e:  # pragma: no cover - classifier already degrades internally
-        logger.warning("mail-forward: classify failed: %s", type(e).__name__)
+    if not _confident_enough(result):
+        # Below the floor (typically an ungrounded-evidence classification) — the
+        # message stays fully readable in-app; we just do not ping the real inbox.
+        logger.info("mail-forward: classification below confidence floor")
         return None
-    return (result or {}).get("status")
+    return status
 
 
-def should_forward(message: Dict[str, Any]) -> Tuple[bool, str]:
+def should_forward(message: Dict[str, Any], *,
+                   classify: bool = True) -> Tuple[bool, str]:
     """ALLOW-LIST gate for the PERSONAL inbox (spec §6).
 
     The in-app inbox keeps EVERYTHING — ``mail_store_service.ingest_committed``
@@ -310,25 +354,31 @@ def should_forward(message: Dict[str, Any]) -> Tuple[bool, str]:
       1. ``is_system_noise`` — deterministic, offline DENY of OTP/verification
          noise -> ``(False, "system_noise")``.
       2. ALLOW-LIST on the classifier status (``_allowed_statuses``) ->
-         ``(True, "<status>")``. Anything else -> ``(False, "not_allowlisted")``,
-         INCLUDING an unclassifiable message: an allow-list fails CLOSED, and the
-         message is still fully readable in-app.
+         ``(True, "<status>")``. Anything else -> ``(False, ...)``, INCLUDING an
+         unclassifiable message, a message with no classification CONTEXT, and a
+         classification below the confidence floor: an allow-list fails CLOSED,
+         and the message is still fully readable in-app.
 
-    CONTEXT CONTRACT: stage 2 needs ``from_domain`` (and/or a stored
-    ``classification``) to classify. A caller that passes only ``{subject,
-    text}`` is using this purely as a NOISE oracle — notably
-    ``mail_store_service._maybe_capture_application_otp``, which must NOT gain an
-    LLM call or a changed capture trigger — and gets the stage-1 verdict only:
-    ``(True, "application")``."""
+    ``classify=False`` is the EXPLICIT noise-oracle contract: stage 1 only, no
+    LLM call, verdict ``(True, "application")`` for anything that is not noise.
+    Its one caller is ``mail_store_service._maybe_capture_application_otp`` on the
+    webhook commit path, which needs the deterministic OTP predicate and must
+    never gain a model call. It used to be INFERRED from the absence of
+    ``from_domain``, which made the carve-out reachable by DATA: a message with an
+    empty from_domain (a null return-path ``<>``, a bounce, a malformed From) took
+    the oracle branch and was RELAYED to the user's real inbox — a `return True`
+    default inside an allow-list."""
     if is_system_noise(message):
         return False, "system_noise"
 
-    has_context = bool(message.get("from_domain")) or isinstance(
-        message.get("classification"), dict
-    )
-    if not has_context:
-        # Noise-oracle callers: stage 1 only (no LLM, unchanged semantics).
+    if not classify:
+        # EXPLICIT noise-oracle contract: stage 1 only (no LLM, no relay decision).
         return True, "application"
+
+    if not (bool(message.get("from_domain"))
+            or isinstance(message.get("classification"), dict)):
+        # Nothing to classify with -> fail CLOSED. Never relay on no evidence.
+        return False, "no_context"
 
     status = _classify_status(message)
     if status and status in _allowed_statuses():
@@ -559,12 +609,12 @@ def forward_notification(message_doc: Dict[str, Any]) -> Dict[str, Any]:
         "text": text,
         "from_domain": message.get("from_domain"),
         "classification": message.get("classification"),
-    })
+    }, classify=True)
     if not forward_ok:
         # system_noise: ingest already captured any OTP (see
         # mail_store_service._maybe_capture_application_otp).
-        # not_allowlisted: the message IS in the in-app inbox — we just don't
-        # ping the personal inbox for it.
+        # not_allowlisted / no_context: the message IS in the in-app inbox — we
+        # just don't ping the personal inbox for it.
         return _skip(category, thread_id)
 
     # --- Trust is a CORRELATION signal, NOT a forwarding gate. ----------------

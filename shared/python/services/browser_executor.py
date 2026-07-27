@@ -1003,68 +1003,28 @@ class BrowserExecutor(ExecutorAdapter):
                         # One more date/disability retry when Self Identify validation fails.
                         field = (outcome or {}).get("field") or ""
                         reason = (outcome or {}).get("reason") or ""
-                        errors = (outcome or {}).get("errors") or []
-                        err_blob = " ".join(
-                            str((e or {}).get("message") or "") for e in errors
-                        ).lower()
-                        body_l = ""
-                        try:
-                            body_l = (page.inner_text("body") or "").lower()
-                        except Exception:
-                            pass
-                        # Intel / Workday compliance: secondary employment + citizenship.
-                        if ("secondary" in err_blob or "secondary" in body_l
-                                or "citizenship" in err_blob or reason == "validation_failed"):
-                            try:
-                                for label in ("Neither", "Neither/Ninguno", "No"):
-                                    try:
-                                        loc = page.get_by_text(label, exact=False).first
-                                        if loc.count():
-                                            loc.click(force=True, timeout=4_000)
-                                            break
-                                    except Exception:
-                                        pass
-                                # Citizenship countries (not Yes/No).
-                                try:
-                                    cit = page.locator(
-                                        "textarea, input[type=text]"
-                                    ).filter(has_text="")
-                                    # Prefer a field near citizenship wording via JS clear+type.
-                                    for sel in (
-                                        "textarea",
-                                        "[data-automation-id*=citizenship] input",
-                                        "[data-automation-id*=citizenship] textarea",
-                                    ):
-                                        try:
-                                            loc = page.locator(sel).first
-                                            if loc.count() and loc.is_visible():
-                                                # Only overwrite if current value looks like Yes/No.
-                                                cur = ""
-                                                try:
-                                                    cur = (loc.input_value() or "").strip().lower()
-                                                except Exception:
-                                                    cur = ""
-                                                if cur in ("", "yes", "no", "yes/si", "si"):
-                                                    loc.fill("United States of America")
-                                                    break
-                                        except Exception:
-                                            pass
-                                except Exception:
-                                    pass
-                                page.wait_for_timeout(800)
-                                outcome = fill_driver.drive(adapter, answers or {}, mode=mode)
-                                kind = (outcome or {}).get("outcome")
-                                if kind in (fill_driver.FILL_CONFIRMED, fill_driver.FILL_SUBMITTED):
-                                    shot = None
-                                    try:
-                                        png = page.screenshot(full_page=False, type="png")
-                                        shot = self._save_screenshot(application, png)
-                                    except Exception:
-                                        pass
-                                    return {"status": SUBMIT_SUCCESS, "confirmation": True,
-                                            "screenshot_ref": shot, "wall": None, "error": None}
-                            except Exception as e:
-                                logger.info("workday compliance retry failed: %s", e)
+                        # REMOVED (AUTOAPPLY_REPAIR_SPEC §0 rules 1 + 4): the
+                        # "Intel / Workday compliance" retry that used to live
+                        # here was the LAST surviving fabrication path after
+                        # `_WD_DEFAULTS` was deleted. On any `validation_failed`
+                        # (or merely the word "secondary" appearing anywhere in
+                        # the page body) it blind-clicked the first element whose
+                        # text contained "Neither"/"No" — which on a Workday
+                        # questionnaire is routinely the "No" option of "are you
+                        # legally authorized to work…" / "will you require
+                        # sponsorship…" — and then typed the literal
+                        # "United States of America" into the first visible
+                        # textarea as a countries-of-citizenship answer. Both are
+                        # LEGAL ATTESTATIONS asserted with no declared user value,
+                        # and both are false for the live user (F-1 OPT,
+                        # citizenship India, sponsorship required).
+                        #
+                        # A legal attestation we do not have a declared value for
+                        # must PARK, never be guessed: the run now falls through
+                        # to the `needs_input` return below, which
+                        # `auto_apply_service.finalize_submission` maps onto the
+                        # ledger `needs_input` queue so the user is asked.
+                        # Nothing may reintroduce a value here.
                         if "date" in str(field).lower() or reason == "validation_failed":
                             try:
                                 from datetime import datetime, timezone

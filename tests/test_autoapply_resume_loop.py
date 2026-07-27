@@ -204,6 +204,96 @@ class TestInAppApproveAdvancesLedger:
         assert resp.status_code == 429           # never 401
         assert als.get_application(USER, aid)["status"] == als.STATUS_READY_FOR_REVIEW
 
+    def test_over_quota_with_reserve_OFF_also_never_approves_the_row(
+            self, db, app, monkeypatch):
+        """AUTO_APPLY_RESERVE=false is the DOCUMENTED ROLLBACK LEVER, so this
+        branch has to be correct — and it was the broken one.
+
+        The route advanced the ledger row to `approved` BEFORE the legacy quota
+        charge, so an exhausted quota answered 429 while leaving a REAL approved
+        application that `apply_scheduler` redrives into `auto_apply_submit` on the
+        next hourly tick: the user was told it did not happen and it happened.
+        """
+        monkeypatch.setenv("AUTO_APPLY_RESERVE", "false")
+        ass.set_settings(USER, True)
+        _no_dispatch(monkeypatch)
+        aid = _row()
+        monkeypatch.setattr("services.entitlements_service.quota",
+                            lambda email, feature: 0 if feature == "auto_submit" else 5)
+
+        resp = _client(app)("post", "/api/apply/auto-submit/approve",
+                            {"application_id": aid, "answers": {"q1": "yes"}})
+
+        assert resp.status_code == 429           # never 401
+        row = als.get_application(USER, aid)
+        assert row["status"] == als.STATUS_READY_FOR_REVIEW, \
+            "a 429 must never leave an approved (submittable) row behind"
+        # Nothing was charged, and no System-A approval record was written either.
+        assert db.feature_usage.count_documents(
+            {"user_email": USER, "feature": "auto_submit"}) == 0
+        assert db.auto_submit_approvals.count_documents(
+            {"user_email": USER, "application_id": aid}) == 0
+        # And the row was never approved even TRANSIENTLY: the quota gate is a
+        # non-incrementing PRE-check, so there is nothing to roll back. (A
+        # rollback would leave an approve + an invalidation in the audit trail.)
+        assert db.auto_submit_audit.count_documents(
+            {"application_id": aid, "action": "application_approved"}) == 0
+
+    def test_a_charge_that_loses_a_race_rolls_the_approval_back(
+            self, db, app, monkeypatch):
+        """The residual window: the non-incrementing pre-check passes, then the
+        ATOMIC charge is denied by a concurrent approval. The row must be rolled
+        back out of `approved` rather than left for the hourly sweep to submit."""
+        monkeypatch.setenv("AUTO_APPLY_RESERVE", "false")
+        ass.set_settings(USER, True)
+        _no_dispatch(monkeypatch)
+        aid = _row()
+
+        import importlib
+        route = importlib.import_module("blueprints.apply")
+        monkeypatch.setattr(route, "_charge_feature",
+                            lambda email, feature, **kw: (False, {"limit": 25,
+                                                                  "used": 25,
+                                                                  "remaining": 0}))
+
+        resp = _client(app)("post", "/api/apply/auto-submit/approve",
+                            {"application_id": aid, "answers": {"q1": "yes"}})
+
+        assert resp.status_code == 429
+        assert als.get_application(USER, aid)["status"] == als.STATUS_READY_FOR_REVIEW
+        # The rollback also voids the frozen snapshot, so a later approval re-freezes.
+        assert als.get_approval_snapshot(USER, aid) is None
+
+    def test_an_already_approved_row_is_never_charged_a_second_time(
+            self, db, app, monkeypatch):
+        """FINDING 4 — live in prod. The emailed magic link approves through
+        `ledger.approve`, which RESERVES the slot and freezes the reservation on
+        the row. A later in-app approve of that row misses the status-guarded CAS
+        (`approved` is not approvable), so `ledger_advanced` is False — and the
+        route then reserved the SAME approval again under its own key (1 -> 2).
+        """
+        monkeypatch.setenv("AUTO_APPLY_RESERVE", "true")
+        ass.set_settings(USER, True)
+        _no_dispatch(monkeypatch)
+        aid = _row()
+
+        # The magic-link edge: approve via the ledger (reserves + freezes).
+        assert als.approve(
+            USER, [aid], approved_by="user",
+            snapshot_provider=lambda a: aas.build_approval_snapshot(USER, a)) == 1
+        assert _auto_submit_slots(db) == (1, 1)
+
+        resp = _client(app)("post", "/api/apply/auto-submit/approve",
+                            {"application_id": aid, "answers": {"q1": "yes"}})
+
+        assert resp.status_code == 201, resp.get_json()
+        assert resp.get_json()["ledger_approved"] is False   # CAS legitimately missed
+        assert als.get_application(USER, aid)["status"] == als.STATUS_APPROVED
+        # STILL exactly one charge for this approval.
+        assert _auto_submit_slots(db) == (1, 1)
+        assert db.feature_usage.count_documents(
+            {"user_email": USER, "feature": "auto_submit"}) == 0
+
 
 # ===========================================================================
 # 2. RESUME AFTER ANSWER (spec §3)
@@ -306,6 +396,71 @@ class TestResumeAfterAnswer:
         assert body["application_status"] == als.STATUS_NEEDS_INPUT
         assert [r["field_id"] for r in body["remaining"]] == ["ats_account"]
         assert als.get_application(USER, aid)["status"] == als.STATUS_NEEDS_INPUT
+
+    @pytest.mark.parametrize("kind", ["validation_failed", "captcha",
+                                      "sensitive_unconfirmed", "", "whatever_v2"])
+    def test_an_unrecognised_kind_is_a_WALL_not_an_answerable_question(
+            self, kind, db, app, monkeypatch):
+        """`kind` is an OPEN vocabulary — `finalize_submission` writes it from a
+        free-form executor/fill-driver reason. Under the old DENY-list, anything
+        unlisted was answerable BY DEFAULT: the user typed anything, `remaining`
+        emptied, the row marched ready_for_review -> approve -> submit, and the
+        executor hit the very same wall again. Unrecognised must read as a wall."""
+        _no_dispatch(monkeypatch)
+        wall = {"question": "Something only the site can settle",
+                "kind": kind, "field_id": "blocked_field"}
+        aid = _row(status="needs_input", needs=[_GAP, wall])
+
+        resp = _client(app)("post", "/api/apply/needs-input/answer",
+                            {"application_id": aid,
+                             "answers": {"previous_employee": "No",
+                                         "blocked_field": "anything at all"}})
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["application_status"] == als.STATUS_NEEDS_INPUT
+        assert [r["field_id"] for r in body["remaining"]] == ["blocked_field"]
+        assert als.get_application(USER, aid)["status"] == als.STATUS_NEEDS_INPUT
+
+    def test_an_executor_field_request_stays_answerable(self, db, app, monkeypatch):
+        """The other side of the inversion: a fill-driver report that NAMES a
+        field is a genuine question, so it must be written with an allow-listed
+        kind — otherwise the one-tap resume loop would park forever."""
+        _no_dispatch(monkeypatch)
+        aid = _row(status="ready_for_review")
+        als.transition(USER, aid, als.STATUS_APPROVED)
+        als.transition(USER, aid, als.STATUS_QUEUED_FOR_EXECUTION)
+        als.transition(USER, aid, als.STATUS_RUNNING)
+
+        aas.finalize_submission(aid, USER, status="needs_input",
+                                field="years_experience",
+                                reason="no_option_match")
+
+        item = als.get_application(USER, aid)["needs_input"][0]
+        assert item["field_id"] == "years_experience"
+        assert item["kind"] in aas._ANSWERABLE_KINDS
+        assert aas._answerable(item) is True
+
+        resp = _client(app)("post", "/api/apply/needs-input/answer",
+                            {"application_id": aid,
+                             "answers": {"years_experience": "6"}})
+        assert resp.status_code == 200
+        assert resp.get_json()["remaining"] == []
+
+    def test_an_executor_report_with_no_field_stays_a_wall(self, db, app, monkeypatch):
+        """No field named = not a question. It keeps its raw reason (so the real
+        cause survives) and no typed answer can clear it."""
+        _no_dispatch(monkeypatch)
+        aid = _row(status="ready_for_review")
+        als.transition(USER, aid, als.STATUS_APPROVED)
+        als.transition(USER, aid, als.STATUS_QUEUED_FOR_EXECUTION)
+        als.transition(USER, aid, als.STATUS_RUNNING)
+
+        aas.finalize_submission(aid, USER, status="needs_input", reason="captcha")
+
+        item = als.get_application(USER, aid)["needs_input"][0]
+        assert item["kind"] == "captcha"
+        assert aas._answerable(item) is False
 
     def test_row_not_awaiting_input_is_409_never_401(self, db, app, monkeypatch):
         aid = _row(status="ready_for_review")

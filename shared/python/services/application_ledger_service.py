@@ -927,6 +927,34 @@ def reserve_enabled() -> bool:
     return _reserve_enabled()
 
 
+def has_auto_submit_reservation(user_email: str, application_id: str) -> bool:
+    """Does this row ALREADY carry an auto_submit reservation frozen by
+    ``approve()``? (Owner-scoped; never raises — a lookup fault reads as False.)
+
+    A route must ask this before metering the feature itself. An approval that
+    already happened — typically via the emailed magic link, which reserves the
+    slot inside `approve()` — leaves the reservation ON THE ROW, and a later
+    in-app approve of the SAME row misses the status-guarded CAS (`approved` is
+    not an approvable state). Keying the "the ledger already charged" branch off
+    the CAS result ALONE therefore fell through to the route-level charge and
+    reserved the same approval a SECOND time under a different idempotency key.
+    """
+    try:
+        user_email = _require_email(user_email)
+        application_id = _clean_str(application_id, 64)
+        if not application_id:
+            return False
+        rec = _applications().find_one(
+            {"user_email": user_email, "application_id": application_id},
+            {"_id": 0, "auto_submit_reservation": 1},
+        ) or {}
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("auto_submit reservation lookup failed for %s: %s",
+                       str(application_id)[:12], type(e).__name__)
+        return False
+    return bool((rec.get("auto_submit_reservation") or {}).get("entry_ids"))
+
+
 def _auto_submit_idempotency_key(application_id: str,
                                  snapshot: Optional[Dict[str, Any]]) -> str:
     """The reservation idempotency key = application_id + a fingerprint of the
@@ -958,11 +986,13 @@ def _settle_reservation(user_email: str, rec: Dict[str, Any],
             for eid in entry_ids:
                 quota.complete_entry(eid)
         elif to_status in _RESERVATION_REFUND_STATUSES:
-            quota.refund_entries(entry_ids)
+            # Owner-scoped refund: a slot may only ever be credited back to the
+            # counter of the user who reserved it.
+            quota.refund_entries(entry_ids, user_email=user_email)
         elif to_status == STATUS_READY_FOR_REVIEW:
             # Approval invalidated back to review — release the slot and drop the
             # linkage so a fresh approval reserves cleanly against the new snapshot.
-            quota.refund_entries(entry_ids)
+            quota.refund_entries(entry_ids, user_email=user_email)
             _applications().update_one(
                 {"application_id": rec.get("application_id"), "user_email": user_email},
                 {"$unset": {"auto_submit_reservation": ""}})

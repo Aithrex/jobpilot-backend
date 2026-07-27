@@ -76,6 +76,47 @@ def _safe_feature(feature) -> str:
     return feature if isinstance(feature, str) and feature else ""
 
 
+def _idem_value(email: str, feature: str, date: str, key) -> str:
+    """The STORED idempotency key: the caller's key NAMESPACED by
+    (owner, feature, period).
+
+    Namespacing the VALUE — not just the lookup filter — is what makes the
+    UNIQUE index on ``idempotency_key`` a per-owner, per-period guard regardless
+    of which index is deployed. Under the legacy GLOBAL unique index a raw key
+    reused by a second user (or by the same user in the next period) collided on
+    insert, which surfaced as a spurious denial; namespaced, it cannot.
+    """
+    return f"{_safe_feature(feature)}:{date}:{_safe_email(email)}:{key}"
+
+
+def _idem_filter(email: str, feature: str, date: str, key) -> Dict:
+    """The idempotency lookup NAMESPACE: a caller-supplied key is honoured ONLY
+    within the same (owner, feature, period).
+
+    Both scopes are load-bearing, not defensive decoration:
+
+    * OWNER — ``job_postings`` is SHARED inventory, so two users' match sweeps
+      derive the same ``normalized_job_identity`` for one posting. An
+      owner-less lookup let the second user hit the FIRST user's entry:
+      ``reserved: True`` with the second user's counter untouched (the daily cap
+      silently stopped binding), and a refund that returned ANOTHER tenant's
+      slot. A caller-supplied key (the tailor routes accept one from the client)
+      made that reachable on request, too.
+    * PERIOD — a key with no period outlives its own quota window, so a
+      next-day retry of the same posting re-uses yesterday's entry and charges
+      nothing. Scoping by ``date`` is what makes a key expire with its period.
+
+    Every value lands in an EQUALITY position and is string-guarded first, so
+    nothing user-supplied can reach an operator position.
+    """
+    return {
+        "idempotency_key": _idem_value(email, feature, date, key),
+        "user_email": _safe_email(email),
+        "feature": _safe_feature(feature),
+        "date": date,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Pool / counter key resolution (reuses usage_service pool semantics)
 # ---------------------------------------------------------------------------
@@ -218,15 +259,16 @@ def reserve_tailor(
 
     email = _safe_email(email)
     n = max(1, int(n))
+    date = _today_key()
 
     if idempotency_key:
         existing = list(_ledger().find(
-            {"idempotency_key": str(idempotency_key)}, {"entry_id": 1}
+            _idem_filter(email, FEATURE_TAILOR, date, idempotency_key),
+            {"entry_id": 1}
         ))
         if existing:
             return True, [e["entry_id"] for e in existing], get_usage(email)
 
-    date = _today_key()
     limit = get_user_limit(email)
     primary, residuals = _pool_counter_ids(email, date)
     residual_used = _counts_for(residuals)
@@ -250,7 +292,8 @@ def reserve_tailor(
             "settled_at": None,
         }
         if idempotency_key and i == 0:
-            entry["idempotency_key"] = str(idempotency_key)
+            entry["idempotency_key"] = _idem_value(
+                email, FEATURE_TAILOR, date, idempotency_key)
         entries.append(entry)
     try:
         _ledger().insert_many(entries)
@@ -263,7 +306,8 @@ def reserve_tailor(
         )
         if idempotency_key:
             existing = list(_ledger().find(
-                {"idempotency_key": str(idempotency_key)}, {"entry_id": 1}
+                _idem_filter(email, FEATURE_TAILOR, date, idempotency_key),
+                {"entry_id": 1}
             ))
             if existing:
                 return True, [e["entry_id"] for e in existing], get_usage(email)
@@ -308,7 +352,11 @@ def reserve(user_email: str, feature: str, n: int = 1,
             idempotency_key: Optional[str] = None) -> Dict:
     """Atomically reserve ``n`` slots of ``feature`` for the current period.
 
-    Returns ``{reserved: bool, entry_ids: [...], entry_id: first|None, usage}``.
+    Returns ``{reserved, entry_ids, entry_id: first|None, usage, replayed}``.
+    ``replayed`` is True when the key matched an EXISTING reservation, i.e. this
+    call charged NOTHING — a caller that refunds on a downstream no-op MUST skip
+    the refund then, or it hands back a slot the live reservation still owns
+    (the concurrent/redelivered-tick refund bug).
     The reservation is a single guarded ``$inc`` bounded below the plan limit —
     no check-then-increment anywhere (the fix for the auto_submit /
     autoapply_answer race). ``usage`` is post-reserve on success, pre-attempt on
@@ -326,25 +374,33 @@ def reserve(user_email: str, feature: str, n: int = 1,
     if feature == FEATURE_TAILOR:
         allowed, entry_ids, usage = reserve_tailor(
             user_email, n=n, idempotency_key=idempotency_key)
+        # Tailor keeps its pool-aware path; it does not report replay separately,
+        # so callers that need `replayed` (refund-on-no-op) must not meter tailor
+        # through here.
         return {"reserved": allowed, "entry_ids": entry_ids,
-                "entry_id": entry_ids[0] if entry_ids else None, "usage": usage}
+                "entry_id": entry_ids[0] if entry_ids else None, "usage": usage,
+                "replayed": False}
 
     if not user_email or not feature:
-        return {"reserved": False, "entry_ids": [], "entry_id": None, "usage": {}}
+        return {"reserved": False, "entry_ids": [], "entry_id": None, "usage": {},
+                "replayed": False}
 
     from services import entitlements_service as ent
 
-    # Idempotent redelivery — same key, same feature → the existing reservation.
+    date = ent._period_key(feature)
+
+    # Idempotent redelivery — the SAME key from the SAME owner for the SAME
+    # feature+period → the existing reservation, and nothing is charged.
     if idempotency_key:
         existing = list(_ledger().find(
-            {"idempotency_key": str(idempotency_key), "feature": feature},
+            _idem_filter(user_email, feature, date, idempotency_key),
             {"entry_id": 1}))
         if existing:
             eids = [e["entry_id"] for e in existing]
             return {"reserved": True, "entry_ids": eids, "entry_id": eids[0],
-                    "usage": _generic_usage(user_email, feature)}
+                    "usage": _generic_usage(user_email, feature),
+                    "replayed": True}
 
-    date = ent._period_key(feature)
     counter_id = counter_id_for(user_email, date, feature)
     limit = ent.quota(user_email, feature)
 
@@ -360,7 +416,7 @@ def reserve(user_email: str, feature: str, n: int = 1,
 
     if not reserved:
         return {"reserved": False, "entry_ids": [], "entry_id": None,
-                "usage": _generic_usage(user_email, feature)}
+                "usage": _generic_usage(user_email, feature), "replayed": False}
 
     now = _now()
     entries = []
@@ -377,7 +433,8 @@ def reserve(user_email: str, feature: str, n: int = 1,
             "settled_at": None,
         }
         if idempotency_key and i == 0:
-            entry["idempotency_key"] = str(idempotency_key)
+            entry["idempotency_key"] = _idem_value(
+                user_email, feature, date, idempotency_key)
         entries.append(entry)
     try:
         _ledger().insert_many(entries)
@@ -390,18 +447,19 @@ def reserve(user_email: str, feature: str, n: int = 1,
             {"_id": counter_id, "count": {"$gte": n}}, {"$inc": {"count": -n}})
         if idempotency_key:
             existing = list(_ledger().find(
-                {"idempotency_key": str(idempotency_key), "feature": feature},
+                _idem_filter(user_email, feature, date, idempotency_key),
                 {"entry_id": 1}))
             if existing:
                 eids = [e["entry_id"] for e in existing]
                 return {"reserved": True, "entry_ids": eids, "entry_id": eids[0],
-                        "usage": _generic_usage(user_email, feature)}
+                        "usage": _generic_usage(user_email, feature),
+                        "replayed": True}
         return {"reserved": False, "entry_ids": [], "entry_id": None,
-                "usage": _generic_usage(user_email, feature)}
+                "usage": _generic_usage(user_email, feature), "replayed": False}
 
     eids = [e["entry_id"] for e in entries]
     return {"reserved": True, "entry_ids": eids, "entry_id": eids[0],
-            "usage": _generic_usage(user_email, feature)}
+            "usage": _generic_usage(user_email, feature), "replayed": False}
 
 
 def attach_job(entry_id: str, job_id: str) -> None:
@@ -432,17 +490,30 @@ def complete_entry(entry_id: str, job_id: Optional[str] = None,
     return res is not None
 
 
-def refund_entry(entry_id: str) -> bool:
+def refund_entry(entry_id: str, user_email: Optional[str] = None) -> bool:
     """Settle reserved -> refunded and give the slot back.
 
     Idempotent: the reserved->refunded transition is the guard — a second
     call (or a refund after completion) matches nothing and never
     double-decrements. The counter decrement is floored via ``count > 0``.
+
+    ``user_email`` (when supplied) is an OWNERSHIP guard in the filter: the
+    refund REFUSES an entry owned by anyone else, so a caller holding a foreign
+    entry_id can never credit a slot back to another tenant's counter. Pass it
+    wherever the owner is known — it is the backstop for the cross-tenant
+    idempotency-key namespace bug, independent of the key scoping itself.
     """
     if not isinstance(entry_id, str) or not entry_id:
         return False
+    query = {"entry_id": entry_id, "state": "reserved"}
+    if user_email is not None:
+        owner = _safe_email(user_email)
+        if not owner:
+            logger.warning("quota_ledger refund refused: invalid owner scope")
+            return False
+        query["user_email"] = owner
     entry = _ledger().find_one_and_update(
-        {"entry_id": entry_id, "state": "reserved"},
+        query,
         {"$set": {"state": "refunded", "settled_at": _now()}},
     )
     if entry is None:
@@ -456,9 +527,13 @@ def refund_entry(entry_id: str) -> bool:
     return True
 
 
-def refund_entries(entry_ids: List[str]) -> int:
-    """Refund a batch of reservations (each idempotently)."""
-    return sum(1 for eid in (entry_ids or []) if refund_entry(eid))
+def refund_entries(entry_ids: List[str], user_email: Optional[str] = None) -> int:
+    """Refund a batch of reservations (each idempotently).
+
+    ``user_email`` scopes every refund to its owner (see ``refund_entry``): an
+    entry belonging to a different tenant is REFUSED, not silently credited."""
+    return sum(1 for eid in (entry_ids or [])
+               if refund_entry(eid, user_email=user_email))
 
 
 def entries_count_for_users(emails: List[str], date: Optional[str] = None) -> Dict[str, int]:

@@ -1107,7 +1107,13 @@ def _maybe_capture_application_otp(
         from services.mail_forward_service import should_forward
         from services import application_otp_service as otp
 
-        forward_ok, _category = should_forward({"subject": subject, "text": text})
+        # classify=False is the EXPLICIT noise-oracle contract: the deterministic
+        # OTP/verification predicate ONLY, no model call on the webhook commit
+        # path, no relay decision. (It used to be inferred from the absence of
+        # from_domain, which made the same carve-out reachable from message DATA
+        # on the FORWARDING path — an empty from_domain got relayed.)
+        forward_ok, _category = should_forward(
+            {"subject": subject, "text": text}, classify=False)
         if forward_ok:
             return
         otp.capture_from_noise_message(

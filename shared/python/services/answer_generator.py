@@ -1,7 +1,19 @@
 """
-Answer Generator — powers the Job Application Autofill Chrome extension.
+Answer Generator — grounded free-text answers for job application forms.
 
-Two responsibilities:
+LIVES IN THE SHARED LAYER ON PURPOSE (`shared/python/services/`, mounted at
+/opt/python in every Lambda). It used to live in `services/jobs/services/`, and
+`scripts/package.sh:33` bundles only `services/<svc>/` into each zip, so it
+shipped in **jobs.zip alone**. The unattended auto-apply gather runs through
+`resume_service._process_job`, self-invoked into whichever Lambda enqueued it,
+and `infra/terraform/schedulers.tf` points every scheduled rule at the **resume**
+Lambda — so a scheduled gather importing this module would have raised
+ImportError while a gather triggered from `POST /api/apply/queue` (jobs Lambda)
+worked. Environment-dependent behaviour is worse than none. In the layer it is
+importable by all four services; `from services.answer_generator import ...`
+resolves unchanged for the jobs blueprint (PEP-420 namespace package).
+
+Three responsibilities:
 
 1. build_application_profile() — flatten the user's stored base resume +
    visa profile into a single "ApplicationProfile" JSON the extension seeds
@@ -14,11 +26,16 @@ Two responsibilities:
    and projects and aligned to the job description on the page. The whole
    point is a 1-in-100 answer, not a template — see _DISTINCTIVENESS_BLOCK.
 
+3. generate_for_gather() — the ENTITLEMENT-GATED entry point the auto-apply
+   gather phase calls. Charges one `autoapply_answer` unit per field BEFORE its
+   Bedrock call (CLAUDE.md invariant 3) and is idempotent under at-least-once
+   Lambda redelivery.
+
 Grounding follows the same pattern as services/project_generator.py:
 reuse flatten_skills / build_resume_text and the claude_json LLM facade.
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -399,6 +416,7 @@ def generate_free_text_answers(
     role: str = "",
     base_resume_doc: Optional[Dict[str, Any]] = None,
     max_fields: int = _MAX_GENERATED_FIELDS,
+    charge: Optional[Callable[[str], bool]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Generate grounded free-text answers for a resolve()'s ``needs_generation``.
 
@@ -432,6 +450,11 @@ def generate_free_text_answers(
         run `entitlements_service.require_feature(...)` /
         `check_and_increment(email, feature)` BEFORE calling it (CLAUDE.md
         invariant 3) — this function is a pure generator, not a route.
+        Pass ``charge=`` to gate PER FIELD: it is called with the field_id
+        immediately before that field's Bedrock call and must return False when
+        the pool is empty, which stops the loop (the remaining fields are simply
+        absent from the result and stay in needs_input). `generate_for_gather`
+        wires this to the `autoapply_answer` bucket.
       * Never raises. Any per-field failure is logged and that field is simply
         absent from the result (it stays in needs_input).
     """
@@ -477,6 +500,18 @@ def generate_free_text_answers(
         if not question:
             continue
 
+        # GATE BEFORE SPEND (CLAUDE.md invariant 3) — one unit per Bedrock call.
+        if charge is not None:
+            try:
+                if not charge(field_id):
+                    logger.info("generate_free_text_answers: quota exhausted at "
+                                "%s for %s — stopping", field_id, user_email)
+                    break
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("generate_free_text_answers: charge failed for "
+                               "%s: %s — refusing to spend", field_id, e)
+                break
+
         try:
             variants = generator.generate(
                 question=question,
@@ -511,3 +546,101 @@ def generate_free_text_answers(
     logger.info("generate_free_text_answers: generated %d/%d free-text answers",
                 len(out), len(needs_generation))
     return out
+
+
+# ---------------------------------------------------------------------------
+# The gather entry point (repair spec §7) — entitlement-gated.
+# ---------------------------------------------------------------------------
+
+_ANSWER_FEATURE = "autoapply_answer"
+
+
+def _charge_answer_slot(user_email: str, idempotency_key: str) -> bool:
+    """Charge ONE `autoapply_answer` unit. True when the spend is authorised.
+
+    Mirrors `services/jobs/blueprints/apply.py::_charge_feature` (the extension's
+    synchronous route) so BOTH producers of grounded free-text answers draw down
+    the SAME monthly pool with the same per-plan cap from entitlements_service —
+    the tailor bucket is never touched, so tailor cannot be double-counted.
+
+    `idempotency_key` matters here in a way it does not on the route: gather runs
+    as an async job under at-least-once Lambda delivery, so a redelivered gather
+    for the same (application, field) must NOT charge twice.
+    """
+    from services import entitlements_service
+    try:
+        from utils.config import _get_config_value
+        reserve_on = str(
+            _get_config_value("AUTO_APPLY_RESERVE", "false") or "false"
+        ).strip().lower() in ("1", "true", "yes", "on")
+    except Exception:  # pragma: no cover - config always importable in-process
+        reserve_on = False
+
+    if not reserve_on:
+        allowed, _usage = entitlements_service.check_and_increment(
+            user_email, _ANSWER_FEATURE)
+        return bool(allowed)
+
+    from services import quota_ledger_service as quota
+    res = quota.reserve(user_email, _ANSWER_FEATURE, n=1,
+                        idempotency_key=idempotency_key)
+    if not res.get("reserved"):
+        return False
+    # Synchronous spend — the Bedrock call happens right after this returns, so
+    # settle the reserved slot now. A replayed reservation is already settled.
+    if not res.get("replayed"):
+        for eid in (res.get("entry_ids") or []):
+            quota.complete_entry(eid)
+    return True
+
+
+def generate_for_gather(
+    user_email: str,
+    needs_generation: List[Dict[str, Any]],
+    *,
+    application_id: str = "",
+    job_description: str = "",
+    company: str = "",
+    role: str = "",
+    base_resume_doc: Optional[Dict[str, Any]] = None,
+    max_fields: int = _MAX_GENERATED_FIELDS,
+) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
+    """THE auto-apply gather consumer of ``resolve()["needs_generation"]``.
+
+    Returns ``(generated, remaining)``:
+
+      * ``generated``  { field_id: answer record }  (see `generate_free_text_answers`)
+      * ``remaining``  the ``needs_generation`` entries that were NOT answered —
+        unknown field ids, generation failures, and everything past the per-form
+        cap or the monthly quota. The caller MUST recompute
+        `has_novel_free_text` from THIS list, not from the pre-generation one, or
+        the autonomy score stays penalised for questions we just answered.
+
+    Wired into `auto_apply_service.gather` and NOWHERE ELSE. Deliberately NOT on
+    the `POST /api/apply/needs-input/answer` request path: that endpoint must
+    stay pure-Mongo (CLAUDE.md invariant 2 — long work is an async job), and it
+    is a user typing an answer, not us writing one.
+
+    Entitlements are charged HERE, one `autoapply_answer` unit per Bedrock call,
+    BEFORE the call (CLAUDE.md invariant 3). Running out of pool is not an error:
+    the answered fields stand, the rest stay in `needs_input`, and the user is
+    asked for those only.
+    """
+    empty_remaining = [i for i in (needs_generation or []) if isinstance(i, dict)]
+    if not user_email or not needs_generation:
+        return {}, empty_remaining
+
+    app_key = str(application_id or "").strip() or "no-app"
+
+    def _charge(field_id: str) -> bool:
+        return _charge_answer_slot(user_email, f"gather:{app_key}:{field_id}")
+
+    generated = generate_free_text_answers(
+        user_email, needs_generation,
+        job_description=job_description, company=company, role=role,
+        base_resume_doc=base_resume_doc, max_fields=max_fields,
+        charge=_charge,
+    )
+    remaining = [i for i in empty_remaining
+                 if str(i.get("field_id") or "").strip() not in generated]
+    return generated, remaining

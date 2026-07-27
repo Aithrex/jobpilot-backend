@@ -202,14 +202,79 @@ def test_should_forward_skips_system_noise(subject, text):
 @pytest.mark.parametrize("subject,text", [
     ("Update on your application to Acme", "After careful review we will not be moving forward."),
     ("You have an interview", "Congratulations, you have an interview at Corp."),
-    ("Application received", "Thank you for applying. We received your application."),
     ("Next steps", "We would like to schedule an assessment. Over 5000 candidates applied."),
     ("Your offer from Acme", "We are pleased to extend an offer. Start date 2026-08-01."),
 ])
 def test_should_forward_relays_meaningful_mail(subject, text):
-    ok, category = fwd.should_forward({"subject": subject, "text": text})
+    # A real inbound message always carries a from_domain (see _seed_message /
+    # mail_store_service.ingest_committed) — the allow-list needs it to classify.
+    ok, category = fwd.should_forward({"subject": subject, "text": text,
+                                       "from_domain": "greenhouse.io"})
     assert ok is True
     assert category != "system_noise"
+
+
+def test_an_ats_confirmation_is_not_allowlisted_by_default():
+    """`applied` is deliberately excluded (apply_daily_summary owns "we applied
+    for you"). This used to read as RELAYABLE only because a context-less message
+    took the fail-open oracle branch before the classifier ever ran."""
+    assert fwd.should_forward({
+        "subject": "Application received",
+        "text": "Thank you for applying. We received your application.",
+        "from_domain": "greenhouse.io"}) == (False, "not_allowlisted")
+
+
+@pytest.mark.parametrize("from_domain", ["", None])
+def test_a_message_with_no_context_is_never_relayed(from_domain, monkeypatch):
+    """AN ALLOW-LIST MUST NOT HAVE A `return True` DEFAULT.
+
+    The noise-oracle carve-out used to be INFERRED from the absence of
+    from_domain, so a message with an empty one — a null return-path `<>`, a
+    bounce, a malformed From — took that branch and was RELAYED to the user's real
+    personal inbox with no classification at all. The oracle contract is now
+    explicit (`classify=False`) and the forwarding path fails CLOSED.
+    """
+    import services.mail_ingress_service as ingress
+    monkeypatch.setattr(ingress, "classify",
+                        lambda *a, **k: pytest.fail("must not classify with no context"))
+
+    assert fwd.should_forward({"subject": "Update on your application",
+                               "text": "We would like to schedule an interview.",
+                               "from_domain": from_domain}) == (False, "no_context")
+
+
+def test_an_ungrounded_classification_never_earns_a_relay(env, monkeypatch):
+    """`mail_ingress_service` caps a classification whose evidence quote is
+    missing or not in the body at _UNGROUNDED_CONFIDENCE_CAP (0.60) exactly so a
+    hallucinated verdict cannot drive an automatic action. Forwarding IS one, so
+    the floor must sit above that cap — the gate ignored `confidence` entirely."""
+    import services.mail_ingress_service as ingress
+
+    def _ungrounded(from_domain, subject, body_text):
+        return {"status": "interview_invite",
+                "confidence": ingress._UNGROUNDED_CONFIDENCE_CAP,
+                "company": "", "role": "", "event_at": None,
+                "evidence_sentence": ""}
+
+    monkeypatch.setattr(ingress, "classify", _ungrounded)
+    msg = {"subject": "Next steps", "text": "Let's talk.",
+           "from_domain": "greenhouse.io"}
+    assert fwd.should_forward(msg) == (False, "not_allowlisted")
+
+    # A grounded, confident verdict on the same message still relays.
+    monkeypatch.setattr(ingress, "classify",
+                        lambda *a, **k: {"status": "interview_invite",
+                                         "confidence": 0.95, "company": "",
+                                         "role": "", "event_at": None,
+                                         "evidence_sentence": "Let's talk."})
+    assert fwd.should_forward(msg) == (True, "interview_invite")
+
+
+def test_the_confidence_floor_can_never_be_configured_below_the_ungrounded_cap(
+        monkeypatch):
+    import services.mail_ingress_service as ingress
+    monkeypatch.setenv("MAIL_FORWARD_CONFIDENCE_FLOOR", "0.0")
+    assert fwd._confidence_floor() > ingress._UNGROUNDED_CONFIDENCE_CAP
 
 
 def test_forward_notification_skips_noise_message(env, sent):
@@ -513,9 +578,11 @@ def test_allowlist_config_override_is_closed_to_status_enum(env, sent, monkeypat
 
 
 def test_noise_oracle_callers_get_the_deterministic_verdict_only(env, monkeypatch):
-    """`mail_store_service._maybe_capture_application_otp` calls should_forward
-    with ONLY {subject, text} as a NOISE oracle. That path must never gain an LLM
-    call nor change its capture trigger."""
+    """`mail_store_service._maybe_capture_application_otp` calls should_forward as
+    a NOISE oracle, now via the EXPLICIT `classify=False` contract (it used to be
+    inferred from the absence of from_domain, which made the same fail-OPEN
+    carve-out reachable from message data on the forwarding path). That path must
+    never gain an LLM call nor change its capture trigger."""
     import services.mail_ingress_service as ingress
 
     def _boom(*a, **k):  # any classifier call here is a bug
@@ -523,9 +590,37 @@ def test_noise_oracle_callers_get_the_deterministic_verdict_only(env, monkeypatc
 
     monkeypatch.setattr(ingress, "classify", _boom)
     assert fwd.should_forward({"subject": "Update on your application",
-                               "text": "We will not be moving forward."}) == (True, "application")
+                               "text": "We will not be moving forward."},
+                              classify=False) == (True, "application")
     assert fwd.should_forward({"subject": "Your verification code",
-                               "text": "Your code is 483920."}) == (False, "system_noise")
+                               "text": "Your code is 483920."},
+                              classify=False) == (False, "system_noise")
+
+
+def test_the_otp_capture_path_uses_the_explicit_oracle_contract(env, monkeypatch):
+    """The webhook commit path itself (not just should_forward) must stay
+    LLM-free and keep the same capture trigger."""
+    import services.mail_ingress_service as ingress
+    import services.application_otp_service as otp
+
+    monkeypatch.setattr(ingress, "classify",
+                        lambda *a, **k: pytest.fail("no LLM on the commit path"))
+    captured = []
+    monkeypatch.setattr(otp, "capture_from_noise_message",
+                        lambda **kw: captured.append(kw.get("message_id")))
+
+    # Noise -> captured for the executor, never surfaced to the user.
+    store._maybe_capture_application_otp(
+        user_email=OWNER, message_id="m1", subject="Your verification code",
+        text="Your code is 483920.", html="", from_addr="no-reply@wd.com",
+        application_id=None)
+    # A real employer reply -> not an OTP, nothing captured.
+    store._maybe_capture_application_otp(
+        user_email=OWNER, message_id="m2", subject="Update on your application",
+        text="We will not be moving forward.", html="",
+        from_addr="no-reply@greenhouse.io", application_id=None)
+
+    assert captured == ["m1"]
 
 
 if __name__ == "__main__":

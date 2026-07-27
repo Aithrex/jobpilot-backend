@@ -590,13 +590,47 @@ def build_profile(
 # Job-side helpers (used by match_jobs and the daily pipeline scorer)
 # ---------------------------------------------------------------------------
 
+_TITLE_TOKEN_RE = re.compile(r"[a-z][a-z+#./]*")
+_TITLE_LEVEL_RE = re.compile(
+    r"\b(senior|sr|junior|jr|staff|principal|lead|entry|entry-level|associate|"
+    r"intern|new|grad|graduate|early|career|level|i|ii|iii|iv|v|1|2|3)\b")
+
+
+def _title_core_tokens(title: str) -> frozenset:
+    """Seniority-stripped token set of a job title. "Senior Software Engineer II"
+    and "Software Engineer" both reduce to {software, engineer}."""
+    return frozenset(_TITLE_TOKEN_RE.findall(
+        _TITLE_LEVEL_RE.sub(" ", (title or "").lower())))
+
+
 def title_relevance(profile: Dict[str, Any], job_title: str) -> float:
     """0.0..1.0 — how well the job title aligns with the candidate's intent.
 
     1.0 = exact primary-intent title match
+    0.9 = a title this profile explicitly TARGETS (see below)
     0.6 = secondary-intent title match
     0.3 = generic SWE title (fallback safety net)
     0.0 = unrelated
+
+    The 0.9 tier is a BUG FIX, not a new feature. `title_terms` for the
+    `backend` intent — which is also the generalist fallback `build_profile`
+    assigns when no specialty scores above 5.0 — require a qualifier:
+
+        r"\\b(backend|back-?end|api|server-side|distributed systems)\\s+(engineer|developer)\\b"
+        r"\\b(software engineer)\\b.*\\b(backend|api|server)\\b"
+
+    A bare "Software Engineer" posting matches NEITHER, so it fell through to
+    the generic 0.3 net — while `build_profile` had simultaneously put
+    "Software Engineer" in that same profile's `target_titles` (via
+    GENERIC_SWE_TITLES) and was actively searching job boards for it. The
+    profile said "find me Software Engineer roles" and the scorer then rated
+    every one of them 0.3, deflating the blended score by ~0.7 * 35 = 24
+    points. Any title the profile itself targets is relevant by construction.
+
+    Kept at 0.9 rather than 1.0 because a `title_terms` regex hit is a match on
+    the candidate's DOMAIN, while a `target_titles` hit is a match on a title
+    string the profile builder emitted, which for early-career profiles includes
+    the generic safety net.
     """
     if not job_title:
         return 0.0
@@ -611,6 +645,15 @@ def title_relevance(profile: Dict[str, Any], job_title: str) -> float:
         re.compile(p, re.IGNORECASE) for p in INTENTS[secondary]["title_terms"]
     )):
         return 0.6
+    # Checked AFTER the two regex tiers on purpose: a `title_terms` hit is
+    # evidence about the candidate's domain and outranks a title-string match,
+    # and the secondary's own target titles are spliced into `target_titles`.
+    job_tokens = _title_core_tokens(job_title)
+    if job_tokens:
+        for target in (profile.get("target_titles") or []):
+            target_tokens = _title_core_tokens(str(target))
+            if target_tokens and target_tokens <= job_tokens:
+                return 0.9
     if re.search(r"\b(software|swe|developer|engineer)\b", title_lower):
         return 0.3
     return 0.0

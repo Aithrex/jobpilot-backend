@@ -529,6 +529,88 @@ def _local_autonomy(ats_family: Optional[str], coverage: float, *,
     return "ask", score
 
 
+def _free_text_generation_enabled() -> bool:
+    """Kill switch for grounded free-text generation inside gather (repair spec
+    §7). Default ON — the whole point of the fix is that `needs_generation` has a
+    consumer — but this is the ONE place the pipeline spends Bedrock tokens
+    unattended, so ops keeps a lever. OFF restores the previous behaviour: an
+    essay box falls to needs_input and the user writes it themselves."""
+    try:
+        from utils.config import _get_config_value
+        val = _get_config_value("AUTO_APPLY_GENERATE_FREE_TEXT", "true") or "true"
+        return str(val).strip().lower() in ("1", "true", "yes", "on")
+    except Exception:  # pragma: no cover - config always importable in-process
+        return True
+
+
+def _apply_generated_free_text(application_id: str, user_email: str,
+                               app: Dict[str, Any],
+                               resolution: Dict[str, Any],
+                               answers: Dict[str, Any],
+                               needs_input: List[Dict[str, str]]
+                               ) -> Tuple[Dict[str, Any], bool]:
+    """Answer the form's free-text boxes from the résumé (repair spec §7).
+
+    `answer_library_service.resolve()` has emitted `needs_generation` for every
+    essay box since it was written and had ZERO consumers, so an essay-bearing
+    form ALWAYS fell to `needs_input` and the user was told to write it — the
+    exact outcome §3 says must never happen for a resolvable question.
+
+    Mutates `answers`, `needs_input` and `resolution["resolved"]` in place and
+    returns ``(generated, has_novel_free_text)``, where the flag is recomputed
+    from what is STILL open: the non-essay novel residue
+    (`has_novel_excluding_generation`) OR the essays generation could not answer.
+    Reusing the pre-generation flag would keep the autonomy score penalised for
+    questions we just answered.
+
+    Never raises and never fabricates: generation is grounded in the résumé only,
+    entitlements are charged inside `answer_generator.generate_for_gather` BEFORE
+    each Bedrock call, and every generated record carries
+    ``review_required: True``.
+    """
+    pre_flag = bool(resolution.get("has_novel_free_text"))
+    needs_generation = [i for i in (resolution.get("needs_generation") or [])
+                        if isinstance(i, dict)]
+    if not needs_generation or not _free_text_generation_enabled():
+        return {}, pre_flag
+
+    try:
+        from services.answer_generator import generate_for_gather
+    except ImportError:  # pragma: no cover - layer always carries it now
+        logger.warning("auto_apply gather %s: answer_generator not importable — "
+                       "free-text falls to needs_input", application_id)
+        return {}, pre_flag
+
+    try:
+        generated, remaining = generate_for_gather(
+            user_email, needs_generation,
+            application_id=application_id,
+            job_description=_resolve_jd_text(user_email, application_id, app),
+            company=str(app.get("company") or ""),
+            role=str(app.get("title") or ""),
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("auto_apply gather %s: free-text generation failed: %s",
+                       application_id, e)
+        return {}, pre_flag
+
+    if not generated:
+        return {}, pre_flag
+
+    resolved_map = resolution.get("resolved")
+    if isinstance(resolved_map, dict):
+        resolved_map.update(generated)
+    for field_id, record in generated.items():
+        answers[field_id] = record.get("value")
+    needs_input[:] = [i for i in needs_input
+                      if str(i.get("field_id") or "") not in generated]
+
+    residual = bool(resolution.get("has_novel_excluding_generation", pre_flag))
+    logger.info("auto_apply gather %s: generated %d free-text answer(s), "
+                "%d still open", application_id, len(generated), len(remaining))
+    return generated, bool(residual or remaining)
+
+
 # ===========================================================================
 # PHASE 1 — gather
 # ===========================================================================
@@ -596,9 +678,14 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
         needs_account = bool(recon.get("needs_account"))
         answers, needs_input, resolution = _resolve_answers(
             user_email, questions, company=str(app.get("company") or ""))
+        # Repair spec §7 — the ONLY consumer of resolve()'s `needs_generation`,
+        # and deliberately only here: gather is an async job, so it may spend
+        # Bedrock tokens. Mutates answers/needs_input/resolution in place and
+        # recomputes the novel-free-text flag from what is STILL open.
+        generated_free_text, has_novel_free_text = _apply_generated_free_text(
+            application_id, user_email, app, resolution, answers, needs_input)
         cov = resolution.get("coverage")
         coverage = float(cov) if cov is not None else _coverage(questions, answers)
-        has_novel_free_text = bool(resolution.get("has_novel_free_text"))
         has_unresolved_legal = bool(
             resolution.get("has_unconfirmed_legal_attestation")) or any(
             i.get("kind") == "legal_attestation" for i in needs_input)
@@ -608,6 +695,15 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
             has_novel_free_text=has_novel_free_text,
             has_unresolved_legal=has_unresolved_legal,
             needs_account=needs_account)
+
+        # Model-written prose is NEVER auto-submitted. Clearing the essay out of
+        # `needs_input` means the user no longer has to WRITE it — it does not
+        # mean they no longer have to READ it. Cap to `hold` so the row waits in
+        # ready_for_review for a human approval, honouring
+        # `answer_generator`'s contract that every generated record is
+        # `review_required: True`. Only ever DOWNGRADES the decision.
+        if generated_free_text and autonomy == "auto":
+            autonomy = "hold"
 
         # F: stash the recon form fingerprint alongside the answers so the approval
         # snapshot (and its before-submit re-validation) can prove the form did
@@ -704,6 +800,9 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
         "prepare_dispatched": prepare_dispatched,
         "mode": mode,
         "manual_apply": manual_apply,
+        # Repair spec §7 — how many essay boxes we answered from the résumé
+        # instead of handing back to the user.
+        "generated_free_text": sorted(generated_free_text),
     }
 
 
@@ -813,12 +912,18 @@ _MAX_SUBMITTED_ANSWERS = 50
 _MAX_ANSWER_CHARS = 4000
 _MAX_ANSWER_OPTIONS = 25
 
-# needs_input kinds a TYPED ANSWER can never clear — an Oracle wall (email
-# verify / password reset / CAPTCHA), an ATS account gate, an exhausted tailor
-# quota, a failed prepare. They stay in the queue (and keep the row in
-# needs_input) no matter what the user types, so we never pretend a wall cleared.
-_NON_ANSWERABLE_KINDS = frozenset({"account", "quota", "prepare_failed"})
-_NON_ANSWERABLE_KIND_PREFIXES = ("oracle_",)
+# The needs_input kinds a TYPED ANSWER can actually clear — a CLOSED ALLOW-LIST.
+#
+# This was a DENY-list ({account, quota, prepare_failed} + "oracle_*") over an
+# OPEN vocabulary: `kind` is also written from a free-form executor/fill-driver
+# reason string (finalize_submission below), so ANY unlisted value — a future
+# adapter's `captcha`, `validation_failed`, whatever — counted as answerable by
+# default. A row parked behind a wall with an unlisted reason could then be
+# "answered" with anything: `remaining` emptied, the row advanced
+# ready_for_review -> approve -> submit, and the executor hit the same wall again.
+# Everything not listed here is a WALL: it stays in the queue and keeps the row in
+# needs_input no matter what the user types, so we never pretend a wall cleared.
+_ANSWERABLE_KINDS = frozenset({"screening", "legal_attestation"})
 # Mirrors auto_submit_service._ACCOUNT_GATE_PROMPT (kept as a literal so this
 # module stays free of a reverse import).
 _ACCOUNT_GATE_QUESTION = (
@@ -850,11 +955,12 @@ class NotInNeedsInput(AutoApplyError):
 
 
 def _answerable(item: Dict[str, Any]) -> bool:
-    """True when a needs_input entry is a QUESTION the user can answer here."""
+    """True when a needs_input entry is a QUESTION the user can answer here.
+
+    ALLOW-list (`_ANSWERABLE_KINDS`), never a deny-list: `kind` is an open
+    vocabulary, so anything unrecognised must read as a WALL, not as a question."""
     kind = str((item or {}).get("kind") or "").strip().lower()
-    if kind in _NON_ANSWERABLE_KINDS:
-        return False
-    return not any(kind.startswith(p) for p in _NON_ANSWERABLE_KIND_PREFIXES)
+    return kind in _ANSWERABLE_KINDS
 
 
 def _needs_view(item: Dict[str, Any]) -> Dict[str, str]:
@@ -1385,7 +1491,8 @@ def prepare(application_id: str, user_email: str) -> Dict[str, Any]:
         artifact = prepare_tailored_artifact(user_email, jd_text)
     except Exception as e:
         # (f) Refund the reservation and HOLD — NEVER ready on a tailor failure.
-        quota.refund_entries(entry_ids)
+        # Owner-scoped: a refund may only ever credit the caller's own counter.
+        quota.refund_entries(entry_ids, user_email=user_email)
         logger.error("auto_apply prepare %s: tailor/pin failed: %s", application_id, e)
         ledger.mark_needs_input(
             user_email, application_id,
@@ -1850,13 +1957,23 @@ def finalize_submission(application_id: str, user_email: str, *,
         # A one-tap field the user must supply — the row goes back into the
         # needs_input queue (and POST /api/apply/needs-input/answer resumes it),
         # never to `failed`.
-        fid = _clean(field, 200) or "field"
+        named_field = _clean(field, 200)
+        fid = named_field or "field"
         why = _clean(reason or error, 100) or "needs_input"
+        # `kind` is the CLOSED answerable vocabulary (_ANSWERABLE_KINDS), never the
+        # free-form adapter reason — writing `why` here is what let an unlisted
+        # (wall-ish) reason ride in as "answerable by default". The fill driver's
+        # reasons on this branch (unresolved / no_option_match / field_not_on_page
+        # / fill_failed) all NAME a field, i.e. a real question -> `screening`. A
+        # report that names no field is not a question: it keeps its raw reason and
+        # therefore stays a wall no typed answer can clear. `why` is still returned
+        # (and logged) so the real reason is never lost.
+        kind = "screening" if named_field else why
         try:
             ledger.mark_needs_input(
                 user_email, application_id,
                 [{"question": f"We need your answer to continue ({fid}).",
-                  "kind": why, "field_id": fid}])
+                  "kind": kind, "field_id": fid}])
         except ledger.InvalidTransition:
             logger.info("finalize_submission %s: cannot enter needs_input from "
                         "%s (race) — no-op", application_id, cur)

@@ -1150,6 +1150,7 @@ def _empty_resolution() -> Dict[str, Any]:
     caller of either contract reads a coherent, empty shape."""
     return {"resolved": {}, "answers": {}, "unresolved": [], "coverage": 1.0,
             "needs_generation": [], "has_novel_free_text": False,
+            "has_novel_excluding_generation": False,
             "has_unconfirmed_legal_attestation": False}
 
 
@@ -1305,7 +1306,8 @@ def resolve(user_email: str, questions: List[Any], *,
             "unresolved": [ field_id, ... ],
             "coverage": float,                  # REQUIRED fields only
             "needs_generation": [ {field_id, label, category, kind} ],
-            "has_novel_free_text": bool,
+            "has_novel_free_text": bool,          # incl. the generatable essays
+            "has_novel_excluding_generation": bool,  # the residue after generation
             "has_unconfirmed_legal_attestation": bool,
           }
 
@@ -1421,12 +1423,16 @@ def _resolve_normalized(user_email: str,
             gated = sensitivity in (qb.SENS_PROTECTED, qb.SENS_LEGAL)
 
             # Free-text / essay: grounded generation elsewhere, never here.
+            # Deliberately does NOT set `has_novel`: the returned
+            # `has_novel_free_text` already ORs in `needs_generation`, and keeping
+            # the two sources apart is what lets the gather path recompute the
+            # flag after generation instead of staying penalised for questions it
+            # just answered. See `has_novel_excluding_generation` below.
             if bank_meta["category"] == qb.CAT_FREE_TEXT:
                 needs_generation.append({"field_id": field_id,
                                          "question": item["label"] or norm,
                                          "label": norm,
                                          "category": CAT_ESSAY, "kind": KIND_ESSAY})
-                has_novel = True
                 continue
 
             if required:
@@ -1535,12 +1541,12 @@ def _resolve_normalized(user_email: str,
         is_legal = flagged_legal or (category in LEGAL_CATEGORIES)
 
         # Essays: grounded generation, never counted in coverage, never here.
+        # `has_novel` intentionally untouched — see the CAT_FREE_TEXT branch.
         if kind == KIND_ESSAY and not is_legal:
             needs_generation.append({"field_id": field_id,
                                      "question": item["label"] or norm,
                                      "label": norm,
                                      "category": category, "kind": KIND_ESSAY})
-            has_novel = True
             continue
 
         if required:
@@ -1591,6 +1597,14 @@ def _resolve_normalized(user_email: str,
         "coverage": round(coverage, 4),
         "needs_generation": needs_generation,
         "has_novel_free_text": bool(has_novel or needs_generation),
+        # The SAME flag with the generatable essays excluded. `has_novel_free_text`
+        # is the pre-generation view (unchanged for every existing caller); this is
+        # the residue that grounded generation can never clear — an unrecognised
+        # field, or a known field with no declared value. The gather path ORs this
+        # with the essays generation could NOT answer, so answering "Why this
+        # company?" for the user actually improves the autonomy score instead of
+        # leaving it penalised for a question that is no longer open.
+        "has_novel_excluding_generation": bool(has_novel),
         "has_unconfirmed_legal_attestation": has_unconfirmed_legal,
     }
 

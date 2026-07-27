@@ -14,20 +14,17 @@ call is ever made). What these lock in:
   * Generated answers are ALWAYS ``review_required`` and never claim a declared
     provenance.
 """
-import sys
-
 import pytest
 
-from _vg_support import current_db, REPO_ROOT
+from _vg_support import current_db
 
-# `answer_generator` is a JOBS-Lambda-local service (services/jobs/services/),
-# not part of the shared layer — wire that dir on the path the way local.py does
-# so `services.answer_generator` resolves through the PEP-420 namespace package.
-# Appended (not prepended) so the shared layer always wins on any name clash.
-_JOBS_DIR = str(REPO_ROOT / "services" / "jobs")
-if _JOBS_DIR not in sys.path:
-    sys.path.append(_JOBS_DIR)
-
+# `answer_generator` now lives in the SHARED LAYER (`shared/python/services/`),
+# which `_vg_support` already puts on the path. It moved out of
+# `services/jobs/services/` because `scripts/package.sh` bundles only
+# `services/<svc>/` into each zip, so it shipped in jobs.zip alone while the
+# unattended gather runs in whichever Lambda `resume_service._process_job` was
+# self-invoked into (schedulers.tf: always the resume Lambda) — an ImportError in
+# exactly the path §7 needs it in. `TestLayerPackaging` below pins that.
 import services.claude_client as claude_client  # noqa: E402
 import services.answer_generator as ag  # noqa: E402
 import services.answer_library_service as lib  # noqa: E402

@@ -177,10 +177,35 @@ def _sjids(docs):
     return out
 
 
-def _rewind_watermark(db, hours=1):
+def _rewind_watermark(db, hours=1, user=USER):
     db.auto_submit_settings.update_one(
-        {"user_email": USER},
+        {"user_email": user},
         {"$set": {sweep.WATERMARK_FIELD: NOW - timedelta(hours=hours)}})
+
+
+def _seed_second_user(db, email):
+    """A SECOND opted-in user with the same résumé — the shared-inventory case.
+    `job_postings` is one corpus, so both users match the same posting and derive
+    the same `normalized_job_identity`."""
+    db.users.insert_one({"email": email, "plan": "free",
+                         "active_resume_id": f"asset-{email}"})
+    db.resume_assets.insert_one({
+        "resume_id": f"asset-{email}", "owner_type": "user", "user_email": email,
+        "structured": RESUME, "parse_status": "parsed",
+        "parsed_at": "2026-01-01T00:00:00+00:00",
+    })
+    db.auto_submit_settings.insert_one({
+        "user_email": email, "auto_submit_enabled": True,
+        "mode": autonomy.MODE_AGGRESSIVE,
+    })
+
+
+def _daily_count(db, email):
+    """The user's OWN charged daily-cap counter (per-user counter _id)."""
+    from services import quota_ledger_service as ql
+    doc = db.quota_counters.find_one({"_id": ql.counter_id_for(
+        email, ent._period_key(sweep.DAILY_CAP_FEATURE), sweep.DAILY_CAP_FEATURE)})
+    return int((doc or {}).get("count", 0))
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +277,44 @@ class TestWatermark:
         sweep.run_user_sweep(USER)
         after = sweep.get_watermark(USER)
         assert after >= NOW - timedelta(minutes=21)
+
+    def test_a_window_of_unreadable_postings_still_advances_the_cursor(self, sw):
+        """THE LIVELOCK. The cursor used to be derived from surviving rows only,
+        so a window in which EVERY candidate was dropped for no readable evidence
+        left it parked: the same candidates were re-read (and their bodies
+        re-fetched — up to HYDRATE_LIMIT S3 GETs) every 15 minutes forever,
+        postings behind the stuck window were never reached, and auto-apply
+        stopped for that user with no error surfaced anywhere.
+        """
+        for i in range(3):
+            _seed_posting(sjid=f"blank-{i}", description="", company=f"Acme {i}",
+                          first_seen=NOW - timedelta(minutes=30 - i))
+        _rewind_watermark(sw, hours=2)
+
+        first = sweep.run_user_sweep(USER)
+        assert (first["candidates"], first["no_evidence"], first["scored"]) == (3, 3, 0)
+
+        # The cursor moved past the whole unreadable window...
+        assert sweep.get_watermark(USER) >= NOW - timedelta(minutes=28, seconds=1)
+        # ...so the next tick does not re-read (and re-fetch) the same rows.
+        assert sweep.run_user_sweep(USER)["candidates"] == 0
+
+    def test_the_cursor_stops_short_of_what_the_io_budget_skipped(self, sw):
+        """The other half of the same invariant: advancing over EXAMINED rows must
+        not advance over rows `_hydrate` never looked at, or the lossless-cursor
+        guarantee is gone and postings are silently dropped."""
+        _seed_posting(sjid="a", description="", first_seen=NOW - timedelta(minutes=30))
+        _seed_posting(sjid="b", company="Acme B",
+                      first_seen=NOW - timedelta(minutes=10))
+        docs = sweep._new_postings([], NOW - timedelta(hours=2))
+        assert len(docs) == 2
+
+        _rows, _ctx, dropped, examined_max = sweep._hydrate(docs, limit=1)
+
+        assert dropped == 1
+        # Exactly the first doc's marker — the budget stopped us before the second.
+        assert examined_max == sweep._as_aware(docs[0]["first_seen_at"])
+        assert examined_max < sweep._as_aware(docs[1]["first_seen_at"])
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +425,36 @@ class TestDailyCap:
     def test_feature_is_registered_as_a_daily_period(self):
         assert ent.FEATURE_PERIODS[sweep.DAILY_CAP_FEATURE] == ent.PERIOD_DAY
 
+    def test_the_quota_ledger_idempotency_index_is_not_a_global_namespace(self):
+        """The index has to agree with the lookup filter. A GLOBAL unique on
+        `idempotency_key` alone makes the key namespace cross-tenant AND
+        perpetual: it is what turned one user's reservation into every user's, and
+        without a TTL the keys outlive the periods they belong to."""
+        import importlib
+        mig = importlib.import_module("scripts.migrate_indexes")
+
+        specs = [(keys, opts) for coll, keys, opts in mig.INDEX_SPECS
+                 if coll == "quota_ledger"]
+        idem = [(keys, opts) for keys, opts in specs
+                if any(k == "idempotency_key" for k, _ in keys)]
+        assert len(idem) == 1
+        keys, opts = idem[0]
+        assert [k for k, _ in keys] == ["user_email", "feature", "date",
+                                        "idempotency_key"]
+        assert opts["unique"] is True
+        # A compound SPARSE index would still collide on the entries that carry
+        # no key at all (they all carry user_email) — it must be partial.
+        assert opts["partialFilterExpression"] == {
+            "idempotency_key": {"$exists": True}}
+        assert opts.get("sparse") is None
+        # The superseded global unique must be dropped, or a second user's insert
+        # still collides with the first user's key.
+        assert ("quota_ledger", "idempotency_key_unique") in \
+            mig.POST_CREATE_DROP_INDEXES
+        # And the entries expire with (well after) their own quota period.
+        ttl = [opts for keys, opts in specs if "expireAfterSeconds" in opts]
+        assert len(ttl) == 1 and ttl[0]["expireAfterSeconds"] >= 31 * 24 * 3600
+
     def test_every_plan_including_unlimited_has_a_finite_daily_cap(self):
         """premium_plus is unlimited on the MONTHLY auto_submit pool. If it were
         also unlimited per day, a 15-minute unattended sweep would be unbounded
@@ -432,6 +525,115 @@ class TestDailyCap:
         _rewind_watermark(sw)
 
         assert sweep.run_user_sweep(USER)["enqueued"] == 1
+
+    def test_the_daily_cap_key_carries_the_owner(self, sw, monkeypatch):
+        """`normalized_job_identity` is computed from the SHARED `job_postings`
+        row, so it is identical for every user who matches that posting. The
+        reservation key must therefore carry the user_email — reserving under a
+        bare posting hash puts the per-user daily cap in a cross-tenant key
+        namespace (the quota ledger scopes its lookups too; this is the caller
+        half of the same fix, asserted where the bug was)."""
+        from services import quota_ledger_service as ql
+        seen = []
+        real = ql.reserve
+
+        def _spy(email, feature, n=1, idempotency_key=None):
+            seen.append(idempotency_key)
+            return real(email, feature, n=n, idempotency_key=idempotency_key)
+
+        monkeypatch.setattr(ql, "reserve", _spy)
+        _seed_posting(sjid="swe-1", first_seen=NOW - timedelta(minutes=5))
+        _rewind_watermark(sw)
+
+        assert sweep.run_user_sweep(USER)["enqueued"] == 1
+
+        assert len(seen) == 1
+        assert USER in seen[0], seen[0]
+        assert seen[0].startswith(sweep.DAILY_CAP_FEATURE + ":")
+
+    def test_two_users_matching_one_posting_each_charge_their_own_slot(self, sw):
+        """The cap is PER USER, and `job_postings` is SHARED inventory.
+
+        `normalized_job_identity` is derived from (company, title, jd) — the same
+        posting yields the SAME hash for every user. When the reservation's
+        idempotency key was that hash alone, the second user's reserve matched the
+        FIRST user's ledger entry, returned `reserved: True`, and left the second
+        user's counter at 0: the 20/day cap silently stopped binding for everyone
+        but whoever swept first. Both counters must move.
+        """
+        other = "bob@aspirely.me"
+        _seed_second_user(sw, other)
+        _seed_posting(sjid="swe-shared", first_seen=NOW - timedelta(minutes=5))
+        _rewind_watermark(sw)
+        _rewind_watermark(sw, hours=1, user=other)
+
+        assert sweep.run_user_sweep(USER)["enqueued"] == 1
+        assert sweep.run_user_sweep(other)["enqueued"] == 1
+
+        # One ledger row and one CHARGED daily slot per user — never shared.
+        assert _daily_count(sw, USER) == 1
+        assert _daily_count(sw, other) == 1
+        assert sw.applications.count_documents({"user_email": USER}) == 1
+        assert sw.applications.count_documents({"user_email": other}) == 1
+        assert sw.quota_ledger.count_documents(
+            {"feature": sweep.DAILY_CAP_FEATURE, "user_email": other}) == 1
+
+    def test_the_cap_still_binds_for_the_second_user_of_a_shared_posting(self, sw):
+        """The consequence of the cross-tenant key, stated as a cap: with a cap of
+        1 already spent, the second user must be DENIED — not handed the first
+        user's reservation."""
+        other = "bob@aspirely.me"
+        _seed_second_user(sw, other)
+        for u in (USER, other):
+            sw.entitlement_overrides.insert_one(
+                {"user_email": u,
+                 "overrides": {"limits": {sweep.DAILY_CAP_FEATURE: 1}}})
+        _seed_posting(sjid="swe-1", company="Acme One",
+                      first_seen=NOW - timedelta(minutes=9))
+        _seed_posting(sjid="swe-2", company="Acme Two",
+                      first_seen=NOW - timedelta(minutes=8))
+        _rewind_watermark(sw)
+        _rewind_watermark(sw, hours=1, user=other)
+
+        assert sweep.run_user_sweep(USER)["daily_capped"] == 1      # 1 of 2 enqueued
+        second = sweep.run_user_sweep(other)
+
+        assert second["enqueued"] == 1
+        assert second["daily_capped"] == 1
+        assert _daily_count(sw, other) == 1
+
+    def test_a_redelivered_tick_never_refunds_the_live_reservation(self, sw,
+                                                                   monkeypatch):
+        """Same user, overlapping/redelivered ticks on ONE posting.
+
+        Tick B's reserve is an idempotent REPLAY (same key), so it charged
+        nothing. Its `create_application` then loses to the unique index
+        (`skipped_duplicate`) — and the old refund handed back tick A's slot, so a
+        REAL queued application existed with nothing charged for it. A replayed
+        reservation must never be refunded.
+        """
+        _seed_posting(sjid="swe-1", first_seen=NOW - timedelta(minutes=5))
+        _rewind_watermark(sw)
+        assert sweep.run_user_sweep(USER)["enqueued"] == 1
+        assert _daily_count(sw, USER) == 1
+        entry_ids = [e["entry_id"] for e in sw.quota_ledger.find(
+            {"feature": sweep.DAILY_CAP_FEATURE, "user_email": USER})]
+        assert len(entry_ids) == 1
+
+        # Simulate the concurrent tick: the dedup gate ran BEFORE tick A inserted,
+        # so it sees nothing and lets the enqueue through to the unique index.
+        from services import application_ledger_service as als
+        monkeypatch.setattr(als, "dedup_gate", lambda email, identity: (False, None))
+        _rewind_watermark(sw)
+        out = sweep.run_user_sweep(USER)
+
+        assert out["duplicates"] == 1
+        assert out["enqueued"] == 0
+        # The real application from tick A is still there and still CHARGED.
+        assert sw.applications.count_documents({"user_email": USER}) == 1
+        assert _daily_count(sw, USER) == 1
+        assert sw.quota_ledger.find_one(
+            {"entry_id": entry_ids[0]})["state"] == "reserved"
 
     def test_a_duplicate_never_consumes_a_daily_slot(self, sw):
         _seed_posting(sjid="swe-a", first_seen=NOW - timedelta(minutes=9))
