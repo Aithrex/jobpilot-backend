@@ -82,6 +82,13 @@ VALID_DECISIONS = (AUTO, HOLD, ASK)
 #                 confirmations); below it, `auto` is capped to `ask`. Hard
 #                 never-fabricate rules (unconfirmed legal attestation -> ask)
 #                 still win, always.
+#   * aggressive — public "Auto Aggressive" mode: same as autopilot but skips
+#                 the graduation gate so matching jobs can submit daily from day
+#                 one (still subject to never-fabricate + quota). The hourly
+#                 apply scheduler enqueues more matches for this mode.
+#
+# Product labels (FE): Manual=copilot, Auto=approval, Auto Aggressive=aggressive.
+# `autopilot` remains a valid stored value for existing users.
 #
 # DECIDED (user, July 2026): there is NO implicit default — onboarding FORCES an
 # explicit pick. `get_mode` returns None until it is set, and the scheduler/
@@ -91,7 +98,8 @@ VALID_DECISIONS = (AUTO, HOLD, ASK)
 MODE_COPILOT = "copilot"
 MODE_APPROVAL = "approval"
 MODE_AUTOPILOT = "autopilot"
-VALID_MODES = (MODE_COPILOT, MODE_APPROVAL, MODE_AUTOPILOT)
+MODE_AGGRESSIVE = "aggressive"
+VALID_MODES = (MODE_COPILOT, MODE_APPROVAL, MODE_AUTOPILOT, MODE_AGGRESSIVE)
 
 # Autopilot graduation gate: `auto` is honored only once the user has at least
 # this many canonical applications confirmed via a USER-approved path. LOCKED at

@@ -59,6 +59,7 @@ _DEFAULT_TZ = "America/New_York"
 # Per-user hourly work bounds — a single noisy account can never monopolise the
 # sweep's Lambda budget. Postings beyond this per tick simply roll to next hour.
 _MAX_MATCHES_PER_USER = 25       # new postings enqueued per user per tick
+_MAX_MATCHES_AGGRESSIVE = 50     # Auto Aggressive — more daily matching volume
 _MAX_APPROVAL_MATCHES = 25       # rows listed in one approval email
 _MAX_REDRIVE_PER_USER = 25       # stuck submissions re-driven per user per tick
 _MAX_SUMMARY_ITEMS = 25          # rows shown in one EOD summary section
@@ -258,10 +259,17 @@ def run_apply_hourly() -> Dict[str, Any]:
 
 def _run_user_hourly(email: str) -> Dict[str, int]:
     from services import application_ledger_service as als
+    from services import autonomy_service
     from services.resume_service import get_resume_service, ResumeService
 
     now = _now()
     out = {"enqueued": 0, "redriven": 0, "emailed": 0, "skipped_closed": 0}
+    mode = autonomy_service.get_mode(email)
+    match_cap = (
+        _MAX_MATCHES_AGGRESSIVE
+        if mode == autonomy_service.MODE_AGGRESSIVE
+        else _MAX_MATCHES_PER_USER
+    )
 
     # 1. Re-drive stuck submissions (Oracle re-check). Rows sitting in the
     #    submit-pickup state get auto_apply_submit re-enqueued. The ledger's CAS
@@ -295,9 +303,11 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
             logger.warning("[apply_scheduler] redrive enqueue failed (%s): %s", aid, e)
 
     # 2. Enqueue new matches through the dedup gate -> ledger row -> gather job.
+    #    Auto Aggressive / Autopilot users get matching postings queued daily
+    #    (hourly sweep) without waiting for a manual click.
     fresh: List[Dict[str, Any]] = []  # this tick's rows that still need a go-ahead
-    for saved in _saved_jobs(email)[: _MAX_MATCHES_PER_USER * 3]:
-        if out["enqueued"] >= _MAX_MATCHES_PER_USER:
+    for saved in _saved_jobs(email)[: match_cap * 3]:
+        if out["enqueued"] >= match_cap:
             break
         fields = _match_fields(saved)
         if not fields:

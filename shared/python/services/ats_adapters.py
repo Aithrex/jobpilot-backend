@@ -1085,10 +1085,28 @@ class WorkdayAdapter(AtsAdapter):
                 continue
             if not self._visible(wrapper):
                 continue
-            # Skip section/container wrappers that aren't real fields.
-            if wrapper_aid in (
-                "formField-disabilityForm",  # CC-305 section chrome
-            ):
+            # CC-305: formField-disabilityForm wraps the whole section — still
+            # extract the required disability radio/checkbox group inside it.
+            if wrapper_aid == "formField-disabilityForm":
+                radios = self._qsa_within(wrapper, "input[type=radio]")
+                checks = self._qsa_within(wrapper, "input[type=checkbox]")
+                if not radios and not checks:
+                    continue
+                child = (radios or checks)[0]
+                child_kind = "radio" if radios else "checkbox"
+                seen.add(wrapper_aid)
+                label = self._label_for_wrapper(wrapper, child, wrapper_aid)
+                required = True  # CC-305 "check one of the boxes" is required
+                raw.append({
+                    "label": label or "disability status",
+                    "required": required,
+                    "type": QTYPE_SELECT,
+                    "options": [],
+                    "handle": wrapper_aid,
+                    "name": wrapper_aid,
+                })
+                self._widget_by_handle[wrapper_aid] = child_kind
+                self._formfield_child[wrapper_aid] = wrapper
                 continue
             # Skip Workday multiselect containers (pre-filled dropdowns
             # like Country/Region phone code).
@@ -1386,59 +1404,145 @@ class WorkdayAdapter(AtsAdapter):
                 "status": "filled", "widget": widget, "value": value}
 
     def _fill_month_year(self, handle: str, value: str) -> bool:
-        """Fill Workday's split Month[/Day]/Year date widget (MM/YYYY or MM/DD/YYYY)."""
+        """Fill Workday's split Month[/Day]/Year date widget (MM/YYYY or MM/DD/YYYY).
+
+        Handles both ``formField-*`` wrappers and bare ``dateSectionMonth-input``
+        automation ids (CC-305 Self Identify uses the latter as the recon handle).
+
+        Workday spinbuttons often ignore fill()/JS value setters and leave a
+        broken value like ``07//``. The reliable path is: focus each segment,
+        clear, type digits, Tab to the next, then verify year is present.
+        """
         if self._page is None or not hasattr(self._page, "locator"):
             return True
         v = (value or "").strip()
         month = day = year = None
         m = re.match(r"^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$", v)
         if m:
-            month, day, year = str(int(m.group(1))), str(int(m.group(2))), m.group(3)
+            month, day, year = (
+                str(int(m.group(1))).zfill(2),
+                str(int(m.group(2))).zfill(2),
+                m.group(3),
+            )
         else:
             m = re.match(r"^(\d{1,2})[/\-](\d{4})$", v)
             if m:
-                month, year = str(int(m.group(1))), m.group(2)
+                month, year = str(int(m.group(1))).zfill(2), m.group(2)
             else:
                 m = re.match(r"^(\d{4})[/\-](\d{1,2})$", v)
                 if m:
-                    year, month = m.group(1), str(int(m.group(2)))
+                    year, month = m.group(1), str(int(m.group(2))).zfill(2)
         if not month or not year:
             return False
+        # CC-305 Self Identify requires day — default to today if only MM/YYYY.
+        if not day:
+            from datetime import datetime, timezone
+            day = datetime.now(timezone.utc).strftime("%d")
         try:
-            wrapper = self._page.locator("[data-automation-id=%s]" % handle)
-            if not wrapper.count():
+            page = self._page
+            # Prefer the signed-on date widget when present (Self Identify).
+            signed = page.locator(
+                "[data-automation-id*='dateSignedOn'] "
+                "[data-automation-id='dateSectionMonth-input'], "
+                "[data-automation-id='dateSignedOn'] "
+                "[data-automation-id='dateSectionMonth-input']"
+            )
+            if "dateSignedOn" in (handle or "") or (
+                    signed.count() and "dateSection" in (handle or "")):
+                month_inp = page.locator(
+                    "[data-automation-id*='dateSignedOn'] "
+                    "[data-automation-id='dateSectionMonth-input']"
+                ).first
+                if not month_inp.count():
+                    month_inp = page.locator(
+                        "[data-automation-id='dateSectionMonth-input']"
+                    ).last
+                day_inp = page.locator(
+                    "[data-automation-id*='dateSignedOn'] "
+                    "[data-automation-id='dateSectionDay-input']"
+                ).first
+                if not day_inp.count():
+                    day_inp = page.locator(
+                        "[data-automation-id='dateSectionDay-input']"
+                    ).last
+                year_inp = page.locator(
+                    "[data-automation-id*='dateSignedOn'] "
+                    "[data-automation-id='dateSectionYear-input']"
+                ).first
+                if not year_inp.count():
+                    year_inp = page.locator(
+                        "[data-automation-id='dateSectionYear-input']"
+                    ).last
+            else:
+                wrapper = page.locator("[data-automation-id=%s]" % handle)
+                if not wrapper.count() and "dateSectionMonth" in handle:
+                    month_inp = page.locator(
+                        "[data-automation-id=%s]" % handle).first
+                    day_inp = month_inp.locator(
+                        "xpath=ancestor::*[contains(@data-automation-id,'date') "
+                        "or contains(@class,'date')][1]"
+                        "//*[@data-automation-id='dateSectionDay-input']"
+                    ).first
+                    year_inp = month_inp.locator(
+                        "xpath=ancestor::*[contains(@data-automation-id,'date') "
+                        "or contains(@class,'date')][1]"
+                        "//*[@data-automation-id='dateSectionYear-input']"
+                    ).first
+                else:
+                    month_inp = wrapper.locator(
+                        "[data-automation-id='dateSectionMonth-input']").first
+                    day_inp = wrapper.locator(
+                        "[data-automation-id='dateSectionDay-input']").first
+                    year_inp = wrapper.locator(
+                        "[data-automation-id='dateSectionYear-input']").first
+
+            if not month_inp.count() or not year_inp.count():
+                logger.info("workday date missing segments handle=%s m=%s y=%s",
+                            handle, month_inp.count(), year_inp.count())
                 return False
-            # Prefer typing the full date into the month spinbutton — Workday
-            # auto-advances across day/year segments for MM/DD/YYYY widgets.
-            month_inp = wrapper.locator(
-                "[data-automation-id='dateSectionMonth-input']").first
-            if not month_inp.count():
-                return False
+
+            def _type_seg(loc, digits: str) -> None:
+                loc.scroll_into_view_if_needed(timeout=3_000)
+                loc.click(timeout=3_000, force=True)
+                # Clear existing (Control+a / Meta+a then Backspace).
+                try:
+                    loc.press("Control+a")
+                except Exception:
+                    pass
+                loc.press("Backspace")
+                loc.type(digits, delay=50)
+
+            _type_seg(month_inp, month)
+            month_inp.press("Tab")
+            page.wait_for_timeout(150)
+            if day_inp.count():
+                _type_seg(day_inp, day)
+                day_inp.press("Tab")
+                page.wait_for_timeout(150)
+            _type_seg(year_inp, year)
+            year_inp.press("Tab")
+            page.wait_for_timeout(300)
+
+            # Verify — reject partials like "07//".
             try:
-                month_inp.scroll_into_view_if_needed(timeout=3_000)
+                mv = (month_inp.input_value() or "").strip()
+                yv = (year_inp.input_value() or "").strip()
+                dv = (day_inp.input_value() or "").strip() if day_inp.count() else day
             except Exception:
-                pass
-            typed = v if day else ("%s/%s" % (month, year))
-            try:
-                month_inp.click(timeout=3_000, force=True)
-                month_inp.press("Control+a")
-                month_inp.type(typed, delay=35)
-                month_inp.press("Tab")
-                self._page.wait_for_timeout(400)
+                mv = yv = dv = ""
+            ok_m = mv.lstrip("0") == month.lstrip("0") or mv == month
+            ok_y = yv == year or yv.endswith(year[-2:])
+            ok_d = (not day_inp.count()) or dv.lstrip("0") == day.lstrip("0") or dv == day
+            if ok_m and ok_y and ok_d:
                 return True
-            except Exception as e1:
-                logger.info("workday date type-full failed: %s", e1)
-            # Fallback: set each spinbutton via native value setter.
-            day_inp = wrapper.locator(
-                "[data-automation-id='dateSectionDay-input']").first
-            year_inp = wrapper.locator(
-                "[data-automation-id='dateSectionYear-input']").first
-            pairs = [(month_inp, month)]
-            if day and day_inp.count():
-                pairs.append((day_inp, day))
-            if year_inp.count():
-                pairs.append((year_inp, year))
-            for loc, val in pairs:
+            logger.info(
+                "workday date verify failed handle=%s got m=%r d=%r y=%r want %s/%s/%s",
+                handle, mv, dv, yv, month, day, year,
+            )
+            # Last resort: JS setters + input events on each segment.
+            for loc, digits in ((month_inp, month), (day_inp, day), (year_inp, year)):
+                if not loc.count():
+                    continue
                 try:
                     loc.evaluate(
                         """(el, v) => {
@@ -1449,16 +1553,16 @@ class WorkdayAdapter(AtsAdapter):
                           el.dispatchEvent(new Event('input', {bubbles:true}));
                           el.dispatchEvent(new Event('change', {bubbles:true}));
                           el.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));
-                        }""", val)
-                except Exception as e2:
-                    logger.info("workday date segment set failed: %s", e2)
-                    return False
+                          el.blur();
+                        }""", digits)
+                except Exception:
+                    pass
+            page.wait_for_timeout(200)
             try:
-                year_inp.press("Tab")
+                yv2 = (year_inp.input_value() or "").strip()
+                return bool(yv2) and (yv2 == year or yv2.endswith(year[-2:]))
             except Exception:
-                pass
-            self._page.wait_for_timeout(400)
-            return True
+                return False
         except Exception as e:
             logger.info("workday fill_month_year failed %s: %s", handle, e)
             return False
@@ -1562,7 +1666,7 @@ class WorkdayAdapter(AtsAdapter):
                     radio.click()
                 return True
             # Also try clicking the label itself.
-        # Fallback: use page locator to click by text.
+        # Fallback: use page locator to click by text (exact, then contains).
         if self._page is not None and hasattr(self._page, "locator"):
             try:
                 wrapper_loc = self._page.locator(
@@ -1570,6 +1674,23 @@ class WorkdayAdapter(AtsAdapter):
                 label_loc = wrapper_loc.get_by_text(value, exact=True)
                 if label_loc.count():
                     label_loc.first.click(timeout=5_000)
+                    return True
+                # Soft match for long CC-305 options.
+                for cand in (
+                    value,
+                    "I Don't Wish To Answer",
+                    "I do not want to answer",
+                    "Don't wish to answer",
+                    "Prefer not",
+                ):
+                    soft = wrapper_loc.get_by_text(cand, exact=False)
+                    if soft.count():
+                        soft.first.click(timeout=5_000)
+                        return True
+                # Page-wide last resort for Self Identify radios.
+                soft = self._page.get_by_text(value, exact=False)
+                if soft.count():
+                    soft.first.click(timeout=5_000)
                     return True
             except Exception:
                 pass

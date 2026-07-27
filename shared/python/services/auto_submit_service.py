@@ -259,7 +259,11 @@ def _view(rec: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, A
 # Per-user opt-in settings
 # ---------------------------------------------------------------------------
 def get_settings(user_email: str) -> Dict[str, Any]:
-    """Read the user's opt-in. Default False (never auto-submit)."""
+    """Read the user's opt-in. Default False (never auto-submit).
+
+    ``use_tailored_resume`` defaults True — auto-apply pins a tailored artifact
+    when prepare is enabled. Users may opt into plain-resume submits.
+    """
     doc = None
     try:
         doc = _settings().find_one({"user_email": user_email}, {"_id": 0})
@@ -267,20 +271,40 @@ def get_settings(user_email: str) -> Dict[str, Any]:
         logger.warning("auto_submit get_settings failed for %s: %s", user_email, e)
     enabled = bool(doc and doc.get("auto_submit_enabled"))
     updated_at = _iso(doc.get("updated_at")) if doc else None
-    return {"auto_submit_enabled": enabled, "updated_at": updated_at}
+    # Default ON: safer public default is tailor-then-apply. Explicit False skips.
+    use_tailored = True if not doc or "use_tailored_resume" not in doc else bool(
+        doc.get("use_tailored_resume")
+    )
+    return {
+        "auto_submit_enabled": enabled,
+        "use_tailored_resume": use_tailored,
+        "updated_at": updated_at,
+    }
 
 
-def set_settings(user_email: str, enabled: bool) -> Dict[str, Any]:
-    """Set the user's opt-in and audit the change."""
+def set_settings(user_email: str, enabled: bool,
+                 use_tailored_resume: Optional[bool] = None) -> Dict[str, Any]:
+    """Set the user's opt-in (and optional tailor preference) and audit."""
     enabled = bool(enabled)
+    fields: Dict[str, Any] = {
+        "user_email": user_email,
+        "auto_submit_enabled": enabled,
+        "updated_at": _now(),
+    }
+    if use_tailored_resume is not None:
+        fields["use_tailored_resume"] = bool(use_tailored_resume)
     _settings().update_one(
         {"user_email": user_email},
-        {"$set": {"user_email": user_email, "auto_submit_enabled": enabled,
-                  "updated_at": _now()}},
+        {"$set": fields},
         upsert=True,
     )
     _audit(user_email, "settings_enabled" if enabled else "settings_disabled")
     return get_settings(user_email)
+
+
+def use_tailored_resume(user_email: str) -> bool:
+    """True when auto-apply should pin a tailored résumé before submit."""
+    return bool(get_settings(user_email).get("use_tailored_resume", True))
 
 
 def user_opted_in(user_email: str) -> bool:

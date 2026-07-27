@@ -643,6 +643,8 @@ class BrowserExecutor(ExecutorAdapter):
                         "race_ethnicity": "Decline to State (United States of America)",
                         "veteran_status": "I do not wish to provide this information",
                         "disability_status": "I Don't Wish To Answer",
+                        "formfield_disabilityform": "I Don't Wish To Answer",
+                        "formField-disabilityForm": "I Don't Wish To Answer",
                         "accept_terms": "Yes",
                         "formfield_accepttermsandagreements": "Yes",
                         "full_name": "Harshith Manne",

@@ -52,3 +52,10 @@ scripts/.titles_cache.txt
 # Cloudflare Wrangler local cache
 .wrangler/
 **/.wrangler/
+
+# Local apply-executor probe/submit scratch (Lambda payloads, screenshots)
+.tmp-ae/
+.tmp/
+
+# Docker layer cache-bust stamp used during image rebuilds
+shared/python/.build_bust

@@ -86,7 +86,7 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "ats_scores": 5,
         "cover_letter": 2,
         "autoapply_answer": 10,
-        "auto_submit": 5,             # opt-in auto-submit — conservative on free
+        "auto_submit": 10,            # opt-in auto-submit — free tier daily cap (public release)
         "quiz": None,                 # Learning Hub — free for all users
         "practice_question": 5,
         "mock_evaluate": 2,
@@ -172,6 +172,7 @@ _CORE = {
     "post_draft",
     "salary",
     "voice_graph",     # capture + raw-mode resume available on every tier (§6.12.10)
+    "auto_apply",      # public auto-apply (Manual / Auto / Auto Aggressive) — metered via auto_submit
 }
 
 PLAN_FEATURES: Dict[str, set] = {
@@ -232,6 +233,18 @@ def _resets_at(feature: str) -> datetime:
 # ---------------------------------------------------------------------------
 # Plan lookup
 # ---------------------------------------------------------------------------
+def _override_doc(email: str) -> Dict:
+    """Per-user admin escape hatch (`entitlement_overrides`). Empty on miss."""
+    if not email:
+        return {}
+    try:
+        db = DBConnect().get_db()
+        ov = db.entitlement_overrides.find_one({"user_email": email}, {"overrides": 1})
+        return ((ov or {}).get("overrides") or {}) if isinstance(ov, dict) else {}
+    except Exception:
+        return {}
+
+
 def get_plan(email: str) -> str:
     """Return the user's normalized plan, defaulting to free."""
     if not email:
@@ -245,14 +258,9 @@ def get_plan(email: str) -> str:
     plan = (doc or {}).get("plan")
     plan = plan if plan in VALID_PLANS else DEFAULT_PLAN
     # Admin per-user override escape hatch (§6.10) wins over the stored plan.
-    # Defensive: any lookup/shape error simply ignores the override.
-    try:
-        ov = db.entitlement_overrides.find_one({"user_email": email}, {"overrides": 1})
-        ov_plan = ((ov or {}).get("overrides") or {}).get("plan")
-        if ov_plan in VALID_PLANS:
-            return ov_plan
-    except Exception:
-        pass
+    ov_plan = _override_doc(email).get("plan")
+    if ov_plan in VALID_PLANS:
+        return ov_plan
     return plan
 
 
@@ -267,8 +275,22 @@ def quota(email_or_plan: str, feature: str) -> Optional[int]:
     knob the guest→signup carry-in reads). Any config-read failure falls
     back to the static PLAN_LIMITS value, so behavior without the config
     doc is byte-for-byte the previous behavior (5/day).
+
+    Admin `entitlement_overrides.limits.<feature>` wins over plan defaults
+    (testing escape hatch — set to a large int or None for unlimited).
     """
+    is_email = email_or_plan not in VALID_PLANS
     plan = email_or_plan if email_or_plan in VALID_PLANS else get_plan(email_or_plan)
+    if is_email:
+        ov_limits = _override_doc(email_or_plan).get("limits") or {}
+        if isinstance(ov_limits, dict) and feature in ov_limits:
+            raw = ov_limits[feature]
+            if raw is None:
+                return None
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                pass
     if plan == FREE and feature == "tailor":
         try:
             from services import platform_config_service as pconfig
@@ -281,9 +303,20 @@ def quota(email_or_plan: str, feature: str) -> Optional[int]:
 
 
 def feature_allowed(email: str, feature: str) -> bool:
-    """True if the plan's feature set includes `feature` (boolean gate)."""
+    """True if the plan's feature set includes `feature` (boolean gate).
+
+    Admin overrides may grant extra features via
+    ``entitlement_overrides.features`` (list or ``{feature: true}`` map).
+    """
     plan = get_plan(email)
-    return feature in PLAN_FEATURES.get(plan, PLAN_FEATURES[DEFAULT_PLAN])
+    if feature in PLAN_FEATURES.get(plan, PLAN_FEATURES[DEFAULT_PLAN]):
+        return True
+    ov = _override_doc(email).get("features")
+    if isinstance(ov, dict):
+        return bool(ov.get(feature))
+    if isinstance(ov, (list, tuple, set)):
+        return feature in ov
+    return False
 
 
 def required_plans_for(feature: str) -> list:
@@ -413,13 +446,28 @@ def summary(email: str) -> Dict:
 
     Cheap (no live usage reads): the plan, its boolean feature flags, and the
     integer limit map so the UI can gate/locked-badge without extra round trips.
+    Admin overrides for features/limits are layered in so the FE mirrors effective
+    access during testing.
     """
     plan = get_plan(email)
+    features = set(PLAN_FEATURES.get(plan, PLAN_FEATURES[DEFAULT_PLAN]))
+    limits = dict(PLAN_LIMITS.get(plan, PLAN_LIMITS[DEFAULT_PLAN]))
+    ov = _override_doc(email)
+    ov_feats = ov.get("features")
+    if isinstance(ov_feats, dict):
+        features |= {k for k, v in ov_feats.items() if v}
+    elif isinstance(ov_feats, (list, tuple, set)):
+        features |= set(ov_feats)
+    ov_limits = ov.get("limits")
+    if isinstance(ov_limits, dict):
+        for k, v in ov_limits.items():
+            if v is None or isinstance(v, (int, float)) and not isinstance(v, bool):
+                limits[k] = None if v is None else int(v)
     return {
         "plan": plan,
         "plan_label": PLAN_META.get(plan, {}).get("label", plan),
-        "features": sorted(PLAN_FEATURES.get(plan, PLAN_FEATURES[DEFAULT_PLAN])),
-        "limits": dict(PLAN_LIMITS.get(plan, PLAN_LIMITS[DEFAULT_PLAN])),
+        "features": sorted(features),
+        "limits": limits,
     }
 
 

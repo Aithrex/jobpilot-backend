@@ -175,7 +175,7 @@ def _prepare_enabled() -> bool:
 
 def _modes_enabled() -> bool:
     """Dark-launch gate for the explicit autonomy MODES (copilot/approval/
-    autopilot). Default OFF, so prod — and every existing gather/prepare/approval
+    autopilot/aggressive). Default OFF, so prod — and every existing gather/prepare/approval
     test — stays byte-identical until onboarding (a FE task) FORCES the mode pick
     and this is flipped on. When ON, the mode gate caps `decide()` per the user's
     chosen mode AND the fail-safe fires (mode unset -> gather refuses to auto-act).
@@ -187,6 +187,15 @@ def _modes_enabled() -> bool:
         return str(val).strip().lower() in ("1", "true", "yes", "on")
     except Exception:  # pragma: no cover - defensive
         return False
+
+
+def _user_wants_tailored_resume(user_email: str) -> bool:
+    """Per-user tailor preference (default True). Safe if settings read fails."""
+    try:
+        from services import auto_submit_service as ass
+        return bool(ass.use_tailored_resume(user_email))
+    except Exception:  # pragma: no cover - defensive
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +218,9 @@ def _mode_decision(user_email: str, autonomy: str) -> Tuple[str, Optional[str], 
       * autopilot                   — `auto` is honored ONLY when the graduation
         gate is unlocked (>= AUTOPILOT_GRADUATION_N user-approved confirms); else
         `auto` is capped to `ask`. `hold`/`ask` pass through unchanged.
+      * aggressive                  — public Auto Aggressive: honors `auto`
+        without graduation (daily matching submit). Hard never-fabricate rules
+        still win upstream.
     """
     from services import autonomy_service
     mode = autonomy_service.get_mode(user_email)
@@ -216,6 +228,8 @@ def _mode_decision(user_email: str, autonomy: str) -> Tuple[str, Optional[str], 
         return autonomy, None, True
     if mode in (autonomy_service.MODE_COPILOT, autonomy_service.MODE_APPROVAL):
         return ("ask" if autonomy == "auto" else autonomy), mode, False
+    if mode == autonomy_service.MODE_AGGRESSIVE:
+        return autonomy, mode, False
     if mode == autonomy_service.MODE_AUTOPILOT:
         if autonomy == "auto" and not autonomy_service.autopilot_unlocked(user_email):
             return "ask", mode, False
@@ -595,12 +609,14 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
                                     autonomy=autonomy, confidence_score=confidence)
             final = ledger.STATUS_NEEDS_INPUT
         elif autonomy == "auto":
-            if _prepare_enabled() and not app.get("tailoring_record_id"):
+            if (_prepare_enabled() and not app.get("tailoring_record_id")
+                    and _user_wants_tailored_resume(user_email)):
                 # Defect D — a row may be approved ONLY after a tailored artifact
                 # is pinned. Dispatch the async prepare phase (reserve → tailor →
                 # pin → land ready_for_review → system-approve). The row stays
                 # `gathering` until prepare completes (gathering→ready_for_review
-                # is legal).
+                # is legal). Users may opt into plain-resume auto-apply via
+                # auto_submit_settings.use_tailored_resume=False.
                 _enqueue_prepare(application_id, user_email)
                 final = ledger.STATUS_GATHERING
                 prepare_dispatched = True

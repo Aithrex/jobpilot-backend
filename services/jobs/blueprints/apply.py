@@ -421,16 +421,13 @@ def auto_submit_put_settings():
         if not (0.0 <= float(threshold) <= 1.0):
             return jsonify({"error": "autonomy_threshold must be a number in [0, 1]"}), 400
 
-    # Optional explicit autonomy mode (copilot|approval|autopilot) — the SINGLE
-    # source of truth. Validate the enum BEFORE persisting; a bad value is a
-    # business error (400 — never 401).
+    # Optional explicit autonomy mode (copilot|approval|autopilot|aggressive) —
+    # the SINGLE source of truth. Validate the enum BEFORE persisting; a bad
+    # value is a business error (400 — never 401).
     #
-    # FRONTEND HANDOFF (frontend-engineer): no implicit default is ever written.
-    # Onboarding must add a step that FORCES the user to pick one of the three
-    # modes and PUTs it here; until it is set, GET returns mode:null and the
-    # auto-apply gather path REFUSES to auto-act (mode_required fail-safe). The FE
-    # should treat a mode_required/needs_onboarding signal (and a null mode) as
-    # "route the user to the onboarding mode picker".
+    # FRONTEND HANDOFF: no implicit default is ever written. Onboarding must
+    # force the user to pick a mode and PUT it here; until set, GET returns
+    # mode:null and gather refuses to auto-act (mode_required fail-safe).
     mode = data.get("mode")
     if mode is not None and mode not in autonomy_service.VALID_MODES:
         return jsonify({
@@ -438,8 +435,15 @@ def auto_submit_put_settings():
             "message": f"mode must be one of {list(autonomy_service.VALID_MODES)}",
         }), 400
 
+    # Optional: tailor-before-apply preference (default True server-side).
+    use_tailored = data.get("use_tailored_resume")
+    if use_tailored is not None and not isinstance(use_tailored, bool):
+        return jsonify({"error": "use_tailored_resume must be a boolean"}), 400
+
     try:
-        result = auto_submit_service.set_settings(user_email, enabled)
+        result = auto_submit_service.set_settings(
+            user_email, enabled, use_tailored_resume=use_tailored,
+        )
         if threshold is not None:
             result["autonomy_threshold"] = autonomy_service.set_autonomy_threshold(
                 user_email, float(threshold)

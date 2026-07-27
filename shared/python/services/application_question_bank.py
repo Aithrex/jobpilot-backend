@@ -243,6 +243,8 @@ FIELDS: List[Dict[str, Any]] = [
        options=_VETERAN_OPTIONS, default_policy=POLICY_DECLINE_DEFAULT),
     _f("disability_status", "Disability status (CC-305)", CAT_EEO, SENS_PROTECTED, VT_SELECT, "select",
        [r"disabilit", r"\bdisabled\b", r"person with a disability",
+        r"please check one of the boxes", r"voluntary self.?identif",
+        r"formfield.?disabilityform"],
         r"identify as .*disab", r"cc ?305", r"form cc 305", r"voluntary self ?identif",
         r"check one of the boxes below", r"don.?t wish to answer"],
        options=_DISABILITY_OPTIONS, default_policy=POLICY_DECLINE_DEFAULT),
