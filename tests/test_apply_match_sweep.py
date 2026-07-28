@@ -41,6 +41,25 @@ from services import job_inventory_service as inv
 USER = "alice@aspirely.me"
 NOW = datetime.now(timezone.utc)
 
+
+def _load_migrate_indexes():
+    """Load `scripts/migrate_indexes.py` by FILE PATH.
+
+    `scripts/` is not a package and is not guaranteed to be on `sys.path`:
+    importing it as `scripts.migrate_indexes` resolves when pytest is run from
+    the repo root and raises ModuleNotFoundError in CI. Resolving relative to
+    this file makes the test independent of the invocation.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "migrate_indexes.py"
+    assert path.is_file(), f"migrate_indexes.py not found at {path}"
+    spec = importlib.util.spec_from_file_location("_migrate_indexes_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 SWE_JD = (
     "Senior Backend Engineer\n\n"
     "Requirements:\n"
@@ -430,8 +449,11 @@ class TestDailyCap:
         `idempotency_key` alone makes the key namespace cross-tenant AND
         perpetual: it is what turned one user's reservation into every user's, and
         without a TTL the keys outlive the periods they belong to."""
-        import importlib
-        mig = importlib.import_module("scripts.migrate_indexes")
+        # Load by PATH, not by module name. `scripts/` is not a package and is
+        # not on sys.path under every pytest invocation — importing it by name
+        # passes locally (repo root happens to be on the path) and raises
+        # ModuleNotFoundError in CI.
+        mig = _load_migrate_indexes()
 
         specs = [(keys, opts) for coll, keys, opts in mig.INDEX_SPECS
                  if coll == "quota_ledger"]
