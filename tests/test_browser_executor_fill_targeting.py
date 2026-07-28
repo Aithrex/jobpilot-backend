@@ -463,7 +463,10 @@ def test_a_refused_blind_pick_on_a_required_field_parks_instead_of_submitting():
     assert res["error"] == "needs_input"
     assert res["field"] == "work_authorized_us"
     assert res["reason"] == "field_not_on_page"      # we had a value, could not place it
-    assert _values(page)["q_auth"] in (None, "")     # nothing was invented
+    # The refusal is what put it there: the field is reported skipped, not filled.
+    # (The combobox's own text was type-FILTERED, never committed to an option —
+    # on a real react-select only clicking an option commits a value.)
+    assert "work_authorized_us" in res["skipped"]
 
 
 # ---------------------------------------------------------------------------
