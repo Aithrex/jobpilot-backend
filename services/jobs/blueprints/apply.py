@@ -36,6 +36,7 @@ from services import autonomy_service
 from services import application_ledger_service
 from services import approval_token_service
 from services import ats_credential_service
+from services import reveal_reauth_service
 from services import today_inbox_service
 from services import apply_onboarding_service
 
@@ -1070,11 +1071,21 @@ def needs_input_wall_cleared():
 #
 # The password is ALWAYS server-generated: the client never sends one (a PUT
 # carrying a password is rejected). Reveal is a single, audited plaintext egress
-# gated by a FRESH account-password re-auth + tight rate limit. Every route is
+# gated by a FRESH step-up re-auth + tight rate limit. Every route is
 # @jwt_required and user_email-scoped; typed CredentialError maps to
 # 400/403/404/409/429/503 — never 401.
+#
+# The step-up factor is chosen by the ACCOUNT, not by the client: an OAuth-only
+# signup (the primary path) has no password_hash, so demanding one made the
+# reveal permanently unreachable. reveal_reauth_service owns the decision and
+# GET /credentials/reauth-methods publishes it, so the FE never has to infer
+# capability from an error.
 # ==================================================================
 def _credential_error(e: "ats_credential_service.CredentialError"):
+    return jsonify({"error": e.error, "message": e.message}), e.status
+
+
+def _reauth_error(e: "reveal_reauth_service.ReauthError"):
     return jsonify({"error": e.error, "message": e.message}), e.status
 
 
@@ -1121,14 +1132,55 @@ def put_ats_credential():
         return jsonify({"error": "Failed to store credential"}), 500
 
 
+@apply_bp.route("/credentials/reauth-methods", methods=["GET"])
+@jwt_required()
+def ats_reveal_reauth_methods():
+    """Which step-up factors THIS account can complete, so the reveal dialog can
+    render the right one instead of guessing from a 403.
+
+    Reads the caller's own account only (JWT identity) — no lookup by a
+    client-supplied address, so this can't be used to probe other accounts."""
+    user_email = get_jwt_identity()
+    try:
+        view = reveal_reauth_service.methods_view(user_email)
+        view["challenge"] = reveal_reauth_service.peek_challenge(user_email)
+        return jsonify(view), 200
+    except reveal_reauth_service.ReauthError as e:
+        return _reauth_error(e)
+    except Exception as e:
+        logger.exception("apply/credentials reauth-methods error: %s", e)
+        return jsonify({"error": "Failed to load verification options"}), 500
+
+
+@apply_bp.route("/credentials/reveal/challenge", methods=["POST"])
+@jwt_required()
+def ats_reveal_challenge():
+    """Mail a single-use code to the account's REGISTERED address.
+
+    The destination is the JWT identity — the request body cannot name one. The
+    service rate-limits sends across containers, keeps at most one live code per
+    user, stores only its bcrypt hash, and refuses (503) rather than let the
+    dev/ops console fallback print a working code."""
+    user_email = get_jwt_identity()
+    try:
+        return jsonify(reveal_reauth_service.send_email_code(user_email)), 200
+    except reveal_reauth_service.ReauthError as e:
+        return _reauth_error(e)
+    except Exception as e:
+        logger.exception("apply/credentials reveal challenge error: %s", e)
+        return jsonify({"error": "Failed to send verification code"}), 500
+
+
 @apply_bp.route("/credentials/reveal", methods=["POST"])
 @jwt_required()
 def reveal_ats_credential():
-    """Reveal-on-demand: fresh bcrypt re-auth against the account password, a
-    tight per-user rate limit, and a hard-required audit write in the service."""
+    """Reveal-on-demand: a fresh step-up re-auth (account password OR an emailed
+    single-use code), a tight per-user rate limit, and a hard-required audit
+    write BEFORE the decrypt inside the service."""
     user_email = get_jwt_identity()
 
-    # Tight rate limit — a reveal is a sensitive plaintext egress.
+    # Tight rate limit — a reveal is a sensitive plaintext egress. Counted
+    # before any factor is examined, so it also bounds code/password guessing.
     limiter = get_rate_limiter()
     if limiter.is_rate_limited(
         f"cred_reveal:{user_email}", max_requests=5, window_seconds=300
@@ -1139,47 +1191,34 @@ def reveal_ats_credential():
         }), 429
 
     data = request.get_json(silent=True) or {}
-    password = data.get("password")
-    if not password or not isinstance(password, str):
-        return jsonify({
-            "error": "reauth_required",
-            "message": "Your account password is required to reveal a stored credential.",
-        }), 400
 
-    # Fresh re-auth against users.password_hash (never logged).
-    from models.user import User
+    # Fresh re-auth. Neither secret is ever logged; the service picks the method
+    # from what was supplied and enforces what the account actually supports.
     try:
-        db = DBConnect().get_db()
-        user = db.users.find_one({"email": user_email}, {"password_hash": 1})
+        method = reveal_reauth_service.verify(
+            user_email, password=data.get("password"), code=data.get("code")
+        )
+    except reveal_reauth_service.ReauthError as e:
+        return _reauth_error(e)
     except Exception as e:
-        logger.exception("apply/credentials reveal reauth lookup error: %s", e)
+        logger.exception("apply/credentials reveal reauth error: %s", e)
         return jsonify({"error": "Failed to reveal credential"}), 500
-    if not user or not user.get("password_hash"):
-        # OAuth-only account: there is no account password to re-auth against, so
-        # the reveal gate cannot be satisfied. 403 with a DISTINCT code (never
-        # 401) so the FE can tell the user to set a password instead of showing
-        # "wrong password" for a password they never had.
-        return jsonify({
-            "error": "reauth_unavailable",
-            "message": ("Set an account password (Forgot password) before "
-                        "revealing a stored employer login."),
-        }), 403
-    if not User.verify_password(password, user["password_hash"]):
-        # 403 (not 401): a failed re-auth is a business failure, not a missing JWT.
-        return jsonify({
-            "error": "reauth_failed",
-            "message": "Password verification failed.",
-        }), 403
 
     try:
-        return jsonify(ats_credential_service.reveal(
+        secret = ats_credential_service.reveal(
             user_email, data.get("ats_family"), data.get("tenant", "")
-        )), 200
+        )
     except ats_credential_service.CredentialError as e:
         return _credential_error(e)
     except Exception as e:
         logger.exception("apply/credentials reveal error: %s", e)
         return jsonify({"error": "Failed to reveal credential"}), 500
+
+    if method == reveal_reauth_service.METHOD_EMAIL_CODE:
+        # The code did its job — drop the consumed row rather than leave it for
+        # the TTL sweep.
+        reveal_reauth_service.clear_for_user(user_email)
+    return jsonify(secret), 200
 
 
 @apply_bp.route("/credentials/reset", methods=["POST"])

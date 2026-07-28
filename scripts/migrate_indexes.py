@@ -286,6 +286,10 @@ INDEX_SPECS = [
     # ATS credential vault (Tranche 1 §4)
     ("ats_credentials", [("user_email", ASCENDING), ("ats_family", ASCENDING), ("tenant", ASCENDING)], {"unique": True, "name": "user_family_tenant_unique"}),
     ("ats_credential_audit", [("user_email", ASCENDING), ("at", DESCENDING)], {"name": "user_email_at"}),
+    # Reveal step-up challenges (reveal_reauth_service). ONE live code per user,
+    # server-reaped so a forgotten challenge can't outlive its window.
+    ("credential_reveal_challenges", [("user_email", ASCENDING)], {"unique": True, "name": "user_email_unique"}),
+    ("credential_reveal_challenges", [("expires_at", ASCENDING)], {"expireAfterSeconds": 0, "name": "ttl_expires_at"}),
 
     # === auto-apply Tranche 2/3 ============================================
     # cross-user trend signal

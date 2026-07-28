@@ -108,6 +108,7 @@ CASCADE_COLLECTIONS: List[Tuple[str, str]] = [
     ("approval_tokens", "user_email"),
     ("ats_credentials", "user_email"),
     ("ats_credential_audit", "user_email"),
+    ("credential_reveal_challenges", "user_email"),
     # --- auto-apply Tranche 2/3 (answers cache, verify freezes, answer library);
     #     skill_market_stats is cross-user aggregate data, NOT user-keyed — excluded ---
     ("auto_apply_answers", "user_email"),
