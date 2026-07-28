@@ -30,12 +30,21 @@ import lxml.html
 
 # ---------------------------------------------------------------------------
 # Tiny CSS -> XPath translator (the fixed subset the adapters use).
-# Supports: comma lists, a leading tag or '*', '#id', '.class', and attribute
-# selectors '[a]', '[a=v]', '[a*=v]', '[a^=v]', '[a$=v]' (quoted or bare values).
+# Supports: comma lists, a leading tag or '*', '#id', '.class', attribute
+# selectors '[a]', '[a=v]', '[a*=v]', '[a^=v]', '[a$=v]' (quoted or bare values),
+# and Playwright's ``:has-text('...')`` pseudo-class.
 # No combinators are needed (the adapters query single compound selectors and do
 # any structural/text work in Python).
+#
+# ``:has-text`` is NOT decoration: `_click_submit` asks for
+# ``button:has-text('Submit application')`` and a real ATS form carries several
+# other buttons (a react-select's "Toggle flyout", the résumé "Attach"). Ignoring
+# the text filter silently returned the FIRST button on the page, i.e. the
+# harness clicked the wrong control and no fixture with more than one button
+# could ever be trusted.
 # ---------------------------------------------------------------------------
 _TAG_RE = re.compile(r"^([a-zA-Z][\w-]*|\*)")
+_HAS_TEXT_RE = re.compile(r""":has-text\(\s*(['"])(.*?)\1\s*\)""")
 _TOKEN_RE = re.compile(r"\#([\w-]+)|\.([\w-]+)|\[([^\]]*)\]")
 _ATTR_RE = re.compile(r"\s*([\w:-]+)\s*(?:([*^$]?=)\s*(.*))?$")
 
@@ -72,6 +81,8 @@ def _attr_pred(body: str) -> str:
 
 def _simple_to_xpath(sel: str) -> str:
     sel = sel.strip()
+    texts = [m.group(2) for m in _HAS_TEXT_RE.finditer(sel)]
+    sel = _HAS_TEXT_RE.sub("", sel)
     tag, i = "*", 0
     m = _TAG_RE.match(sel)
     if m:
@@ -85,6 +96,12 @@ def _simple_to_xpath(sel: str) -> str:
                          % tok.group(2))
         else:
             preds.append(_attr_pred(tok.group(3)))
+    # Playwright's :has-text is a case-insensitive SUBSTRING match on the
+    # element's rendered text (which is also why the executor must never use it
+    # to pick a country - see browser_executor._click_option_by_text).
+    for text in texts:
+        preds.append("contains(translate(., %s, %s), %s)" % (
+            _xstr(text.upper()), _xstr(text.lower()), _xstr(text.lower())))
     return "//" + tag + "".join("[%s]" % p for p in preds)
 
 
@@ -251,12 +268,143 @@ class FakePage:
     def _on_click(self, element: FakeElement) -> None:
         self.clicks += 1
         node = element._node
+        # react-select parity (the SECOND stateful thing a modern ATS form does).
+        # A div-based combobox renders NO option until its listbox is opened, and
+        # a value is committed ONLY by clicking a rendered row - never by typing.
+        # Both halves are modelled so the executor's open -> read -> match ->
+        # click path is exercised end to end against
+        # tests/fixtures/ats/greenhouse_react_select.html.
+        if self._react_select_click(element):
+            return
         typ = (node.get("type") or "").lower()
         is_submit = (node.tag == "button" and typ in ("", "submit")) \
             or (node.tag == "input" and typ == "submit")
         if is_submit and self._next_html is not None:
             self._tree = lxml.html.fromstring(self._next_html)
             self._next_html = None  # consume once — the click is not repeatable
+
+    # -- react-select modelling ---------------------------------------------
+    #: Class tokens that bound the walk from a clicked node up to the ONE
+    #: combobox it belongs to. Without a bound, a page with two comboboxes would
+    #: open both (and a click near the page root would find someone else's menu).
+    _SELECT_SHELL_CLASSES = ("select-shell", "select__container", "select")
+
+    def _select_shell(self, node):
+        """The nearest enclosing combobox that owns a `.select__menu`."""
+        cur = node
+        while cur is not None and hasattr(cur, "get"):
+            classes = (cur.get("class") or "").split()
+            if any(c in classes for c in self._SELECT_SHELL_CLASSES):
+                if cur.xpath(".//*[contains(concat(' ',normalize-space(@class),"
+                             "' '),' select__menu ')]"):
+                    return cur
+            cur = cur.getparent()
+        return None
+
+    def _react_select_click(self, element: FakeElement) -> bool:
+        """Model one click on a react-select. Returns True when this WAS a
+        combobox interaction (so the caller stops); False leaves the click to
+        the ordinary submit handling."""
+        node = element._node
+        shell = self._select_shell(node)
+        if shell is None:
+            return False
+        menus = shell.xpath(".//*[contains(concat(' ',normalize-space(@class),"
+                            "' '),' select__menu ')]")
+        inputs = shell.xpath(".//*[contains(concat(' ',normalize-space(@class),"
+                             "' '),' select__input ')]")
+        if not menus or not inputs:
+            return False
+        menu, box = menus[0], inputs[0]
+        if " select__option " in " %s " % " ".join((node.get("class") or "").split()):
+            # Commit: the option's own text becomes the control's value, and the
+            # listbox closes - exactly what react-select does on select.
+            box.set("value", (node.text_content() or "").strip())
+            box.set("aria-expanded", "false")
+            menu.set("style", "display:none")
+            return True
+        # Anything else inside the control (the input itself, the "Toggle
+        # flyout" button) OPENS the listbox.
+        menu.set("style", "")
+        box.set("aria-expanded", "true")
+        return True
+
+
+# ---------------------------------------------------------------------------
+# Locator surface — OPT IN ONLY.
+#
+# `FakePage` deliberately has NO `locator`: `ats_adapters.WorkdayAdapter` probes
+# `hasattr(page, "locator")` to tell a live Playwright page from this harness
+# (`_fill_dropdown` / `_fill_month_year` short-circuit on it), so growing one on
+# FakePage would silently re-route the whole Workday suite.
+#
+# `LocatorPage` is the opt-in for the ONE place that needs it: proving what
+# `browser_executor._fill_select` does with `page.locator(...)`. Without it every
+# such call raised AttributeError into an `except Exception: continue`, so the
+# substring (`:has-text`) option click and the blind fallbacks were invisible to
+# the offline suite — a test could not tell "we refused to guess" from "the
+# harness could not reach the guess".
+# ---------------------------------------------------------------------------
+def _scoped(node, sel: str):
+    """Descendants of ``node`` matching ``sel`` (CSS, or ``xpath=...``)."""
+    if sel.startswith("xpath="):
+        return node.xpath(sel[len("xpath="):])
+    scoped = " | ".join("." + part.strip()
+                        for part in css_to_xpath(sel).split("|"))
+    return node.xpath(scoped)
+
+
+class FakeLocator:
+    """The Playwright ``Locator`` subset the executor uses: ``.first`` /
+    ``count()`` / ``is_visible()`` / ``inner_text()`` / ``click()`` and a SCOPED
+    ``.locator()`` (CSS or ``xpath=``)."""
+
+    def __init__(self, page: FakePage, nodes):
+        self._page = page
+        self._nodes = list(nodes)
+
+    @property
+    def first(self) -> "FakeLocator":
+        return FakeLocator(self._page, self._nodes[:1])
+
+    def count(self) -> int:
+        return len(self._nodes)
+
+    def is_visible(self) -> bool:
+        return bool(self._nodes) and FakeElement(self._nodes[0],
+                                                 self._page).is_visible()
+
+    def inner_text(self) -> str:
+        if not self._nodes:
+            raise ValueError("locator.inner_text: no element")
+        return FakeElement(self._nodes[0], self._page).inner_text()
+
+    def click(self, **kwargs) -> None:
+        if not self._nodes:
+            raise ValueError("locator.click: no element")
+        FakeElement(self._nodes[0], self._page).click()
+
+    def locator(self, sel: str) -> "FakeLocator":
+        out, seen = [], set()
+        for node in self._nodes:
+            for hit in _scoped(node, sel):
+                if id(hit) not in seen:
+                    seen.add(id(hit))
+                    out.append(hit)
+        return FakeLocator(self._page, out)
+
+
+class LocatorPage(FakePage):
+    """A ``FakePage`` that also answers ``locator()`` / ``focus()``."""
+
+    def locator(self, selector: str) -> FakeLocator:
+        if selector.startswith("xpath="):
+            return FakeLocator(self, self._tree.xpath(selector[len("xpath="):]))
+        return FakeLocator(self, self._tree.xpath(css_to_xpath(selector)))
+
+    def focus(self, selector: str) -> None:
+        if self.query_selector(selector) is None:
+            raise ValueError("focus: no element for %r" % selector)
 
 
 def _read(path) -> str:

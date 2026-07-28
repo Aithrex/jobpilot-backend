@@ -1219,6 +1219,30 @@ _ARTIFACT_FAILED_QUESTION = (
     "site — or retry and we'll try the upload again."
 )
 
+#: Copy for a field we HOLD the user's answer to and could not place on the
+#: employer's form. It must not read like a question: asking again is what
+#: produced the reported loop (Adyen re-asked `country` six times), and the
+#: user's answer was never the problem.
+_UNPLACEABLE_QUESTION = (
+    "We have your answer for “{label}”, but this employer's form "
+    "wouldn't accept it from us — their control isn't one we can drive yet. "
+    "Open the application and set that one field yourself; everything else is "
+    "already filled in."
+)
+_UNPLACEABLE_QUESTION_NO_LABEL = (
+    "We have your answer for one field, but this employer's form wouldn't "
+    "accept it from us. Open the application and set it yourself; everything "
+    "else is already filled in."
+)
+
+
+def _unplaceable_question(label: Optional[str]) -> str:
+    """The hand-off sentence for a field whose held answer we could not place."""
+    clean = _clean(label, 120)
+    if not clean:
+        return _UNPLACEABLE_QUESTION_NO_LABEL
+    return _UNPLACEABLE_QUESTION.format(label=clean)
+
 
 class AutoApplyError(Exception):
     """Typed service error — the route maps `status`/`error` onto the HTTP
@@ -2369,6 +2393,34 @@ def finalize_submission(application_id: str, user_email: str, *,
             _EXECUTOR_ARTIFACT_PREFIXES)
         if artifact:
             kind = "attachment_failed"
+        # …AND EXCEPT a field the user HAS ALREADY ANSWERED. This is the reported
+        # bug: "some of them are not going through and asking the same thing more
+        # times" — live, Adyen re-asked `country` SIX times while the row's own
+        # answer sheet held "United States of America" at coverage 1.0. The
+        # executor's report for that case is not "we need an answer", it is
+        # `field_not_on_page`: we HAD the vetted value and could not place it on
+        # the form (see `browser_executor._presubmit_gaps`, which only emits that
+        # reason for an ANSWERED field). Re-parking it as a fresh `screening`
+        # question made the loop unbreakable by construction — the user answers,
+        # `resume_after_answers` sees no open item, the row goes
+        # ready → approved → submit, the same fill fails, and it re-parks.
+        #
+        # So ask the answer sheet, not the reason string: if we still hold a
+        # non-empty answer for this field, the answer is not what is missing.
+        # Park it as a HAND-OFF instead — outside `_ANSWERABLE_KINDS`, so nothing
+        # can "resume" the row into the identical failure, and carrying the apply
+        # URL so the user can finish the one field we could not place.
+        held = None
+        if named_field and not artifact:
+            try:
+                held = _load_answers(application_id, user_email).get(fid)
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("finalize_submission %s: answer sheet unreadable "
+                               "(%s) — treating %s as unanswered",
+                               application_id, e, fid)
+        unplaceable = held not in (None, "", [], {})
+        if unplaceable:
+            kind = "fill_failed"
         # Keep the REAL question. The placeholder below used to overwrite the
         # form's own label (and drop the option list) on every re-park, so after
         # one round-trip the user was staring at "We need your answer to continue
@@ -2380,7 +2432,12 @@ def finalize_submission(application_id: str, user_email: str, *,
                       and _clean(i.get("field_id"), 200) == fid), None)
         item: Dict[str, Any] = {"kind": kind, "field_id": fid}
         item.update(_needs_control_meta(fid, prior))
-        label = _clean((prior or {}).get("question"), 500)
+        # …but only a QUESTION's text is a field label. A hand-off item's
+        # `question` is a whole sentence of user copy, and re-reading it as the
+        # label nests it inside the next one ("We have your answer for “We have
+        # your answer for “Country”, but…”") on every re-drive.
+        label = (_clean((prior or {}).get("question"), 500)
+                 if (prior is None or _answerable(prior)) else "")
         if not label and named_field:
             try:
                 from services import application_question_bank as qb
@@ -2392,6 +2449,14 @@ def finalize_submission(application_id: str, user_email: str, *,
             item["question"] = _ARTIFACT_FAILED_QUESTION
             item["action"] = "complete_in_browser"
             item["apply_url"] = _clean(app.get("apply_url"), 2000)
+        elif unplaceable:
+            item["question"] = _unplaceable_question(label)
+            item["action"] = "complete_in_browser"
+            item["wall_kind"] = "fill_failed"
+            item["apply_url"] = _clean(app.get("apply_url"), 2000)
+            # An enumerated control we could not drive must not be re-rendered as
+            # a select the user "answers" again — this is a hand-off, not a form.
+            item.pop("options", None)
         else:
             item["question"] = label or f"We need your answer to continue ({fid})."
         if (prior or {}).get("required"):
@@ -2401,8 +2466,10 @@ def finalize_submission(application_id: str, user_email: str, *,
         except ledger.InvalidTransition:
             logger.info("finalize_submission %s: cannot enter needs_input from "
                         "%s (race) — no-op", application_id, cur)
+        logger.info("finalize_submission %s: parked on %s (field=%s reason=%s "
+                    "answer_held=%s)", application_id, kind, fid, why, unplaceable)
         return {"status": ledger.STATUS_NEEDS_INPUT, "application_id": application_id,
-                "field": fid, "reason": why}
+                "field": fid, "reason": why, "answer_held": unplaceable}
 
     # SUBMIT_FAILED / anything else → clean, retryable failure.
     err = _clean(error, 500) or (status or SUBMIT_FAILED)

@@ -2089,13 +2089,129 @@ class BrowserExecutor(ExecutorAdapter):
         except Exception:
             raise last if last is not None else RuntimeError("select failed")
 
+    def _open_listbox(self, page, sel: str) -> List[Tuple[str, Any]]:
+        """Open a div-based combobox and return the options it RENDERS.
+
+        Three openers, in the order a human reaches for them, because no single
+        one is reliable across builds:
+          1. click the control (react-select opens on mousedown);
+          2. ArrowDown on the focused input — react-select's own keyboard
+             opener, and the only one that needs no hit-testing (the input is a
+             ~2 px-wide grid cell inside `.select__input-container`);
+          3. the vendor's own dropdown-indicator button, scoped to THIS control
+             (Greenhouse renders `<button aria-label="Toggle flyout">`).
+
+        Never raises: an unopenable widget returns [] and the caller asks."""
+        try:
+            page.click(sel, timeout=_CONTROL_CLICK_TIMEOUT_MS)
+        except Exception:
+            pass
+        opts = _wait_for_listbox(page)
+        if opts:
+            return opts
+        # (2) Keyboard. Kept in ONE try with the focus so a page object without a
+        # keyboard surface is never poked at all — ArrowDown also HIGHLIGHTS the
+        # first row, and a stray highlight on a gated field is not something to
+        # leave behind.
+        try:
+            page.focus(sel)
+            page.keyboard.press("ArrowDown")
+        except Exception:
+            pass
+        opts = _rendered_options(page)
+        if opts:
+            return opts
+        # (3) The vendor's own toggle.
+        for xpath in _CONTROL_ANCESTOR_XPATHS:
+            try:
+                control = page.locator(sel).locator(xpath)
+                if not control.count():
+                    continue
+                for btn in _TOGGLE_SELECTORS:
+                    loc = control.locator(btn).first
+                    if loc.count() and loc.is_visible():
+                        loc.click(timeout=_OPTION_CLICK_TIMEOUT_MS)
+                        return _wait_for_listbox(page)
+            except Exception:
+                continue
+        return []
+
+    def _click_matching_option(self, options: List[Tuple[str, Any]],
+                               field_id: str, value: str) -> bool:
+        """Click the rendered option that MEANS ``value``, or return False.
+
+        The match runs through ``application_question_bank.match_option``, so
+        geography is exact-or-same-cluster ("United States" == "United States of
+        America" == "USA") and can never resolve to a neighbouring country. No
+        confident match → False → the caller asks; never a nearest option."""
+        if not options:
+            return False
+        match = _match_form_option(field_id, value, [t for t, _ in options])
+        if not match:
+            return False
+        for i, (text, handle) in enumerate(options):
+            if text != match:
+                continue
+            try:
+                handle.click()
+            except Exception as e:
+                logger.info("fill_select: matched an option for %s but could "
+                            "not click it: %s", field_id, e)
+                return False
+            logger.info("fill_select: %s ← matched option %d/%d from the open "
+                        "listbox", field_id, i + 1, len(options))
+            return True
+        return False  # pragma: no cover - match came from this very list
+
+    def _type_filter(self, page, sel: str, text: str) -> bool:
+        """Type ``text`` into the combobox to narrow its listbox. False when the
+        widget would not take keystrokes at all."""
+        try:
+            page.fill(sel, "")
+            page.fill(sel, text)
+            return True
+        except Exception:
+            pass
+        try:
+            page.type(sel, text, delay=40)
+            return True
+        except Exception:
+            return False
+
+    def _click_option_by_text(self, page, text: str) -> bool:
+        """Last-resort SUBSTRING click for a listbox whose rows we could not
+        enumerate. Caller-gated to non-enumerated fields only: `:has-text` is a
+        substring match, so on a country list "India" also matches "British
+        Indian Ocean Territory" — a different country, i.e. a fabrication."""
+        for opt_sel in (
+            f".select__option:has-text('{_q(text)}')",
+            f"[role=option]:not(.iti__country):has-text('{_q(text)}')",
+            f"li[role=option]:has-text('{_q(text)}')",
+            f"div[class*='option']:has-text('{_q(text)}')",
+        ):
+            try:
+                loc = page.locator(opt_sel).first
+                if loc.count() and loc.is_visible():
+                    loc.click(timeout=_OPTION_CLICK_TIMEOUT_MS)
+                    return True
+            except Exception:
+                continue
+        return False
+
     def _fill_select(self, page, sel: str, value: str,
                      field_id: str = "") -> None:
         """Drive react-select / native / autocomplete comboboxes.
 
-        Prefer native ``<select>``, then type-filter + click option (Greenhouse
-        react-select). Avoids intl-tel-input country list. Falls back to
-        ArrowDown+Enter when the option list uses a non-standard selector.
+        Native ``<select>`` first. Then the div-based combobox path, which is
+        the production defect this shape exists for: a Greenhouse react-select
+        materialises NO option until its listbox opens, so the old code typed a
+        filter string and clicked blind by text — and when that missed (it did,
+        for `country` and every gated screening field: prod
+        `jobpilot-apply-executor-prod`, 2026-07-28) the field fell through to
+        the refusal and the row parked. So: OPEN the listbox, READ the labels it
+        renders, MATCH them through the question bank, CLICK the match. Typing
+        to filter is now only a way to make a long list render fewer rows — the
+        decision is always made on labels we actually read.
         """
         el = page.query_selector(sel)
         if el is not None:
@@ -2107,50 +2223,41 @@ class BrowserExecutor(ExecutorAdapter):
                     page.select_option(sel, value)
                 return
 
-        page.click(sel, timeout=5_000)
-        try:
-            page.fill(sel, "")
-            page.fill(sel, value)
-        except Exception:
-            try:
-                page.type(sel, value, delay=40)
-            except Exception:
-                pass
+        # ── 1. Open the listbox and decide on what it actually rendered. ─────
+        options = self._open_listbox(page, sel)
+        if self._click_matching_option(options, field_id, value):
+            return
 
-        # Give async location/geo option lists a moment to populate.
-        try:
-            page.wait_for_selector(
-                ".select__option, [role=option]:not(.iti__country)",
-                timeout=5_000,
-            )
-        except Exception:
-            pass
-
-        # The listbox is not enumerable until it opens, so try the alternate
-        # SPELLINGS of the declared value blind. Vendor-neutral: the synonym
-        # clusters live in the question bank, so every adapter (not just
-        # Greenhouse, which used to carry a hardcoded "United States of America"
-        # list right here) gets the same expansion. Same value, other wording —
-        # never a different value.
+        # ── 2. Type-filter, then RE-READ. Alternate spellings come from the
+        # question bank's synonym clusters (vendor-neutral — no adapter carries
+        # its own "Greenhouse sometimes says United States of America" list).
+        # Every candidate is another WORDING of the declared value, never a
+        # different value, and the match below is still made against the
+        # DECLARED value, not against the filter text.
+        forbidden = _blind_pick_forbidden(field_id)
         candidates = _option_spellings(field_id, value)
         # Location widgets often return "City, ST, Country" — also try city-only.
         if "," in value:
             candidates.append(value.split(",", 1)[0].strip())
 
-        for cand in candidates:
-            for opt_sel in (
-                f".select__option:has-text('{_q(cand)}')",
-                f"[role=option]:not(.iti__country):has-text('{_q(cand)}')",
-                f"li[role=option]:has-text('{_q(cand)}')",
-                f"div[class*='option']:has-text('{_q(cand)}')",
-            ):
-                try:
-                    loc = page.locator(opt_sel).first
-                    if loc.count() and loc.is_visible():
-                        loc.click(timeout=3_000)
-                        return
-                except Exception:
-                    continue
+        for i, cand in enumerate(candidates[:_MAX_FILTER_CANDIDATES]):
+            if not self._type_filter(page, sel, cand):
+                break
+            # Wait ONCE. A location autocomplete only populates after the first
+            # keystrokes, so the first filter earns a wait; after that the
+            # listbox is open and re-renders synchronously. Waiting per candidate
+            # would spend `_LISTBOX_WAIT_MS` × 12 on a widget that renders
+            # nothing — the exact budget burn this change is undoing.
+            options = _wait_for_listbox(page) if i == 0 else _rendered_options(page)
+            if self._click_matching_option(options, field_id, value):
+                return
+            # A listbox we could not enumerate at all. Substring-clicking it is
+            # only safe where "a different option" is not "a different fact".
+            if not forbidden and self._click_option_by_text(page, cand):
+                return
+        if options:
+            logger.info("fill_select: read %d rendered option(s) for %s — none "
+                        "means the declared value", len(options), field_id)
         # ── BLIND FALLBACKS — NEVER for a gated or enumerated field ──────────
         #
         # Everything below picks whatever option happens to be FIRST. That is a
@@ -2170,7 +2277,7 @@ class BrowserExecutor(ExecutorAdapter):
         # So: refuse. Returning without filling leaves the field in `skipped`,
         # `_presubmit_gaps` reports it, and the row parks as needs_input asking
         # the user — which is the correct answer when we genuinely do not know.
-        if _blind_pick_forbidden(field_id):
+        if forbidden:
             logger.info(
                 "fill_select: no option matched %r for %s — refusing the blind "
                 "fallback on a gated/enumerated field", value, field_id)
@@ -2687,6 +2794,94 @@ def _option_spellings(field_id: str, value: str) -> List[str]:
         return qb.option_candidates(field_id, value) or [value]
     except Exception:  # pragma: no cover - bank never load-bearing for a fill
         return [value]
+
+
+#: Selectors for the options a div-based combobox RENDERS once its listbox is
+#: open, most specific first. ``.iti__country`` is intl-tel-input's phone-prefix
+#: list, which must never be mistaken for the form's own listbox. Only the FIRST
+#: selector that renders anything is read — mixing two of them would blend a
+#: stray page-level ``[role=option]`` into the control's real choice list.
+_LISTBOX_OPTION_SELECTORS: Tuple[str, ...] = (
+    ".select__option",
+    "[role=option]:not(.iti__country)",
+    "[role=listbox] li",
+    "[class*='menu'] [class*='option']",
+)
+#: A country listbox renders ~250 rows; cap well above that but not unbounded.
+_MAX_RENDERED_OPTIONS = 400
+#: How long to wait for a listbox to render after we open (or type-filter) it.
+#: Deliberately SHORT: this ran at 5 000 ms once per enumerated field, and on the
+#: Greenhouse forms that never rendered `.select__option` at all it burned ~40 s
+#: of the executor's Lambda budget doing nothing.
+_LISTBOX_WAIT_MS = 1_500
+#: How many alternate spellings to type-filter with before giving up. The bank
+#: returns up to 12; each is a DOM round trip, and a widget that has not
+#: rendered an option by the 6th spelling is not going to.
+_MAX_FILTER_CANDIDATES = 6
+_CONTROL_CLICK_TIMEOUT_MS = 5_000
+_OPTION_CLICK_TIMEOUT_MS = 3_000
+#: XPaths from the combobox INPUT up to the react-select control that owns the
+#: dropdown indicator button (Greenhouse renders it `aria-label="Toggle flyout"`).
+#: Vendor-neutral: `select__control` is the classNamePrefix convention, `-control`
+#: the emotion-generated suffix every react-select build carries.
+_CONTROL_ANCESTOR_XPATHS: Tuple[str, ...] = (
+    "xpath=ancestor::*[contains(@class,'select__control')][1]",
+    "xpath=ancestor::*[contains(@class,'-control')][1]",
+)
+_TOGGLE_SELECTORS: Tuple[str, ...] = (
+    "button[aria-label*='Toggle' i]",
+    ".select__dropdown-indicator",
+    ".select__indicators button",
+)
+
+
+def _rendered_options(page) -> List[Tuple[str, Any]]:
+    """``[(label, element)]`` for the options a combobox has RENDERED right now.
+
+    A react-select puts no ``<option>`` in the DOM until its listbox opens, which
+    is why recon reports ``options: None`` for a Greenhouse country/screening
+    control and why the value can only be committed by CLICKING a rendered row.
+    Reading them here is what lets ``application_question_bank.match_option`` do
+    its job (exact-or-same-cluster for geography) instead of the executor
+    guessing blind.
+
+    Never raises — an unreadable widget is an empty list, i.e. "ask the user"."""
+    out: List[Tuple[str, Any]] = []
+    seen = set()
+    for sel in _LISTBOX_OPTION_SELECTORS:
+        try:
+            handles = page.query_selector_all(sel) or []
+        except Exception:
+            continue
+        for handle in handles:
+            try:
+                if not handle.is_visible():
+                    continue
+                text = " ".join((handle.inner_text() or "").split())[:200]
+            except Exception:
+                continue
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            out.append((text, handle))
+            if len(out) >= _MAX_RENDERED_OPTIONS:
+                return out
+        if out:
+            break
+    return out
+
+
+def _wait_for_listbox(page) -> List[Tuple[str, Any]]:
+    """``_rendered_options`` with one short wait for an async/animated listbox."""
+    opts = _rendered_options(page)
+    if opts:
+        return opts
+    try:
+        page.wait_for_selector(", ".join(_LISTBOX_OPTION_SELECTORS[:2]),
+                               timeout=_LISTBOX_WAIT_MS)
+    except Exception:
+        pass
+    return _rendered_options(page)
 
 
 def _native_option_labels(page, sel: str) -> List[str]:
