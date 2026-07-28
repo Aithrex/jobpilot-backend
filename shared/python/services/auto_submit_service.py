@@ -559,6 +559,15 @@ _FOLD_ATTENTION: Tuple[str, ...] = (
     # strictly better than silence; the FE renders it via StatusRowCard.
     "needs_input", "waiting_human", "submission_unknown", "unsupported", "failed",
 )
+# IN-FLIGHT — the row is being worked on RIGHT NOW and has no action for the user.
+# All three have live writers and none was folded, so the row vanished from the
+# Auto-Apply tab for the whole run: `queued` (create_application's default),
+# `gathering` (auto_apply_service.gather), `running` (a remote browser run that
+# takes MINUTES). The card only came back if the run FAILED — the same
+# "applications just go missing" complaint we closed for terminal rows.
+# Surfaced read-only (already_approved True, so the FE never renders a second
+# Approve) but NOT eligible: nothing is cleared for the extension to submit.
+_FOLD_INFLIGHT: Tuple[str, ...] = ("queued", "gathering", "running")
 _ACCOUNT_GATE_PROMPT = (
     "Sign in or create an account on the employer's career site to continue."
 )
@@ -626,8 +635,13 @@ def list_canonical_approvals(user_email: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     try:
         from services import application_ledger_service as als
-        for status in _FOLD_AWAITING + _FOLD_APPROVED + _FOLD_ATTENTION:
-            already = status in _FOLD_APPROVED
+        for status in (_FOLD_AWAITING + _FOLD_APPROVED + _FOLD_INFLIGHT
+                       + _FOLD_ATTENTION):
+            # An in-flight row is read-only like an approved one, but it is NOT
+            # eligible: only an approved/queued_for_execution row is cleared to
+            # submit.
+            already = status in _FOLD_APPROVED or status in _FOLD_INFLIGHT
+            eligible = status in _FOLD_APPROVED
             for r in als.list_applications(user_email, status=status, limit=100):
                 url = r.get("apply_url")
                 payload = {
@@ -636,7 +650,7 @@ def list_canonical_approvals(user_email: str) -> List[Dict[str, Any]]:
                     "status": status,
                     "already_approved": already,
                     # only an approved/queued row is cleared for the extension.
-                    "eligible": already,
+                    "eligible": eligible,
                     "ats": r.get("ats_family"),
                     "title": r.get("title"), "company": r.get("company"),
                     "source": "ledger",
@@ -689,9 +703,14 @@ def _stamp_fold_undo(user_email: str, rows: List[Dict[str, Any]]) -> None:
     """Attach `undo_until` (+ `approved_at`) to every APPROVED folded row, in ONE
     query, derived from the frozen approval snapshot's `approved_at` +
     UNDO_WINDOW_SECONDS — the same cancel buffer a legacy System-A approval has.
-    Without it the approved card shows no cancel window at all."""
+    Without it the approved card shows no cancel window at all.
+
+    Keyed on the APPROVED statuses, not on `already_approved`: an in-flight row
+    (`running`) is read-only too, but it has left the cancellable window
+    (`cancel_ledger` refuses it), so offering a countdown + Cancel there would be
+    a button that cannot work."""
     ids = [r.get("application_id") for r in rows
-           if r.get("already_approved") and r.get("application_id")]
+           if r.get("status") in _FOLD_APPROVED and r.get("application_id")]
     if not ids:
         return
     try:

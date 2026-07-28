@@ -406,6 +406,10 @@ _VALID_AUTONOMY = ("auto", "hold", "ask")
 # Bounded needs_input so the one-tap queue can never grow a document without
 # limit (no unbounded arrays — same spirit as apply.py::_MAX_VAULT_BYTES).
 _MAX_NEEDS_INPUT_ITEMS = 50
+# Enumerated choices carried with a needs_input question (the form's own option
+# list, so the FE can render a select instead of a free-text box). Bounded for
+# the same reason as the item list itself.
+_MAX_NEEDS_INPUT_OPTIONS = 40
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -637,10 +641,10 @@ def _parse_closes_at(value: Any) -> Optional[datetime]:
     raise InvalidApplicationInput("posting_closes_at must be ISO-8601")
 
 
-def _sanitize_needs_input(items: Any) -> List[Dict[str, str]]:
+def _sanitize_needs_input(items: Any) -> List[Dict[str, Any]]:
     """Bound + sanitize the one-tap review queue items ({question, kind,
     field_id}). Silently drops malformed entries; caps the list."""
-    out: List[Dict[str, str]] = []
+    out: List[Dict[str, Any]] = []
     if not isinstance(items, list):
         return out
     for item in items[:_MAX_NEEDS_INPUT_ITEMS]:
@@ -649,7 +653,7 @@ def _sanitize_needs_input(items: Any) -> List[Dict[str, str]]:
         question = _clean_str(item.get("question"), 500)
         if not question:
             continue
-        entry = {
+        entry: Dict[str, Any] = {
             "question": question,
             "kind": _clean_str(item.get("kind"), 40),
             "field_id": _clean_str(item.get("field_id"), 200),
@@ -662,6 +666,22 @@ def _sanitize_needs_input(items: Any) -> List[Dict[str, str]]:
         action = _clean_str(item.get("action"), 40)
         if action:
             entry["action"] = action
+        # Optional CONTROL metadata (`auto_apply_service._needs_item`). Dropping
+        # it here is what made the FE render a plain text box for an enumerated
+        # select: the user typed a value no option matched, the executor reported
+        # `no_option_match`, the row re-parked — forever. Persisted so the fold
+        # (which reads this stored row, not the answer response) carries it too.
+        value_type = _clean_str(item.get("value_type"), 40)
+        if value_type:
+            entry["value_type"] = value_type
+        options = item.get("options")
+        if isinstance(options, list):
+            opts = [o for o in (_clean_str(o, 200)
+                                for o in options[:_MAX_NEEDS_INPUT_OPTIONS]) if o]
+            if opts:
+                entry["options"] = opts
+        if item.get("required"):
+            entry["required"] = True
         out.append(entry)
     return out
 

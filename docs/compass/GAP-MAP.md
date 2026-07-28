@@ -23,7 +23,7 @@
 | Compass §6.4 | JobPilot | State |
 |---|---|---|
 | Chrome MV3 extension | `jobpilot-frontend/extension/` (Apply Assistant) | ✅ exists, wired to `apply.py` |
-| Field fill + essay answers, grounded | `answer_generator.py` (jobs svc) | ✅ production-grade backend |
+| Field fill + essay answers, grounded | `answer_generator.py` (shared layer) | ✅ production-grade backend; wired into `auto_apply_service.gather` |
 | 8-ATS adapters + Review Card + confidence/diff | extension | 🟡 needs adapter breadth + Review Card overlay |
 | Fill/Review/One-Tap (no auto-submit) | design | ✅ human-approves is already the stance |
 | Morning WhatsApp digest / notification fan-out | `daily_pipeline_service` | 🟡 digest logic exists; WhatsApp/SMS/push channel abstraction is the gap |

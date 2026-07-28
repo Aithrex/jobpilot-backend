@@ -289,7 +289,7 @@ def _freezes_coll():
 # ---------------------------------------------------------------------------
 def _resolve_answers(user_email: str,
                      questions: List[Dict[str, Any]],
-                     company: str = "") -> Tuple[Dict[str, Any], List[Dict[str, str]], Dict[str, Any]]:
+                     company: str = "") -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
     """Resolve normalized questions against the canonical profile via the answer
     library. Returns ``(answers, needs_input_items, resolution)``:
 
@@ -306,7 +306,7 @@ def _resolve_answers(user_email: str,
     this service invented.
     """
     answers: Dict[str, Any] = {}
-    needs_input: List[Dict[str, str]] = []
+    needs_input: List[Dict[str, Any]] = []
 
     resolution = _call_answer_library(user_email, questions, company=company)
     resolved_map = resolution.get("resolved") or {}
@@ -434,12 +434,72 @@ def _value_of(hit: Any) -> Any:
     return hit
 
 
-def _needs_item(q: Dict[str, Any], *, kind: str) -> Dict[str, str]:
-    return {
-        "question": _clean(q.get("label"), 500) or _clean(q.get("field_id"), 200),
+_MAX_NEEDS_OPTIONS = 40
+
+
+def _needs_control_meta(field_id: str,
+                        source: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The CONTROL metadata for one needs_input question — {value_type?, options?}.
+
+    Why it must travel: without it the FE has nothing but the prompt text and
+    falls back to a free-text box (`needsInput.inferControl`). For an enumerated
+    select (`how_did_you_hear` → "Company website" | "LinkedIn" | …) the user then
+    types something no option matches, the fill driver reports `no_option_match`,
+    and the row re-parks — an unbreakable loop, PLUS the typed value gets banked
+    in the answer library and poisons every future application.
+
+    Prefers the FORM's own shape (`normalize_recon_questions` already produces
+    `type` + `options` — those are the choices this ATS will actually accept) and
+    falls back to the closed question-bank catalog, so an item that was parked
+    without recon metadata (e.g. an executor re-park) still renders a real
+    control."""
+    meta: Dict[str, Any] = {}
+    src = source if isinstance(source, dict) else {}
+
+    value_type = _clean(src.get("value_type") or src.get("type"), 40)
+    options: List[str] = []
+    raw_options = src.get("options")
+    if isinstance(raw_options, list):
+        options = [o for o in (_clean(o, 200)
+                               for o in raw_options[:_MAX_NEEDS_OPTIONS]) if o]
+
+    if not value_type or not options:
+        bank = None
+        if field_id:
+            try:
+                from services import application_question_bank as qb
+                bank = qb.get_field(field_id)
+            except Exception:  # pragma: no cover - parallel build safety
+                bank = None
+        if bank:
+            bank_vt = _clean(bank.get("value_type"), 40)
+            value_type = value_type or bank_vt
+            # A Yes/No field needs no option list: `value_type: "boolean"` already
+            # tells the FE to render the two pills, and it serializes them as real
+            # booleans (which is what the declared store wants).
+            if not options and bank_vt != "boolean":
+                options = [o for o in (_clean(o, 200)
+                                       for o in (bank.get("options") or
+                                                 [])[:_MAX_NEEDS_OPTIONS]) if o]
+
+    if value_type:
+        meta["value_type"] = value_type
+    if options:
+        meta["options"] = options
+    return meta
+
+
+def _needs_item(q: Dict[str, Any], *, kind: str) -> Dict[str, Any]:
+    fid = _clean(q.get("field_id"), 200)
+    item: Dict[str, Any] = {
+        "question": _clean(q.get("label"), 500) or fid,
         "kind": kind,
-        "field_id": _clean(q.get("field_id"), 200),
+        "field_id": fid,
     }
+    item.update(_needs_control_meta(fid, q))
+    if q.get("required"):
+        item["required"] = True
+    return item
 
 
 def _coverage(questions: List[Dict[str, Any]], answers: Dict[str, Any]) -> float:
@@ -547,7 +607,7 @@ def _apply_generated_free_text(application_id: str, user_email: str,
                                app: Dict[str, Any],
                                resolution: Dict[str, Any],
                                answers: Dict[str, Any],
-                               needs_input: List[Dict[str, str]]
+                               needs_input: List[Dict[str, Any]]
                                ) -> Tuple[Dict[str, Any], bool]:
     """Answer the form's free-text boxes from the résumé (repair spec §7).
 
@@ -963,13 +1023,20 @@ def _answerable(item: Dict[str, Any]) -> bool:
     return kind in _ANSWERABLE_KINDS
 
 
-def _needs_view(item: Dict[str, Any]) -> Dict[str, str]:
-    """The {question, kind, field_id} shape the contract returns in `remaining`."""
-    out = {
+def _needs_view(item: Dict[str, Any]) -> Dict[str, Any]:
+    """The {question, kind, field_id} shape the contract returns in `remaining`,
+    PLUS the control metadata (value_type / options / required) the FE needs to
+    render a real control instead of guessing a text box (see
+    `_needs_control_meta`), and a wall's hand-off fields (apply_url / action)."""
+    fid = _clean(item.get("field_id"), 200)
+    out: Dict[str, Any] = {
         "question": _clean(item.get("question"), 500),
         "kind": _clean(item.get("kind"), 40),
-        "field_id": _clean(item.get("field_id"), 200),
+        "field_id": fid,
     }
+    out.update(_needs_control_meta(fid, item))
+    if item.get("required"):
+        out["required"] = True
     for extra in ("apply_url", "action"):
         val = _clean(item.get(extra), 2000 if extra == "apply_url" else 40)
         if val:
@@ -1022,22 +1089,53 @@ def _sanitize_submitted_answers(answers: Any) -> Dict[str, Any]:
     return clean
 
 
-def _remember_answer(user_email: str, question: str, value: Any) -> bool:
-    """Bank ONE answer in the per-user answer library so the SAME question is
-    never asked again (spec §3.1 — `remember()` had no production caller). The
-    library keys on the normalized QUESTION text, so this needs the label, not
-    the field id. Best-effort: a library fault never breaks the resume loop."""
-    if not question:
-        return False
+def _remember_answers(user_email: str, answers: Dict[str, Any],
+                      by_field: Dict[str, Dict[str, Any]]) -> int:
+    """Bank the user's answers so the SAME question is never asked again (spec
+    §3.1) — ONE `answer_library_service.remember_many(..., declare=True)` call,
+    the API written for exactly this endpoint. Returns how many were banked.
+
+    remember_many is what makes the promise hold, and per-answer `remember()`
+    could not:
+      * it passes the catalog ``field_id`` (the key `_lookup_user_store` matches
+        FIRST), so the same question worded differently on another ATS still
+        hits. Called positionally without ``field_id=`` the memo stored
+        ``field_id: None`` and only ever matched on normalized question text.
+      * ``declare=True`` also writes the flat ``user_preferences[field_id]``
+        declared store, so provenance upgrades from ``user_store`` to
+        ``declared`` (which is what a LEGAL attestation must be sourced from —
+        see `_is_declared_source`) and the answer shows up in the profile.
+      * a field the user answered that is NOT in the current queue is still
+        banked: `remember_many` falls back to the raw key, where the old
+        `by_field.get(fid)` lookup produced an empty question and silently
+        banked NOTHING.
+
+    A WALL (captcha / verify / account gate) is never banked: it is not a
+    question, and its typed "answer" would poison every future application.
+    Best-effort — a library fault never breaks the resume loop."""
+    bankable: Dict[str, Any] = {}
+    labels: Dict[str, str] = {}
+    for fid, value in answers.items():
+        item = by_field.get(fid)
+        if item is not None and not _answerable(item):
+            continue
+        bankable[fid] = value
+        label = _clean((item or {}).get("question"), 2000)
+        if label:
+            labels[fid] = label
+    if not bankable:
+        return 0
     try:
         from services import answer_library_service
     except ImportError:  # pragma: no cover - parallel build safety
-        return False
+        return 0
     try:
-        return answer_library_service.remember(user_email, question, value) is not None
+        out = answer_library_service.remember_many(
+            user_email, bankable, labels=labels, declare=True)
     except Exception as e:  # pragma: no cover - defensive
-        logger.warning("auto_apply: remember failed for %s: %s", user_email, e)
-        return False
+        logger.warning("auto_apply: remember_many failed for %s: %s", user_email, e)
+        return 0
+    return len(out.get("remembered") or [])
 
 
 def _merge_answers(application_id: str, user_email: str,
@@ -1057,12 +1155,17 @@ def _question_from_needs_item(item: Dict[str, Any]) -> Dict[str, Any]:
     Every needs_input entry was emitted BECAUSE it was required (or a legal
     attestation), so `required` is True by construction."""
     kind = str(item.get("kind") or "").strip().lower()
-    return {
+    q: Dict[str, Any] = {
         "field_id": _clean(item.get("field_id"), 200),
         "label": _clean(item.get("question"), 500),
         "required": True,
         "is_legal_attestation": kind == "legal_attestation",
     }
+    # Carry the control metadata forward so a question that stays open is
+    # re-emitted (by `_needs_item`) with the SAME enumerated choices it was
+    # parked with — a re-park must never degrade a select into a text box.
+    q.update(_needs_control_meta(q["field_id"], item))
+    return q
 
 
 def resume_after_answers(user_email: str, application_id: str,
@@ -1110,15 +1213,11 @@ def resume_after_answers(user_email: str, application_id: str,
         pending = pending + [{"question": _ACCOUNT_GATE_QUESTION,
                               "kind": "account", "field_id": "ats_account"}]
 
-    # (1) merge + bank.
+    # (1) merge + bank (ONE remember_many — see `_remember_answers`).
     stored = dict(_load_answers(application_id, user_email))
-    remembered = 0
-    for fid, value in submitted.items():
-        stored[fid] = value
-        question = (by_field.get(fid) or {}).get("question")
-        if _remember_answer(user_email, question, value):
-            remembered += 1
+    stored.update(submitted)
     _merge_answers(application_id, user_email, stored)
+    remembered = _remember_answers(user_email, submitted, by_field)
 
     # (2) re-resolve everything still open (skip what was just answered, and the
     # walls no answer can clear).
@@ -1126,7 +1225,7 @@ def resume_after_answers(user_email: str, application_id: str,
     open_items = [i for i in pending
                   if _answerable(i) and i.get("field_id") not in submitted]
     resolution: Dict[str, Any] = {}
-    still_missing: List[Dict[str, str]] = []
+    still_missing: List[Dict[str, Any]] = []
     if open_items:
         newly, still_missing, resolution = _resolve_answers(
             user_email, [_question_from_needs_item(i) for i in open_items],
@@ -1969,11 +2068,30 @@ def finalize_submission(application_id: str, user_email: str, *,
         # therefore stays a wall no typed answer can clear. `why` is still returned
         # (and logged) so the real reason is never lost.
         kind = "screening" if named_field else why
+        # Keep the REAL question. The placeholder below used to overwrite the
+        # form's own label (and drop the option list) on every re-park, so after
+        # one round-trip the user was staring at "We need your answer to continue
+        # (how_did_you_hear)" with a free-text box — the loop this branch exists
+        # to break. Prefer the label the row was parked with, then the catalog's,
+        # and only fall back to the placeholder for a field we know nothing about.
+        prior = next((i for i in (app.get("needs_input") or [])
+                      if isinstance(i, dict)
+                      and _clean(i.get("field_id"), 200) == fid), None)
+        item: Dict[str, Any] = {"kind": kind, "field_id": fid}
+        item.update(_needs_control_meta(fid, prior))
+        label = _clean((prior or {}).get("question"), 500)
+        if not label and named_field:
+            try:
+                from services import application_question_bank as qb
+                bank = qb.get_field(fid)
+            except Exception:  # pragma: no cover - parallel build safety
+                bank = None
+            label = _clean((bank or {}).get("label"), 500)
+        item["question"] = label or f"We need your answer to continue ({fid})."
+        if (prior or {}).get("required"):
+            item["required"] = True
         try:
-            ledger.mark_needs_input(
-                user_email, application_id,
-                [{"question": f"We need your answer to continue ({fid}).",
-                  "kind": kind, "field_id": fid}])
+            ledger.mark_needs_input(user_email, application_id, [item])
         except ledger.InvalidTransition:
             logger.info("finalize_submission %s: cannot enter needs_input from "
                         "%s (race) — no-op", application_id, cur)

@@ -45,7 +45,14 @@ def db():
     d = current_db()
     for c in _COLLECTIONS:
         d[c].delete_many({})
-    return d
+    yield d
+    # Tear down as well as set up: the resume loop now DECLARES answers
+    # (`answer_library_service.remember_many(..., declare=True)` writes flat
+    # `user_preferences[field_id]` keys), and a leaked declared profile silently
+    # changes what OTHER suites resolve. Cheap, and it kills a class of
+    # cross-suite flake.
+    for c in _COLLECTIONS:
+        d[c].delete_many({})
 
 
 @pytest.fixture()
