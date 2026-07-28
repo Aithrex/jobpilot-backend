@@ -36,7 +36,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, FrozenSet, List, Optional
+import unicodedata
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -269,7 +270,13 @@ FIELDS: List[Dict[str, Any]] = [
        options=["Yes", "No"], default_policy=POLICY_CONFIRM_DEFAULT),
     _f("citizenship_countries", "Country/countries of citizenship",
        CAT_WORK_AUTH, SENS_LEGAL, VT_TEXT, "text",
-       [r"countries? of citizenship", r"country/?countries of citizenship",
+       # The SINGULAR wording matters: "Country of citizenship" used to fall
+       # through to the identity `country` field and get filled with the user's
+       # country of RESIDENCE — i.e. a fabricated citizenship claim (spec §0.1).
+       # work_auth is matched before identity, so these aliases win.
+       [r"countr(?:y|ies)(?: region)? of citizenship",
+        r"country/?countries of citizenship",
+        r"citizenship countr(?:y|ies)",
         r"enter your country.*citizenship", r"citizenship below"],
        default_policy=POLICY_FROM_PROFILE),
     _f("government_employee", "Are you a current government employee?",
@@ -574,11 +581,23 @@ for _cat in _ORDER_CATEGORIES:
 # ---------------------------------------------------------------------------
 # Text normalization (shared by the normalizer + option matcher).
 # ---------------------------------------------------------------------------
+def _fold(text: str) -> str:
+    """Strip diacritics so an accented spelling normalizes to its ASCII twin
+    ("Côte d'Ivoire" == "Cote d'Ivoire", "Türkiye" == "Turkiye"). Without this
+    the punctuation pass below turns every accented letter into a SPACE, which
+    silently shreds the word."""
+    try:
+        decomposed = unicodedata.normalize("NFKD", text or "")
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return text or ""
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
 def _norm(text: str) -> str:
-    """Lowercase, strip punctuation to single spaces. Alias/negation patterns are
-    written against this space-normalized form (so "don't" -> "don t",
-    "race/ethnicity" -> "race ethnicity")."""
-    s = (text or "").lower()
+    """Fold diacritics, lowercase, strip punctuation to single spaces.
+    Alias/negation patterns are written against this space-normalized form (so
+    "don't" -> "don t", "race/ethnicity" -> "race ethnicity")."""
+    s = _fold(text or "").lower()
     s = re.sub(r"[^a-z0-9]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
@@ -791,6 +810,213 @@ _VETERAN_NO_SYNS: FrozenSet[str] = frozenset({
     "not a veteran", "i am not a veteran", "no i am not a protected veteran",
 })
 
+# Display spellings of a decline, in the order worth TRYING on a widget whose
+# options cannot be enumerated (see ``option_candidates``). Same cluster as
+# ``_DECLINE_SYNS`` above — that one is for recognising, this one for typing.
+_DECLINE_SPELLINGS: Tuple[str, ...] = (
+    "Decline to self-identify", "Prefer not to answer", "Prefer not to say",
+    "I don't wish to answer", "I do not wish to answer",
+    "Choose not to disclose", "Decline to answer",
+)
+
+
+# ---------------------------------------------------------------------------
+# GEOGRAPHY synonym clusters (country / state-province).
+# ---------------------------------------------------------------------------
+# Country and state are ENUMERATIONS that every ATS spells its own way: the same
+# place is "United States" on one form, "United States of America" on the next
+# and "USA" on a third. The catalog types these fields as free text (we cannot
+# ask a user to pick from 200 countries in onboarding), but on the FORM they are
+# dropdowns — so a declared value has to be matched onto THIS form's own label,
+# exactly the way a select's options already are. Same idea as _DECLINE_SYNS:
+# one cluster per real place, every spelling of it inside.
+#
+# SAFETY BOUNDARY (AUTOAPPLY_REPAIR_SPEC §0): this is option MATCHING of a value
+# the user actually DECLARED — never value INVENTION. Two rules keep it there:
+#   * a geography field matches ONLY on exact normalized equality or on both
+#     sides landing in the SAME cluster. The loose token-overlap scoring used for
+#     EEO wording is DISABLED for geography — it cheerfully matched "Guinea" onto
+#     "Papua New Guinea", i.e. it answered with a country nobody declared.
+#   * a declared place that matches no option on the form returns None, so the
+#     caller parks the field at needs_input and a human supplies it. It is NEVER
+#     defaulted (least of all to the US) and never rounded to a neighbouring or
+#     containing place.
+_COUNTRY_CLUSTERS: Tuple[Tuple[str, ...], ...] = (
+    # -- Americas ----------------------------------------------------------
+    ("United States of America", "United States", "USA", "U.S.A.", "U.S.", "US",
+     "America", "United States (USA)", "United States of America (USA)",
+     "USA (United States of America)", "United States (US)"),
+    ("Canada", "CAN"),
+    ("Mexico", "MEX", "Estados Unidos Mexicanos"),
+    ("Brazil", "Brasil", "BRA"),
+    ("Argentina", "ARG"),
+    ("Chile", "CHL"),
+    ("Colombia", "COL"),
+    ("Peru", "PER"),
+    ("Costa Rica", "CRI"),
+    ("Panama", "PAN"),
+    ("Puerto Rico", "PRI"),
+    # Dominica and the Dominican Republic are DIFFERENT countries — both keyed
+    # so neither can ever be matched onto the other.
+    ("Dominican Republic", "DOM"),
+    ("Dominica", "DMA"),
+    # -- Europe ------------------------------------------------------------
+    ("United Kingdom", "UK", "U.K.", "GB", "GBR", "Great Britain", "Britain",
+     "United Kingdom of Great Britain and Northern Ireland",
+     "England", "Scotland", "Wales", "Northern Ireland"),
+    ("Ireland", "IRL", "Republic of Ireland", "Eire"),
+    ("Germany", "Deutschland", "DEU", "GER"),
+    ("France", "FRA"),
+    ("Spain", "España", "ESP"),
+    ("Italy", "Italia", "ITA"),
+    ("Portugal", "PRT"),
+    ("Netherlands", "The Netherlands", "Holland", "NLD"),
+    ("Belgium", "BEL"),
+    ("Switzerland", "Suisse", "Schweiz", "CHE"),
+    ("Austria", "AUT"),
+    ("Sweden", "SWE"),
+    ("Norway", "NOR"),
+    ("Denmark", "DNK"),
+    ("Finland", "FIN"),
+    ("Iceland", "ISL"),
+    ("Poland", "POL"),
+    ("Czechia", "Czech Republic", "CZE"),
+    ("Slovakia", "SVK"),
+    ("Hungary", "HUN"),
+    ("Romania", "ROU"),
+    ("Bulgaria", "BGR"),
+    ("Greece", "GRC"),
+    ("Croatia", "HRV"),
+    ("Serbia", "SRB"),
+    ("North Macedonia", "Macedonia", "MKD"),
+    ("Ukraine", "UKR"),
+    ("Russia", "Russian Federation", "RUS"),
+    ("Turkey", "Türkiye", "TUR"),
+    # -- Middle East / Africa ---------------------------------------------
+    ("Israel", "ISR"),
+    ("United Arab Emirates", "UAE", "U.A.E.", "ARE"),
+    ("Saudi Arabia", "KSA", "SAU", "Kingdom of Saudi Arabia"),
+    ("Qatar", "QAT"),
+    ("Egypt", "EGY"),
+    ("South Africa", "ZAF", "RSA"),
+    ("Nigeria", "NGA"),
+    ("Niger", "NER"),
+    ("Kenya", "KEN"),
+    ("Ghana", "GHA"),
+    ("Morocco", "MAR"),
+    ("Ethiopia", "ETH"),
+    ("Sudan", "SDN"),
+    ("South Sudan", "SSD"),
+    ("Democratic Republic of the Congo", "DR Congo", "DRC",
+     "Congo (Kinshasa)", "Congo Kinshasa", "Congo, Democratic Republic of the"),
+    ("Republic of the Congo", "Congo", "Congo (Brazzaville)", "Congo Brazzaville"),
+    ("Guinea", "GIN"),
+    ("Guinea-Bissau", "GNB"),
+    ("Equatorial Guinea", "GNQ"),
+    ("Côte d'Ivoire", "Ivory Coast", "CIV"),
+    # -- Asia / Pacific ----------------------------------------------------
+    ("India", "IND", "Republic of India", "Bharat"),
+    ("Pakistan", "PAK"),
+    ("Bangladesh", "BGD"),
+    ("Sri Lanka", "LKA"),
+    ("Nepal", "NPL"),
+    ("China", "People's Republic of China", "PRC", "CHN", "Mainland China"),
+    ("Hong Kong", "Hong Kong SAR", "HKG"),
+    ("Macau", "Macao", "MAC"),
+    ("Taiwan", "Republic of China", "TWN"),
+    ("Japan", "JPN", "Nippon"),
+    ("South Korea", "Republic of Korea", "Korea, Republic of", "Korea (South)",
+     "KOR"),
+    ("North Korea", "Democratic People's Republic of Korea", "Korea (North)",
+     "PRK"),
+    ("Singapore", "SGP"),
+    ("Malaysia", "MYS"),
+    ("Indonesia", "IDN"),
+    ("Thailand", "THA"),
+    ("Vietnam", "Viet Nam", "VNM"),
+    ("Philippines", "The Philippines", "PHL"),
+    ("Australia", "AUS"),
+    ("New Zealand", "NZL", "Aotearoa"),
+    ("Papua New Guinea", "PNG"),
+)
+
+# US states + DC + territories + Canadian provinces. Kept in a SEPARATE table
+# from countries on purpose: the two-letter codes collide across the two
+# vocabularies ("CA" = California and Canada, "IN" = Indiana and India), so the
+# field_id chooses the table and the ambiguity never arises.
+_REGION_ABBR: Dict[str, str] = {
+    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
+    "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
+    "Florida": "FL", "Georgia": "GA", "Hawaii": "HI", "Idaho": "ID",
+    "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
+    "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
+    "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN",
+    "Mississippi": "MS", "Missouri": "MO", "Montana": "MT", "Nebraska": "NE",
+    "Nevada": "NV", "New Hampshire": "NH", "New Jersey": "NJ",
+    "New Mexico": "NM", "New York": "NY", "North Carolina": "NC",
+    "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK", "Oregon": "OR",
+    "Pennsylvania": "PA", "Rhode Island": "RI", "South Carolina": "SC",
+    "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX", "Utah": "UT",
+    "Vermont": "VT", "Virginia": "VA", "Washington": "WA",
+    "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY",
+    "District of Columbia": "DC", "Puerto Rico": "PR",
+    "Guam": "GU", "American Samoa": "AS", "U.S. Virgin Islands": "VI",
+    "Alberta": "AB", "British Columbia": "BC", "Manitoba": "MB",
+    "New Brunswick": "NB", "Newfoundland and Labrador": "NL",
+    "Northwest Territories": "NT", "Nova Scotia": "NS", "Nunavut": "NU",
+    "Ontario": "ON", "Prince Edward Island": "PE", "Quebec": "QC",
+    "Saskatchewan": "SK", "Yukon": "YT",
+}
+_REGION_CLUSTERS: Tuple[Tuple[str, ...], ...] = tuple(
+    (name, abbr) for name, abbr in _REGION_ABBR.items())
+
+
+def _build_geo(clusters: Tuple[Tuple[str, ...], ...]
+               ) -> Tuple[Dict[str, str], Dict[str, Tuple[str, ...]]]:
+    """(normalized alias -> cluster key, cluster key -> display spellings)."""
+    index: Dict[str, str] = {}
+    by_key: Dict[str, Tuple[str, ...]] = {}
+    for cluster in clusters:
+        key = _norm(cluster[0])
+        if not key:  # pragma: no cover - defensive
+            continue
+        by_key[key] = cluster
+        for alias in cluster:
+            a = _norm(alias)
+            if not a:
+                continue
+            if a in index and index[a] != key:  # pragma: no cover - data bug
+                logger.warning("question_bank: geo alias %r claimed by %r and %r",
+                               a, index[a], key)
+                continue
+            index[a] = key
+    return index, by_key
+
+
+_COUNTRY_INDEX, _COUNTRY_BY_KEY = _build_geo(_COUNTRY_CLUSTERS)
+_REGION_INDEX, _REGION_BY_KEY = _build_geo(_REGION_CLUSTERS)
+
+#: field_id -> (alias index, cluster-by-key). Membership here is what makes a
+#: field an ENUMERATION for matching purposes, independent of its ``value_type``
+#: (which stays ``text`` so the needs_input UI keeps rendering a text box rather
+#: than an empty, unusable select).
+_GEO_TABLES: Dict[str, Tuple[Dict[str, str], Dict[str, Tuple[str, ...]]]] = {
+    "country": (_COUNTRY_INDEX, _COUNTRY_BY_KEY),
+    "work_auth_country": (_COUNTRY_INDEX, _COUNTRY_BY_KEY),
+    "citizenship_countries": (_COUNTRY_INDEX, _COUNTRY_BY_KEY),
+    "state": (_REGION_INDEX, _REGION_BY_KEY),
+}
+ENUMERATED_FIELD_IDS: FrozenSet[str] = frozenset(_GEO_TABLES)
+
+
+def is_enumerated(field_id: str) -> bool:
+    """True for a field whose value comes from a real-world ENUMERATION that the
+    FORM enumerates (country / state today) even though the catalog types it as
+    free text. Such a field must be option-matched against the form's own
+    options, never filled verbatim."""
+    return field_id in _GEO_TABLES
+
+
 _OPTION_ACCEPT = 0.60
 
 
@@ -844,13 +1070,21 @@ def match_option(field_id: str, canonical_value: Any,
 
     Handles: decline synonyms ("Prefer not to answer" == "Decline to
     self-identify" == "I don't wish to answer"), Yes/No variants (incl. booleans
-    and "I am authorized"), and EEO/veteran wording (token containment)."""
+    and "I am authorized"), EEO/veteran wording (token containment), and
+    GEOGRAPHY ("United States" == "United States of America" == "USA").
+
+    Geography is matched STRICTLY — exact normalized equality or the same
+    synonym cluster, never token overlap — so a declared country can only ever
+    resolve to that same country. No option in the cluster -> None -> the caller
+    asks. Never a default, never a neighbour."""
     if not form_options or not isinstance(form_options, list):
         return None
 
     concept = _canon_concept(canonical_value)
     canon_norm = "" if isinstance(canonical_value, bool) else _norm(str(canonical_value))
     canon_tokens = _content_tokens(canon_norm)
+    geo_index = (_GEO_TABLES[field_id][0] if field_id in _GEO_TABLES else None)
+    canon_geo = geo_index.get(canon_norm) if (geo_index and canon_norm) else None
 
     best_opt: Optional[str] = None
     best_score = 0.0
@@ -864,8 +1098,16 @@ def match_option(field_id: str, canonical_value: Any,
             continue
 
         score = 0.0
+        if geo_index is not None:
+            # GEOGRAPHY: the option is the declared place, or it is not. Exact
+            # normalized equality, or both spellings in the same cluster.
+            opt_geo = geo_index.get(opt_norm)
+            if canon_norm and opt_norm == canon_norm:
+                score = 1.0
+            elif canon_geo and opt_geo and canon_geo == opt_geo:
+                score = 1.0
         # 1) exact normalized equality.
-        if canon_norm and opt_norm == canon_norm:
+        elif canon_norm and opt_norm == canon_norm:
             score = 1.0
         else:
             opt_concept = _option_concept(opt_norm)
@@ -894,3 +1136,46 @@ def match_option(field_id: str, canonical_value: Any,
     if best_opt is not None and best_score >= _OPTION_ACCEPT:
         return {"option": best_opt, "confidence": round(best_score, 4)}
     return None
+
+
+# ---------------------------------------------------------------------------
+# PUBLIC: option_candidates — spellings to TRY on a non-enumerable widget.
+# ---------------------------------------------------------------------------
+def option_candidates(field_id: str, value: Any, limit: int = 12) -> List[str]:
+    """Ordered alternate SPELLINGS of an already-declared value.
+
+    ``match_option`` is for widgets whose options we can read. Some cannot be
+    read — a Greenhouse react-select or a Workday listbox only materialises its
+    options after you click and type — so the executor has to try labels blind.
+    This returns the labels worth trying, declared value FIRST, then the other
+    spellings of the SAME value from its synonym cluster.
+
+    Vendor-neutral by construction: no adapter needs its own hardcoded "Greenhouse
+    sometimes says United States of America" list.
+
+    SAFETY: every candidate is a different WORDING of the value the user
+    declared, never a different value. Nothing here can turn a declared "India"
+    into "United States". A value with no cluster returns just itself."""
+    text = "" if value is None else str(value).strip()
+    out: List[str] = [text] if text else []
+    seen = {_norm(text)} if text else set()
+
+    def _add(spellings) -> None:
+        for s in spellings:
+            n = _norm(s)
+            if n and n not in seen:
+                seen.add(n)
+                out.append(s)
+
+    table = _GEO_TABLES.get(field_id)
+    if table is not None and text:
+        index, by_key = table
+        key = index.get(_norm(text))
+        if key:
+            _add(by_key.get(key, ()))
+    elif _canon_concept(value) == "decline":
+        # Declining is not a claim (spec §0.3) — every wording of it is the same
+        # answer, so any of them is a safe thing to try.
+        _add(_DECLINE_SPELLINGS)
+
+    return out[:limit]

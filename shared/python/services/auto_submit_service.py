@@ -596,7 +596,7 @@ def _fold_needs_input(user_email: str, row: Dict[str, Any]) -> List[Dict[str, An
     if not aid:
         return items
     try:
-        from services.auto_apply_service import _answers_coll
+        from services.auto_apply_service import _answers_coll, account_gate_item
         ans = _answers_coll().find_one(
             {"application_id": aid, "user_email": user_email},
             {"_id": 0, "needs_account": 1},
@@ -604,11 +604,19 @@ def _fold_needs_input(user_email: str, row: Dict[str, Any]) -> List[Dict[str, An
     except Exception:  # pragma: no cover - best-effort enrichment
         return items
     if ans.get("needs_account"):
-        return [{
-            "question": _ACCOUNT_GATE_PROMPT,
-            "kind": "account",
-            "field_id": "ats_account",
-        }]
+        # Family-aware copy (spec §4): "we're creating it" where we can, an
+        # honest "we can't for this vendor" where we can't — never the old
+        # generic "go create one yourself".
+        try:
+            return [account_gate_item(
+                row.get("ats_family"),
+                apply_url=str(row.get("apply_url") or row.get("url") or ""))]
+        except Exception:  # pragma: no cover - defensive
+            return [{
+                "question": _ACCOUNT_GATE_PROMPT,
+                "kind": "account",
+                "field_id": "ats_account",
+            }]
     return items
 
 

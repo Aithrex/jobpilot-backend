@@ -40,7 +40,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from services.ats_detector import detect_ats, GREENHOUSE, LEVER, ASHBY, WORKDAY
 from services.ats_executor import AtsExecutor
@@ -710,6 +710,13 @@ class BrowserExecutor(ExecutorAdapter):
 
         Uses ``ats_credential_service`` — passwords are always server-generated.
         ``credentials`` may supply ``username`` (managed mailbox alias preferred).
+
+        ``resolve_login`` decides WHICH vault row backs this tenant: Workday is a
+        shared-password family, so every tenant of a given user maps to that
+        user's ONE canonical Workday secret — except a tenant that already owns
+        a password from before that rule, which keeps it (the employer's side
+        has that exact password). ``reveal`` follows the same pointer, so the
+        password typed into the form always matches the stored row.
         """
         family = (ats_family or "").strip().lower()
         if family != WORKDAY:
@@ -721,31 +728,28 @@ class BrowserExecutor(ExecutorAdapter):
                     "wall": None, "error": "missing_user_email"}
         tenant = (tenant or "default").strip().lower() or "default"
         username = ""
+        login_url = ""
+        company = ""
         if isinstance(credentials, dict):
             username = (credentials.get("username") or "").strip()
+            login_url = (credentials.get("login_url") or "").strip()
+            company = (credentials.get("company") or "").strip()
         if not username:
             username = self._managed_apply_email(user_email) or user_email
         try:
             from services import ats_credential_service as creds
-            # Ensure vault row, then reveal. store_or_rotate is idempotent;
-            # if reveal 404s after a race, store once more.
-            try:
-                revealed = creds.reveal(user_email, WORKDAY, tenant)
-            except creds.CredentialError as e:
-                if getattr(e, "error", "") != "not_found":
-                    raise
-                creds.store_or_rotate(user_email, WORKDAY, tenant, username=username)
-                revealed = creds.reveal(user_email, WORKDAY, tenant)
-            else:
-                # Keep username aligned to managed mailbox when we already have a row.
-                if username and revealed.get("username") != username:
-                    pass  # username is metadata; password is what matters for sign-in
-
+            # Ensure the right vault row exists (never rotates an existing
+            # password), then reveal through the single audited egress.
+            resolved = creds.resolve_login(user_email, WORKDAY, tenant,
+                                           username=username,
+                                           login_url=login_url, company=company)
+            revealed = creds.reveal(user_email, WORKDAY, tenant)
             return {
                 "status": ORACLE_READY, "resolved": True, "wall": None, "error": None,
                 "username": revealed.get("username") or username,
                 "has_password": True,
                 "tenant": tenant,
+                "shared_password": bool(resolved.get("shared")),
                 # Password stays in-process for the drive path; never logged.
                 "_password": revealed.get("password"),
             }
@@ -755,10 +759,18 @@ class BrowserExecutor(ExecutorAdapter):
                     "wall": None, "error": str(e)[:200]}
 
     def _managed_apply_email(self, user_email: str) -> Optional[str]:
+        """The managed private alias to register with. Provisions one when the
+        user has none — falling back to the REAL address leaks it to the
+        employer AND sends the ATS verification mail to an inbox this system
+        cannot read, which is exactly how the OTP loop stalls."""
         try:
             from services import managed_mailbox_service as mailbox
-            mb = mailbox.get_mailbox(user_email) or {}
-            addr = (mb.get("address") or "").strip()
+            addr = mailbox.apply_alias(user_email)
+            if not addr:
+                logger.warning(
+                    "workday account: no routable managed alias for this user "
+                    "(APPLY_MAIL_DOMAIN unset?) — falling back to the account "
+                    "address; ATS verification mail will not be readable")
             return addr or None
         except Exception:
             return None
@@ -1121,8 +1133,13 @@ class BrowserExecutor(ExecutorAdapter):
         if not user_email:
             return False
         apply_email = self._managed_apply_email(user_email) or user_email
-        vault = self.create_account(user_email, WORKDAY, tenant,
-                                    {"username": apply_email})
+        # login_url/company are DISPLAY metadata on the vault row so the user can
+        # find this employer's portal again from the credentials screen.
+        vault = self.create_account(
+            user_email, WORKDAY, tenant,
+            {"username": apply_email,
+             "login_url": (application or {}).get("apply_url") or "",
+             "company": (application or {}).get("company") or ""})
         if not vault.get("resolved") or not vault.get("_password"):
             logger.info("workday account: vault unavailable (%s)", vault.get("error"))
             return False
@@ -1668,12 +1685,9 @@ class BrowserExecutor(ExecutorAdapter):
                 cls = (el.get_attribute("class") or "")
                 role = (el.get_attribute("role") or "")
                 if tag == "select":
-                    try:
-                        page.select_option(sel, label=str(value))
-                    except Exception:
-                        page.select_option(sel, str(value))
+                    self._fill_native_select(page, sel, fid, str(value))
                 elif _SELECT_HINT in cls or role == "combobox" or tag == "select":
-                    self._fill_select(page, sel, str(value))
+                    self._fill_select(page, sel, str(value), field_id=fid)
                 else:
                     el.fill(str(value))
                 filled += 1
@@ -1692,8 +1706,38 @@ class BrowserExecutor(ExecutorAdapter):
                 pass
         return filled, skipped
 
-    def _fill_select(self, page, sel: str, value: str) -> None:
-        """Drive react-select / native / autocomplete country comboboxes.
+    def _fill_native_select(self, page, sel: str, field_id: str,
+                            value: str) -> None:
+        """Set a NATIVE ``<select>``.
+
+        The form's own ``<option>`` labels are the truth, so match the declared
+        value onto one of them first (``United States`` -> ``United States of
+        America``); the raw label / value-attribute attempts stay as fallbacks.
+        On no match nothing is selected and the exception propagates to the
+        caller's skip handler — the field is left blank rather than mis-set.
+        """
+        attempts = []
+        options = _native_option_labels(page, sel)
+        if options:
+            match = _match_form_option(field_id, value, options)
+            if match:
+                attempts.append(match)
+        attempts.append(value)
+        last: Optional[Exception] = None
+        for label in attempts:
+            try:
+                page.select_option(sel, label=label)
+                return
+            except Exception as e:
+                last = e
+        try:
+            page.select_option(sel, value)          # by value attribute
+        except Exception:
+            raise last if last is not None else RuntimeError("select failed")
+
+    def _fill_select(self, page, sel: str, value: str,
+                     field_id: str = "") -> None:
+        """Drive react-select / native / autocomplete comboboxes.
 
         Prefer native ``<select>``, then type-filter + click option (Greenhouse
         react-select). Avoids intl-tel-input country list. Falls back to
@@ -1728,10 +1772,13 @@ class BrowserExecutor(ExecutorAdapter):
         except Exception:
             pass
 
-        # Greenhouse sometimes labels US as "United States of America".
-        candidates = [value]
-        if value.lower() in ("united states", "usa", "us"):
-            candidates += ["United States of America", "United States", "USA"]
+        # The listbox is not enumerable until it opens, so try the alternate
+        # SPELLINGS of the declared value blind. Vendor-neutral: the synonym
+        # clusters live in the question bank, so every adapter (not just
+        # Greenhouse, which used to carry a hardcoded "United States of America"
+        # list right here) gets the same expansion. Same value, other wording —
+        # never a different value.
+        candidates = _option_spellings(field_id, value)
         # Location widgets often return "City, ST, Country" — also try city-only.
         if "," in value:
             candidates.append(value.split(",", 1)[0].strip())
@@ -1787,10 +1834,7 @@ class BrowserExecutor(ExecutorAdapter):
                 tag = (el.evaluate("e => e.tagName") or "").lower()
                 typ = (el.get_attribute("type") or "").lower()
                 if tag == "select":
-                    try:
-                        page.select_option(sel, label=str(value))
-                    except Exception:
-                        page.select_option(sel, str(value))
+                    self._fill_native_select(page, sel, fid, str(value))
                 elif typ in ("checkbox", "radio"):
                     # Multiple same-name inputs → check the one matching value.
                     opt = page.query_selector(f'{sel}[value="{_attr(str(value))}"]')
@@ -2126,6 +2170,49 @@ def _css_id(fid: str) -> str:
     """Escape a field id for use in a `#id` selector (question_123 is safe; be
     defensive about odd characters)."""
     return re.sub(r"([^A-Za-z0-9_-])", r"\\\1", str(fid))
+
+
+# ---------------------------------------------------------------------------
+# Option matching (question-bank backed, vendor-neutral).
+# ---------------------------------------------------------------------------
+def _option_spellings(field_id: str, value: str) -> List[str]:
+    """Alternate SPELLINGS of the declared value to try on a widget whose options
+    cannot be read (react-select / listbox). Declared value first. Same value in
+    other words — never a different value."""
+    try:
+        from services import application_question_bank as qb
+        return qb.option_candidates(field_id, value) or [value]
+    except Exception:  # pragma: no cover - bank never load-bearing for a fill
+        return [value]
+
+
+def _native_option_labels(page, sel: str) -> List[str]:
+    """The live ``<option>`` label texts of a native select ([] when unreadable)."""
+    try:
+        opts = page.query_selector_all(f"{sel} option") or []
+    except Exception:
+        return []
+    out: List[str] = []
+    for o in opts:
+        try:
+            t = (o.inner_text() or "").strip()
+        except Exception:
+            continue
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def _match_form_option(field_id: str, value: str,
+                       options: List[str]) -> Optional[str]:
+    """The form's OWN option that means the declared value, or None. None means
+    ask — never a fallback to a different option."""
+    try:
+        from services import application_question_bank as qb
+        match = qb.match_option(field_id, value, options)
+    except Exception:  # pragma: no cover - defensive
+        return None
+    return match["option"] if match else None
 
 
 def _q(value: str) -> str:

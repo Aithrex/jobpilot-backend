@@ -1115,7 +1115,17 @@ def reveal_ats_credential():
     except Exception as e:
         logger.exception("apply/credentials reveal reauth lookup error: %s", e)
         return jsonify({"error": "Failed to reveal credential"}), 500
-    if not user or not user.get("password_hash") or not User.verify_password(password, user["password_hash"]):
+    if not user or not user.get("password_hash"):
+        # OAuth-only account: there is no account password to re-auth against, so
+        # the reveal gate cannot be satisfied. 403 with a DISTINCT code (never
+        # 401) so the FE can tell the user to set a password instead of showing
+        # "wrong password" for a password they never had.
+        return jsonify({
+            "error": "reauth_unavailable",
+            "message": ("Set an account password (Forgot password) before "
+                        "revealing a stored employer login."),
+        }), 403
+    if not User.verify_password(password, user["password_hash"]):
         # 403 (not 401): a failed re-auth is a business failure, not a missing JWT.
         return jsonify({
             "error": "reauth_failed",

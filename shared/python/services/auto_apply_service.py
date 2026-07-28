@@ -671,6 +671,152 @@ def _apply_generated_free_text(application_id: str, user_email: str,
     return generated, bool(residual or remaining)
 
 
+# ---------------------------------------------------------------------------
+# Employer account gate (spec §4) — we create the account, the user does not.
+#
+# Account creation is implemented for WORKDAY ONLY today (browser_executor
+# ._workday_clear_account_gate → ats_adapters.fill_account_credentials).
+# Greenhouse/Lever/Ashby have no signup flow at all, so for those the only
+# honest answer is to say so.
+# ---------------------------------------------------------------------------
+#: Vendors whose candidate account we can register/sign into ourselves.
+AUTO_ACCOUNT_FAMILIES = ("workday",)
+
+
+def _auto_account_enabled() -> bool:
+    """Kill switch for provisioning the employer account ourselves
+    (``ATS_AUTO_ACCOUNT``, default ON). Off ⇒ the pre-fix behaviour: the row
+    parks on the account wall and the user is told to go do it by hand."""
+    try:
+        from utils.config import _get_config_value
+        val = _get_config_value("ATS_AUTO_ACCOUNT", "true") or "true"
+        return str(val).strip().lower() in ("1", "true", "yes", "on")
+    except Exception:  # pragma: no cover - defensive
+        return True
+
+
+def _workday_tenant_from_url(apply_url: str) -> str:
+    """Workday tenant = the first host label (``acme.wd1.myworkdayjobs.com`` →
+    ``acme``). Mirrors ``browser_executor._workday_tenant_from_url`` so the vault
+    row gather provisions is the SAME row the executor later reveals."""
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(apply_url or "").hostname or "").lower()
+        first = (host.split(".") or [""])[0]
+        if first and first not in ("www", "careers", "wd1", "wd2", "wd3", "wd5"):
+            return first
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return "default"
+
+
+def account_gate_item(ats_family: Any, *, apply_url: str = "",
+                      provisioned: bool = False, username: str = "",
+                      shared: bool = False) -> Dict[str, Any]:
+    """The `needs_input` entry for an employer account wall.
+
+    The message is the product contract: when we CAN register for the user it
+    says we are doing it and where to find the login; when we cannot (an
+    unsupported vendor) it says that plainly instead of implying we failed.
+    Only the second case carries ``action="complete_in_browser"`` — that flag is
+    the FE's "there is nothing we can do for you here" signal.
+    """
+    fam = str(ats_family or "").strip().lower()
+    item: Dict[str, Any] = {"kind": "account", "field_id": "ats_account"}
+    if apply_url:
+        item["apply_url"] = apply_url
+    if provisioned:
+        where = " (%s)" % username if username else ""
+        item["question"] = (
+            "We're creating your employer account%s and signing in for you — "
+            "no action needed. Your login%s is in Settings → Employer logins, "
+            "so you can check this application's status on their portal yourself."
+            % ("" if not shared else " with your shared Workday password", where)
+        )
+        return item
+    if fam in AUTO_ACCOUNT_FAMILIES:
+        item["question"] = (
+            "This employer requires an account. We normally create one for you "
+            "automatically, but we couldn't just now — we'll retry. You can also "
+            "sign in on their site and we'll resume."
+        )
+        item["action"] = "complete_in_browser"
+        return item
+    item["question"] = (
+        "This employer's application system%s requires an account before it "
+        "accepts an application, and we can't create one there yet. Create it on "
+        "their career site and we'll resume automatically."
+        % (" (%s)" % fam if fam else "")
+    )
+    item["action"] = "complete_in_browser"
+    return item
+
+
+def _provision_employer_account(user_email: str,
+                                app: Dict[str, Any]) -> Dict[str, Any]:
+    """Create/attach the vault login for the employer behind ``app`` so the
+    submit drive can sign in, instead of handing the wall back to the user.
+
+    Returns ``{provisioned, family, tenant, username, shared, reason}``.
+    ``provisioned`` False means the row must still park on the wall.
+
+    Does NOT drive a browser (the remote signup happens later, inside
+    ``browser_executor._workday_clear_account_gate``); it only guarantees the
+    managed alias + the encrypted password exist and are the ones the executor
+    will read back.
+    """
+    out: Dict[str, Any] = {"provisioned": False, "family": "", "tenant": "",
+                           "username": "", "shared": False, "reason": ""}
+    family = str(app.get("ats_family") or "").strip().lower()
+    apply_url = str(app.get("apply_url") or "")
+    if not family:
+        try:
+            from services.ats_detector import detect_ats
+            family = str((detect_ats(apply_url, None) or ("", {}))[0] or "").lower()
+        except Exception:  # pragma: no cover - defensive
+            family = ""
+    out["family"] = family
+    if family not in AUTO_ACCOUNT_FAMILIES:
+        out["reason"] = "unsupported_family"
+        return out
+    if not _auto_account_enabled():
+        out["reason"] = "disabled"
+        return out
+
+    tenant = _workday_tenant_from_url(apply_url)
+    out["tenant"] = tenant
+    try:
+        from services import managed_mailbox_service as mailbox
+        # Idempotent: provisions the private alias when the user has none, so we
+        # never register an employer account against their real inbox.
+        username = mailbox.apply_alias(user_email) or ""
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("auto_apply account gate: alias lookup failed: %s", e)
+        username = ""
+    if not username:
+        # No routable managed address ⇒ the ATS verification mail would land in
+        # an inbox we cannot read and the OTP loop could never finish.
+        out["reason"] = "no_managed_alias"
+        logger.warning("auto_apply account gate: no managed alias for user — "
+                       "cannot self-register (APPLY_MAIL_DOMAIN unset?)")
+        return out
+    out["username"] = username
+
+    try:
+        from services import ats_credential_service as creds
+        resolved = creds.resolve_login(
+            user_email, family, tenant, username=username,
+            login_url=apply_url, company=str(app.get("company") or ""))
+    except Exception as e:
+        out["reason"] = "vault_unavailable"
+        logger.warning("auto_apply account gate: vault unavailable: %s", e)
+        return out
+
+    out["provisioned"] = True
+    out["shared"] = bool(resolved.get("shared"))
+    return out
+
+
 # ===========================================================================
 # PHASE 1 — gather
 # ===========================================================================
@@ -735,7 +881,29 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
         # resolution and answer-lookup all key off ONE id (the bug fix: recon
         # dicts vs. text-keyed resolutions no longer diverge).
         questions = apply_forms.normalize_recon_questions(raw_questions)
+        # THE FIX (spec §4): an employer account gate is OUR job, not the user's.
+        # Before this, `needs_account` went straight to `has_gaps` below, so the
+        # row parked on an unclearable wall and `create_account` — which only
+        # runs inside the SUBMIT drive — was never reached. Now we provision the
+        # managed alias + the encrypted login here; the submit drive signs in
+        # with exactly that row. We only fall back to parking when we genuinely
+        # cannot help (unsupported vendor, no managed mailbox, vault down).
+        account = {"provisioned": False, "family": "", "shared": False,
+                   "username": "", "reason": ""}
         needs_account = bool(recon.get("needs_account"))
+        if needs_account:
+            account = _provision_employer_account(user_email, app)
+            if account.get("provisioned"):
+                logger.info(
+                    "auto_apply gather %s: employer account provisioned "
+                    "(family=%s tenant=%s shared=%s) — continuing instead of "
+                    "parking on the account wall", application_id,
+                    account.get("family"), account.get("tenant"),
+                    account.get("shared"))
+                needs_account = False
+            else:
+                logger.info("auto_apply gather %s: account gate NOT self-served "
+                            "(%s) — parking", application_id, account.get("reason"))
         answers, needs_input, resolution = _resolve_answers(
             user_email, questions, company=str(app.get("company") or ""))
         # Repair spec §7 — the ONLY consumer of resolve()'s `needs_generation`,
@@ -810,6 +978,13 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
         #   * clean but ASK/HOLD → wait in ready_for_review for a MANUAL approval.
         prepare_dispatched = False
         has_gaps = bool(needs_input) or needs_account
+        if needs_account:
+            # Persist a REAL, family-aware wall item instead of leaving the list
+            # empty for `auto_submit_service._fold_needs_input` to synthesize a
+            # generic "go create one yourself" prompt.
+            needs_input = list(needs_input) + [account_gate_item(
+                account.get("family") or app.get("ats_family"),
+                apply_url=str(app.get("apply_url") or ""))]
         if has_gaps:
             ledger.mark_needs_input(user_email, application_id, needs_input,
                                     autonomy=autonomy, confidence_score=confidence)
@@ -857,6 +1032,10 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
         "resolved": len(answers),
         "needs_input": len(needs_input),
         "needs_account": needs_account,
+        # True ⇒ we created/attached the employer login ourselves and the row
+        # was NOT parked on the account wall (spec §4).
+        "account_provisioned": bool(account.get("provisioned")),
+        "account_gate_reason": account.get("reason") or "",
         "prepare_dispatched": prepare_dispatched,
         "mode": mode,
         "manual_apply": manual_apply,
@@ -984,8 +1163,10 @@ _MAX_ANSWER_OPTIONS = 25
 # Everything not listed here is a WALL: it stays in the queue and keeps the row in
 # needs_input no matter what the user types, so we never pretend a wall cleared.
 _ANSWERABLE_KINDS = frozenset({"screening", "legal_attestation"})
-# Mirrors auto_submit_service._ACCOUNT_GATE_PROMPT (kept as a literal so this
-# module stays free of a reverse import).
+# Legacy generic prompt. Kept ONLY so stored rows written before the §4 fix
+# still read sensibly; new items come from `account_gate_item`, which is
+# family-aware (we create the account where we can, and say so plainly where we
+# cannot). `auto_submit_service._fold_needs_input` calls the same helper.
 _ACCOUNT_GATE_QUESTION = (
     "Sign in or create an account on the employer's career site to continue."
 )
@@ -1210,8 +1391,8 @@ def resume_after_answers(user_email: str, application_id: str,
     needs_account = bool(sheet.get("needs_account"))
     if needs_account and not any(
             str(i.get("field_id") or "") == "ats_account" for i in pending):
-        pending = pending + [{"question": _ACCOUNT_GATE_QUESTION,
-                              "kind": "account", "field_id": "ats_account"}]
+        pending = pending + [account_gate_item(
+            app.get("ats_family"), apply_url=str(app.get("apply_url") or ""))]
 
     # (1) merge + bank (ONE remember_many — see `_remember_answers`).
     stored = dict(_load_answers(application_id, user_email))

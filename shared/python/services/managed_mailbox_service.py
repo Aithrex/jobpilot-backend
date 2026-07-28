@@ -691,6 +691,39 @@ def get_mailbox(user_email: str) -> Dict[str, Any]:
     return _serialize_mailbox(mailbox)
 
 
+def apply_alias(user_email: str, *, provision_if_missing: bool = True) -> Optional[str]:
+    """The managed private address to hand to an employer/ATS as the account
+    username — provisioning it idempotently when the user has none.
+
+    Why this exists: callers used to do ``get_mailbox(...)["address"] or None``
+    and then silently fall back to the user's REAL email. That leaked the real
+    address to the employer AND put the ATS verification mail somewhere the
+    system cannot read, so the OTP loop (``application_otp_service``) could
+    never complete. Provisioning is a pure DB operation and is NOT gated by
+    ``APPLY_MAILBOX_ENABLED`` (see :func:`provision`), so there is no reason to
+    ever hand over the real address just because the row was missing.
+
+    Returns ``None`` when no ROUTABLE address can be formed — i.e.
+    ``APPLY_MAIL_DOMAIN`` is unset, so the alias has no host (D3: the feature is
+    inert and we only reserve local parts). Callers must then decide explicitly
+    what to do rather than assuming they got a mailbox.
+    """
+    email = InputSanitizer.sanitize_email(user_email)
+    if not email:
+        return None
+    address = str((get_mailbox(email) or {}).get("address") or "").strip()
+    if not address and provision_if_missing:
+        try:
+            address = str((provision(email) or {}).get("address") or "").strip()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("managed_mailbox: apply_alias provision failed: %s", e)
+            address = ""
+    # A local part with no domain is not deliverable — treat it as "no alias".
+    if "@" not in address:
+        return None
+    return address
+
+
 def _require_mailbox(email: str) -> Dict[str, Any]:
     mailbox = _mailboxes().find_one({"user_email": email})
     if not mailbox:

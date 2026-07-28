@@ -139,13 +139,27 @@ def _is_sensitive(question: Dict[str, Any], field_id: str) -> bool:
         return False
 
 
+def _is_enumerated(field_id: str) -> bool:
+    """A field whose value comes from a real-world ENUMERATION the FORM
+    enumerates (country / state) even where the recon typed the control as text
+    — e.g. a country combobox backed by a datalist. Those must be option-matched
+    onto the form's own labels, never filled verbatim."""
+    try:
+        from services import application_question_bank as qb
+        return qb.is_enumerated(field_id)
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
 def _match_value(adapter, question: Dict[str, Any], field_id: str,
                  value: Any) -> Any:
-    """Return the exact form value to fill. For a select/radio, option-match the
-    canonical (already-inverted) value against the field's LIVE options; a marker
-    (``__NO_MATCH__``) is returned when a REQUIRED option field has no confident
-    match, so the caller can stop instead of guessing. Text fields fill raw."""
-    if question.get("type") not in _OPTION_WIDGETS:
+    """Return the exact form value to fill. For a select/radio (or an enumerated
+    geography field), option-match the canonical (already-inverted) value against
+    the field's LIVE options; a marker (``__NO_MATCH__``) is returned when a
+    REQUIRED option field has no confident match, so the caller can stop instead
+    of guessing. Plain text fields fill raw."""
+    if (question.get("type") not in _OPTION_WIDGETS
+            and not _is_enumerated(field_id)):
         return value
     options = adapter.options_for(field_id)
     if not options:
