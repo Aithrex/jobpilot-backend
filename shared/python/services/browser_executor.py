@@ -10,9 +10,11 @@ Design / contract (see ``executor_adapter`` for the full spec):
   * ``recon_form`` is delegated to the cheap HTTP path (``AtsExecutor``) for
     Greenhouse; the browser is reserved for what genuinely needs it (submit).
   * ``submit`` launches headless Chromium, fills the form from the vetted
-    ``answers`` map (``{field_id: value}`` where ``field_id`` is the recon id,
-    which on Greenhouse IS the DOM element id), attaches the résumé PDF, clicks
-    submit, and classifies the outcome:
+    ``answers`` map (``{field_id: value}`` where ``field_id`` is the CANONICAL
+    question-bank id — ``full_name``/``email``, NOT the DOM handle: the drive
+    re-recons the live form and maps each canonical id onto the element recon
+    actually found), attaches the résumé PDF, clicks submit, and classifies the
+    outcome:
         SUBMIT_SUCCESS        confirmation detected  (+ screenshot_ref)
         SUBMIT_WAITING_VERIFY a CAPTCHA / email-verify wall  (freeze/thaw)
         SUBMIT_FAILED         hard validation/other failure
@@ -153,6 +155,20 @@ _VERIFY_RE = re.compile(
     r"a verification (link|code) |security code|enter the code)", re.IGNORECASE)
 # A react-select combobox on Greenhouse: input carrying this class / role.
 _SELECT_HINT = "select__input"
+
+# The page/context/browser died under the drive (Playwright wording). TRANSIENT
+# infrastructure fault — Chromium in the Lambda sandbox runs --single-process, so
+# a crash/OOM takes the target with it. Nothing was submitted when this fires.
+_CLOSED_RE = re.compile(
+    r"(target (page, context or browser )?(has been )?closed|"
+    r"browser has been closed|context has been closed|"
+    r"target closed|session closed|page has been closed|"
+    r"connection closed|browser closed)", re.IGNORECASE)
+
+# Which file input is the résumé — matched against the input's OWN attributes
+# (id/name/aria-label/accept/class), never a per-vendor id list.
+_RESUME_RE = re.compile(r"resum|cv\b|curriculum", re.IGNORECASE)
+_COVER_LETTER_RE = re.compile(r"cover[\s_-]*letter", re.IGNORECASE)
 
 # The ATS families this executor can actually drive end-to-end. Anything else is
 # PERMANENTLY unsupported for auto-apply (iCIMS / SmartRecruiters / Workable are
@@ -701,6 +717,14 @@ class BrowserExecutor(ExecutorAdapter):
         try:
             return driver(target, answers or {}, resume, application)
         except Exception as e:  # unexpected fault → failed (orchestrator marks ledger)
+            if _CLOSED_RE.search(str(e)):
+                # The page/context/browser died mid-drive (Chromium runs
+                # --single-process in the Lambda sandbox). Nothing was
+                # submitted; this is a TRANSIENT fleet fault to retry, not a
+                # permanent application failure and not an opaque error.
+                logger.warning("browser submit: browser/page closed mid-drive "
+                               "(%s) — transient", str(e)[:120])
+                return self._unavailable()
             logger.exception("browser submit: unexpected fault")
             return self._failed(str(e)[:300])
 
@@ -1548,16 +1572,19 @@ class BrowserExecutor(ExecutorAdapter):
         return self._drive(url, answers, resume, application, self._fill_lever)
 
     def _drive_ashby(self, url, answers, resume, application) -> Dict[str, Any]:
-        # Ashby fields carry ids (_systemfield_name / UUID) → id-based fill.
+        # Ashby fields carry ids (_systemfield_name / UUID) → id-based fill,
+        # resolved from the live recon map (the ids are NOT the answer keys).
         return self._drive(url, answers, resume, application, self._fill_fields)
 
     def _drive(self, url: str, answers: Dict[str, Any],
                resume: Optional[Tuple[str, bytes]],
                application: Dict[str, Any], fill_fn) -> Dict[str, Any]:
         """Generic form-drive scaffolding shared across ATS families. ``fill_fn``
-        is the family-specific field filler (Greenhouse: `#id`; Lever: `[name]` +
-        native selects). Everything else — nav, captcha gate, résumé attach,
-        submit, outcome classification, screenshot — is common."""
+        is the family-specific field filler (Greenhouse/Ashby: id-keyed; Lever:
+        `[name]` + native selects), and both take the recon-derived selector map
+        built in ``_drive_page``. Everything else — nav, captcha gate, résumé
+        attach, pre-submit gate, submit, classification, screenshot — is
+        common."""
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as pw:
@@ -1597,65 +1624,276 @@ class BrowserExecutor(ExecutorAdapter):
                             break
                     except Exception:
                         continue
-                self._wait_for_form(page)
-
-                # A challenge that's already up before we touch anything.
-                # CAPTCHA strategy: try the (default no-op) solver seam first;
-                # if it can't clear it, freeze → the user finishes in their own
-                # browser (the human-in-the-loop primary path).
-                if self._captcha_present(page) and not self._try_solve_captcha(page):
-                    return self._wall(WALL_CAPTCHA, page, application, ["captcha"])
-
-                filled, skipped = fill_fn(page, answers)
-                if resume:
-                    self._attach_resume(page, resume)
-
-                # Ops dry-run: fill + proof shot, never click Submit (safe against
-                # live employer postings).
-                if (application or {}).get("dry_run"):
-                    ref = self._shoot(page, application)
-                    # NOT a failure: the form is filled and proof captured, the
-                    # Submit click was deliberately withheld (see
-                    # EXECUTOR_PREPARED / fill_driver.FILL_PREPARED).
-                    return {"status": EXECUTOR_PREPARED, "confirmation": None,
-                            "screenshot_ref": ref, "wall": None, "error": None,
-                            "filled": filled, "skipped": skipped,
-                            "submitted": False, "dry_run": True}
-
-                self._click_submit(page)
-                page.wait_for_timeout(_SUBMIT_SETTLE_MS)
-
-                outcome = self._classify_outcome(page)
-                if outcome == "captcha":
-                    return self._wall(WALL_CAPTCHA, page, application, ["captcha"])
-                if outcome == "verify":
-                    return self._handle_verify_outcome(
-                        page, application, ["email_verification"])
-                if outcome == "success":
-                    ref = self._shoot(page, application)
-                    conf = self._confirmation_text(page)
-                    logger.info("browser submit SUCCESS (filled=%d skipped=%d)", filled, len(skipped))
-                    return {"status": SUBMIT_SUCCESS, "confirmation": conf,
-                            "screenshot_ref": ref, "wall": None, "error": None}
-                # Still on the form. Distinguish a genuine field error from an
-                # INVISIBLE reCAPTCHA-v3 score-block (no visible challenge — the
-                # submit just silently doesn't go through). A field error is a
-                # real failure; a score-block is a captcha wall → human handoff.
-                field_err = self._field_validation_error(page)
-                if field_err:
-                    ref = self._shoot(page, application)
-                    return {"status": SUBMIT_FAILED, "confirmation": None,
-                            "screenshot_ref": ref, "wall": None, "error": field_err}
-                if self._recaptcha_any(page):
-                    logger.info("browser submit: no confirmation + reCAPTCHA present "
-                                "→ likely score-block, routing to human handoff")
-                    return self._wall(WALL_CAPTCHA, page, application, ["captcha"])
-                ref = self._shoot(page, application)
-                return {"status": SUBMIT_FAILED, "confirmation": None,
-                        "screenshot_ref": ref, "wall": None,
-                        "error": "no_confirmation_after_submit"}
+                return self._drive_page(page, url, answers, resume,
+                                        application, fill_fn)
             finally:
                 browser.close()
+
+    def _drive_page(self, page, url: str, answers: Dict[str, Any],
+                    resume: Optional[Tuple[str, bytes]],
+                    application: Dict[str, Any], fill_fn) -> Dict[str, Any]:
+        """The on-page half of ``_drive``: recon → fill → attach → PRE-SUBMIT
+        GATE → submit → classify. Split out of ``_drive`` so the whole sequence
+        is drivable against an offline DOM (``tests/ats_dom.FakePage``) — the
+        browser lifecycle / SSRF / navigation stay in ``_drive``."""
+        self._wait_for_form(page)
+
+        # A challenge that's already up before we touch anything.
+        # CAPTCHA strategy: try the (default no-op) solver seam first;
+        # if it can't clear it, freeze → the user finishes in their own
+        # browser (the human-in-the-loop primary path).
+        if self._captcha_present(page) and not self._try_solve_captcha(page):
+            return self._wall(WALL_CAPTCHA, page, application, ["captcha"])
+
+        # Recon the form we are ACTUALLY on so every fill targets the element
+        # recon found, instead of guessing `#<canonical field_id>`.
+        fields = self._recon_live_fields(page, url)
+        filled, skipped = fill_fn(page, answers, self._field_selectors(fields))
+        resume_attached = self._attach_resume(page, resume) if resume else False
+
+        # A page/context/browser that died under us (Lambda single-process
+        # Chromium crash, target closed) makes every probe below meaningless —
+        # and the fill silently no-opped. TRANSIENT: retry later, never a
+        # ledger failure and never a submit.
+        if self._page_dead(page):
+            logger.warning("browser submit: page/browser closed mid-drive — "
+                           "transient, nothing submitted")
+            return self._unavailable()
+
+        # SAFETY (spec §0 / fill_driver parity): a REQUIRED field we could not
+        # put a value into stops the run BEFORE submit — never a half-filled
+        # application to a real employer.
+        gaps = self._presubmit_gaps(page, fields, answers, skipped,
+                                    resume, resume_attached, filled=filled)
+
+        # Ops dry-run: fill + proof shot, never click Submit (safe against
+        # live employer postings).
+        if (application or {}).get("dry_run"):
+            ref = self._shoot(page, application)
+            # NOT a failure: the form is filled and proof captured, the
+            # Submit click was deliberately withheld (see
+            # EXECUTOR_PREPARED / fill_driver.FILL_PREPARED).
+            return {"status": EXECUTOR_PREPARED, "confirmation": None,
+                    "screenshot_ref": ref, "wall": None, "error": None,
+                    "filled": filled, "skipped": skipped, "gaps": gaps,
+                    "submitted": False, "dry_run": True}
+
+        if gaps:
+            return self._needs_input(page, application, gaps,
+                                     filled=filled, skipped=skipped)
+
+        self._click_submit(page)
+        page.wait_for_timeout(_SUBMIT_SETTLE_MS)
+
+        outcome = self._classify_outcome(page)
+        if outcome == "captcha":
+            return self._wall(WALL_CAPTCHA, page, application, ["captcha"])
+        if outcome == "verify":
+            return self._handle_verify_outcome(
+                page, application, ["email_verification"])
+        if outcome == "success":
+            ref = self._shoot(page, application)
+            conf = self._confirmation_text(page)
+            logger.info("browser submit SUCCESS (filled=%d skipped=%d)", filled, len(skipped))
+            return {"status": SUBMIT_SUCCESS, "confirmation": conf,
+                    "screenshot_ref": ref, "wall": None, "error": None}
+        # Still on the form. Distinguish a genuine field error from an
+        # INVISIBLE reCAPTCHA-v3 score-block (no visible challenge — the
+        # submit just silently doesn't go through). A field error is a
+        # real failure; a score-block is a captcha wall → human handoff.
+        field_err = self._field_validation_error(page)
+        if field_err:
+            ref = self._shoot(page, application)
+            return {"status": SUBMIT_FAILED, "confirmation": None,
+                    "screenshot_ref": ref, "wall": None, "error": field_err}
+        if self._recaptcha_any(page):
+            logger.info("browser submit: no confirmation + reCAPTCHA present "
+                        "→ likely score-block, routing to human handoff")
+            return self._wall(WALL_CAPTCHA, page, application, ["captcha"])
+        ref = self._shoot(page, application)
+        return {"status": SUBMIT_FAILED, "confirmation": None,
+                "screenshot_ref": ref, "wall": None,
+                "error": "no_confirmation_after_submit"}
+
+    # -- recon-backed field targeting ----------------------------------------
+    def _recon_live_fields(self, page, url: str) -> List[Dict[str, Any]]:
+        """Recon the form ON SCREEN and return its normalized questions, each
+        annotated with the live CSS ``selector`` of the element recon found.
+
+        WHY (the Ashby incident): the vetted answers are keyed by the CANONICAL
+        question-bank ``field_id`` (``full_name``, ``email``, …) that
+        ``apply_forms.normalize_recon_questions`` derived from the question
+        LABEL — never by the DOM handle, which is a per-vendor template
+        (``_systemfield_name`` on one Ashby form, a question UUID on the next,
+        ``cards[…][…]`` on Lever). Filling ``#<field_id>`` therefore matched
+        nothing on Ashby and every field was silently skipped. Re-running the
+        SAME normalization against the live DOM recovers the pairing
+        field_id ↔ real handle, so the fill targets the element recon found.
+
+        Deliberately re-reconned HERE rather than carried from the gather-phase
+        recon: the answers are persisted flat (``auto_apply_service.
+        _persist_answers``) and the ``ExecutorAdapter.submit`` contract passes
+        ``{field_id: value}`` only, and a handle captured hours ago can be stale
+        anyway. Never raises — an unusable recon degrades to the old id-guess.
+        """
+        try:
+            from services.ats_adapters import select_adapter
+            adapter = select_adapter(page, url or "")
+            questions = adapter.recon() or []
+        except Exception as e:
+            logger.info("live recon unavailable (%s) — falling back to id-guess fill", e)
+            return []
+        fields: List[Dict[str, Any]] = []
+        for q in questions:
+            if not isinstance(q, dict):
+                continue
+            item = dict(q)
+            item["selector"] = self._selector_for_handle(page, q.get("recon_id") or "")
+            fields.append(item)
+        return fields
+
+    def _selector_for_handle(self, page, handle: str) -> Optional[str]:
+        """A live CSS selector for the element recon reported under ``handle``
+        (an id OR a name — Lever keys by name, Ashby/Greenhouse by id), or None
+        when it is not on the page. Uses the ATTRIBUTE form (``[id="…"]``) so a
+        handle that is not a valid CSS identifier — an Ashby question UUID
+        starting with a digit — still addresses. No per-vendor prefixes."""
+        if not handle:
+            return None
+        for sel in ('[id="%s"]' % _attr(handle), '[name="%s"]' % _attr(handle)):
+            try:
+                if page.query_selector(sel) is not None:
+                    return sel
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _field_selectors(fields: List[Dict[str, Any]]) -> Dict[str, str]:
+        """``{canonical field_id -> selector}``, plus the raw recon handle as an
+        alias so a caller that keyed its answers by the ATS handle still hits."""
+        out: Dict[str, str] = {}
+        for q in fields or []:
+            sel = q.get("selector")
+            if not sel:
+                continue
+            for key in (q.get("field_id"), q.get("recon_id")):
+                if key and key not in out:
+                    out[str(key)] = sel
+        return out
+
+    def _page_dead(self, page) -> bool:
+        """True when the page/context/browser is gone (Playwright: "Target page,
+        context or browser has been closed"). Every read after that point is a
+        lie — the fill silently no-ops and the drive must report a TRANSIENT
+        unavailable rather than parking or submitting."""
+        try:
+            if bool(page.is_closed()):
+                return True
+        except Exception:
+            pass
+        try:
+            page.query_selector("html")
+            return False
+        except Exception as e:
+            return bool(_CLOSED_RE.search(str(e)))
+
+    def _has_fillable_inputs(self, page) -> bool:
+        """Whether this page presents any answerable control at all (used to tell
+        'we filled nothing because the form is just an upload' from 'we filled
+        nothing because every selector missed')."""
+        for sel in ("input[type=text]", "input[type=email]", "input[type=tel]",
+                    "input[type=url]", "textarea", "select"):
+            try:
+                if page.query_selector(sel) is not None:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _presubmit_gaps(self, page, fields: List[Dict[str, Any]],
+                        answers: Dict[str, Any], skipped: List[str],
+                        resume: Optional[Tuple[str, bytes]],
+                        resume_attached: bool, *,
+                        filled: int = 0) -> List[Dict[str, Any]]:
+        """Every REQUIRED field this drive could not put a value into.
+
+        This is the executor's copy of the rail ``fill_driver`` enforces for
+        Workday (``FILL_NEEDS_INPUT`` / ``FILL_WAITING_HUMAN`` before any
+        submit): a required field that is unanswered, or answered but whose
+        element we could not locate/fill, STOPS the run and names the field.
+        Greenhouse/Lever/Ashby bypass ``fill_driver`` entirely, so without this
+        the drive happily clicked Submit on a form where ZERO fields were filled
+        — exactly the production Ashby failure ("Missing entry for required
+        field: Name / Email / Résumé"). Reasons mirror the fill_driver
+        vocabulary so the ledger/one-tap queue reads identically.
+        """
+        gaps: List[Dict[str, Any]] = []
+        skipped_keys = {str(s) for s in (skipped or [])}
+        answered = {str(k) for k, v in (answers or {}).items()
+                    if v not in (None, "")}
+
+        # THE BACKSTOP, independent of recon quality: we put NOTHING into a form
+        # that plainly has answerable controls. That is the signature of the
+        # production incident (every selector missed → a pristine form clicked
+        # Submit), and it is also what an ATS scores as a bot — two Ashby
+        # postings answered our empty submissions with "flagged as possible
+        # spam". Never submit an empty form to a real employer.
+        if not filled and (fields or self._has_fillable_inputs(page)):
+            gaps.append({"field": "form", "reason": "no_fields_filled"})
+        for q in fields or []:
+            if not q.get("required"):
+                continue
+            keys = {str(k) for k in (q.get("field_id"), q.get("recon_id")) if k}
+            if not keys:
+                continue
+            name = str(q.get("field_id") or q.get("recon_id"))
+            if keys & skipped_keys:
+                # We HAD a vetted value and could not place it (handle renamed /
+                # element gone / fill rejected).
+                gaps.append({"field": name, "reason": "field_not_on_page"})
+            elif not (keys & answered):
+                # No vetted value at all — never guessed, so the form cannot be
+                # completed by us. A legal/EEO attestation says so explicitly.
+                gaps.append({"field": name,
+                             "reason": ("sensitive_unconfirmed"
+                                        if q.get("is_legal_attestation")
+                                        else "unresolved")})
+        # The résumé is required by every ATS this executor drives and is NOT in
+        # `fields` (recon drops executor-supplied file handles), so check it
+        # separately: a form that asks for one must never be submitted without.
+        if not resume_attached and self._resume_input_selectors(page):
+            gaps.append({"field": "resume",
+                         "reason": "resume_not_attached" if resume
+                                   else "resume_missing"})
+        return gaps
+
+    def _needs_input(self, page, application: Dict[str, Any],
+                     gaps: List[Dict[str, Any]], *, filled: int = 0,
+                     skipped: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Stop BEFORE submit and hand the named field back to the user.
+
+        Same wire shape the Workday drive already returns for a fill_driver
+        ``needs_input`` (SUBMIT_FAILED + ``error="needs_input"`` + ``field`` +
+        ``reason``), which ``auto_apply_service`` parks in the one-tap
+        ``needs_input`` queue rather than failing the row. ``submitted`` is
+        always False — nothing was clicked."""
+        first = gaps[0] if gaps else {"field": "field", "reason": "unresolved"}
+        logger.info("browser submit BLOCKED pre-submit: %d required gap(s), "
+                    "first=%s reason=%s (filled=%d)", len(gaps),
+                    first.get("field"), first.get("reason"), filled)
+        try:
+            from services import apply_metrics
+            apply_metrics.emit("presubmit_block", adapter=self.name,
+                               outcome=str(first.get("reason")), count=len(gaps))
+        except Exception:  # pragma: no cover - metrics never load-bearing
+            pass
+        return {"status": SUBMIT_FAILED, "confirmation": None,
+                "screenshot_ref": self._shoot(page, application),
+                "wall": None, "error": "needs_input",
+                "field": first.get("field"), "reason": first.get("reason"),
+                "gaps": gaps, "filled": filled, "skipped": list(skipped or []),
+                "submitted": False}
 
     # -- form primitives -----------------------------------------------------
     def _wait_for_form(self, page) -> None:
@@ -1667,12 +1905,29 @@ class BrowserExecutor(ExecutorAdapter):
         except Exception:
             pass  # proceed; individual fills will no-op if absent
 
-    def _fill_fields(self, page, answers: Dict[str, Any]) -> Tuple[int, list]:
+    def _fill_fields(self, page, answers: Dict[str, Any],
+                     field_map: Optional[Dict[str, str]] = None) -> Tuple[int, list]:
+        """Fill an id-keyed form (Greenhouse / Ashby).
+
+        ``field_map`` is the recon-derived ``{answer key -> live selector}`` map
+        (see ``_recon_live_fields``) and is ALWAYS preferred: the answer keys are
+        canonical field_ids, which equal the DOM id only by coincidence (they do
+        on Greenhouse, they never do on Ashby's ``_systemfield_*`` / UUID
+        handles). The ``#<key>`` guess remains only as the fallback for a page we
+        could not recon."""
         filled, skipped = 0, []
+        field_map = field_map or {}
         for fid, value in answers.items():
             if value is None or value == "":
                 continue
-            sel = f"#{_css_id(fid)}"
+            # recon map → the answer key AS a live id/name handle → the legacy
+            # `#id` guess. The middle step matters on modern Greenhouse, where a
+            # React-rendered control routinely carries `name="country"` with a
+            # generated (or absent) id, so `#country` misses an element that
+            # `[name="country"]` finds.
+            sel = (field_map.get(str(fid))
+                   or self._selector_for_handle(page, str(fid))
+                   or f"#{_css_id(fid)}")
             try:
                 el = page.query_selector(sel)
             except Exception:
@@ -1797,6 +2052,31 @@ class BrowserExecutor(ExecutorAdapter):
                         return
                 except Exception:
                     continue
+        # ── BLIND FALLBACKS — NEVER for a gated or enumerated field ──────────
+        #
+        # Everything below picks whatever option happens to be FIRST. That is a
+        # reasonable last resort for a location autocomplete ("San Francisco,
+        # CA, USA" vs "San Francisco, California"), where the options are all
+        # spellings of the same place.
+        #
+        # It is a FABRICATION for anything else. On a Greenhouse
+        # work-authorization or sponsorship combobox, "first filtered option" is
+        # an arbitrary answer to a legal attestation — and because this method
+        # returns normally, the caller counts the field as `filled`, so the
+        # pre-submit gate never sees a gap and the form is submitted with an
+        # invented legal claim. That is spec §0 rule 1, and it is the same shape
+        # as the two fabrication paths already deleted from this file
+        # (`_WD_DEFAULTS`, and the validation-retry that blind-clicked "No").
+        #
+        # So: refuse. Returning without filling leaves the field in `skipped`,
+        # `_presubmit_gaps` reports it, and the row parks as needs_input asking
+        # the user — which is the correct answer when we genuinely do not know.
+        if _blind_pick_forbidden(field_id):
+            logger.info(
+                "fill_select: no option matched %r for %s — refusing the blind "
+                "fallback on a gated/enumerated field", value, field_id)
+            raise _BlindPickRefused(field_id)
+
         # First filtered option (common for location autocomplete).
         try:
             first = page.locator(
@@ -1814,15 +2094,23 @@ class BrowserExecutor(ExecutorAdapter):
         except Exception:
             pass
 
-    def _fill_lever(self, page, answers: Dict[str, Any]) -> Tuple[int, list]:
+    def _fill_lever(self, page, answers: Dict[str, Any],
+                    field_map: Optional[Dict[str, str]] = None) -> Tuple[int, list]:
         """Lever fill: fields are keyed by the ``name`` attribute (not id), and
         selects are NATIVE ``<select>`` (not react-select), so this is simpler
-        than Greenhouse. Handles text, native select, and checkbox/radio."""
+        than Greenhouse. Handles text, native select, and checkbox/radio.
+
+        As in ``_fill_fields``, the recon-derived ``field_map`` wins: a canonical
+        answer key (``full_name``) is not Lever's ``name`` attribute (``name``,
+        ``cards[…][…]``); the ``[name="<key>"]`` guess is the fallback only."""
         filled, skipped = 0, []
+        field_map = field_map or {}
         for fid, value in answers.items():
             if value is None or value == "":
                 continue
-            sel = f'[name="{_attr(fid)}"]'
+            sel = (field_map.get(str(fid))
+                   or self._selector_for_handle(page, str(fid))
+                   or f'[name="{_attr(fid)}"]')
             try:
                 el = page.query_selector(sel)
             except Exception:
@@ -1847,26 +2135,74 @@ class BrowserExecutor(ExecutorAdapter):
                 skipped.append(fid)
         return filled, skipped
 
-    def _attach_resume(self, page, resume: Tuple[str, bytes]) -> None:
-        """Attach the résumé. Prefer direct ``set_input_files`` (works headless
-        even when the input is hidden); fall back to Attach → file chooser."""
+    def _resume_input_selectors(self, page) -> List[str]:
+        """Live selectors for this form's résumé upload, best first, [] when the
+        form has none.
+
+        Found by WALKING the file inputs and reading their own attributes —
+        never by a per-vendor id list (``#resume`` is Greenhouse's,
+        ``#_systemfield_resume`` is ONE Ashby template of several, and the next
+        one is a UUID). A file input that advertises itself as a cover letter is
+        skipped; anything résumé-ish sorts first, other file inputs stay as a
+        last resort (the historical behaviour)."""
+        out: List[str] = []
+        try:
+            elements = page.query_selector_all("input[type=file]") or []
+        except Exception:
+            elements = []
+        rest: List[str] = []
+        for el in elements:
+            hint, handle = "", ""
+            try:
+                for attr in ("id", "name", "aria-label", "data-testid",
+                             "accept", "class", "placeholder"):
+                    val = el.get_attribute(attr) or ""
+                    if val and attr in ("id", "name") and not handle:
+                        handle = val
+                    hint += " " + val
+            except Exception:
+                continue
+            sel = self._selector_for_handle(page, handle)
+            if not sel:
+                continue
+            if _COVER_LETTER_RE.search(hint) and not _RESUME_RE.search(hint):
+                continue
+            (out if _RESUME_RE.search(hint) else rest).append(sel)
+        # Unaddressable (no id/name) inputs still deserve the generic fallbacks.
+        for sel in ("input[type=file][accept*='pdf']", "input[type=file]"):
+            try:
+                if page.query_selector(sel) is not None:
+                    rest.append(sel)
+            except Exception:
+                continue
+        for sel in rest:
+            if sel not in out:
+                out.append(sel)
+        return out
+
+    def _attach_resume(self, page, resume: Tuple[str, bytes]) -> bool:
+        """Attach the résumé; returns whether a file actually went in. Prefer
+        direct ``set_input_files`` (works headless even when the input is
+        hidden); fall back to Attach → file chooser. A False here is a REQUIRED
+        gap — ``_presubmit_gaps`` refuses to submit on it rather than sending a
+        résumé-less application."""
         name, data = resume
         payload = {"name": name or "resume.pdf", "mimeType": "application/pdf", "buffer": data}
         # Direct input first — more reliable in Lambda than native file chooser.
-        for sel in ("#resume", "#_systemfield_resume",
-                    "input[type=file][name=resume]",
-                    "input[type=file][accept*='pdf']",
-                    "input[type=file]"):
-            if page.query_selector(sel) is not None:
-                try:
-                    page.set_input_files(sel, files=[payload])
-                    return
-                except Exception:
-                    continue
+        for sel in self._resume_input_selectors(page):
+            try:
+                page.set_input_files(sel, files=[payload])
+                return True
+            except Exception:
+                continue
         attach = None
         for sel in ("button:has-text('Attach')", "label:has-text('Attach')",
                     "button:has-text('Upload file')", "[data-source=attach]"):
-            attach = page.query_selector(sel)
+            try:
+                attach = page.query_selector(sel)
+            except Exception:
+                attach = None       # dead/odd page → not an attach failure path
+                break
             if attach is not None:
                 break
         if attach is not None:
@@ -1874,9 +2210,11 @@ class BrowserExecutor(ExecutorAdapter):
                 with page.expect_file_chooser(timeout=_FORM_TIMEOUT_MS) as fc:
                     attach.click()
                 fc.value.set_files(payload)
-                return
+                return True
             except Exception as e:
                 logger.info("attach via file-chooser failed (%s)", e)
+        logger.info("resume attach: no usable file input on this form")
+        return False
 
     def _click_submit(self, page) -> None:
         for sel in ("button:has-text('Submit application')",
@@ -2170,6 +2508,67 @@ def _css_id(fid: str) -> str:
     """Escape a field id for use in a `#id` selector (question_123 is safe; be
     defensive about odd characters)."""
     return re.sub(r"([^A-Za-z0-9_-])", r"\\\1", str(fid))
+
+
+class _BlindPickRefused(Exception):
+    """Raised instead of blind-picking an option for a gated/enumerated field.
+
+    The caller treats it like any other fill failure: the field lands in
+    ``skipped``, ``_presubmit_gaps`` reports it, and the row parks as
+    needs_input rather than submitting an invented answer.
+    """
+
+    def __init__(self, field_id: str):
+        self.field_id = field_id
+        super().__init__(f"blind option pick refused for {field_id!r}")
+
+
+def _blind_pick_forbidden(field_id: str) -> bool:
+    """True when "just take the first option" would be a FABRICATION.
+
+    The rule is deliberately inverted: ONLY a field the bank marks `safe` may be
+    blind-picked. Everything else refuses.
+
+      * `legal` / `protected` (i.e. `qb.is_gated`) — work authorization,
+        sponsorship, criminal history, EEO. An arbitrary option is an invented
+        legal attestation.
+      * `sensitive` — e.g. `has_security_clearance`, `current_salary`. NOT gated,
+        so an is_gated-only check would have let these through: "first option"
+        on a clearance dropdown claims a clearance the user may not hold.
+      * ENUMERATED (`qb.is_enumerated`) — country / state / citizenship. These
+        are `safe` by sensitivity, but their options are distinct real-world
+        places, so "first option" is simply a different country than declared.
+
+    A location autocomplete stays allowed: it is `safe` and not enumerated, and
+    its options are competing spellings of ONE place — which is the only case
+    the fallback was ever justified for.
+
+    FAILS CLOSED: unknown sensitivity, an unreadable bank, or an empty id all
+    refuse. A missed fill parks the row and asks the user; a wrong one is
+    submitted to a real employer under their name.
+    """
+    if not field_id:
+        return True
+    try:
+        from services import application_question_bank as qb
+    except Exception:  # pragma: no cover - defensive
+        logger.warning(
+            "fill_select: question bank unavailable — refusing blind option "
+            "pick for %s (fail closed)", field_id)
+        return True
+    try:
+        if qb.is_gated(field_id) or qb.is_enumerated(field_id):
+            return True
+        meta = qb.FIELD_INDEX.get(field_id)
+        if not meta:
+            # Not in the catalog at all — a vendor-custom question. We cannot
+            # reason about it, but it is also not a known legal/geo field, so
+            # allow the location-style fallback rather than burying the user in
+            # needs_input for every bespoke dropdown.
+            return False
+        return meta.get("sensitivity") != qb.SENS_SAFE
+    except Exception:  # pragma: no cover - defensive
+        return True
 
 
 # ---------------------------------------------------------------------------

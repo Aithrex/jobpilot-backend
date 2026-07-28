@@ -158,6 +158,17 @@ class FakeElement:
     def click(self) -> None:
         self._page._on_click(self)
 
+    def evaluate(self, script: str):
+        """The ONE page-function the executor's fill path runs per element
+        (``e => e.tagName``). Anything else is out of scope for a static DOM and
+        raises, exactly as an unsupported call would in a real browser."""
+        if "tagName" in script:
+            return str(self._node.tag).upper()
+        raise NotImplementedError("FakeElement.evaluate: %s" % script)
+
+    def screenshot(self, **kwargs) -> bytes:
+        return b"\x89PNG\r\n\x1a\n" + self.inner_text().encode("utf-8")[:64]
+
 
 class FakePage:
     """An lxml-backed static-DOM page. ``next_html`` (optional) is the document a
@@ -168,6 +179,7 @@ class FakePage:
         self.url = url
         self._next_html = next_html
         self.clicks = 0
+        self.uploads = {}
 
     @classmethod
     def from_file(cls, path, url: str = "", next_file=None):
@@ -187,6 +199,53 @@ class FakePage:
         if nodes:
             return (nodes[0].text_content() or "").strip()
         return (self._tree.text_content() or "").strip()
+
+    # -- page-level surface the browser_executor drive uses ------------------
+    # (Timing calls are no-ops on a static DOM; the file/select actuators are
+    # real state changes so a test can assert what actually landed in the form.)
+    def set_default_timeout(self, ms) -> None:
+        pass
+
+    def wait_for_timeout(self, ms) -> None:
+        pass
+
+    def screenshot(self, **kwargs) -> bytes:
+        return b"\x89PNG\r\n\x1a\n" + self.inner_text("body").encode("utf-8")[:64]
+
+    def click(self, selector: str, **kwargs) -> None:
+        el = self.query_selector(selector)
+        if el is None:
+            raise ValueError("click: no element for %r" % selector)
+        el.click()
+
+    def fill(self, selector: str, value=None, **kwargs) -> None:
+        el = self.query_selector(selector)
+        if el is None:
+            raise ValueError("fill: no element for %r" % selector)
+        el.fill(value)
+
+    def set_input_files(self, selector: str, files=None) -> None:
+        """Playwright parity: raises when the selector matches nothing, so a
+        driver that guessed the wrong upload selector cannot silently 'succeed'."""
+        el = self.query_selector(selector)
+        if el is None:
+            raise ValueError("set_input_files: no element for %r" % selector)
+        payload = (files or [{}])[0]
+        name = payload.get("name") if isinstance(payload, dict) else str(payload)
+        el._node.set("value", name or "")
+        self.uploads[selector] = name
+
+    def select_option(self, selector: str, label=None, value=None):
+        el = self.query_selector(selector)
+        if el is None:
+            raise ValueError("select_option: no element for %r" % selector)
+        wanted = label if label is not None else value
+        for opt in el._node.xpath(".//option"):
+            text = (opt.text_content() or "").strip()
+            if wanted in (text, opt.get("value")):
+                el._node.set("value", opt.get("value") or text)
+                return [opt.get("value") or text]
+        raise ValueError("select_option: no option %r" % wanted)
 
     # -- stateful submit transition -----------------------------------------
     def _on_click(self, element: FakeElement) -> None:
