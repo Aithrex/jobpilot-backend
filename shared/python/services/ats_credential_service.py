@@ -247,13 +247,34 @@ def generate_password() -> str:
     return "".join(chars)
 
 
+# The canonical shared-family row (one Workday password per user) is keyed with
+# an EMPTY tenant. KMS rejects an empty-string VALUE in an EncryptionContext with
+# `ValidationException: Invalid EncryptionContext`, so binding `tenant: ""`
+# made every generate_data_key fail — no credential could be stored at all, and
+# every Workday application parked on the account gate with the opaque
+# "Credential encryption is unavailable."
+#
+# Substitute an explicit sentinel rather than dropping the key: omitting `tenant`
+# for the shared row would make its context a strict SUBSET of a per-tenant row's,
+# weakening the binding. The sentinel keeps every row's context the same shape and
+# the same arity. It must be a value no real tenant can take — Workday tenants are
+# hostname-safe (alphanumeric/hyphen), so underscores make this unreachable.
+_SHARED_TENANT_SENTINEL = "__shared__"
+
+
 def _context(user_email: str, ats_family: str, tenant: str) -> Dict[str, str]:
-    """Identity binding for the KMS envelope (encryption context + GCM AAD)."""
+    """Identity binding for the KMS envelope (encryption context + GCM AAD).
+
+    Every value must be a NON-EMPTY string: KMS validates the context, and the
+    same map is the GCM associated data, so a change here invalidates existing
+    blobs. Safe to introduce now only because no credential has ever been stored
+    (the empty-tenant bug meant encrypt never succeeded).
+    """
     return {
         "purpose": "ats_credentials",
         "user_email": user_email,
         "ats_family": ats_family,
-        "tenant": tenant,
+        "tenant": tenant or _SHARED_TENANT_SENTINEL,
     }
 
 
