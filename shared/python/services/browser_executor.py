@@ -28,7 +28,8 @@ Design / contract (see ``executor_adapter`` for the full spec):
     resolved answers only (AUTOAPPLY_REPAIR_SPEC §0) — and NEVER raises for an
     expected condition: every path returns a structured dict.
   * The résumé is resolved to bytes via an injectable ``resume_resolver`` (the
-    default resolves ``tailoring_record_id`` → S3; tests inject bytes directly),
+    default resolves ``tailoring_record_id`` — else the base ``resume_asset_id``
+    — → S3, always owner-scoped; tests inject bytes directly),
     and submission-proof screenshots go through an injectable ``screenshot_sink``
     (default → S3), so the whole thing is testable with zero AWS.
 
@@ -195,21 +196,52 @@ EXECUTOR_PREPARED = "prepared"
 # ---------------------------------------------------------------------------
 # Injectable defaults (S3-backed) — kept import-light so tests need no AWS.
 # ---------------------------------------------------------------------------
+def _safe_upload_name(filename: Any, mime_type: Any = "") -> str:
+    """A safe file name for the browser upload that KEEPS the real extension —
+    a .docx attached as "resume.pdf" is rejected by the ATS. Basename only, no
+    path separators, no exotic characters."""
+    base = os.path.basename(str(filename or "")).strip()
+    base = re.sub(r"[^A-Za-z0-9._-]", "_", base)[:80].lstrip(".")
+    if base and "." in base:
+        return base
+    mt = str(mime_type or "").lower()
+    return "resume.docx" if ("word" in mt or "officedocument" in mt) else "resume.pdf"
+
+
 def _default_resume_resolver(application: Dict[str, Any],
                              resume_pdf: Any,
                              user_email: Optional[str]) -> Optional[Tuple[str, bytes]]:
-    """Resolve ``{tailoring_record_id}`` → (filename, pdf_bytes) from S3.
+    """Resolve a résumé REFERENCE → (filename, file_bytes) from S3.
 
-    Returns None when no tailored résumé is linked (the caller then submits
-    without a résumé attachment only if the form allows it). Never raises past
-    the caller's try/except.
+    Two reference shapes (see ``auto_apply_service._resume_ref``):
+      * ``{tailoring_record_id}`` — the pinned tailored variant (wins);
+      * ``{resume_asset_id}``     — the user's active BASE upload, used when
+        tailoring is off/skipped for the row.
+    BOTH lookups are owner-scoped: without a ``user_email`` the base id does not
+    resolve at all, so an id alone can never reach another user's résumé.
+
+    Returns None when no résumé is linked; the caller then hands the row to
+    ``_presubmit_gaps``, which PARKS it (``resume_missing``) rather than
+    submitting a CV-less application. Never raises past the caller's try/except.
     """
-    ref = resume_pdf or {}
-    trid = ref.get("tailoring_record_id") if isinstance(ref, dict) else None
-    if not trid:
+    ref = resume_pdf if isinstance(resume_pdf, dict) else {}
+    trid = ref.get("tailoring_record_id")
+    asset_id = ref.get("resume_asset_id")
+    if not trid and not asset_id:
         return None
     from utils.db_connect import DBConnect
     from services.s3_service import get_storage_service
+
+    if not trid:
+        # BASE résumé fallback — owner-scoped by construction (no user_email ⇒
+        # no résumé, never a cross-user read).
+        from services import resume_access
+        asset = resume_access.get_owned_asset(user_email or "", asset_id)
+        object_key = (asset or {}).get("object_key")
+        if not object_key:
+            return None
+        return (_safe_upload_name(asset.get("filename"), asset.get("mime_type")),
+                get_storage_service().get_resume(object_key))
 
     db = DBConnect().get_db()
     q: Dict[str, Any] = {"record_id": trid}
@@ -2187,7 +2219,12 @@ class BrowserExecutor(ExecutorAdapter):
         gap — ``_presubmit_gaps`` refuses to submit on it rather than sending a
         résumé-less application."""
         name, data = resume
-        payload = {"name": name or "resume.pdf", "mimeType": "application/pdf", "buffer": data}
+        name = name or "resume.pdf"
+        # A BASE upload may be .docx (tailored artifacts are always PDF) — declare
+        # the type its extension actually implies or the ATS rejects the file.
+        mime = ("application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                if name.lower().endswith((".docx", ".doc")) else "application/pdf")
+        payload = {"name": name, "mimeType": mime, "buffer": data}
         # Direct input first — more reliable in Lambda than native file chooser.
         for sel in self._resume_input_selectors(page):
             try:

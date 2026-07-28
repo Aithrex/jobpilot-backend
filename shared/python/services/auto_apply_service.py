@@ -1501,16 +1501,43 @@ def resume_after_answers(user_email: str, application_id: str,
     return out
 
 
-def _resume_ref(app: Dict[str, Any], user_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """A reference the executor resolves to PDF bytes (the tailored variant) —
-    NOT the bytes themselves (the orchestrator never carries megabytes; the
-    fleet fetches from S3). None when no tailored variant is linked.
+def _base_resume_ref(user_email: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Reference to the user's ACTIVE BASE résumé asset (``resume_assets`` via
+    ``users.active_resume_id``) — the FALLBACK when no tailored variant exists.
 
-    ``user_email`` is folded in because the S3 lookup for the tailored résumé is
-    owner-scoped and the ledger view (`app`) intentionally omits the owner."""
+    Same discipline as the tailored ref: an id, never bytes, and the owner is
+    carried so the executor's S3 lookup stays owner-scoped. None when the user
+    has no uploaded file at all (then nothing is attachable and the pre-submit
+    gate must park the row — never submit a CV-less application)."""
+    if not user_email:
+        return None
+    try:
+        from services import resume_access
+        asset = resume_access.get_active_asset(user_email)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("auto_apply: base résumé lookup failed: %s", e)
+        return None
+    if not asset or not asset.get("object_key") or not asset.get("resume_id"):
+        return None
+    return {"resume_asset_id": asset["resume_id"], "user_email": user_email}
+
+
+def _resume_ref(app: Dict[str, Any], user_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """A reference the executor resolves to PDF bytes — NOT the bytes themselves
+    (the orchestrator never carries megabytes; the fleet fetches from S3).
+
+    The TAILORED variant wins whenever one is linked. Otherwise fall back to the
+    user's active BASE résumé asset: tailoring is opt-out
+    (``auto_submit_settings.use_tailored_resume=False`` skips prepare entirely),
+    and without this fallback such a row reached the executor with nothing to
+    attach and every ATS rejected it ("Missing entry for required field:
+    Resume"). None only when the user has NO résumé at all.
+
+    ``user_email`` is folded in because both S3 lookups are owner-scoped and the
+    ledger view (`app`) intentionally omits the owner."""
     trid = app.get("tailoring_record_id")
     if not trid:
-        return None
+        return _base_resume_ref(user_email)
     ref = {"tailoring_record_id": trid}
     if user_email:
         ref["user_email"] = user_email
@@ -1518,26 +1545,39 @@ def _resume_ref(app: Dict[str, Any], user_email: Optional[str] = None) -> Option
 
 
 def pinned_resume_s3_key(application_id: str, user_email: str) -> Optional[str]:
-    """Resolve the ONE pinned (immutable-S3-keyed) tailored-résumé PDF key for a
-    row — what the executor callback surface presigns a one-use GET for. Owner-
-    scoped. None when no pinned artifact exists (prepare/D guarantees one before
-    submit, so None means "not ready", not "attach nothing")."""
+    """Resolve the ONE résumé object key for a row — what the executor callback
+    surface (the remote fleet's ``/executor/resume-url``) presigns a one-use GET
+    for. Owner-scoped, and the pinned (immutable-S3-keyed) TAILORED artifact wins.
+    Falls back to the user's active BASE asset for untailored rows (same reason
+    as ``_resume_ref``). None means the user has no résumé at all — "attach
+    nothing" is never a valid outcome, so the caller answers 409."""
     app = ledger.get_application(user_email, application_id)
     trid = (app or {}).get("tailoring_record_id")
     if not trid:
-        return None
+        return _base_resume_s3_key(user_email)
     rec = DBConnect().get_db().tailoring_records.find_one(
         {"record_id": _clean(trid, 200), "user_email": user_email},
         {"_id": 0, "versions": 1, "current_version_id": 1})
     if not rec:
-        return None
+        return _base_resume_s3_key(user_email)
     versions = rec.get("versions") or []
     version = next((v for v in versions
                     if v.get("version_id") == rec.get("current_version_id")), None)
     version = version or (versions[-1] if versions else None)
     if not version:
+        return _base_resume_s3_key(user_email)
+    return (((version.get("files") or {}).get("pdf") or {}).get("s3_key")
+            or _base_resume_s3_key(user_email))
+
+
+def _base_resume_s3_key(user_email: str) -> Optional[str]:
+    """Object key of the user's active BASE résumé asset (owner-scoped)."""
+    ref = _base_resume_ref(user_email)
+    if not ref:
         return None
-    return ((version.get("files") or {}).get("pdf") or {}).get("s3_key")
+    from services import resume_access
+    asset = resume_access.get_owned_asset(user_email, ref["resume_asset_id"])
+    return (asset or {}).get("object_key") or None
 
 
 def execution_envelope(application_id: str, user_email: str) -> Optional[Dict[str, Any]]:
@@ -1583,7 +1623,9 @@ def execution_envelope(application_id: str, user_email: str) -> Optional[Dict[st
         "ats_family": app.get("ats_family"),
         "tenant": app.get("ats_tenant") or app.get("tenant") or "",
         "answers": ans_doc.get("answers") or {},
-        "resume_available": bool(app.get("tailoring_record_id")),
+        # True when the fleet can pull SOMETHING from /executor/resume-url —
+        # the pinned tailored artifact OR the active base asset (untailored rows).
+        "resume_available": bool(_resume_ref(app, user_email)),
         "credential_required": bool(ans_doc.get("needs_account")),
     }
 

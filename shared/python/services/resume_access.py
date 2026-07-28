@@ -321,6 +321,18 @@ def get_asset(resume_id: str) -> Optional[Dict[str, Any]]:
     return _assets().find_one({"resume_id": rid})
 
 
+def get_owned_asset(user_email: str, resume_id: str) -> Optional[Dict[str, Any]]:
+    """Owner-scoped asset read. Unlike ``get_asset``, the resume_id ALONE never
+    resolves: the owner is folded into the query, so an id that travelled through
+    an executor payload (auto-apply's base-résumé reference) can never pull
+    another user's résumé — the most sensitive artifact in the product."""
+    email = _safe_email(user_email)
+    rid = _safe_id(resume_id)
+    if not email or not rid:
+        return None
+    return _assets().find_one({"resume_id": rid, "user_email": email})
+
+
 def get_active_asset(user_email: str) -> Optional[Dict[str, Any]]:
     """Resolve users.active_resume_id -> asset doc; falls back to the user's
     newest asset (any parse state) so a failed-parse upload can be re-parsed."""
