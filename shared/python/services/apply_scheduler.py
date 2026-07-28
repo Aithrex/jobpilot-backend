@@ -243,12 +243,13 @@ def run_apply_hourly() -> Dict[str, Any]:
 
     users = _opted_in_users()
     totals = {"users": len(users), "enqueued": 0, "redriven": 0,
-              "emailed": 0, "skipped_closed": 0}
+              "gather_redriven": 0, "emailed": 0, "skipped_closed": 0}
     for email in users:
         try:
             res = _run_user_hourly(email)
             totals["enqueued"] += res["enqueued"]
             totals["redriven"] += res["redriven"]
+            totals["gather_redriven"] += res.get("gather_redriven", 0)
             totals["emailed"] += res["emailed"]
             totals["skipped_closed"] += res["skipped_closed"]
         except Exception as e:  # per-user isolation
@@ -263,7 +264,8 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
     from services.resume_service import get_resume_service, ResumeService
 
     now = _now()
-    out = {"enqueued": 0, "redriven": 0, "emailed": 0, "skipped_closed": 0}
+    out = {"enqueued": 0, "redriven": 0, "gather_redriven": 0, "emailed": 0,
+           "skipped_closed": 0}
     mode = autonomy_service.get_mode(email)
     match_cap = (
         _MAX_MATCHES_AGGRESSIVE
@@ -301,6 +303,51 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
             out["redriven"] += 1
         except Exception as e:
             logger.warning("[apply_scheduler] redrive enqueue failed (%s): %s", aid, e)
+
+    # 1b. Re-drive rows that never GATHERED.
+    #
+    # `apply_match_sweep` (and /api/apply/queue) create the ledger row and then
+    # fire `auto_apply_gather` as an async Lambda self-invoke. That invoke is
+    # best-effort: if it is throttled, dropped, or its Lambda dies before the
+    # job runs, the row sits at `queued` forever. Nothing re-drove it — step 1
+    # above only looks at the SUBMIT-pickup state — so the application was
+    # silently orphaned in a state the UI does not even render.
+    #
+    # Observed in production: of 10 rows the sweep created in one tick, 4
+    # gathered and 6 were still `queued` with a single `application_created`
+    # audit line and no answers document, half an hour later.
+    #
+    # Re-enqueueing gather is safe: `gather` is idempotent (it early-returns for
+    # any row that has already left `queued`/`gathering`), and the dedup gate
+    # plus the ledger's CAS transitions mean a duplicate cannot create a second
+    # application or a second submission.
+    gather_redrive_statuses = (als.STATUS_QUEUED, als.STATUS_GATHERING)
+    for status in gather_redrive_statuses:
+        try:
+            ungathered = als.list_applications(email, status=status,
+                                               limit=_MAX_REDRIVE_PER_USER)
+        except Exception as e:
+            logger.warning("[apply_scheduler] gather-redrive list failed (%s) "
+                           "for %s: %s", status, email, e)
+            continue
+        for row in ungathered:
+            aid = row.get("application_id")
+            if not aid:
+                continue
+            if _is_closed(row.get("posting_closes_at"), now=now):
+                out["skipped_closed"] += 1
+                continue
+            try:
+                payload = {"user_email": email, "application_id": aid,
+                           "apply_url": row.get("apply_url") or ""}
+                job_id = get_resume_service().create_job(
+                    "auto_apply_gather", payload, user_email=email)
+                ResumeService.invoke_async(job_id, "auto_apply_gather", payload)
+                out["gather_redriven"] = out.get("gather_redriven", 0) + 1
+            except Exception as e:
+                logger.warning(
+                    "[apply_scheduler] gather-redrive enqueue failed (%s): %s",
+                    aid, e)
 
     # 2. Enqueue new matches through the dedup gate -> ledger row -> gather job.
     #    Auto Aggressive / Autopilot users get matching postings queued daily
