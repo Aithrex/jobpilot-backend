@@ -1026,6 +1026,45 @@ def needs_input_answer():
                         "message": "We couldn't save your answers. Please try again."}), 500
 
 
+@apply_bp.route("/needs-input/wall-cleared", methods=["POST"])
+@jwt_required()
+@entitlements_service.require_feature("auto_apply")
+def needs_input_wall_cleared():
+    """The user finished a browser wall on the employer's site — resume now.
+
+    A CAPTCHA / email-verification / candidate-account wall is cleared on the
+    EMPLOYER's side, so nothing tells us when it happened. This is that signal:
+    the FE calls it when the user comes back from the employer tab. It puts the
+    row back on the automated re-check ladder from the top and drives one
+    re-check immediately, so a cleared wall resumes in seconds instead of
+    waiting out a four-hour backoff step (or, before this, being written off).
+
+    We never SOLVE a wall — this route only re-observes one the human cleared.
+    """
+    user_email = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    application_id = InputSanitizer.sanitize_string(
+        data.get("application_id") or "", max_length=64)
+    if not application_id:
+        return jsonify({"error": "invalid_request",
+                        "message": "application_id is required"}), 400
+
+    from services import auto_apply_service
+
+    try:
+        return jsonify(auto_apply_service.resume_after_wall(
+            user_email, application_id)), 200
+    except auto_apply_service.NoWallToResume as e:
+        return jsonify({"error": "no_wall_to_resume", "message": str(e)}), 409
+    except application_ledger_service.ApplicationLedgerError as e:
+        return jsonify({"error": e.error, "message": e.message}), e.status
+    except Exception as e:
+        logger.exception("apply/needs-input wall-cleared error: %s", e)
+        return jsonify({"error": "resume_failed",
+                        "message": "We couldn't re-check that application. "
+                                   "Please try again."}), 500
+
+
 # ==================================================================
 # ATS CREDENTIAL VAULT (Tranche 1 §4) — server-managed ATS logins.
 #

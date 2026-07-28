@@ -682,6 +682,13 @@ def _sanitize_needs_input(items: Any) -> List[Dict[str, Any]]:
                 entry["options"] = opts
         if item.get("required"):
             entry["required"] = True
+        # The WALL kind behind a `complete_in_browser` hand-off (captcha /
+        # verify / reset). The FE groups the hand-offs by it and picks the right
+        # copy; without it every wall reads the same and a CAPTCHA looks like a
+        # question we are waiting on an answer for.
+        wall_kind = _clean_str(item.get("wall_kind"), 40)
+        if wall_kind:
+            entry["wall_kind"] = wall_kind
         out.append(entry)
     return out
 

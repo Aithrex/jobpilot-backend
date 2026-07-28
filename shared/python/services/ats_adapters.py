@@ -161,6 +161,15 @@ _ACCOUNT_RE = re.compile(
     r"(create an account|sign in to apply|log ?in to apply|register to apply|"
     r"create your account|already have an account)", re.IGNORECASE)
 
+# The "with email" control on a federated auth panel. Must NOT match the
+# identity-provider buttons that sit next to it ("Sign in with Apple/Google/
+# LinkedIn") — clicking one of those would hand the employer an OAuth flow we
+# have no account for and cannot complete.
+_EMAIL_AUTH_RE = re.compile(
+    r"((?:sign|log)\s*(?:in|up)|continue|register)\s+with\s+(?:an?\s+)?email"
+    r"|use\s+(?:my\s+|an?\s+)?email"
+    r"|email\s+and\s+password", re.IGNORECASE)
+
 
 # ===========================================================================
 # Per-family circuit breaker (opens on repeated selector/fingerprint drift)
@@ -905,6 +914,19 @@ class WorkdayAdapter(AtsAdapter):
         "signInContent", "signInFormo", "createAccountLink", "signInLink",
         "createAccountSubmitButton", "signInSubmitButton", "backToSignInLink",
         "createAccountHeader", "authView", "loginPanel",
+    )
+
+    # The "…or sign in with email" escape hatch on a FEDERATED auth panel.
+    # Newer Workday tenants (NXP, State Street, Midland States Bank — all
+    # observed live on 2026-07-28) render ONLY social buttons ("Sign in with
+    # Apple / Google / LinkedIn / email") on the Create Account/Sign In step:
+    # there is NO email input and NO password input in the DOM until the email
+    # option is chosen. `fill_account_credentials` therefore found nothing to
+    # fill and returned False, `_account_gate_present` stayed True, and the row
+    # parked on `account_required` forever. These reveal the credential form.
+    _EMAIL_AUTH_AUTOMATION_IDS = (
+        "signInWithEmail", "signUpWithEmail", "emailSignInLink",
+        "useEmailLink", "emailAuthLink",
     )
 
     # OTP / email-verify controls (theme-independent automation hooks).
@@ -1860,6 +1882,70 @@ class WorkdayAdapter(AtsAdapter):
             return {"reason": TAKEOVER_NOVEL_LEGAL, "evidence": novel}
         return None
 
+    def _credential_inputs_present(self) -> bool:
+        """An email AND a password control are in the DOM right now.
+
+        Distinct from ``_account_gate_present`` (which also fires on account
+        COPY and on a federated panel with no inputs at all): this is the
+        precondition ``fill_account_credentials`` actually needs."""
+        email = (self._qs("[data-automation-id=email]")
+                 or self._qs("input[type=email]")
+                 or self._qs("input[autocomplete=username]")
+                 or self._qs("input[name=email]"))
+        pwd = (self._qs("[data-automation-id=password]")
+               or self._qs("input[type=password]")
+               or self._qs("input[name=password]"))
+        return email is not None and pwd is not None
+
+    def _reveal_email_auth_form(self) -> bool:
+        """Click the "…with email" option on a FEDERATED auth panel so the
+        email/password controls render. Returns True only when they now exist.
+
+        No-op (False) when the inputs are already present or the panel offers no
+        email route. Deliberately CSS + visible-text only — no ``locator``
+        pseudo-selectors — so it is exercisable by the offline DOM harness and
+        cannot be defeated by a theme rename.
+        """
+        if self._page is None or self._credential_inputs_present():
+            return False
+        clicked = False
+        for aid in self._EMAIL_AUTH_AUTOMATION_IDS:
+            el = self._qs("[data-automation-id=%s]" % aid)
+            if el is None:
+                continue
+            try:
+                el.click()
+                clicked = True
+                break
+            except Exception:
+                continue
+        if not clicked:
+            for el in self._qsa("button, a, [role=button]")[:80]:
+                try:
+                    text = (el.inner_text() or "").strip()
+                except Exception:
+                    continue
+                if not text or not _EMAIL_AUTH_RE.search(text):
+                    continue
+                try:
+                    if hasattr(el, "is_visible") and not el.is_visible():
+                        continue
+                    el.click()
+                    clicked = True
+                    break
+                except Exception:
+                    continue
+        if not clicked:
+            return False
+        try:
+            self._page.wait_for_timeout(1_500)
+        except Exception:
+            pass
+        revealed = self._credential_inputs_present()
+        logger.info("workday federated auth panel: email form %s",
+                    "revealed" if revealed else "still hidden")
+        return revealed
+
     def _otp_gate_present(self) -> bool:
         """True when a Workday/Okta OTP input is on screen."""
         for aid in self._OTP_AUTOMATION_IDS:
@@ -2058,6 +2144,13 @@ class WorkdayAdapter(AtsAdapter):
         if self._page is None:
             return False
         page = self._page
+
+        # A federated panel ("Sign in with Apple / Google / LinkedIn / email")
+        # has NO email or password input until the email route is chosen. Reveal
+        # it BEFORE anything below looks for those controls — otherwise every
+        # `_find` returns None and this method returns False without ever having
+        # touched the form (the live failure on NXP / State Street / Midland).
+        self._reveal_email_auth_form()
 
         if create:
             # Never click header "Sign In" — it opens a modal over Create Account.

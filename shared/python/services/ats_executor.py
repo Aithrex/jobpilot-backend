@@ -95,6 +95,28 @@ def _is_legal(label: str) -> bool:
     return bool(label) and bool(_LEGAL_PATTERNS.search(label))
 
 
+#: Cap on choices carried per field (matches auto_apply_service._MAX_NEEDS_OPTIONS).
+_MAX_OPTIONS = 40
+
+
+def _option_labels(values: Any) -> List[str]:
+    """Human labels from a Greenhouse ``values`` array, de-duped, order kept.
+
+    Entries are ``{"label": "Yes", "value": 1}``; a bare string is tolerated so
+    a shape change degrades to "fewer options", never to a crash."""
+    out: List[str] = []
+    seen = set()
+    for v in (values or [])[:_MAX_OPTIONS] if isinstance(values, list) else []:
+        if isinstance(v, dict):
+            label = str(v.get("label") or v.get("value") or "").strip()
+        else:
+            label = str(v or "").strip()
+        if label and label not in seen:
+            seen.add(label)
+            out.append(label[:200])
+    return out
+
+
 def _parse_question(q: Dict[str, Any], force_legal: bool = False) -> Optional[Dict[str, Any]]:
     """Map one Greenhouse question entry → a ReconQuestion dict, or None to drop
     it (hidden-only, executor-supplied, or malformed)."""
@@ -121,13 +143,26 @@ def _parse_question(q: Dict[str, Any], force_legal: bool = False) -> Optional[Di
         return None
     label = (q.get("label") or "").strip()
     qtype = _GH_TYPE_MAP.get(primary.get("type"), QTYPE_TEXT)
-    return {
+    parsed = {
         "id": fid,
         "text": label,
         "type": qtype,
         "required": bool(q.get("required")),
         "is_legal_attestation": bool(force_legal or _is_legal(label)),
     }
+    # THE ENUMERATED-FIELD FIX: Greenhouse ships the accepted choices on the
+    # field as ``values: [{label, value}, …]`` and we used to DROP them. Without
+    # them the needs_input item reaches the FE as `value_type: select` with no
+    # `options`, `needsInput.inferControl` renders a free-text box, the user
+    # types prose, `application_question_bank.match_option` cannot map it to a
+    # real choice, `fill_driver` returns `no_option_match` and the row re-parks
+    # with the SAME question — a select question nobody (user or machine) can
+    # answer. Carry the labels through; `apply_forms.normalize_recon_questions`
+    # and `_needs_control_meta` already prefer the form's own options.
+    opts = _option_labels(primary.get("values"))
+    if opts:
+        parsed["options"] = opts
+    return parsed
 
 
 def _parse_greenhouse(payload: Dict[str, Any]) -> List[Dict[str, Any]]:

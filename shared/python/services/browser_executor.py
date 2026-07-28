@@ -84,6 +84,40 @@ _FORM_RECON_JS = r"""
     if (q) { const l = q.querySelector('label, .application-label'); if (l) return (l.innerText||'').trim(); }
     return el.getAttribute('placeholder') || '';
   };
+  // Choice labels for an ENUMERATED control. Without these the needs_input item
+  // reaches the FE as a select with no options, the FE falls back to a free-text
+  // box, and nothing the user types can ever match a real option — the row
+  // re-parks on the same question forever. <select> reads its own <option>s;
+  // a radio/checkbox GROUP (which we collapse by handle below) reads its
+  // same-named siblings' labels.
+  const optionsFor = (el) => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    let vals = [];
+    if (el.tagName === 'SELECT') {
+      vals = [...el.options]
+        .filter(o => !o.disabled && (o.value !== '' || clean(o.text)))
+        .map(o => clean(o.text) || clean(o.value));
+    } else if (['radio', 'checkbox'].includes((el.type || '').toLowerCase()) && el.name) {
+      const scope = el.form || document;
+      vals = [...scope.querySelectorAll(
+        'input[type=' + el.type.toLowerCase() + ']')]
+        .filter(s => s.name === el.name)
+        .map(s => clean(labelFor(s)) || clean(s.value));
+    }
+    const outv = [], got = new Set();
+    for (const v of vals) {
+      // Drop the placeholder row ("Select...", "-- Please choose one --") and
+      // dupes. Anchored at BOTH ends and \b-bounded so a real choice that
+      // merely starts with the word ("Selected candidates only") survives —
+      // silently deleting a valid option is worse than keeping a placeholder,
+      // which the fill driver would never match anyway.
+      if (!v || got.has(v)) continue;
+      if (/^[-\s]*(please\s+)?(select|choose)\b[\s\w.…]{0,24}[-\s.…]*$/i.test(v)) continue;
+      got.add(v); outv.push(v);
+      if (outv.length >= 40) break;
+    }
+    return outv;
+  };
   document.querySelectorAll('input, select, textarea').forEach(el => {
     const type = el.tagName === 'SELECT' ? 'select'
                : el.tagName === 'TEXTAREA' ? 'textarea'
@@ -92,8 +126,11 @@ _FORM_RECON_JS = r"""
     const handle = el.id || el.name || '';
     if (!handle || seen.has(handle)) return;   // collapse radio/checkbox groups
     seen.add(handle);
-    out.push({ name: handle, type, label: labelFor(el) || handle,
-               required: el.required || el.getAttribute('aria-required') === 'true' });
+    const entry = { name: handle, type, label: labelFor(el) || handle,
+                    required: el.required || el.getAttribute('aria-required') === 'true' };
+    const opts = optionsFor(el);
+    if (opts.length) entry.options = opts;
+    out.push(entry);
   });
   return out;
 }
@@ -536,7 +573,6 @@ class BrowserExecutor(ExecutorAdapter):
                        legal_prefixes: tuple) -> Dict[str, Any]:
         """Generic browser recon for name/id-keyed forms (Lever, Ashby)."""
         from playwright.sync_api import sync_playwright
-        from services.ats_executor import _is_legal
         try:
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=self._headless,
@@ -553,6 +589,18 @@ class BrowserExecutor(ExecutorAdapter):
             logger.warning("%s recon failed (%s): %s", family, target, e)
             return {"questions": [], "needs_account": False, "status": EXECUTOR_UNAVAILABLE}
 
+        return {"questions": self._shape_recon_fields(raw, exclude_names,
+                                                      legal_prefixes),
+                "needs_account": False}
+
+    @staticmethod
+    def _shape_recon_fields(raw: Optional[List[Dict[str, Any]]],
+                            exclude_names: set,
+                            legal_prefixes: tuple) -> List[Dict[str, Any]]:
+        """Browser-captured fields → ReconQuestion dicts. Split out of
+        ``_recon_browser`` so the shaping (which is where option labels used to
+        be dropped) is testable without a browser."""
+        from services.ats_executor import _is_legal
         questions, seen = [], set()
         for f in raw or []:
             name = (f.get("name") or "").strip()
@@ -566,13 +614,22 @@ class BrowserExecutor(ExecutorAdapter):
             label = (f.get("label") or name).strip()
             qtype = _LEVER_TYPE_MAP.get(f.get("type"), QTYPE_TEXT)
             is_legal = bool(_is_legal(label) or any(name.startswith(p) for p in legal_prefixes))
-            questions.append({
+            q: Dict[str, Any] = {
                 "id": name, "text": label, "type": qtype,
                 "required": bool(f.get("required")), "is_legal_attestation": is_legal,
-            })
+            }
+            # Enumerated controls carry the choices the ATS will actually accept
+            # (see `_FORM_RECON_JS.optionsFor`). `normalize_recon_questions`
+            # sanitizes + caps them; `_needs_control_meta` prefers them over the
+            # question-bank catalog, so the FE renders a real picker instead of a
+            # free-text box the answer can never match.
+            opts = f.get("options")
+            if isinstance(opts, list) and opts:
+                q["options"] = opts
+            questions.append(q)
             if len(questions) >= 120:
                 break
-        return {"questions": questions, "needs_account": False}
+        return questions
 
     def probe_form(self, apply_url: str, *,
                    application_id: str = "probe") -> Dict[str, Any]:
@@ -1238,8 +1295,18 @@ class BrowserExecutor(ExecutorAdapter):
                 except Exception:
                     page.wait_for_timeout(1_500)
                 still = getattr(adapter, "_account_gate_present", lambda: False)()
-                on_login = "login" in (page.url or "").lower()
-                if still and on_login:
+                # THE ACCOUNT-CREATION FIX: this used to also require
+                # `"login" in page.url`. The wall we actually meet is served at
+                # `.../apply/applyManually` (live: NXP, State Street, Midland
+                # States Bank, 2026-07-28), so the guard was ALWAYS false, the
+                # Create Account fallback never ran, and no employer account was
+                # ever registered — the vault held a password the employer had
+                # never seen. The honest signal is the gate still being on
+                # screen after a sign-in attempt: the account does not exist (or
+                # the password is wrong), and creating it is the next step.
+                # The "already exists → sign in" recovery below closes the loop
+                # if we were wrong.
+                if still:
                     # Sign-in failed → open Create Account and provision.
                     try:
                         link = page.locator(

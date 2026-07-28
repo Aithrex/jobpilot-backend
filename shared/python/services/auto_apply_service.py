@@ -59,10 +59,23 @@ from services.executor_adapter import (
     SUBMIT_UNKNOWN,
     SUBMIT_WAITING_VERIFY,
     VALID_WALL_KINDS,
+    WALL_CAPTCHA,
+    WALL_RESET,
     WALL_VERIFY,
 )
 
 logger = logging.getLogger(__name__)
+
+#: Notification event fired when a row parks on a wall only the user can clear.
+#: Transactional (not proactive): it is the direct consequence of the user's own
+#: auto-apply run, so it is not quiet-houred and does not spend a digest slot —
+#: the whole value is that the human hears about it IMMEDIATELY.
+WALL_NOTIFY_EVENT = "application_wall"
+
+#: Freeze status once the automated re-check ladder is exhausted. NOT
+#: ``abandoned``: the row stays in the user's queue as an actionable hand-off
+#: (see `_bump_verify`).
+FREEZE_AWAITING_HUMAN = "awaiting_human"
 
 # Re-check backoff for frozen Oracle walls (verify/reset/CAPTCHA).
 _VERIFY_BACKOFF_MINUTES = (5, 15, 30, 60, 120, 240)
@@ -1196,6 +1209,16 @@ _ACCOUNT_GATE_QUESTION = (
     "Sign in or create an account on the employer's career site to continue."
 )
 
+#: Field handles the EXECUTOR supplies (the tailored résumé / cover letter PDF),
+#: mirroring `ats_executor._EXECUTOR_SUPPLIED_PREFIXES`. A fill failure on one of
+#: these is ours, not the user's — it must never be surfaced as a question.
+_EXECUTOR_ARTIFACT_PREFIXES = ("resume", "cv", "cover_letter", "coverletter")
+_ARTIFACT_FAILED_QUESTION = (
+    "We couldn't attach your résumé to this employer's form, so we stopped "
+    "rather than send an incomplete application. You can finish it on their "
+    "site — or retry and we'll try the upload again."
+)
+
 
 class AutoApplyError(Exception):
     """Typed service error — the route maps `status`/`error` onto the HTTP
@@ -1243,7 +1266,7 @@ def _needs_view(item: Dict[str, Any]) -> Dict[str, Any]:
     out.update(_needs_control_meta(fid, item))
     if item.get("required"):
         out["required"] = True
-    for extra in ("apply_url", "action"):
+    for extra in ("apply_url", "action", "wall_kind"):
         val = _clean(item.get(extra), 2000 if extra == "apply_url" else 40)
         if val:
             out[extra] = val
@@ -2335,6 +2358,17 @@ def finalize_submission(application_id: str, user_email: str, *,
         # therefore stays a wall no typed answer can clear. `why` is still returned
         # (and logged) so the real reason is never lost.
         kind = "screening" if named_field else why
+        # …EXCEPT an artifact WE supply. `resume` / `cover_letter` are executor
+        # -supplied handles (`ats_executor._EXECUTOR_SUPPLIED_PREFIXES`): a fill
+        # failure there is OUR failure to attach the file, not a question. It was
+        # surfacing as a screening item reading "We need your answer to continue
+        # (resume)." with a text box the user could type into but never satisfy
+        # (live: Supabase, 2026-07-28). Keep it out of the answerable vocabulary
+        # so it reads — and is treated — as an attachment problem.
+        artifact = named_field and str(named_field).lower().startswith(
+            _EXECUTOR_ARTIFACT_PREFIXES)
+        if artifact:
+            kind = "attachment_failed"
         # Keep the REAL question. The placeholder below used to overwrite the
         # form's own label (and drop the option list) on every re-park, so after
         # one round-trip the user was staring at "We need your answer to continue
@@ -2354,7 +2388,12 @@ def finalize_submission(application_id: str, user_email: str, *,
             except Exception:  # pragma: no cover - parallel build safety
                 bank = None
             label = _clean((bank or {}).get("label"), 500)
-        item["question"] = label or f"We need your answer to continue ({fid})."
+        if artifact:
+            item["question"] = _ARTIFACT_FAILED_QUESTION
+            item["action"] = "complete_in_browser"
+            item["apply_url"] = _clean(app.get("apply_url"), 2000)
+        else:
+            item["question"] = label or f"We need your answer to continue ({fid})."
         if (prior or {}).get("required"):
             item["required"] = True
         try:
@@ -2472,7 +2511,7 @@ def _park_verify(user_email: str, application_id: str,
     needs = [_clean(n, 200) for n in needs[:20] if n]
     now = _now()
 
-    _freezes_coll().update_one(
+    res = _freezes_coll().update_one(
         {"application_id": application_id, "user_email": user_email},
         {"$set": {"kind": kind, "needs": needs, "status": "waiting_verify",
                   "next_check_at": now + timedelta(minutes=_VERIFY_BACKOFF_MINUTES[0]),
@@ -2480,6 +2519,7 @@ def _park_verify(user_email: str, application_id: str,
          "$setOnInsert": {"attempts": 0, "created_at": now}},
         upsert=True,
     )
+    first_park = getattr(res, "upserted_id", None) is not None
 
     # Human-in-the-loop is the primary CAPTCHA strategy (see the captcha-strategy
     # decision): surface the wall with the apply URL so the FE can deep-link the
@@ -2487,14 +2527,127 @@ def _park_verify(user_email: str, application_id: str,
     # and more reliable than a headless retry. The automated sweep still re-checks
     # in parallel for transient walls.
     app = ledger.get_application(user_email, application_id) or {}
-    item = {"question": f"Verification required ({kind}) to finish this application",
+    item = {"question": wall_prompt(kind, needs),
             "kind": f"oracle_{kind}", "field_id": f"oracle_{kind}",
+            "wall_kind": kind,
             "apply_url": app.get("apply_url") or "", "action": "complete_in_browser"}
-    ledger.mark_needs_input(user_email, application_id, [item])
-    logger.info("auto_apply submit %s: parked on oracle wall (%s)",
-                application_id, kind)
+    if needs:
+        item["needs"] = needs
+    try:
+        ledger.mark_needs_input(user_email, application_id, [item])
+    except ledger.InvalidTransition:
+        # Already parked (needs_input → needs_input is deliberately NOT a legal
+        # edge). A re-park must still REFRESH the item — the wall kind can change
+        # between runs (an account gate that becomes an email verification) — so
+        # rewrite the queue in place instead of dropping the update.
+        ledger.update_needs_input(user_email, application_id, [item])
+    logger.info("auto_apply submit %s: parked on oracle wall (%s, needs=%s)",
+                application_id, kind, needs)
+    # Speed of the HUMAN handoff is the only lever we have on a wall we are not
+    # allowed to answer — so tell the user the moment it parks (once per freeze,
+    # not on every re-park) with a deep link straight to this application.
+    if first_park:
+        _notify_wall(user_email, application_id, kind, needs, app, item["question"])
     return {"status": "waiting_verify", "kind": kind,
             "application_id": application_id}
+
+
+#: User-facing copy per wall kind. These are HAND-OFFS, not questions: nothing
+#: the user can type into JobPilot clears them, so the copy must send them to the
+#: employer's site rather than imply we are waiting on an answer.
+_WALL_PROMPTS: Dict[str, str] = {
+    WALL_CAPTCHA: (
+        "Finish this one on the employer's site — they show a \"prove you're "
+        "human\" check that only you can complete. Open the application, clear "
+        "the check and submit; we'll pick the tracking back up."
+    ),
+    WALL_VERIFY: (
+        "Finish this one on the employer's site — they want an email "
+        "confirmation before they'll accept the application."
+    ),
+    WALL_RESET: (
+        "Finish this one on the employer's site — they asked for a password "
+        "reset before they'll accept the application."
+    ),
+}
+_ACCOUNT_WALL_PROMPT = (
+    "Finish this one on the employer's site — their careers portal needs you to "
+    "finish creating or signing into a candidate account before it will take the "
+    "application."
+)
+
+
+def wall_prompt(kind: str, needs: Optional[List[str]] = None) -> str:
+    """The user-facing sentence for a browser wall.
+
+    ``needs`` is authoritative over ``kind``: an employer ACCOUNT gate is
+    reported as ``kind="verify"`` by the executor (there is no dedicated wall
+    constant for it), and telling the user "verify your email" when the site is
+    actually asking them to create an account sends them looking for a mail that
+    will never arrive."""
+    joined = " ".join(str(n) for n in (needs or [])).lower()
+    if "account" in joined:
+        return _ACCOUNT_WALL_PROMPT
+    return _WALL_PROMPTS.get(str(kind or "").lower(), _WALL_PROMPTS[WALL_VERIFY])
+
+
+def _wall_deep_link(application_id: str) -> str:
+    """Deep link to THIS application's auto-apply card (FE route
+    ``/app/apply/auto-apply``)."""
+    try:
+        from utils.config import AppUrlsConfig
+        base = (AppUrlsConfig.FRONTEND_URL or "").rstrip("/")
+    except Exception:  # pragma: no cover - defensive
+        base = ""
+    return f"{base}/app/apply/auto-apply?application_id={application_id}"
+
+
+def _notify_wall(user_email: str, application_id: str, kind: str,
+                 needs: List[str], app: Dict[str, Any], prompt: str) -> None:
+    """Tell the user a row just parked on a wall only they can clear.
+
+    Best-effort and non-transactional in every sense: a notification failure must
+    never disturb the park itself (the ledger row is already the source of
+    truth). Routed through the notification service so channel prefs / consent /
+    the unsubscribe ledger are all honoured."""
+    try:
+        from services.notifications import service as notify
+    except Exception as e:  # pragma: no cover - parallel build safety
+        logger.info("auto_apply wall notify skipped (import): %s", e)
+        return
+    company = str(app.get("company") or "").strip()
+    title = str(app.get("title") or "").strip()
+    where = " — ".join([p for p in (company, title) if p]) or "an application"
+    url = _wall_deep_link(application_id)
+    subject = (f"{company}: finish this on their site" if company
+               else "One application needs you on the employer's site")
+    try:
+        notify.send(user_email, WALL_NOTIFY_EVENT, {
+            "title": subject,
+            "summary_line": f"{where}: {prompt}",
+            "cta_url": url,
+            "application_id": application_id,
+            "wall_kind": kind,
+            "needs": list(needs or []),
+            "email": {
+                "subject": subject,
+                "html": (
+                    f"<p>{_html_escape(prompt)}</p>"
+                    f"<p><strong>{_html_escape(where)}</strong></p>"
+                    f"<p><a href=\"{_html_escape(url)}\">Open this application</a></p>"
+                ),
+                "text": f"{where}\n\n{prompt}\n\n{url}",
+            },
+            "push": {"title": subject, "body": prompt, "url": url},
+            "sms": {"body": f"{where}: {prompt} {url}"[:300]},
+        })
+    except Exception as e:  # pragma: no cover - notifications are best-effort
+        logger.info("auto_apply wall notify failed for %s: %s", application_id, e)
+
+
+def _html_escape(value: Any) -> str:
+    import html
+    return html.escape(str(value or ""), quote=True)
 
 
 def due_verify_waits(limit: int = 100) -> List[Dict[str, Any]]:
@@ -2573,21 +2726,35 @@ def _resolve_freeze(application_id: str, user_email: str) -> None:
 
 def _bump_verify(application_id: str, user_email: str,
                  freeze: Dict[str, Any]) -> Dict[str, Any]:
-    """Still blocked: schedule the next re-check with backoff, or abandon +
-    fail the row once attempts are exhausted."""
+    """Still blocked: schedule the next re-check with backoff, or stop
+    re-checking and hand the wall to the human once attempts are exhausted.
+
+    Exhaustion is NOT a failure. A wall is by definition something we are not
+    allowed to answer for the user (a CAPTCHA especially — we neither solve nor
+    circumvent one), so the only outcome that was ever available is "the human
+    finishes it on the employer's site". This used to `mark_failed` the row after
+    ~7h, which deleted the one actionable thing the user had — the deep-linked
+    hand-off card — and relabelled correct behaviour as a fault. Live proof
+    (2026-07-28): eight freezes, all `abandoned` at attempts=6, eight ledger rows
+    `failed: oracle_wall_unresolved`, four of them CAPTCHAs that were behaving
+    exactly as designed.
+
+    Now: stop burning executor invocations (the freeze leaves `waiting_verify`,
+    so `due_verify_waits` no longer returns it) but LEAVE the ledger row in
+    `needs_input` with its wall item, indefinitely actionable. `resume_after_wall`
+    puts it back on the ladder the moment the user says they cleared it.
+    """
     attempts = int(freeze.get("attempts") or 0) + 1
     now = _now()
     if attempts >= _VERIFY_MAX_ATTEMPTS:
         _freezes_coll().update_one(
             {"application_id": application_id, "user_email": user_email},
-            {"$set": {"status": "abandoned", "attempts": attempts, "updated_at": now}})
-        try:
-            ledger.mark_failed(user_email, application_id, "oracle_wall_unresolved")
-        except ledger.ApplicationLedgerError:
-            pass
-        logger.info("auto_apply recheck %s: oracle wall exhausted — abandoned",
-                    application_id)
-        return {"status": "abandoned", "application_id": application_id}
+            {"$set": {"status": FREEZE_AWAITING_HUMAN, "attempts": attempts,
+                      "updated_at": now}})
+        logger.info("auto_apply recheck %s: oracle wall not self-clearing after "
+                    "%d checks — awaiting the human (row stays actionable)",
+                    application_id, attempts)
+        return {"status": FREEZE_AWAITING_HUMAN, "application_id": application_id}
 
     delay = _VERIFY_BACKOFF_MINUTES[min(attempts, _VERIFY_MAX_ATTEMPTS - 1)]
     _freezes_coll().update_one(
@@ -2596,6 +2763,61 @@ def _bump_verify(application_id: str, user_email: str,
                   "next_check_at": now + timedelta(minutes=delay),
                   "updated_at": now}})
     return {"status": "waiting_verify", "attempts": attempts,
+            "application_id": application_id}
+
+
+class NoWallToResume(Exception):
+    """409 — this application is not parked on a browser wall."""
+
+
+def resume_after_wall(user_email: str, application_id: str) -> Dict[str, Any]:
+    """The user finished the wall in their OWN browser — resume this row now.
+
+    A wall is cleared on the employer's side, not ours: once the user completes
+    the CAPTCHA / verifies the email / finishes the candidate account, the next
+    headless visit sees a clean form. Nothing tells us WHEN that happened, so
+    this is the signal — the FE calls it when the user returns from the
+    employer tab (or taps "I've done it").
+
+    Puts the row back on the automated ladder from the top (attempts reset,
+    ``next_check_at`` now, an exhausted freeze revived) and re-drives ONE
+    re-check inline so the answer is immediate rather than up to four hours
+    away. The inline re-check is a single page load — no LLM, no submit — and
+    `recheck_verify` owns the thaw: cleared → ready_for_review → system-approve →
+    submit re-enqueued (async, never inline).
+
+    Raises ledger.ApplicationNotFound (404) / NoWallToResume (409).
+    """
+    application_id = _clean(application_id, 64)
+    user_email = (user_email or "").strip().lower()
+    if not application_id or not user_email:
+        raise NoWallToResume("application_id is required")
+
+    app = ledger.get_application(user_email, application_id)
+    if not app:
+        raise ledger.ApplicationNotFound()
+
+    now = _now()
+    revived = _freezes_coll().update_one(
+        {"application_id": application_id, "user_email": user_email,
+         "status": {"$in": ["waiting_verify", FREEZE_AWAITING_HUMAN]}},
+        {"$set": {"status": "waiting_verify", "attempts": 0,
+                  "next_check_at": now, "updated_at": now,
+                  "human_cleared_at": now}},
+    )
+    if not getattr(revived, "matched_count", 0):
+        raise NoWallToResume("this application is not waiting on a browser wall")
+
+    freeze = _freezes_coll().find_one(
+        {"application_id": application_id, "user_email": user_email},
+        {"_id": 0}) or {}
+    logger.info("auto_apply %s: user reports the wall (%s) cleared — re-checking now",
+                application_id, freeze.get("kind"))
+    result = recheck_verify(application_id, user_email)
+    row = ledger.get_application(user_email, application_id) or {}
+    return {"status": "resumed", "recheck": result.get("status"),
+            "wall_kind": freeze.get("kind"),
+            "application_status": row.get("status"),
             "application_id": application_id}
 
 

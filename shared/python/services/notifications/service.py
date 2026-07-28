@@ -59,6 +59,13 @@ EVENTS: Dict[str, Dict[str, Any]] = {
     "application_nudge":{"proactive": True,  "default_on": True,  "label": "Follow-up reminders"},
     "visa_cliff":       {"proactive": True,  "default_on": True,  "label": "Visa / OPT deadline alerts"},
     "interview_reminder":{"proactive": False,"default_on": True,  "label": "Interview reminders"},
+    # An auto-apply row hit a wall only the user can clear on the employer's
+    # site (CAPTCHA / email verification / candidate account). TRANSACTIONAL:
+    # it is the direct consequence of a run the user started, and its whole
+    # value is immediacy — quiet-housing it or spending a digest slot on it
+    # would leave the application stalled until morning.
+    "application_wall": {"proactive": False, "default_on": True,
+                         "label": "Application needs you on the employer's site"},
 }
 
 _CONSENT_SCOPE = {"whatsapp": WHATSAPP_CONSENT_SCOPE, "sms": SMS_CONSENT_SCOPE}

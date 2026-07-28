@@ -193,7 +193,11 @@ def test_recon_form_success_shape():
     assert res["needs_account"] is False
     assert len(res["questions"]) >= 3
     for q in res["questions"]:
-        assert set(q) == {"id", "text", "type", "required", "is_legal_attestation"}
+        # `options` is present ONLY on enumerated fields (see
+        # test_greenhouse_recon_carries_option_labels) — everything else is the
+        # fixed ReconQuestion shape.
+        assert set(q) - {"options"} == {
+            "id", "text", "type", "required", "is_legal_attestation"}
 
 
 def test_recon_form_network_error_is_unavailable():

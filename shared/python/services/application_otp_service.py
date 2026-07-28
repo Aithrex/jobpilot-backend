@@ -165,17 +165,33 @@ def extract_otp_payload(
 
 
 def _active_freeze(user_email: str) -> Optional[Dict[str, Any]]:
-    """Most recent waiting_verify freeze for this user (mailbox → auto-apply)."""
+    """The waiting_verify freeze an emailed code/link can actually clear.
+
+    A user routinely has SEVERAL live freezes at once (live on 2026-07-28:
+    eight — five ``captcha``, three ``verify``). Binding the grant to whichever
+    row was merely touched last used to hand a Workday email code to an Ashby
+    CAPTCHA row; ``claim_for_verify`` then only serves that application_id, so
+    the code was burned on a wall no email can ever clear and the row that
+    asked for it never saw it.
+
+    A mailed one-time code resolves a VERIFY/RESET wall by construction and
+    never a CAPTCHA, so only a non-captcha freeze may claim it. When the user
+    has nothing but CAPTCHA walls open we bind NOTHING and leave the grant
+    unbound — an unbound grant stays claimable by whichever application asks
+    next, which is strictly better than burning it on a wall no email can clear.
+    """
     try:
-        doc = (_db().auto_apply_freezes
-               .find({"user_email": user_email, "status": "waiting_verify"})
-               .sort("updated_at", -1)
-               .limit(1))
-        rows = list(doc)
-        return rows[0] if rows else None
+        rows = list(_db().auto_apply_freezes
+                    .find({"user_email": user_email, "status": "waiting_verify"})
+                    .sort("updated_at", -1)
+                    .limit(20))
     except Exception as e:
         logger.warning("application_otp: freeze lookup failed: %s", e)
         return None
+    for row in rows:
+        if str(row.get("kind") or "").strip().lower() != "captcha":
+            return row
+    return None
 
 
 def capture_from_noise_message(
