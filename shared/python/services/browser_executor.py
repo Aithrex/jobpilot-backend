@@ -16,8 +16,15 @@ Design / contract (see ``executor_adapter`` for the full spec):
         SUBMIT_SUCCESS        confirmation detected  (+ screenshot_ref)
         SUBMIT_WAITING_VERIFY a CAPTCHA / email-verify wall  (freeze/thaw)
         SUBMIT_FAILED         hard validation/other failure
-    It NEVER invents a value for a field not in ``answers`` and NEVER raises for
-    an expected condition — every path returns a structured dict.
+        EXECUTOR_UNAVAILABLE  TRANSIENT: could not act now → retry later
+        EXECUTOR_UNSUPPORTED  PERMANENT: this ATS is not one we can drive →
+                              ledger `unsupported` + `user_message` (spec §4)
+        EXECUTOR_PREPARED     dry-run/copilot: filled + proof, submit withheld —
+                              NOT a failure (mirrors fill_driver.FILL_PREPARED)
+    It NEVER invents a value for a field not in ``answers`` — identity,
+    employment history and every legal attestation come from the caller's
+    resolved answers only (AUTOAPPLY_REPAIR_SPEC §0) — and NEVER raises for an
+    expected condition: every path returns a structured dict.
   * The résumé is resolved to bytes via an injectable ``resume_resolver`` (the
     default resolves ``tailoring_record_id`` → S3; tests inject bytes directly),
     and submission-proof screenshots go through an injectable ``screenshot_sink``
@@ -147,6 +154,27 @@ _VERIFY_RE = re.compile(
 # A react-select combobox on Greenhouse: input carrying this class / role.
 _SELECT_HINT = "select__input"
 
+# The ATS families this executor can actually drive end-to-end. Anything else is
+# PERMANENTLY unsupported for auto-apply (iCIMS / SmartRecruiters / Workable are
+# merely *detected*; an unrecognised host is not automatable at all).
+_SUPPORTED_FAMILIES = frozenset({GREENHOUSE, LEVER, ASHBY, WORKDAY})
+
+# Result status for "this employer's system is one we cannot drive". PERMANENT
+# and user-facing — strictly distinct from EXECUTOR_UNAVAILABLE, which means
+# "the fleet could not act right now, retry later". The orchestrator maps this
+# onto the ledger's STATUS_UNSUPPORTED (AUTOAPPLY_REPAIR_SPEC §4); it must never
+# be surfaced as an opaque technical failure.
+EXECUTOR_UNSUPPORTED = "executor_unsupported"
+UNSUPPORTED_USER_MESSAGE = (
+    "We can't auto-apply to this employer's system yet — please apply manually."
+)
+
+# Dry-run / copilot outcome: the form was filled and proof captured, and Submit
+# was DELIBERATELY never clicked. Mirrors ``fill_driver.FILL_PREPARED`` (kept as
+# a literal so this module stays import-light). ``submitted`` is always False —
+# this is NOT a failure and must never mark the ledger row failed.
+EXECUTOR_PREPARED = "prepared"
+
 
 # ---------------------------------------------------------------------------
 # Injectable defaults (S3-backed) — kept import-light so tests need no AWS.
@@ -219,6 +247,91 @@ def _default_screenshot_sink(application: Dict[str, Any], png: bytes) -> Optiona
         return None
 
 
+# ---------------------------------------------------------------------------
+# Workday answer normalization — NO fabrication (AUTOAPPLY_REPAIR_SPEC §0)
+# ---------------------------------------------------------------------------
+# Key ALIASES only: the caller may address the same field by either name. This
+# is normalization of a key, never the invention of a value.
+_WD_ALIASES = {
+    "address_line1": "address_line_1",
+    "current_title": "job_title",
+    "current_company": "company",
+    "formfield_country": "country",
+    "formfield_datesignedon": "date_signed",
+    "formfield_disabilityform": "disability_status",
+}
+
+# Canonical decline token — kept identical to
+# ``application_question_bank.DECLINE`` (asserted by the tests) without importing
+# that module here. ``fill_driver`` option-matches it onto whatever decline
+# wording THIS form uses ("I don't wish to answer", "Decline to State (United
+# States of America)", "Prefer not to answer", …).
+_DECLINE = "Decline to self-identify"
+
+# Protected-EEO fields (gender / ethnicity / veteran / disability). Declining is
+# the ONE auto-default allowed without a declared value: it asserts NOTHING about
+# the user (spec §0 rule 3). Note "Hispanic or Latino? -> No" is an assertion
+# about ethnicity, so it declines too — it is never answered "No" for the user.
+_WD_EEO_DECLINES = {
+    "gender": _DECLINE,
+    "hispanic_latino": _DECLINE,
+    "race_ethnicity": _DECLINE,
+    "veteran_status": _DECLINE,
+    "disability_status": _DECLINE,
+    # Workday's CC-305 section is reconned by its raw automation id when the
+    # section label does not normalize to a catalog field.
+    "formfield_disabilityform": _DECLINE,
+    "formField-disabilityForm": _DECLINE,
+}
+
+# Non-assertive form mechanics: they describe HOW we fill the form, not a fact
+# about the user, and are safe to default.
+_WD_SAFE_DEFAULTS = {
+    "phone_device_type": "Mobile",
+    "language": "English",
+}
+
+# The signature date on a self-identification form is genuinely "today".
+_WD_DATE_SIGNED_FIELDS = ("date_signed", "formfield_datesignedon")
+
+
+def _workday_answers(answers: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return the answer map the Workday wizard is driven from.
+
+    HARD RULE (AUTOAPPLY_REPAIR_SPEC §0 rules 1/2/4): this NEVER invents identity
+    (name, email, phone, address), employment facts (employers, titles, dates,
+    role descriptions) or a legal attestation (work authorization, sponsorship,
+    citizenship, export-control person status, age, prior/related employment,
+    terms acceptance). Those may come ONLY from the caller's resolved ``answers``
+    — the user's declared preferences + their résumé. A value we do not have
+    stays ABSENT, so ``fill_driver`` parks the run at ``needs_input`` /
+    ``waiting_human`` naming the exact field instead of asserting something false
+    to a real employer.
+
+    The only additions here are the key aliases above, the two non-assertive
+    mechanics, today's signature date, and the protected-EEO declines. There is
+    deliberately NO blanket default map — one used to live here and it filled a
+    hardcoded person's name plus inverted work-authorization / sponsorship /
+    citizenship answers into every Workday application.
+    """
+    out: Dict[str, Any] = dict(answers or {})
+    for canon, alias in _WD_ALIASES.items():
+        if canon not in out and alias in out:
+            out[canon] = out[alias]
+    for key, value in _WD_SAFE_DEFAULTS.items():
+        if out.get(key) in (None, ""):
+            out[key] = value
+    for key, value in _WD_EEO_DECLINES.items():
+        if out.get(key) in (None, ""):
+            out[key] = value
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%m/%d/%Y")
+    for key in _WD_DATE_SIGNED_FIELDS:
+        if out.get(key) in (None, ""):
+            out[key] = today
+    return out
+
+
 class BrowserExecutor(ExecutorAdapter):
     """Playwright-driven submit executor. See module docstring."""
 
@@ -254,6 +367,26 @@ class BrowserExecutor(ExecutorAdapter):
                                        family, {"_systemfield_resume"}, ())
         if family == WORKDAY:
             return self._recon_workday(apply_url)
+        if family not in _SUPPORTED_FAMILIES:
+            # A vendor we cannot drive (iCIMS / SmartRecruiters / Workable are
+            # detected but unimplemented; an unknown host is not automatable at
+            # all). PERMANENT → the row should land ledger STATUS_UNSUPPORTED.
+            # NOTE (contract): ``status`` deliberately stays EXECUTOR_UNAVAILABLE
+            # so an orchestrator that has not yet learned the new vocabulary
+            # keeps its SAFE behaviour (leave the row queued) instead of treating
+            # an empty question list as a real, fully-answered form. The
+            # ``unsupported`` flag (+ ``unsupported_status``) is what the §4
+            # wiring keys off to mark the row unsupported.
+            logger.info("browser recon: family=%s not supported — unsupported vendor",
+                        family)
+            fam = (family or "").strip().lower() or "unknown"
+            return {"questions": [], "needs_account": False,
+                    "status": EXECUTOR_UNAVAILABLE,
+                    "unsupported": True,
+                    "unsupported_status": EXECUTOR_UNSUPPORTED,
+                    "ats_family": fam, "reason": f"unsupported_ats:{fam}",
+                    "user_message": UNSUPPORTED_USER_MESSAGE,
+                    "retryable": False}
         return self._recon.recon_form(apply_url, ats_family)
 
     def _recon_workday(self, apply_url: str) -> Dict[str, Any]:
@@ -547,8 +680,13 @@ class BrowserExecutor(ExecutorAdapter):
         elif family == WORKDAY:
             target, driver = apply_url, self._drive_workday
         else:
-            logger.info("browser submit: family=%s not yet supported — unavailable", family)
-            return self._unavailable()
+            # A vendor we cannot drive at all — PERMANENT, not a transient
+            # drain. Reported as EXECUTOR_UNSUPPORTED so the orchestrator lands
+            # ledger STATUS_UNSUPPORTED with an honest user message instead of
+            # an opaque `executor_unavailable_midflight` failure (spec §4).
+            logger.info("browser submit: family=%s not supported — unsupported vendor",
+                        family)
+            return self._unsupported(family)
 
         # user_email is folded into the résumé ref by _resume_ref (the executor
         # can't otherwise scope the S3 lookup); fall back to the constructor.
@@ -773,82 +911,30 @@ class BrowserExecutor(ExecutorAdapter):
                         except Exception as e:
                             logger.info("workday resume attach skipped: %s", e)
 
-                    # Enrich answers with Workday-common defaults that the
-                    # caller's profile may not carry (radio/select fields that
-                    # the wizard always asks but the user answer dict omits).
-                    enriched = dict(answers or {})
-                    from datetime import datetime, timezone
-                    _today = datetime.now(timezone.utc).strftime("%m/%d/%Y")
-                    _WD_DEFAULTS = {
-                        "previous_employee": "No",
-                        "phone_device_type": "Mobile",
-                        "work_start_date": "01/2022",
-                        "work_end_date": "06/2026",
-                        "earliest_start_date": "01/2022",
-                        "formfield_startdate": "01/2022",
-                        "formfield_enddate": "06/2026",
-                        "currently_work_here": "No",
-                        "role_description": (
-                            "Built and shipped full-stack AI career platform features "
-                            "across React/TypeScript frontends and Flask/Python APIs, "
-                            "including resume tooling, job matching, and automation flows."
-                        ),
-                        "job_description": (
-                            "Built and shipped full-stack AI career platform features "
-                            "across React/TypeScript frontends and Flask/Python APIs, "
-                            "including resume tooling, job matching, and automation flows."
-                        ),
-                        "gender": "Decline",
-                        "hispanic_latino": "No",
-                        "race_ethnicity": "Decline to State (United States of America)",
-                        "veteran_status": "I do not wish to provide this information",
-                        "disability_status": "I Don't Wish To Answer",
-                        "formfield_disabilityform": "I Don't Wish To Answer",
-                        "formField-disabilityForm": "I Don't Wish To Answer",
-                        "accept_terms": "Yes",
-                        "formfield_accepttermsandagreements": "Yes",
-                        "full_name": "Harshith Manne",
-                        "name": "Harshith Manne",
-                        "language": "English",
-                        "formfield_datesignedon": _today,
-                        "date_signed": _today,
-                        "work_authorized": "Yes",
-                        "work_authorized_us": "Yes",
-                        "requires_sponsorship": "No",
-                        "require_sponsorship": "No",
-                        "over_18": "Yes",
-                        "age_18_or_older": "Yes",
-                        "ey_employee": "No",
-                        "family_member_auditor": "No",
-                        "noncompete_agreement": "No",
-                        "own_ip_rights": "No",
-                        "government_employee": "No",
-                        "dod_employee": "No",
-                        "export_control_us_person": "Yes",
-                        "secondary_employment_intent": "Neither",
-                        "citizenship_countries": "United States of America",
-                        "countries_of_citizenship": "United States of America",
-                    }
-                    # Common key aliases (caller may use either form).
-                    _WD_ALIASES = {
-                        "address_line1": "address_line_1",
-                        "current_title": "job_title",
-                        "current_company": "company",
-                        "formfield_country": "country",
-                        "formfield_datesignedon": "date_signed",
-                        "formfield_disabilityform": "disability_status",
-                    }
-                    for canon, alias in _WD_ALIASES.items():
-                        if canon not in enriched and alias in enriched:
-                            enriched[canon] = enriched[alias]
-                    for k, v in _WD_DEFAULTS.items():
-                        if k not in enriched:
-                            enriched[k] = v
-                    answers = enriched
+                    # Normalize the caller's key aliases and apply ONLY the
+                    # defaults that assert nothing (see _workday_answers).
+                    # Identity, employment history and EVERY legal attestation
+                    # come from the resolved answers; anything missing stays
+                    # missing so the driver parks at needs_input / waiting_human
+                    # rather than inventing it (AUTOAPPLY_REPAIR_SPEC §0).
+                    answers = _workday_answers(answers)
 
-                    mode = "autopilot"
+                    # Ops dry-run: fill the whole wizard but NEVER click Submit
+                    # (copilot prepares only) — safe against a live posting.
+                    dry_run = bool((application or {}).get("dry_run"))
+                    mode = (fill_driver.MODE_COPILOT if dry_run
+                            else fill_driver.MODE_AUTOPILOT)
                     outcome = fill_driver.drive(adapter, answers, mode=mode)
                     kind = (outcome or {}).get("outcome")
+
+                    if kind == fill_driver.FILL_PREPARED:
+                        # Filled + proof captured, deliberately NOT submitted.
+                        return {"status": EXECUTOR_PREPARED, "confirmation": None,
+                                "screenshot_ref": self._shoot(page, application),
+                                "wall": None, "error": None,
+                                "submitted": False, "dry_run": True,
+                                "step": getattr(adapter, "current_step",
+                                                lambda: None)()}
 
                     # One recovery pass for MFA / account mid-wizard.
                     if kind == fill_driver.FILL_WAITING_HUMAN:
@@ -917,70 +1003,31 @@ class BrowserExecutor(ExecutorAdapter):
                         # One more date/disability retry when Self Identify validation fails.
                         field = (outcome or {}).get("field") or ""
                         reason = (outcome or {}).get("reason") or ""
-                        errors = (outcome or {}).get("errors") or []
-                        err_blob = " ".join(
-                            str((e or {}).get("message") or "") for e in errors
-                        ).lower()
-                        body_l = ""
-                        try:
-                            body_l = (page.inner_text("body") or "").lower()
-                        except Exception:
-                            pass
-                        # Intel / Workday compliance: secondary employment + citizenship.
-                        if ("secondary" in err_blob or "secondary" in body_l
-                                or "citizenship" in err_blob or reason == "validation_failed"):
-                            try:
-                                for label in ("Neither", "Neither/Ninguno", "No"):
-                                    try:
-                                        loc = page.get_by_text(label, exact=False).first
-                                        if loc.count():
-                                            loc.click(force=True, timeout=4_000)
-                                            break
-                                    except Exception:
-                                        pass
-                                # Citizenship countries (not Yes/No).
-                                try:
-                                    cit = page.locator(
-                                        "textarea, input[type=text]"
-                                    ).filter(has_text="")
-                                    # Prefer a field near citizenship wording via JS clear+type.
-                                    for sel in (
-                                        "textarea",
-                                        "[data-automation-id*=citizenship] input",
-                                        "[data-automation-id*=citizenship] textarea",
-                                    ):
-                                        try:
-                                            loc = page.locator(sel).first
-                                            if loc.count() and loc.is_visible():
-                                                # Only overwrite if current value looks like Yes/No.
-                                                cur = ""
-                                                try:
-                                                    cur = (loc.input_value() or "").strip().lower()
-                                                except Exception:
-                                                    cur = ""
-                                                if cur in ("", "yes", "no", "yes/si", "si"):
-                                                    loc.fill("United States of America")
-                                                    break
-                                        except Exception:
-                                            pass
-                                except Exception:
-                                    pass
-                                page.wait_for_timeout(800)
-                                outcome = fill_driver.drive(adapter, answers or {}, mode=mode)
-                                kind = (outcome or {}).get("outcome")
-                                if kind in (fill_driver.FILL_CONFIRMED, fill_driver.FILL_SUBMITTED):
-                                    shot = None
-                                    try:
-                                        png = page.screenshot(full_page=False, type="png")
-                                        shot = self._save_screenshot(application, png)
-                                    except Exception:
-                                        pass
-                                    return {"status": SUBMIT_SUCCESS, "confirmation": True,
-                                            "screenshot_ref": shot, "wall": None, "error": None}
-                            except Exception as e:
-                                logger.info("workday compliance retry failed: %s", e)
+                        # REMOVED (AUTOAPPLY_REPAIR_SPEC §0 rules 1 + 4): the
+                        # "Intel / Workday compliance" retry that used to live
+                        # here was the LAST surviving fabrication path after
+                        # `_WD_DEFAULTS` was deleted. On any `validation_failed`
+                        # (or merely the word "secondary" appearing anywhere in
+                        # the page body) it blind-clicked the first element whose
+                        # text contained "Neither"/"No" — which on a Workday
+                        # questionnaire is routinely the "No" option of "are you
+                        # legally authorized to work…" / "will you require
+                        # sponsorship…" — and then typed the literal
+                        # "United States of America" into the first visible
+                        # textarea as a countries-of-citizenship answer. Both are
+                        # LEGAL ATTESTATIONS asserted with no declared user value,
+                        # and both are false for the live user (F-1 OPT,
+                        # citizenship India, sponsorship required).
+                        #
+                        # A legal attestation we do not have a declared value for
+                        # must PARK, never be guessed: the run now falls through
+                        # to the `needs_input` return below, which
+                        # `auto_apply_service.finalize_submission` maps onto the
+                        # ledger `needs_input` queue so the user is asked.
+                        # Nothing may reintroduce a value here.
                         if "date" in str(field).lower() or reason == "validation_failed":
                             try:
+                                from datetime import datetime, timezone
                                 today = datetime.now(timezone.utc).strftime("%m/%d/%Y")
                                 if hasattr(adapter, "_fill_month_year"):
                                     adapter._fill_month_year(
@@ -1550,9 +1597,13 @@ class BrowserExecutor(ExecutorAdapter):
                 # live employer postings).
                 if (application or {}).get("dry_run"):
                     ref = self._shoot(page, application)
-                    return {"status": "prepared", "confirmation": None,
+                    # NOT a failure: the form is filled and proof captured, the
+                    # Submit click was deliberately withheld (see
+                    # EXECUTOR_PREPARED / fill_driver.FILL_PREPARED).
+                    return {"status": EXECUTOR_PREPARED, "confirmation": None,
                             "screenshot_ref": ref, "wall": None, "error": None,
-                            "filled": filled, "skipped": skipped, "submitted": False}
+                            "filled": filled, "skipped": skipped,
+                            "submitted": False, "dry_run": True}
 
                 self._click_submit(page)
                 page.wait_for_timeout(_SUBMIT_SETTLE_MS)
@@ -2049,8 +2100,26 @@ class BrowserExecutor(ExecutorAdapter):
                 "screenshot_ref": None, "wall": None, "error": error}
 
     def _unavailable(self) -> Dict[str, Any]:
+        """TRANSIENT: the executor could not act right now → retry later."""
         return {"status": EXECUTOR_UNAVAILABLE, "confirmation": None,
                 "screenshot_ref": None, "wall": None, "error": None}
+
+    def _unsupported(self, family: Optional[str],
+                     reason: Optional[str] = None) -> Dict[str, Any]:
+        """PERMANENT: this employer's ATS is not one we can drive.
+
+        Distinct from ``_unavailable`` in both meaning and handling: there is
+        nothing to retry, and the user must be told plainly (``user_message``)
+        rather than shown a technical error. ``error`` intentionally mirrors
+        ``reason`` so an orchestrator that has not yet learned the new status
+        still records a legible cause instead of a blank failure."""
+        fam = (family or "").strip().lower() or "unknown"
+        detail = reason or f"unsupported_ats:{fam}"
+        return {"status": EXECUTOR_UNSUPPORTED, "confirmation": None,
+                "screenshot_ref": None, "wall": None,
+                "ats_family": fam, "reason": detail, "error": detail,
+                "user_message": UNSUPPORTED_USER_MESSAGE,
+                "retryable": False, "submitted": False}
 
 
 def _css_id(fid: str) -> str:

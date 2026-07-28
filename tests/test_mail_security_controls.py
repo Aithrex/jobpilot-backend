@@ -300,16 +300,17 @@ def _seed(*, trust, subject=RECRUITER_SUBJECT, from_name="Acme Recruiting",
     return {"thread_id": tid, "message_id": mid, "deduplicated": False}
 
 
-def test_verified_message_relays_full_content(env, sent):
+def test_verified_message_gets_link_only_notification(env, sent):
     _enable_forwarding()
     res = _seed(trust="verified")
     out = fwd.forward_notification(res)
 
     assert out == {"sent": True, "reason": "sent"}
     call = sent[0]
-    # Plain full-content relay: ORIGINAL subject + real body, our From, reply-to.
+    # LINK-ONLY (spec §6): ORIGINAL subject + our From, but the recruiter BODY
+    # is never relayed — it stays in the in-app inbox.
     assert call["subject"] == RECRUITER_SUBJECT
-    assert "invite you to interview" in call["text"]
+    assert "invite you to interview" not in call["text"]
     assert FORWARD_FROM in call["from_addr"]
     # Privacy-preserving reply-bound alias (reply.<hex>@APPLY_MAIL_DOMAIN), not
     # the raw recruiter address — inbound reply-relay keeps the user's email private.
@@ -320,9 +321,9 @@ def test_verified_message_relays_full_content(env, sent):
     assert deep in call["html"] and deep in call["text"]
 
 
-def test_unverified_message_still_relays_full_content(env, sent):
-    # Trust is DECOUPLED: unverified mail forwards the SAME full content — no
-    # downgrade to a generic notice (the product wants the real message).
+def test_unverified_message_still_notifies(env, sent):
+    # Trust is DECOUPLED: unverified mail gets the SAME link-only notification —
+    # no downgrade, and (as always) no recruiter body in the personal inbox.
     _enable_forwarding()
     res = _seed(trust="unverified")
     out = fwd.forward_notification(res)
@@ -330,7 +331,7 @@ def test_unverified_message_still_relays_full_content(env, sent):
     assert out == {"sent": True, "reason": "sent"}
     call = sent[0]
     assert call["subject"] == RECRUITER_SUBJECT
-    assert "invite you to interview" in call["text"]
+    assert "invite you to interview" not in call["text"]
     assert FORWARD_FROM in call["from_addr"]
     assert str(call["reply_to"]).startswith("reply.")
     assert str(call["reply_to"]).endswith("@pilotmail.co")
@@ -344,7 +345,7 @@ def test_unverified_suppress_toggle_sends_nothing(env, sent):
     assert sent == []
 
 
-def test_verified_still_full_under_suppress_mode(env, sent):
+def test_verified_still_notifies_under_suppress_mode(env, sent):
     # The suppress kill-switch only gates UNVERIFIED mail; verified still forwards.
     env.setenv("MAIL_FORWARD_UNVERIFIED_MODE", "suppress")
     _enable_forwarding()
@@ -354,9 +355,9 @@ def test_verified_still_full_under_suppress_mode(env, sent):
     assert sent[0]["subject"] == RECRUITER_SUBJECT
 
 
-def test_missing_trust_still_relays_full_content(env, sent):
+def test_missing_trust_still_notifies(env, sent):
     # Fail-safe: a blank trust verdict is treated as unverified — which, with the
-    # default (forward) mode, STILL relays full content (trust never blocks it).
+    # default (forward) mode, STILL notifies (trust never blocks it).
     _enable_forwarding()
     res = _seed(trust="")
     out = fwd.forward_notification(res)

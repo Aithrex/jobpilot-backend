@@ -79,7 +79,7 @@ class _ReconExecutor(StubExecutor):
 def _no_gaps_auto(monkeypatch, autonomy="auto", confidence=0.95):
     """Force a clean, gap-free decision so ONLY the mode gate decides the landing."""
     monkeypatch.setattr(aas, "_resolve_answers",
-                        lambda ue, qs: ({"q_email": "a@b.co"}, [],
+                        lambda ue, qs, **_kw: ({"q_email": "a@b.co"}, [],
                                         {"coverage": 1.0,
                                          "has_novel_free_text": False,
                                          "has_unconfirmed_legal_attestation": False}))
@@ -232,7 +232,7 @@ def test_autopilot_unconfirmed_legal_still_asks(mdb, monkeypatch, dispatches):
     # upgrade. Left as a gap, so the row parks in needs_input.
     monkeypatch.setattr(
         aas, "_resolve_answers",
-        lambda ue, qs: ({}, [{"question": "Authorized to work?",
+        lambda ue, qs, **_kw: ({}, [{"question": "Authorized to work?",
                               "kind": "legal_attestation", "field_id": "q_auth"}],
                         {"coverage": 0.0, "has_novel_free_text": False,
                          "has_unconfirmed_legal_attestation": True}))

@@ -31,6 +31,14 @@ The outcome vocabulary maps 1:1 onto the ledger via
 ``auto_apply_service.finalize_fill_outcome`` (submitted→submitted,
 confirmed→confirmed, submission_unknown→HELD, waiting_human→waiting_human,
 needs_input→needs_input).
+
+``prepared`` is the SIXTH outcome and the one exception to that mapping: it is
+NOT terminal and NOT a failure. Copilot mode (and the ops dry-run in
+``browser_executor``) fills the whole form, snapshots it, and deliberately does
+not click Submit — the human submits. A consumer MUST handle it explicitly and
+leave the row where it is (or land the copilot hand-off state); folding it into
+the "unrecognized outcome" branch marks a perfectly good prepared application
+``failed``. See ``FILL_NON_FAILURE_OUTCOMES`` below and AUTOAPPLY_REPAIR_SPEC §3.
 """
 from __future__ import annotations
 
@@ -54,6 +62,18 @@ FILL_SUBMISSION_UNKNOWN = "submission_unknown"   # clicked, ambiguous → HELD, 
 FILL_WAITING_HUMAN = "waiting_human"             # anti-bot / sensitive-gap takeover
 FILL_NEEDS_INPUT = "needs_input"                 # a plain field the user must supply
 FILL_PREPARED = "prepared"                       # copilot: filled, deliberately not submitted
+
+# Every outcome this driver can emit. A consumer must branch on each one
+# explicitly; anything outside this set is a bug in the driver, not a form
+# failure. (``browser_executor.EXECUTOR_PREPARED`` mirrors FILL_PREPARED.)
+FILL_OUTCOMES = frozenset({
+    FILL_CONFIRMED, FILL_SUBMITTED, FILL_SUBMISSION_UNKNOWN,
+    FILL_WAITING_HUMAN, FILL_NEEDS_INPUT, FILL_PREPARED,
+})
+
+# Outcomes that are NOT a failure and NOT a submit: the run stopped on purpose.
+# The ledger must never be marked failed for these.
+FILL_NON_FAILURE_OUTCOMES = frozenset({FILL_PREPARED})
 
 # Autonomy modes (mirror autonomy_service; kept as plain strings so this module
 # needs no import of that service on the hot path).
@@ -252,9 +272,11 @@ def drive(adapter, answers: Dict[str, Any], *,
     # Copilot PREPARES only — JobPilot fills every field and hands it over; the
     # user submits themselves. Never clicks submit.
     if mode == MODE_COPILOT:
+        # NOT a failure and NOT terminal — see FILL_NON_FAILURE_OUTCOMES.
         return _out(FILL_PREPARED, adapter_family=family, steps=steps,
                     review_snapshot=review_snapshot,
-                    current_step=adapter.current_step())
+                    current_step=adapter.current_step(),
+                    submitted=False, reason="copilot_prepare_only")
 
     # Refuse to submit while still mid-wizard (Next still present).
     if adapter.has_next_step() and adapter.current_step() != "review":

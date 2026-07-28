@@ -21,6 +21,10 @@ Design invariants (from the spec's §0 locked decisions):
   - D7  Owner identity is ALWAYS the caller-supplied ``user_email`` (resolved from
         the JWT by the route) — NEVER a name parsed from a resume or a request
         body. Every query is owner-scoped.
+  - §6  Zero-prompt: the mailbox is AUTO-PROVISIONED at sign-up (``auth.register``
+        / ``oauth_service.upsert_user``, best-effort) and forwards to the user's
+        OWN registered address, enabled + verified. The user is never asked to
+        create an address or to choose a forwarding destination.
   - §1.3 Tombstones: a rotated/retired alias lives forever in ``mail_aliases`` with
         ``state="retired"`` so its local part can never be reassigned to anyone.
         Uniqueness on ``local_part`` spans ALL states — that IS the anti-recycle
@@ -237,17 +241,23 @@ def _serialize_mailbox(mailbox: Dict[str, Any]) -> Dict[str, Any]:
     """Shape a ``managed_mailboxes`` doc into the spec §5 GET response. The
     address is resolved from the primary alias (the mailbox doc stores only the
     ``primary_alias_id``, per §2). ``mode`` reads THROUGH to
-    ``auto_submit_settings.mode`` (the single source of truth)."""
-    alias = _aliases().find_one({"alias_id": mailbox.get("primary_alias_id")})
+    ``auto_submit_settings.mode`` (the single source of truth).
+
+    ``name_pending`` is True when the primary alias was auto-minted as an opaque
+    fallback because no display name was resolvable YET (auto-provision at
+    signup, before any resume exists). It is the self-repair signal consumed by
+    ``repair_local_part`` — it is NEVER set on a deliberate privacy alias."""
+    alias = _aliases().find_one({"alias_id": mailbox.get("primary_alias_id")}) or {}
     return {
         "provisioned": True,
-        "address": (alias or {}).get("address"),
+        "address": alias.get("address"),
         "mode": _read_through_mode(mailbox.get("user_email"),
                                    mailbox.get("mode", "approval")),
         "paused": bool(mailbox.get("paused", False)),
         "forwarding_enabled": bool(mailbox.get("forwarding_enabled", False)),
         "forward_to": mailbox.get("forward_to"),
         "forward_to_verified": bool(mailbox.get("forward_to_verified", False)),
+        "name_pending": bool(alias.get("name_pending", False)),
         "unread_count": 0,
     }
 
@@ -262,6 +272,7 @@ def _not_provisioned() -> Dict[str, Any]:
         "forwarding_enabled": False,
         "forward_to": None,
         "forward_to_verified": False,
+        "name_pending": False,
         "unread_count": 0,
     }
 
@@ -278,12 +289,17 @@ def _mint_primary_alias(
     domain: str,
     kind: str,
     alias_id: str,
+    name_pending: bool = False,
 ) -> Dict[str, Any]:
     """Mint a fresh ACTIVE primary alias with the given (pre-generated)
     ``alias_id``, resolving collisions per D2 across ALL alias states (the
     tombstone-spanning uniqueness). The DB unique index on ``local_part`` is the
     authority: the in-code ``find_one`` is the fast path, and a racing
-    ``DuplicateKeyError`` just advances to the next candidate."""
+    ``DuplicateKeyError`` just advances to the next candidate.
+
+    ``name_pending=True`` records that this local part is an opaque STOPGAP (no
+    display name was resolvable at mint time) and may be self-repaired later by
+    ``repair_local_part``."""
     for local in _candidate_locals(base):
         if _aliases().find_one({"local_part": local}):
             continue
@@ -298,6 +314,7 @@ def _mint_primary_alias(
                 "kind": kind,
                 "state": "active",
                 "thread_id": None,
+                "name_pending": bool(name_pending),
                 "created_at": _now(),
             }
             _aliases().insert_one(doc)
@@ -325,9 +342,18 @@ def provision(
     """Create (or return the existing) managed mailbox + immutable primary alias
     for a user. Idempotent per user.
 
-    ``user_email`` is the OWNER (D7) — the route resolves it from the JWT and it
-    is NEVER taken from a request body. ``display_name`` seeds the readable local
-    part; ``privacy_alias=True`` mints an opaque ``career.<6-hex>`` instead.
+    ``user_email`` is the OWNER (D7) — the route resolves it from the JWT (or, for
+    auto-provision at signup, the address the account was just created with) and
+    it is NEVER taken from a request body. ``display_name`` seeds the readable
+    local part; ``privacy_alias=True`` mints an opaque ``career.<6-hex>`` instead.
+
+    FORWARDING DEFAULTS (spec §6): a fresh mailbox forwards to the user's OWN
+    registered address, ENABLED and already VERIFIED. ``user_email`` IS the
+    account's address — it was proven at sign-up/OAuth, so a second
+    click-the-link round-trip verifies nothing and only produces the "where
+    should mail go?" prompt the product forbids. ``set_forwarding`` still resets
+    ``forward_to_verified`` whenever the user OVERRIDES the destination to some
+    OTHER address — that address is unproven and must be verified.
 
     Returns the mailbox object in the spec §5 GET shape.
     """
@@ -351,9 +377,11 @@ def provision(
             "primary_alias_id": alias_id,
             "mode": "approval",
             "paused": False,
-            "forwarding_enabled": False,
-            "forward_to": None,
-            "forward_to_verified": False,
+            # Default destination = the account's OWN registered address, on and
+            # verified (see the docstring). Never asks the user anything.
+            "forwarding_enabled": True,
+            "forward_to": email,
+            "forward_to_verified": True,
             "created_at": now,
             "updated_at": now,
         }
@@ -369,7 +397,12 @@ def provision(
     # a mailbox that somehow lost its alias (a crash between the two inserts) is
     # repaired using its already-reserved primary_alias_id.
     if not _aliases().find_one({"alias_id": mailbox["primary_alias_id"]}):
-        base = _privacy_local() if privacy_alias else (_slug_name(display_name) or _privacy_local())
+        slug = "" if privacy_alias else _slug_name(display_name)
+        # No resolvable name (the common case at signup, before any resume) ->
+        # opaque stopgap, FLAGGED so repair_local_part can upgrade it to
+        # firstname.lastname once a name exists. A DELIBERATE privacy alias is
+        # never flagged — the user chose opacity.
+        base = slug or _privacy_local()
         _mint_primary_alias(
             mailbox_id=mailbox["mailbox_id"],
             user_email=email,
@@ -377,10 +410,113 @@ def provision(
             domain=domain,
             kind="privacy" if privacy_alias else "primary",
             alias_id=mailbox["primary_alias_id"],
+            name_pending=(not privacy_alias and not slug),
         )
         mailbox = _mailboxes().find_one({"user_email": email})
 
     return _serialize_mailbox(mailbox)
+
+
+def repair_local_part(user_email: str, display_name: Optional[str]) -> Dict[str, Any]:
+    """Self-repair an auto-provisioned opaque local part into the readable
+    ``firstname.lastname`` once a display name finally exists.
+
+    Auto-provision at signup usually has NO name (the register form only collects
+    email + password), so it mints ``career.<hex>`` and flags the alias
+    ``name_pending``. This upgrades it — but ONLY when it is safe:
+
+      * the primary alias is flagged ``name_pending`` (so a deliberate privacy
+        alias, or an alias the user already rotated by hand, is never touched);
+      * the alias has NEVER been used — zero stored messages reference it. Once a
+        recruiter/ATS holds the address, changing it would silently break
+        delivery, so we leave it alone forever.
+
+    The old local part is TOMBSTONED (``state="retired"``), never recycled (§1.3).
+    Idempotent and best-effort: with nothing to repair it simply returns the
+    current mailbox. Owner-scoped."""
+    email = InputSanitizer.sanitize_email(user_email)
+    if not email:
+        raise ValueError("invalid_user_email")
+    slug = _slug_name(display_name)
+    if not slug:
+        return get_mailbox(email)
+
+    mailbox = _mailboxes().find_one({"user_email": email})
+    if not mailbox:
+        return _not_provisioned()
+    alias = _aliases().find_one({"alias_id": mailbox.get("primary_alias_id")}) or {}
+    if not alias.get("name_pending") or alias.get("state") != "active":
+        return _serialize_mailbox(mailbox)
+    if slug == alias.get("local_part"):
+        # Already the right name — just clear the flag.
+        _aliases().update_one({"alias_id": alias["alias_id"]},
+                              {"$set": {"name_pending": False}})
+        return _serialize_mailbox(mailbox)
+
+    # NEVER change an address anyone has already mailed.
+    try:
+        used = DBConnect().get_db().mail_messages.count_documents(
+            {"alias_id": alias.get("alias_id")}, limit=1
+        )
+    except Exception as e:  # pragma: no cover - defensive; fail closed (no repair)
+        logger.warning("managed_mailbox: repair usage check failed for %s: %s",
+                       email, type(e).__name__)
+        return _serialize_mailbox(mailbox)
+    if used:
+        _aliases().update_one({"alias_id": alias["alias_id"]},
+                              {"$set": {"name_pending": False}})
+        return _serialize_mailbox(mailbox)
+
+    _aliases().update_one(
+        {"alias_id": alias["alias_id"], "user_email": email},
+        {"$set": {"state": "retired", "retired_at": _now(), "name_pending": False}},
+    )
+    new_alias_id = "alias_" + secrets.token_hex(8)
+    new_alias = _mint_primary_alias(
+        mailbox_id=mailbox["mailbox_id"],
+        user_email=email,
+        base=slug,
+        domain=apply_mail_domain(),
+        kind="primary",
+        alias_id=new_alias_id,
+    )
+    _mailboxes().update_one(
+        {"user_email": email},
+        {"$set": {"primary_alias_id": new_alias["alias_id"], "updated_at": _now()}},
+    )
+    logger.info("managed_mailbox: repaired auto-provisioned local part for a user")
+    return _serialize_mailbox(_mailboxes().find_one({"user_email": email}))
+
+
+def backfill_forwarding_defaults(dry_run: bool = False) -> Dict[str, int]:
+    """Bring PRE-EXISTING mailboxes onto the §6 defaults: forward to the owner's
+    own registered address, enabled + verified.
+
+    Only touches docs that were never configured (``forward_to`` null/absent) —
+    a user who DELIBERATELY chose another destination keeps it, verified state
+    and all. Idempotent: a second run matches nothing. Returns counts."""
+    q = {"$or": [{"forward_to": None}, {"forward_to": {"$exists": False}}]}
+    scanned = 0
+    updated = 0
+    for mb in _mailboxes().find(q, {"user_email": 1, "_id": 0}):
+        scanned += 1
+        email = InputSanitizer.sanitize_email(mb.get("user_email"))
+        if not email:
+            continue
+        if dry_run:
+            updated += 1
+            continue
+        res = _mailboxes().update_one(
+            {"user_email": email, **q},
+            {"$set": {
+                "forwarding_enabled": True,
+                "forward_to": email,
+                "forward_to_verified": True,
+                "updated_at": _now(),
+            }},
+        )
+        updated += int(getattr(res, "modified_count", 0) or 0)
+    return {"scanned": scanned, "updated": updated}
 
 
 # ---------------------------------------------------------------------------
@@ -580,10 +716,18 @@ def set_forwarding(
     enabled: bool,
     forward_to: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Toggle forwarding and/or (re)set the forwarding destination. Changing
-    ``forward_to`` ALWAYS resets ``forward_to_verified`` to False — the new
-    destination must be re-verified before any content is forwarded (spec §1.2).
-    Owner-scoped."""
+    """Toggle forwarding and/or (re)set the forwarding destination.
+
+    Changing ``forward_to`` to some OTHER address resets ``forward_to_verified``
+    to False — that destination is unproven and must be re-verified before any
+    content is forwarded (spec §1.2). This is the OVERRIDE path and it is
+    deliberately kept.
+
+    The ONE exception is the account's own registered address (``user_email``):
+    ownership of it was already proven at sign-up/OAuth, so selecting it stays
+    verified. That is also the auto-provisioned default (§6), so a user who
+    overrides and then reverts is never stranded behind a pointless email
+    round-trip. Owner-scoped."""
     email = InputSanitizer.sanitize_email(user_email)
     if not email:
         raise ValueError("invalid_user_email")
@@ -596,7 +740,8 @@ def set_forwarding(
             raise ValueError("invalid_forward_to")
         if target != mailbox.get("forward_to"):
             updates["forward_to"] = target
-            updates["forward_to_verified"] = False  # re-verify the new destination
+            # Own registered address -> already proven; anything else -> re-verify.
+            updates["forward_to_verified"] = (target == email)
 
     _mailboxes().update_one({"user_email": email}, {"$set": updates})
     return _serialize_mailbox(_mailboxes().find_one({"user_email": email}))

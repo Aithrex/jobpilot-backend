@@ -71,9 +71,12 @@ def test_provision_returns_named_address(svc):
         "address": "harshith.manne@pilotmail.co",
         "mode": "approval",
         "paused": False,
-        "forwarding_enabled": False,
-        "forward_to": None,
-        "forward_to_verified": False,
+        # Spec §6: forwarding defaults to the account's OWN registered address,
+        # enabled + already verified — the user is never asked where mail goes.
+        "forwarding_enabled": True,
+        "forward_to": "harshith@aithrex.tech",
+        "forward_to_verified": True,
+        "name_pending": False,
         "unread_count": 0,
     }
 

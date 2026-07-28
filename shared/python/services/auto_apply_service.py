@@ -68,6 +68,37 @@ logger = logging.getLogger(__name__)
 _VERIFY_BACKOFF_MINUTES = (5, 15, 30, 60, 120, 240)
 _VERIFY_MAX_ATTEMPTS = len(_VERIFY_BACKOFF_MINUTES)
 
+# ---------------------------------------------------------------------------
+# Executor outcome vocabulary this orchestrator folds onto the ledger, BEYOND
+# the executor_adapter SUBMIT_* set (spec §4 + the "prepared"/waiting_human gap).
+#
+# These are matched by VALUE, not imported: `browser_executor` pulls in Playwright
+# and must never be imported at orchestrator module load (cold start + the stub
+# default). The literals below are the exact constants that module defines
+# (browser_executor.EXECUTOR_UNSUPPORTED / EXECUTOR_PREPARED) plus the
+# fill_driver spellings, so a report from EITHER layer lands on the right state.
+# ---------------------------------------------------------------------------
+# PERMANENT "we cannot drive this employer's system" — the ledger's
+# STATUS_UNSUPPORTED terminal with an honest user-facing message. Deliberately
+# DISJOINT from EXECUTOR_UNAVAILABLE, which is a TRANSIENT fleet drain and stays
+# a retryable `failed` (never conflate the two: one asks the user to apply
+# manually forever, the other is retried by the next sweep).
+_UNSUPPORTED_STATUSES = frozenset({
+    "executor_unsupported",   # browser_executor.EXECUTOR_UNSUPPORTED
+    "unsupported",            # generic/adapter spelling (ats_adapters TAKEOVER_UNSUPPORTED)
+    "unsupported_vendor", "vendor_unsupported", "unsupported_ats",
+})
+# Filled + proof captured, Submit DELIBERATELY not clicked (copilot / ops dry
+# run). NOT a failure: the row is handed BACK to the human to finish.
+_PREPARED_STATUSES = frozenset({"prepared"})  # browser_executor.EXECUTOR_PREPARED
+# The run stopped at something only a human can clear, with no Oracle freeze doc
+# (fill_driver.FILL_WAITING_HUMAN). Distinct from SUBMIT_WAITING_VERIFY, which
+# owns the automated freeze/thaw sweep.
+_WAITING_HUMAN_STATUSES = frozenset({"waiting_human"})
+# User-facing copy for a prepared (never-submitted) run.
+_PREPARED_MESSAGE = ("We filled this application for you but did not submit it — "
+                     "open it to review and send.")
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -257,7 +288,8 @@ def _freezes_coll():
 # heuristic. This layer adds a hard legal-attestation guard on top.)
 # ---------------------------------------------------------------------------
 def _resolve_answers(user_email: str,
-                     questions: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[Dict[str, str]], Dict[str, Any]]:
+                     questions: List[Dict[str, Any]],
+                     company: str = "") -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
     """Resolve normalized questions against the canonical profile via the answer
     library. Returns ``(answers, needs_input_items, resolution)``:
 
@@ -274,9 +306,9 @@ def _resolve_answers(user_email: str,
     this service invented.
     """
     answers: Dict[str, Any] = {}
-    needs_input: List[Dict[str, str]] = []
+    needs_input: List[Dict[str, Any]] = []
 
-    resolution = _call_answer_library(user_email, questions)
+    resolution = _call_answer_library(user_email, questions, company=company)
     resolved_map = resolution.get("resolved") or {}
 
     for q in questions:
@@ -304,7 +336,8 @@ def _resolve_answers(user_email: str,
 
 
 def _call_answer_library(user_email: str,
-                         questions: List[Dict[str, Any]]) -> Dict[str, Any]:
+                         questions: List[Dict[str, Any]],
+                         company: str = "") -> Dict[str, Any]:
     """Invoke ``answer_library_service.resolve(user_email, questions)`` with the
     normalized (field_id-keyed) questions. A genuine ImportError (parallel build)
     → an empty resolution so the pipeline still runs (everything falls to
@@ -318,7 +351,12 @@ def _call_answer_library(user_email: str,
         return {"resolved": {}, "coverage": 0.0, "has_novel_free_text": False,
                 "has_unconfirmed_legal_attestation": False}
     try:
-        result = answer_library_service.resolve(user_email, questions)
+        # `company` drives the spec §1 résumé escalation (answer "Yes" to
+        # "have you worked here?" when the résumé shows this employer). It can
+        # only ever raise an answer to Yes, never assert "No", so passing it is
+        # safe; omitting it silently disables the escalation.
+        result = answer_library_service.resolve(user_email, questions,
+                                                company=company or "")
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("auto_apply: answer_library resolve failed for %s: %s", user_email, e)
         return {"resolved": {}, "coverage": 0.0, "has_novel_free_text": False,
@@ -353,6 +391,17 @@ def _normalize_resolution(result: Any) -> Dict[str, Any]:
 _DECLARED_SOURCES = frozenset({
     "declared", "user_store", "visa_profile", "onboarding", "preferences",
     "profile", "user_declared", "structured", "resume",
+    # spec §0.3 / §1. Without these two, a legitimately-resolved answer is
+    # bounced straight back to needs_input and the work that produces them is
+    # inert:
+    #   policy_decline — a protected-EEO "prefer not to answer". Declining
+    #     asserts nothing about the user, so it is not a fabrication.
+    #   resume_match   — a résumé-derived escalation to "Yes" (e.g. the user
+    #     HAS worked at this company). It can only ever raise an answer to Yes,
+    #     never assert "No", so it cannot understate an obligation.
+    # Kept as distinct strings rather than folded into "declared" because
+    # neither is something the user actually declared; provenance stays honest.
+    "policy_decline", "resume_match",
 })
 
 
@@ -385,12 +434,72 @@ def _value_of(hit: Any) -> Any:
     return hit
 
 
-def _needs_item(q: Dict[str, Any], *, kind: str) -> Dict[str, str]:
-    return {
-        "question": _clean(q.get("label"), 500) or _clean(q.get("field_id"), 200),
+_MAX_NEEDS_OPTIONS = 40
+
+
+def _needs_control_meta(field_id: str,
+                        source: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The CONTROL metadata for one needs_input question — {value_type?, options?}.
+
+    Why it must travel: without it the FE has nothing but the prompt text and
+    falls back to a free-text box (`needsInput.inferControl`). For an enumerated
+    select (`how_did_you_hear` → "Company website" | "LinkedIn" | …) the user then
+    types something no option matches, the fill driver reports `no_option_match`,
+    and the row re-parks — an unbreakable loop, PLUS the typed value gets banked
+    in the answer library and poisons every future application.
+
+    Prefers the FORM's own shape (`normalize_recon_questions` already produces
+    `type` + `options` — those are the choices this ATS will actually accept) and
+    falls back to the closed question-bank catalog, so an item that was parked
+    without recon metadata (e.g. an executor re-park) still renders a real
+    control."""
+    meta: Dict[str, Any] = {}
+    src = source if isinstance(source, dict) else {}
+
+    value_type = _clean(src.get("value_type") or src.get("type"), 40)
+    options: List[str] = []
+    raw_options = src.get("options")
+    if isinstance(raw_options, list):
+        options = [o for o in (_clean(o, 200)
+                               for o in raw_options[:_MAX_NEEDS_OPTIONS]) if o]
+
+    if not value_type or not options:
+        bank = None
+        if field_id:
+            try:
+                from services import application_question_bank as qb
+                bank = qb.get_field(field_id)
+            except Exception:  # pragma: no cover - parallel build safety
+                bank = None
+        if bank:
+            bank_vt = _clean(bank.get("value_type"), 40)
+            value_type = value_type or bank_vt
+            # A Yes/No field needs no option list: `value_type: "boolean"` already
+            # tells the FE to render the two pills, and it serializes them as real
+            # booleans (which is what the declared store wants).
+            if not options and bank_vt != "boolean":
+                options = [o for o in (_clean(o, 200)
+                                       for o in (bank.get("options") or
+                                                 [])[:_MAX_NEEDS_OPTIONS]) if o]
+
+    if value_type:
+        meta["value_type"] = value_type
+    if options:
+        meta["options"] = options
+    return meta
+
+
+def _needs_item(q: Dict[str, Any], *, kind: str) -> Dict[str, Any]:
+    fid = _clean(q.get("field_id"), 200)
+    item: Dict[str, Any] = {
+        "question": _clean(q.get("label"), 500) or fid,
         "kind": kind,
-        "field_id": _clean(q.get("field_id"), 200),
+        "field_id": fid,
     }
+    item.update(_needs_control_meta(fid, q))
+    if q.get("required"):
+        item["required"] = True
+    return item
 
 
 def _coverage(questions: List[Dict[str, Any]], answers: Dict[str, Any]) -> float:
@@ -480,6 +589,88 @@ def _local_autonomy(ats_family: Optional[str], coverage: float, *,
     return "ask", score
 
 
+def _free_text_generation_enabled() -> bool:
+    """Kill switch for grounded free-text generation inside gather (repair spec
+    §7). Default ON — the whole point of the fix is that `needs_generation` has a
+    consumer — but this is the ONE place the pipeline spends Bedrock tokens
+    unattended, so ops keeps a lever. OFF restores the previous behaviour: an
+    essay box falls to needs_input and the user writes it themselves."""
+    try:
+        from utils.config import _get_config_value
+        val = _get_config_value("AUTO_APPLY_GENERATE_FREE_TEXT", "true") or "true"
+        return str(val).strip().lower() in ("1", "true", "yes", "on")
+    except Exception:  # pragma: no cover - config always importable in-process
+        return True
+
+
+def _apply_generated_free_text(application_id: str, user_email: str,
+                               app: Dict[str, Any],
+                               resolution: Dict[str, Any],
+                               answers: Dict[str, Any],
+                               needs_input: List[Dict[str, Any]]
+                               ) -> Tuple[Dict[str, Any], bool]:
+    """Answer the form's free-text boxes from the résumé (repair spec §7).
+
+    `answer_library_service.resolve()` has emitted `needs_generation` for every
+    essay box since it was written and had ZERO consumers, so an essay-bearing
+    form ALWAYS fell to `needs_input` and the user was told to write it — the
+    exact outcome §3 says must never happen for a resolvable question.
+
+    Mutates `answers`, `needs_input` and `resolution["resolved"]` in place and
+    returns ``(generated, has_novel_free_text)``, where the flag is recomputed
+    from what is STILL open: the non-essay novel residue
+    (`has_novel_excluding_generation`) OR the essays generation could not answer.
+    Reusing the pre-generation flag would keep the autonomy score penalised for
+    questions we just answered.
+
+    Never raises and never fabricates: generation is grounded in the résumé only,
+    entitlements are charged inside `answer_generator.generate_for_gather` BEFORE
+    each Bedrock call, and every generated record carries
+    ``review_required: True``.
+    """
+    pre_flag = bool(resolution.get("has_novel_free_text"))
+    needs_generation = [i for i in (resolution.get("needs_generation") or [])
+                        if isinstance(i, dict)]
+    if not needs_generation or not _free_text_generation_enabled():
+        return {}, pre_flag
+
+    try:
+        from services.answer_generator import generate_for_gather
+    except ImportError:  # pragma: no cover - layer always carries it now
+        logger.warning("auto_apply gather %s: answer_generator not importable — "
+                       "free-text falls to needs_input", application_id)
+        return {}, pre_flag
+
+    try:
+        generated, remaining = generate_for_gather(
+            user_email, needs_generation,
+            application_id=application_id,
+            job_description=_resolve_jd_text(user_email, application_id, app),
+            company=str(app.get("company") or ""),
+            role=str(app.get("title") or ""),
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("auto_apply gather %s: free-text generation failed: %s",
+                       application_id, e)
+        return {}, pre_flag
+
+    if not generated:
+        return {}, pre_flag
+
+    resolved_map = resolution.get("resolved")
+    if isinstance(resolved_map, dict):
+        resolved_map.update(generated)
+    for field_id, record in generated.items():
+        answers[field_id] = record.get("value")
+    needs_input[:] = [i for i in needs_input
+                      if str(i.get("field_id") or "") not in generated]
+
+    residual = bool(resolution.get("has_novel_excluding_generation", pre_flag))
+    logger.info("auto_apply gather %s: generated %d free-text answer(s), "
+                "%d still open", application_id, len(generated), len(remaining))
+    return generated, bool(residual or remaining)
+
+
 # ===========================================================================
 # PHASE 1 — gather
 # ===========================================================================
@@ -545,10 +736,16 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
         # dicts vs. text-keyed resolutions no longer diverge).
         questions = apply_forms.normalize_recon_questions(raw_questions)
         needs_account = bool(recon.get("needs_account"))
-        answers, needs_input, resolution = _resolve_answers(user_email, questions)
+        answers, needs_input, resolution = _resolve_answers(
+            user_email, questions, company=str(app.get("company") or ""))
+        # Repair spec §7 — the ONLY consumer of resolve()'s `needs_generation`,
+        # and deliberately only here: gather is an async job, so it may spend
+        # Bedrock tokens. Mutates answers/needs_input/resolution in place and
+        # recomputes the novel-free-text flag from what is STILL open.
+        generated_free_text, has_novel_free_text = _apply_generated_free_text(
+            application_id, user_email, app, resolution, answers, needs_input)
         cov = resolution.get("coverage")
         coverage = float(cov) if cov is not None else _coverage(questions, answers)
-        has_novel_free_text = bool(resolution.get("has_novel_free_text"))
         has_unresolved_legal = bool(
             resolution.get("has_unconfirmed_legal_attestation")) or any(
             i.get("kind") == "legal_attestation" for i in needs_input)
@@ -558,6 +755,15 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
             has_novel_free_text=has_novel_free_text,
             has_unresolved_legal=has_unresolved_legal,
             needs_account=needs_account)
+
+        # Model-written prose is NEVER auto-submitted. Clearing the essay out of
+        # `needs_input` means the user no longer has to WRITE it — it does not
+        # mean they no longer have to READ it. Cap to `hold` so the row waits in
+        # ready_for_review for a human approval, honouring
+        # `answer_generator`'s contract that every generated record is
+        # `review_required: True`. Only ever DOWNGRADES the decision.
+        if generated_free_text and autonomy == "auto":
+            autonomy = "hold"
 
         # F: stash the recon form fingerprint alongside the answers so the approval
         # snapshot (and its before-submit re-validation) can prove the form did
@@ -654,6 +860,9 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
         "prepare_dispatched": prepare_dispatched,
         "mode": mode,
         "manual_apply": manual_apply,
+        # Repair spec §7 — how many essay boxes we answered from the résumé
+        # instead of handing back to the user.
+        "generated_free_text": sorted(generated_free_text),
     }
 
 
@@ -737,6 +946,353 @@ def answer_sheet(user_email: str, application_id: str) -> Dict[str, Any]:
         "mode": doc.get("mode"),
         "manual_apply": bool(doc.get("manual_apply", False)),
     }
+
+
+# ===========================================================================
+# PHASE 1.6 — RESUME AFTER ANSWER (AUTOAPPLY_REPAIR_SPEC §3)
+#
+# `needs_input` used to be a TERMINAL DEAD END: no surface accepted answers for
+# it, `gather` treats it as an idempotent no-op, and `submit` refuses anything
+# that is not approved — so a single unanswered screening question stranded the
+# application forever and the user was told to go apply manually.
+#
+# This is the loop that closes it: merge the user's answers, BANK each one in the
+# answer library (so the same question is never asked twice), re-resolve what is
+# still open, and either shrink the queue (still `needs_input`) or advance the
+# row to `ready_for_review` — then honour the autonomy mode, so aggressive /
+# autopilot go straight through approve + submit.
+#
+# LATENCY: every step here is deterministic Mongo work (`answer_library_service.
+# resolve` never calls an LLM), so this is a fast synchronous path. The only
+# long-running work — the actual browser submission — is dispatched as the
+# EXISTING `auto_apply_submit` async job via request_immediate_submit (CLAUDE.md
+# invariant 2); nothing slow ever runs on the request thread.
+# ===========================================================================
+_MAX_SUBMITTED_ANSWERS = 50
+_MAX_ANSWER_CHARS = 4000
+_MAX_ANSWER_OPTIONS = 25
+
+# The needs_input kinds a TYPED ANSWER can actually clear — a CLOSED ALLOW-LIST.
+#
+# This was a DENY-list ({account, quota, prepare_failed} + "oracle_*") over an
+# OPEN vocabulary: `kind` is also written from a free-form executor/fill-driver
+# reason string (finalize_submission below), so ANY unlisted value — a future
+# adapter's `captcha`, `validation_failed`, whatever — counted as answerable by
+# default. A row parked behind a wall with an unlisted reason could then be
+# "answered" with anything: `remaining` emptied, the row advanced
+# ready_for_review -> approve -> submit, and the executor hit the same wall again.
+# Everything not listed here is a WALL: it stays in the queue and keeps the row in
+# needs_input no matter what the user types, so we never pretend a wall cleared.
+_ANSWERABLE_KINDS = frozenset({"screening", "legal_attestation"})
+# Mirrors auto_submit_service._ACCOUNT_GATE_PROMPT (kept as a literal so this
+# module stays free of a reverse import).
+_ACCOUNT_GATE_QUESTION = (
+    "Sign in or create an account on the employer's career site to continue."
+)
+
+
+class AutoApplyError(Exception):
+    """Typed service error — the route maps `status`/`error` onto the HTTP
+    response. NEVER 401 (that is reserved for a missing/invalid JWT)."""
+    status = 400
+    error = "auto_apply_error"
+
+    def __init__(self, message: Optional[str] = None):
+        self.message = message or self.error
+        super().__init__(self.message)
+
+
+class InvalidAnswerInput(AutoApplyError):
+    status = 400
+    error = "invalid_answers"
+
+
+class NotInNeedsInput(AutoApplyError):
+    """The row is not (or no longer) waiting on the user — answering it is a
+    business conflict, not an auth failure."""
+    status = 409
+    error = "not_in_needs_input"
+
+
+def _answerable(item: Dict[str, Any]) -> bool:
+    """True when a needs_input entry is a QUESTION the user can answer here.
+
+    ALLOW-list (`_ANSWERABLE_KINDS`), never a deny-list: `kind` is an open
+    vocabulary, so anything unrecognised must read as a WALL, not as a question."""
+    kind = str((item or {}).get("kind") or "").strip().lower()
+    return kind in _ANSWERABLE_KINDS
+
+
+def _needs_view(item: Dict[str, Any]) -> Dict[str, Any]:
+    """The {question, kind, field_id} shape the contract returns in `remaining`,
+    PLUS the control metadata (value_type / options / required) the FE needs to
+    render a real control instead of guessing a text box (see
+    `_needs_control_meta`), and a wall's hand-off fields (apply_url / action)."""
+    fid = _clean(item.get("field_id"), 200)
+    out: Dict[str, Any] = {
+        "question": _clean(item.get("question"), 500),
+        "kind": _clean(item.get("kind"), 40),
+        "field_id": fid,
+    }
+    out.update(_needs_control_meta(fid, item))
+    if item.get("required"):
+        out["required"] = True
+    for extra in ("apply_url", "action"):
+        val = _clean(item.get(extra), 2000 if extra == "apply_url" else 40)
+        if val:
+            out[extra] = val
+    return out
+
+
+def _sanitize_answer_value(value: Any) -> Any:
+    """Bound + sanitize ONE submitted answer. Strings are capped/cleaned,
+    bool/int/float pass through, a small list of scalars survives (multi-select);
+    anything else is coerced to a bounded string. None means "no answer"."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        return _clean(value, _MAX_ANSWER_CHARS) or None
+    if isinstance(value, list):
+        out = [_sanitize_answer_value(v) for v in value[:_MAX_ANSWER_OPTIONS]]
+        out = [v for v in out if v is not None]
+        return out or None
+    return _clean(str(value), _MAX_ANSWER_CHARS) or None
+
+
+def _sanitize_submitted_answers(answers: Any) -> Dict[str, Any]:
+    """Validate + sanitize the {field_id: value} body. Every key is sanitized
+    BEFORE it can reach a Mongo document/filter (invariant 4) and the map is
+    bounded so a malformed client can never bloat the answer sheet."""
+    if not isinstance(answers, dict):
+        raise InvalidAnswerInput("answers must be an object of {field_id: value}")
+    if not answers:
+        raise InvalidAnswerInput("answers must contain at least one field")
+    if len(answers) > _MAX_SUBMITTED_ANSWERS:
+        raise InvalidAnswerInput(
+            f"at most {_MAX_SUBMITTED_ANSWERS} answers may be submitted at once")
+    clean: Dict[str, Any] = {}
+    for raw_key, raw_value in answers.items():
+        if not isinstance(raw_key, str):
+            continue
+        fid = _clean(raw_key, 200)
+        # Never let an operator-shaped / dotted key reach a Mongo $set path.
+        if not fid or fid.startswith("$") or "." in fid:
+            continue
+        value = _sanitize_answer_value(raw_value)
+        if value is None:
+            continue
+        clean[fid] = value
+    if not clean:
+        raise InvalidAnswerInput("no usable answers were provided")
+    return clean
+
+
+def _remember_answers(user_email: str, answers: Dict[str, Any],
+                      by_field: Dict[str, Dict[str, Any]]) -> int:
+    """Bank the user's answers so the SAME question is never asked again (spec
+    §3.1) — ONE `answer_library_service.remember_many(..., declare=True)` call,
+    the API written for exactly this endpoint. Returns how many were banked.
+
+    remember_many is what makes the promise hold, and per-answer `remember()`
+    could not:
+      * it passes the catalog ``field_id`` (the key `_lookup_user_store` matches
+        FIRST), so the same question worded differently on another ATS still
+        hits. Called positionally without ``field_id=`` the memo stored
+        ``field_id: None`` and only ever matched on normalized question text.
+      * ``declare=True`` also writes the flat ``user_preferences[field_id]``
+        declared store, so provenance upgrades from ``user_store`` to
+        ``declared`` (which is what a LEGAL attestation must be sourced from —
+        see `_is_declared_source`) and the answer shows up in the profile.
+      * a field the user answered that is NOT in the current queue is still
+        banked: `remember_many` falls back to the raw key, where the old
+        `by_field.get(fid)` lookup produced an empty question and silently
+        banked NOTHING.
+
+    A WALL (captcha / verify / account gate) is never banked: it is not a
+    question, and its typed "answer" would poison every future application.
+    Best-effort — a library fault never breaks the resume loop."""
+    bankable: Dict[str, Any] = {}
+    labels: Dict[str, str] = {}
+    for fid, value in answers.items():
+        item = by_field.get(fid)
+        if item is not None and not _answerable(item):
+            continue
+        bankable[fid] = value
+        label = _clean((item or {}).get("question"), 2000)
+        if label:
+            labels[fid] = label
+    if not bankable:
+        return 0
+    try:
+        from services import answer_library_service
+    except ImportError:  # pragma: no cover - parallel build safety
+        return 0
+    try:
+        out = answer_library_service.remember_many(
+            user_email, bankable, labels=labels, declare=True)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("auto_apply: remember_many failed for %s: %s", user_email, e)
+        return 0
+    return len(out.get("remembered") or [])
+
+
+def _merge_answers(application_id: str, user_email: str,
+                   answers: Dict[str, Any]) -> None:
+    """Upsert the merged answer sheet. Kept out of the lean ledger row (answers
+    carry PII), same store gather/prepare/execution_envelope already read."""
+    _answers_coll().update_one(
+        {"application_id": application_id, "user_email": user_email},
+        {"$set": {"answers": answers, "updated_at": _now()},
+         "$setOnInsert": {"created_at": _now()}},
+        upsert=True,
+    )
+
+
+def _question_from_needs_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    """The normalized question shape `answer_library_service.resolve` consumes.
+    Every needs_input entry was emitted BECAUSE it was required (or a legal
+    attestation), so `required` is True by construction."""
+    kind = str(item.get("kind") or "").strip().lower()
+    q: Dict[str, Any] = {
+        "field_id": _clean(item.get("field_id"), 200),
+        "label": _clean(item.get("question"), 500),
+        "required": True,
+        "is_legal_attestation": kind == "legal_attestation",
+    }
+    # Carry the control metadata forward so a question that stays open is
+    # re-emitted (by `_needs_item`) with the SAME enumerated choices it was
+    # parked with — a re-park must never degrade a select into a text box.
+    q.update(_needs_control_meta(q["field_id"], item))
+    return q
+
+
+def resume_after_answers(user_email: str, application_id: str,
+                         answers: Any) -> Dict[str, Any]:
+    """Spec §3: accept the user's answers for a `needs_input` row and RESUME it.
+
+    1. Merge the answers into the row's answer sheet and `remember()` each one.
+    2. Re-resolve every question that is still open (the library may now resolve
+       neighbours from the banked answer, and a legal attestation answered here
+       becomes a DECLARED value — never a fabricated one).
+    3. Gaps left → stay `needs_input` with a SHRUNKEN queue; return `remaining`.
+    4. Clear → `needs_input -> ready_for_review`, then honour the autonomy mode:
+       an effective `auto` (aggressive, or graduated autopilot) is system-approved
+       and its submit is enqueued immediately. Anything else waits for a manual
+       approval — but the user is NEVER told to go apply manually for a question
+       they just answered.
+
+    Returns the §3 contract dict. Raises NotInNeedsInput (409) /
+    InvalidAnswerInput (400) / ledger.ApplicationNotFound (404).
+    """
+    application_id = _clean(application_id, 64)
+    if not application_id:
+        raise InvalidAnswerInput("application_id is required")
+    app = ledger.get_application(user_email, application_id)
+    if not app:
+        raise ledger.ApplicationNotFound()
+    if app.get("status") != ledger.STATUS_NEEDS_INPUT:
+        raise NotInNeedsInput(
+            f"this application is not waiting for your input (status="
+            f"{app.get('status')})")
+
+    submitted = _sanitize_submitted_answers(answers)
+    pending = [i for i in (app.get("needs_input") or []) if isinstance(i, dict)]
+    by_field = {i.get("field_id"): i for i in pending if i.get("field_id")}
+
+    # An ATS ACCOUNT wall is frequently parked with an EMPTY question list (a
+    # Workday login gate): without this the row would look "clear" and get
+    # resumed by an unrelated answer. It is a wall, not a question.
+    sheet = _answers_coll().find_one(
+        {"application_id": application_id, "user_email": user_email},
+        {"_id": 0, "needs_account": 1}) or {}
+    needs_account = bool(sheet.get("needs_account"))
+    if needs_account and not any(
+            str(i.get("field_id") or "") == "ats_account" for i in pending):
+        pending = pending + [{"question": _ACCOUNT_GATE_QUESTION,
+                              "kind": "account", "field_id": "ats_account"}]
+
+    # (1) merge + bank (ONE remember_many — see `_remember_answers`).
+    stored = dict(_load_answers(application_id, user_email))
+    stored.update(submitted)
+    _merge_answers(application_id, user_email, stored)
+    remembered = _remember_answers(user_email, submitted, by_field)
+
+    # (2) re-resolve everything still open (skip what was just answered, and the
+    # walls no answer can clear).
+    blocked = [_needs_view(i) for i in pending if not _answerable(i)]
+    open_items = [i for i in pending
+                  if _answerable(i) and i.get("field_id") not in submitted]
+    resolution: Dict[str, Any] = {}
+    still_missing: List[Dict[str, Any]] = []
+    if open_items:
+        newly, still_missing, resolution = _resolve_answers(
+            user_email, [_question_from_needs_item(i) for i in open_items],
+            company=str(app.get("company") or ""))
+        if newly:
+            stored.update(newly)
+            _merge_answers(application_id, user_email, stored)
+
+    remaining = still_missing + blocked
+
+    # (3) gaps left → stay in needs_input, but SHRINK the queue to what is
+    # actually still open (the user must never be re-asked what they answered).
+    if remaining:
+        ledger.update_needs_input(user_email, application_id, remaining)
+        logger.info("auto_apply resume %s: %d answer(s) merged, %d still open",
+                    application_id, len(submitted), len(remaining))
+        return {"status": "resumed",
+                "application_status": ledger.STATUS_NEEDS_INPUT,
+                "remaining": remaining,
+                "answered": len(submitted), "remembered": remembered,
+                "application_id": application_id}
+
+    # (4) clear → land review, then honour the mode.
+    cov = resolution.get("coverage")
+    coverage = float(cov) if cov is not None else 1.0
+    has_novel_free_text = bool(resolution.get("has_novel_free_text"))
+    autonomy, confidence = _decide_autonomy(
+        app, coverage, user_email=user_email,
+        has_novel_free_text=has_novel_free_text,
+        has_unresolved_legal=False, needs_account=False)
+
+    mode: Optional[str] = None
+    refuse = False
+    if _modes_enabled():
+        autonomy, mode, refuse = _mode_decision(user_email, autonomy)
+
+    _persist_answers(application_id, user_email, stored, coverage, needs_account,
+                     autonomy=autonomy, confidence_score=confidence, mode=mode)
+
+    ledger.mark_ready_for_review(user_email, application_id, autonomy=autonomy,
+                                 confidence_score=confidence,
+                                 tailoring_record_id=app.get("tailoring_record_id"))
+    landed = ledger.STATUS_READY_FOR_REVIEW
+    approve_result: Dict[str, Any] = {}
+    if autonomy == "auto" and not refuse:
+        # Aggressive / graduated autopilot: converge on the SAME approved +
+        # frozen-snapshot state a manual approval reaches, then enqueue the
+        # submit job (never an inline submit).
+        approve_result = ledger.approve_with_result(
+            user_email, [application_id], approved_by="system",
+            snapshot_provider=lambda aid: build_approval_snapshot(user_email, aid))
+        if approve_result.get("approved"):
+            landed = ledger.STATUS_APPROVED
+            request_immediate_submit(user_email, application_id)
+
+    logger.info("auto_apply resume %s: cleared — landed %s (autonomy=%s mode=%s)",
+                application_id, landed, autonomy, mode)
+    out = {"status": "resumed", "application_status": landed, "remaining": [],
+           "answered": len(submitted), "remembered": remembered,
+           "autonomy": autonomy, "mode": mode,
+           "application_id": application_id}
+    if approve_result.get("over_quota"):
+        # The answers ARE saved and the row IS in review — the user is simply out
+        # of auto-submit slots, so it waits for a manual approve/upgrade.
+        out["quota_exceeded"] = True
+        out["usage"] = approve_result.get("usage") or {}
+    return out
 
 
 def _resume_ref(app: Dict[str, Any], user_email: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -1034,7 +1590,8 @@ def prepare(application_id: str, user_email: str) -> Dict[str, Any]:
         artifact = prepare_tailored_artifact(user_email, jd_text)
     except Exception as e:
         # (f) Refund the reservation and HOLD — NEVER ready on a tailor failure.
-        quota.refund_entries(entry_ids)
+        # Owner-scoped: a refund may only ever credit the caller's own counter.
+        quota.refund_entries(entry_ids, user_email=user_email)
         logger.error("auto_apply prepare %s: tailor/pin failed: %s", application_id, e)
         ledger.mark_needs_input(
             user_email, application_id,
@@ -1204,6 +1761,20 @@ def submit(application_id: str, user_email: str) -> Dict[str, Any]:
     if st == SUBMIT_WAITING_VERIFY:
         wall = result.get("wall") or {}
         return _park_verify(user_email, application_id, wall)
+
+    if st in _UNSUPPORTED_STATUSES:
+        # Spec §4: a vendor we cannot drive is PERMANENT and user-facing — the
+        # `unsupported` terminal, NOT the retryable `failed` below (and never the
+        # transient executor_unavailable path that follows).
+        return _park_unsupported(user_email, application_id, result)
+
+    if st in _PREPARED_STATUSES:
+        # Filled, proof captured, Submit deliberately not clicked (copilot / ops
+        # dry-run). A human handoff — never a failure.
+        return _park_prepared(user_email, application_id, result)
+
+    if st in _WAITING_HUMAN_STATUSES:
+        return _park_waiting_human(user_email, application_id, result)
 
     if st == EXECUTOR_UNAVAILABLE:
         # Rare mid-flight drain (available() said yes, submit() said no). We are
@@ -1397,9 +1968,23 @@ def finalize_submission(application_id: str, user_email: str, *,
                         confirmation: Optional[str] = None,
                         screenshot_ref: Optional[str] = None,
                         wall: Optional[Dict[str, Any]] = None,
-                        error: Optional[str] = None) -> Dict[str, Any]:
-    """Finalize a Cloud-Run-dispatched submission from the worker's terminal
-    report. ``status`` is one of the executor SUBMIT_* values."""
+                        error: Optional[str] = None,
+                        field: Optional[str] = None,
+                        reason: Optional[str] = None,
+                        user_message: Optional[str] = None) -> Dict[str, Any]:
+    """Finalize a dispatched submission from the worker's terminal report — the
+    ONE place a reported outcome becomes a ledger state.
+
+    ``status`` accepts BOTH vocabularies, because they overlap by design and a
+    second mapping table is exactly how the two drifted apart:
+      * the executor SUBMIT_* set (submitted / submission_unknown /
+        waiting_verify / failed / executor_unsupported / prepared), and
+      * the deterministic fill driver's outcome names (confirmed / submitted /
+        submission_unknown / waiting_human / needs_input / prepared).
+
+    (This absorbed the former ``finalize_fill_outcome`` — a duplicate mapping
+    with zero production callers. ``fill_driver`` outcomes fold in here now.)
+    """
     application_id = _clean(application_id, 64)
     app = ledger.get_application(user_email, application_id)
     if not app:
@@ -1414,15 +1999,24 @@ def finalize_submission(application_id: str, user_email: str, *,
 
     _adapter = str(app.get("ats_family") or "")
 
-    if status == SUBMIT_SUCCESS:
+    if status in (SUBMIT_SUCCESS, "confirmed"):
         ledger.mark_submitted(user_email, application_id)
         confirmation = _clean(confirmation, 500)
         screenshot_ref = _clean(screenshot_ref, 500)
         _audit_submit(user_email, application_id, confirmation, screenshot_ref)
         _emit_metric("confirmation", application_id=application_id,
                      adapter=_adapter, outcome="submitted")
-        logger.info("finalize_submission %s: submitted", application_id)
-        return {"status": ledger.STATUS_SUBMITTED, "application_id": application_id,
+        landed = ledger.STATUS_SUBMITTED
+        if status == "confirmed":
+            # The driver SAW a positive confirmation — walk the last edge too.
+            try:
+                ledger.mark_confirmed(user_email, application_id)
+                landed = ledger.STATUS_CONFIRMED
+            except ledger.InvalidTransition:
+                logger.info("finalize_submission %s: cannot confirm (race) — left "
+                            "submitted", application_id)
+        logger.info("finalize_submission %s: %s", application_id, landed)
+        return {"status": landed, "application_id": application_id,
                 "confirmation": confirmation or None,
                 "screenshot_ref": screenshot_ref or None}
 
@@ -1444,6 +2038,66 @@ def finalize_submission(application_id: str, user_email: str, *,
     if status == SUBMIT_WAITING_VERIFY:
         return _park_verify(user_email, application_id, wall or {})
 
+    if status in _UNSUPPORTED_STATUSES:
+        # Spec §4 — permanent + user-facing, never the retryable failure below.
+        return _park_unsupported(user_email, application_id,
+                                 {"user_message": user_message,
+                                  "reason": reason or error})
+
+    if status in _PREPARED_STATUSES:
+        return _park_prepared(user_email, application_id,
+                              {"screenshot_ref": screenshot_ref})
+
+    if status in _WAITING_HUMAN_STATUSES:
+        return _park_waiting_human(user_email, application_id,
+                                   {"reason": reason or error})
+
+    if status == "needs_input":
+        # A one-tap field the user must supply — the row goes back into the
+        # needs_input queue (and POST /api/apply/needs-input/answer resumes it),
+        # never to `failed`.
+        named_field = _clean(field, 200)
+        fid = named_field or "field"
+        why = _clean(reason or error, 100) or "needs_input"
+        # `kind` is the CLOSED answerable vocabulary (_ANSWERABLE_KINDS), never the
+        # free-form adapter reason — writing `why` here is what let an unlisted
+        # (wall-ish) reason ride in as "answerable by default". The fill driver's
+        # reasons on this branch (unresolved / no_option_match / field_not_on_page
+        # / fill_failed) all NAME a field, i.e. a real question -> `screening`. A
+        # report that names no field is not a question: it keeps its raw reason and
+        # therefore stays a wall no typed answer can clear. `why` is still returned
+        # (and logged) so the real reason is never lost.
+        kind = "screening" if named_field else why
+        # Keep the REAL question. The placeholder below used to overwrite the
+        # form's own label (and drop the option list) on every re-park, so after
+        # one round-trip the user was staring at "We need your answer to continue
+        # (how_did_you_hear)" with a free-text box — the loop this branch exists
+        # to break. Prefer the label the row was parked with, then the catalog's,
+        # and only fall back to the placeholder for a field we know nothing about.
+        prior = next((i for i in (app.get("needs_input") or [])
+                      if isinstance(i, dict)
+                      and _clean(i.get("field_id"), 200) == fid), None)
+        item: Dict[str, Any] = {"kind": kind, "field_id": fid}
+        item.update(_needs_control_meta(fid, prior))
+        label = _clean((prior or {}).get("question"), 500)
+        if not label and named_field:
+            try:
+                from services import application_question_bank as qb
+                bank = qb.get_field(fid)
+            except Exception:  # pragma: no cover - parallel build safety
+                bank = None
+            label = _clean((bank or {}).get("label"), 500)
+        item["question"] = label or f"We need your answer to continue ({fid})."
+        if (prior or {}).get("required"):
+            item["required"] = True
+        try:
+            ledger.mark_needs_input(user_email, application_id, [item])
+        except ledger.InvalidTransition:
+            logger.info("finalize_submission %s: cannot enter needs_input from "
+                        "%s (race) — no-op", application_id, cur)
+        return {"status": ledger.STATUS_NEEDS_INPUT, "application_id": application_id,
+                "field": fid, "reason": why}
+
     # SUBMIT_FAILED / anything else → clean, retryable failure.
     err = _clean(error, 500) or (status or SUBMIT_FAILED)
     ledger.mark_failed(user_email, application_id, err)
@@ -1453,90 +2107,85 @@ def finalize_submission(application_id: str, user_email: str, *,
 
 
 # ===========================================================================
-# Fill-driver outcome → ledger mapping. The deterministic fill driver
-# (services.fill_driver.drive) returns a structured outcome; this folds it into
-# the ledger for a row that is RUNNING (leased for execution). Mapping:
-#   confirmed          -> submitted -> confirmed  (positive confirmation seen)
-#   submitted          -> submitted               (submitted, confirmation pending)
-#   submission_unknown -> submission_unknown       (HELD — NEVER auto-retried)
-#   waiting_human      -> waiting_human            (anti-bot / sensitive gap)
-#   needs_input        -> needs_input              (one-tap field the user supplies)
-# Idempotent + CAS-guarded via the ledger; an out-of-order fold is a no-op.
+# NOTE (fill-driver outcomes): the former `finalize_fill_outcome` — a SECOND,
+# never-called copy of the outcome->ledger mapping — was removed. The single
+# mapping now lives in `finalize_submission` above, which accepts BOTH the
+# executor SUBMIT_* vocabulary and the fill driver's outcome names
+# (confirmed / submitted / submission_unknown / waiting_human / needs_input /
+# prepared). The production path is unchanged: /executor/terminal ->
+# _TERMINAL_MAP -> finalize_submission.
 # ===========================================================================
-def finalize_fill_outcome(application_id: str, user_email: str,
-                          outcome: Dict[str, Any]) -> Dict[str, Any]:
-    """Drive the ledger from the fill driver's structured outcome. The row is
-    expected in RUNNING (the executor pickup state). Returns a small summary; an
-    illegal transition (lost race / already terminal) is caught and logged, never
-    raised, so a redelivered fold cannot clobber a finalized row."""
-    application_id = _clean(application_id, 64)
-    kind = str((outcome or {}).get("outcome") or "")
-    app = ledger.get_application(user_email, application_id)
-    if not app:
-        raise ledger.ApplicationNotFound()
 
-    cur = app.get("status")
-    if cur in (ledger.STATUS_SUBMITTED, ledger.STATUS_CONFIRMED,
-               ledger.STATUS_SUBMISSION_UNKNOWN):
-        logger.info("finalize_fill_outcome %s: already terminal (%s) — no-op",
-                    application_id, cur)
-        return {"idempotent": True, "status": cur, "application_id": application_id}
+# ---------------------------------------------------------------------------
+# Non-submit terminal/hold parks (spec §4 + the prepared/waiting_human gap).
+# Each is CAS-guarded through the ledger and never raises: an out-of-order or
+# redelivered report degrades to a logged no-op instead of clobbering a row.
+# ---------------------------------------------------------------------------
+def _park_unsupported(user_email: str, application_id: str,
+                      result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Spec §4: the executor reported a vendor/site we cannot drive. Land the
+    ledger's `unsupported` TERMINAL carrying the user-facing sentence — never the
+    retryable `failed` this used to collapse into. The executor's technical
+    reason is kept in the audit/metric only (it is not user copy)."""
+    result = result or {}
+    message = _clean(result.get("user_message"), 300) or ledger.UNSUPPORTED_MESSAGE
+    reason = _clean(result.get("reason") or result.get("error"), 200) or "unsupported_vendor"
+    try:
+        ledger.mark_unsupported(user_email, application_id, message)
+    except ledger.ApplicationLedgerError as e:
+        logger.info("auto_apply %s: cannot mark unsupported (%s) — no-op",
+                    application_id, getattr(e, "error", e))
+        return {"status": ledger.STATUS_UNSUPPORTED, "application_id": application_id,
+                "message": message, "reason": reason, "applied": False}
+    _emit_metric("unsupported", application_id=application_id, outcome="unsupported")
+    logger.info("auto_apply %s: unsupported vendor (%s) — parked, not retried",
+                application_id, reason)
+    return {"status": ledger.STATUS_UNSUPPORTED, "application_id": application_id,
+            "message": message, "reason": reason, "retryable": False}
 
-    def _safe_transition(to_status: str, **kw) -> bool:
-        try:
-            ledger.transition(user_email, application_id, to_status, **kw)
-            return True
-        except ledger.InvalidTransition:
-            logger.info("finalize_fill_outcome %s: cannot enter %s from %s (race)",
-                        application_id, to_status, cur)
-            return False
 
-    if kind in ("confirmed", "submitted"):
-        ledger.mark_submitted(user_email, application_id)
-        confirmation = _clean(
-            (outcome.get("confirmation") or {}).get("evidence")
-            if isinstance(outcome.get("confirmation"), dict)
-            else outcome.get("confirmation"), 500)
-        receipt = outcome.get("receipt") or {}
-        screenshot_ref = _clean(receipt.get("snapshot_hash"), 500)
-        _audit_submit(user_email, application_id, confirmation, screenshot_ref)
-        if kind == "confirmed":
-            _safe_transition(ledger.STATUS_CONFIRMED)
-        landed = ledger.get_application(user_email, application_id) or {}
-        return {"status": landed.get("status"), "application_id": application_id}
-
-    if kind == "submission_unknown":
-        _safe_transition(ledger.STATUS_SUBMISSION_UNKNOWN)
-        logger.warning("finalize_fill_outcome %s: submission_unknown — HELD, "
-                       "no retry", application_id)
-        return {"status": ledger.STATUS_SUBMISSION_UNKNOWN,
-                "application_id": application_id}
-
-    if kind == "waiting_human":
-        _safe_transition(ledger.STATUS_WAITING_HUMAN)
+def _park_prepared(user_email: str, application_id: str,
+                   result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """A `prepared` run (copilot / ops dry-run): the form was filled and proof
+    captured, and Submit was DELIBERATELY not clicked. This is a HUMAN HANDOFF,
+    not a failure — park the row in `waiting_human` (legal from running) so the
+    Attention surface hands it back with the apply URL instead of the row dying
+    at `unrecognized_fill_outcome`."""
+    result = result or {}
+    screenshot_ref = _clean(result.get("screenshot_ref"), 500)
+    try:
+        ledger.mark_waiting_human(user_email, application_id, _PREPARED_MESSAGE)
+    except ledger.ApplicationLedgerError as e:
+        logger.info("auto_apply %s: cannot park prepared (%s) — no-op",
+                    application_id, getattr(e, "error", e))
         return {"status": ledger.STATUS_WAITING_HUMAN,
-                "application_id": application_id,
-                "reason": _clean(outcome.get("reason"), 100) or None}
+                "application_id": application_id, "prepared": True, "applied": False}
+    _emit_metric("prepared", application_id=application_id, outcome="prepared")
+    logger.info("auto_apply %s: prepared (not submitted) — handed back to the user",
+                application_id)
+    return {"status": ledger.STATUS_WAITING_HUMAN, "application_id": application_id,
+            "prepared": True, "submitted": False,
+            "message": _PREPARED_MESSAGE,
+            "screenshot_ref": screenshot_ref or None}
 
-    if kind == "needs_input":
-        field = _clean(outcome.get("field"), 200) or "field"
-        reason = _clean(outcome.get("reason"), 100) or "needs_input"
-        try:
-            ledger.mark_needs_input(
-                user_email, application_id,
-                [{"question": f"We need your answer to continue ({field}).",
-                  "kind": reason, "field_id": field}])
-        except ledger.InvalidTransition:
-            logger.info("finalize_fill_outcome %s: cannot enter needs_input from "
-                        "%s (race)", application_id, cur)
-        return {"status": ledger.STATUS_NEEDS_INPUT, "application_id": application_id,
-                "field": field, "reason": reason}
 
-    # An unrecognized outcome must never be silently treated as success.
-    logger.warning("finalize_fill_outcome %s: unrecognized outcome %r — failing",
-                   application_id, kind)
-    ledger.mark_failed(user_email, application_id, f"unrecognized_fill_outcome:{kind}")
-    return {"status": ledger.STATUS_FAILED, "application_id": application_id}
+def _park_waiting_human(user_email: str, application_id: str,
+                        result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The run stopped at a wall only a human can clear and reported no Oracle
+    freeze (fill_driver's `waiting_human`). Park in `waiting_human` with the
+    reason so the Attention card can explain it."""
+    result = result or {}
+    reason = _clean(result.get("reason") or result.get("error"), 200) or "human_handoff"
+    try:
+        ledger.mark_waiting_human(user_email, application_id, reason)
+    except ledger.ApplicationLedgerError as e:
+        logger.info("auto_apply %s: cannot park waiting_human (%s) — no-op",
+                    application_id, getattr(e, "error", e))
+        return {"status": ledger.STATUS_WAITING_HUMAN,
+                "application_id": application_id, "reason": reason, "applied": False}
+    logger.info("auto_apply %s: waiting on a human (%s)", application_id, reason)
+    return {"status": ledger.STATUS_WAITING_HUMAN, "application_id": application_id,
+            "reason": reason}
 
 
 # ---------------------------------------------------------------------------

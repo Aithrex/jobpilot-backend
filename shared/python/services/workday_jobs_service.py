@@ -812,6 +812,18 @@ def _attach_feasibility(jobs: List[Dict[str, Any]], resume_skills: List[str],
                security clearance. The tab hides these by default.
 
     Left unset when there's no parsed resume — we refuse to guess.
+
+    THIS FUNCTION DOES NOT TOUCH `match_score`. It used to: a `stretch` row lost
+    11 points per missing year and a `skip` row was clamped to 12, AFTER
+    `_score_jobs` had already written `match_score`, `fit_band` and
+    `score_version` from `services.fit_score`. The row then carried a number
+    that (a) no longer matched the band or the version stamped beside it and
+    (b) double-penalised gaps `fit_score` already caps
+    (`severe_experience_gap` 50, `clearance_missing` 40, `unrelated_role` 30).
+    Feasibility is a DIFFERENT question from fit - "can this résumé be tailored
+    into this JD without inventing anything" vs "does this person match" - and
+    it has its own clearly-labelled fields (`tailor_feasibility`,
+    `feasibility_reason`) with their own UI treatment. Keep them separate.
     """
     if not resume_skills:
         return
@@ -837,14 +849,9 @@ def _attach_feasibility(jobs: List[Dict[str, Any]], resume_skills: List[str],
                     verdict, reason = "skip", f"Asks ~{req}+ yrs experience vs ≈{resume_years} on resume"
                 elif gap >= 2:
                     verdict, reason = "stretch", f"Asks ~{req}+ yrs vs ≈{resume_years} — a stretch"
-                    # Graded experience penalty so an under-qualified role can't
-                    # headline as a perfect score (gap 2→-11, 3→-22, 4→-33).
-                    job["match_score"] = max(0, (job.get("match_score") or 0) - (gap - 1) * 11)
             if verdict:
                 job["tailor_feasibility"] = verdict
                 job["feasibility_reason"] = reason
-                if verdict == "skip":
-                    job["match_score"] = min(job.get("match_score") or 0, 12)
             continue
         title_fams = _families_in(title)
         core = set(title_fams)
@@ -881,9 +888,6 @@ def _attach_feasibility(jobs: List[Dict[str, Any]], resume_skills: List[str],
                 verdict, reason = "skip", f"Asks ~{req}+ yrs experience vs ≈{resume_years} on resume"
             elif gap >= 2:
                 verdict, reason = "stretch", f"Asks ~{req}+ yrs vs ≈{resume_years} — a stretch"
-                # Graded experience penalty (years-gap stretch only, not the
-                # partial-off-stack / management stretches below).
-                job["match_score"] = max(0, (job.get("match_score") or 0) - (gap - 1) * 11)
             elif conflicts and overlap:
                 labels = ", ".join(_STACK_FAMILIES[k][0] for k in sorted(conflicts))
                 verdict, reason = "stretch", f"Partially off-stack ({labels}) — tailorable via {', '.join(_STACK_FAMILIES[k][0] for k in sorted(overlap))}"
@@ -895,10 +899,6 @@ def _attach_feasibility(jobs: List[Dict[str, Any]], resume_skills: List[str],
             verdict, reason = "stretch", "Management-track title — not an IC engineering role"
         job["tailor_feasibility"] = verdict
         job["feasibility_reason"] = reason
-        if verdict == "skip":
-            # An off-target row must never outrank a real one, whatever
-            # incidental skills its JD mentions.
-            job["match_score"] = min(job.get("match_score") or 0, 12)
 
 
 # ----------------------------------------------------------------------
@@ -1504,8 +1504,12 @@ def run_workday_jobs_search(
             _write_cache(coll, key, raw_jobs)
 
     jobs = jobs[:GLOBAL_KEEP]
+    # Feasibility no longer rewrites `match_score`, so the ranking established
+    # above still holds — no re-rank here. Users who do not want to see rows the
+    # base résumé cannot be tailored into filter on `tailor_feasibility`
+    # ("Hide unrealistic"), which is an explicit, labelled control rather than a
+    # silent 12-point clamp on a number stamped `fit-v2.0`.
     _attach_feasibility(jobs, skills, resume_years)
-    _rank(jobs)  # feasibility caps skip-row scores — order must reflect it
     _attach_sponsorship(jobs)
     for j in jobs:
         j.pop("_fam_counts", None)  # internal scan cache — never leak to client

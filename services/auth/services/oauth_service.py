@@ -397,6 +397,16 @@ def upsert_user(provider: str, identity: Dict) -> Optional[str]:
         {"$setOnInsert": {"user_email": email, "onboarding_complete": False, "created_at": _now()}},
         upsert=True,
     )
+
+    # Managed application mailbox — AUTO-PROVISION at signup (spec §6), mirroring
+    # auth.register. Social sign-in already carries a display name, so the local
+    # part is the readable firstname.lastname straight away. Idempotent and
+    # best-effort: a failure here can NEVER break sign-in.
+    try:
+        from services import managed_mailbox_service
+        managed_mailbox_service.provision(email, identity.get("name"))
+    except Exception as e:
+        logger.warning("mailbox auto-provision failed for %s sign-in: %s", provider, e)
     return email
 
 

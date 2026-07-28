@@ -1784,6 +1784,47 @@ def score_batch(resume: Dict[str, Any], items: Iterable[Dict[str, Any]]
     return out, meta
 
 
+def load_structured_for_user(user_email: str) -> Dict[str, Any]:
+    """The caller's ACTIVE parsed resume, or `{}`.
+
+    Resolves users.active_resume_id -> resume_assets via resume_access (v3).
+    `{}` means "there is no parsed resume", which every caller MUST treat as
+    "do not produce a score" - not as "score against an empty resume", which
+    awards the neutral 60% credit in four components and lands around 60-72.
+    """
+    try:
+        from services import resume_access
+        record = resume_access.get_active_structured(user_email)
+        return (record or {}).get("structured") or {}
+    except Exception as e:
+        logger.warning("fit_score: could not load active resume for %s: %s",
+                       user_email, type(e).__name__)
+        return {}
+
+
+def load_profile_for_user(user_email: str) -> Optional[Dict[str, Any]]:
+    """`build_resume_profile` for the caller's active resume, or None.
+
+    ONE definition of "this account cannot be scored yet", shared by every
+    display path (`/api/jobs/search`, the inventory feed, the pipeline
+    match-score endpoint). None is the honest answer and must surface as "not
+    scored" in the UI; it must NEVER be replaced by a number.
+    """
+    if not user_email:
+        return None
+    structured = load_structured_for_user(user_email)
+    if not structured:
+        return None
+    return build_resume_profile(structured)
+
+
+def unscored_meta() -> Dict[str, Any]:
+    """The batch meta for an account with no parsed resume."""
+    return {"score_version": FIT_SCORE_VERSION, "resume_skill_count": 0,
+            "has_resume": False, "resume_years": None,
+            "resume_role_families": []}
+
+
 def score_batch_for_user(user_email: str, items: Iterable[Dict[str, Any]]
                          ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
     """`score_batch` against the caller's ACTIVE parsed resume.
@@ -1792,19 +1833,9 @@ def score_batch_for_user(user_email: str, items: Iterable[Dict[str, Any]]
     exactly as the legacy jd_match_scorer did. A caller with no parsed resume
     gets empty scores and `has_resume: False` rather than a fabricated one.
     """
-    structured: Dict[str, Any] = {}
-    try:
-        from services import resume_access
-        record = resume_access.get_active_structured(user_email)
-        structured = (record or {}).get("structured") or {}
-    except Exception as e:
-        logger.warning("fit_score: could not load active resume for %s: %s",
-                       user_email, type(e).__name__)
-        structured = {}
+    structured = load_structured_for_user(user_email)
     if not structured:
-        return {}, {"score_version": FIT_SCORE_VERSION, "resume_skill_count": 0,
-                    "has_resume": False, "resume_years": None,
-                    "resume_role_families": []}
+        return {}, unscored_meta()
     return score_batch(structured, items)
 
 

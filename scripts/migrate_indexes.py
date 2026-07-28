@@ -130,14 +130,37 @@ INDEX_SPECS = [
     # find_one_and_update {entry_id, state}); uuid4 → unique.
     ("quota_ledger", [("entry_id", ASCENDING)],
      {"unique": True, "name": "entry_id_unique"}),
-    # Caller-supplied dedup key (reserve_tailor idempotency) — unique sparse
-    # so a client retry can't double-reserve.
-    ("quota_ledger", [("idempotency_key", ASCENDING)],
-     {"unique": True, "sparse": True, "name": "idempotency_key_unique"}),
+    # Caller-supplied dedup key (reserve / reserve_tailor idempotency).
+    #
+    # SCOPED, not global. The old `idempotency_key_unique` made the key namespace
+    # CROSS-TENANT and PERPETUAL, which is exactly how the match sweep's daily cap
+    # stopped binding: `normalized_job_identity` is derived from the SHARED
+    # job_postings row, so every user matching one posting produces the same key,
+    # and the global unique index meant the second user's insert collided with the
+    # first user's entry (while the owner-less lookup in quota_ledger_service
+    # happily returned that foreign reservation). The namespace that matches the
+    # lookup filter (`quota_ledger_service._idem_filter`) is
+    # (user_email, feature, date, idempotency_key): idempotent for ONE owner
+    # within ONE feature period, and expiring with that period.
+    #
+    # partialFilterExpression (NOT sparse): a compound sparse index still indexes
+    # every doc that has ANY of the keys, and every entry carries user_email —
+    # so the entries WITHOUT an idempotency_key would collide with each other.
+    ("quota_ledger", [("user_email", ASCENDING), ("feature", ASCENDING),
+                      ("date", ASCENDING), ("idempotency_key", ASCENDING)],
+     {"unique": True, "name": "user_feature_date_idempotency_unique",
+      "partialFilterExpression": {"idempotency_key": {"$exists": True}}}),
     # Per-actor daily reads: entries_count_for_users filters
     # {user_email $in, date, state $in}.
     ("quota_ledger", [("user_email", ASCENDING), ("date", ASCENDING)],
      {"name": "user_email_date"}),
+    # TTL: a ledger entry is only meaningful inside its own quota period (the
+    # longest is monthly), and the counter it settles is keyed by that period.
+    # Without a TTL the collection grows forever AND stale idempotency keys keep
+    # answering lookups from long-closed periods. 60 days outlives the longest
+    # period plus audit slack; `reserved_at` is stamped on every entry.
+    ("quota_ledger", [("reserved_at", ASCENDING)],
+     {"expireAfterSeconds": 60 * 24 * 3600, "name": "ttl_reserved_at"}),
     # feature_usage real doc shape is {user_email, date, feature} — confirmed at
     # entitlements_service.py:241 (find_one) and :273 ($inc upsert). Matches the
     # existing migrate_users_v2 index name so this is a clean no-op re-assert.
@@ -613,7 +636,11 @@ INDEX_SPECS = [
 
     # === job_postings (ADR-003 canonical inventory) =======================
     # Every spec below is derived from a real query in
-    # shared/python/services/job_inventory_service.py; the function is named in
+    # shared/python/services/job_inventory_service.py (one exception, named in
+    # its own comment: `active_cost_first_seen_at` serves
+    # services/apply_match_sweep.py, the only reader that scans by
+    # first_seen_at rather than posted_at).
+    # The function is named in
     # the comment. Compound key order is equality -> sort -> range throughout.
     # Each one is verified with explain("executionStats") by
     # scripts/explain_job_inventory.py — run it after applying this migration.
@@ -655,6 +682,29 @@ INDEX_SPECS = [
     ("job_postings", [("status", ASCENDING), ("cost_class", ASCENDING),
                       ("posted_at", DESCENDING)],
      {"name": "active_cost_posted_at"}),
+    # NEW-SINCE-WATERMARK retrieval: apply_match_sweep._new_postings issues
+    #   {status:"active", cost_class:"free", first_seen_at:{$gt:watermark},
+    #    posted_at_confidence:{$ne:"unknown"}, role_family:{$in:[...]}}
+    #   sort {first_seen_at: 1}   limit CANDIDATE_LIMIT
+    # Equality (status, cost_class) -> sort+range (first_seen_at asc). This is a
+    # DIFFERENT axis from every index above: those are all keyed on `posted_at`
+    # (when the EMPLOYER published), while the sweep needs "what did WE first
+    # see since I last looked" — the only marker that is monotonic per crawl and
+    # therefore safe as a resumable cursor (`$setOnInsert` in
+    # job_inventory_service.upsert_posting). No existing index can serve it: the
+    # compound ones lead with status but then diverge on posted_at, so a
+    # first_seen_at range degrades to a filtered scan of the whole active set.
+    # Measured need: 18.6k live docs and growing, swept every 15 minutes (96
+    # COLLSCANs/day without this).
+    # role_family stays a RESIDUAL filter rather than a key field: it arrives as
+    # an $in of 1-4 families and putting it between the equalities and the sort
+    # key would force a blocking in-memory sort on the watermark cursor, which
+    # is the one thing the sweep cannot afford (it must read in first_seen_at
+    # order to advance the watermark without skipping rows).
+    # first_seen_at is ASCENDING in the key to match the sort direction exactly.
+    ("job_postings", [("status", ASCENDING), ("cost_class", ASCENDING),
+                      ("first_seen_at", ASCENDING)],
+     {"name": "active_cost_first_seen_at"}),
     # Location-scoped retrieval: find_active_fresh(location_key=...) adds
     # {"locations.key": <eq>}. `locations` is an array, so this index is
     # MULTIKEY. MEASURED (scripts/explain_job_inventory.py, 1000-doc scratch
@@ -765,6 +815,12 @@ POST_CREATE_DROP_INDEXES = [
     # unique user_email_job_id_unique (created above in run()). Dropping the global
     # unique is what actually lets user B save a posting user A already saved.
     ("saved_jobs", "job_id_1"),
+    # Same class of bug on the quota ledger: the GLOBAL unique on idempotency_key
+    # is superseded by the (user_email, feature, date, idempotency_key) partial
+    # unique created above. It must go, or user B reserving under a key user A
+    # already used still collides — a cross-tenant denial instead of B's own
+    # reservation.
+    ("quota_ledger", "idempotency_key_unique"),
 ]
 
 
