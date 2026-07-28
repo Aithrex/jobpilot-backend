@@ -383,7 +383,16 @@ class TestNovelFlagRecompute:
 # Generated prose is never auto-submitted
 # ---------------------------------------------------------------------------
 class TestNeverAutoSubmitGeneratedProse:
-    def test_generated_row_waits_for_a_human(self, gen_db, llm):
+    """Renamed in spirit: generated prose is now auto-submitted BY DEFAULT.
+
+    This used to cap `auto` -> `hold` unconditionally so a human read the essay
+    first. The product owner chose hands-off submission instead — holding every
+    posting that asks "why us?" defeats applying overnight. The gate survives as
+    the opt-in `review_generated_prose` setting, covered below and in
+    tests/test_generated_prose_review_gate.py.
+    """
+
+    def test_generated_prose_auto_submits_by_default(self, gen_db, llm):
         _seed_resume(gen_db)
         gen_db.user_preferences.insert_one(
             {"user_email": USER, "work_authorized_us": True})
@@ -394,8 +403,25 @@ class TestNeverAutoSubmitGeneratedProse:
         res = aas.gather(_make_app(), USER)
 
         assert res["generated_free_text"] == ["why_company"]
-        # NOT `auto`, NOT approved, NOT submitting: the essay appears on the
-        # review card first (answer_generator's review_required contract).
+        assert res["autonomy"] == "auto"
+        assert res["status"] == ledger.STATUS_APPROVED
+
+    def test_a_user_can_opt_back_into_reviewing_the_essay(self, gen_db, llm):
+        """The guard is one settings write away, not a deploy — which is the
+        whole reason it was kept as a setting rather than deleted."""
+        _seed_resume(gen_db)
+        gen_db.user_preferences.insert_one(
+            {"user_email": USER, "work_authorized_us": True})
+        gen_db.auto_submit_settings.update_one(
+            {"user_email": USER},
+            {"$set": {"review_generated_prose": True}}, upsert=True)
+        aas.set_executor(_FakeExecutor([
+            _recon_q("q_email", _EMAIL_Q, required=True),
+            _recon_q("q_why", _WHY_Q, required=True, type="textarea"),
+        ]))
+        res = aas.gather(_make_app(), USER)
+
+        assert res["generated_free_text"] == ["why_company"]
         assert res["autonomy"] != "auto"
         assert res["status"] == ledger.STATUS_READY_FOR_REVIEW
 

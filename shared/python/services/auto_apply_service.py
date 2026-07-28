@@ -924,14 +924,39 @@ def gather(application_id: str, user_email: str) -> Dict[str, Any]:
             has_unresolved_legal=has_unresolved_legal,
             needs_account=needs_account)
 
-        # Model-written prose is NEVER auto-submitted. Clearing the essay out of
-        # `needs_input` means the user no longer has to WRITE it — it does not
-        # mean they no longer have to READ it. Cap to `hold` so the row waits in
-        # ready_for_review for a human approval, honouring
-        # `answer_generator`'s contract that every generated record is
-        # `review_required: True`. Only ever DOWNGRADES the decision.
+        # Model-written prose and the review gate.
+        #
+        # `answer_generator` stamps every generated record `review_required: True`,
+        # and this used to cap `auto` -> `hold` unconditionally so a human read the
+        # essay before it reached the employer. The product owner has explicitly
+        # chosen hands-off submission instead: holding every posting that asks
+        # "why us?" defeats the point of applying overnight.
+        #
+        # It stays a per-user setting rather than a deletion, because the risk it
+        # guarded against is real — prose written in the user's voice goes to a
+        # real employer unread — and reverting must be one settings write, not a
+        # deploy. Default is now OFF (auto-submit).
+        #
+        # Note this ONLY governs generated FREE TEXT. It cannot relax any of the
+        # hard rules above it: an unconfirmed legal attestation still forces
+        # `ask`, an oracle wall still forces `hold`, and nothing here invents a
+        # factual answer — the generator is résumé-grounded and gated by
+        # entitlements. It can only ever DOWNGRADE, never upgrade.
         if generated_free_text and autonomy == "auto":
-            autonomy = "hold"
+            # Lazy import, matching every other reference in this module
+            # (`autonomy_service` is not bound at module scope — the shared layer
+            # is built in parallel). Fail SAFE: if the settings read raises, keep
+            # the review gate on rather than silently auto-submitting prose.
+            try:
+                from services import autonomy_service as _autonomy
+                _review = _autonomy.review_generated_prose(user_email)
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning(
+                    "auto_apply: prose review-gate read failed for %s: %s — "
+                    "holding for review", user_email, e)
+                _review = True
+            if _review:
+                autonomy = "hold"
 
         # F: stash the recon form fingerprint alongside the answers so the approval
         # snapshot (and its before-submit re-validation) can prove the form did
@@ -1966,6 +1991,25 @@ def submit(application_id: str, user_email: str) -> Dict[str, Any]:
         ledger.mark_failed(user_email, application_id, "executor_unavailable_midflight")
         return {"status": EXECUTOR_UNAVAILABLE, "ledger_status": ledger.STATUS_FAILED,
                 "application_id": application_id}
+
+    if st == SUBMIT_FAILED and _clean(result.get("error"), 40) == "needs_input":
+        # The drive STOPPED BEFORE clicking submit because a required field
+        # could not be filled (no vetted value, or the element recon found is no
+        # longer on the page — see browser_executor._presubmit_gaps, and the
+        # Workday fill_driver needs_input return). That is a QUESTION for the
+        # user, not a failed application: park it in the one-tap queue
+        # (running → needs_input is a legal transition) so
+        # POST /api/apply/needs-input/answer can resume it. Routed through
+        # finalize_submission so there is exactly ONE outcome→ledger mapping.
+        logger.info("auto_apply submit %s: blocked pre-submit on %s (%s) — "
+                    "parking needs_input", application_id,
+                    result.get("field"), result.get("reason"))
+        return finalize_submission(
+            application_id, user_email, status="needs_input",
+            screenshot_ref=_clean(result.get("screenshot_ref"), 500),
+            error=_clean(result.get("error"), 100),
+            field=_clean(result.get("field"), 200),
+            reason=_clean(result.get("reason"), 100))
 
     # SUBMIT_FAILED or anything unexpected → hard failure (retryable).
     err = _clean(result.get("error"), 500) or (st or SUBMIT_FAILED)

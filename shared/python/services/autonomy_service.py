@@ -312,6 +312,50 @@ def set_autonomy_threshold(user_email: str, threshold: float) -> float:
 DEFAULT_MATCH_THRESHOLD = 65
 
 
+# ---------------------------------------------------------------------------
+# Review gate for MODEL-WRITTEN FREE TEXT (essays: "why this company", etc.)
+#
+# `answer_generator` stamps every generated record `review_required: True`. This
+# flag decides whether that stamp actually parks the row for a human read.
+#
+# DEFAULT_REVIEW_GENERATED_PROSE = False — the product owner chose hands-off
+# submission: holding every posting that asks "why us?" would defeat applying
+# overnight, which is the point of the feature.
+#
+# It is a per-user setting rather than a deleted branch because the risk is real
+# (prose written in the user's voice reaching a real employer unread) and
+# reverting has to be one settings write, not a deploy.
+#
+# SCOPE: free text ONLY. It cannot relax the hard rules in `decide()` — an
+# unconfirmed legal attestation still forces `ask` and an oracle wall still
+# forces `hold`. Generated answers are résumé-grounded and entitlement-gated;
+# this flag never permits inventing a FACT, only sending prose unreviewed.
+# ---------------------------------------------------------------------------
+DEFAULT_REVIEW_GENERATED_PROSE = False
+
+
+def review_generated_prose(user_email: str) -> bool:
+    """True if model-written free text should park the row for a human read.
+
+    Defaults to False (auto-submit). Any read error returns the default rather
+    than raising — this sits on the gather path and must never break it.
+    """
+    if not user_email:
+        return DEFAULT_REVIEW_GENERATED_PROSE
+    try:
+        doc = _settings().find_one(
+            {"user_email": user_email}, {"_id": 0, "review_generated_prose": 1}
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(
+            "autonomy: review_generated_prose read failed for %s: %s", user_email, e)
+        return DEFAULT_REVIEW_GENERATED_PROSE
+    raw = (doc or {}).get("review_generated_prose")
+    if raw is None:
+        return DEFAULT_REVIEW_GENERATED_PROSE
+    return bool(raw)
+
+
 def get_match_threshold(user_email: str) -> int:
     """Read the user's `match_threshold` (0-100) from auto_submit_settings.
 
