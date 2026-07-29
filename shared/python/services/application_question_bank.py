@@ -1060,6 +1060,23 @@ def _content_tokens(s: str) -> FrozenSet[str]:
     return frozenset(t for t in s.split() if t and t not in _OPT_STOP)
 
 
+#: A trailing international dial code on an ALREADY `_norm`-ed option label
+#: ("United States +1" -> "united states 1"). Anchored to the END and digits
+#: only, so it can only ever remove a dial code: no country name ends in a
+#: number, and nothing here can turn one country into a different one.
+_DIAL_CODE_TAIL = re.compile(r"\s+\d{1,4}$")
+
+
+def _strip_dial_code(opt_norm: str) -> str:
+    """A phone-country option label with its trailing dial code removed.
+
+    SAFETY: this is a spelling normalization, never a value change. "india 91"
+    -> "india"; "united states 1" -> "united states". The geography lookup that
+    follows is still STRICT (exact key or same synonym cluster), so a stripped
+    label can only resolve to its OWN country or to nothing."""
+    return _DIAL_CODE_TAIL.sub("", opt_norm).strip()
+
+
 def match_option(field_id: str, canonical_value: Any,
                  form_options: Optional[List[str]]) -> Optional[Dict[str, Any]]:
     """Fuzzy-map a canonical value onto THIS form's actual option text.
@@ -1101,8 +1118,19 @@ def match_option(field_id: str, canonical_value: Any,
         if geo_index is not None:
             # GEOGRAPHY: the option is the declared place, or it is not. Exact
             # normalized equality, or both spellings in the same cluster.
-            opt_geo = geo_index.get(opt_norm)
+            #
+            # A phone-widget country picker labels its rows with the dial code
+            # appended — Greenhouse renders "United States +1", which `_norm`
+            # folds to "united states 1" and which is therefore in NO geo table.
+            # The declared "United States of America" then matched nothing, the
+            # executor refused the blind pick (correctly), and a fully-answered
+            # application parked on one field (prod, 2026-07-29: 17 of 18 fields
+            # filled). Strip a TRAILING dial code and look up again.
+            opt_lookup = _strip_dial_code(opt_norm)
+            opt_geo = geo_index.get(opt_norm) or geo_index.get(opt_lookup)
             if canon_norm and opt_norm == canon_norm:
+                score = 1.0
+            elif canon_norm and opt_lookup == canon_norm:
                 score = 1.0
             elif canon_geo and opt_geo and canon_geo == opt_geo:
                 score = 1.0

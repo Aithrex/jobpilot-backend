@@ -2256,8 +2256,17 @@ class BrowserExecutor(ExecutorAdapter):
             if not forbidden and self._click_option_by_text(page, cand):
                 return
         if options:
+            # Log the LABELS, not just the count. A bare count says "no match"
+            # without saying what we were matching against, so diagnosing a
+            # mismatch meant a prod deploy to find out (this cost a full
+            # round-trip on the Greenhouse `country` widget, 2026-07-29). The
+            # labels are the one fact needed to tell "the widget renders text we
+            # do not recognise" from "the synonym cluster is too narrow".
+            # Option text is public form copy — no PII — and is truncated.
             logger.info("fill_select: read %d rendered option(s) for %s — none "
-                        "means the declared value", len(options), field_id)
+                        "means the declared value %r; options=%s",
+                        len(options), field_id, value,
+                        [label for label, _ in options[:12]])
         # ── BLIND FALLBACKS — NEVER for a gated or enumerated field ──────────
         #
         # Everything below picks whatever option happens to be FIRST. That is a

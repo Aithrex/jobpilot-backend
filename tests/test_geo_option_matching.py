@@ -184,6 +184,69 @@ class TestCountrySpellings:
         assert m is not None and m["option"] == option
 
 
+class TestPhoneWidgetDialCodeLabels:
+    """A phone-widget country picker appends the DIAL CODE to every label.
+
+    INCIDENT (prod, 2026-07-29). Greenhouse renders the phone fieldset's country
+    control as a react-select whose rows read "United States +1". `_norm` folds
+    that to "united states 1", which is a key in NO geo table, so the declared
+    "United States of America" matched nothing. The executor refused the blind
+    pick (correctly — spec §0 rule 1) and an application with 17 of its 18
+    fields filled parked on that one control.
+
+    Verified against the live form with a real browser: opening the listbox
+    renders 244 options labelled "<Country> +<dial code>"; typing "United
+    States" filters to exactly one, "United States +1". So the ONLY gap was the
+    matcher — the driver reached the right option and could not name it.
+    """
+
+    @pytest.mark.parametrize("declared", [
+        "United States of America", "United States", "USA", "US",
+    ])
+    def test_declared_us_matches_a_dial_code_label(self, declared):
+        m = qb.match_option("country", declared,
+                            ["United States +1", "India +91", "Canada +1"])
+        assert m is not None and m["option"] == "United States +1"
+
+    def test_it_works_for_the_users_own_country_too(self):
+        """Not a US special case — the same normalization for any country."""
+        m = qb.match_option("country", "India",
+                            ["United States +1", "India +91", "Canada +1"])
+        assert m is not None and m["option"] == "India +91"
+
+    @pytest.mark.parametrize("declared,expected", [
+        ("Niger", "Niger +227"),
+        ("Nigeria", "Nigeria +234"),
+    ])
+    def test_dial_codes_do_not_blur_lookalike_countries(self, declared,
+                                                        expected):
+        """Stripping trailing digits must not make "Niger" reach "Nigeria"."""
+        m = qb.match_option("country", declared,
+                            ["Niger +227", "Nigeria +234"])
+        assert m is not None and m["option"] == expected
+
+    def test_an_absent_country_is_still_refused(self):
+        """THE safety boundary: the dial-code suffix must not become a loophole
+        that lets an unlisted country round onto a listed one."""
+        assert qb.match_option(
+            "country", "Bhutan", ["United States +1", "Canada +1"]) is None
+        assert qb.match_option(
+            "country", "India", ["United States +1", "Canada +1"]) is None
+
+    def test_a_bare_number_never_matches_a_country(self):
+        """A label that is ONLY a dial code carries no country — stripping it
+        leaves nothing, which must match nothing rather than everything."""
+        assert qb.match_option("country", "United States",
+                               ["+1", "+91"]) is None
+
+    def test_a_plain_label_is_unaffected(self):
+        """The normalization is additive — it must not regress the ordinary
+        no-dial-code case that already worked."""
+        m = qb.match_option("country", "United States of America",
+                            ["Canada", "India", "United States"])
+        assert m is not None and m["option"] == "United States"
+
+
 # ===========================================================================
 # SAFETY: matching a declared value, never inventing one
 # ===========================================================================
