@@ -184,6 +184,51 @@ class TestCountrySpellings:
         assert m is not None and m["option"] == option
 
 
+class TestBooleanFilterSpellings:
+    """A declared BOOLEAN needs a typeable spelling to filter a combobox with.
+
+    INCIDENT (prod, 2026-07-29). `option_candidates` returned `str(True)` ==
+    "True". The executor typed that into Greenhouse's Yes/No react-select, which
+    filtered every option away and rendered its empty-state placeholder, so the
+    executor read `options=['No options']`, matched nothing and skipped a
+    REQUIRED field — while `match_option(fid, True, ["Yes","No"])` resolves to
+    "Yes" without complaint. The matcher was never the problem; the filter text
+    was.
+    """
+
+    def test_true_offers_yes_before_the_python_repr(self):
+        c = qb.option_candidates("willing_to_relocate", True)
+        assert c[0] == "Yes"
+        assert "True" in c          # kept as a last resort for literal forms
+
+    def test_false_offers_no(self):
+        c = qb.option_candidates("requires_sponsorship", False)
+        assert c[0] == "No"
+
+    def test_a_declared_string_keeps_its_own_wording(self):
+        """Scoped to real booleans ONLY. A string whose CONCEPT is yes/no — the
+        veteran wording, say — must still type its own declared text, or it
+        would filter a long EEO list by the wrong term."""
+        assert qb.option_candidates(
+            "veteran_status", "Not a Protected Veteran") == [
+                "Not a Protected Veteran"]
+
+    def test_geography_spellings_are_unaffected(self):
+        c = qb.option_candidates("country", "United States of America")
+        assert c[0] == "United States of America"
+        assert "United States" in c
+
+    def test_every_boolean_spelling_means_the_declared_value(self):
+        """SAFETY: a candidate may only ever re-word the declared answer. None
+        of the Yes spellings may resolve to No, or vice versa."""
+        for cand in qb.option_candidates("willing_to_relocate", True):
+            assert qb.match_option("willing_to_relocate", cand,
+                                   ["Yes", "No"])["option"] == "Yes"
+        for cand in qb.option_candidates("willing_to_relocate", False):
+            assert qb.match_option("willing_to_relocate", cand,
+                                   ["Yes", "No"])["option"] == "No"
+
+
 class TestPhoneWidgetDialCodeLabels:
     """A phone-widget country picker appends the DIAL CODE to every label.
 

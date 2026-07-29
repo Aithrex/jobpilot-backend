@@ -1193,6 +1193,12 @@ def match_option(field_id: str, canonical_value: Any,
 # ---------------------------------------------------------------------------
 # PUBLIC: option_candidates — spellings to TRY on a non-enumerable widget.
 # ---------------------------------------------------------------------------
+#: Filter spellings for a declared BOOLEAN, most-likely first. Every entry means
+#: the same answer, so trying them in order can only find the declared value.
+_YES_SPELLINGS = ("Yes", "Y", "True")
+_NO_SPELLINGS = ("No", "N", "False")
+
+
 def option_candidates(field_id: str, value: Any, limit: int = 12) -> List[str]:
     """Ordered alternate SPELLINGS of an already-declared value.
 
@@ -1209,8 +1215,20 @@ def option_candidates(field_id: str, value: Any, limit: int = 12) -> List[str]:
     declared, never a different value. Nothing here can turn a declared "India"
     into "United States". A value with no cluster returns just itself."""
     text = "" if value is None else str(value).strip()
-    out: List[str] = [text] if text else []
-    seen = {_norm(text)} if text else set()
+    if isinstance(value, bool):
+        # A declared BOOLEAN has no useful spelling of its own: `str(True)` is
+        # "True", and typing that into a Yes/No combobox filters every option
+        # away. Greenhouse then renders its empty-state placeholder and the
+        # executor read `options=['No options']`, matched nothing and skipped a
+        # REQUIRED field (prod, `willing_to_relocate`, 2026-07-29) — even though
+        # `match_option(fid, True, ["Yes","No"])` resolves to "Yes" happily.
+        # These are spellings of the SAME answer; the match is still decided by
+        # `match_option` against the declared value, never by the filter text.
+        out: List[str] = list(_YES_SPELLINGS if value else _NO_SPELLINGS)
+        seen = {_norm(s) for s in out}
+    else:
+        out = [text] if text else []
+        seen = {_norm(text)} if text else set()
 
     def _add(spellings) -> None:
         for s in spellings:
