@@ -117,6 +117,22 @@ def normalize_recon_questions(
 
         existing = by_fid.get(field_id)
         if existing is not None:
+            # NOTE: this collapse is load-bearing for Workday, whose recon
+            # reports BOTH a control's wrapper (`formField-yearsExperience`) and
+            # its inner input (`yearsExperience`) as separate questions, often
+            # with different label text (a <label> plus an aria-label). Keying
+            # the merge on field_id is what makes those one field again.
+            #
+            # KNOWN GAP: a form with genuinely DISTINCT inputs that share one
+            # canonical id — Greenhouse/SpaceX ask "Undergraduate GPA",
+            # "Graduate GPA" and "Doctorate GPA", all mapping to `gpa` — keeps
+            # only the first recon_id, so the others are never filled. Splitting
+            # them here is NOT the fix: neither label nor recon_id can tell a
+            # nested wrapper pair from three distinct inputs without
+            # vendor-specific knowledge this module deliberately does not have.
+            # The fix belongs in the adapter recon (stop emitting wrapper+inner
+            # pairs), or in the question bank (distinct gpa_undergraduate /
+            # gpa_graduate / gpa_doctorate fields).
             existing["required"] = existing["required"] or required
             existing["is_legal_attestation"] = (
                 existing["is_legal_attestation"] or is_legal)

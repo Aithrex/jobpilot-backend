@@ -176,6 +176,27 @@ class TestNormalizeRecon:
         assert norm[0]["field_id"] == "work_authorized_us"
         assert norm[0]["is_legal_attestation"] is True
 
+    def test_a_workday_wrapper_and_its_inner_input_stay_one_field(
+            self, gather_db):
+        """Workday recon reports a control's WRAPPER and its inner input as two
+        questions, with different label text and different DOM handles. The
+        field_id collapse is what makes them one field again — split them and
+        the answer resolved under `years_experience` never reaches the second
+        slot, so a fully-answerable form parks as `unresolved`.
+
+        Guards the de-dupe against a well-meaning "distinct labels are distinct
+        questions" refactor (which breaks every Workday multi-step fill)."""
+        norm = apply_forms.normalize_recon_questions([
+            {"id": "formField-yearsExperience", "text": "Years of experience",
+             "type": "text", "required": True},
+            {"id": "yearsExperience",
+             "text": "How many years of professional experience do you have?",
+             "type": "text", "required": True},
+        ])
+        assert len(norm) == 1, "wrapper + inner input must stay ONE field"
+        assert norm[0]["field_id"] == "years_experience"
+        assert norm[0]["required"] is True
+
 
 # ---------------------------------------------------------------------------
 # auto_apply gather: the end-to-end coverage fix + the legal guard

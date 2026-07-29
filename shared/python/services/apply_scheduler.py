@@ -243,13 +243,15 @@ def run_apply_hourly() -> Dict[str, Any]:
 
     users = _opted_in_users()
     totals = {"users": len(users), "enqueued": 0, "redriven": 0,
-              "gather_redriven": 0, "emailed": 0, "skipped_closed": 0}
+              "gather_redriven": 0, "reresolved": 0, "emailed": 0,
+              "skipped_closed": 0}
     for email in users:
         try:
             res = _run_user_hourly(email)
             totals["enqueued"] += res["enqueued"]
             totals["redriven"] += res["redriven"]
             totals["gather_redriven"] += res.get("gather_redriven", 0)
+            totals["reresolved"] += res.get("reresolved", 0)
             totals["emailed"] += res["emailed"]
             totals["skipped_closed"] += res["skipped_closed"]
         except Exception as e:  # per-user isolation
@@ -264,8 +266,8 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
     from services.resume_service import get_resume_service, ResumeService
 
     now = _now()
-    out = {"enqueued": 0, "redriven": 0, "gather_redriven": 0, "emailed": 0,
-           "skipped_closed": 0}
+    out = {"enqueued": 0, "redriven": 0, "gather_redriven": 0, "reresolved": 0,
+           "emailed": 0, "skipped_closed": 0}
     mode = autonomy_service.get_mode(email)
     match_cap = (
         _MAX_MATCHES_AGGRESSIVE
@@ -348,6 +350,49 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
                 logger.warning(
                     "[apply_scheduler] gather-redrive enqueue failed (%s): %s",
                     aid, e)
+
+    # 1c. Re-resolve STALE `needs_input` rows against the CURRENT profile.
+    #
+    # A row is parked with the questions that were unresolvable at GATHER time
+    # and then never looked at again. So finishing onboarding — or answering the
+    # same question on any other application — does not release the rows already
+    # waiting on exactly that fact. Observed in production: two rows (EnergyHub,
+    # Adyen) parked on "Country" four minutes BEFORE the user's onboarding wrote
+    # `country`; both then sat asking for a value the platform already held.
+    #
+    # `resume_after_answers` with an EMPTY answer map is precisely this
+    # re-resolution: it merges nothing, re-resolves every still-open question,
+    # shrinks the queue to what is genuinely still missing, and promotes the row
+    # to `ready_for_review` (then auto-approve + submit under an effective
+    # `auto`) only when nothing is left. Walls it cannot clear stay walls.
+    #
+    # Idempotent: a row with nothing newly resolvable comes back unchanged.
+    try:
+        parked = als.list_applications(email, status=als.STATUS_NEEDS_INPUT,
+                                       limit=_MAX_REDRIVE_PER_USER)
+    except Exception as e:
+        logger.warning("[apply_scheduler] needs_input list failed for %s: %s",
+                       email, e)
+        parked = []
+    for row in parked:
+        aid = row.get("application_id")
+        if not aid:
+            continue
+        if _is_closed(row.get("posting_closes_at"), now=now):
+            out["skipped_closed"] += 1
+            continue
+        try:
+            from services import auto_apply_service as _aas
+            result = _aas.resume_after_answers(email, aid, {})
+            if result.get("application_status") != als.STATUS_NEEDS_INPUT:
+                out["reresolved"] = out.get("reresolved", 0) + 1
+                logger.info(
+                    "[apply_scheduler] re-resolved stale needs_input %s -> %s",
+                    aid, result.get("application_status"))
+        except Exception as e:
+            # Per-row isolation: a 409/404 or a resolver error must never abort
+            # the sweep for the remaining rows.
+            logger.warning("[apply_scheduler] re-resolve failed (%s): %s", aid, e)
 
     # 2. Enqueue new matches through the dedup gate -> ledger row -> gather job.
     #    Auto Aggressive / Autopilot users get matching postings queued daily
