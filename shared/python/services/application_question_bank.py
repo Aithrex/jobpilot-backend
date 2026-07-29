@@ -229,6 +229,30 @@ FIELDS: List[Dict[str, Any]] = [
         r"country of (?:employment|work authorization)",
         r"authoriz\w* to work in which country"],
        default_policy=POLICY_REQUIRED_ONBOARDING),
+    # Distinct from `requires_sponsorship`: this asks whether the EMPLOYER will
+    # have to file or sign something (an I-983 training plan, a letter to a
+    # school's DSO or to a government agency) so the candidate keeps existing
+    # work authorization — an F-1 CPT/OPT/STEM OPT obligation, not a visa
+    # petition. Without its own entry the label's "…submission to your school…"
+    # classified onto `school`, collided with the form's real School field and
+    # was dropped, so a REQUIRED attestation was never asked and never filled
+    # (prod, EnergyHub, 2026-07-29). Aliases are deliberately narrow — the
+    # filing-specific wording only — so an ordinary sponsorship question still
+    # reaches `requires_sponsorship`.
+    #
+    # NEVER_DEFAULT, not REQUIRED_ONBOARDING: it is a legal attestation that
+    # must come from the user, but adding it to the onboarding required set
+    # would retroactively mark completed onboardings incomplete.
+    _f("employer_immigration_filing",
+       "Will the employer need to file or sign immigration paperwork for you "
+       "(CPT / OPT / STEM OPT)?",
+       CAT_WORK_AUTH, SENS_LEGAL, VT_BOOLEAN, "select",
+       [r"written submission", r"submission to your school",
+        r"stem ?opt", r"\bi.?983\b", r"\bcpt\b",
+        r"maintain your (?:employment|work) eligibility",
+        r"(?:provide|complete|sign|file) .*(?:letter|documentation|submission|"
+        r"paperwork) .*(?:school|government agency|dso)"],
+       options=["Yes", "No"], default_policy=POLICY_NEVER_DEFAULT),
 
     # ================= EEO (protected, decline_default) =================
     _f("gender", "Gender", CAT_EEO, SENS_PROTECTED, VT_SELECT, "select",

@@ -56,6 +56,34 @@ def _slug(text: str, fallback: str = "field") -> str:
     return s[:80] or fallback
 
 
+def _same_control(existing: Dict[str, Any], recon_id: str, label: str) -> bool:
+    """True when this recon question is the SAME form control we already kept.
+
+    The DOM handle decides: two entries carrying the same ``recon_id`` are one
+    input reported twice, so merging them loses nothing. Different handles are
+    different inputs — even when they classify alike — and collapsing those is
+    what silently dropped a required control (see `normalize_recon_questions`).
+    When a handle is missing on either side we fall back to the label, which is
+    the only signal left."""
+    a = str(existing.get("recon_id") or "").strip()
+    b = str(recon_id or "").strip()
+    if a and b:
+        return a == b
+    return _slug(str(existing.get("label") or ""), "") == _slug(label or "", "")
+
+
+def _disambiguate(field_id: str, label: str, taken: Dict[str, Any]) -> str:
+    """A distinct, stable key for a DIFFERENT control that classifies onto an
+    already-taken field id. Deterministic per label so a re-recon of the same
+    form yields the same key (a remembered answer must keep matching)."""
+    base = ("%s__%s" % (field_id, _slug(label)))[:120]
+    candidate, n = base, 2
+    while candidate in taken:
+        candidate = ("%s_%d" % (base, n))[:120]
+        n += 1
+    return candidate
+
+
 def normalize_recon_questions(
         recon_questions: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     """Map raw recon questions onto the normalized ``field_id``-keyed shape.
@@ -117,26 +145,29 @@ def normalize_recon_questions(
 
         existing = by_fid.get(field_id)
         if existing is not None:
-            # NOTE: this collapse is load-bearing for Workday, whose recon
-            # reports BOTH a control's wrapper (`formField-yearsExperience`) and
-            # its inner input (`yearsExperience`) as separate questions, often
-            # with different label text (a <label> plus an aria-label). Keying
-            # the merge on field_id is what makes those one field again.
+            if _same_control(existing, recon_id, label):
+                # One input reported twice (same DOM handle) — merge, keeping
+                # the stricter signal.
+                existing["required"] = existing["required"] or required
+                existing["is_legal_attestation"] = (
+                    existing["is_legal_attestation"] or is_legal)
+                continue
+            # DIFFERENT controls that classify onto the same canonical id.
             #
-            # KNOWN GAP: a form with genuinely DISTINCT inputs that share one
-            # canonical id — Greenhouse/SpaceX ask "Undergraduate GPA",
-            # "Graduate GPA" and "Doctorate GPA", all mapping to `gpa` — keeps
-            # only the first recon_id, so the others are never filled. Splitting
-            # them here is NOT the fix: neither label nor recon_id can tell a
-            # nested wrapper pair from three distinct inputs without
-            # vendor-specific knowledge this module deliberately does not have.
-            # The fix belongs in the adapter recon (stop emitting wrapper+inner
-            # pairs), or in the question bank (distinct gpa_undergraduate /
-            # gpa_graduate / gpa_doctorate fields).
-            existing["required"] = existing["required"] or required
-            existing["is_legal_attestation"] = (
-                existing["is_legal_attestation"] or is_legal)
-            continue
+            # Collapsing these DROPPED the second control outright: its recon_id
+            # was discarded so nothing ever filled it, while its `required` was
+            # OR-merged onto the survivor — so `_presubmit_gaps` saw a satisfied
+            # field, reported ZERO gaps, and the executor clicked Submit on an
+            # incomplete form. Observed in prod (EnergyHub, 2026-07-29): a
+            # REQUIRED immigration attestation ("are you on a nonimmigrant visa
+            # … will you require a written submission to your school …")
+            # classified onto `school`, collided with the real School field and
+            # vanished. Only the ATS's own server-side validation stopped it.
+            #
+            # Keeping both is safe now that Workday's recon no longer emits a
+            # control's wrapper AND its inner input as two questions — that was
+            # the one source of same-control duplicates with different handles.
+            field_id = _disambiguate(field_id, label, by_fid)
 
         nq: Dict[str, Any] = {
             "field_id": field_id,

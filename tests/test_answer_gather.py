@@ -176,26 +176,57 @@ class TestNormalizeRecon:
         assert norm[0]["field_id"] == "work_authorized_us"
         assert norm[0]["is_legal_attestation"] is True
 
-    def test_a_workday_wrapper_and_its_inner_input_stay_one_field(
-            self, gather_db):
-        """Workday recon reports a control's WRAPPER and its inner input as two
-        questions, with different label text and different DOM handles. The
-        field_id collapse is what makes them one field again — split them and
-        the answer resolved under `years_experience` never reaches the second
-        slot, so a fully-answerable form parks as `unresolved`.
-
-        Guards the de-dupe against a well-meaning "distinct labels are distinct
-        questions" refactor (which breaks every Workday multi-step fill)."""
+    def test_one_control_reported_twice_is_merged(self, gather_db):
+        """Same DOM handle = one input seen twice. Merge, keeping the stricter
+        `required`."""
         norm = apply_forms.normalize_recon_questions([
-            {"id": "formField-yearsExperience", "text": "Years of experience",
-             "type": "text", "required": True},
-            {"id": "yearsExperience",
+            {"id": "q_years", "text": "Years of experience",
+             "type": "text", "required": False},
+            {"id": "q_years",
              "text": "How many years of professional experience do you have?",
              "type": "text", "required": True},
         ])
-        assert len(norm) == 1, "wrapper + inner input must stay ONE field"
+        assert len(norm) == 1
         assert norm[0]["field_id"] == "years_experience"
         assert norm[0]["required"] is True
+
+    def test_distinct_controls_sharing_a_field_id_are_both_kept(self, gather_db):
+        """THE production defect (EnergyHub, 2026-07-29).
+
+        A required immigration attestation whose label mentions "…a written
+        submission to your school…" classified onto `school` and collided with
+        the form's real School control. The de-dupe dropped it: its recon_id was
+        discarded so nothing filled it, while its `required` was OR-merged onto
+        the survivor — so `_presubmit_gaps` saw a satisfied field, reported ZERO
+        gaps, and the executor clicked Submit on an incomplete form. Only the
+        ATS's own validation stopped it.
+
+        Both controls must survive, each keeping its own DOM handle, and the
+        survivor must NOT inherit the other's `required`."""
+        norm = apply_forms.normalize_recon_questions([
+            {"id": "school--0", "text": "School", "type": "select",
+             "required": False},
+            {"id": "question_999", "type": "select", "required": True,
+             "text": "Do you require a written submission to your school to "
+                     "maintain your employment eligibility?"},
+        ])
+        assert len(norm) == 2, "a distinct required control must never vanish"
+        assert {q["recon_id"] for q in norm} == {"school--0", "question_999"}
+        school = next(q for q in norm if q["recon_id"] == "school--0")
+        assert school["required"] is False, "must not inherit the other's flag"
+
+    def test_a_collision_key_is_stable_across_recons(self, gather_db):
+        """A re-recon must yield the same keys, or a remembered answer would
+        stop matching the question it was stored for."""
+        recon = [
+            {"id": "a", "text": "School", "type": "select", "required": False},
+            {"id": "b", "text": "Which school did your sibling attend?",
+             "type": "text", "required": True},
+        ]
+        first = apply_forms.normalize_recon_questions(recon)
+        second = apply_forms.normalize_recon_questions(recon)
+        assert [q["field_id"] for q in first] == [q["field_id"] for q in second]
+        assert len({q["field_id"] for q in first}) == 2
 
 
 # ---------------------------------------------------------------------------

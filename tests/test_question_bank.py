@@ -167,6 +167,60 @@ class TestAliasMapping:
                 qb.normalize_field(p, allow_llm=True)
 
 
+class TestEmployerImmigrationFiling:
+    """"Will the employer have to file/sign something for you?" is its own
+    question — an F-1 CPT/OPT/STEM OPT obligation (an I-983, a letter to a
+    school's DSO), NOT a visa petition.
+
+    Prod, EnergyHub 2026-07-29: with no catalog entry, the label's "…a written
+    submission to your school…" classified onto `school`, collided with the
+    form's real School control and was dropped, so a REQUIRED legal attestation
+    was never asked and never filled.
+    """
+
+    _REAL = ("Are you currently on a nonimmigrant visa (ex. F-1)? If you are, "
+             "will you now or in the future require Alarm.com to provide a "
+             "written submission to your school or a government agency for you "
+             "to maintain your employment eligibility (ex. CPT/OPT/STEM OPT)?")
+
+    @pytest.mark.parametrize("phrasing", [
+        _REAL,
+        "Will you require a written submission to your school to maintain "
+        "your employment eligibility?",
+        "Would you need us to sign an I-983 training plan?",
+        "Are you currently using CPT?",
+        "Will you require STEM OPT support from the employer?",
+    ])
+    def test_filing_phrasings_map_to_their_own_field(self, phrasing):
+        assert qb.normalize_field(phrasing, allow_llm=False)["field_id"] == \
+            "employer_immigration_filing"
+
+    def test_it_does_not_classify_as_school(self):
+        """The exact regression: the word "school" in a subordinate clause."""
+        assert qb.normalize_field(self._REAL, allow_llm=False)["field_id"] != \
+            "school"
+
+    @pytest.mark.parametrize("phrasing", [
+        "Will you, now or in the future, require company assistance or "
+        "sponsorship to obtain or maintain your authorization to work?",
+        "Do you now or in the future require visa sponsorship?",
+        "Will you require sponsorship for an employment visa?",
+    ])
+    def test_ordinary_sponsorship_questions_are_untouched(self, phrasing):
+        """The new aliases are narrow on purpose — a plain sponsorship question
+        must still reach `requires_sponsorship`."""
+        assert qb.normalize_field(phrasing, allow_llm=False)["field_id"] == \
+            "requires_sponsorship"
+
+    def test_it_is_a_legal_attestation_that_is_never_defaulted(self):
+        f = qb.get_field("employer_immigration_filing")
+        assert f["sensitivity"] == qb.SENS_LEGAL
+        assert f["default_policy"] == qb.POLICY_NEVER_DEFAULT
+        # It must never be auto-answered from a form's option list.
+        assert qb.match_option(
+            "employer_immigration_filing", None, ["Yes", "No"]) is None
+
+
 # ---------------------------------------------------------------------------
 # POLARITY / NEGATION
 # ---------------------------------------------------------------------------
