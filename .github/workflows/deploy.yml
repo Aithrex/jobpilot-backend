@@ -32,7 +32,14 @@ jobs:
         with:
           filters: |
             shared:  ['shared/**', 'infra/**', '.github/workflows/**', 'scripts/build_layer.sh', 'scripts/package.sh']
-            executor: ['services/apply_executor/**', 'shared/python/services/browser_executor.py', 'shared/python/services/ats_executor.py', 'shared/python/services/ats_detector.py']
+            # The image does `COPY shared/python /opt/python` — the WHOLE tree —
+            # so it depends on every shared module, not a hand-picked few. The
+            # old three-file list silently shipped a stale executor: fixes to
+            # application_question_bank / apply_forms / ats_adapters deployed to
+            # the four zip Lambdas but never reached the container that actually
+            # fills forms, so prod ran old fill logic (2026-07-29). Keep this in
+            # step with the COPY above, not with a guess about imports.
+            executor: ['services/apply_executor/**', 'shared/python/**']
             auth:    ['services/auth/**']
             jobs:    ['services/jobs/**']
             resume:  ['services/resume/**']
