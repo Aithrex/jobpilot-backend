@@ -1171,6 +1171,17 @@ class WorkdayAdapter(AtsAdapter):
             if child_aid and child_aid in seen:
                 continue
             seen.add(wrapper_aid)
+            # …and claim the CHILD too, so pass 1 does not re-emit the same
+            # control under its inner handle. Pass 2 runs FIRST and only marked
+            # the wrapper, so `formField-yearsExperience` and `yearsExperience`
+            # both reached the normalizer as separate questions — one physical
+            # input reported twice, with different labels (a <label> plus an
+            # aria-label). The field_id collapse downstream then had to hide it,
+            # and that collapse is what silently DROPPED a genuinely distinct
+            # required control on Greenhouse. Fix the double-emit at the source
+            # so the normalizer never has to guess which duplicates are real.
+            if child_aid:
+                seen.add(child_aid)
             if child_kind == "radio":
                 qtype, widget = QTYPE_SELECT, "radio"
             elif child_kind == "textarea":

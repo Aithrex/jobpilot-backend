@@ -173,6 +173,38 @@ def test_application_questions_step_sponsorship_invert_polarity():
     assert yrs["is_legal_attestation"] is False
 
 
+def test_a_control_is_reported_once_not_as_wrapper_plus_inner_input():
+    """Workday puts its data-automation-id on a WRAPPER div (`formField-X`) AND
+    on the inner input (`X`). Recon collects wrappers first, but only marked the
+    wrapper as seen, so the pass over direct-automation-id elements re-emitted
+    the same physical control under its inner handle — three controls arriving
+    as six questions, each pair carrying different label text (a <label> plus an
+    aria-label).
+
+    That is load-bearing: it forced `apply_forms` to collapse same-field_id
+    duplicates, and THAT collapse is what silently dropped a genuinely distinct
+    required control on Greenhouse. Fixing the double-emit here is what lets the
+    normalizer keep every distinct control.
+    """
+    wd = WorkdayAdapter(_page("workday_application_questions"), _WD_URL)
+    qs = wd.recon()
+    handles = [q["recon_id"] for q in qs]
+
+    # No control appears twice — neither by handle nor by canonical field.
+    assert len(handles) == len(set(handles))
+    fids = [q["field_id"] for q in qs]
+    assert len(fids) == len(set(fids)), "one control must yield one question"
+
+    # And an inner handle must never ride along beside its own wrapper.
+    for h in handles:
+        if h.startswith("formField-"):
+            assert h[len("formField-"):] not in handles
+
+    # The fixture's three controls, addressed by the wrapper the filler uses.
+    assert set(fids) == {"requires_sponsorship", "years_experience",
+                         "how_did_you_hear"}
+
+
 def test_voluntary_disclosures_eeo_fields_flagged_protected_legal():
     wd = WorkdayAdapter(_page("workday_voluntary_disclosures"), _WD_URL)
     by_fid = {q["field_id"]: q for q in wd.recon()}
