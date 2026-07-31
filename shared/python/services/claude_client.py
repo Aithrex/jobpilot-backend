@@ -1,12 +1,20 @@
 """LLM client facade — re-exports the active provider's public surface.
 
-All AI in JobPilot runs on Claude via AWS Bedrock; the implementation lives
-in `services/llm_providers/claude.py` (boto3 `invoke_model`, no Anthropic
-SDK). This facade exists so callers never touch boto3/Bedrock directly and
-so the model tiers stay swappable via env.
+All AI in JobPilot goes through this module; callers never touch a vendor
+SDK directly. Two providers are supported, selected by `LLM_PROVIDER`:
 
-Tier override via env (Bedrock):
-    BEDROCK_FLASH_MODEL_ID, BEDROCK_PRO_MODEL_ID, BEDROCK_PREVIEW_MODEL_ID
+    claude  → services/llm_providers/claude.py  (boto3 Bedrock invoke_model)
+    gemini  → services/llm_providers/gemini.py  (google-genai)
+
+Exactly one is active per process — see `services.llm_providers`. The name
+`claude_client` (and the `CLAUDE_*` constants) is kept because ~50 modules
+import it; the constants resolve to whichever provider is active, so under
+Gemini `CLAUDE_PRO` is a Gemini model ID. Renaming would be churn for no
+functional gain.
+
+Tier override via env:
+    Claude — BEDROCK_FLASH_MODEL_ID, BEDROCK_PRO_MODEL_ID, BEDROCK_PREVIEW_MODEL_ID
+    Gemini — GEMINI_FLASH_MODEL_ID,  GEMINI_PRO_MODEL_ID,  GEMINI_PREVIEW_MODEL_ID
 """
 from services.llm_providers import get_provider
 from services.llm_providers.base import LLMRetriesExhaustedError
@@ -51,9 +59,10 @@ def claude_json(
 
 
 def get_claude_client():
-    """Returns the active provider's raw client — for Claude this is the
-    boto3 Bedrock runtime client. Most callers should use `claude_json` +
-    provider abstractions rather than touching the client directly."""
+    """Returns the active provider's raw client — the boto3 Bedrock runtime
+    client under Claude, the `genai.Client` under Gemini. Most callers should
+    use `claude_json` + provider abstractions rather than touching the client
+    directly."""
     return _provider.lazy_client()
 
 

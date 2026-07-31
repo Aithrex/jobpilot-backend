@@ -47,6 +47,15 @@ declare -A MAP=(
   [GUEST_IP_HASH_SALT]="guest-ip-hash-salt"
   [GUEST_SIGNAL_HMAC_KEY]="guest-signal-hmac-key"
   [GUEST_DOWNLOAD_TOKEN_SECRET]="guest-download-token-secret"
+  # Google Gemini API key — needed only when LLM_PROVIDER=gemini.
+  [GEMINI_API_KEY]="gemini-api-key"
+)
+
+# Keys that are configuration, NOT secrets — stored as plain String so they
+# can be read (and changed) without KMS. LLM_PROVIDER is the Claude<->Gemini
+# switch: flipping it in prod is one put-parameter call, no redeploy.
+declare -A PLAIN=(
+  [LLM_PROVIDER]="llm-provider"
 )
 
 get_val() {
@@ -61,17 +70,26 @@ get_val() {
 }
 
 seeded=0; skipped=0
-for key in "${!MAP[@]}"; do
-  path="${PREFIX}/${MAP[$key]}"
-  if val=$(get_val "$key") && [ -n "$val" ]; then
+put_param() {
+  # $1=key  $2=path  $3=type
+  local val
+  if val=$(get_val "$1") && [ -n "$val" ]; then
     aws ssm put-parameter $PROFILE_ARG --region "$REGION" \
-      --name "$path" --type SecureString --value "$val" --overwrite >/dev/null
-    echo "  set  $path"
+      --name "$2" --type "$3" --value "$val" --overwrite >/dev/null
+    echo "  set  $2"
     seeded=$((seeded+1))
   else
-    echo "  skip $path  (no $key in .env)"
+    echo "  skip $2  (no $1 in .env)"
     skipped=$((skipped+1))
   fi
+}
+
+for key in "${!MAP[@]}"; do
+  put_param "$key" "${PREFIX}/${MAP[$key]}" SecureString
+done
+
+for key in "${!PLAIN[@]}"; do
+  put_param "$key" "${PREFIX}/${PLAIN[$key]}" String
 done
 
 echo ">> Done: $seeded set, $skipped skipped (region=$REGION, profile=${AWS_PROFILE:-default})"

@@ -49,6 +49,15 @@ resource "aws_lambda_function" "service" {
       # (POST /api/auth/ses-notifications) rejects messages from any other topic.
       SES_SNS_TOPIC_ARN = aws_sns_topic.ses_notifications.arn
 
+      # LLM provider selection + Gemini credentials. LLM_PROVIDER is read from
+      # SSM (not set as a plain env var here) so switching Claude <-> Gemini is
+      # a single `aws ssm put-parameter .../llm-provider` call with NO redeploy
+      # and no terraform apply. Absent/unset -> claude (today's behavior).
+      # The /llm-provider parameter is a plain String; only the API key is a
+      # SecureString. See services/llm_providers/__init__.py.
+      SSM_LLM_PROVIDER   = "${var.ssm_path_prefix}/llm-provider"
+      SSM_GEMINI_API_KEY = "${var.ssm_path_prefix}/gemini-api-key"
+
       # SSM parameter PATHS (utils/ssm_config reads these env vars, then fetches
       # the SecureString values at those paths). Seed them with scripts/seed_ssm.sh.
       SSM_MONGODB_URI              = "${var.ssm_path_prefix}/mongodb-uri"
@@ -84,8 +93,8 @@ resource "aws_lambda_function" "service" {
       # secret) — the CMK the credential vault (kms_cipher.py) envelope-encrypts
       # under. APPROVAL_LINK_SECRET is the dedicated HMAC secret for signed
       # approve-links (§2), read as a SecureString via SSM_APPROVAL_LINK_SECRET.
-      CREDENTIALS_KMS_KEY_ID    = aws_kms_key.credentials.arn
-      SSM_APPROVAL_LINK_SECRET  = "${var.ssm_path_prefix}/approval-link-secret"
+      CREDENTIALS_KMS_KEY_ID   = aws_kms_key.credentials.arn
+      SSM_APPROVAL_LINK_SECRET = "${var.ssm_path_prefix}/approval-link-secret"
 
       # Guest onboarding (no-signup /start flow). ON in prod. Server-side salt
       # for guest ip_hash via SSM (unset ⇒ hash_ip fails closed, feature still
@@ -96,7 +105,7 @@ resource "aws_lambda_function" "service" {
       # signals are neither stored nor matched (quota subjects stay standalone);
       # without the download secret, guest download tokens cannot be minted
       # (503, never 401). Rotating the signal key orphans existing HMAC links.
-      SSM_GUEST_SIGNAL_HMAC_KEY      = "${var.ssm_path_prefix}/guest-signal-hmac-key"
+      SSM_GUEST_SIGNAL_HMAC_KEY       = "${var.ssm_path_prefix}/guest-signal-hmac-key"
       SSM_GUEST_DOWNLOAD_TOKEN_SECRET = "${var.ssm_path_prefix}/guest-download-token-secret"
     }
   }

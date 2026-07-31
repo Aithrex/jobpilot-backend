@@ -126,6 +126,14 @@ def get_all_secrets() -> Dict[str, str]:
         # secret for email_service when EMAIL_PROVIDER=zeptomail. Missing → the
         # service falls back to dev console logging (no mail sent).
         'ZEPTOMAIL_TOKEN': os.getenv('SSM_ZEPTOMAIL_TOKEN'),
+        # Google Gemini API key — required only when LLM_PROVIDER=gemini.
+        # Unset while running Claude is expected and harmless.
+        'GEMINI_API_KEY': os.getenv('SSM_GEMINI_API_KEY'),
+        # Which LLM serves all AI traffic: 'claude' (default) or 'gemini'.
+        # NOT a secret — stored as a plain String parameter. It lives in SSM
+        # rather than a Lambda env var so switching providers is one
+        # put-parameter call with no redeploy. Unset -> claude.
+        'LLM_PROVIDER': os.getenv('SSM_LLM_PROVIDER'),
     }
     
     # Filter out empty values
@@ -312,6 +320,19 @@ class SSMConfig:
     @property
     def ZEPTOMAIL_TOKEN(self) -> Optional[str]:
         return self._get('ZEPTOMAIL_TOKEN', 'ZEPTOMAIL_TOKEN')
+
+    @property
+    def GEMINI_API_KEY(self) -> Optional[str]:
+        return self._get('GEMINI_API_KEY', 'GEMINI_API_KEY')
+
+    @property
+    def LLM_PROVIDER(self) -> Optional[str]:
+        """'claude' (default) or 'gemini' — see services/llm_providers.
+
+        Read via SSM so the provider can be switched in production with a
+        single put-parameter call and no redeploy.
+        """
+        return self._get('LLM_PROVIDER', 'LLM_PROVIDER')
 
     @property
     def ALLOWED_ORIGINS(self) -> str:

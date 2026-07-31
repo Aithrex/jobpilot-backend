@@ -1,8 +1,13 @@
 """Abstract LLM provider interface.
 
-Each concrete provider (currently Claude on Bedrock) implements this
-interface. Callers import via `services.claude_client`, which proxies to
-the active provider from `get_provider()`.
+Each concrete provider — Claude on AWS Bedrock (`claude.py`) and Google
+Gemini (`gemini.py`) — implements this interface. Callers import via
+`services.claude_client`, which proxies to the active provider from
+`get_provider()`, selected by the `LLM_PROVIDER` setting.
+
+Exactly ONE provider is active per process: when Gemini is selected,
+Bedrock is never called, and vice versa. Providers must not fall back to
+one another — a failure raises `LLMRetriesExhaustedError` instead.
 
 Three public surface areas:
   1. `json(prompt, ...)` — single-shot text/multimodal call returning a dict.
@@ -41,10 +46,16 @@ class LLMProvider(ABC):
         max_retries: int = 2,
         schema: Optional[dict] = None,
         parts: Optional[list] = None,
+        system: Optional[str] = None,
     ) -> dict:
         """Call the LLM and return a parsed JSON dict.
 
         Mirrors the `claude_json` facade signature so callers don't change.
+
+        `system` carries trusted instructions separately from the untrusted
+        user message (see `utils.llm_safety.guarded_system`) — every provider
+        MUST accept it and map it to its native system-prompt mechanism.
+        Omitting it silently collapses that prompt-injection boundary.
         """
 
     @abstractmethod
