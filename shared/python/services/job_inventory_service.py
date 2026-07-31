@@ -93,7 +93,17 @@ NORMALIZATION_VERSION = 2
 # profiles carry the OLD classification, and `needs_requirements_parse` is what
 # makes the crawler redo them, so without this bump every posting already in the
 # inventory would keep its stale (usually absent) role_family forever.
-EXTRACTOR_VERSION = 2
+#
+# v3: `fit_score.classify_role` gained the physical-qualifier veto, so titles
+# like "Corrosion Reliability Engineer", "Staff Hardware Reliability Engineer"
+# and "Power Systems Engineer III - Generator/Plant Testing" now classify as
+# `hardware_engineering` instead of `devops`/`software_engineering`. 30 of the
+# 565 postings stored in the `devops` family were mechanical roles of that
+# shape, and because RETRIEVAL filters on the stored `role_family`, they would
+# keep being pulled into a software candidate's feed forever without a bump.
+# The re-parse is pure regex over the JD body (no Bedrock spend) and is picked
+# up per shard by `needs_requirements_parse` on the next crawl.
+EXTRACTOR_VERSION = 3
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1

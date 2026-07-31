@@ -747,6 +747,46 @@ def _compile_families() -> Tuple[re.Pattern, Dict[str, str]]:
 
 _FAMILY_RE, _PHRASE_TO_FAMILY = _compile_families()
 
+# The software families. A title that resolves into one of these but carries a
+# PHYSICAL-engineering qualifier has been misread.
+_SOFTWARE_FAMILIES = frozenset({
+    "software_engineering", "devops", "data_engineering", "data_science",
+    "data_analysis", "security", "qa", "it_support",
+})
+
+# Physical / plant / hardware domain qualifiers. Measured problem: the taxonomy
+# matches the ROLE NOUN ("reliability engineer" -> devops, "systems engineer" ->
+# software_engineering) and ignores the qualifier in front of it, so a live
+# US-only devops feed ranked these ABOVE real SRE roles for a cloud engineer:
+#
+#   "Corrosion Reliability Engineer II/III"            -> devops   (score 75)
+#   "Staff Hardware Reliability Engineer"              -> devops
+#   "Build Reliability Engineer II, Propulsion"        -> devops
+#   "Senior Reliability Engineer - Power Electronics"  -> devops
+#   "Instrument and Electrical Reliability Engineer"   -> devops
+#   "Power Systems Engineer III - Generator/Plant ..." -> software_engineering
+#
+# 30 of the 565 postings in the devops family were mechanical/hardware roles
+# of this shape. They are real engineering jobs — they belong in
+# `hardware_engineering`, which the taxonomy already has (Mechanical, Chemical
+# and Process Engineer all classify there correctly) — just not in a software
+# candidate's feed. Word-boundary matched, and deliberately NOT including
+# "systems"/"platform"/"build" on their own, which are ordinary software words.
+_PHYSICAL_QUALIFIER_RE = re.compile(
+    r"(?<![a-z])("
+    r"corrosion|propulsion|geotechnical|metallurg\w*|welding|hvac|"
+    r"mechanical|structural|civil|chemical|petroleum|pipeline|drilling|"
+    r"refinery|plant|generator|turbine|boiler|instrumentation|instrument and|"
+    r"power electronics|power systems|power generation|power distribution|"
+    r"electrical grid|substation|electrical|electromechanical|hardware|firmware|"
+    r"rf |antenna|semiconductor|wafer|fab |foundry|"
+    r"manufacturing|industrial|process safety|machining|tooling|"
+    r"aerospace structures|airframe|avionics hardware|automotive body|"
+    r"packaging|textile|agricultural|marine|mining|nuclear|"
+    r"wastewater|water treatment|environmental|hydraulic|pneumatic|"
+    r"facilities|maintenance|hvacr|calibration"
+    r")(?![a-z])", re.IGNORECASE)
+
 
 def classify_role(text: Any) -> Optional[str]:
     """Role family for a title (or a short blob). Returns None when nothing
@@ -758,7 +798,14 @@ def classify_role(text: Any) -> Optional[str]:
         return None
     m = _FAMILY_RE.search(blob)
     if m:
-        return _PHRASE_TO_FAMILY.get(m.group(0))
+        fam = _PHRASE_TO_FAMILY.get(m.group(0))
+        # A physical-domain qualifier vetoes a software reading. "Hardware
+        # Reliability Engineer" is a hardware role that happens to contain the
+        # phrase "reliability engineer"; reading it as SRE puts a corrosion
+        # engineer at the top of a cloud engineer's feed.
+        if fam in _SOFTWARE_FAMILIES and _PHYSICAL_QUALIFIER_RE.search(blob):
+            return "hardware_engineering"
+        return fam
     # "nurse"/"rn" appear as bare tokens far more than as phrases.
     if re.search(r"(?<![A-Za-z0-9_])(nurse|nursing|rn)(?![A-Za-z0-9_])", blob):
         return "nursing"
@@ -1104,6 +1151,49 @@ _REQUIRED_PROFILE_KEYS = (
 )
 
 
+# Skills that almost every posting names and that therefore discriminate
+# between candidates barely at all. They are still SCORED (a posting that wants
+# stakeholder management and the resume shows it is a real, if weak, signal) —
+# they just cannot be the ONLY thing a posting published, because then there is
+# no measurable technical requirement to assess a fit against.
+#
+# Measured: 5,588 of 30,000 active postings (18%) name nothing but these.
+_GENERIC_SKILLS = frozenset({
+    "communication", "teamwork", "collaboration", "interpersonal",
+    "leadership", "problem solving", "critical thinking", "time management",
+    "organization", "attention to detail", "multitasking", "adaptability",
+    "work ethic", "self motivated", "documentation", "writing",
+    "presentation", "public speaking", "training", "mentoring", "onboarding",
+    "recruiting", "scheduling", "planning", "budgeting", "negotiation",
+    "customer service", "compliance", "reporting", "research", "analysis",
+    "data entry", "excel", "microsoft office", "word", "powerpoint",
+    "outlook", "google workspace", "project management",
+    "stakeholder management", "account management", "lead generation", "crm",
+})
+
+# How much measurable evidence a posting must publish. Set from the live
+# inventory rather than by feel: the real technical families publish a MEDIAN
+# of 8-13 skills (devops 11, software_engineering 9, data_engineering 13,
+# security 8, qa 8), while 4,703 postings (15.6%) name two or fewer.
+#
+# The bar is on DISCRIMINATING skills, not raw count, because both failure
+# modes are real:
+#   * "Corrosion Reliability Engineer" published ["teamwork", "monitoring"];
+#     the resume matched "monitoring" and one-of-two read as 50% requirement
+#     coverage -> 15 of 30 points -> a final 75, "good match", ranked above
+#     genuine SRE roles. One incidental word in common is not half a job.
+#   * "Requirements: Kubernetes and Terraform." is only two skills but both
+#     are hard and specific, and that posting is perfectly measurable.
+# So: two hard skills is enough, and a longer list still needs at least one.
+_MIN_HARD_SKILLS = 2
+_MIN_TOTAL_SKILLS = 3
+
+
+def _hard_skills(names: Sequence[str]) -> List[str]:
+    """The named skills that actually discriminate (see `_GENERIC_SKILLS`)."""
+    return [s for s in names if str(s).strip().lower() not in _GENERIC_SKILLS]
+
+
 def has_job_requirements(reqs: Any) -> bool:
     """Did this posting publish anything the scorer can actually measure?
 
@@ -1111,12 +1201,22 @@ def has_job_requirements(reqs: Any) -> bool:
     guest is allowed to see (ADR-001's rule: fewer true matches beat more
     manufactured ones). Keeping one definition means the scorer's cap and the
     feed's exclusion can never disagree about what "no evidence" means.
+
+    Failing this does NOT hide the posting from the scorer — it routes to the
+    `insufficient_job_requirements` hard constraint, which caps the score at 45
+    and says so in the explanation ("this posting does not publish readable
+    requirements"). The row is still shown, honestly labelled.
     """
     if not isinstance(reqs, dict):
         return False
     if reqs.get("requirements_source") in (None, "", "none"):
         return False
-    return bool(reqs.get("required_skills") or reqs.get("preferred_skills"))
+    named = list(reqs.get("required_skills") or []) + \
+        list(reqs.get("preferred_skills") or [])
+    hard = _hard_skills(named)
+    if len(hard) >= _MIN_HARD_SKILLS:
+        return True
+    return len(named) >= _MIN_TOTAL_SKILLS and len(hard) >= 1
 
 
 def _precomputed_requirements(stored: Any) -> Optional[Dict[str, Any]]:
@@ -1278,11 +1378,44 @@ def _title_tokens(title: str) -> Set[str]:
     return {w for w in re.findall(r"[a-z][a-z+#.]{2,}", t) if w not in _TITLE_STOP}
 
 
+def effective_role_family(reqs: Dict[str, Any], job_title: Any) -> Optional[str]:
+    """The role family actually used to score, given the posting and its title.
+
+    A STORED `role_family` is not taken at face value, for two reasons:
+
+    1. The TITLE outranks it. `extract_requirements` falls back to classifying
+       off the JD BODY when the title yields nothing, and a body is full of
+       incidental engineering vocabulary — "Temporary Research Assistant" at
+       the University of Chicago is stored as `software_engineering` on that
+       basis and was collecting 23 of 25 role-alignment points in a cloud
+       engineer's feed. A title that classifies is direct evidence about the
+       role; a body that merely mentions software is not. When the title says
+       nothing and the only claim is body-derived, the family is treated as
+       UNDETERMINED, which is the honest reading.
+
+    2. A profile written before the physical-qualifier veto (see
+       EXTRACTOR_VERSION v3) still carries the old family, so the veto is
+       re-applied live rather than waiting for every shard to be re-crawled.
+
+    Public because `score` reports it in the `evidence` block: the family named
+    in the explanation must be the one the score was actually computed from.
+    """
+    job_fam = (reqs or {}).get("role_family")
+    title_fam = classify_role(job_title)
+    if title_fam:
+        job_fam = title_fam
+    elif job_fam in _SOFTWARE_FAMILIES:
+        job_fam = None
+    if job_fam in _SOFTWARE_FAMILIES and _PHYSICAL_QUALIFIER_RE.search(_norm(job_title)):
+        return "hardware_engineering"
+    return job_fam
+
+
 def _score_role(reqs: Dict[str, Any], prof: Dict[str, Any], job_title: str
                 ) -> Tuple[float, str, bool]:
     """(points, detail, unrelated_flag)"""
     mx = COMPONENT_MAX["role_alignment"]
-    job_fam = reqs.get("role_family")
+    job_fam = effective_role_family(reqs, job_title)
     fams = prof.get("families") or set()
     job_tokens = _title_tokens(job_title)
     res_tokens: Set[str] = set()
@@ -1314,12 +1447,37 @@ def _score_role(reqs: Dict[str, Any], prof: Dict[str, Any], job_title: str
     return mx * 0.08, "This role is in a different field from your background.", True
 
 
+# Smallest requirement list a coverage RATIO is computed over. See `_coverage`.
+_MIN_COVERAGE_DENOM = 3
+
+
 def _coverage(reqs_list: Sequence[str], prof: Dict[str, Any]
               ) -> Tuple[float, List[str], List[str]]:
     """(0..1 coverage, covered names, missing names).
 
     Applied evidence counts 1.0, a bare skills-list claim 0.75. That gap is
-    the difference between "I have shipped this" and "I have listed this"."""
+    the difference between "I have shipped this" and "I have listed this".
+
+    The DENOMINATOR has a floor of three. Without it a one-item list reads as
+    certainty: "Temporary Research Assistant" at the University of Chicago
+    published exactly one required skill, "monitoring", the resume happened to
+    have it, and one-of-one scored a perfect 30/30 -> a final 86, the single
+    highest-ranked row in a cloud engineer's US feed. One word in common is
+    not a complete match.
+
+    The floor only touches lists shorter than it, which is the only place the
+    ratio is unreliable:
+
+        1 of 1   -> 0.33 instead of 1.00   (the case above)
+        2 of 2   -> 0.67 instead of 1.00
+        3 of 3   -> 1.00 unchanged
+        6 of 12  -> 0.50 unchanged
+        12 of 12 -> 1.00 unchanged
+
+    This is the mirror of the floor `jd_match_scorer` documents on the resume
+    side of its ratio, applied to the side that actually belongs there: the
+    posting's asks.
+    """
     if not reqs_list:
         return 0.0, [], []
     exp = prof.get("experience_skills") or set()
@@ -1336,7 +1494,7 @@ def _coverage(reqs_list: Sequence[str], prof: Dict[str, Any]
             covered.append(skill)
         else:
             missing.append(skill)
-    return total / len(reqs_list), covered, missing
+    return total / max(len(reqs_list), _MIN_COVERAGE_DENOM), covered, missing
 
 
 def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any]
@@ -1715,7 +1873,9 @@ def score(resume: Dict[str, Any], job: Dict[str, Any],
             "required_coverage": round(req_cov, 3),
             "preferred_coverage": round(pref_cov, 3),
             "requirements_source": reqs.get("requirements_source"),
-            "job_role_family": reqs.get("role_family"),
+            # The family the score was computed from, which is not always the
+            # one stored on the posting — see `effective_role_family`.
+            "job_role_family": effective_role_family(reqs, job_title),
             "resume_role_families": sorted(prof.get("families") or set()),
             "resume_years": prof.get("years"),
             "required_years": reqs.get("required_years"),

@@ -291,12 +291,13 @@ def _hydrate(docs: List[Dict[str, Any]], limit: int = HYDRATE_LIMIT
     a posting whose body we could not read is skipped for good rather than
     re-attempted forever — re-reading it never made it readable.
     """
-    from services import fit_score
+    from services import fit_score, us_geo
     from services.inventory_feed import _row_from_posting
 
     rows: List[Dict[str, Any]] = []
     context: Dict[str, Dict[str, Any]] = {}
     dropped = 0
+    dropped_non_us = 0
     hydrated = 0
     examined_max: Optional[datetime] = None
 
@@ -309,6 +310,18 @@ def _hydrate(docs: List[Dict[str, Any]], limit: int = HYDRATE_LIMIT
     for doc in docs:
         job_id = str(doc.get("job_id") or "")
         if not job_id:
+            _examined(doc)
+            continue
+        # US-ONLY, enforced HERE and not only on the browse feed. This sweep had
+        # no geo filter at all, so the unattended fan-out enqueued whatever the
+        # crawler happened to surface: a State Street "Krakow, Poland" req and a
+        # Revvity Workday role are both in the live ledger. Applying on the
+        # user's behalf to a country they cannot work in is worse than a bad
+        # search result — it burns a daily-cap slot and reaches a real employer.
+        # Same `us_geo` decision the feed uses, so what a user is SHOWN and what
+        # we APPLY TO can never disagree.
+        if not us_geo.keep_us_posting(doc):
+            dropped_non_us += 1
             _examined(doc)
             continue
         row = _row_from_posting(doc, tz_offset=0)
@@ -343,7 +356,11 @@ def _hydrate(docs: List[Dict[str, Any]], limit: int = HYDRATE_LIMIT
             "tenant": doc.get("tenant") or "",
             "first_seen_at": _as_aware(doc.get("first_seen_at")),
         }
-    return rows, context, dropped, examined_max
+    if dropped_non_us:
+        # Logged separately from the no-evidence drops so the two reasons a
+        # candidate disappears stay distinguishable in prod.
+        logger.info("[match_sweep] dropped %d non-US candidate(s)", dropped_non_us)
+    return rows, context, dropped + dropped_non_us, examined_max
 
 
 def _still_open(job_id: str) -> bool:

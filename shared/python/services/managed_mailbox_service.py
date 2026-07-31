@@ -103,6 +103,28 @@ def apply_mail_domain() -> str:
     return (_get_config_value("APPLY_MAIL_DOMAIN", "") or "").strip().lower()
 
 
+def can_receive_mail() -> bool:
+    """Can this deployment actually RECEIVE mail at a managed alias?
+
+    Both conditions are load-bearing and neither implies the other: a domain
+    can be configured while the pipeline is off, and the flag can be on before
+    a domain exists. Only when both hold does an ATS verification email sent to
+    an alias have any chance of being read.
+
+    This exists because an alias is minted regardless (D3 reserves local parts
+    so the model is ready before the infra is), so the mere EXISTENCE of an
+    alias is not evidence that mail can arrive. Live consequence: a candidate
+    account was registered on four employers' Workday portals against
+    ``harshith.manne@my-private-mail.com``, each portal mailed a verification
+    link there, and `mail_messages` has never held a single document — so every
+    one of those applications parked on an account wall that could not, even in
+    principle, clear. Callers that need a round-trip through the inbox must
+    check this FIRST and say so plainly when it is False, rather than
+    attempting the flow and blaming the user for the result.
+    """
+    return bool(mailbox_enabled() and apply_mail_domain())
+
+
 def mailbox_enabled() -> bool:
     """``APPLY_MAILBOX_ENABLED`` master flag. Default OFF everywhere (including
     dev) — the live inbound/forwarding pipeline needs external infra that does

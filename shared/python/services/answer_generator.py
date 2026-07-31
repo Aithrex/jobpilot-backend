@@ -491,9 +491,19 @@ def generate_free_text_answers(
         field_id = str(item.get("field_id") or "").strip()
         if not field_id or field_id in out:
             continue
-        # Only the known free-text catalog ids (plus the legacy "essay" id) —
-        # never a field the resolver merely failed to classify.
-        if field_id not in _GENERATABLE_FIELD_IDS:
+        # The known free-text catalog ids (plus the legacy "essay" id), OR an
+        # item the answer library explicitly marked `open_ended`.
+        #
+        # `open_ended` is set ONLY by `answer_library_service._resolve_normalized`
+        # and only for an unrecognised question that is a genuine prose box with
+        # no options (see `_is_open_prose`). It exists because "never a field
+        # the resolver merely failed to classify" stranded every employer-
+        # specific essay — "Describe a system you designed end to end" matches
+        # no alias, so the row parked in the one-tap queue and the user was
+        # asked to write it by hand, which is the outcome this module exists to
+        # prevent. Generation is résumé-grounded either way and every answer
+        # still carries `review_required: True`.
+        if field_id not in _GENERATABLE_FIELD_IDS and not item.get("open_ended"):
             continue
         # `question` is the raw form label; `label` is the normalized fallback.
         question = str(item.get("question") or item.get("label") or "").strip()

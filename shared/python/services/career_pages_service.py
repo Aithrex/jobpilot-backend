@@ -642,42 +642,22 @@ _FOREIGN_COUNTRY_RE = re.compile(
 
 
 def _keep_us(job: Dict[str, Any], keep_ambiguous: bool = False) -> bool:
-    """HARD US filter for board rows — same keep/drop contract as
-    ``_geo_keep_us``: keep clearly-US or clearly-remote, DROP everything
-    ambiguous.
+    """HARD US filter for board rows.
 
-    1. Authoritative ``country_hint`` from the ATS payload wins.
-    2. No location text -> keep only if the row is explicitly remote.
-    3. Explicit foreign COUNTRY -> DROP (before the US tier so "Canada -
-       Remote (ON, AB, or NS Only)" cannot be rescued by the "or"->Oregon
-       collision).
-    4. US word or US state (code OR name) -> KEEP (rescues "Dublin, OH",
-       "Paris, TX", "Ontario, California", "Indiana").
-    5. Bare foreign hub CITY -> DROP.
-    6. Clear remote, no foreign marker -> KEEP.
-    7. Else (ambiguous / bare non-foreign city) -> DROP, unless
-       ``keep_ambiguous`` (the pre-hardening lenient contract — see
-       ``_keep_us_lenient``, used by the guest ``GUEST_US_STRICT=0`` rollback).
+    DELEGATES to ``services.us_geo`` — the single implementation of this rule.
+    This function used to carry its own tiered copy, which drifted from
+    ``workday_jobs_service._geo_keep_us`` (no bare-"US" tier, no Toronto
+    guard) while ``inventory_feed`` served BOTH source tabs through it. A live
+    A/B over 20,000 active postings put the old rule at 43% kept with 33
+    foreign leaks; the shared rule keeps 50% with the leaks gone. See
+    ``us_geo`` for the decision order and the measured cases behind it.
+
+    Signature and keep/drop contract are unchanged, so every existing caller
+    and the ``_keep_us_lenient`` rollback below behave as before.
     """
-    hint = job.get("country_hint") or ""
-    if hint:
-        return hint in _COUNTRY_OK
-    loc = job.get("location") or ""
-    if not loc.strip():
-        # Board rows with no location at all are usually remote-anywhere;
-        # keep only if explicitly remote (US-ness can't be proven either way).
-        return bool(job.get("is_remote"))
-    if _FOREIGN_COUNTRY_RE.search(loc):
-        return False
-    if (_US_WORD_RE.search(loc) or _US_STATE_RE.search(loc)
-            or _US_STATE_NAME_RE.search(loc)):
-        return True
-    if _FOREIGN_CITY_RE.search(loc):
-        return False
-    if _REMOTE_RE.search(loc):
-        return True
-    # Ambiguous (bare US-less city, "N Locations", unknown).
-    return keep_ambiguous
+    from services import us_geo
+
+    return us_geo.keep_us_row(job, keep_ambiguous=keep_ambiguous)
 
 
 def _keep_us_lenient(job: Dict[str, Any]) -> bool:

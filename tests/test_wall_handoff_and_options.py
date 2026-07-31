@@ -642,6 +642,13 @@ class _GateAdapter:
 
 
 def _gate_executor(monkeypatch, ex):
+    # The account-gate flow now PREFLIGHTS the managed mailbox: registering a
+    # candidate account commits us to reading the employer's verification
+    # email, so it refuses to start when this deployment cannot receive mail.
+    # These tests are about what happens once that precondition holds, so state
+    # it explicitly rather than depending on ambient config.
+    from services import managed_mailbox_service as mailbox
+    monkeypatch.setattr(mailbox, "can_receive_mail", lambda: True)
     monkeypatch.setattr(type(ex), "_managed_apply_email",
                         lambda self, email: "alias@my-private-mail.com")
     monkeypatch.setattr(type(ex), "create_account",

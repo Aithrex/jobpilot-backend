@@ -64,6 +64,70 @@ _MAX_APPROVAL_MATCHES = 25       # rows listed in one approval email
 _MAX_REDRIVE_PER_USER = 25       # stuck submissions re-driven per user per tick
 _MAX_SUMMARY_ITEMS = 25          # rows shown in one EOD summary section
 
+# Errors that mean "our side broke", never "this application is bad". ONLY
+# these are auto-requeued (see step 1b-ii); a validation failure or an employer
+# rejection is a real outcome and stays failed. Matched exactly, not by
+# substring, so a new error string cannot accidentally join the retry set.
+_INFRA_ERRORS = frozenset({
+    "executor_unavailable_midflight",
+    "executor_unavailable",
+    "no_confirmation_after_submit",
+})
+# Attempts before an infrastructure failure is left alone. Three ticks of the
+# hourly sweep is enough to ride out a deploy or a drained executor pool; more
+# than that is a standing outage a human needs to look at.
+_MAX_INFRA_RETRIES = 3
+
+
+def _is_non_us(row: Dict[str, Any]) -> bool:
+    """Does this ledger row point at a posting we can prove is not US?
+
+    Requires a POSITIVE foreign signal, not merely a failed keep-test: an
+    unresolvable "2 Locations" rollup must not cost a real US application.
+    Same asymmetry the cleanup script uses.
+    """
+    from urllib.parse import unquote
+
+    from services import us_geo
+
+    location, country = "", None
+    job_id = row.get("posting_job_id")
+    if job_id:
+        try:
+            doc = DBConnect().get_db().job_postings.find_one(
+                {"job_id": job_id}, {"locations": 1})
+            locs = (doc or {}).get("locations") or []
+            first = locs[0] if locs else {}
+            if isinstance(first, dict):
+                location, country = str(first.get("raw") or ""), first.get("country")
+        except Exception:  # pragma: no cover - fall through to the URL
+            pass
+    if not location:
+        # Every Workday tenant builds `.../job/<Location>/<Title>_<req>`.
+        url = str(row.get("apply_url") or "")
+        if "/job/" in url:
+            location = unquote(url.split("/job/", 1)[1].split("/", 1)[0]
+                               ).replace("-", " ").strip()
+    if not location:
+        return False
+    return (not us_geo.keep_us(location, country)
+            and us_geo.has_foreign_marker(location))
+
+
+def _count_infra_retry(user_email: str, application_id: str) -> None:
+    """Record one infrastructure retry so the bound above is enforceable.
+
+    Kept on the application row rather than in a side collection: it must be
+    read in the same query the redrive already runs, and it must survive a
+    requeue (the ledger's status transitions do not touch unknown fields)."""
+    try:
+        DBConnect().get_db().applications.update_one(
+            {"user_email": user_email, "application_id": application_id},
+            {"$inc": {"infra_retries": 1}})
+    except Exception as e:  # pragma: no cover - the retry itself already ran
+        logger.warning("[apply_scheduler] infra_retries bump failed (%s): %s",
+                       application_id, e)
+
 # The EOD summary and the hourly nudge both fire at the user's LOCAL hour off a
 # single UTC hourly trigger (same idiom as run_evening_summaries).
 _EVENING_HOUR = 19
@@ -243,14 +307,15 @@ def run_apply_hourly() -> Dict[str, Any]:
 
     users = _opted_in_users()
     totals = {"users": len(users), "enqueued": 0, "redriven": 0,
-              "gather_redriven": 0, "reresolved": 0, "emailed": 0,
-              "skipped_closed": 0}
+              "gather_redriven": 0, "infra_retried": 0, "reresolved": 0,
+              "emailed": 0, "skipped_closed": 0}
     for email in users:
         try:
             res = _run_user_hourly(email)
             totals["enqueued"] += res["enqueued"]
             totals["redriven"] += res["redriven"]
             totals["gather_redriven"] += res.get("gather_redriven", 0)
+            totals["infra_retried"] += res.get("infra_retried", 0)
             totals["reresolved"] += res.get("reresolved", 0)
             totals["emailed"] += res["emailed"]
             totals["skipped_closed"] += res["skipped_closed"]
@@ -266,7 +331,8 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
     from services.resume_service import get_resume_service, ResumeService
 
     now = _now()
-    out = {"enqueued": 0, "redriven": 0, "gather_redriven": 0, "reresolved": 0,
+    out = {"enqueued": 0, "redriven": 0, "gather_redriven": 0,
+           "infra_retried": 0, "reresolved": 0,
            "emailed": 0, "skipped_closed": 0}
     mode = autonomy_service.get_mode(email)
     match_cap = (
@@ -350,6 +416,60 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
                 logger.warning(
                     "[apply_scheduler] gather-redrive enqueue failed (%s): %s",
                     aid, e)
+
+    # 1b-ii. Requeue rows that failed for an INFRASTRUCTURE reason.
+    #
+    # `auto_apply_service` marks a mid-flight executor drain as
+    # `failed / executor_unavailable_midflight` and calls it "retryable" — but
+    # nothing ever retried it. `application_ledger_service.RETRYABLE_STATUSES`
+    # is only consulted by `dedup_gate`, i.e. when a NEW enqueue happens to hit
+    # the same posting, and `apply_match_sweep` advances its watermark past a
+    # posting once it has been examined, so that second enqueue never comes.
+    #
+    # Observed in the live ledger: 3 of 6 failed applications (Dovetail, NXP,
+    # K2 Space) carry exactly this error. The executor was simply not
+    # available; nothing was wrong with the application, and nothing was ever
+    # sent to the employer. Leaving them dead means a user loses three real
+    # applications to an ops event they never saw.
+    #
+    # Bounded by `_MAX_INFRA_RETRIES` attempts so a persistently unavailable
+    # executor cannot spin the row forever, and deliberately restricted to a
+    # CLOSED LIST of infrastructure errors — a genuine validation failure or an
+    # employer rejection must stay failed.
+    try:
+        broken = als.list_applications(email, status=als.STATUS_FAILED,
+                                       limit=_MAX_REDRIVE_PER_USER)
+    except Exception as e:
+        logger.warning("[apply_scheduler] infra-retry list failed for %s: %s", email, e)
+        broken = []
+    for row in broken:
+        aid = row.get("application_id")
+        err = str(row.get("error") or "").strip()
+        if not aid or err not in _INFRA_ERRORS:
+            continue
+        if _is_closed(row.get("posting_closes_at"), now=now):
+            out["skipped_closed"] += 1
+            continue
+        if int(row.get("infra_retries") or 0) >= _MAX_INFRA_RETRIES:
+            continue
+        # Never resurrect a non-US row. Some failed rows pre-date the geo
+        # filter on the intake sweep (a Bucharest NXP req is in the live
+        # ledger with exactly this error), and `failed` cannot transition to
+        # `skipped`, so the cleanup script cannot retire them either. Without
+        # this check the retry would put them straight back into the queue.
+        if _is_non_us(row):
+            continue
+        try:
+            als.requeue(email, aid)
+            _count_infra_retry(email, aid)
+            payload = {"user_email": email, "application_id": aid,
+                       "apply_url": row.get("apply_url") or ""}
+            job_id = get_resume_service().create_job(
+                "auto_apply_gather", payload, user_email=email)
+            ResumeService.invoke_async(job_id, "auto_apply_gather", payload)
+            out["infra_retried"] = out.get("infra_retried", 0) + 1
+        except Exception as e:
+            logger.warning("[apply_scheduler] infra retry failed (%s): %s", aid, e)
 
     # 1c. Re-resolve STALE `needs_input` rows against the CURRENT profile.
     #

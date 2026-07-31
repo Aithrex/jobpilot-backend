@@ -467,17 +467,31 @@ FIELDS: List[Dict[str, Any]] = [
     _f("gpa", "GPA", CAT_SCREENING, SENS_SAFE, VT_NUMBER, "text",
        [r"\bgpa\b", r"grade point average", r"cumulative gpa"],
        default_policy=POLICY_FROM_PROFILE),
+    # Aliases below marked "(live)" were added from questions that a real
+    # Greenhouse/Workday/Ashby form asked and this bank returned "unknown" for,
+    # stranding a resolvable question in the one-tap queue.
     _f("certifications", "Certifications", CAT_SCREENING, SENS_SAFE, VT_TEXT, "textarea",
        [r"certification", r"professional certificate", r"licenses and certification",
-        r"relevant certification"],
+        r"relevant certification",
+        # (live) "What certificates and/or licenses do you have?"
+        r"certificates? (?:and ?/?or |and |or )?licen[cs]es?",
+        r"licen[cs]es? (?:and ?/?or |and |or )?certificates?",
+        r"what certificates?", r"do you (?:hold|have) any certificat"],
        default_policy=POLICY_FROM_PROFILE),
     _f("current_company", "Current company", CAT_SCREENING, SENS_SAFE, VT_TEXT, "text",
        [r"current (?:company|employer)", r"present employer", r"who .*currently work for",
-        r"^company$", r"^company\*?$"],
+        r"^company$", r"^company\*?$",
+        # (live) "Current or Most Recent Employer"
+        r"(?:current|present) or most recent (?:company|employer)",
+        r"most recent (?:company|employer)", r"last employer",
+        r"^employer$", r"^employer\*?$"],
        default_policy=POLICY_FROM_PROFILE),
     _f("current_title", "Current job title", CAT_SCREENING, SENS_SAFE, VT_TEXT, "text",
        [r"current (?:job )?title", r"current (?:role|position)", r"present job title",
-        r"^job title$", r"^job title\*?$"],
+        r"^job title$", r"^job title\*?$",
+        # (live) "Current or Most Recent Title"
+        r"(?:current|present) or most recent (?:job )?(?:title|role|position)",
+        r"most recent (?:job )?(?:title|role|position)"],
        default_policy=POLICY_FROM_PROFILE),
     _f("work_start_date", "Work experience start date", CAT_SCREENING, SENS_SAFE, VT_DATE, "date",
        [r"^from\b", r"work (?:experience )?start", r"employment start",
@@ -550,12 +564,25 @@ FIELDS: List[Dict[str, Any]] = [
     _f("why_company", "Why this company?", CAT_FREE_TEXT, SENS_SAFE, VT_ESSAY, "textarea",
        [r"why (?:do you want to |are you interested in )?(?:work|join|apply)",
         r"why (?:us|our company|this company)", r"what .*(?:interests|excites) you about (?:this|our)",
-        r"what do you know about our company", r"why this role"],
+        r"what do you know about our company", r"why this role",
+        # (live) "Why are you interested in this role?" — the existing
+        # "why ... interested in ... work|join|apply" alias needs the verb, so
+        # the far commonest phrasing of all fell through to "unknown".
+        r"why are you interested in (?:this|the|our)",
+        r"why (?:this|the) (?:position|opportunity|job|team)",
+        r"what (?:draws|drew|attracts|attracted) you to"],
        default_policy=POLICY_NEVER_DEFAULT),
     _f("why_you", "Why are you a good fit?", CAT_FREE_TEXT, SENS_SAFE, VT_ESSAY, "textarea",
        [r"why should we hire you", r"what makes you a (?:good|great) fit",
         r"tell us about yourself", r"describe your relevant experience",
-        r"why are you (?:a good|the right) (?:fit|candidate)"],
+        r"why are you (?:a good|the right) (?:fit|candidate)",
+        # (live) "Describe your experience with AWS." / "Tell us about your
+        # experience in distributed systems." These are resume-grounded
+        # experience prompts, which is exactly what `why_you` generates.
+        r"describe your experience", r"tell us about your experience",
+        r"what(?:'s| is) your experience with",
+        r"describe (?:a|your) (?:project|relevant work)",
+        r"walk us through your (?:background|experience)"],
        default_policy=POLICY_NEVER_DEFAULT),
     _f("additional_info", "Anything else?", CAT_FREE_TEXT, SENS_SAFE, VT_ESSAY, "textarea",
        [r"anything else .*(?:like us to know|you.d like to (?:add|share))",

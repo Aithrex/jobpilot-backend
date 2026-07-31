@@ -1334,6 +1334,91 @@ def resolve(user_email: str, questions: List[Any], *,
     return _resolve_legacy(user_email, questions, company=company)
 
 
+# Control shapes that are genuinely free prose. A question whose shape is
+# anything else — or unknown — is NOT eligible for generation.
+_PROSE_VALUE_TYPES = frozenset({"essay", "textarea", "longtext", "long_text",
+                                "multiline", "paragraph"})
+# Length above which an unlabelled control is treated as prose anyway: ATS
+# recon often reports a bare `text` type for a long question, and a 60+
+# character question that also has no options is not a dropdown.
+_PROSE_MIN_LABEL = 60
+
+
+# Canonical value types that are a SHORT SCALAR — a URL, a date, a phone
+# number. None of them can be a truthful answer to a paragraph question.
+_SCALAR_VALUE_TYPES = frozenset({"url", "date", "phone", "email", "number",
+                                 "money", "years"})
+
+# The legacy `_categorize` path reports a CATEGORY rather than a value type.
+# These are its short-scalar categories — the ones whose stored value is a
+# link, a date, a phone number or an amount.
+_LEGACY_SCALAR_CATEGORIES = frozenset({
+    CAT_LINKS, CAT_START_DATE, CAT_CONTACT, CAT_SALARY, CAT_YEARS, CAT_NOTICE,
+})
+
+
+def _scalar_answer_to_prose_question(item: Dict[str, Any],
+                                     value_type: Any) -> bool:
+    """Would this fill put a short scalar into a paragraph box?
+
+    A live failure: the classifier matched the word "portfolio" inside
+
+        "Our team values written communication above all. Please share a link
+         to something you wrote and say why you chose it."
+
+    and resolved it to `portfolio_url`, so the application would have
+    submitted the bare string "manneharshithsiddardha.com" as the answer to a
+    120-character essay. Loose token matching cannot tell a mention from a
+    request. When the shape of the question and the shape of the answer
+    disagree this badly, the honest move is to generate a real answer (or ask)
+    rather than submit a URL into a paragraph.
+    """
+    return bool(_is_open_prose(item)
+                and str(value_type or "").lower() in _SCALAR_VALUE_TYPES)
+
+
+def _value_fits_options(field_id: str, value: Any, options: Any) -> bool:
+    """Is `value` one of the options THIS form will actually accept?
+
+    Only consulted when recon captured the form's real option list. A second
+    live failure: "Which shift are you available for?" matched the token
+    "available" and resolved to `available_start_date`, so a dropdown of
+    Day/Night would have been answered "2026-07-06". That is the exact loop
+    `auto_apply_service._needs_control_meta` documents — the fill driver
+    reports `no_option_match`, the row re-parks, AND the bad value is banked
+    in the answer library and poisons every future application. Failing the
+    match here keeps it out of the answer entirely.
+    """
+    if not options or not isinstance(options, list):
+        return True          # no option list captured: nothing to check against
+    if value in (None, ""):
+        return False
+    try:
+        from services import application_question_bank as qb
+        return qb.match_option(field_id, value, options) is not None
+    except Exception:        # pragma: no cover - never block on a helper fault
+        return True
+
+
+def _is_open_prose(item: Dict[str, Any]) -> bool:
+    """Is this unrecognised question a free-prose box we may generate into?
+
+    Deliberately conservative: an enumerated control must never reach the
+    generator, so the presence of ANY options list disqualifies the question
+    outright, and an unknown shape only qualifies on a long question with no
+    options at all.
+    """
+    if item.get("options"):
+        return False
+    vt = item.get("value_type") or ""
+    if vt in _PROSE_VALUE_TYPES:
+        return True
+    if vt:
+        # A declared shape that is not prose (select, radio, date, number...).
+        return False
+    return len(str(item.get("label") or "")) >= _PROSE_MIN_LABEL
+
+
 def _resolve_normalized(user_email: str,
                         questions: List[Dict[str, Any]], *,
                         company: Optional[str] = None) -> Dict[str, Any]:
@@ -1384,7 +1469,14 @@ def _resolve_normalized(user_email: str,
         prepared.append({"field_id": field_id, "label": label, "norm": norm,
                          "tokens": tokens, "required": required,
                          "flagged_legal": flagged_legal, "invert": invert,
-                         "mapping": mapping, "options": options})
+                         "mapping": mapping, "options": options,
+                         # The form's own control shape. Carried so an
+                         # UNRECOGNISED question can be routed to grounded
+                         # generation only when it is genuinely a prose box —
+                         # see the open-ended branch below.
+                         "value_type": InputSanitizer.sanitize_string(
+                             str(q.get("value_type") or q.get("type") or ""),
+                             max_length=40).lower()})
 
     if not prepared:
         return _empty_resolution()
@@ -1501,6 +1593,24 @@ def _resolve_normalized(user_email: str,
             if escalations.get(field_id) is True and _to_bool(val) is not True:
                 val = _escalated_yes(bank_meta, qb)
                 src, sv, escalated = SOURCE_RESUME_MATCH, None, True
+            # Shape guards — a resolved value must fit the QUESTION, not just
+            # the field name the classifier matched. Both of these were live
+            # wrong-answer paths; see the helpers for the exact forms.
+            if val not in (None, "") and _scalar_answer_to_prose_question(item, vtype):
+                needs_generation.append({"field_id": field_id,
+                                         "question": item["label"] or norm,
+                                         "label": norm,
+                                         "category": CAT_ESSAY, "kind": KIND_ESSAY,
+                                         "open_ended": True})
+                if required:
+                    required_total -= 1
+                continue
+            if val not in (None, "") and not _value_fits_options(
+                    field_id, _apply_invert(val, vtype, invert), item.get("options")):
+                unresolved.append(field_id)
+                has_novel = True
+                continue
+
             if val not in (None, ""):
                 out_val = _apply_invert(val, vtype, invert)
                 review = (sensitivity != qb.SENS_SAFE) or escalated or (
@@ -1531,7 +1641,34 @@ def _resolve_normalized(user_email: str,
             # legal attestation (err toward the never-fabricate guard).
             field, category, kind = field_id, None, KIND_LEGAL
         else:
-            # Unrecognized, non-legal → novel free-text risk.
+            # Unrecognized, non-legal. If the form is asking for PROSE, this is
+            # answerable from the resume even though no alias matched, so route
+            # it to grounded generation instead of stranding it.
+            #
+            # This was the dead end behind the live one-tap queue: an employer
+            # asks "Describe a system you designed end to end" or "What
+            # interests you about our infrastructure team", no alias matches,
+            # and the row parks forever with the user told to write it. The
+            # generator is résumé-grounded and marks every answer
+            # `review_required`, so nothing is submitted unseen.
+            #
+            # STRICTLY prose only. A select/radio/checkbox/date/number needs an
+            # exact option the form will accept; a generated string there fails
+            # `no_option_match`, re-parks the row AND banks a poisoned answer
+            # for every future application (the loop `_needs_control_meta`
+            # documents). Absent metadata is treated as NOT prose.
+            if (_is_open_prose(item)
+                    and not (qb is not None and qb.is_gated(field_id))):
+                needs_generation.append({"field_id": field_id,
+                                         "question": item["label"] or norm,
+                                         "label": norm,
+                                         "category": CAT_ESSAY,
+                                         "kind": KIND_ESSAY,
+                                         # Tells the generator this id is not in
+                                         # its closed catalog but is safe to
+                                         # answer. Nothing else may set it.
+                                         "open_ended": True})
+                continue
             if required:
                 required_total += 1
             unresolved.append(field_id)
@@ -1568,6 +1705,26 @@ def _resolve_normalized(user_email: str,
 
         # Global mapping — fill from the canonical profile.
         val = values.get(field) if field else None
+        # Same two shape guards as the bank path above. This is the branch that
+        # actually produced both live wrong answers, because `_categorize` is
+        # the loosest classifier in the chain: it matched "portfolio" inside a
+        # 120-character essay prompt and "available" inside "Which shift are
+        # you available for?".
+        if val not in (None, "") and _scalar_answer_to_prose_question(
+                item, "url" if category in _LEGACY_SCALAR_CATEGORIES else ""):
+            needs_generation.append({"field_id": field_id,
+                                     "question": item["label"] or norm,
+                                     "label": norm,
+                                     "category": CAT_ESSAY, "kind": KIND_ESSAY,
+                                     "open_ended": True})
+            if required:
+                required_total -= 1
+            continue
+        if val not in (None, "") and not _value_fits_options(
+                field_id, val, item.get("options")):
+            unresolved.append(field_id)
+            has_novel = True
+            continue
         if val not in (None, ""):
             resolved[field_id] = {"value": val, "field": field, "category": category,
                                   "kind": kind, "source": "profile", "confidence": 1.0}

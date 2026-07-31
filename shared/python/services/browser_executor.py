@@ -1245,6 +1245,33 @@ class BrowserExecutor(ExecutorAdapter):
         """Sign in or create a Workday candidate account via the credential vault."""
         if not user_email:
             return False
+        # PREFLIGHT: creating a Workday candidate account commits us to reading
+        # a verification email. If this deployment cannot receive mail at a
+        # managed alias, that round trip is impossible and the gate can never
+        # clear — so registering an account is worse than not trying: it puts a
+        # half-created account on a real employer's portal, burns the OTP
+        # poll's full timeout inside a Lambda, and reports the dead end to the
+        # user as though finishing it were their job.
+        #
+        # Measured on the live system: `managed_mailbox_service.mailbox_enabled()`
+        # is False and `apply_mail_domain()` is empty, an alias was minted
+        # anyway at `harshith.manne@my-private-mail.com`, four Workday
+        # applications registered against it, and `mail_messages` has never
+        # held a document. Bail out here and let the caller raise the honest
+        # wall instead.
+        try:
+            from services import managed_mailbox_service as mailbox
+            if not mailbox.can_receive_mail():
+                logger.info(
+                    "workday account: managed mailbox cannot receive mail "
+                    "(APPLY_MAILBOX_ENABLED / APPLY_MAIL_DOMAIN) — not "
+                    "registering an employer account we could never verify")
+                return False
+        except Exception:
+            # A probe fault must not silently re-enable the flow.
+            logger.warning("workday account: mailbox capability probe failed — "
+                           "treating as unable to receive")
+            return False
         apply_email = self._managed_apply_email(user_email) or user_email
         # login_url/company are DISPLAY metadata on the vault row so the user can
         # find this employer's portal again from the credentials screen.
@@ -1796,10 +1823,18 @@ class BrowserExecutor(ExecutorAdapter):
             logger.info("browser submit SUCCESS (filled=%d skipped=%d)", filled, len(skipped))
             return {"status": SUBMIT_SUCCESS, "confirmation": conf,
                     "screenshot_ref": ref, "wall": None, "error": None}
-        # Still on the form. Distinguish a genuine field error from an
-        # INVISIBLE reCAPTCHA-v3 score-block (no visible challenge — the
-        # submit just silently doesn't go through). A field error is a
-        # real failure; a score-block is a captcha wall → human handoff.
+        # Still on the form. Three different things look alike here and only
+        # one of them is a failure:
+        #   * an ANTI-BOT rejection ("flagged as possible spam") — a human
+        #     challenge, and the row must reach the user's own browser;
+        #   * an INVISIBLE reCAPTCHA-v3 score-block (no visible challenge, the
+        #     submit silently doesn't go through) — same handoff;
+        #   * a genuine field-level validation error — a real failure.
+        antibot = self._antibot_block(page)
+        if antibot:
+            logger.info("browser submit: anti-bot rejection (%s) → human handoff",
+                        antibot[:60])
+            return self._wall(WALL_CAPTCHA, page, application, ["captcha"])
         field_err = self._field_validation_error(page)
         if field_err:
             ref = self._shoot(page, application)
@@ -2513,6 +2548,45 @@ class BrowserExecutor(ExecutorAdapter):
             return (el.inner_text() or "").strip()[:400] or "submitted"
         m = _CONFIRM_RE.search(self._body_text(page))
         return m.group(0)[:400] if m else "submitted"
+
+    # An ATS's anti-bot verdict, which arrives in the SAME `[role=alert]` /
+    # error-message slot a real field error uses. Two live Ashby submissions
+    # (Cerebras, Chainalysis) came back with
+    #
+    #   "We couldn't submit your application. Your application submission was
+    #    flagged as possible spam."
+    #
+    # and were recorded as terminal `failed` rows with that text as the error.
+    # That is the wrong reading twice over: nothing about the application was
+    # invalid, and the user was never offered the one-tap handoff that the
+    # captcha path already builds for exactly this situation. It is a human
+    # challenge, so it must produce a WALL.
+    _ANTIBOT_RE = re.compile(
+        r"(flagged as (?:possible )?spam|possible spam|suspected? (?:as )?spam"
+        r"|automated (?:traffic|submission)s?|unusual (?:traffic|activity)"
+        r"|bot(?:-| )?detect|are you a (?:human|robot)|verify you are human"
+        r"|security check (?:failed|required)|access denied"
+        r"|blocked for security|too many (?:attempts|requests)"
+        r"|rate[- ]limit)", re.IGNORECASE)
+
+    def _antibot_block(self, page) -> Optional[str]:
+        """The visible text of an anti-bot rejection, or None.
+
+        Checked BEFORE `_field_validation_error` because they read the same
+        DOM slots and the anti-bot verdict is the more specific diagnosis.
+        """
+        for sel in (".field-error", "[class*=error-message]", "[role=alert]",
+                    "[class*=alert]", "[class*=banner]"):
+            try:
+                el = page.query_selector(sel)
+                if el is None or not el.is_visible():
+                    continue
+                txt = (el.inner_text() or "").strip()
+                if txt and self._ANTIBOT_RE.search(txt):
+                    return txt[:200]
+            except Exception:
+                continue
+        return None
 
     def _field_validation_error(self, page) -> Optional[str]:
         """A genuine, VISIBLE field-level validation error (a control flagged

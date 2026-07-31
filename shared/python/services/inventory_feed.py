@@ -137,14 +137,26 @@ def _posted_text(days: Optional[int]) -> str:
 # Retrieval + scoring
 # ---------------------------------------------------------------------------
 
-def _role_families(titles: Iterable[str], skills: Iterable[str]) -> List[str]:
+def _role_families(titles: Iterable[str], skills: Iterable[str],
+                   resume_families: Optional[Iterable[str]] = None) -> List[str]:
     """Families to retrieve for.
 
     Errs wide, exactly as the guest path does: retrieval that is too tight
     returns nothing and reads as an empty market, while the scorer is good at
-    pushing a poor fit down. An explicit title filter from the tab UI takes
-    priority; with no titles at all we return [] and retrieve unfiltered, which
-    is the correct reading of "show me everything".
+    pushing a poor fit down. With no titles and no resume families at all we
+    return [] and retrieve unfiltered, which is the correct reading of "show me
+    everything".
+
+    The RESUME's own families are unioned in because titles alone were far too
+    tight. Measured on the live inventory: a "cloud engineer / devops engineer /
+    site reliability engineer" search classifies to the single family `devops`,
+    which is 565 of 53,730 active postings — 366 Workday candidates and 199
+    career-page candidates, of which ~150 survived the geo filter. That is the
+    whole reason the feed looked thin and mediocre. The same user's resume also
+    classifies as `software_engineering`; unioning it takes retrieval to 2,528
+    and 1,952 respectively, a ~7x wider pool for the scorer to rank. Widening
+    RETRIEVAL cannot lower precision here — ordering is decided by `fit_score`,
+    and an off-family posting scores below the ones already being shown.
     """
     from services import fit_score
 
@@ -153,16 +165,23 @@ def _role_families(titles: Iterable[str], skills: Iterable[str]) -> List[str]:
         fam = fit_score.classify_role(str(value or ""))
         if fam and fam not in out:
             out.append(fam)
+    # Only widen a filter that already exists. With no titles the caller wants
+    # everything, and injecting the resume's families there would NARROW the
+    # feed instead of widening it.
+    if out:
+        for fam in (resume_families or []):
+            if fam and fam not in out:
+                out.append(str(fam))
     return out
 
 
-def _score_rows(rows: List[Dict[str, Any]], user_email: str,
-                resume_skills: List[str], resume_years: Optional[int]) -> None:
-    """Score in place with the shared engine.
+def _build_profile(user_email: str, resume_skills: List[str],
+                   resume_years: Optional[int]) -> Optional[Dict[str, Any]]:
+    """The scorer's resume profile, or None when there is nothing to score on.
 
-    Writes `match_score` / `matched_skills` / `missing_skills` - the three
-    fields the tab UI and `_rank` already consume - plus the versioned `fit`
-    block the guest cards carry, so both surfaces explain a score the same way.
+    Split out of `_score_rows` so RETRIEVAL can consult the resume's role
+    families before the query runs (see `_role_families`) without loading and
+    re-analysing the resume a second time.
     """
     from services import fit_score
 
@@ -181,10 +200,29 @@ def _score_rows(rows: List[Dict[str, Any]], user_email: str,
             resume = {}
 
     if resume:
-        profile = fit_score.build_resume_profile(resume)
-    elif resume_skills:
-        profile = fit_score._profile_from_skills(resume_skills, None, resume_years)
-    else:
+        return fit_score.build_resume_profile(resume)
+    if resume_skills:
+        return fit_score._profile_from_skills(resume_skills, None, resume_years)
+    return None
+
+
+def _score_rows(rows: List[Dict[str, Any]], user_email: str,
+                resume_skills: List[str], resume_years: Optional[int],
+                profile: Optional[Dict[str, Any]] = None) -> None:
+    """Score in place with the shared engine.
+
+    Writes `match_score` / `matched_skills` / `missing_skills` - the three
+    fields the tab UI and `_rank` already consume - plus the versioned `fit`
+    block the guest cards carry, so both surfaces explain a score the same way.
+
+    `profile` may be passed by a caller that already built it (`build_feed`
+    does, for retrieval); omitted, it is built here exactly as before.
+    """
+    from services import fit_score
+
+    if profile is None:
+        profile = _build_profile(user_email, resume_skills, resume_years)
+    if profile is None:
         # No resume and no skills: there is nothing to score against, so leave
         # every row unscored rather than invent a number. `_rank` then falls
         # back to recency, which is the honest ordering.
@@ -291,7 +329,12 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         except (TypeError, ValueError):
             pass
 
-    families = _role_families(titles, skills)
+    # Built BEFORE retrieval: its role families widen the query (the pool was
+    # the feed's binding constraint, not the ranking), and reusing the same
+    # object for scoring means the resume is loaded and analysed once.
+    profile = _build_profile(user_email, skills, resume_years)
+    families = _role_families(titles, skills,
+                              sorted((profile or {}).get("families") or ()))
     try:
         docs = inv.find_active_fresh(
             source=source,
@@ -307,20 +350,21 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
                        source, type(exc).__name__)
         return None
 
-    # Reuse the tab's OWN geo filter rather than a country-code check. Most
-    # inventory rows carry no parsed country (boards ship a free-text location),
-    # so a country-code test passes almost everything and leaks obvious non-US
-    # rows - "IN_Senior Associate_DevOps_GCC" and Commonwealth Bank both showed
-    # up in a US-only slice. `_keep_us` does the tiered location-text analysis
-    # the legacy path already relies on.
-    from services.career_pages_service import _keep_us
+    # Geo is decided by the ONE shared rule (`us_geo`), not a country-code
+    # check: most inventory rows carry no parsed country (boards ship a
+    # free-text location), so a country-code test passes almost everything and
+    # leaks obvious non-US rows - "IN_Senior Associate_DevOps_GCC" and
+    # Commonwealth Bank both showed up in a US-only slice. This module used to
+    # borrow `career_pages_service._keep_us` for BOTH source tabs, which was
+    # the weaker of the two implementations then in the tree.
+    from services import us_geo
 
     rows: List[Dict[str, Any]] = []
     for doc in docs:
         row = _row_from_posting(doc, tz_offset=tz_offset)
         if row is None:
             continue
-        if us_only and not _keep_us(row):
+        if us_only and not us_geo.keep_us_row(row):
             continue
         rows.append(row)
     rows = _dedupe(rows)
@@ -330,7 +374,7 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
                     source, len(rows), MIN_ROWS)
         return None
 
-    _score_rows(rows, user_email, skills, resume_years)
+    _score_rows(rows, user_email, skills, resume_years, profile=profile)
     rows.sort(key=lambda j: (-(j.get("match_score") or 0),
                             j.get("days_ago") if j.get("days_ago") is not None else 99))
     rows = rows[:GLOBAL_KEEP]

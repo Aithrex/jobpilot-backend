@@ -470,38 +470,22 @@ def _geo_keep_us(loc_text: str, country_code: Optional[str] = None,
     "Pune" DROP, "Remote" KEEP, "Remote - India" DROP, "Austin, TX" KEEP,
     "Indiana" KEEP (NOT foreign), "Ontario, California" KEEP (NOT foreign),
     "N Locations" DROP (list stage KEEP for enrichment), "" DROP.
+
+    DELEGATES to ``services.us_geo``, which is now the single implementation
+    of this rule (this function and ``career_pages_service._keep_us`` had
+    drifted apart while both were live). The tiers above still describe what
+    happens; ``us_geo`` additionally makes the two-letter state-code tier
+    POSITIONAL, which is what stopped "Hyderabad-Hi-Tec City" (Hawaii) and
+    "CA - Toronto" (California) leaking into US-only slices, and it accepts a
+    bare "US" plus a large-US-city list, which recovered ~1,500 real US rows
+    per 20,000 that this version dropped.
     """
-    # 0. Authoritative geo from detail enrichment beats the text heuristic.
-    if country_code:
-        return country_code == "US"
-    loc = (loc_text or "").strip().lower()
-    if not loc:
-        return False  # empty / unknown -> DROP (was KEEP)
-    # 1. Explicit foreign COUNTRY / province.
-    if _NON_US_COUNTRY_RE.search(loc) or _CA_PROVINCE_RE.search(loc):
-        return False
-    # 1b. "Toronto" outranks the state-code tier — Workday's Canadian rows
-    # like "CA-Toronto-York St" would otherwise be kept by the "ca" token.
-    if "toronto" in loc:
-        return False
-    # 2. US country word or US state (code or full name).
-    if "united states" in loc or "usa" in loc:
-        return True
-    if re.search(r"\b(us|u\.s\.)\b", loc):
-        return True
-    if _US_STATE_RE.search(loc) or _US_STATE_NAME_RE.search(loc):
-        return True
-    # 3. Bare foreign hub city.
-    if _NON_US_CITY_RE.search(loc):
-        return False
-    # 4. Clear remote, no foreign marker.
-    if _REMOTE_RE.search(loc):
-        return True
-    # 5. Multi-location rollup — deferred at the list stage for enrichment.
-    if defer_multi and _MULTI_LOC_RE.search(loc):
-        return True
-    # 6. Ambiguous -> DROP.
-    return False
+    from services import us_geo
+
+    # `country_code` here is the enrichment's ISO-2; `us_geo` normalizes any
+    # spelling of "United States" and treats a non-US value as authoritative,
+    # which is exactly the tier-0 behaviour this function had.
+    return us_geo.keep_us(loc_text, country_code, defer_multi=defer_multi)
 
 
 def _fetch_tenant_term(

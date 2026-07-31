@@ -223,7 +223,10 @@ class TestGatherConsumesNeedsGeneration:
                 continue
             if "generate_for_gather" in path.read_text(encoding="utf-8",
                                                       errors="replace"):
-                hits.append(str(path.relative_to(root)))
+                # POSIX separators so the assertion holds on Windows too —
+                # `str(PurePath)` yields backslashes there and the test failed
+                # for that reason alone.
+                hits.append(path.relative_to(root).as_posix())
         assert hits == ["shared/python/services/auto_apply_service.py"], hits
 
 
