@@ -130,6 +130,7 @@ class TestWorkdayAccountPreflight:
         from services import managed_mailbox_service as mm
 
         monkeypatch.setattr(mm, "can_receive_mail", lambda: False)
+        monkeypatch.setattr(mm, "has_ever_received", lambda e: True)
         ex = BrowserExecutor.__new__(BrowserExecutor)
 
         def _boom(*a, **k):                      # must never be reached
@@ -147,6 +148,24 @@ class TestWorkdayAccountPreflight:
             raise RuntimeError("probe exploded")
 
         monkeypatch.setattr(mm, "can_receive_mail", _raise)
+        monkeypatch.setattr(mm, "has_ever_received", lambda e: True)
+        ex = BrowserExecutor.__new__(BrowserExecutor)
+        monkeypatch.setattr(
+            BrowserExecutor, "create_account",
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not register")), raising=False)
+        assert ex._workday_clear_account_gate(
+            _Page({}), object(), {}, "user@example.com", "x") is False
+
+
+    def test_configured_but_never_delivered_still_refuses(self, monkeypatch):
+        """Configuration is necessary but not sufficient. Prod has both flags
+        on and live MX, yet nothing has ever been observed arriving — which is
+        exactly the state that produced four unverifiable Workday accounts."""
+        from services import managed_mailbox_service as mm
+
+        monkeypatch.setattr(mm, "can_receive_mail", lambda: True)
+        monkeypatch.setattr(mm, "has_ever_received", lambda e: False)
         ex = BrowserExecutor.__new__(BrowserExecutor)
         monkeypatch.setattr(
             BrowserExecutor, "create_account",

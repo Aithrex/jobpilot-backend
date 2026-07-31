@@ -649,6 +649,7 @@ def _gate_executor(monkeypatch, ex):
     # it explicitly rather than depending on ambient config.
     from services import managed_mailbox_service as mailbox
     monkeypatch.setattr(mailbox, "can_receive_mail", lambda: True)
+    monkeypatch.setattr(mailbox, "has_ever_received", lambda email: True)
     monkeypatch.setattr(type(ex), "_managed_apply_email",
                         lambda self, email: "alias@my-private-mail.com")
     monkeypatch.setattr(type(ex), "create_account",

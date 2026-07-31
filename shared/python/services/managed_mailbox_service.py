@@ -113,16 +113,41 @@ def can_receive_mail() -> bool:
 
     This exists because an alias is minted regardless (D3 reserves local parts
     so the model is ready before the infra is), so the mere EXISTENCE of an
-    alias is not evidence that mail can arrive. Live consequence: a candidate
-    account was registered on four employers' Workday portals against
-    ``harshith.manne@my-private-mail.com``, each portal mailed a verification
-    link there, and `mail_messages` has never held a single document — so every
-    one of those applications parked on an account wall that could not, even in
-    principle, clear. Callers that need a round-trip through the inbox must
-    check this FIRST and say so plainly when it is False, rather than
-    attempting the flow and blaming the user for the result.
+    alias is not evidence that mail can arrive.
+
+    SCOPE — read this before relying on it. This is a CONFIGURATION check, and
+    configuration is necessary but NOT sufficient. Prod currently has both
+    values set (`APPLY_MAIL_DOMAIN=my-private-mail.com`,
+    `APPLY_MAILBOX_ENABLED=true`) and the Cloudflare MX records are live, yet
+    `mail_messages` holds nothing and four Workday candidate accounts were
+    registered against an alias whose verification mail was never observed
+    arriving. So this returning True does NOT prove a round trip completes —
+    only that someone intended it to. `has_ever_received` is the observational
+    counterpart; a caller about to commit to reading an inbox should consult
+    both.
     """
     return bool(mailbox_enabled() and apply_mail_domain())
+
+
+def has_ever_received(user_email: str) -> bool:
+    """Has a message ever actually landed for this user's managed mailbox?
+
+    The observational half of `can_receive_mail`. Configuration says the
+    pipeline is meant to work; this says whether it has been seen working for
+    THIS user, which is what a flow that must read a verification email
+    actually depends on.
+
+    Fails CLOSED on any error: an unreachable collection is not evidence of
+    delivery.
+    """
+    if not user_email:
+        return False
+    try:
+        return DBConnect().get_db().mail_messages.find_one(
+            {"user_email": user_email}, {"_id": 1}) is not None
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("managed_mailbox: delivery probe failed: %s", type(e).__name__)
+        return False
 
 
 def mailbox_enabled() -> bool:

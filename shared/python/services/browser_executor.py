@@ -1253,19 +1253,29 @@ class BrowserExecutor(ExecutorAdapter):
         # poll's full timeout inside a Lambda, and reports the dead end to the
         # user as though finishing it were their job.
         #
-        # Measured on the live system: `managed_mailbox_service.mailbox_enabled()`
-        # is False and `apply_mail_domain()` is empty, an alias was minted
-        # anyway at `harshith.manne@my-private-mail.com`, four Workday
-        # applications registered against it, and `mail_messages` has never
-        # held a document. Bail out here and let the caller raise the honest
-        # wall instead.
+        # Measured on the live system: prod HAS both settings on
+        # (`APPLY_MAIL_DOMAIN=my-private-mail.com`, `APPLY_MAILBOX_ENABLED=true`)
+        # and Cloudflare MX is live, yet `mail_messages` holds nothing and four
+        # Workday applications registered accounts against
+        # `harshith.manne@my-private-mail.com` whose verification mail was never
+        # observed arriving. Configuration alone therefore does NOT clear this
+        # preflight — delivery has to have been seen for this user at least
+        # once, or we are registering an account against an inbox we have no
+        # evidence we can read.
         try:
             from services import managed_mailbox_service as mailbox
             if not mailbox.can_receive_mail():
                 logger.info(
-                    "workday account: managed mailbox cannot receive mail "
+                    "workday account: managed mailbox not configured to receive "
                     "(APPLY_MAILBOX_ENABLED / APPLY_MAIL_DOMAIN) — not "
                     "registering an employer account we could never verify")
+                return False
+            if not mailbox.has_ever_received(user_email):
+                logger.info(
+                    "workday account: no mail has ever been observed arriving "
+                    "for %s — not registering an employer account whose "
+                    "verification link we have no evidence we can read",
+                    user_email)
                 return False
         except Exception:
             # A probe fault must not silently re-enable the flow.
