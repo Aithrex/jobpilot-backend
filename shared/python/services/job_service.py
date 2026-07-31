@@ -14,19 +14,98 @@ import hashlib
 import json
 import logging
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlencode
 
 import requests
+from pymongo import ASCENDING
 
 from utils.config import _get_config_value
 from utils.db_connect import DBConnect
 
 logger = logging.getLogger(__name__)
 
+
+# ======================================================================
+# Paid-source (cost_class) chokepoint
+# ======================================================================
+# JSearch/RapidAPI is METERED: every call costs real money and is trivially
+# amplified by anonymous traffic. mnc_jobs_service already drops cost_class
+# "paid" catalog rows on guest-safe runs, but that is one caller's gate. The
+# gate below lives on _search_jsearch_raw itself - the single function every
+# JSearch path funnels through - so a NEW caller cannot reach the paid API by
+# another route and quietly bypass the policy.
+#
+# Guest context is established two ways, both fail-safe:
+#   1. EXPLICIT - any caller (including background workers, where there is no
+#      Flask request) can wrap work in ``guest_cost_context()``. A plain
+#      module-level flag is used rather than a ContextVar on purpose:
+#      ThreadPoolExecutor does NOT propagate contextvars into worker threads,
+#      and the guest match pipeline fans out across exactly such a pool - a
+#      ContextVar would silently fail OPEN there.
+#   2. IMPLICIT - inside a Flask request with no verified JWT identity, the
+#      caller is by definition unauthenticated, so paid sources are refused
+#      even if nobody remembered to set the flag.
+# A stale/leaked flag can only ever cause a REFUSAL (degraded results), never
+# an unmetered spend.
+
+class PaidSourceBlocked(RuntimeError):
+    """A metered (cost_class=paid) source was reached from guest context."""
+
+
+_guest_cost_lock = threading.Lock()
+_guest_cost_depth = 0
+
+
+@contextmanager
+def guest_cost_context():
+    """Mark the enclosing work as anonymous/guest: metered sources refuse."""
+    global _guest_cost_depth
+    with _guest_cost_lock:
+        _guest_cost_depth += 1
+    try:
+        yield
+    finally:
+        with _guest_cost_lock:
+            _guest_cost_depth -= 1
+
+
+def in_guest_cost_context() -> bool:
+    """True when metered/paid job sources must not be called."""
+    if _guest_cost_depth > 0:
+        return True
+    try:
+        from flask import has_request_context
+
+        if not has_request_context():
+            return False  # background worker with no explicit marker
+        from flask_jwt_extended import verify_jwt_in_request
+
+        # optional=True: returns None (no raise) when there is no token, so an
+        # unauthenticated HTTP caller is detected without ever emitting a 401.
+        verify_jwt_in_request(optional=True)
+        from flask_jwt_extended import get_jwt_identity
+
+        return not get_jwt_identity()
+    except Exception:
+        # Cannot prove the caller is authenticated -> treat as guest.
+        return True
+
+# Sentinel for `match_jobs(profile=...)`: distinguishes "caller did not pass a
+# résumé profile" from the meaningful "caller passed None = this account has no
+# parsed résumé, do not score it".
+_PROFILE_UNSET = object()
+
 # ---- Portfolio skills (same source as chat_service.PORTFOLIO_CONTEXT) ----
+# NO LONGER A SCORING INPUT, and nothing in the repo reads it any more. The
+# removed legacy scorer matched a résumé-less account against this hardcoded
+# list and printed the result as that person's fit (routinely 100/100 "Strong
+# match"). Kept only as a documented tombstone for one release so a reviewer
+# grepping the old behaviour lands here; delete on the next pass.
 PORTFOLIO_SKILLS = [
     "Python", "Java", "Bash", "JavaScript", "SQL", "HTML", "CSS",
     "AWS", "EC2", "S3", "VPC", "ECS", "Lambda", "CloudWatch", "CloudTrail",
@@ -238,7 +317,19 @@ class JobService:
                 expireAfterSeconds=APIFY_ACTOR_CACHE_TTL_SECONDS,
                 name="apify_actor_cache_cached_at_ttl",
             )
-            self.saved_jobs.create_index("job_id", unique=True)
+            # DEFECT L: saved_jobs dedup is PER-USER, not global. A source-prefixed
+            # job_id ("{source}:{id}") is a per-posting canonical id SHARED across
+            # users; a global unique on job_id alone made user B's save of a posting
+            # user A already saved raise DuplicateKeyError. The correct dedup key is
+            # (user_email, job_id): idempotent per user, collision-free across users.
+            # This compound also serves the hot {user_email} read prefix
+            # (get_saved_jobs). The old global job_id_1 index is dropped by
+            # scripts/migrate_indexes.py AFTER this compound exists (safe reindex).
+            self.saved_jobs.create_index(
+                [("user_email", ASCENDING), ("job_id", ASCENDING)],
+                unique=True,
+                name="user_email_job_id_unique",
+            )
             self.job_filter_preferences.create_index("user_email", unique=True)
             self.user_apify_keys.create_index("user_email", unique=True)
         except Exception as e:
@@ -428,7 +519,21 @@ class JobService:
         the intent as post-filters in the main pipeline. We also widen
         date_posted from "today" → "3days" because JSearch's daily index
         lags ~1 day for many sources.
+
+        COST GATE (first thing, before the key is even read): JSearch is a
+        metered paid source and is NEVER callable from guest/unauthenticated
+        context, whichever caller got here. See the module header.
         """
+        if in_guest_cost_context():
+            logger.warning(
+                "JSearch refused: metered (cost_class=paid) source reached "
+                "from guest/unauthenticated context"
+            )
+            raise PaidSourceBlocked(
+                "JSearch is a paid source and is not available to "
+                "guest/unauthenticated callers"
+            )
+
         api_key = self._get_jsearch_key()
         if not api_key:
             logger.info("JSearch skipped: JSEARCH_API_KEY not configured")
@@ -951,6 +1056,13 @@ class JobService:
 
         queries = [q for q in (queries or []) if q] or [""]
 
+        # Resolve the caller's résumé ONCE for this whole search. `match_jobs`
+        # runs again after every source finishes (streaming partials), so
+        # letting it resolve per call meant one Mongo read per source. `None`
+        # here is meaningful: no parsed résumé => no fit score at all.
+        from services import fit_score as _fit_score
+        fit_profile = _fit_score.load_profile_for_user(user_email)
+
         tasks = []
         task_meta: Dict[Any, str] = {}
         with ThreadPoolExecutor(max_workers=APIFY_MAX_WORKERS) as pool:
@@ -1069,6 +1181,7 @@ class JobService:
                     try:
                         partial_scored = self.match_jobs(
                             list(all_jobs), user_email=user_email,
+                            profile=fit_profile,
                         )
                         partial_cb({
                             "jobs": self._prepare_jobs_for_response(partial_scored),
@@ -1093,13 +1206,15 @@ class JobService:
                             src, stream_err,
                         )
 
-        matched = self.match_jobs(all_jobs, user_email=user_email)
+        matched = self.match_jobs(all_jobs, user_email=user_email,
+                                  profile=fit_profile)
         if not matched and fallback_jobs and not h1b_only:
             logger.info(
                 "Strict job filters produced no rows; showing %d closest matches",
                 len(fallback_jobs),
             )
-            matched = self.match_jobs(fallback_jobs, user_email=user_email)
+            matched = self.match_jobs(fallback_jobs, user_email=user_email,
+                                      profile=fit_profile)
             source_counts = fallback_source_counts
         returned_jobs = self._prepare_jobs_for_response(matched)
         return {
@@ -1556,8 +1671,12 @@ class JobService:
                 continue
             seen_ids.add(id(job))
             balanced.append(job)
+        # Order by `rank_score` (fit + the preference bonuses `match_jobs` keeps
+        # OUT of the displayed score), falling back to the fit score itself for
+        # rows that never went through `match_jobs` (cached older payloads).
         balanced.sort(
-            key=lambda j: j.get("match_score", 0),
+            key=lambda j: (j.get("rank_score") if j.get("rank_score") is not None
+                           else j.get("match_score", 0)),
             reverse=True,
         )
         prepared: List[Dict[str, Any]] = []
@@ -1838,168 +1957,120 @@ class JobService:
     # Skill Matching
     # ------------------------------------------------------------------
 
-    def match_jobs(self, jobs: List[Dict], user_email: str = "") -> List[Dict]:
-        """Score and rank jobs against the user's resume profile.
+    def match_jobs(self, jobs: List[Dict], user_email: str = "",
+                   profile: Any = _PROFILE_UNSET) -> List[Dict]:
+        """Score and rank search results with the SHARED fit engine.
 
-        The score blends four signals (each 0..1, then weighted):
-          - title_relevance:   does the job title fall in the candidate's intent family?
-          - skill_overlap:     weighted resume-skill hits in the JD (core skills count more)
-          - domain_relevance:  does the JD mention the candidate's domain at all?
-          - experience_alignment: seniority bracket match
+        ADR-002: `services.fit_score` is the ONE candidate-to-job match score in
+        this product. It is what `/api/jobs/pipeline/match-scores` returns, what
+        the inventory feed writes, and what `apply_match_sweep` gates auto-apply
+        on at 65. This method used to run its OWN blend
+        (`title*35 + skill*30 + domain*20 + experience*15` plus flat bonuses),
+        so the same (resume, posting) pair scored 54 here and 75 there, and the
+        frontend then labelled THIS number with fit_score's band words. One
+        engine now serves the search tab too.
 
-        On top of the blended base we still apply small bonuses (H1B, remote,
-        new-grad keywords) so users with a hard preference still see them
-        bubble up. The previous flat skill-overlap heuristic is preserved as
-        a fallback when no resume / structured profile is available.
+        Two things that are deliberately NOT part of the score:
+
+          * H1B / remote / new-grad preferences. Those are eligibility and
+            preference signals, not evidence that the candidate fits the role,
+            so they live in `rank_score` (ordering only, never displayed) the
+            same way `workday_jobs_service` keeps them out of `match_score`.
+          * Anything about a user with no parsed resume. See `_unscored_jobs`.
+
+        `profile` may be passed by a caller that scores the same user's rows
+        more than once (the streaming search does, once per source that
+        finishes) so the active resume is resolved from Mongo only once. Pass
+        `None` explicitly to mean "this account has no parsed resume".
         """
-        from services.resume_profiler import (
-            domain_relevance,
-            experience_alignment,
-            feedback_signal_for_user,
-            title_relevance,
-            weighted_skill_overlap,
-        )
+        from services import fit_score
 
-        profile = self._get_resume_profile(user_email=user_email)
+        if profile is _PROFILE_UNSET:
+            profile = fit_score.load_profile_for_user(user_email)
 
-        # No resume yet → fall back to the original flat scorer (legacy path)
-        # so first-time users still get useful results before they upload.
+        # No parsed resume => NO score. The old fallback here scored a résumé-less
+        # account off a hardcoded PORTFOLIO_SKILLS list plus +15/+10/+5 bonuses and
+        # routinely produced 100 "Strong match" on postings the shared engine
+        # scores at 20 ("unlikely"), in green, on a row it had never compared to a
+        # résumé. There is no defensible number to print here.
         if not profile:
-            return self._legacy_match_jobs(jobs, user_email=user_email)
-
-        weights = {
-            "title": 35.0,
-            "skill": 30.0,
-            "domain": 20.0,
-            "experience": 15.0,
-        }
+            return self._unscored_jobs(jobs)
 
         for job in jobs:
-            title = job.get("title", "") or ""
-            desc = job.get("description", "") or ""
-            text = f"{title} {desc}"
-
-            title_score = title_relevance(profile, title)
-            matched, raw_overlap, norm_overlap = weighted_skill_overlap(profile, text)
-            domain_score = domain_relevance(profile, text)
-            exp_score = experience_alignment(profile, text)
-
-            base = (
-                title_score * weights["title"]
-                + norm_overlap * weights["skill"]
-                + domain_score * weights["domain"]
-                + exp_score * weights["experience"]
+            verdict = fit_score.score_one(
+                jd_text=job.get("description") or "",
+                title=job.get("title") or "",
+                profile=profile,
+                location=job.get("location") or "",
             )
+            score = int(verdict["match_score"])
+            job["match_score"] = score
+            # Requirements this posting names that the résumé evidences /
+            # does not. This is the direction the UI already claims to show
+            # ("Asked for, not evidenced"); the previous list was inverted -
+            # résumé skills the JD failed to mention.
+            job["matched_skills"] = list(verdict.get("matched_skills") or [])
+            job["missing_skills"] = list(verdict.get("missing_top") or [])[:30]
+            job["score_version"] = verdict["score_version"]
+            job["fit"] = {
+                "score_version": verdict.get("score_version"),
+                "band": verdict.get("band"),
+                "confidence": verdict.get("confidence"),
+                "components": verdict.get("component_scores") or {},
+                "explanation": str(verdict.get("explanation") or "")[:400],
+                "missing_requirements": (verdict.get("missing_requirements") or [])[:4],
+            }
 
-            # Small qualitative bonuses (capped so they can't replace fit).
+            # Ordering-only preference bonuses. Never added to `match_score`.
             bonus = 0
             if job.get("h1b_sponsor"):
                 bonus += 8
-            title_desc = text.lower()
-            if any(kw in title_desc for kw in NEW_GRAD_KEYWORDS) and profile.get("experience_years", 0) <= 3:
+            blob = f"{job.get('title') or ''} {job.get('description') or ''}".lower()
+            resume_years = (profile.get("years") or 0)
+            if any(kw in blob for kw in NEW_GRAD_KEYWORDS) and resume_years <= 3:
                 bonus += 5
             if job.get("is_remote"):
                 bonus += 2
+            job["rank_score"] = min(100, score + bonus)
 
-            score = int(min(100, max(0, round(base + bonus))))
-
-            job["match_score"] = score
-            job["matched_skills"] = sorted(set(matched))
-            # Surface the signal breakdown so the UI can explain *why* a job
-            # ranks where it does (and so we can tune weights from real data).
-            job["match_breakdown"] = {
-                "title_relevance": round(title_score, 2),
-                "skill_overlap": round(norm_overlap, 3),
-                "domain_relevance": round(domain_score, 2),
-                "experience_alignment": round(exp_score, 2),
-                "weighted_skill_score": raw_overlap,
-                "primary_intent": profile.get("primary_intent"),
-                "secondary_intent": profile.get("secondary_intent"),
-            }
-            # Keep `missing_skills` as the previous shape for the analyze flow:
-            # everything in the candidate's weighted-skill list that the job
-            # didn't mention. We report the highest-weight ones first.
-            weighted = profile.get("weighted_skills") or {}
-            missing = [s for s in weighted if s not in matched]
-            missing.sort(key=lambda s: weighted.get(s, 0.0), reverse=True)
-            job["missing_skills"] = missing[:30]
-
-        jobs.sort(key=lambda j: j["match_score"], reverse=True)
+        jobs.sort(key=lambda j: (-(j.get("rank_score") or 0),
+                                 -(j.get("match_score") or 0)))
         return jobs
 
-    def _legacy_match_jobs(self, jobs: List[Dict], user_email: str = "") -> List[Dict]:
-        """Pre-profile flat scorer — kept as a fallback for users without a resume."""
-        resume_skills = self._get_resume_skills(user_email=user_email)
-        all_skills = set(s.lower() for s in PORTFOLIO_SKILLS)
-        all_skills.update(s.lower() for s in resume_skills)
+    def _unscored_jobs(self, jobs: List[Dict]) -> List[Dict]:
+        """The honest no-parsed-résumé result: rows, no fit verdict.
 
-        for job in jobs:
-            desc_lower = (job.get("description", "") + " " + job.get("title", "")).lower()
-            matched = []
-            for skill in all_skills:
-                pattern = r"\b" + re.escape(skill) + r"\b" if len(skill) > 2 else re.escape(skill)
-                if re.search(pattern, desc_lower, re.IGNORECASE):
-                    matched.append(skill)
-
-            score = min(len(matched) * 10, 70)  # cap skill portion at 70
-            if job.get("h1b_sponsor"):
-                score += 15
-            title_desc = (job.get("title", "") + " " + job.get("description", "")).lower()
-            if any(kw in title_desc for kw in NEW_GRAD_KEYWORDS):
-                score += 10
-            if job.get("is_remote"):
-                score += 5
-            score = min(score, 100)
-
-            job["match_score"] = score
-            job["matched_skills"] = sorted(set(matched))
-            job["missing_skills"] = sorted(all_skills - set(matched))
-
-        jobs.sort(key=lambda j: j["match_score"], reverse=True)
-        return jobs
-
-    def _get_resume_skills(self, user_email: str = "") -> List[str]:
-        """Get flat skills list from the user's ACTIVE resume asset (v3)."""
-        if not user_email:
-            return []
-        try:
-            from services import resume_access
-            resume = resume_access.get_active_structured(user_email)
-            if resume:
-                return resume.get("skills", [])
-        except Exception as e:
-            logger.warning(f"Failed to load resume skills for {user_email}: {e}")
-        return []
-
-    def _get_resume_profile(self, user_email: str = "") -> Optional[Dict[str, Any]]:
-        """Build (or load) a resume_profiler profile for the user.
-
-        Profiles are derived deterministically from the structured resume on
-        every call — they're cheap (no LLM, ~milliseconds) so we don't bother
-        caching across requests. We DO incorporate the user's recent activity
-        as a feedback signal so clicks/applies bias future ranking.
+        `match_score = 0` with NO `fit` / `score_version` marker is the
+        platform's "not scored" convention (`inventory_feed._score_rows` uses
+        exactly this, and the frontend's `fitBand` renders 0 as the "Not
+        scored" band). Ordering falls back to the preference signals we CAN
+        justify without a résumé, carried in `rank_score` so no number claims
+        to be a match.
         """
-        if not user_email:
-            return None
-        try:
-            from services import resume_access
-            resume = resume_access.get_active_structured(user_email)
-            if not resume:
-                return None
-            structured = resume.get("structured") or {}
-            # Mirror experience_years from the flat field if structured lacks it.
-            if "experience_years" not in structured and "experience_years" in resume:
-                structured = dict(structured)
-                structured["experience_years"] = resume.get("experience_years")
-            from services.resume_profiler import build_profile, feedback_signal_for_user
-            try:
-                feedback = feedback_signal_for_user(self.db.job_activity_log, user_email)
-            except Exception:
-                feedback = None
-            return build_profile(structured, feedback_signal=feedback)
-        except Exception as e:
-            logger.warning(f"Failed to build resume profile for {user_email}: {e}")
-            return None
+        for job in jobs:
+            job["match_score"] = 0
+            job["matched_skills"] = []
+            job["missing_skills"] = []
+            job.pop("fit", None)
+            job.pop("score_version", None)
+            rank = 0
+            if job.get("h1b_sponsor"):
+                rank += 8
+            if job.get("is_remote"):
+                rank += 2
+            blob = f"{job.get('title') or ''} {job.get('description') or ''}".lower()
+            if any(kw in blob for kw in NEW_GRAD_KEYWORDS):
+                rank += 5
+            job["rank_score"] = rank
+        jobs.sort(key=lambda j: -(j.get("rank_score") or 0))
+        return jobs
+
+    # `_get_resume_skills` / `_get_resume_profile` were removed with the second
+    # scoring engine they fed. The single definition of "what do we know about
+    # this candidate for matching purposes" is now
+    # `fit_score.load_profile_for_user`; `resume_profiler.build_profile` remains
+    # the RETRIEVAL profile (which titles/keywords to search for) and is reached
+    # through `filter_suggester_service` / `daily_pipeline_service`.
 
     def get_resume(self, user_email: str = "") -> Optional[Dict[str, Any]]:
         """Retrieve the user's ACTIVE parsed resume (v3: resume_access

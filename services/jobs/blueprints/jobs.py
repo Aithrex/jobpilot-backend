@@ -10,7 +10,12 @@ import re
 from flask import Blueprint, Response, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
-from utils.security import InputSanitizer, get_rate_limiter, get_client_ip
+from utils.security import (
+    InputSanitizer,
+    check_rate_limit,
+    get_client_ip,
+    get_rate_limiter,
+)
 
 jobs_bp = Blueprint("jobs", __name__)
 logger = logging.getLogger(__name__)
@@ -1100,13 +1105,22 @@ def pipeline_match_scores():
     """Score a batch of pipeline rows against the caller's parsed resume.
 
     Body: { "items": [{ "id": "...", "title": "...", "description": "..." }, ...] }
-    Returns: { "scores": { id: { match_score, matched_skills, missing_top, explain } },
-               "meta":   { resume_skill_count, has_resume } }
+    Returns: { "scores": { id: { score, band, confidence, score_version,
+                                 components, explanation, missing_requirements,
+                                 hard_constraints, ...legacy match_score/
+                                 matched_skills/missing_top } },
+               "meta":   { score_version, resume_skill_count, has_resume,
+                           resume_years, resume_role_families } }
+
+    ADR-002: this is the SAME shared fit engine the guest path and the feed
+    pipelines use, so an authenticated user and a guest looking at the same
+    posting see the same number. It replaced jd_match_scorer, whose
+    denominator came from the resume's own skill list.
 
     Stateless on the backend — the frontend fires this after a pipeline run
     lands and overlays the scores on the already-rendered tier groups. No
-    LLM call, no caching needed: the comparison is regex-against-skills,
-    fast enough to score 100 rows under ~50ms.
+    LLM call in this path (deterministic rules only), fast enough to score
+    100 rows well inside the request budget.
     """
     client_ip = get_client_ip(request)
     limiter = get_rate_limiter()
@@ -1123,8 +1137,8 @@ def pipeline_match_scores():
     items = items_raw[:200]
 
     try:
-        from services.jd_match_scorer import score_batch
-        scores, meta = score_batch(user_email, items)
+        from services.fit_score import score_batch_for_user
+        scores, meta = score_batch_for_user(user_email, items)
         return jsonify({"scores": scores, "meta": meta}), 200
     except Exception as e:
         logger.error(f"Pipeline match-scores error: {e}")
@@ -1274,8 +1288,13 @@ def guest_matches():
         )
 
     client_ip = get_client_ip(request)
-    limiter = get_rate_limiter()
-    if limiter.is_rate_limited(f"guest:matches:{client_ip}", max_requests=10, window_seconds=3600):
+    # Distributed (cross-Lambda-container) limit: a per-container dict cannot
+    # enforce "10 guest match runs per hour per client" when N containers each
+    # keep their own. Fails CLOSED - a match run fans out paid-adjacent scrapes
+    # and LLM scoring, so a Mongo blip must not open it up.
+    if check_rate_limit(
+        f"guest:matches:{client_ip}", max_requests=10, window_seconds=3600
+    ):
         return jsonify({"error": "Rate limit exceeded"}), 429
 
     data = request.get_json(force=True, silent=True) or {}
@@ -1307,6 +1326,9 @@ def guest_matches():
             jsonify({
                 "error": "challenge_required",
                 "provider": ch.get("provider"),
+                # Solve the widget, POST {challenge_id, solution} to
+                # /api/resume/guest/challenge/verify, then retry.
+                "challenge_id": ch.get("challenge_id"),
                 "message": "Please complete a quick verification to continue.",
             }),
             429,
@@ -1359,6 +1381,34 @@ def guest_matches():
             payload["tz_offset_minutes"] = int(tz_offset_minutes)
         except (TypeError, ValueError):
             pass
+
+        # --- fast path: serve synchronously from the canonical inventory ----
+        # The legacy path returns 202 + a job_id because matching used to crawl
+        # ~1,100 third-party hosts and take up to 210 seconds. Reading the
+        # inventory is one indexed query plus deterministic scoring, so there is
+        # nothing to wait for: the guest gets results in the response instead of
+        # a spinner and 2-second polling.
+        #
+        # `inventory_only=True` guarantees this cannot start a fan-out inside
+        # the 60s jobs Lambda: if the crawler has not warmed this role family it
+        # returns None and we fall through to the async job below, unchanged.
+        if guest_service.inventory_mode_enabled():
+            try:
+                result = guest_service.compute_guest_matches(
+                    guest_id,
+                    None,
+                    requested_seniority,
+                    payload.get("tz_offset_minutes", 0),
+                    inventory_only=True,
+                )
+            except Exception as sync_err:
+                logger.warning("Guest matches inventory fast path failed: %s", sync_err)
+                result = None
+            if result is not None:
+                # The run is genuinely spent: compute_guest_matches persisted
+                # today's snapshot, so a repeat call hits get_cached_matches.
+                return jsonify(result), 200
+
         try:
             job_id = guest_service.create_guest_job("guest_matches", payload, guest_id)
             ResumeService.invoke_async(job_id, "guest_matches", payload)

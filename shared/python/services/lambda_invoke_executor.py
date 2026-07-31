@@ -54,6 +54,29 @@ def _remote_enabled() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+def _ssrf_block(apply_url: str, *, submit: bool = False) -> Optional[Dict[str, Any]]:
+    """Fail closed before invoking the fleet when the apply URL is not allowed."""
+    from services import ssrf_guard
+    allowed, reason = ssrf_guard.apply_url_allowed(apply_url or "")
+    if allowed:
+        return None
+    logger.warning("apply-executor pre-invoke SSRF block: %s (%s)", reason, apply_url)
+    if submit:
+        return {
+            "status": SUBMIT_FAILED,
+            "confirmation": None,
+            "screenshot_ref": None,
+            "wall": None,
+            "error": f"ssrf_blocked:{reason}",
+        }
+    return {
+        "questions": [],
+        "needs_account": False,
+        "status": EXECUTOR_UNAVAILABLE,
+        "error": f"ssrf_blocked:{reason}",
+    }
+
+
 class LambdaInvokeExecutor(ExecutorAdapter):
     name = "lambda-invoke"
 
@@ -64,6 +87,9 @@ class LambdaInvokeExecutor(ExecutorAdapter):
         return _remote_enabled()
 
     def recon_form(self, apply_url: str, ats_family: Optional[str]) -> Dict[str, Any]:
+        blocked = _ssrf_block(apply_url)
+        if blocked is not None:
+            return blocked
         return self._invoke("recon_form",
                             {"apply_url": apply_url, "ats_family": ats_family},
                             on_error={"questions": [], "needs_account": False,
@@ -71,6 +97,12 @@ class LambdaInvokeExecutor(ExecutorAdapter):
 
     def submit(self, application: Dict[str, Any], answers: Dict[str, Any],
                resume_pdf: Any) -> Dict[str, Any]:
+        url = ""
+        if isinstance(application, dict):
+            url = (application.get("apply_url") or application.get("url") or "")
+        blocked = _ssrf_block(url, submit=True)
+        if blocked is not None:
+            return blocked
         return self._invoke("submit",
                             {"application": application, "answers": answers,
                              "resume_pdf": resume_pdf},

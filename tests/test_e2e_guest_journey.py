@@ -27,6 +27,7 @@ import copy
 import io
 import json
 import uuid as _uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import requests as _requests_mod
@@ -44,6 +45,8 @@ COLLECTIONS = (
     "guest_claim_carryins",
     "guest_global_counters",
     "guest_challenge_velocity",
+    "guest_challenges",
+    "rate_limit_buckets",
     "job_match_snapshots",
     "platform_config",
     "tailoring_records",
@@ -237,7 +240,14 @@ def _greenhouse_jobs_payload():
     trim the visible response to 5). Shapes match the REAL Greenhouse board
     API the career-pages fetcher consumes (?content=false list + per-job
     detail): dict location, numeric ids, first_published timestamps.
-    Seniority-neutral titles by design — they appear in every view."""
+    Seniority-neutral titles by design — they appear in every view.
+
+    first_published is RELATIVE to now (1 day back): the guest freshness
+    contract drops anything older than GUEST_MAX_AGE_DAYS, so a hardcoded
+    date would silently rot this suite once the calendar passed it."""
+    published = (
+        datetime.now(timezone.utc) - timedelta(days=1)
+    ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     titles = (
         "Backend Engineer",
         "Python Backend Engineer",
@@ -253,8 +263,10 @@ def _greenhouse_jobs_payload():
             "location": {"name": "Remote - United States"},
             "absolute_url": f"https://boards.example/jobs/{1000 + i}",
             "content": _GH_DESC_HTML,
-            "first_published": "2026-07-20T08:00:00Z",
-            "updated_at": "2026-07-20T08:00:00Z",
+            "first_published": published,
+            # Present but IGNORED: updated_at is an edit timestamp and is no
+            # longer a posting-date fallback (freshness inflation).
+            "updated_at": published,
         }
         for i, t in enumerate(titles)
     ]}

@@ -36,7 +36,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from utils.db_connect import DBConnect
 
@@ -686,6 +686,93 @@ def _persist_tailoring_record(
         return None
 
 
+def _pin_rendered_pdf(user_email: str, record_id: str,
+                      tailored: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """Render a tailored résumé to PDF and PIN it under the IMMUTABLE v3 key
+    (``tailoring/{record_id}/{version_id}/{render_version}.pdf``), caching the
+    ref on the record's initial version. Returns ``(version_id, s3_key)``.
+
+    This is the immutable artifact the auto-apply submit path
+    (``browser_executor._resume_pdf_ref``) later resolves to PDF bytes, so a
+    submitted application always carries exactly the résumé that was pinned at
+    preparation time. Raises on a render/store failure so the caller can refund
+    the reserved tailor slot and never land the row in ``ready``.
+    """
+    from services.resume_versioning import canonical_content_hash
+    from services.s3_service import get_storage_service
+    from utils.db_connect import DBConnect as _DBC
+
+    svc = get_resume_service()
+    _db = _DBC().get_db()
+    rec = _db.tailoring_records.find_one(
+        {"record_id": record_id, "user_email": user_email}
+    )
+    if not rec:
+        raise ValueError("tailoring_record_not_found")
+    versions = rec.get("versions") or []
+    target = versions[-1] if versions else None
+    if not target:
+        raise ValueError("tailoring_record_has_no_version")
+    version_id = target.get("version_id")
+
+    pdf_bytes = svc.renderer.generate_pdf(tailored)
+    if not pdf_bytes or len(pdf_bytes) < 100:
+        raise ValueError("pdf_render_failed")
+
+    storage = get_storage_service()
+    s3_key = storage.upload_tailoring_file(
+        record_id, version_id or "v0", svc.renderer.RENDER_VERSION, pdf_bytes, "pdf"
+    )
+
+    target.setdefault("files", {})
+    target["files"]["pdf"] = {
+        "s3_key": s3_key,
+        "size_bytes": len(pdf_bytes),
+        "content_hash": canonical_content_hash(tailored),
+        "render_version": svc.renderer.RENDER_VERSION,
+        "rendered_at": datetime.now(timezone.utc),
+    }
+    _db.tailoring_records.update_one(
+        {"record_id": record_id, "user_email": user_email},
+        {"$set": {"versions": versions,
+                  "current_version_id": rec.get("current_version_id") or version_id,
+                  "updated_at": datetime.now(timezone.utc)}},
+    )
+    return version_id, s3_key
+
+
+def prepare_tailored_artifact(user_email: str, jd_text: str) -> Dict[str, Any]:
+    """Tailor the user's active résumé for a JD, persist a canonical
+    tailoring_records doc (``versions[0]`` immutable), and PIN a rendered PDF
+    under the immutable v3 S3 key. Returns ``{record_id, version_id, s3_key}``.
+
+    The ONE reusable "tailor for a JD and pin it" path the auto-apply prepare
+    phase (defect D) drives. It reuses the SAME tailor / persist / render
+    building blocks the ``tailor`` job branch uses — nothing about tailoring is
+    reimplemented here. Raises on ANY failure so the caller (auto_apply.prepare)
+    can refund the reserved tailor slot and route the row to ``needs_input``
+    (never ``ready``). Never fabricates résumé facts (the tailor's IntegrityGuard
+    still governs the content).
+    """
+    svc = get_resume_service()
+    resume = svc.parser.ensure_structured_resume(user_email=user_email)
+    if not resume or not resume.get("structured"):
+        raise ValueError("no_structured_resume")
+    structured = resume["structured"]
+
+    jd_analysis = svc.extract_jd(jd_text or "")
+    result = svc.tailor.tailor(structured, jd_analysis)
+
+    record_id = _persist_tailoring_record(
+        user_email, resume, jd_text or "", jd_analysis, result, "auto_apply_prepare"
+    )
+    if not record_id:
+        raise ValueError("tailoring_record_persist_failed")
+
+    version_id, s3_key = _pin_rendered_pdf(user_email, record_id, result)
+    return {"record_id": record_id, "version_id": version_id, "s3_key": s3_key}
+
+
 def _attach_ats_keyword_audit(result: Dict[str, Any], jd_analysis: Dict[str, Any]) -> None:
     """Re-run the deterministic keyword gap engine on the FINAL tailored
     resume so the UI can warn about JD keywords that didn't make it in.
@@ -745,6 +832,30 @@ def _consume_projects_diagnostic(result: Dict[str, Any]) -> None:
         for r in rejections[:10]:
             logger.warning("  rejection: %s -> %s", r.get("name"), r.get("reason"))
     result.setdefault("_diagnostics", {})["projects"] = diag
+
+
+def _feed_from_inventory(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Try to answer a feed tab from the canonical inventory.
+
+    Returns None whenever the inventory cannot answer honestly - mode disabled,
+    the requested slice is still warming, or anything at all went wrong - and
+    the caller then runs the legacy live crawl unchanged. Failure is never
+    surfaced to the user as an empty tab.
+    """
+    try:
+        from services import inventory_feed
+
+        if not inventory_feed.enabled():
+            return None
+        result = inventory_feed.build_feed(source, payload)
+        if result is not None:
+            logger.info("feed %s served from inventory: %d jobs",
+                        source, result.get("total", 0))
+        return result
+    except Exception as exc:
+        logger.warning("feed %s: inventory path failed (%s); falling back to crawl",
+                       source, type(exc).__name__)
+        return None
 
 
 def _stamp_job_logos(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -854,6 +965,22 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result = learning_verifier.build_verify_job(payload)
             svc.complete_job(job_id, result)
 
+        elif job_type == "sprint_verify":
+            # Sprint Hub — grade a day's proof-of-work repo against its ticket.
+            # Async because it downloads the repo and runs a PRO-tier judge:
+            # 40-60s, well past the API Gateway limit for an inline request.
+            from services import sprint_submission_service
+            result = sprint_submission_service.verify_job(payload)
+            svc.complete_job(job_id, result)
+
+        elif job_type == "sprint_generate":
+            # Sprint Learning Hub — AI-generate the day tickets for a path, write
+            # the shared sprint_paths doc, and resolve to the requesting user's
+            # stateful view so the client poll renders directly.
+            from services import sprint_generation_service
+            result = sprint_generation_service.generate_path_job(payload)
+            svc.complete_job(job_id, result)
+
         elif job_type == "learning_completion_post":
             # Learning loop payoff — draft a LinkedIn post for a VERIFIED task
             # (grounded in the real repo; bandit + cringe filter apply). publish.py
@@ -904,7 +1031,9 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             # a grounded, honest six-second recruiter read (PRO). The service loads
             # the resume and never fabricates; output is advisory, never written back.
             from services.recruiter_gaze_service import build_six_seconds
-            result = build_six_seconds(payload.get("user_email", ""))
+            result = build_six_seconds(
+                payload.get("user_email", ""), payload.get("fingerprint", "")
+            )
             svc.complete_job(job_id, result)
 
         elif job_type == "referral_draft":
@@ -1834,21 +1963,28 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             svc.complete_job(job_id, result)
 
         elif job_type == "workday_jobs":
-            from services.workday_jobs_service import run_workday_jobs_search
+            # ADR-003 read cutover. `_feed_from_inventory` answers from
+            # `job_postings` in milliseconds and returns None when the slice is
+            # not warm yet, in which case the legacy live crawl runs unchanged.
+            result = _feed_from_inventory("workday", payload)
+            if result is None:
+                from services.workday_jobs_service import run_workday_jobs_search
 
-            def _stream_workday_partial(partial: dict) -> None:
-                svc.update_job_partial(job_id, _stamp_job_logos(partial))
+                def _stream_workday_partial(partial: dict) -> None:
+                    svc.update_job_partial(job_id, _stamp_job_logos(partial))
 
-            result = run_workday_jobs_search(payload, partial_cb=_stream_workday_partial)
+                result = run_workday_jobs_search(payload, partial_cb=_stream_workday_partial)
             svc.complete_job(job_id, _stamp_job_logos(result))
 
         elif job_type == "career_pages":
-            from services.career_pages_service import run_career_pages_search
+            result = _feed_from_inventory("career-pages", payload)
+            if result is None:
+                from services.career_pages_service import run_career_pages_search
 
-            def _stream_career_partial(partial: dict) -> None:
-                svc.update_job_partial(job_id, _stamp_job_logos(partial))
+                def _stream_career_partial(partial: dict) -> None:
+                    svc.update_job_partial(job_id, _stamp_job_logos(partial))
 
-            result = run_career_pages_search(payload, partial_cb=_stream_career_partial)
+                result = run_career_pages_search(payload, partial_cb=_stream_career_partial)
             svc.complete_job(job_id, _stamp_job_logos(result))
 
         elif job_type == "mnc_jobs":
@@ -1946,6 +2082,118 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             # text, company, or user identity. Delete-then-insert (idempotent).
             from services import ats_signal_service
             result = ats_signal_service.build_ats_signal_aggregate_job(payload)
+            svc.complete_job(job_id, result)
+
+        elif job_type == "job_ingest_dispatch":
+            # ADR-003 — the queue-receive replacement. An EventBridge tick lands
+            # here and enqueues at most JOB_INGEST_SHARDS_PER_TICK `job_ingest_
+            # shard` jobs for shards that are neither leased nor in backoff.
+            # That exclusion IS the backpressure: a tick whose predecessors are
+            # still running enqueues fewer, not more. Duplicate delivery of the
+            # dispatch job itself is harmless — the shards it would re-select
+            # are leased by the first delivery's workers and therefore not due.
+            from services import job_ingest_worker
+            result = job_ingest_worker.dispatch_due_shards(
+                payload.get("source"),
+                limit=int(payload.get("limit") or job_ingest_worker.MAX_SHARDS_PER_TICK),
+            )
+            svc.complete_job(job_id, result)
+
+        elif job_type == "job_ingest_shard":
+            # ADR-003 — one bounded shard of the job registry (~20 sources).
+            # No idempotency guard is needed here beyond the ones inside the
+            # worker: `acquire_lease` makes a duplicate at-least-once delivery a
+            # no-op (`skipped=lease_unavailable`), `upsert_posting` is idempotent
+            # on (source, source_job_id) with `first_seen_at` set only on insert,
+            # and `advance_watermark` refuses to move backwards. run_shard never
+            # raises — a failing shard records backoff in `job_source_state` and
+            # leaves every other shard alone.
+            from services import job_ingest_worker
+            result = job_ingest_worker.run_shard(
+                payload.get("source", ""), payload.get("shard", "")
+            )
+            svc.complete_job(job_id, result)
+
+            # Requirement extraction is dispatched as its OWN job so no Bedrock
+            # call ever sits in the listing/detail hot path. The queue carries
+            # content hashes, and each hash is extracted at most once.
+            queue = result.get("parse_queue") or []
+            if queue and job_ingest_worker.REQUIREMENTS_ENABLED:
+                try:
+                    parse_payload = {"items": queue[:job_ingest_worker.REQUIREMENTS_BATCH]}
+                    parse_id = svc.create_job("job_ingest_requirements",
+                                              parse_payload, "system@internal")
+                    ResumeService.invoke_async(parse_id, "job_ingest_requirements",
+                                               parse_payload)
+                except Exception as parse_err:
+                    logger.warning(
+                        f"job_ingest_shard {job_id}: requirement dispatch failed: {parse_err}"
+                    )
+
+        elif job_type == "job_ingest_requirements":
+            # ADR-002 — expensive requirement extraction, async, once per changed
+            # content_hash. Deduped within the batch AND against inventory, and
+            # gated behind JOB_INGEST_REQUIREMENTS_ENABLED because it is the only
+            # part of ingestion that spends tokens. Idempotency guard: a duplicate
+            # delivery would re-spend, so bail if this job already completed.
+            existing = svc.get_job(job_id, user_email=payload.get("user_email", ""))
+            if existing and existing.get("status") == "completed":
+                logger.info(f"Skipping job_ingest_requirements {job_id}: already completed")
+                return
+
+            from services import job_ingest_worker
+            result = job_ingest_worker.extract_requirements(payload.get("items") or [])
+            svc.complete_job(job_id, result)
+
+        elif job_type == "job_ingest_maintenance":
+            # ADR-003 retention sweep, now also the rolling-window enforcer:
+            #   expire  -> close ACTIVE postings older than the 7-day guest
+            #              window (retention_days=0, so purgeable immediately);
+            #   purge   -> delete closed+past-purge_at rows, ARCHIVING any
+            #              pinned posting to S3 and verifying the object exists
+            #              before the delete (that check is the whole "a job you
+            #              applied to is never lost" guarantee);
+            #   verify  -> close postings no crawl has reconfirmed in 72h, the
+            #              backstop for a shard stuck in backoff.
+            # purge_at is stamped exclusively by close_posting, so a live
+            # posting is unreachable from here. Idempotent by nature.
+            from services import job_ingest_worker
+            result = job_ingest_worker.run_maintenance(
+                verify_limit=int(payload.get("verify_limit") or 2000),
+            )
+            svc.complete_job(job_id, result)
+
+        elif job_type == "apply_match_sweep":
+            # Spec §5 — unattended new-posting -> auto-apply fan-out, on a
+            # 15-minute EventBridge tick (scheduled_jobs.dispatch_scheduled).
+            # System actor, no user_email: it fans out over every opted-in user
+            # itself, per-user error-isolated.
+            #
+            # NO idempotency bail here, deliberately. A duplicate at-least-once
+            # delivery is already a no-op by construction: `dedup_gate` + the
+            # unique (user_email, job_identity) index reject a second row for
+            # the same posting, the daily-cap reservation is idempotent on that
+            # same identity, and the watermark only ever moves forward. Re-
+            # running the sweep is strictly cheaper than skipping a real one.
+            from services import apply_match_sweep
+            result = apply_match_sweep.run_match_sweep()
+            svc.complete_job(job_id, result)
+
+        elif job_type == "auto_apply_prepare":
+            # Defect D — the REQUIRED tailored-résumé preparation phase. Reserves
+            # a tailor slot, tailors + pins an immutable artifact, writes
+            # tailoring_record_id back onto the ledger row, and only THEN lands
+            # the row in `ready`. Idempotency guard — Lambda async is
+            # at-least-once and re-tailoring would re-spend an LLM call; bail if
+            # this job already completed (prepare itself is also idempotent on a
+            # pinned artifact, so this is belt-and-suspenders).
+            existing = svc.get_job(job_id, user_email=payload.get("user_email", ""))
+            if existing and existing.get("status") == "completed":
+                logger.info(f"Skipping auto_apply_prepare job {job_id}: already completed")
+                return
+
+            from services.auto_apply_service import prepare
+            result = prepare(payload["application_id"], payload["user_email"])
             svc.complete_job(job_id, result)
 
         elif job_type == "auto_apply_gather":

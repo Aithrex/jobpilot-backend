@@ -96,6 +96,40 @@ resource "aws_lambda_function" "service" {
       CREDENTIALS_KMS_KEY_ID   = aws_kms_key.credentials.arn
       SSM_APPROVAL_LINK_SECRET = "${var.ssm_path_prefix}/approval-link-secret"
 
+      # Managed Application Mailbox (managed-mailbox-v1 §7). This `environment`
+      # block is inside `for_each = var.service_config`, so EVERY service Lambda
+      # (auth · jobs · resume · billing) already receives these vars — auth NEEDS
+      # APPLY_MAIL_DOMAIN because `auth.register` / `oauth_service.upsert_user`
+      # now auto-provision the mailbox at signup (AUTOAPPLY_REPAIR_SPEC §6);
+      # without the domain `provision()` would mint a bare local part with no
+      # host. Do NOT move these into a per-service override. The feature stays
+      # INERT until APPLY_MAIL_DOMAIN is set AND APPLY_MAILBOX_ENABLED flips true
+      # (spec §11/§12). The bucket + CMK below are provisioned in
+      # managed_mailbox.tf, so we wire them directly.
+      APPLY_MAIL_DOMAIN     = "my-private-mail.com"
+      APPLY_MAILBOX_ENABLED = "true"
+      # Non-secret store identifiers (key id is NOT a secret — same rationale as
+      # CREDENTIALS_KMS_KEY_ID above; a plain env var is correct, no SSM needed).
+      APPLY_MAIL_BUCKET     = aws_s3_bucket.mail.bucket
+      APPLY_MAIL_KMS_KEY_ID = aws_kms_key.mail.arn
+      # Outbound relay sender for forwarding a recruiter email to the user's real
+      # inbox — JobPilot-owned, verified in ZeptoMail (aspirely.me domain), NEVER
+      # the recruiter. Empty => forwarding stays inert.
+      MAIL_FORWARD_FROM = "notifications@aspirely.me"
+      # Reply-relay sending mode (privacy-preserving reply back to the recruiter).
+      # Held OFF until my-private-mail.com is verified as a ZeptoMail sending
+      # domain (SPF/DKIM in Cloudflare — see docs/ops/managed-mailbox-setup.md
+      # "Reply-relay sending domain"). OFF => relay From = MAIL_FORWARD_FROM with a
+      # "(via My Private Mail)" display; ON => relay From = the user's PRIMARY
+      # managed alias. NEVER the user's real email in either mode.
+      APPLY_MAIL_SEND_AS_ALIAS    = "false"
+      APPLY_MAIL_SENDING_VERIFIED = "false"
+      # Shared HMAC secret with the Cloudflare Worker's secret binding — the ONLY
+      # secret this feature adds. SecureString at this SSM path; seed the SAME
+      # value into the Worker via `wrangler secret put MAIL_INBOUND_HMAC_SECRET`
+      # (spec §7/§12). Unset ⇒ slot/commit HMAC verify fails closed (403).
+      SSM_MAIL_INBOUND_HMAC_SECRET = "${var.ssm_path_prefix}/mail-inbound-hmac-secret"
+
       # Guest onboarding (no-signup /start flow). ON in prod. Server-side salt
       # for guest ip_hash via SSM (unset ⇒ hash_ip fails closed, feature still
       # works). Gate = env flag AND the admin `enabled` knob (default true).
@@ -107,6 +141,26 @@ resource "aws_lambda_function" "service" {
       # (503, never 401). Rotating the signal key orphans existing HMAC links.
       SSM_GUEST_SIGNAL_HMAC_KEY       = "${var.ssm_path_prefix}/guest-signal-hmac-key"
       SSM_GUEST_DOWNLOAD_TOKEN_SECRET = "${var.ssm_path_prefix}/guest-download-token-secret"
+
+      # Voice Graph (Compass addendum §6.12). ON in prod. Writing samples are
+      # Fernet-encrypted at rest via INTEGRATION_TOKEN_ENCRYPTION_KEY (falls back
+      # to GMAIL_TOKEN_ENCRYPTION_KEY) — both already wired above, so sample-save
+      # works. Unset would default OFF in prod (all routes 404); set explicitly.
+      VOICE_GRAPH_ENABLED = "true"
+
+      # Auto-apply AWS browser fleet (Playwright container Lambda).
+      # Stage-4 armed for easy ATS (Greenhouse / Lever / Ashby) + Workday
+      # best-effort. LinkedIn/generic stay disabled. Kill via AUTO_SUBMIT_ENABLED
+      # or EXECUTOR_REMOTE_ENABLED without a deploy.
+      AUTO_APPLY_EXECUTOR           = "remote"
+      EXECUTOR_REMOTE_ENABLED       = "true"
+      APPLY_EXECUTOR_FUNCTION       = "${var.project}-apply-executor-${var.environment}"
+      AUTO_SUBMIT_ENABLED           = "true"
+      AUTO_APPLY_ADAPTERS_DISABLED  = "linkedin,generic"
+      AUTO_APPLY_PREPARE            = "true"
+      AUTO_APPLY_MODES              = "true"
+      AUTO_APPLY_RESERVE            = "true"
+      AUTO_APPLY_APPROVAL_FOLD      = "true"
     }
   }
 

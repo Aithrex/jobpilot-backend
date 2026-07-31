@@ -90,6 +90,55 @@ STATUS_SKIPPED_DUPLICATE = "skipped_duplicate"
 # it. It is NOT retryable — a skip is a deliberate, sticky decision.
 STATUS_SKIPPED = "skipped"
 
+# ---------------------------------------------------------------------------
+# Canonical state machine (defect E, STEP E0 — ADDITIVE ONLY).
+#
+# The target machine the whole applications pipeline is converging on. E0
+# introduces these names + a read-side `canonical_status()` normalizer and
+# nothing else: no writer or reader is migrated here (that is E1/E3), approval
+# semantics are untouched (that is F). Every legacy state above stays fully
+# valid; these are added alongside them so the cutover can happen reader-by-
+# reader with the normalizer as the shim.
+#
+#   draft → queued → preparing → needs_input → ready_for_review → approved →
+#   queued_for_execution → running → (waiting_otp | waiting_human) →
+#   submitted → confirmed
+#   terminals: cancelled, failed_pre_submit(=failed), unsupported, withdrawn,
+#              submission_unknown
+# ---------------------------------------------------------------------------
+STATUS_DRAFT = "draft"
+STATUS_PREPARING = "preparing"                    # canonical peer of `gathering`
+STATUS_READY_FOR_REVIEW = "ready_for_review"      # the `ready` split awaiting go-ahead
+STATUS_APPROVED = "approved"                       # the `ready` split, approved (F)
+STATUS_QUEUED_FOR_EXECUTION = "queued_for_execution"  # handed to the executor sweep
+STATUS_RUNNING = "running"                         # canonical peer of `submitting`
+STATUS_WAITING_OTP = "waiting_otp"                 # an OTP wall mid-run
+STATUS_WAITING_HUMAN = "waiting_human"             # a human-handoff wall mid-run
+STATUS_SUBMISSION_UNKNOWN = "submission_unknown"   # submit attempted, outcome unknown
+STATUS_CANCELLED = "cancelled"                     # pre-submit user/system abort
+STATUS_UNSUPPORTED = "unsupported"                 # ATS/site not supportable
+# The user-facing sentence a row carries when it lands in `unsupported` (spec §4).
+# Stored on the row (in `error`) so every reader — the fold payload, the daily
+# email, the FE card — renders the SAME honest message instead of an error code.
+UNSUPPORTED_MESSAGE = ("We can't auto-apply to this employer's system yet — "
+                       "please apply manually.")
+STATUS_WITHDRAWN = "withdrawn"                      # post-submit user withdrawal
+# Canonical peer of `failed` — a canonical-only label (an OUTPUT of
+# canonical_status). NOT a valid ledger status and NOT a transition target: the
+# ledger still stores `failed`; this name only exists in canonical read-space.
+STATUS_FAILED_PRE_SUBMIT = "failed_pre_submit"
+
+# E1 (defect E): a create-time EXECUTION-axis terminal meaning "submitted
+# OUTSIDE our executor" — a manual/mail/gmail signal that owns an OUTCOME (the
+# employer-response funnel) but that JobPilot never drove to submission itself.
+# ADDITIVE: it joins ALL_STATUSES (so list_applications accepts it as a filter)
+# but is deliberately kept OUT of ACTIVE_STATUSES/RETRYABLE_STATUSES — dedup_gate
+# must not treat an external row as "already handled" for the auto-apply queue,
+# and retry must not re-queue it. It is NOT a _TRANSITION_GUARDS target either:
+# no edge leads into or out of it on the execution axis. A lightweight row is
+# BORN here (via set_outcome) and its whole life happens on the outcome axis.
+STATUS_EXTERNAL = "external"
+
 # Statuses that mean "this posting is already handled" — a dedup_gate hit on
 # any of these SKIPS the enqueue (Tranche 1 §1 rule). Includes both terminal-good
 # (confirmed) and terminal user-declined (skipped) so neither is re-offered.
@@ -102,7 +151,139 @@ ACTIVE_STATUSES: Tuple[str, ...] = (
 # Only these may be retried (re-queued) — everything else is a skip.
 RETRYABLE_STATUSES: Tuple[str, ...] = (STATUS_FAILED, STATUS_SKIPPED_DUPLICATE)
 
-ALL_STATUSES: Tuple[str, ...] = ACTIVE_STATUSES + RETRYABLE_STATUSES
+# E0 (defect E): the canonical states added ADDITIVELY to the valid-status set.
+# Deliberately NOT folded into ACTIVE_STATUSES/RETRYABLE_STATUSES — dedup_gate
+# and retry semantics read those two and must stay byte-for-byte unchanged in
+# E0 (no writer emits a canonical state yet). This tuple only widens
+# ALL_STATUSES so `list_applications` accepts a canonical `status` filter and the
+# transition guard-key set can cover the whole target machine.
+_CANONICAL_ADDED_STATUSES: Tuple[str, ...] = (
+    STATUS_DRAFT, STATUS_PREPARING, STATUS_READY_FOR_REVIEW, STATUS_APPROVED,
+    STATUS_QUEUED_FOR_EXECUTION, STATUS_RUNNING, STATUS_WAITING_OTP,
+    STATUS_WAITING_HUMAN, STATUS_SUBMISSION_UNKNOWN, STATUS_CANCELLED,
+    STATUS_UNSUPPORTED, STATUS_WITHDRAWN,
+)
+
+ALL_STATUSES: Tuple[str, ...] = (
+    ACTIVE_STATUSES + RETRYABLE_STATUSES + _CANONICAL_ADDED_STATUSES
+    # E1: the external terminal — valid + filterable, but NOT active/retryable.
+    + (STATUS_EXTERNAL,)
+)
+
+# ---------------------------------------------------------------------------
+# OUTCOME axis (defect E, E1) — the EMPLOYER-RESPONSE funnel, ORTHOGONAL to
+# `status` (the execution lifecycle). While `status` answers "did JobPilot get
+# this submitted?", `outcome` answers "what did the employer do after?". It is
+# owned by the mail/gmail/manual signals and (until E3) MIRRORED to the coarse
+# `tailoring_records.application.status` the kanban/funnel readers still read.
+# Stored on the row as outcome/outcome_source/outcome_evidence/outcome_updated_at
+# via set_outcome; _view is intentionally NOT widened yet (readers migrate in E3).
+# ---------------------------------------------------------------------------
+OUTCOME_NONE = "none"
+OUTCOME_APPLIED = "applied"
+OUTCOME_VIEWED = "viewed"
+OUTCOME_SCREENING = "screening"
+OUTCOME_INTERVIEWING = "interviewing"
+OUTCOME_OFFER = "offer"
+OUTCOME_REJECTED = "rejected"
+OUTCOME_GHOSTED = "ghosted"
+OUTCOME_WITHDRAWN = "withdrawn"
+
+OUTCOME_STATUSES: Tuple[str, ...] = (
+    OUTCOME_NONE, OUTCOME_APPLIED, OUTCOME_VIEWED, OUTCOME_SCREENING,
+    OUTCOME_INTERVIEWING, OUTCOME_OFFER, OUTCOME_REJECTED, OUTCOME_GHOSTED,
+    OUTCOME_WITHDRAWN,
+)
+
+# The canonical target-machine vocabulary — the set of values `canonical_status`
+# may EMIT. It is the union of the additive canonical states, the legacy names
+# that are already canonical (map to themselves), and `failed_pre_submit` (the
+# canonical peer of `failed`). The four legacy-only aliases
+# (gathering/ready/submitting/failed) are intentionally ABSENT — they normalize
+# into their canonical peers below.
+CANONICAL_STATUSES: Tuple[str, ...] = _CANONICAL_ADDED_STATUSES + (
+    STATUS_QUEUED, STATUS_NEEDS_INPUT, STATUS_SUBMITTED, STATUS_CONFIRMED,
+    STATUS_SKIPPED, STATUS_SKIPPED_DUPLICATE, STATUS_FAILED_PRE_SUBMIT,
+)
+
+# Legacy → canonical remap for the four names whose spelling changes. Read-side
+# only (E3 will call `canonical_status`); no writer uses this in E0.
+_LEGACY_TO_CANONICAL: Dict[str, str] = {
+    STATUS_GATHERING: STATUS_PREPARING,
+    STATUS_READY: STATUS_READY_FOR_REVIEW,
+    STATUS_SUBMITTING: STATUS_RUNNING,
+    STATUS_FAILED: STATUS_FAILED_PRE_SUBMIT,
+}
+
+
+def canonical_status(status: str) -> str:
+    """Normalize a (legacy or canonical) status onto the canonical vocabulary.
+
+    E0 read-side shim for defect E. Maps the four renamed legacy states
+    (gathering→preparing, ready→ready_for_review, submitting→running,
+    failed→failed_pre_submit); every other legacy name and every canonical name
+    is already canonical and returns unchanged, so the function is idempotent
+    (`canonical_status(canonical_status(x)) == canonical_status(x)`). An unknown
+    or non-string input is returned as-is and never raises — this is a
+    tolerant normalizer, not a validator. NOT called by any writer/reader yet.
+    """
+    if not isinstance(status, str):
+        return status
+    return _LEGACY_TO_CANONICAL.get(status, status)
+
+
+# ---------------------------------------------------------------------------
+# E3 (defect E) — the read-side DUAL-READ shim. Collapses a canonical
+# `applications` row's TWO axes (outcome + canonical_status(status)) onto the
+# SINGLE coarse `tailoring_records.application.status` vocabulary the funnel /
+# kanban / today_inbox readers consume today, so a reader can PREFER the
+# canonical row when one exists and FALL BACK to the tailoring_records mirror
+# otherwise. Writers dual-write the mirror in E1 and the mirror is KEPT (its drop
+# is a DEFERRED cleanup, see docs/specs/auto-apply-defects-plan.md), so a reader
+# seeded from tailoring_records only (the char goldens) is unaffected.
+# ---------------------------------------------------------------------------
+# outcome (employer-response funnel) -> coarse tracker/funnel bucket.
+_OUTCOME_TO_BUCKET: Dict[str, str] = {
+    OUTCOME_NONE: "draft",
+    OUTCOME_APPLIED: "applied",
+    OUTCOME_VIEWED: "applied",
+    OUTCOME_SCREENING: "interviewing",
+    OUTCOME_INTERVIEWING: "interviewing",
+    OUTCOME_OFFER: "offer",
+    OUTCOME_REJECTED: "rejected",
+    OUTCOME_GHOSTED: "ghosted",
+    OUTCOME_WITHDRAWN: "withdrawn",
+}
+# execution status -> coarse bucket, for a row whose outcome axis is still `none`
+# (no employer response yet) but that JobPilot DID submit — it must count as
+# `applied` on the funnel exactly as a submitted legacy row does.
+_EXEC_STATUS_TO_BUCKET: Dict[str, str] = {
+    STATUS_SUBMITTED: "applied",
+    STATUS_CONFIRMED: "applied",
+    STATUS_WITHDRAWN: "withdrawn",
+}
+
+
+def outcome_view(row: Dict[str, Any]) -> str:
+    """Collapse a canonical `applications` row onto the coarse
+    `tailoring_records.application.status` bucket the funnel / kanban /
+    today_inbox readers use today (E3 dual-read).
+
+    The OUTCOME axis (what the employer did) WINS when it carries a real signal;
+    a row with no employer response yet falls back to its EXECUTION status (a
+    submitted/confirmed row counts as `applied`), else `draft`. Tolerant: a
+    non-dict / unknown input collapses to `draft` and never raises.
+    """
+    if not isinstance(row, dict):
+        return "draft"
+    bucket = _OUTCOME_TO_BUCKET.get(row.get("outcome"))
+    if bucket and bucket != "draft":
+        return bucket
+    exec_bucket = _EXEC_STATUS_TO_BUCKET.get(canonical_status(row.get("status")))
+    if exec_bucket:
+        return exec_bucket
+    return bucket or "draft"
+
 
 # Live (non-terminal) states — the only ones that may fall to `failed`.
 _LIVE_STATUSES: Tuple[str, ...] = (
@@ -110,31 +291,110 @@ _LIVE_STATUSES: Tuple[str, ...] = (
     STATUS_SUBMITTING, STATUS_SUBMITTED,
 )
 
+# E0: the canonical in-flight (pre-terminal) states — the canonical peers of
+# _LIVE_STATUSES. Unioned into the `failed` guard so a canonical live row can
+# still fall to `failed` exactly as a legacy live row can.
+_CANONICAL_LIVE_STATUSES: Tuple[str, ...] = (
+    STATUS_DRAFT, STATUS_PREPARING, STATUS_READY_FOR_REVIEW, STATUS_APPROVED,
+    STATUS_QUEUED_FOR_EXECUTION, STATUS_RUNNING, STATUS_WAITING_OTP,
+    STATUS_WAITING_HUMAN,
+)
+
 # target status -> statuses it may be entered FROM (the compare-and-set guard).
+#
+# E0 (defect E): the canonical machine is unioned in ADDITIVELY. No legacy edge
+# below is removed or re-parented — canonical sources are only ADDED to existing
+# targets, and the new canonical targets are appended. Every from->to pair that
+# is legal today stays legal; a diff reviewer should see only additions.
 _TRANSITION_GUARDS: Dict[str, Tuple[str, ...]] = {
     STATUS_GATHERING: (STATUS_QUEUED,),
     # entered from gather (novel question), or re-entered when a submit run
     # blocks on something only the user can answer (one-tap resume loop).
-    STATUS_NEEDS_INPUT: (STATUS_GATHERING, STATUS_READY, STATUS_SUBMITTING),
+    # E0: preparing → needs_input (canonical peer of gathering → needs_input).
+    # F: running → needs_input — an executor run that hits an Oracle wall
+    # (verify/CAPTCHA) parks the row in the one-tap queue (see auto_apply._park_verify).
+    STATUS_NEEDS_INPUT: (
+        STATUS_GATHERING, STATUS_READY, STATUS_SUBMITTING, STATUS_PREPARING,
+        STATUS_RUNNING),
     # gathering → ready directly when all answers are known (auto path).
     STATUS_READY: (STATUS_GATHERING, STATUS_NEEDS_INPUT),
     STATUS_SUBMITTING: (STATUS_READY,),
-    STATUS_SUBMITTED: (STATUS_SUBMITTING,),
+    # E0: a run submits directly (running), or after an OTP / human-handoff wall
+    # clears — canonical peers of submitting → submitted.
+    STATUS_SUBMITTED: (
+        STATUS_SUBMITTING, STATUS_RUNNING, STATUS_WAITING_OTP,
+        STATUS_WAITING_HUMAN),
     STATUS_CONFIRMED: (STATUS_SUBMITTED,),
-    STATUS_FAILED: _LIVE_STATUSES,          # any live state → failed
+    # any live state → failed. E0: canonical live states join the legacy ones.
+    STATUS_FAILED: _LIVE_STATUSES + _CANONICAL_LIVE_STATUSES,
     # a row discovered mid-gather to collide with another ledger row.
     STATUS_SKIPPED_DUPLICATE: (STATUS_QUEUED, STATUS_GATHERING),
     # user-initiated skip (§2 email `skip`): from any pre-submit live state.
     STATUS_SKIPPED: (STATUS_QUEUED, STATUS_GATHERING, STATUS_NEEDS_INPUT, STATUS_READY),
-    STATUS_QUEUED: RETRYABLE_STATUSES,      # explicit retry only
+    # explicit retry only. E0: canonical draft → queued (the entry hand-off).
+    STATUS_QUEUED: RETRYABLE_STATUSES + (STATUS_DRAFT,),
+
+    # --- E0: canonical machine targets (defect E), additive ---
+    # draft is the canonical entry state; a row is CREATED here, nothing
+    # transitions INTO it yet (empty guard = no legal inbound edge in E0).
+    STATUS_DRAFT: (),
+    # queued → preparing (canonical peer of queued → gathering).
+    STATUS_PREPARING: (STATUS_QUEUED,),
+    # needs_input → ready_for_review (answers resolved); or preparing →
+    # ready_for_review directly when all answers are known (canonical peer of
+    # the gathering → ready auto path).
+    # F: gathering → ready_for_review is the live auto/prepare landing edge (the
+    # split of the legacy gathering → ready). approved/queued_for_execution →
+    # ready_for_review is the approval-INVALIDATION edge — a stale snapshot at
+    # submit re-validation kicks the row back to review rather than submitting.
+    STATUS_READY_FOR_REVIEW: (
+        STATUS_NEEDS_INPUT, STATUS_PREPARING, STATUS_GATHERING,
+        STATUS_APPROVED, STATUS_QUEUED_FOR_EXECUTION),
+    # ready_for_review → approved. This is the F approval edge; F will own the
+    # approval SEMANTICS/snapshot — E0 only makes the edge legal.
+    STATUS_APPROVED: (STATUS_READY_FOR_REVIEW,),
+    # approved → queued_for_execution (picked up by the executor sweep).
+    STATUS_QUEUED_FOR_EXECUTION: (STATUS_APPROVED,),
+    # queued_for_execution → running (canonical peer of ready → submitting).
+    STATUS_RUNNING: (STATUS_QUEUED_FOR_EXECUTION,),
+    # running → waiting_otp / waiting_human (an OTP or human wall mid-run).
+    STATUS_WAITING_OTP: (STATUS_RUNNING,),
+    STATUS_WAITING_HUMAN: (STATUS_RUNNING,),
+    # --- E0: canonical terminals, from the appropriate in-flight states ---
+    # cancel: a pre-submit abort of the whole application (never after submit).
+    STATUS_CANCELLED: (
+        STATUS_DRAFT, STATUS_QUEUED, STATUS_PREPARING, STATUS_NEEDS_INPUT,
+        STATUS_READY_FOR_REVIEW, STATUS_APPROVED, STATUS_QUEUED_FOR_EXECUTION),
+    # the ATS/site turned out to be unsupportable during prep or execution.
+    STATUS_UNSUPPORTED: (
+        STATUS_PREPARING, STATUS_QUEUED_FOR_EXECUTION, STATUS_RUNNING),
+    # user withdraws after we submitted (post-submit terminal; confirmed stays a
+    # dead-end so the "no legal forward move from confirmed" invariant holds).
+    STATUS_WITHDRAWN: (STATUS_SUBMITTED,),
+    # a submit attempt whose outcome we could not confirm — HELD (distinct from
+    # failed), so reached only from the execution states that attempt a submit.
+    STATUS_SUBMISSION_UNKNOWN: (
+        STATUS_RUNNING, STATUS_WAITING_OTP, STATUS_WAITING_HUMAN),
 }
 
-# States the §2 email approve loop may move to `ready` (the submit-sweep pickup
-# state). In Tranche 1 rows sit in `queued` (no gather job yet), so `queued` is
-# included alongside gathering/needs_input.
-_APPROVABLE_STATUSES: Tuple[str, ...] = (
-    STATUS_QUEUED, STATUS_GATHERING, STATUS_NEEDS_INPUT,
-)
+# F: approval is TIGHTENED to only `ready_for_review` — the review/wait state a
+# row reaches once gather/prepare have resolved every answer (and, with D, pinned
+# a résumé). A queued/gathering/needs_input row is NOT yet reviewable, so an
+# email-approve on it is a no-op (belt-and-suspenders: never approve — and, with
+# G, never charge — a row that isn't ready). This replaces the pre-F set
+# (queued/gathering/needs_input), which let an approval race a still-gathering row.
+_APPROVABLE_STATUSES: Tuple[str, ...] = (STATUS_READY_FOR_REVIEW,)
+# Legacy `ready` rows predate the split; tolerate them as their canonical peer
+# (canonical_status(ready) == ready_for_review) so an in-flight legacy row can
+# still be approved during the cutover.
+_APPROVABLE_LEGACY: Tuple[str, ...] = (STATUS_READY,)
+
+# F: the approval-policy + consent-copy schema versions frozen into every
+# approval snapshot. Bump when the approval policy or the consent text materially
+# changes, so a snapshot minted under an older policy is detectable (and can be
+# forced through a fresh re-approval).
+_APPROVAL_POLICY_VERSION = "1"
+_APPROVAL_CONSENT_VERSION = "1"
 # Pre-submit live states a user `skip` may terminate (never touch an already
 # submitting/submitted/confirmed row).
 _SKIPPABLE_STATUSES: Tuple[str, ...] = (
@@ -146,6 +406,10 @@ _VALID_AUTONOMY = ("auto", "hold", "ask")
 # Bounded needs_input so the one-tap queue can never grow a document without
 # limit (no unbounded arrays — same spirit as apply.py::_MAX_VAULT_BYTES).
 _MAX_NEEDS_INPUT_ITEMS = 50
+# Enumerated choices carried with a needs_input question (the form's own option
+# list, so the FE can render a select instead of a free-text box). Bounded for
+# the same reason as the item list itself.
+_MAX_NEEDS_INPUT_OPTIONS = 40
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -377,10 +641,10 @@ def _parse_closes_at(value: Any) -> Optional[datetime]:
     raise InvalidApplicationInput("posting_closes_at must be ISO-8601")
 
 
-def _sanitize_needs_input(items: Any) -> List[Dict[str, str]]:
+def _sanitize_needs_input(items: Any) -> List[Dict[str, Any]]:
     """Bound + sanitize the one-tap review queue items ({question, kind,
     field_id}). Silently drops malformed entries; caps the list."""
-    out: List[Dict[str, str]] = []
+    out: List[Dict[str, Any]] = []
     if not isinstance(items, list):
         return out
     for item in items[:_MAX_NEEDS_INPUT_ITEMS]:
@@ -389,7 +653,7 @@ def _sanitize_needs_input(items: Any) -> List[Dict[str, str]]:
         question = _clean_str(item.get("question"), 500)
         if not question:
             continue
-        entry = {
+        entry: Dict[str, Any] = {
             "question": question,
             "kind": _clean_str(item.get("kind"), 40),
             "field_id": _clean_str(item.get("field_id"), 200),
@@ -402,6 +666,29 @@ def _sanitize_needs_input(items: Any) -> List[Dict[str, str]]:
         action = _clean_str(item.get("action"), 40)
         if action:
             entry["action"] = action
+        # Optional CONTROL metadata (`auto_apply_service._needs_item`). Dropping
+        # it here is what made the FE render a plain text box for an enumerated
+        # select: the user typed a value no option matched, the executor reported
+        # `no_option_match`, the row re-parked — forever. Persisted so the fold
+        # (which reads this stored row, not the answer response) carries it too.
+        value_type = _clean_str(item.get("value_type"), 40)
+        if value_type:
+            entry["value_type"] = value_type
+        options = item.get("options")
+        if isinstance(options, list):
+            opts = [o for o in (_clean_str(o, 200)
+                                for o in options[:_MAX_NEEDS_INPUT_OPTIONS]) if o]
+            if opts:
+                entry["options"] = opts
+        if item.get("required"):
+            entry["required"] = True
+        # The WALL kind behind a `complete_in_browser` hand-off (captcha /
+        # verify / reset). The FE groups the hand-offs by it and picks the right
+        # copy; without it every wall reads the same and a CAPTCHA looks like a
+        # question we are waiting on an answer for.
+        wall_kind = _clean_str(item.get("wall_kind"), 40)
+        if wall_kind:
+            entry["wall_kind"] = wall_kind
         out.append(entry)
     return out
 
@@ -448,12 +735,31 @@ def dedup_gate(user_email: str, job_identity: str) -> Tuple[bool, Optional[Dict[
 # ---------------------------------------------------------------------------
 # Create (insert-first; unique-index conflict → skipped_duplicate no-op)
 # ---------------------------------------------------------------------------
+def _pin_source_posting(posting_job_id: Optional[str]) -> None:
+    """Best-effort pin of the inventory row behind an application.
+
+    Never raises. If the pin fails the posting simply stays subject to normal
+    retention and the archive is retried by the next sweep that reaches it;
+    losing the pin is a degraded history link, not a lost application.
+    """
+    if not posting_job_id:
+        return
+    try:
+        from services import job_inventory_service as inv
+
+        inv.pin_posting(str(posting_job_id), reason="applied")
+    except Exception as exc:  # pragma: no cover - pinning must never block apply
+        logger.warning("pin_posting failed for %s: %s",
+                       str(posting_job_id)[:12], type(exc).__name__)
+
+
 def create_application(user_email: str, *, company: str, title: str,
                        jd_text: str, source: str, apply_url: str = "",
                        ats_family: Optional[str] = None,
                        tenant: Optional[str] = None,
                        posting_closes_at: Any = None,
                        tailoring_record_id: Optional[str] = None,
+                       posting_job_id: Optional[str] = None,
                        autonomy: str = "ask",
                        confidence_score: float = 0.0) -> Tuple[Dict[str, Any], str]:
     """Create a ledger row in `queued`, or resolve against the existing one.
@@ -498,6 +804,10 @@ def create_application(user_email: str, *, company: str, title: str,
         "apply_url": _clean_str(apply_url, 2000),
         "posting_closes_at": _parse_closes_at(posting_closes_at),
         "tailoring_record_id": _clean_str(tailoring_record_id, 200) or None,
+        # Link back to the canonical inventory row, when the posting came from
+        # there. This is what `pin_posting` below uses to make the job outlive
+        # the 7-day retention window.
+        "posting_job_id": _clean_str(posting_job_id, 64) or None,
         "autonomy": autonomy,
         "confidence_score": _clamp_score(confidence_score),
     }
@@ -521,7 +831,17 @@ def create_application(user_email: str, *, company: str, title: str,
     try:
         _applications().insert_one(rec)
     except DuplicateKeyError:
+        _pin_source_posting(posting_job_id)
         return _resolve_insert_conflict(user_email, identity, fresh_fields, now)
+
+    # A posting a user has applied to must outlive the inventory's rolling
+    # 7-day window, or their own application history renders as a dead
+    # reference. Pinning archives the full posting (body included) to S3 and
+    # flags the Mongo row so retention verifies that archive before deleting.
+    # Done AFTER the successful insert so a failed create cannot pin, and
+    # deliberately non-fatal: an application that exists with an unpinned
+    # posting is recoverable, an application that failed to record is not.
+    _pin_source_posting(posting_job_id)
 
     _audit(user_email, "application_created", application_id=application_id,
            meta={"job_identity_prefix": identity[:12], "source": source,
@@ -586,6 +906,129 @@ def _atomic_transition(user_email: str, application_id: str,
     )
 
 
+# ---------------------------------------------------------------------------
+# Exactly-once entitlement RESERVATION for auto_submit (defect G).
+#
+# Dark-launch gated (AUTO_APPLY_RESERVE, default OFF) so every existing
+# approval/transition path stays byte-identical until flipped on — mirroring the
+# AUTO_APPLY_PREPARE / AUTO_APPLY_MODES posture. When ON:
+#   * approve() RESERVES one auto_submit slot per row (atomic, idempotent on
+#     application_id + snapshot fingerprint) BEFORE the CAS — an over-cap row is
+#     NOT approved (the route surfaces 429, never 401).
+#   * transition() SETTLES that reservation at the terminal execution state:
+#       - confirmed                                   → FINALIZE (slot consumed)
+#       - failed / unsupported / cancelled / withdrawn → RELEASE (slot returned)
+#       - submission_unknown                          → HOLD  (stays reserved)
+#       - ready_for_review (approval invalidated)     → RELEASE + clear (a fresh
+#         approval re-reserves against the fresh snapshot)
+# All settlement is idempotent (quota_ledger complete/refund guard on entry
+# state), so a redelivered transition never double-settles.
+# ---------------------------------------------------------------------------
+_AUTO_SUBMIT_FEATURE = "auto_submit"
+
+# SAFE pre-submit terminals whose reservation is RELEASED (never charge for an
+# application that never submitted).
+_RESERVATION_REFUND_STATUSES: Tuple[str, ...] = (
+    STATUS_FAILED, STATUS_UNSUPPORTED, STATUS_CANCELLED, STATUS_WITHDRAWN,
+)
+
+
+def _reserve_enabled() -> bool:
+    """Dark-launch gate for defect G's atomic auto_submit reservation. Default
+    OFF — a misconfig can only leave today's (non-reserving) behavior in place."""
+    try:
+        from utils.config import _get_config_value
+        val = _get_config_value("AUTO_APPLY_RESERVE", "false") or "false"
+        return str(val).strip().lower() in ("1", "true", "yes", "on")
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
+def reserve_enabled() -> bool:
+    """PUBLIC read of the defect-G reservation gate, for callers that must know
+    WHO charges the auto_submit slot. When True, `approve()` reserves the slot
+    itself (atomic, idempotency-keyed), so a route that also metered the feature
+    would DOUBLE-CHARGE — the route must skip its own charge for rows it advances
+    through `approve()`. When False, `approve()` never touches quota and the
+    legacy route-level metering remains the single charge."""
+    return _reserve_enabled()
+
+
+def has_auto_submit_reservation(user_email: str, application_id: str) -> bool:
+    """Does this row ALREADY carry an auto_submit reservation frozen by
+    ``approve()``? (Owner-scoped; never raises — a lookup fault reads as False.)
+
+    A route must ask this before metering the feature itself. An approval that
+    already happened — typically via the emailed magic link, which reserves the
+    slot inside `approve()` — leaves the reservation ON THE ROW, and a later
+    in-app approve of the SAME row misses the status-guarded CAS (`approved` is
+    not an approvable state). Keying the "the ledger already charged" branch off
+    the CAS result ALONE therefore fell through to the route-level charge and
+    reserved the same approval a SECOND time under a different idempotency key.
+    """
+    try:
+        user_email = _require_email(user_email)
+        application_id = _clean_str(application_id, 64)
+        if not application_id:
+            return False
+        rec = _applications().find_one(
+            {"user_email": user_email, "application_id": application_id},
+            {"_id": 0, "auto_submit_reservation": 1},
+        ) or {}
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("auto_submit reservation lookup failed for %s: %s",
+                       str(application_id)[:12], type(e).__name__)
+        return False
+    return bool((rec.get("auto_submit_reservation") or {}).get("entry_ids"))
+
+
+def _auto_submit_idempotency_key(application_id: str,
+                                 snapshot: Optional[Dict[str, Any]]) -> str:
+    """The reservation idempotency key = application_id + a fingerprint of the
+    STABLE approval integrity fields (never approved_at/approved_by, which differ
+    per click). So two concurrent/replayed approvals of the SAME snapshot collapse
+    onto ONE reservation, and a re-approval after a snapshot drift mints a fresh
+    one."""
+    snapshot = snapshot or {}
+    basis = "|".join(
+        str(snapshot.get(k) or "")
+        for k in ("application_hash", "resume_version_id", "answers_fingerprint"))
+    fp = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:16]
+    return f"{_AUTO_SUBMIT_FEATURE}:{application_id}:{fp}"
+
+
+def _settle_reservation(user_email: str, rec: Dict[str, Any],
+                        to_status: str) -> None:
+    """Settle the auto_submit reservation frozen at approval when a row reaches a
+    terminal execution state (defect G). Inert when the row carries no
+    reservation (e.g. a manual/mail row, or reservation gated OFF at approval),
+    so it is safe to call on EVERY transition. Idempotent."""
+    reservation = rec.get("auto_submit_reservation") or {}
+    entry_ids = reservation.get("entry_ids") or []
+    if not entry_ids:
+        return
+    try:
+        from services import quota_ledger_service as quota
+        if to_status == STATUS_CONFIRMED:
+            for eid in entry_ids:
+                quota.complete_entry(eid)
+        elif to_status in _RESERVATION_REFUND_STATUSES:
+            # Owner-scoped refund: a slot may only ever be credited back to the
+            # counter of the user who reserved it.
+            quota.refund_entries(entry_ids, user_email=user_email)
+        elif to_status == STATUS_READY_FOR_REVIEW:
+            # Approval invalidated back to review — release the slot and drop the
+            # linkage so a fresh approval reserves cleanly against the new snapshot.
+            quota.refund_entries(entry_ids, user_email=user_email)
+            _applications().update_one(
+                {"application_id": rec.get("application_id"), "user_email": user_email},
+                {"$unset": {"auto_submit_reservation": ""}})
+        # STATUS_SUBMISSION_UNKNOWN → HOLD: leave the reservation reserved.
+    except Exception as e:  # pragma: no cover - settlement must never break the txn
+        logger.warning("auto_submit reservation settle (%s) failed for %s: %s",
+                       to_status, rec.get("application_id"), e)
+
+
 def transition(user_email: str, application_id: str, to_status: str, *,
                error: Optional[str] = None,
                needs_input: Any = None,
@@ -623,10 +1066,25 @@ def transition(user_email: str, application_id: str, to_status: str, *,
         set_fields["confirmed_at"] = now
     elif to_status == STATUS_FAILED:
         set_fields["error"] = _clean_str(error, 2000) or "unknown_error"
+    elif to_status == STATUS_WAITING_HUMAN and error:
+        # A human-handoff hold carries its REASON in the same field every reader
+        # already surfaces (the fold payload reads `error` as the card's reason).
+        # Only set when a reason was passed, so existing callers are unchanged.
+        set_fields["error"] = _clean_str(error, 2000)
+    elif to_status == STATUS_UNSUPPORTED:
+        # Spec §4: an unsupported ATS is surfaced HONESTLY, not as an error — the
+        # row carries the user-facing sentence the FE renders verbatim. Distinct
+        # from `failed` (retryable): this posting will never be automatable by us.
+        set_fields["error"] = _clean_str(error, 2000) or UNSUPPORTED_MESSAGE
     elif to_status == STATUS_NEEDS_INPUT:
         set_fields["needs_input"] = _sanitize_needs_input(needs_input)
     elif to_status == STATUS_READY:
         set_fields["needs_input"] = []   # resolved by the one-tap loop
+    elif to_status == STATUS_READY_FOR_REVIEW:
+        set_fields["needs_input"] = []          # answers resolved before review
+        # F: entering (or re-entering, on invalidation) review VOIDS any prior
+        # approval — a fresh approval must re-freeze a fresh snapshot.
+        set_fields["approval_snapshot"] = None
     elif to_status == STATUS_QUEUED:
         set_fields["error"] = None       # retry wipes the stale failure
         set_fields["needs_input"] = []
@@ -642,6 +1100,10 @@ def transition(user_email: str, application_id: str, to_status: str, *,
 
     updated = _atomic_transition(user_email, application_id, guard, set_fields)
     if updated is not None:
+        # Defect G: settle the auto_submit reservation at the terminal execution
+        # state (finalize on confirmed / release on safe pre-submit terminal /
+        # hold on submission_unknown). Inert + idempotent when no reservation.
+        _settle_reservation(user_email, updated, to_status)
         _audit(user_email, "application_transition", application_id=application_id,
                meta={"to": to_status,
                      "needs_input_count": len(set_fields.get("needs_input") or [])
@@ -674,11 +1136,56 @@ def mark_needs_input(user_email: str, application_id: str, questions: Any, *,
                       confidence_score=confidence_score)
 
 
+def update_needs_input(user_email: str, application_id: str,
+                       questions: Any) -> Dict[str, Any]:
+    """Rewrite the one-tap queue of a row that STAYS in `needs_input`.
+
+    The answer loop (spec §3) shrinks the queue as questions get answered, which
+    is NOT a transition (needs_input -> needs_input is not — and must not become —
+    a legal edge). This is the only sanctioned way to edit the list in place: a
+    status-guarded CAS on `needs_input`, so it can never touch a row that already
+    advanced (a lost race raises InvalidTransition/404 exactly like `transition`).
+    """
+    user_email = _require_email(user_email)
+    application_id = _clean_str(application_id, 64)
+    if not application_id:
+        raise InvalidApplicationInput("application_id is required")
+    items = _sanitize_needs_input(questions)
+    updated = _atomic_transition(user_email, application_id,
+                                 (STATUS_NEEDS_INPUT,), {"needs_input": items})
+    if updated is not None:
+        _audit(user_email, "application_needs_input_updated",
+               application_id=application_id,
+               meta={"needs_input_count": len(items)})
+        return _view(updated)
+    current = _applications().find_one(
+        {"application_id": application_id, "user_email": user_email},
+        {"_id": 0, "status": 1},
+    )
+    if current is None:
+        raise ApplicationNotFound()
+    raise InvalidTransition(
+        f"cannot update needs_input from '{current.get('status')}'")
+
+
 def mark_ready(user_email: str, application_id: str, *,
                autonomy: Optional[str] = None,
                confidence_score: Optional[float] = None,
                tailoring_record_id: Optional[str] = None) -> Dict[str, Any]:
     return transition(user_email, application_id, STATUS_READY,
+                      autonomy=autonomy, confidence_score=confidence_score,
+                      tailoring_record_id=tailoring_record_id)
+
+
+def mark_ready_for_review(user_email: str, application_id: str, *,
+                          autonomy: Optional[str] = None,
+                          confidence_score: Optional[float] = None,
+                          tailoring_record_id: Optional[str] = None) -> Dict[str, Any]:
+    """F: land a row in `ready_for_review` — the split of legacy `ready` that
+    AWAITS an approval (a manual go-ahead, or the automatic system-approval on the
+    clean-auto path). Approval (→ `approved`) freezes the immutable snapshot
+    separately; see `approve`. Canonical peer of the legacy `mark_ready`."""
+    return transition(user_email, application_id, STATUS_READY_FOR_REVIEW,
                       autonomy=autonomy, confidence_score=confidence_score,
                       tailoring_record_id=tailoring_record_id)
 
@@ -699,9 +1206,134 @@ def mark_failed(user_email: str, application_id: str, error: str) -> Dict[str, A
     return transition(user_email, application_id, STATUS_FAILED, error=error)
 
 
+def mark_waiting_human(user_email: str, application_id: str,
+                       reason: Optional[str] = None) -> Dict[str, Any]:
+    """Hand a RUNNING row back to the human (a `prepared` copilot fill, or a wall
+    the executor cannot clear). `reason` is the user-facing sentence the Attention
+    card renders. Not a failure — the row stays live and re-approvable."""
+    return transition(user_email, application_id, STATUS_WAITING_HUMAN,
+                      error=reason)
+
+
+def mark_unsupported(user_email: str, application_id: str,
+                     message: Optional[str] = None) -> Dict[str, Any]:
+    """Spec §4: this employer's ATS/site is not automatable by us — a HONEST,
+    non-retryable terminal (never a `failed` we would silently re-drive). Legal
+    from preparing / queued_for_execution / running (see _TRANSITION_GUARDS).
+    `message` defaults to the user-facing UNSUPPORTED_MESSAGE."""
+    return transition(user_email, application_id, STATUS_UNSUPPORTED,
+                      error=message or UNSUPPORTED_MESSAGE)
+
+
 def requeue(user_email: str, application_id: str) -> Dict[str, Any]:
     """Explicit retry: failed/skipped_duplicate → queued (the ONLY way back in)."""
     return transition(user_email, application_id, STATUS_QUEUED)
+
+
+# ---------------------------------------------------------------------------
+# OUTCOME axis writer (defect E, E1) — the employer-response funnel write-through
+# ---------------------------------------------------------------------------
+def _outcome_locator(user_email: str, record_id: Optional[str],
+                     job_ref: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The owner-scoped filter that finds the canonical row an outcome attaches
+    to. Prefer the tailored-résumé link (`tailoring_record_id`), else a job
+    reference (a 64-hex `job_identity`, else a `posting_job_id`). None means
+    "no locator" → a standalone lightweight row is created. Every branch folds
+    in user_email so an outcome can only ever touch the caller's OWN row."""
+    if record_id:
+        return {"user_email": user_email, "tailoring_record_id": record_id}
+    if job_ref:
+        jr = _clean_str(job_ref, 200)
+        if jr:
+            low = jr.lower()
+            if _HEX64.match(low):
+                return {"user_email": user_email, "job_identity": low}
+            return {"user_email": user_email, "posting_job_id": jr}
+    return None
+
+
+def set_outcome(user_email: str, *, record_id: Optional[str] = None,
+                job_ref: Optional[str] = None, outcome: str, source: str,
+                evidence: Optional[str] = None) -> Dict[str, Any]:
+    """Stamp the OUTCOME axis (employer-response funnel) on the canonical row for
+    a (user, application), find-or-creating that row.
+
+    This is the E1 write-through: mail/gmail/manual signals call it to record
+    what the employer did (`outcome` ∈ OUTCOME_STATUSES), independent of the
+    execution `status`. Resolution order (owner-scoped throughout):
+      1. the row whose `tailoring_record_id == record_id`, else
+      2. the row matched by `job_ref` (job_identity or posting_job_id), else
+      3. a NEW lightweight row — `{origin: source, status: "external", ...}` —
+         so a mail-only / manually-tracked application becomes a real canonical
+         row WITHOUT ever entering ACTIVE_STATUSES/dedup_gate/retry (external is
+         an execution-axis terminal; this row lives entirely on the outcome axis).
+
+    The execution `status` of an EXISTING row is never touched here. Returns a
+    small result dict {application_id, outcome, created}. Raises
+    InvalidApplicationInput on an outcome outside OUTCOME_STATUSES.
+    """
+    from pymongo import ReturnDocument
+
+    user_email = _require_email(user_email)
+    if outcome not in OUTCOME_STATUSES:
+        raise InvalidApplicationInput(f"unknown outcome: {outcome}")
+    source_clean = _clean_str(source, 40).lower() or "unknown"
+    evidence_clean = _clean_str(evidence, 500) or None
+    record_id_clean = _clean_str(record_id, 200) or None
+    now = _now()
+
+    set_fields: Dict[str, Any] = {
+        "outcome": outcome,
+        "outcome_source": source_clean,
+        "outcome_evidence": evidence_clean,
+        "outcome_updated_at": now,
+        "updated_at": now,
+    }
+
+    locator = _outcome_locator(user_email, record_id_clean, job_ref)
+
+    new_application_id = str(uuid.uuid4())
+    on_insert: Dict[str, Any] = {
+        "application_id": new_application_id,
+        "user_email": user_email,
+        "origin": source_clean,
+        "status": STATUS_EXTERNAL,
+        "needs_input": [],
+        "error": None,
+        "created_at": now,
+        "submitted_at": None,
+        "confirmed_at": None,
+        "audit_ref": new_application_id,
+    }
+    if record_id_clean:
+        on_insert["tailoring_record_id"] = record_id_clean
+
+    if locator is None:
+        # No locator to upsert against — a standalone lightweight row.
+        doc = {**on_insert, **set_fields}
+        _applications().insert_one(doc)
+        doc.pop("_id", None)
+        rec = doc
+    else:
+        # A locator field seeds the upserted doc from the query equality, so it
+        # must NOT also appear in $setOnInsert (that is a Mongo path conflict).
+        insert_doc = {k: v for k, v in on_insert.items() if k not in locator}
+        rec = _applications().find_one_and_update(
+            locator,
+            {"$set": set_fields, "$setOnInsert": insert_doc},
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+
+    created = bool(rec) and rec.get("application_id") == new_application_id
+    _audit(user_email, "application_outcome_set",
+           application_id=(rec or {}).get("application_id"),
+           meta={"outcome": outcome, "source": source_clean, "created": created})
+    return {
+        "application_id": (rec or {}).get("application_id"),
+        "outcome": outcome,
+        "created": created,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -725,25 +1357,195 @@ def _clean_id_list(application_ids: Any) -> List[str]:
     return out
 
 
+def _build_approval_snapshot(fields: Optional[Dict[str, Any]],
+                             approved_by: str) -> Dict[str, Any]:
+    """The immutable approval snapshot frozen onto a row at approval (F). Every
+    field is sanitized/defaulted so nothing user-derived reaches the row raw. The
+    three integrity fields (application_hash / resume_version_id /
+    answers_fingerprint) are re-validated before the executor submits — a mismatch
+    invalidates the approval instead of submitting a stale application. policy_/
+    consent_version pin the approval semantics; approved_at/approved_by are the
+    who/when audit anchor (approved_by == 'system' on the autopilot path)."""
+    fields = fields or {}
+    return {
+        "application_hash": _clean_str(fields.get("application_hash"), 128) or None,
+        "resume_version_id": _clean_str(fields.get("resume_version_id"), 128) or None,
+        "answers_fingerprint": _clean_str(fields.get("answers_fingerprint"), 128) or None,
+        "policy_version": _clean_str(fields.get("policy_version"), 40) or _APPROVAL_POLICY_VERSION,
+        "consent_version": _clean_str(fields.get("consent_version"), 40) or _APPROVAL_CONSENT_VERSION,
+        "approved_at": _now(),
+        "approved_by": _clean_str(approved_by, 40) or "user",
+    }
+
+
+def approve_with_result(user_email: str, application_ids: Any, *,
+                        approved_by: str = "user",
+                        snapshot_provider: Any = None) -> Dict[str, Any]:
+    """F: approve the user's listed `ready_for_review` rows (tolerating a legacy
+    `ready`) → `approved`, FREEZING an immutable snapshot on each.
+
+    Tightened from the pre-F `approve_to_ready` (which accepted queued/gathering/
+    needs_input and moved to `ready`): a row that has NOT reached `ready_for_review`
+    is left untouched — an approval can never race a still-gathering row. Idempotent
+    + single-writer: a row already `approved` (or further) is a no-op — the
+    status-guarded find_one_and_update never re-transitions or re-freezes it, so a
+    replayed magic-link / duplicate click can never double-approve (and, once G
+    lands its reservation call here, never double-charge). Autopilot converges on
+    this same path with approved_by="system".
+
+    `snapshot_provider(application_id) -> dict` optionally supplies the per-row
+    integrity fields (application_hash / resume_version_id / answers_fingerprint /
+    policy_version / consent_version); a build failure degrades to an empty
+    snapshot (the approval still records who/when).
+
+    Returns the DETAILED outcome so a caller (the in-app approve route) can tell
+    "approved" from "over quota" from "not approvable" — three outcomes the bare
+    count collapses into 0:
+
+        {"approved": int, "approved_ids": [...],
+         "over_quota": [...], "usage": {...},     # G reservation denial
+         "not_approvable": [...]}                 # wrong state / lost race
+
+    (G: the auto_submit entitlement is reserved here, right before the CAS, keyed
+    on application_id + snapshot, so a redelivery reuses the reservation.)
+    """
+    from pymongo import ReturnDocument
+
+    user_email = _require_email(user_email)
+    ids = _clean_id_list(application_ids)
+    result: Dict[str, Any] = {"approved": 0, "approved_ids": [],
+                              "over_quota": [], "usage": {}, "not_approvable": []}
+    if not ids:
+        return result
+    approvable = list(_APPROVABLE_STATUSES) + list(_APPROVABLE_LEGACY)
+    moved = 0
+    for aid in ids:
+        snap_fields: Dict[str, Any] = {}
+        if snapshot_provider is not None:
+            try:
+                snap_fields = snapshot_provider(aid) or {}
+            except Exception as e:  # never let snapshot-building block approval
+                logger.warning("approval snapshot build failed for %s: %s",
+                               str(aid)[:12], type(e).__name__)
+                snap_fields = {}
+        snapshot = _build_approval_snapshot(snap_fields, approved_by)
+
+        # G HOOK: reserve the auto_submit entitlement BEFORE the CAS, keyed on
+        # application_id + snapshot fingerprint (a redelivery/duplicate approve of
+        # the SAME snapshot reuses the reservation — never double-reserves). An
+        # over-cap reservation means this row is NOT approved (the route maps the
+        # miss to 429, never 401). Dark-launch gated (AUTO_APPLY_RESERVE, OFF by
+        # default) so existing approval flows are byte-identical until flipped.
+        reservation: Optional[Dict[str, Any]] = None
+        if _reserve_enabled():
+            try:
+                from services import quota_ledger_service as quota
+                res_key = _auto_submit_idempotency_key(aid, snapshot)
+                res = quota.reserve(user_email, _AUTO_SUBMIT_FEATURE, n=1,
+                                    idempotency_key=res_key)
+            except Exception as e:  # pragma: no cover - reservation infra failure
+                logger.error("auto_submit reserve failed for %s: %s",
+                             str(aid)[:12], type(e).__name__)
+                res = {"reserved": False}
+            if not res.get("reserved"):
+                # Over the daily auto_submit cap — do NOT approve (and do NOT
+                # transition) this row.
+                _audit(user_email, "application_approve_over_quota",
+                       application_id=aid, meta={"feature": _AUTO_SUBMIT_FEATURE})
+                result["over_quota"].append(aid)
+                result["usage"] = res.get("usage") or result["usage"]
+                continue
+            reservation = {"feature": _AUTO_SUBMIT_FEATURE,
+                           "entry_ids": res.get("entry_ids") or [],
+                           "idempotency_key": res_key}
+
+        set_doc: Dict[str, Any] = {
+            "status": STATUS_APPROVED, "needs_input": [],
+            "approval_snapshot": snapshot, "updated_at": _now(),
+        }
+        if reservation is not None:
+            set_doc["auto_submit_reservation"] = reservation
+        updated = _applications().find_one_and_update(
+            {"user_email": user_email, "application_id": aid,
+             "status": {"$in": approvable}},
+            {"$set": set_doc},
+            return_document=ReturnDocument.AFTER,
+        )
+        # CAS miss with a fresh reservation in hand: the row was already approved
+        # (a duplicate — the live row holds the SAME idempotency_key'd entries, so
+        # we must NOT refund) or slipped out of an approvable state. Either way the
+        # reservation is idempotency-keyed, so a later approve of the same snapshot
+        # reuses it — no double charge; we intentionally do not refund here.
+        if updated is not None:
+            moved += 1
+            result["approved_ids"].append(aid)
+            _audit(user_email, "application_approved", application_id=aid,
+                   meta={"approved_by": snapshot["approved_by"],
+                         "has_snapshot": any(
+                             snapshot.get(k) for k in
+                             ("application_hash", "resume_version_id",
+                              "answers_fingerprint"))})
+        else:
+            result["not_approvable"].append(aid)
+    result["approved"] = moved
+    return result
+
+
+def approve(user_email: str, application_ids: Any, *, approved_by: str = "user",
+            snapshot_provider: Any = None) -> int:
+    """Count-returning face of `approve_with_result` (the historical signature —
+    every existing caller/test uses this). Semantics are unchanged: the number of
+    rows moved `ready_for_review` → `approved` with a frozen snapshot."""
+    return approve_with_result(user_email, application_ids,
+                               approved_by=approved_by,
+                               snapshot_provider=snapshot_provider)["approved"]
+
+
+# Back-compat alias for the pre-F name. NOTE the semantics changed under F: it now
+# approves ONLY ready_for_review rows (→ approved, snapshot frozen), not the old
+# queued/gathering/needs_input → ready. Retained so any straggling caller keeps
+# resolving; new code calls `approve`.
 def approve_to_ready(user_email: str, application_ids: Any) -> int:
-    """§2 `approve` / `approve_all` / `approve_one`: move the user's listed rows
-    still awaiting go-ahead (queued/gathering/needs_input) to `ready` — the
-    state the Tranche 2 submit sweep picks up. Idempotent (rows already
-    ready/submitted/skipped are left untouched). Returns the number moved."""
+    return approve(user_email, application_ids, approved_by="user")
+
+
+def get_approval_snapshot(user_email: str,
+                          application_id: str) -> Optional[Dict[str, Any]]:
+    """The frozen approval snapshot for a row (owner-scoped), or None. Read at
+    submit time to re-validate the approval before the executor acts (F)."""
+    user_email = _require_email(user_email)
+    application_id = _clean_str(application_id, 64)
+    if not application_id:
+        return None
+    rec = _applications().find_one(
+        {"application_id": application_id, "user_email": user_email},
+        {"_id": 0, "approval_snapshot": 1})
+    return (rec or {}).get("approval_snapshot")
+
+
+def approval_snapshots(user_email: str,
+                       application_ids: Any) -> Dict[str, Dict[str, Any]]:
+    """Bulk peer of `get_approval_snapshot`: {application_id -> frozen snapshot}
+    for the listed rows, owner-scoped, in ONE query. Rows without a snapshot are
+    absent from the map. Used by the approval-fold payload (which needs
+    `approved_at` to derive the undo window for a whole page of rows without N
+    round trips). Best-effort: any read failure degrades to an empty map."""
     user_email = _require_email(user_email)
     ids = _clean_id_list(application_ids)
     if not ids:
-        return 0
-    res = _applications().update_many(
-        {"user_email": user_email, "application_id": {"$in": ids},
-         "status": {"$in": list(_APPROVABLE_STATUSES)}},
-        {"$set": {"status": STATUS_READY, "needs_input": [], "updated_at": _now()}},
-    )
-    moved = getattr(res, "modified_count", 0) or 0
-    if moved:
-        _audit(user_email, "application_approved_ready",
-               meta={"requested": len(ids), "moved": moved})
-    return moved
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        cursor = _applications().find(
+            {"user_email": user_email, "application_id": {"$in": ids}},
+            {"_id": 0, "application_id": 1, "approval_snapshot": 1})
+        for rec in cursor:
+            snap = rec.get("approval_snapshot")
+            if isinstance(snap, dict) and rec.get("application_id"):
+                out[rec["application_id"]] = snap
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("approval_snapshots read failed for %s: %s", user_email, e)
+    return out
 
 
 def user_skip(user_email: str, application_ids: Any) -> int:
@@ -801,3 +1603,67 @@ def list_applications(user_email: str, *, status: Optional[str] = None,
         .limit(limit)
     )
     return [_view(rec) for rec in cursor]
+
+
+# ---------------------------------------------------------------------------
+# E3 (defect E) — the canonical-preferred DUAL-READ map for the funnel/kanban/
+# today_inbox readers. {tailoring_record_id -> outcome_view bucket} for every
+# canonical `applications` row this user owns that links a tailoring record. A
+# reader PREFERS this bucket over `tailoring_records.application.status` when a
+# canonical row exists for the record, and falls back to the tailoring_records
+# mirror otherwise.
+# ---------------------------------------------------------------------------
+def outcome_buckets_for_records(user_email: str) -> Dict[str, str]:
+    """Owner-scoped {tailoring_record_id -> coarse funnel bucket} projection of
+    the canonical ledger, for the E3 dual-read. Best-effort: an empty map (any
+    error, or no canonical rows) degrades cleanly to the tailoring_records
+    fallback, so a read surface never 500s on the dual-read.
+    """
+    try:
+        user_email = _require_email(user_email)
+    except InvalidApplicationInput:
+        return {}
+    out: Dict[str, str] = {}
+    try:
+        cursor = _applications().find(
+            {"user_email": user_email,
+             "tailoring_record_id": {"$nin": [None, ""]}},
+            {"_id": 0, "tailoring_record_id": 1, "outcome": 1, "status": 1},
+        )
+        for row in cursor:
+            rid = row.get("tailoring_record_id")
+            if rid:
+                out[rid] = outcome_view(row)
+    except Exception as e:  # pragma: no cover - dual-read is best-effort
+        logger.warning("outcome_buckets_for_records failed for %s: %s",
+                       user_email, e)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Index management — call from scripts/migrate_indexes.py, NEVER at import time
+# (keeps cold starts lean). Idempotent (create_index is a no-op by name).
+# ---------------------------------------------------------------------------
+def ensure_indexes() -> None:
+    """Create the `applications` ledger indexes. Mirrors the specs in
+    scripts/migrate_indexes.py (matching names/options) so a runtime ensure and
+    the migration are a clean no-op re-assert of each other. Safe to run
+    repeatedly.
+    """
+    coll = _applications()
+    coll.create_index([("user_email", 1), ("job_identity", 1)],
+                      unique=True, name="user_email_job_identity_unique")
+    coll.create_index([("user_email", 1), ("status", 1)], name="user_email_status")
+    coll.create_index([("posting_closes_at", 1)], sparse=True,
+                      name="posting_closes_at_sparse")
+    coll.create_index([("application_id", 1)], unique=True,
+                      name="application_id_unique")
+    # E1 upsert race guard (defect E): set_outcome find-or-creates the canonical
+    # row on (user_email, tailoring_record_id). Unique PARTIAL (NOT plain sparse):
+    # a compound sparse index still indexes every doc carrying ANY keyed field
+    # (all rows have user_email), so a null tailoring_record_id would collide — the
+    # partial filter limits uniqueness to rows that actually link a tailored
+    # résumé, which is exactly the set two concurrent signals could duplicate.
+    coll.create_index([("user_email", 1), ("tailoring_record_id", 1)],
+                      unique=True, name="user_email_tailoring_record_id_unique",
+                      partialFilterExpression={"tailoring_record_id": {"$type": "string"}})

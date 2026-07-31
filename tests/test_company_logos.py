@@ -511,7 +511,7 @@ class TestStamping:
         )
         rows = [{"title": "Python Engineer", "company": "Acme Corp", "location": "US",
                  "apply_link": "https://a.example/1", "source": "Greenhouse",
-                 "description": "Python Go SQL backend"}]
+                 "days_ago": 1, "description": "Python Go SQL backend"}]
         monkeypatch.setattr(guest_service, "_fetch_free_jobs", lambda structured: rows)
         result = guest_service.compute_guest_matches(s["guest_id"])
         assert len(result["jobs"]) == 1
@@ -547,6 +547,7 @@ class TestStamping:
             "apply_link": "javascript:alert(1)",         # stripped
             "url": "https://ok.example/job",             # kept
             "logo_url": "javascript:alert(2)",           # stripped (no company to re-stamp)
+            "days_ago": 1,
             "source": "Greenhouse", "description": "Python",
         }]
         monkeypatch.setattr(guest_service, "_fetch_free_jobs", lambda structured: rows)

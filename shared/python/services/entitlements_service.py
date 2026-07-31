@@ -62,8 +62,9 @@ FEATURE_PERIODS = {
     "tailor": PERIOD_DAY,
     "ats_scores": PERIOD_DAY,
     "cover_letter": PERIOD_DAY,
-    "autoapply_answer": PERIOD_DAY,
-    "auto_submit": PERIOD_DAY,         # opt-in auto-submit — daily abuse/safety cap
+    "autoapply_answer": PERIOD_MONTH,  # grounded open-ended answers (monthly pool)
+    "auto_submit": PERIOD_MONTH,       # opt-in auto-submit — monthly application pool
+    "auto_apply_daily": PERIOD_DAY,    # unattended fan-out throttle — see below
     "quiz": PERIOD_DAY,
     "practice_question": PERIOD_DAY,
     "mock_evaluate": PERIOD_DAY,
@@ -76,38 +77,68 @@ FEATURE_PERIODS = {
     "differentiation_analysis": PERIOD_DAY,  # Learning §6.6 — market-gap analysis
     "task_verify": PERIOD_DAY,               # Learning §6.6 — proof-of-work verification
     "completion_post": PERIOD_MONTH,         # Learning §6.6 — verified-win LinkedIn post
+    "sprint_generate": PERIOD_DAY,           # Sprint Hub — meter day-ticket generation
+    "hub_mentor": PERIOD_DAY,                # Sprint Hub — meter mentor chat turns
 }
+
+# ---------------------------------------------------------------------------
+# Unattended fan-out blast radius (`auto_apply_daily`).
+#
+# `auto_submit` is a MONTHLY pool and premium_plus is unlimited on it, which
+# means that before this existed there was NO bound on how fast auto-apply
+# could burn. `apply_match_sweep` runs every 15 minutes (96 ticks/day) and the
+# Auto Aggressive per-tick cap is 50, so an unlimited-plan user could have had
+# ~4,800 applications attempted in a single unattended day.
+#
+# This is a SAFETY throttle, not a plan lever — it is intentionally the SAME
+# number on every plan. Nobody, on any tier, gets 100 unattended applications a
+# day by accident; raising it is a deliberate per-user
+# `entitlement_overrides.limits.auto_apply_daily` decision. It is metered per
+# ENQUEUE (the moment the sweep commits to an application), never refunded, so
+# a downstream failure still consumes blast radius. That asymmetry is the
+# point: the cap bounds attempts, not successes.
+#
+# It does NOT replace or double-count the monthly `auto_submit` pool — that one
+# is charged later, at approval (application_ledger_service._AUTO_SUBMIT_FEATURE
+# via quota_ledger reservation). Two different questions: "how many this month"
+# vs "how fast, unattended".
+# ---------------------------------------------------------------------------
+DEFAULT_DAILY_AUTO_APPLY_CAP = 20
 
 PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
     FREE: {
         "tailor": 5,
         "ats_scores": 5,
         "cover_letter": 2,
-        "autoapply_answer": 10,
-        "auto_submit": 5,             # opt-in auto-submit — conservative on free
-        "quiz": 3,
+        "autoapply_answer": 25,
+        "auto_submit": 25,            # free: 25 auto-apply submissions / month
+        "auto_apply_daily": DEFAULT_DAILY_AUTO_APPLY_CAP,  # safety throttle, not a plan lever
+        "quiz": None,                 # Learning Hub — free for all users
         "practice_question": 5,
         "mock_evaluate": 2,
         "salary": 3,
         "post_draft": 1,
-        "learning_plan_generate": 1,
+        "learning_plan_generate": None,  # Learning Hub — free for all users
         "authored_resume": 1,         # Voice Graph — §6.12.10 (raw mode is always free)
         "graph_extract": 5,           # Voice Graph — LLM extractions per day
         "six_seconds": 3,             # Recruiter's Six Seconds — §6.11.2
-        "differentiation_analysis": 1,  # Learning §6.6
-        "task_verify": 5,
+        "differentiation_analysis": None,  # Learning Hub — free for all users
+        "task_verify": None,          # Learning Hub — free for all users
+        "sprint_generate": None,      # Learning Hub — free for all users
+        "hub_mentor": None,           # Learning Hub — free for all users
         "completion_post": 1,
         # Structural caps (checked against live state, not time-windowed):
         "batch_tailor_max": 0,        # batch tailoring disabled on free
-        "active_learning_paths": 1,
+        "active_learning_paths": None,   # Learning Hub — free for all users
         "writing_samples": 1,         # Voice Graph — count of finalized samples
     },
     PREMIUM: {
         "tailor": 30,
         "ats_scores": None,
         "cover_letter": None,
-        "autoapply_answer": 100,
-        "auto_submit": 50,
+        "autoapply_answer": 300,
+        "auto_submit": 200,           # premium: 200 auto-apply submissions / month
+        "auto_apply_daily": DEFAULT_DAILY_AUTO_APPLY_CAP,  # same throttle on every plan
         "quiz": 20,
         "practice_question": 30,
         "mock_evaluate": 15,
@@ -119,6 +150,8 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "six_seconds": 30,
         "differentiation_analysis": 10,
         "task_verify": 50,
+        "sprint_generate": None,
+        "hub_mentor": None,
         "completion_post": 8,
         "batch_tailor_max": 10,
         "active_learning_paths": 5,
@@ -130,6 +163,10 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "cover_letter": None,
         "autoapply_answer": None,
         "auto_submit": None,          # soft cap; effectively unlimited
+        # NOT None. "Unlimited monthly" must not mean "unbounded per day" — an
+        # unattended 15-minute sweep with no daily bound is the ~4,800/day
+        # failure mode described above. Admin override raises it per user.
+        "auto_apply_daily": DEFAULT_DAILY_AUTO_APPLY_CAP,
         "quiz": None,
         "practice_question": None,
         "mock_evaluate": None,
@@ -141,6 +178,8 @@ PLAN_LIMITS: Dict[str, Dict[str, Optional[int]]] = {
         "six_seconds": 100,
         "differentiation_analysis": 100,
         "task_verify": None,
+        "sprint_generate": None,
+        "hub_mentor": None,
         "completion_post": None,
         "batch_tailor_max": 25,
         "active_learning_paths": None,
@@ -164,6 +203,7 @@ _CORE = {
     "post_draft",
     "salary",
     "voice_graph",     # capture + raw-mode resume available on every tier (§6.12.10)
+    "auto_apply",      # public auto-apply (Manual / Auto / Auto Aggressive) — metered via auto_submit
 }
 
 PLAN_FEATURES: Dict[str, set] = {
@@ -224,6 +264,18 @@ def _resets_at(feature: str) -> datetime:
 # ---------------------------------------------------------------------------
 # Plan lookup
 # ---------------------------------------------------------------------------
+def _override_doc(email: str) -> Dict:
+    """Per-user admin escape hatch (`entitlement_overrides`). Empty on miss."""
+    if not email:
+        return {}
+    try:
+        db = DBConnect().get_db()
+        ov = db.entitlement_overrides.find_one({"user_email": email}, {"overrides": 1})
+        return ((ov or {}).get("overrides") or {}) if isinstance(ov, dict) else {}
+    except Exception:
+        return {}
+
+
 def get_plan(email: str) -> str:
     """Return the user's normalized plan, defaulting to free."""
     if not email:
@@ -237,14 +289,9 @@ def get_plan(email: str) -> str:
     plan = (doc or {}).get("plan")
     plan = plan if plan in VALID_PLANS else DEFAULT_PLAN
     # Admin per-user override escape hatch (§6.10) wins over the stored plan.
-    # Defensive: any lookup/shape error simply ignores the override.
-    try:
-        ov = db.entitlement_overrides.find_one({"user_email": email}, {"overrides": 1})
-        ov_plan = ((ov or {}).get("overrides") or {}).get("plan")
-        if ov_plan in VALID_PLANS:
-            return ov_plan
-    except Exception:
-        pass
+    ov_plan = _override_doc(email).get("plan")
+    if ov_plan in VALID_PLANS:
+        return ov_plan
     return plan
 
 
@@ -259,8 +306,22 @@ def quota(email_or_plan: str, feature: str) -> Optional[int]:
     knob the guest→signup carry-in reads). Any config-read failure falls
     back to the static PLAN_LIMITS value, so behavior without the config
     doc is byte-for-byte the previous behavior (5/day).
+
+    Admin `entitlement_overrides.limits.<feature>` wins over plan defaults
+    (testing escape hatch — set to a large int or None for unlimited).
     """
+    is_email = email_or_plan not in VALID_PLANS
     plan = email_or_plan if email_or_plan in VALID_PLANS else get_plan(email_or_plan)
+    if is_email:
+        ov_limits = _override_doc(email_or_plan).get("limits") or {}
+        if isinstance(ov_limits, dict) and feature in ov_limits:
+            raw = ov_limits[feature]
+            if raw is None:
+                return None
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                pass
     if plan == FREE and feature == "tailor":
         try:
             from services import platform_config_service as pconfig
@@ -273,9 +334,20 @@ def quota(email_or_plan: str, feature: str) -> Optional[int]:
 
 
 def feature_allowed(email: str, feature: str) -> bool:
-    """True if the plan's feature set includes `feature` (boolean gate)."""
+    """True if the plan's feature set includes `feature` (boolean gate).
+
+    Admin overrides may grant extra features via
+    ``entitlement_overrides.features`` (list or ``{feature: true}`` map).
+    """
     plan = get_plan(email)
-    return feature in PLAN_FEATURES.get(plan, PLAN_FEATURES[DEFAULT_PLAN])
+    if feature in PLAN_FEATURES.get(plan, PLAN_FEATURES[DEFAULT_PLAN]):
+        return True
+    ov = _override_doc(email).get("features")
+    if isinstance(ov, dict):
+        return bool(ov.get(feature))
+    if isinstance(ov, (list, tuple, set)):
+        return feature in ov
+    return False
 
 
 def required_plans_for(feature: str) -> list:
@@ -405,13 +477,28 @@ def summary(email: str) -> Dict:
 
     Cheap (no live usage reads): the plan, its boolean feature flags, and the
     integer limit map so the UI can gate/locked-badge without extra round trips.
+    Admin overrides for features/limits are layered in so the FE mirrors effective
+    access during testing.
     """
     plan = get_plan(email)
+    features = set(PLAN_FEATURES.get(plan, PLAN_FEATURES[DEFAULT_PLAN]))
+    limits = dict(PLAN_LIMITS.get(plan, PLAN_LIMITS[DEFAULT_PLAN]))
+    ov = _override_doc(email)
+    ov_feats = ov.get("features")
+    if isinstance(ov_feats, dict):
+        features |= {k for k, v in ov_feats.items() if v}
+    elif isinstance(ov_feats, (list, tuple, set)):
+        features |= set(ov_feats)
+    ov_limits = ov.get("limits")
+    if isinstance(ov_limits, dict):
+        for k, v in ov_limits.items():
+            if v is None or isinstance(v, (int, float)) and not isinstance(v, bool):
+                limits[k] = None if v is None else int(v)
     return {
         "plan": plan,
         "plan_label": PLAN_META.get(plan, {}).get("label", plan),
-        "features": sorted(PLAN_FEATURES.get(plan, PLAN_FEATURES[DEFAULT_PLAN])),
-        "limits": dict(PLAN_LIMITS.get(plan, PLAN_LIMITS[DEFAULT_PLAN])),
+        "features": sorted(features),
+        "limits": limits,
     }
 
 

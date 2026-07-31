@@ -59,9 +59,74 @@ _DEFAULT_TZ = "America/New_York"
 # Per-user hourly work bounds — a single noisy account can never monopolise the
 # sweep's Lambda budget. Postings beyond this per tick simply roll to next hour.
 _MAX_MATCHES_PER_USER = 25       # new postings enqueued per user per tick
+_MAX_MATCHES_AGGRESSIVE = 50     # Auto Aggressive — more daily matching volume
 _MAX_APPROVAL_MATCHES = 25       # rows listed in one approval email
 _MAX_REDRIVE_PER_USER = 25       # stuck submissions re-driven per user per tick
 _MAX_SUMMARY_ITEMS = 25          # rows shown in one EOD summary section
+
+# Errors that mean "our side broke", never "this application is bad". ONLY
+# these are auto-requeued (see step 1b-ii); a validation failure or an employer
+# rejection is a real outcome and stays failed. Matched exactly, not by
+# substring, so a new error string cannot accidentally join the retry set.
+_INFRA_ERRORS = frozenset({
+    "executor_unavailable_midflight",
+    "executor_unavailable",
+    "no_confirmation_after_submit",
+})
+# Attempts before an infrastructure failure is left alone. Three ticks of the
+# hourly sweep is enough to ride out a deploy or a drained executor pool; more
+# than that is a standing outage a human needs to look at.
+_MAX_INFRA_RETRIES = 3
+
+
+def _is_non_us(row: Dict[str, Any]) -> bool:
+    """Does this ledger row point at a posting we can prove is not US?
+
+    Requires a POSITIVE foreign signal, not merely a failed keep-test: an
+    unresolvable "2 Locations" rollup must not cost a real US application.
+    Same asymmetry the cleanup script uses.
+    """
+    from urllib.parse import unquote
+
+    from services import us_geo
+
+    location, country = "", None
+    job_id = row.get("posting_job_id")
+    if job_id:
+        try:
+            doc = DBConnect().get_db().job_postings.find_one(
+                {"job_id": job_id}, {"locations": 1})
+            locs = (doc or {}).get("locations") or []
+            first = locs[0] if locs else {}
+            if isinstance(first, dict):
+                location, country = str(first.get("raw") or ""), first.get("country")
+        except Exception:  # pragma: no cover - fall through to the URL
+            pass
+    if not location:
+        # Every Workday tenant builds `.../job/<Location>/<Title>_<req>`.
+        url = str(row.get("apply_url") or "")
+        if "/job/" in url:
+            location = unquote(url.split("/job/", 1)[1].split("/", 1)[0]
+                               ).replace("-", " ").strip()
+    if not location:
+        return False
+    return (not us_geo.keep_us(location, country)
+            and us_geo.has_foreign_marker(location))
+
+
+def _count_infra_retry(user_email: str, application_id: str) -> None:
+    """Record one infrastructure retry so the bound above is enforceable.
+
+    Kept on the application row rather than in a side collection: it must be
+    read in the same query the redrive already runs, and it must survive a
+    requeue (the ledger's status transitions do not touch unknown fields)."""
+    try:
+        DBConnect().get_db().applications.update_one(
+            {"user_email": user_email, "application_id": application_id},
+            {"$inc": {"infra_retries": 1}})
+    except Exception as e:  # pragma: no cover - the retry itself already ran
+        logger.warning("[apply_scheduler] infra_retries bump failed (%s): %s",
+                       application_id, e)
 
 # The EOD summary and the hourly nudge both fire at the user's LOCAL hour off a
 # single UTC hourly trigger (same idiom as run_evening_summaries).
@@ -242,12 +307,16 @@ def run_apply_hourly() -> Dict[str, Any]:
 
     users = _opted_in_users()
     totals = {"users": len(users), "enqueued": 0, "redriven": 0,
+              "gather_redriven": 0, "infra_retried": 0, "reresolved": 0,
               "emailed": 0, "skipped_closed": 0}
     for email in users:
         try:
             res = _run_user_hourly(email)
             totals["enqueued"] += res["enqueued"]
             totals["redriven"] += res["redriven"]
+            totals["gather_redriven"] += res.get("gather_redriven", 0)
+            totals["infra_retried"] += res.get("infra_retried", 0)
+            totals["reresolved"] += res.get("reresolved", 0)
             totals["emailed"] += res["emailed"]
             totals["skipped_closed"] += res["skipped_closed"]
         except Exception as e:  # per-user isolation
@@ -258,18 +327,27 @@ def run_apply_hourly() -> Dict[str, Any]:
 
 def _run_user_hourly(email: str) -> Dict[str, int]:
     from services import application_ledger_service as als
+    from services import autonomy_service
     from services.resume_service import get_resume_service, ResumeService
 
     now = _now()
-    out = {"enqueued": 0, "redriven": 0, "emailed": 0, "skipped_closed": 0}
+    out = {"enqueued": 0, "redriven": 0, "gather_redriven": 0,
+           "infra_retried": 0, "reresolved": 0,
+           "emailed": 0, "skipped_closed": 0}
+    mode = autonomy_service.get_mode(email)
+    match_cap = (
+        _MAX_MATCHES_AGGRESSIVE
+        if mode == autonomy_service.MODE_AGGRESSIVE
+        else _MAX_MATCHES_PER_USER
+    )
 
     # 1. Re-drive stuck submissions (Oracle re-check). Rows sitting in the
     #    submit-pickup state get auto_apply_submit re-enqueued. The ledger's CAS
     #    transition guards make a double-submit structurally impossible, so a
-    #    re-drive is always idempotent. (STATUS_READY is the documented submit
-    #    pickup state; getattr keeps this forward-compatible if a later tranche
-    #    adds a dedicated waiting_verify status.)
-    redrive_status = getattr(als, "STATUS_WAITING_VERIFY", als.STATUS_READY)
+    #    re-drive is always idempotent. (F: `approved` is the submit-pickup state —
+    #    submit consumes approved/queued_for_execution; getattr keeps this
+    #    forward-compatible if a later tranche adds a dedicated waiting_verify.)
+    redrive_status = getattr(als, "STATUS_WAITING_VERIFY", als.STATUS_APPROVED)
     try:
         stuck = als.list_applications(email, status=redrive_status,
                                       limit=_MAX_REDRIVE_PER_USER)
@@ -294,10 +372,154 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
         except Exception as e:
             logger.warning("[apply_scheduler] redrive enqueue failed (%s): %s", aid, e)
 
+    # 1b. Re-drive rows that never GATHERED.
+    #
+    # `apply_match_sweep` (and /api/apply/queue) create the ledger row and then
+    # fire `auto_apply_gather` as an async Lambda self-invoke. That invoke is
+    # best-effort: if it is throttled, dropped, or its Lambda dies before the
+    # job runs, the row sits at `queued` forever. Nothing re-drove it — step 1
+    # above only looks at the SUBMIT-pickup state — so the application was
+    # silently orphaned in a state the UI does not even render.
+    #
+    # Observed in production: of 10 rows the sweep created in one tick, 4
+    # gathered and 6 were still `queued` with a single `application_created`
+    # audit line and no answers document, half an hour later.
+    #
+    # Re-enqueueing gather is safe: `gather` is idempotent (it early-returns for
+    # any row that has already left `queued`/`gathering`), and the dedup gate
+    # plus the ledger's CAS transitions mean a duplicate cannot create a second
+    # application or a second submission.
+    gather_redrive_statuses = (als.STATUS_QUEUED, als.STATUS_GATHERING)
+    for status in gather_redrive_statuses:
+        try:
+            ungathered = als.list_applications(email, status=status,
+                                               limit=_MAX_REDRIVE_PER_USER)
+        except Exception as e:
+            logger.warning("[apply_scheduler] gather-redrive list failed (%s) "
+                           "for %s: %s", status, email, e)
+            continue
+        for row in ungathered:
+            aid = row.get("application_id")
+            if not aid:
+                continue
+            if _is_closed(row.get("posting_closes_at"), now=now):
+                out["skipped_closed"] += 1
+                continue
+            try:
+                payload = {"user_email": email, "application_id": aid,
+                           "apply_url": row.get("apply_url") or ""}
+                job_id = get_resume_service().create_job(
+                    "auto_apply_gather", payload, user_email=email)
+                ResumeService.invoke_async(job_id, "auto_apply_gather", payload)
+                out["gather_redriven"] = out.get("gather_redriven", 0) + 1
+            except Exception as e:
+                logger.warning(
+                    "[apply_scheduler] gather-redrive enqueue failed (%s): %s",
+                    aid, e)
+
+    # 1b-ii. Requeue rows that failed for an INFRASTRUCTURE reason.
+    #
+    # `auto_apply_service` marks a mid-flight executor drain as
+    # `failed / executor_unavailable_midflight` and calls it "retryable" — but
+    # nothing ever retried it. `application_ledger_service.RETRYABLE_STATUSES`
+    # is only consulted by `dedup_gate`, i.e. when a NEW enqueue happens to hit
+    # the same posting, and `apply_match_sweep` advances its watermark past a
+    # posting once it has been examined, so that second enqueue never comes.
+    #
+    # Observed in the live ledger: 3 of 6 failed applications (Dovetail, NXP,
+    # K2 Space) carry exactly this error. The executor was simply not
+    # available; nothing was wrong with the application, and nothing was ever
+    # sent to the employer. Leaving them dead means a user loses three real
+    # applications to an ops event they never saw.
+    #
+    # Bounded by `_MAX_INFRA_RETRIES` attempts so a persistently unavailable
+    # executor cannot spin the row forever, and deliberately restricted to a
+    # CLOSED LIST of infrastructure errors — a genuine validation failure or an
+    # employer rejection must stay failed.
+    try:
+        broken = als.list_applications(email, status=als.STATUS_FAILED,
+                                       limit=_MAX_REDRIVE_PER_USER)
+    except Exception as e:
+        logger.warning("[apply_scheduler] infra-retry list failed for %s: %s", email, e)
+        broken = []
+    for row in broken:
+        aid = row.get("application_id")
+        err = str(row.get("error") or "").strip()
+        if not aid or err not in _INFRA_ERRORS:
+            continue
+        if _is_closed(row.get("posting_closes_at"), now=now):
+            out["skipped_closed"] += 1
+            continue
+        if int(row.get("infra_retries") or 0) >= _MAX_INFRA_RETRIES:
+            continue
+        # Never resurrect a non-US row. Some failed rows pre-date the geo
+        # filter on the intake sweep (a Bucharest NXP req is in the live
+        # ledger with exactly this error), and `failed` cannot transition to
+        # `skipped`, so the cleanup script cannot retire them either. Without
+        # this check the retry would put them straight back into the queue.
+        if _is_non_us(row):
+            continue
+        try:
+            als.requeue(email, aid)
+            _count_infra_retry(email, aid)
+            payload = {"user_email": email, "application_id": aid,
+                       "apply_url": row.get("apply_url") or ""}
+            job_id = get_resume_service().create_job(
+                "auto_apply_gather", payload, user_email=email)
+            ResumeService.invoke_async(job_id, "auto_apply_gather", payload)
+            out["infra_retried"] = out.get("infra_retried", 0) + 1
+        except Exception as e:
+            logger.warning("[apply_scheduler] infra retry failed (%s): %s", aid, e)
+
+    # 1c. Re-resolve STALE `needs_input` rows against the CURRENT profile.
+    #
+    # A row is parked with the questions that were unresolvable at GATHER time
+    # and then never looked at again. So finishing onboarding — or answering the
+    # same question on any other application — does not release the rows already
+    # waiting on exactly that fact. Observed in production: two rows (EnergyHub,
+    # Adyen) parked on "Country" four minutes BEFORE the user's onboarding wrote
+    # `country`; both then sat asking for a value the platform already held.
+    #
+    # `resume_after_answers` with an EMPTY answer map is precisely this
+    # re-resolution: it merges nothing, re-resolves every still-open question,
+    # shrinks the queue to what is genuinely still missing, and promotes the row
+    # to `ready_for_review` (then auto-approve + submit under an effective
+    # `auto`) only when nothing is left. Walls it cannot clear stay walls.
+    #
+    # Idempotent: a row with nothing newly resolvable comes back unchanged.
+    try:
+        parked = als.list_applications(email, status=als.STATUS_NEEDS_INPUT,
+                                       limit=_MAX_REDRIVE_PER_USER)
+    except Exception as e:
+        logger.warning("[apply_scheduler] needs_input list failed for %s: %s",
+                       email, e)
+        parked = []
+    for row in parked:
+        aid = row.get("application_id")
+        if not aid:
+            continue
+        if _is_closed(row.get("posting_closes_at"), now=now):
+            out["skipped_closed"] += 1
+            continue
+        try:
+            from services import auto_apply_service as _aas
+            result = _aas.resume_after_answers(email, aid, {})
+            if result.get("application_status") != als.STATUS_NEEDS_INPUT:
+                out["reresolved"] = out.get("reresolved", 0) + 1
+                logger.info(
+                    "[apply_scheduler] re-resolved stale needs_input %s -> %s",
+                    aid, result.get("application_status"))
+        except Exception as e:
+            # Per-row isolation: a 409/404 or a resolver error must never abort
+            # the sweep for the remaining rows.
+            logger.warning("[apply_scheduler] re-resolve failed (%s): %s", aid, e)
+
     # 2. Enqueue new matches through the dedup gate -> ledger row -> gather job.
+    #    Auto Aggressive / Autopilot users get matching postings queued daily
+    #    (hourly sweep) without waiting for a manual click.
     fresh: List[Dict[str, Any]] = []  # this tick's rows that still need a go-ahead
-    for saved in _saved_jobs(email)[: _MAX_MATCHES_PER_USER * 3]:
-        if out["enqueued"] >= _MAX_MATCHES_PER_USER:
+    for saved in _saved_jobs(email)[: match_cap * 3]:
+        if out["enqueued"] >= match_cap:
             break
         fields = _match_fields(saved)
         if not fields:
@@ -346,9 +568,13 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
         except Exception as e:
             logger.warning("[apply_scheduler] gather enqueue failed (%s): %s", aid, e)
 
-        # Collect the rows that still need the user's go-ahead (autonomy ask/hold)
-        # for this tick's single approval email.
-        if (record.get("autonomy") or "ask") in ("ask", "hold"):
+        # F: approval emails fire ONLY once a row reaches `ready_for_review` — the
+        # manual-approval wait state — so we never email a link the user cannot yet
+        # act on (approve is tightened to ready_for_review). A freshly-created row
+        # is `queued`, so this tick's inline collection is normally empty; a
+        # dedicated ready_for_review nudge sweep drives these emails after gather
+        # lands the row (follow-up). canonical_status tolerates a legacy `ready`.
+        if als.canonical_status(record.get("status")) == als.STATUS_READY_FOR_REVIEW:
             fresh.append({"application_id": aid, "title": fields["title"],
                           "company": fields["company"], "location": fields["location"]})
 

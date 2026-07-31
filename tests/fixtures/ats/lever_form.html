@@ -1,0 +1,22 @@
+<!doctype html>
+<!-- Aithrex-owned synthetic fixture. Mimics a Lever-style form: name-keyed
+     fields, .application-question wrappers, a NATIVE <select> for EEO, and a
+     .postings-btn submit. NEVER a real employer. -->
+<html><head><meta charset="utf-8"><title>Aithrex - Lever</title></head>
+<body>
+<form class="application-form" action="https://jobs.lever.co/aithrex/aabbccddeeff0011/apply" method="post">
+  <div class="application-question"><label>Full name</label>
+     <input name="name" type="text" required></div>
+  <div class="application-question"><label>Email</label>
+     <input name="email" type="email" required></div>
+  <div class="application-question"><label>Phone</label>
+     <input name="phone" type="tel"></div>
+  <div class="application-question"><label>Gender</label>
+     <select name="eeo[gender]"><option>Decline to self identify</option><option>Female</option><option>Male</option></select></div>
+  <div class="application-question"><label>Pronouns</label>
+     <input name="pronouns" type="text"></div>
+  <div class="application-question"><label>Resume</label>
+     <input name="resume" type="file"></div>
+  <button class="postings-btn" type="submit">Submit application</button>
+</form>
+</body></html>

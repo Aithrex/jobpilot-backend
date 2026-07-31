@@ -105,6 +105,8 @@ def create_app():
     app.register_blueprint(tech_chronicle_bp, url_prefix='/api/tech-chronicle')
     from blueprints.voice_graph import voice_graph_bp
     app.register_blueprint(voice_graph_bp, url_prefix='/api/resume/voice-graph')
+    from blueprints.sprint_hub import sprint_hub_bp
+    app.register_blueprint(sprint_hub_bp, url_prefix='/api/resume/hub')
     from blueprints.guest import guest_bp
     app.register_blueprint(guest_bp, url_prefix='/api/resume/guest')
 

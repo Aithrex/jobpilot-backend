@@ -261,18 +261,32 @@ class TestTransitions:
 # ---------------------------------------------------------------------------
 # Bulk email-loop set operations (approve / skip) — user-scoped + idempotent
 # ---------------------------------------------------------------------------
+def _seat_ready_for_review(user, aid):
+    """F: drive a queued row to `ready_for_review` (the only approvable state)
+    through the legal live edges, so the approve golden runs against real state."""
+    als.mark_gathering(user, aid)
+    als.mark_ready_for_review(user, aid, autonomy="auto", confidence_score=0.95)
+
+
 class TestBulkOps:
-    def test_approve_to_ready_moves_only_own_pre_submit_rows(self, led_db):
+    def test_approve_moves_only_own_ready_for_review_rows(self, led_db):
+        # F: approval is tightened to ready_for_review → approved (was the pre-F
+        # queued/gathering/needs_input → ready). Seat A's row in ready_for_review;
+        # B's row stays queued (not approvable) and is invisible to A's link.
         a, _ = _create(led_db, USER_A)
         b, _ = _create(led_db, USER_B, company="Globex")
-        moved = als.approve_to_ready(USER_A, [a["application_id"], b["application_id"]])
-        assert moved == 1  # only A's row, and only because it is approvable
-        assert als.get_application(USER_A, a["application_id"])["status"] == als.STATUS_READY
+        _seat_ready_for_review(USER_A, a["application_id"])
+        moved = als.approve(USER_A, [a["application_id"], b["application_id"]])
+        assert moved == 1  # only A's row, and only because it is ready_for_review
+        assert als.get_application(USER_A, a["application_id"])["status"] == als.STATUS_APPROVED
         # B's row untouched by A's link.
         assert als.get_application(USER_B, b["application_id"])["status"] == als.STATUS_QUEUED
 
     def test_approve_is_idempotent(self, led_db):
+        # F: a second approve is a no-op — an already-approved row is never
+        # re-transitioned or re-frozen (belt-and-suspenders against double-charge).
         a, _ = _create(led_db, USER_A)
-        assert als.approve_to_ready(USER_A, [a["application_id"]]) == 1
-        # Already ready → nothing more to move.
-        assert als.approve_to_ready(USER_A, [a["application_id"]]) == 0
+        _seat_ready_for_review(USER_A, a["application_id"])
+        assert als.approve(USER_A, [a["application_id"]]) == 1
+        # Already approved → nothing more to move.
+        assert als.approve(USER_A, [a["application_id"]]) == 0

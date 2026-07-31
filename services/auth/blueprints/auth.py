@@ -166,10 +166,16 @@ def register():
     role = InputSanitizer.sanitize_string(data.get("role") or "", 120) or None
     sector = InputSanitizer.sanitize_string(data.get("sector") or "", 120) or None
     fingerprint = InputSanitizer.sanitize_string(data.get("fingerprint_hash") or "", 128) or None
+    # Optional at sign-up (the current form doesn't collect it; OAuth does). When
+    # present it seeds the managed mailbox's readable local part below; when
+    # absent the alias is minted as an opaque stopgap and self-repairs later
+    # (managed_mailbox_service.repair_local_part).
+    name = InputSanitizer.sanitize_string(data.get("name") or "", 120) or None
 
     doc = {
         "email": email,
         "password_hash": User.hash_password(password),
+        "name": name,
         "role": role,
         "sector": sector,
         "plan": entitlements_service.DEFAULT_PLAN,
@@ -204,6 +210,18 @@ def register():
         email_service.send_welcome(email, AppUrlsConfig.FRONTEND_URL)
     except Exception as e:
         logger.warning("welcome email dispatch failed for %s: %s", email, e)
+
+    # Managed application mailbox — AUTO-PROVISION at signup (spec §6). The user
+    # must NEVER be asked to "create a private email": the address is minted here
+    # and forwarding defaults to this very address, enabled + verified.
+    # Best-effort, EXACTLY like the welcome email above: idempotent (safe to
+    # re-run), a pure DB write, and wrapped so an unconfigured domain, a Mongo
+    # blip or a collision-exhaustion can NEVER fail signup.
+    try:
+        from services import managed_mailbox_service
+        managed_mailbox_service.provision(email, name)
+    except Exception as e:
+        logger.warning("mailbox auto-provision failed for %s: %s", email, e)
 
     # Return a token (the frontend deliberately discards it and asks the user to
     # log in explicitly — see AuthContext register()). Shape stays {access_token,email}.

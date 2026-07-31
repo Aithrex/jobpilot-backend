@@ -113,6 +113,146 @@ _MID_TITLE_RE = re.compile(r"\b(mid[- ]?level|ii)\b", re.IGNORECASE)
 SNAPSHOT_RETENTION_DAYS = 7
 
 
+# ---------------------------------------------------------------------------
+# Guest freshness contract (server-authoritative)
+# ---------------------------------------------------------------------------
+# The feeds run a 30-day window (workday_jobs_service.WINDOW_DAYS). That is the
+# right window for an authed user browsing a whole tab; it is the WRONG window
+# for a guest's first impression, where a 26-day-old req reads as a dead lead
+# (live incident: a 26-day-old Workday row was served to an anonymous guest).
+#
+# The guest window is enforced HERE, once, so it holds no matter which feed a
+# row came from and no matter how a feed derived its date. All three rules
+# fail CLOSED:
+#   * unknown posted date -> DROP. We never substitute now() for a missing
+#     date; that would turn "we do not know" into "posted today".
+#   * age > GUEST_MAX_AGE_DAYS -> DROP.
+#   * an explicit closed/inactive marker -> DROP.
+# Applied immediately after fetch (before scoring) AND on every snapshot read,
+# so a snapshot written this morning can never serve a row that has since aged
+# out. Fewer than guest_jobs_max survivors is a SUCCESS, never padded.
+
+
+def _env_int(name: str, default: int) -> int:
+    """Optional env override for a guest knob (same contract as
+    workday_jobs_service._env_int; redefined locally so importing
+    guest_service never drags in the workday fan-out module at import time)."""
+    try:
+        return max(1, int(os.environ.get(name, "") or default))
+    except (TypeError, ValueError):
+        return default
+
+
+GUEST_MAX_AGE_DAYS = _env_int("GUEST_MAX_AGE_DAYS", 7)
+
+# Explicit "this req is not live" markers seen across the feeds. Only an
+# EXPLICIT marker rejects: an absent status field is not evidence of closure.
+_CLOSED_STATUS_VALUES = frozenset({
+    "closed", "close", "inactive", "expired", "filled", "archived",
+    "cancelled", "canceled", "removed", "withdrawn", "draft", "unpublished",
+    "not_active", "notactive", "deleted",
+})
+_STATUS_FIELDS = ("status", "job_status", "state", "posting_status")
+# Truthy => open. A present-but-falsey value rejects.
+_OPEN_FLAG_FIELDS = ("active", "is_active", "is_open", "is_live")
+# Truthy => closed.
+_CLOSED_FLAG_FIELDS = ("closed", "is_closed", "expired", "is_expired",
+                       "archived", "is_archived")
+
+
+def _row_days_ago(row: Dict[str, Any]) -> Optional[int]:
+    """The row's own calendar age in days, or None when it is UNKNOWN.
+
+    Only the feed-computed `days_ago` counts. A missing/unparseable value is
+    unknown — it is never derived from now(), and never defaulted to 0."""
+    value = row.get("days_ago")
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_is_open(row: Dict[str, Any]) -> bool:
+    """False only when the row carries an EXPLICIT closed/inactive marker."""
+    for field in _OPEN_FLAG_FIELDS:
+        if field in row and row.get(field) is not None and not row.get(field):
+            return False
+    for field in _CLOSED_FLAG_FIELDS:
+        if row.get(field):
+            return False
+    for field in _STATUS_FIELDS:
+        value = row.get(field)
+        if isinstance(value, str) and value.strip().lower().replace(
+            " ", "_"
+        ) in _CLOSED_STATUS_VALUES:
+            return False
+    return True
+
+
+def filter_fresh_for_guest(
+    rows: Optional[List[Dict[str, Any]]],
+    *,
+    max_age_days: Optional[int] = None,
+    extra_age_days: int = 0,
+) -> List[Dict[str, Any]]:
+    """Drop every row a guest must not see: unknown date, too old, or closed.
+
+    ``extra_age_days`` ages rows that were dated at some point in the PAST
+    (a stored snapshot): a card that was 6 days old when the snapshot was
+    written is 8 days old two days later and must stop being served."""
+    try:
+        limit = int(GUEST_MAX_AGE_DAYS if max_age_days is None else max_age_days)
+    except (TypeError, ValueError):
+        limit = GUEST_MAX_AGE_DAYS
+    try:
+        extra = max(0, int(extra_age_days))
+    except (TypeError, ValueError):
+        extra = 0
+    out: List[Dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        days = _row_days_ago(row)
+        if days is None:            # unknown posted date — never guessed
+            continue
+        if days + extra > limit:
+            continue
+        if not _row_is_open(row):
+            continue
+        out.append(row)
+    return out
+
+
+def _snapshot_extra_age_days(snapshot: Dict[str, Any]) -> int:
+    """Calendar days elapsed since the snapshot's own date — the amount every
+    stored card has aged since it was scored."""
+    raw = str((snapshot or {}).get("date") or "")
+    try:
+        snap_date = datetime.strptime(raw, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return 0
+    return max(0, (_now().date() - snap_date).days)
+
+
+def _freshen_snapshot(snapshot: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Re-apply the guest freshness contract to a STORED snapshot on read.
+
+    A snapshot is a cache, not a licence: rows that have aged out (or were
+    written by an older, laxer code path) are dropped here, so a cache hit can
+    never serve something a fresh scan would reject."""
+    if not snapshot:
+        return snapshot
+    extra = _snapshot_extra_age_days(snapshot)
+    out = dict(snapshot)
+    for key in ("jobs", "pool"):
+        rows = out.get(key)
+        if isinstance(rows, list):
+            out[key] = filter_fresh_for_guest(rows, extra_age_days=extra)
+    return out
+
+
 def _clock() -> float:
     """Monotonic clock seam — tests monkeypatch this to drive the 75s
     wall-clock budget deterministically."""
@@ -851,16 +991,20 @@ def _cache_doc_for_guest(guest_id: str) -> Optional[Dict[str, Any]]:
     """Resolve the guest's snapshot doc (spec 1.4): subject-level first
     (today's (quota_subject_id, date) snapshot), falling back to the
     session's snapshot_id ref (carries guests through a missing HMAC key —
-    each session is then its own standalone subject anyway)."""
+    each session is then its own standalone subject anyway).
+
+    Every return path runs through _freshen_snapshot: this is THE single read
+    seam for stored guest matches, so the freshness contract is re-applied on
+    every cache/snapshot read without each caller having to remember."""
     sid = subject_for_guest(guest_id)
     if sid:
         snap = _snapshots().find_one({"quota_subject_id": sid, "date": _today_key()})
         if snap:
-            return snap
+            return _freshen_snapshot(snap)
     doc = get_session(guest_id) or {}
     snap_id = doc.get("snapshot_id")
     if snap_id and isinstance(snap_id, str):
-        return _snapshots().find_one({"snapshot_id": snap_id})
+        return _freshen_snapshot(_snapshots().find_one({"snapshot_id": snap_id}))
     return None
 
 
@@ -1024,17 +1168,53 @@ def _store_matches(
 
 
 def _guest_role_terms(structured: Dict[str, Any]) -> List[str]:
-    """Derive up to 3 target-role search terms from the guest's own resume."""
+    """Derive up to 3 target-role search terms from the guest's own resume.
+
+    Returns [] when the resume yields no usable role evidence. It deliberately
+    does NOT fall back to "software engineer".
+
+    That fallback used to live here, and it read only experience[].title. So a
+    nurse, an accountant, a teacher, or any new grad whose roles did not parse
+    into that one field triggered a full software-engineering scan, whose
+    results were then scored against their (non-tech) skills. The guest saw
+    near-zero matches and an empty_reason blaming the market. The cause was us.
+
+    Evidence is widened instead: experience titles, then the resume's own
+    headline/title field, then the field of study. If all are empty the caller
+    must say so honestly rather than guess a career.
+    """
     terms: List[str] = []
     seen = set()
-    for exp in (structured.get("experience") or []):
-        title = InputSanitizer.sanitize_string(str(exp.get("title") or ""), max_length=120).strip()
-        if title and title.lower() not in seen:
-            seen.add(title.lower())
-            terms.append(title)
+
+    def _add(raw: Any) -> None:
         if len(terms) >= 3:
+            return
+        text = InputSanitizer.sanitize_string(str(raw or ""), max_length=120).strip()
+        if text and text.lower() not in seen:
+            seen.add(text.lower())
+            terms.append(text)
+
+    for exp in (structured.get("experience") or []):
+        _add(exp.get("title"))
+        if len(terms) >= 3:
+            return terms
+
+    # No parsed work titles: the resume may still declare a role directly
+    # (headline / target title), which is common on student and career-change
+    # resumes where experience[] is empty or non-professional.
+    for key in ("title", "job_title", "headline", "headline_title", "target_title"):
+        _add(structured.get(key))
+    if terms:
+        return terms
+
+    # Last resort: field of study. A degree names a domain, not a job, so this
+    # is weaker evidence and stops at one term.
+    for edu in (structured.get("education") or []):
+        _add(edu.get("degree") or edu.get("field") or edu.get("coursework"))
+        if terms:
             break
-    return terms or ["software engineer"]
+
+    return terms
 
 
 def _role_title_filter(structured: Dict[str, Any]):
@@ -1105,8 +1285,19 @@ def _fetch_free_jobs(
     Returns (rows, sources_report) in the spec-1.4 shape. Module-level so
     tests can patch it (legacy patches returning a bare list still work)."""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout, as_completed
+    from services.job_service import guest_cost_context
 
     terms = _guest_role_terms(structured)
+    if not terms:
+        # No role evidence anywhere in the resume. Scanning ~1000 tenants for a
+        # guessed career burns the whole budget to produce matches the guest
+        # will not recognise, and the old "software engineer" default made that
+        # failure look like a market result. Say what actually happened.
+        logger.info("guest matches: no role terms derivable from resume, skipping scan")
+        return [], {
+            "ok": [], "failed": [], "timed_out": [], "considered": 0,
+            "timings_ms": {}, "empty_reason": "role_undetermined",
+        }
     skills = resume_skills if resume_skills is not None else _resume_skills(structured)
     base_payload = {
         "titles": terms,
@@ -1144,6 +1335,12 @@ def _fetch_free_jobs(
             **base_payload,
             "overall_timeout": GUEST_SIDE_SOURCE_TIMEOUT,
             "enrich_top": GUEST_ENRICH_TOP,
+            # cost_class gate: an anonymous guest must NEVER trigger metered
+            # aggregator (RapidAPI/JSearch) calls. The MNC catalog's
+            # engine == "aggregator" rows are cost_class "paid" and are
+            # dropped BEFORE any fetch. This is not conditional on the key
+            # being absent — the key IS configured in this deployment.
+            "exclude_paid": True,
         })
 
     sources = {
@@ -1161,6 +1358,20 @@ def _fetch_free_jobs(
     # timeout (live incident: fetch 230s, zero scoring time). shutdown with
     # wait=False abandons stragglers instead — partial results, on time.
     pool = ThreadPoolExecutor(max_workers=len(sources))
+    # Paid-source chokepoint. mnc_jobs_service already drops aggregator rows
+    # before any fetch (exclude_paid=True), so this is defense in depth: it
+    # makes job_service._search_jsearch_raw refuse outright if any future
+    # caller reaches JSearch by another path from inside this fan-out.
+    # A module-global flag, NOT a ContextVar — ThreadPoolExecutor does not
+    # propagate contextvars to pool threads.
+    #
+    # The context must span the WHOLE fan-out, not just submit(): the flag is
+    # process-global, so releasing it at submit time would clear it while the
+    # pool threads are still mid-fetch. Stragglers abandoned by the
+    # shutdown(wait=False) below can still outlive it — exclude_paid remains
+    # the load-bearing guarantee, and this is the second line.
+    guest_cost = guest_cost_context()
+    guest_cost.__enter__()
     futures = {pool.submit(fn): name for name, fn in sources.items()}
     try:
         for fut in as_completed(futures, timeout=GUEST_FETCH_BUDGET_SECONDS):
@@ -1192,6 +1403,7 @@ def _fetch_free_jobs(
             pool.shutdown(wait=False, cancel_futures=True)
         except TypeError:  # pragma: no cover - cancel_futures needs py3.9+
             pool.shutdown(wait=False)
+        guest_cost.__exit__(None, None, None)
 
     # Merge: one posting can surface from more than one catalog — dedupe on
     # (company, title, location), keeping the copy with the richer signal.
@@ -1213,6 +1425,327 @@ def _fetch_free_jobs(
     out = list(merged.values())
     report["considered"] = len(out)
     return out, {**report, "timings_ms": timings_ms}
+
+
+# --- inventory read path (ADR-003 cutover) ---------------------------------
+# How many candidates the ranking stage gets. The scorer is pure regex over a
+# precomputed requirement profile, so a few hundred rows cost single-digit
+# milliseconds; the number is chosen for RECALL, not for speed. It is the pool
+# the top 5 is chosen from, so too small a pool silently caps quality.
+INVENTORY_CANDIDATE_LIMIT = _env_int("GUEST_INVENTORY_CANDIDATES", 400)
+# Below this many scorable candidates the inventory is treated as not yet warm
+# for this role family and the caller may fall back to the live scan.
+INVENTORY_MIN_CANDIDATES = _env_int("GUEST_INVENTORY_MIN_CANDIDATES", 12)
+
+
+def _resume_role_families(structured: Dict[str, Any]) -> List[str]:
+    """Role families to retrieve for, widest sensible set.
+
+    Retrieval and ranking have opposite failure modes. A retrieval filter that
+    is too tight returns nothing and looks like an empty market; the scorer, by
+    contrast, is good at pushing a bad fit down. So this errs wide: every family
+    implied by the resume's titles AND by the same role terms the live scan
+    would have searched for, deduped, order-preserved.
+    """
+    from services import fit_score
+
+    families: List[str] = []
+
+    def _add(value: Any) -> None:
+        fam = fit_score.classify_role(value) if value else None
+        if fam and fam not in families:
+            families.append(fam)
+
+    for exp in (structured.get("experience") or [])[:6]:
+        if isinstance(exp, dict):
+            _add(exp.get("title") or exp.get("position") or exp.get("role"))
+    for term in _guest_role_terms(structured)[:6]:
+        _add(term)
+    _add(structured.get("target_role") or structured.get("headline"))
+    return families
+
+
+_US_COUNTRY_VALUES = frozenset({
+    "us", "usa", "u.s.", "u.s.a.", "united states", "united states of america",
+})
+
+# FULL state names. `workday_jobs_service._US_STATE_RE` only carries two-letter
+# codes, which is enough for a lenient filter where an unmatched row is kept
+# anyway - but under strict gating a miss is a DROP, and boards very commonly
+# write "Tempe, Arizona" or "Austin, Texas". Without this, real US roles would
+# be silently discarded, which is the exact failure strict mode exists to avoid
+# on the other side.
+#
+# Deliberately excluded: "Washington" (collides with Washington DC vs the state
+# is fine, but also with countless non-US uses) is INCLUDED because the risk is
+# low; "Georgia" is included despite the country of the same name, because
+# `_FOREIGN_COUNTRY_RE` is consulted first and would have to name Georgia for a
+# real collision - and a US job board writing "Georgia" means the state
+# essentially always.
+# Bare "US" / "U.S." as a standalone token. `career_pages_service._US_WORD_RE`
+# matches "usa", "u.s." and "united states" but NOT a lone "US", and on live
+# inventory "US" was the single most common location string of all (828 rows in
+# a 9000-row audit) - every one of them a US role being discarded.
+_US_TOKEN_RE = re.compile(r"\b(us|u\.s\.|u\.s|usa)\b", re.IGNORECASE)
+
+# Major US cities that routinely appear WITHOUT a state qualifier ("San
+# Francisco", "New York City", "Seattle"). Under lenient gating these fell
+# through to the keep-by-default tier; under strict gating an unrecognised city
+# is a drop, so they need explicit recognition or real jobs vanish.
+#
+# Deliberately EXCLUDED as genuinely ambiguous: Cambridge, Manchester,
+# Birmingham, Richmond, Windsor, Hamilton - each names a well-known non-US city
+# too, and a wrong keep is worse than a missed keep on this path.
+_US_CITY_RE = re.compile(
+    r"\b(san francisco|new york city|nyc|seattle|los angeles|san diego|"
+    r"san jose|silicon valley|palo alto|mountain view|sunnyvale|santa clara|"
+    r"menlo park|redwood city|cupertino|oakland|berkeley|sacramento|"
+    r"san antonio|dallas|houston|fort worth|plano|irving|denver|boulder|"
+    r"atlanta|miami|orlando|tampa|jacksonville|charlotte|raleigh|durham|"
+    r"nashville|memphis|louisville|indianapolis|columbus|cleveland|"
+    r"cincinnati|pittsburgh|philadelphia|baltimore|bethesda|reston|herndon|"
+    r"mclean|arlington|alexandria|minneapolis|st\.? paul|milwaukee|"
+    r"kansas city|st\.? louis|omaha|salt lake city|las vegas|phoenix|"
+    r"scottsdale|tempe|tucson|albuquerque|portland|boise|anchorage|honolulu|"
+    r"brooklyn|queens|bronx|manhattan|long island|newark|jersey city|"
+    r"hoboken|stamford|hartford|providence|buffalo|rochester|albany|"
+    r"bellevue|redmond|kirkland|tacoma|spokane|des moines|madison|"
+    r"ann arbor|grand rapids|chattanooga|huntsville|birmingham al|"
+    r"new orleans|baton rouge|oklahoma city|tulsa|wichita|little rock|"
+    r"colorado springs|fort collins|fort lauderdale|west palm beach|"
+    r"boca raton|sarasota|naples fl|greenville sc|columbia sc|charleston sc)\b",
+    re.IGNORECASE)
+
+_US_STATE_NAME_RE = re.compile(
+    r"\b(alabama|alaska|arizona|arkansas|california|colorado|connecticut|"
+    r"delaware|florida|georgia|hawaii|idaho|illinois|indiana|iowa|kansas|"
+    r"kentucky|louisiana|maine|maryland|massachusetts|michigan|minnesota|"
+    r"mississippi|missouri|montana|nebraska|nevada|new hampshire|new jersey|"
+    r"new mexico|new york|north carolina|north dakota|ohio|oklahoma|oregon|"
+    r"pennsylvania|rhode island|south carolina|south dakota|tennessee|texas|"
+    r"utah|vermont|virginia|washington|west virginia|wisconsin|wyoming|"
+    r"district of columbia|puerto rico)\b",
+    re.IGNORECASE)
+
+
+def guest_us_strict() -> bool:
+    """Strict US gating for guest previews. `GUEST_US_STRICT=0` reverts."""
+    return (os.getenv("GUEST_US_STRICT") or "1").strip().lower() not in ("0", "false", "no")
+
+
+def is_us_confident(row: Dict[str, Any]) -> bool:
+    """Does this posting carry POSITIVE evidence of being a US role?
+
+    Deliberately stricter than the lenient `career_pages_service._keep_us_lenient`
+    (the `GUEST_US_STRICT=0` rollback), which keeps ambiguous locations
+    ("3 Locations", "Remote", "Getafe Area") on the reasoning that dropping them
+    loses real US roles. That trade is right for a browse tab, where a user can
+    see the location and judge, and wrong for a guest preview: five cards are the
+    product's entire first impression, and one
+    posting in Hyderabad reads as "this tool does not understand me".
+
+    So the burden of proof inverts here. Ambiguous means dropped, and the honest
+    consequence is fewer cards, which ADR-001 already established as preferable
+    to padded ones.
+
+    Order matters:
+      1. an explicit foreign COUNTRY beats everything, including a colliding US
+         state code ("Canada - Remote (ON, AB, or NS Only)" - "or" is Oregon);
+      2. a parsed country field is authoritative when the source gave us one;
+      3. an explicit US marker or a US state code proves the case;
+      4. anything else is unproven, and unproven is dropped.
+    """
+    from services.career_pages_service import (
+        _FOREIGN_CITY_RE, _FOREIGN_COUNTRY_RE, _US_WORD_RE,
+    )
+    from services.workday_jobs_service import _US_STATE_RE
+
+    location = str(row.get("location") or "").strip()
+    country = str(row.get("country_hint") or "").strip().lower()
+
+    if country:
+        return country in _US_COUNTRY_VALUES
+    if not location:
+        return False
+    # An UNAMBIGUOUS US marker wins even alongside a foreign country, because
+    # boards concatenate multi-location postings ("Remote, Canada; Remote,
+    # United States") and a role open in the US is a US role wherever else it
+    # is also open. Only spelled-out markers qualify here - a two-letter STATE
+    # CODE stays below the foreign veto, because "Canada - Remote (ON, AB, or
+    # NS Only)" would otherwise be rescued by "or" colliding with Oregon.
+    if _US_WORD_RE.search(location) or _US_TOKEN_RE.search(location):
+        return True
+    # US state names are masked before the foreign-country veto is consulted:
+    # `_FOREIGN_COUNTRY_RE` matches "mexico" inside "New Mexico", which would
+    # veto an entire US state. (The same collision exists on the legacy path;
+    # it is hidden there only because an unmatched row is kept anyway.)
+    if _FOREIGN_COUNTRY_RE.search(_US_STATE_NAME_RE.sub(" ", location)):
+        return False
+    # Below the veto on purpose. A US state or city name alongside a foreign
+    # COUNTRY is weak evidence, not multi-location evidence: "Dublin, Ireland
+    # (Mountain View)" is an Irish posting that happens to name a US office.
+    # A two-letter state code sits here for the additional reason that "or"
+    # collides with Oregon in "Canada - Remote (ON, AB, or NS Only)".
+    if (_US_STATE_RE.search(location) or _US_STATE_NAME_RE.search(location)
+            or _US_CITY_RE.search(location)):
+        return True
+    if _FOREIGN_CITY_RE.search(location):
+        return False
+    # Bare "Remote", "3 Locations", a lone city, an unrecognised region: real
+    # US roles hide in here, and so does everything else. Unproven.
+    return False
+
+
+def _inventory_row(doc: Dict[str, Any], tz_offset_minutes: int) -> Optional[Dict[str, Any]]:
+    """One `job_postings` document -> one guest pipeline row.
+
+    Emits the SAME shape the three live scanners emit, which is what lets the
+    entire downstream path (freshness gate, scoring, ranking, card build,
+    snapshot, seniority views) stay byte-for-byte unchanged. `description` is
+    deliberately empty: the body lives in S3 and the scorer reads
+    `requirements` instead, so no JD text crosses the wire on this path.
+    """
+    from services.workday_jobs_service import _days_ago
+
+    posted_at = doc.get("posted_at")
+    if not isinstance(posted_at, datetime):
+        return None                      # ADR-001: no date, no card. Never guessed.
+    iso = (posted_at if posted_at.tzinfo else posted_at.replace(tzinfo=timezone.utc)).isoformat()
+    days = _days_ago(iso, tz_offset_minutes)
+    if days is None:
+        return None
+
+    locations = doc.get("locations") or []
+    location = ""
+    country = ""
+    if isinstance(locations, list) and locations:
+        first = locations[0]
+        if isinstance(first, dict):
+            location = str(first.get("raw") or "")
+            country = str(first.get("country") or "")
+        else:
+            location = str(first)
+
+    url = str(doc.get("canonical_url") or "")
+    return {
+        # Geo inputs for `_keep_us`. The crawler stores the whole board, US or
+        # not, so the US contract is enforced on READ.
+        "country_hint": country.lower(),
+        "is_remote": doc.get("work_mode") == "remote",
+        "job_id": doc.get("job_id"),
+        "title": str(doc.get("title_raw") or ""),
+        "company": str(doc.get("employer_name") or ""),
+        "location": location,
+        "url": url,
+        "apply_link": url,
+        "source": "Workday" if doc.get("source") == "workday" else "Career Page",
+        "description": "",
+        "requirements": doc.get("requirements") or None,
+        "posted": iso,
+        "posted_text": iso[:10],
+        "date_posted": iso,
+        "days_ago": days,
+        "work_mode": doc.get("work_mode"),
+        "seniority_hint": doc.get("seniority"),
+        "_guest_source": "inventory",
+    }
+
+
+def _fetch_from_inventory(
+    structured: Dict[str, Any],
+    progress_cb=None,
+    *,
+    resume_skills: Optional[List[str]] = None,
+    resume_years: Optional[int] = None,
+    tz_offset_minutes: int = 0,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Candidate retrieval from the canonical inventory. Drop-in replacement
+    for `_fetch_free_jobs`, same signature and same return contract.
+
+    This is the whole latency story. `_fetch_free_jobs` issues roughly 7,400
+    outbound requests to ~1,100 third-party hosts inside the user's request and
+    still reaches only ~9% of the registry before its 165s budget expires. This
+    issues ONE indexed Mongo query against postings a scheduled crawler already
+    collected, covering 100% of the registry, and returns in milliseconds.
+
+    ADR-004 is enforced structurally: `cost_classes=["free"]` sits in the query
+    itself, so a metered aggregator row cannot reach an anonymous guest even by
+    accident.
+    """
+    from services import fit_score, job_inventory_service as inv
+
+    started = _clock()
+    families = _resume_role_families(structured)
+    if not families:
+        # Same honest failure the live scan reports: no role evidence means we
+        # cannot say what this person does, and guessing produces matches they
+        # will not recognise.
+        return [], {"ok": [], "failed": [], "timed_out": [], "considered": 0,
+                    "timings_ms": {}, "empty_reason": "role_undetermined"}
+
+    try:
+        docs = inv.find_active_fresh(
+            role_families=families,
+            max_age_days=GUEST_MAX_AGE_DAYS,
+            cost_classes=[inv.COST_CLASS_FREE],   # ADR-004, in the query
+            limit=INVENTORY_CANDIDATE_LIMIT,
+        )
+    except Exception as e:
+        logger.warning("guest matches: inventory read failed: %s", type(e).__name__)
+        return [], {"ok": [], "failed": ["inventory"], "timed_out": [],
+                    "considered": 0, "timings_ms": {}}
+
+    # US-only contract. The crawler is deliberately geo-agnostic - it mirrors
+    # each board in full - so this filter is what makes the guest feed US-only,
+    # and the legacy scan enforced it by passing us_only=True down to the three
+    # source services. Reusing their own `_keep_us` keeps one definition of
+    # "is this a US role" across both retrieval paths.
+    from services.career_pages_service import _keep_us_lenient
+
+    strict = guest_us_strict()
+    # Lenient mode (GUEST_US_STRICT=0) is the rollback: it keeps ambiguous
+    # locations. `_keep_us` itself is now a HARD filter (drops ambiguous), so the
+    # rollback must use the dedicated lenient contract, not `_keep_us`.
+    keep_us = is_us_confident if strict else _keep_us_lenient
+
+    rows: List[Dict[str, Any]] = []
+    without_requirements = 0
+    dropped_non_us = 0
+    for doc in docs:
+        # Job-side evidence gate. A posting whose body we never read produces no
+        # requirements, and the scorer can then only judge it on its title. It
+        # is capped at 45 by `insufficient_job_requirements`, but a guest's top
+        # five is the product's first impression and does not get to contain
+        # rows we have not actually read. It stays in the inventory and remains
+        # browsable to signed-in users; it just cannot be a headline match.
+        if not fit_score.has_job_requirements(doc.get("requirements")):
+            without_requirements += 1
+            continue
+        row = _inventory_row(doc, tz_offset_minutes)
+        if row is None:
+            continue
+        if not keep_us(row):
+            dropped_non_us += 1
+            continue
+        rows.append(row)
+
+    if progress_cb:
+        try:
+            progress_cb(1, 1)
+        except Exception:
+            pass
+
+    report = {
+        "ok": ["inventory"], "failed": [], "timed_out": [],
+        "considered": len(rows),
+        "role_families": families,
+        "retrieved": len(docs),
+        "dropped_no_requirements": without_requirements,
+        "dropped_non_us": dropped_non_us,
+        "us_gate": "strict" if strict else "lenient",
+        "timings_ms": {"inventory_ms": int((_clock() - started) * 1000)},
+    }
+    return rows, report
 
 
 _SAFE_URL_PREFIXES = ("http://", "https://")
@@ -1400,6 +1933,25 @@ def _build_card(row: Dict[str, Any], verdict: Dict[str, Any]) -> Dict[str, Any]:
     # (deterministic, additive v2.1 field — absent on older cached cards).
     card["gaps"] = (verdict.get("missing_top") or [])[:5]
     card["why"] = _match_why(card["matched_skills"])
+    # ADR-002: the versioned, explainable fit block. Deliberately TRIMMED to
+    # roughly 500 bytes. This rides into every job_match_snapshots doc, up to
+    # GUEST_POOL_MAX rows, so the per-component prose and the strengths list
+    # are dropped (both are recomputable from the engine and the explanation
+    # already carries the headline). Remembering the Atlas 512MB incident.
+    if verdict.get("score_version"):
+        card["fit"] = {
+            "score_version": verdict["score_version"],
+            "band": verdict.get("band"),
+            "confidence": verdict.get("confidence"),
+            "components": verdict.get("component_scores") or {},
+            "explanation": str(verdict.get("explanation") or "")[:400],
+            "missing_requirements": (verdict.get("missing_requirements") or [])[:4],
+            "hard_constraints": [
+                {"type": c.get("type"), "status": c.get("status")}
+                for c in (verdict.get("hard_constraints") or [])
+                if c.get("status") in ("missing", "unknown")
+            ][:4],
+        }
     return card
 
 
@@ -1415,12 +1967,23 @@ def _classify_empty_reason(
     return "no_openings_matched"
 
 
+def inventory_mode_enabled() -> bool:
+    """Is the canonical inventory the primary retrieval path?
+
+    `GUEST_MATCH_MODE=scan` is the single-env-var rollback to the legacy live
+    fan-out, and is the only value that turns this off.
+    """
+    return (os.getenv("GUEST_MATCH_MODE") or "inventory").strip().lower() != "scan"
+
+
 def compute_guest_matches(
     guest_id: str,
     job_id: Optional[str] = None,
     seniority: Optional[str] = None,
     tz_offset_minutes: int = 0,
-) -> Dict[str, Any]:
+    *,
+    inventory_only: bool = False,
+) -> Optional[Dict[str, Any]]:
     """Async-job body for `guest_matches` (spec 3.1-3.8, v4): run the SAME
     three sources as the authed Job Opportunities feed in parallel, score
     every row with jd_match_scorer against the guest's parsed resume, enrich
@@ -1474,10 +2037,19 @@ def compute_guest_matches(
         except Exception:  # pragma: no cover - progress must never break
             pass
 
-    from services.jd_match_scorer import score_one
+    # ADR-002: one shared, versioned engine. The old jd_match_scorer built its
+    # denominator from the RESUME's own skills, so it measured "how much of
+    # this resume appears in this posting" and had ~15 reachable values. The
+    # fit engine derives required skills from the JOB DESCRIPTION and is the
+    # SAME engine the feed pipelines use to select candidates, so selection
+    # and display can no longer disagree.
+    from services import fit_score
 
     _progress("reading_resume", 10)
     skills = _resume_skills(structured)
+    # Built once; every posting reuses it (requirement extraction is memoised
+    # per JD inside the engine).
+    fit_profile = fit_score.build_resume_profile(structured)
 
     # --- searching_sources (30..70 as providers complete) ------------------
     _progress("searching_sources", 30)
@@ -1489,15 +2061,21 @@ def compute_guest_matches(
     fetch_failed = False
     src_report: Optional[Dict[str, Any]] = None
     t_fetch = _clock()
-    try:
-        fetcher = _fetch_free_jobs
+
+    def _run_fetcher(fn) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """Invoke a retrieval function, tolerating legacy one-argument doubles.
+
+        The signature sniffing predates the inventory path: tests patch
+        `_fetch_free_jobs` with a bare `fn(structured)` returning a list, and
+        that contract is still honoured.
+        """
         try:
-            params = inspect.signature(fetcher).parameters
+            params = inspect.signature(fn).parameters
             accepts_cb = len(params) >= 2
             accepts_profile = "resume_skills" in params
         except (TypeError, ValueError):  # pragma: no cover - exotic patch
             accepts_cb, accepts_profile = False, False
-        profile_kwargs = (
+        kwargs = (
             {
                 "resume_skills": skills,
                 "resume_years": detected_years,
@@ -1505,17 +2083,61 @@ def compute_guest_matches(
             }
             if accepts_profile else {}
         )
-        fetched = (
-            fetcher(structured, _source_progress, **profile_kwargs)
-            if accepts_cb else fetcher(structured)
-        )
-    except Exception as e:
-        logger.warning("guest matches: free-source fetch failed: %s", type(e).__name__)
-        fetched, fetch_failed = [], True
-    if isinstance(fetched, tuple) and len(fetched) == 2:
-        rows, src_report = list(fetched[0] or []), dict(fetched[1] or {})
-    else:
-        rows, src_report = list(fetched or []), None
+        out = fn(structured, _source_progress, **kwargs) if accepts_cb else fn(structured)
+        if isinstance(out, tuple) and len(out) == 2:
+            return list(out[0] or []), dict(out[1] or {})
+        return list(out or []), None
+
+    # --- retrieval mode ----------------------------------------------------
+    # `inventory` reads the canonical `job_postings` collection (ADR-003) and
+    # returns in milliseconds; `scan` is the legacy live fan-out that costs up
+    # to 210s. Default is inventory WITH an automatic fallback: while the
+    # crawler is still warming a role family, a thin result would be a worse
+    # answer than a slow one, so a cold read scans instead of reporting an empty
+    # market. `GUEST_MATCH_MODE=scan` forces the legacy path outright, which is
+    # the one-env-var rollback.
+    rows: List[Dict[str, Any]] = []
+    used_mode = "scan"
+
+    if inventory_mode_enabled():
+        used_mode = "inventory"
+        try:
+            rows, src_report = _run_fetcher(_fetch_from_inventory)
+        except Exception as e:
+            logger.warning("guest matches: inventory read failed: %s", type(e).__name__)
+            rows, src_report = [], None
+        # "No role terms" is a genuine answer, not a cold cache - scanning would
+        # burn 210s to produce the same empty result.
+        undetermined = (src_report or {}).get("empty_reason") == "role_undetermined"
+        # Warmth is measured BEFORE the quality gates, not after. `rows` has
+        # already had non-US, undated and evidence-less postings removed, and
+        # those removals are real answers about the market, not symptoms of a
+        # cold cache. Judging warmth on the filtered count would send a niche
+        # US-thin role down the 210s live scan to rediscover the same thinness.
+        retrieved = int((src_report or {}).get("retrieved") or len(rows))
+        if retrieved < INVENTORY_MIN_CANDIDATES and not undetermined:
+            logger.warning(
+                "guest matches: inventory cold for families=%s (%d candidates < %d) "
+                "- falling back to live scan",
+                (src_report or {}).get("role_families"), retrieved,
+                INVENTORY_MIN_CANDIDATES,
+            )
+            used_mode, rows, src_report = "scan_fallback", [], None
+
+    if used_mode != "inventory":
+        # `inventory_only` is the SYNCHRONOUS caller (the HTTP route). It runs
+        # inside a 60s Lambda and must never start a 210s fan-out, so a cold
+        # inventory returns None and the route falls back to the async job.
+        if inventory_only:
+            return None
+        try:
+            rows, src_report = _run_fetcher(_fetch_free_jobs)
+        except Exception as e:
+            logger.warning("guest matches: free-source fetch failed: %s", type(e).__name__)
+            rows, src_report, fetch_failed = [], None, True
+
+    if src_report is not None:
+        src_report["mode"] = used_mode
 
     sources_report: Dict[str, Any] = src_report or {
         "ok": [] if fetch_failed else ["workday", "career_pages", "mnc"],
@@ -1530,6 +2152,18 @@ def compute_guest_matches(
             timings[k] = int(v)
         except (TypeError, ValueError):
             pass
+
+    # --- guest freshness contract: BEFORE any scoring work ------------------
+    # The feeds hand back their own 30-day window; guests get GUEST_MAX_AGE_DAYS.
+    # Dropping here (not at render time) means stale rows never consume scoring
+    # budget, never reach enrichment, and can never be persisted into a
+    # snapshot. Fewer survivors is a success — nothing is padded back in.
+    fetched_count = len(rows)
+    rows = filter_fresh_for_guest(rows)
+    dropped_stale = fetched_count - len(rows)
+    if dropped_stale:
+        sources_report["dropped_stale"] = dropped_stale
+        sources_report["max_age_days"] = GUEST_MAX_AGE_DAYS
 
     # Feed rows carry posted_text/date_posted; the legacy card field is
     # `posted` — map it so cached cards keep one canonical field.
@@ -1549,10 +2183,17 @@ def compute_guest_matches(
         if _remaining() <= 0:
             budget_expired = True
             break
-        verdict = score_one(
+        # `requirements` short-circuits JD extraction. Inventory rows carry the
+        # profile the crawler already extracted (identical output, asserted by
+        # test_inventory_scoring_parity), so the JD body never has to be loaded
+        # to produce a score. Live-scan rows carry None and extract inline.
+        verdict = fit_score.score_one(
             jd_text=str(row.get("description") or ""),
             title=str(row.get("title") or ""),
             resume_skills=skills,
+            profile=fit_profile,
+            location=str(row.get("location") or ""),
+            job={"requirements": row.get("requirements")} if row.get("requirements") else None,
         )
         scored.append((row, verdict))
     timings["score_ms"] = int((_clock() - t_score) * 1000)
@@ -1560,7 +2201,11 @@ def compute_guest_matches(
     # --- 3.1: CXS detail enrichment for description-less Workday rows ------
     t_enrich = _clock()
     enriched = 0
-    if not budget_expired and _remaining() > 0:
+    # Inventory rows are already requirement-parsed at crawl time, so there is
+    # nothing to enrich and no reason to open a socket on the request path.
+    if used_mode == "inventory":
+        pass
+    elif not budget_expired and _remaining() > 0:
         candidates = [
             (row, verdict) for row, verdict in scored
             if str(row.get("source") or "") in ("Workday Direct", "Workday")
@@ -1590,10 +2235,12 @@ def compute_guest_matches(
                     continue
                 row, verdict = pair
                 row["description"] = str(text)[:15000]
-                fresh = score_one(
+                fresh = fit_score.score_one(
                     jd_text=row["description"],
                     title=str(row.get("title") or ""),
                     resume_skills=skills,
+                    profile=fit_profile,
+                    location=str(row.get("location") or ""),
                 )
                 verdict.clear()
                 verdict.update(fresh)

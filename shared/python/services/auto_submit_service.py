@@ -259,7 +259,11 @@ def _view(rec: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, A
 # Per-user opt-in settings
 # ---------------------------------------------------------------------------
 def get_settings(user_email: str) -> Dict[str, Any]:
-    """Read the user's opt-in. Default False (never auto-submit)."""
+    """Read the user's opt-in. Default False (never auto-submit).
+
+    ``use_tailored_resume`` defaults True — auto-apply pins a tailored artifact
+    when prepare is enabled. Users may opt into plain-resume submits.
+    """
     doc = None
     try:
         doc = _settings().find_one({"user_email": user_email}, {"_id": 0})
@@ -267,20 +271,40 @@ def get_settings(user_email: str) -> Dict[str, Any]:
         logger.warning("auto_submit get_settings failed for %s: %s", user_email, e)
     enabled = bool(doc and doc.get("auto_submit_enabled"))
     updated_at = _iso(doc.get("updated_at")) if doc else None
-    return {"auto_submit_enabled": enabled, "updated_at": updated_at}
+    # Default ON: safer public default is tailor-then-apply. Explicit False skips.
+    use_tailored = True if not doc or "use_tailored_resume" not in doc else bool(
+        doc.get("use_tailored_resume")
+    )
+    return {
+        "auto_submit_enabled": enabled,
+        "use_tailored_resume": use_tailored,
+        "updated_at": updated_at,
+    }
 
 
-def set_settings(user_email: str, enabled: bool) -> Dict[str, Any]:
-    """Set the user's opt-in and audit the change."""
+def set_settings(user_email: str, enabled: bool,
+                 use_tailored_resume: Optional[bool] = None) -> Dict[str, Any]:
+    """Set the user's opt-in (and optional tailor preference) and audit."""
     enabled = bool(enabled)
+    fields: Dict[str, Any] = {
+        "user_email": user_email,
+        "auto_submit_enabled": enabled,
+        "updated_at": _now(),
+    }
+    if use_tailored_resume is not None:
+        fields["use_tailored_resume"] = bool(use_tailored_resume)
     _settings().update_one(
         {"user_email": user_email},
-        {"$set": {"user_email": user_email, "auto_submit_enabled": enabled,
-                  "updated_at": _now()}},
+        {"$set": fields},
         upsert=True,
     )
     _audit(user_email, "settings_enabled" if enabled else "settings_disabled")
     return get_settings(user_email)
+
+
+def use_tailored_resume(user_email: str) -> bool:
+    """True when auto-apply should pin a tailored résumé before submit."""
+    return bool(get_settings(user_email).get("use_tailored_resume", True))
 
 
 def user_opted_in(user_email: str) -> bool:
@@ -501,6 +525,267 @@ def list_pending_eligible(user_email: str) -> Dict[str, Any]:
         else:
             waiting.append(_view(rec, now=now))
     return {"pending": eligible, "waiting": waiting}
+
+
+# ---------------------------------------------------------------------------
+# E2 (defect E) — fold `auto_submit_approvals` INTO the applications ledger.
+#
+# A THIN ADAPTER over the ledger's F approval states (ready_for_review / approved
+# / queued_for_execution) + the frozen approval_snapshot. New approvals go through
+# `ledger.approve()`; the pending queue reads canonical ledger rows LABELED with
+# their `status` + an `already_approved` flag (so defect H's FE renders an
+# already-approved row read-only instead of re-approvable). Legacy
+# `auto_submit_approvals` docs are STILL read (via list_pending_eligible) and are
+# NOT deleted during the transition. Dark-launch gated (AUTO_APPLY_APPROVAL_FOLD,
+# default OFF everywhere — dark until an operator flips it), mirroring the
+# AUTO_APPLY_RESERVE / AUTO_APPLY_PREPARE / AUTO_APPLY_MODES posture, so the live
+# queue is byte-identical until the flag is on.
+# ---------------------------------------------------------------------------
+# ready_for_review still AWAITS a go-ahead (already_approved False); approved /
+# queued_for_execution are cleared to submit + snapshot-frozen (F), surfaced
+# read-only (already_approved True). Attention statuses hand the row BACK to the
+# human (never approvable) — without them the Auto-Apply tab looks empty while
+# gather has correctly parked rows in needs_input / waiting_human / etc.
+_FOLD_AWAITING: Tuple[str, ...] = ("ready_for_review",)
+_FOLD_APPROVED: Tuple[str, ...] = ("approved", "queued_for_execution")
+_FOLD_ATTENTION: Tuple[str, ...] = (
+    # spec §4: `unsupported` is surfaced HONESTLY (with its user-facing message)
+    # rather than vanishing from the tab or masquerading as an error.
+    #
+    # `failed` is here for the same reason. It used to be absent from every fold
+    # bucket AND from the FE status union, so a row that failed outright simply
+    # disappeared from the Auto-Apply tab — the user was left believing the
+    # application was still in flight. A terminal failure the user can see is
+    # strictly better than silence; the FE renders it via StatusRowCard.
+    "needs_input", "waiting_human", "submission_unknown", "unsupported", "failed",
+)
+# IN-FLIGHT — the row is being worked on RIGHT NOW and has no action for the user.
+# All three have live writers and none was folded, so the row vanished from the
+# Auto-Apply tab for the whole run: `queued` (create_application's default),
+# `gathering` (auto_apply_service.gather), `running` (a remote browser run that
+# takes MINUTES). The card only came back if the run FAILED — the same
+# "applications just go missing" complaint we closed for terminal rows.
+# Surfaced read-only (already_approved True, so the FE never renders a second
+# Approve) but NOT eligible: nothing is cleared for the extension to submit.
+_FOLD_INFLIGHT: Tuple[str, ...] = ("queued", "gathering", "running")
+_ACCOUNT_GATE_PROMPT = (
+    "Sign in or create an account on the employer's career site to continue."
+)
+
+
+def approval_fold_enabled() -> bool:
+    """Dark-launch gate for E2's approval fold. Default OFF in ALL environments
+    (unlike the master `auto_submit_enabled`, which is dev-ON) so the pending
+    queue stays byte-identical until an operator flips AUTO_APPLY_APPROVAL_FOLD."""
+    raw = (_get_config_value("AUTO_APPLY_APPROVAL_FOLD", "") or "").strip().lower()
+    if raw in _FLAG_TRUE:
+        return True
+    if raw in _FLAG_FALSE:
+        return False
+    return False
+
+
+def _fold_needs_input(user_email: str, row: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Ledger needs_input list, plus a synthetic account-gate prompt when gather
+    parked the row on ``needs_account`` with an empty question list (common on
+    Workday login walls) so the FE Attention card has something to show."""
+    items = [i for i in (row.get("needs_input") or []) if isinstance(i, dict)]
+    if items or row.get("status") != "needs_input":
+        return items
+    aid = row.get("application_id")
+    if not aid:
+        return items
+    try:
+        from services.auto_apply_service import _answers_coll, account_gate_item
+        ans = _answers_coll().find_one(
+            {"application_id": aid, "user_email": user_email},
+            {"_id": 0, "needs_account": 1},
+        ) or {}
+    except Exception:  # pragma: no cover - best-effort enrichment
+        return items
+    if ans.get("needs_account"):
+        # Family-aware copy (spec §4): "we're creating it" where we can, an
+        # honest "we can't for this vendor" where we can't — never the old
+        # generic "go create one yourself".
+        try:
+            return [account_gate_item(
+                row.get("ats_family"),
+                apply_url=str(row.get("apply_url") or row.get("url") or ""))]
+        except Exception:  # pragma: no cover - defensive
+            return [{
+                "question": _ACCOUNT_GATE_PROMPT,
+                "kind": "account",
+                "field_id": "ats_account",
+            }]
+    return items
+
+
+def list_canonical_approvals(user_email: str) -> List[Dict[str, Any]]:
+    """E2 thin ADAPTER: the auto-apply LEDGER rows that belong in the approval
+    queue, in the extension's pending-record shape, LABELED with the canonical
+    execution `status` + an `already_approved` flag.
+
+      * ready_for_review          -> already_approved False, eligible False
+                                     (awaits the user's go-ahead — H renders it
+                                      as an actionable review card).
+      * approved / queued_for_exec -> already_approved True, eligible True
+                                     (cleared to submit, snapshot frozen — H
+                                      renders it read-only, no second approve).
+      * needs_input / waiting_human / submission_unknown
+                                  -> already_approved False, eligible False
+                                     (attention holds — H's FE Attention section).
+
+    Dark-launch gated: returns [] until AUTO_APPLY_APPROVAL_FOLD is on, so the
+    live queue is unchanged. Owner-scoped; best-effort (never raises past here).
+    """
+    if not approval_fold_enabled():
+        return []
+    out: List[Dict[str, Any]] = []
+    try:
+        from services import application_ledger_service as als
+        for status in (_FOLD_AWAITING + _FOLD_APPROVED + _FOLD_INFLIGHT
+                       + _FOLD_ATTENTION):
+            # An in-flight row is read-only like an approved one, but it is NOT
+            # eligible: only an approved/queued_for_execution row is cleared to
+            # submit.
+            already = status in _FOLD_APPROVED or status in _FOLD_INFLIGHT
+            eligible = status in _FOLD_APPROVED
+            for r in als.list_applications(user_email, status=status, limit=100):
+                url = r.get("apply_url")
+                payload = {
+                    "application_id": r.get("application_id"),
+                    "apply_url": url, "url": url,
+                    "status": status,
+                    "already_approved": already,
+                    # only an approved/queued row is cleared for the extension.
+                    "eligible": eligible,
+                    "ats": r.get("ats_family"),
+                    "title": r.get("title"), "company": r.get("company"),
+                    "source": "ledger",
+                }
+                if status in _FOLD_ATTENTION:
+                    payload["needs_input"] = _fold_needs_input(user_email, r)
+                    reason = r.get("error") or r.get("reason")
+                    if reason:
+                        payload["reason"] = reason
+                out.append(payload)
+        _stamp_fold_answers(user_email, out)
+        _stamp_fold_undo(user_email, out)
+    except Exception as e:  # pragma: no cover - fold is best-effort
+        logger.warning("auto_submit canonical fold failed for %s: %s", user_email, e)
+    return out
+
+
+def _stamp_fold_answers(user_email: str, rows: List[Dict[str, Any]]) -> None:
+    """Attach `answers_snapshot` (the resolved {field_id: value} answer sheet) to
+    every folded row, in ONE query.
+
+    Without it the FE review card renders "No application questions to review" —
+    a folded row carried no answers at all, because the fold reads the LEAN ledger
+    row while the answers live in `auto_apply_answers` (they carry PII and are
+    deliberately kept off the ledger). Best-effort: a read failure leaves the rows
+    untouched rather than emptying the queue."""
+    ids = [r.get("application_id") for r in rows if r.get("application_id")]
+    if not ids:
+        return
+    try:
+        from services.auto_apply_service import _answers_coll
+        cursor = _answers_coll().find(
+            {"user_email": user_email, "application_id": {"$in": ids}},
+            {"_id": 0, "application_id": 1, "answers": 1, "coverage": 1})
+        by_id = {d.get("application_id"): d for d in cursor}
+    except Exception as e:  # pragma: no cover - best-effort enrichment
+        logger.warning("auto_submit fold answers stamp failed for %s: %s",
+                       user_email, e)
+        return
+    for row in rows:
+        doc = by_id.get(row.get("application_id")) or {}
+        answers = doc.get("answers")
+        row["answers_snapshot"] = answers if isinstance(answers, dict) else {}
+        row["answers_count"] = len(row["answers_snapshot"])
+        if doc.get("coverage") is not None:
+            row["coverage"] = doc.get("coverage")
+
+
+def _stamp_fold_undo(user_email: str, rows: List[Dict[str, Any]]) -> None:
+    """Attach `undo_until` (+ `approved_at`) to every APPROVED folded row, in ONE
+    query, derived from the frozen approval snapshot's `approved_at` +
+    UNDO_WINDOW_SECONDS — the same cancel buffer a legacy System-A approval has.
+    Without it the approved card shows no cancel window at all.
+
+    Keyed on the APPROVED statuses, not on `already_approved`: an in-flight row
+    (`running`) is read-only too, but it has left the cancellable window
+    (`cancel_ledger` refuses it), so offering a countdown + Cancel there would be
+    a button that cannot work."""
+    ids = [r.get("application_id") for r in rows
+           if r.get("status") in _FOLD_APPROVED and r.get("application_id")]
+    if not ids:
+        return
+    try:
+        from services import application_ledger_service as als
+        snapshots = als.approval_snapshots(user_email, ids)
+    except Exception as e:  # pragma: no cover - best-effort enrichment
+        logger.warning("auto_submit fold undo stamp failed for %s: %s", user_email, e)
+        return
+    for row in rows:
+        snap = snapshots.get(row.get("application_id"))
+        if not snap:
+            continue
+        approved_at = _as_aware(snap.get("approved_at"))
+        if approved_at is None:
+            continue
+        row["approved_at"] = _iso(approved_at)
+        row["undo_until"] = _iso(
+            approved_at + timedelta(seconds=UNDO_WINDOW_SECONDS))
+
+
+def approve_ledger(user_email: str, application_ids: Any, *,
+                   approved_by: str = "user", snapshot_provider: Any = None) -> int:
+    """E2 thin ADAPTER: route a NEW approval through the ledger's F approval edge
+    (`ready_for_review -> approved`, snapshot frozen) instead of minting a legacy
+    `auto_submit_approvals` doc. Idempotent + single-writer (see
+    application_ledger_service.approve): a row not yet in ready_for_review is left
+    untouched, and a replay never double-approves. Returns the count moved."""
+    from services import application_ledger_service as als
+    return als.approve(user_email, application_ids, approved_by=approved_by,
+                       snapshot_provider=snapshot_provider)
+
+
+def approve_ledger_detailed(user_email: str, application_ids: Any, *,
+                            approved_by: str = "user",
+                            snapshot_provider: Any = None) -> Dict[str, Any]:
+    """Detailed peer of `approve_ledger` — returns
+    {approved, approved_ids, over_quota, usage, not_approvable} so the IN-APP
+    approve route can tell "advanced the canonical row" from "over the auto_submit
+    cap" (429) from "this id has no reviewable ledger row" (fall back to the
+    legacy System-A record). Same single-writer/idempotency guarantees."""
+    from services import application_ledger_service as als
+    return als.approve_with_result(user_email, application_ids,
+                                   approved_by=approved_by,
+                                   snapshot_provider=snapshot_provider)
+
+
+def cancel_ledger(user_email: str, application_id: str) -> bool:
+    """Undo the canonical side of an in-app approval: `approved` /
+    `queued_for_execution` -> `cancelled` (a legal pre-submit abort). Returns True
+    when the row was actually cancelled; False when there is no ledger row, or it
+    already left the cancellable window (the executor leased it). Best-effort —
+    the System-A cancel is the caller's primary action and must not fail on this."""
+    try:
+        from services import application_ledger_service as als
+        row = als.get_application(user_email, application_id)
+        if not row or row.get("status") not in (
+                als.STATUS_APPROVED, als.STATUS_QUEUED_FOR_EXECUTION):
+            # ready_for_review is deliberately NOT cancellable here: undoing an
+            # approval must never silently discard an application the user only
+            # ever wanted to review (that is `skip`, an explicit action).
+            return False
+        als.transition(user_email, application_id, als.STATUS_CANCELLED)
+        return True
+    except Exception as e:
+        logger.info("auto_submit cancel_ledger: no canonical cancel for %s (%s)",
+                    application_id, e)
+        return False
 
 
 # ---------------------------------------------------------------------------

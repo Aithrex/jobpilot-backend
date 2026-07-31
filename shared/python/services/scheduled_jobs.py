@@ -306,6 +306,24 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             return {"job": name, "result": run_events_refresh()}
         if name == "apply_hourly":
             return {"job": name, "result": run_apply_hourly()}
+        if name == "apply_match_sweep":
+            # Spec §5 — the NEW-POSTING fan-out (`apply_hourly` only ever looked
+            # at jobs the user had already SAVED by hand; this is the half that
+            # was missing). Bridged to the resume `_process_job` job type of the
+            # same name rather than run inline, like `ingest_*` and unlike
+            # `apply_hourly`: the sweep does per-user S3 reads plus scoring, so
+            # it needs its own Lambda budget instead of sharing the scheduled
+            # tick's. System actor, empty payload; per-user gating, entitlement
+            # checks and the daily cap all live inside the sweep.
+            #
+            # NOTE: unlike the `ingest_` prefix branch below, a new rule key
+            # needs BOTH this branch AND an entry in infra/terraform/
+            # schedulers.tf — there is no prefix match to fall through to.
+            from services.resume_service import get_resume_service, ResumeService
+            job_id = get_resume_service().create_job(
+                "apply_match_sweep", {}, "system@internal")
+            ResumeService.invoke_async(job_id, "apply_match_sweep", {})
+            return {"job": name, "enqueued": job_id}
         if name == "trend_aggregate":
             # System/cron recompute of the cross-user market trend aggregate.
             # This bridges an EventBridge scheduled trigger to the resume
@@ -333,6 +351,29 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             from services.resume_service import get_resume_service, ResumeService
             job_id = get_resume_service().create_job("ats_signal_aggregate", {}, "system@internal")
             ResumeService.invoke_async(job_id, "ats_signal_aggregate", {})
+            return {"job": name, "enqueued": job_id}
+        if name.startswith("ingest_"):
+            # ADR-003 canonical job inventory. One prefix branch covers every
+            # ingestion rule so adding a shard schedule is a Terraform-only
+            # change, not a code change:
+            #   ingest_workday / ingest_career_pages -> dispatch that source's
+            #       due shards (bounded per tick; `due_shards` excludes leased
+            #       and backed-off shards, which is the backpressure)
+            #   ingest_maintenance -> the retention sweep
+            # Both bridge to the resume `_process_job` job types of the same
+            # family, system actor, exactly like trend_aggregate above.
+            from services.resume_service import get_resume_service, ResumeService
+            if name == "ingest_maintenance":
+                job_type, payload = "job_ingest_maintenance", {}
+            else:
+                source = {"ingest_workday": "workday",
+                          "ingest_career_pages": "career-pages"}.get(name)
+                if source is None:
+                    logger.warning("[scheduled] unknown ingest rule: %s", name)
+                    return {"error": "unknown job", "name": name}
+                job_type, payload = "job_ingest_dispatch", {"source": source}
+            job_id = get_resume_service().create_job(job_type, payload, "system@internal")
+            ResumeService.invoke_async(job_id, job_type, payload)
             return {"job": name, "enqueued": job_id}
         logger.warning("[scheduled] unknown job: %s", name)
         return {"error": "unknown job", "name": name}

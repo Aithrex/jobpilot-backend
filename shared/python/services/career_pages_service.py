@@ -47,6 +47,8 @@ from services.workday_jobs_service import (
     _role_matchers,
     _score_jobs,
     _US_STATE_RE,
+    _US_STATE_NAME_RE,
+    _REMOTE_RE,
 )
 
 logger = logging.getLogger(__name__)
@@ -194,7 +196,12 @@ def _fetch_greenhouse(c: Dict[str, str]) -> List[Dict[str, Any]]:
     r.raise_for_status()
     out = []
     for j in (r.json() or {}).get("jobs") or []:
-        date = j.get("first_published") or j.get("updated_at") or ""
+        # first_published ONLY. updated_at is an edit timestamp, not a posting
+        # date: falling back to it re-dated months-old reqs as "new" (and
+        # Greenhouse is over half the catalog, so it was the single biggest
+        # source of fake freshness). No first_published => the date is
+        # UNKNOWN, and an unknown date is correctly dropped downstream.
+        date = j.get("first_published") or ""
         out.append(_row(
             c, j.get("id"), j.get("title") or "", j.get("absolute_url") or "",
             _iso(date), ((j.get("location") or {}).get("name")) or ""))
@@ -404,7 +411,9 @@ def _fetch_eightfold(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]
             positions = (r.json() or {}).get("positions") or []
         for j in positions:
             locs = j.get("locations") or ([j.get("location")] if j.get("location") else [])
-            posted = j.get("postedTs") or j.get("creationTs") or j.get("t_update") or j.get("t_create")
+            # Posting timestamps only — t_update/t_create are record-edit
+            # times and made stale reqs look freshly posted.
+            posted = j.get("postedTs") or j.get("creationTs")
             url = (j.get("canonicalPositionUrl")
                    or f"https://{host}/careers/job/{j.get('id')}?domain={domain}")
             out.append(_row(
@@ -536,7 +545,8 @@ def _fetch_uber(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
             out.append(_row(
                 c, j.get("id"), title,
                 f"https://www.uber.com/global/en/careers/list/{j.get('id')}/",
-                _iso(j.get("creationDate") or j.get("updatedDate")),
+                # creationDate only: updatedDate is an edit timestamp.
+                _iso(j.get("creationDate")),
                 location,
                 description=desc[:5000],
                 is_remote=bool(_REMOTE_RE.search(title + " " + desc)) or None,
@@ -593,17 +603,24 @@ ENTERPRISE_CATALOG: List[Dict[str, Any]] = [
 # ----------------------------------------------------------------------
 
 # Board ATSes often print BARE foreign hub cities ("Dublin", "London") with
-# no country — the Workday tiering keeps those because "Dublin, CA" is also
-# a US city. Only applied when the string carries no US signal at all.
+# no country. Checked AFTER the US-positive tier so US namesakes rescued by a
+# state survive ("Dublin, OH", "Paris, TX", "Melbourne, FL"); a bare foreign
+# city with no US signal drops. Word-boundary matched.
 _FOREIGN_CITY_RE = re.compile(
     r"\b(dublin|london|toronto|vancouver|montreal|ottawa|waterloo|singapore|"
     r"bangalore|bengaluru|hyderabad|chennai|pune|mumbai|delhi|noida|gurgaon|"
-    r"amsterdam|berlin|munich|paris|warsaw|krakow|tokyo|osaka|sydney|"
-    r"melbourne|tel aviv|sao paulo|mexico city|lisbon|madrid|barcelona|"
-    r"zurich|stockholm|copenhagen|oslo|helsinki|prague|bucharest|tallinn|"
-    r"athens|milan|rome|brussels|vienna|belgrade|zagreb|seoul|taipei|"
-    r"shanghai|beijing|hong kong|manila|jakarta|kuala lumpur|hanoi|cairo|"
-    r"lagos|nairobi|cape town|johannesburg|buenos aires|santiago|bogota|lima)\b",
+    r"gurugram|kolkata|ahmedabad|kochi|cochin|coimbatore|trivandrum|"
+    r"thiruvananthapuram|indore|nagpur|vadodara|mysore|mysuru|chandigarh|"
+    r"jaipur|bhubaneswar|visakhapatnam|vizag|mississauga|calgary|edinburgh|"
+    r"glasgow|belfast|leeds|manchester|amsterdam|berlin|munich|frankfurt|"
+    r"paris|warsaw|krakow|gdansk|tokyo|osaka|sydney|melbourne|brisbane|"
+    r"tel aviv|sao paulo|mexico city|lisbon|madrid|barcelona|"
+    r"zurich|geneva|stockholm|copenhagen|oslo|helsinki|prague|bucharest|"
+    r"tallinn|athens|milan|rome|brussels|vienna|belgrade|zagreb|seoul|taipei|"
+    r"shanghai|beijing|shenzhen|hong kong|manila|makati|taguig|cebu|jakarta|"
+    r"kuala lumpur|hanoi|ho chi minh|cairo|lagos|nairobi|cape town|"
+    r"johannesburg|buenos aires|santiago|bogota|lima|guadalajara|monterrey|"
+    r"colombo|karachi|lahore|islamabad|budapest|dubai|abu dhabi|riyadh|doha)\b",
     re.IGNORECASE)
 _US_WORD_RE = re.compile(r"united states|\busa\b|\bu\.s\.\b|remote[ -]+us\b",
                          re.IGNORECASE)
@@ -618,28 +635,38 @@ _FOREIGN_COUNTRY_RE = re.compile(
     r"korea|taiwan|argentina|chile|colombia|peru|costa rica|nigeria|kenya|"
     r"south africa|egypt|\buae\b|dubai|new zealand|estonia|latvia|"
     r"lithuania|greece|croatia|serbia|turkey|ukraine|bulgaria|slovakia|"
+    r"singapore|pakistan|bangladesh|sri lanka|qatar|saudi|hong kong|"
     r"latin america|south america|\bemea\b|\bapac\b|\bnsw\b|\bnz\b|\bau\b|"
     r"auckland|wellington|brisbane|perth)\b",
     re.IGNORECASE)
 
 
-def _keep_us(job: Dict[str, Any]) -> bool:
-    hint = job.get("country_hint") or ""
-    if hint:
-        return hint in _COUNTRY_OK
-    loc = job.get("location") or ""
-    if not loc.strip():
-        # Board rows with no location at all are usually remote-anywhere;
-        # keep only if explicitly remote (US-ness can't be proven either way).
-        return bool(job.get("is_remote"))
-    if _FOREIGN_COUNTRY_RE.search(loc):
-        return False
-    if _US_WORD_RE.search(loc) or _US_STATE_RE.search(loc):
-        return _geo_keep_us(loc)  # US signal present — normal tiering decides
-    if _FOREIGN_CITY_RE.search(loc):
-        return False
-    # No country field — fall back to the Workday location-text tiering.
-    return _geo_keep_us(loc)
+def _keep_us(job: Dict[str, Any], keep_ambiguous: bool = False) -> bool:
+    """HARD US filter for board rows.
+
+    DELEGATES to ``services.us_geo`` — the single implementation of this rule.
+    This function used to carry its own tiered copy, which drifted from
+    ``workday_jobs_service._geo_keep_us`` (no bare-"US" tier, no Toronto
+    guard) while ``inventory_feed`` served BOTH source tabs through it. A live
+    A/B over 20,000 active postings put the old rule at 43% kept with 33
+    foreign leaks; the shared rule keeps 50% with the leaks gone. See
+    ``us_geo`` for the decision order and the measured cases behind it.
+
+    Signature and keep/drop contract are unchanged, so every existing caller
+    and the ``_keep_us_lenient`` rollback below behave as before.
+    """
+    from services import us_geo
+
+    return us_geo.keep_us_row(job, keep_ambiguous=keep_ambiguous)
+
+
+def _keep_us_lenient(job: Dict[str, Any]) -> bool:
+    """Lenient US keep-filter — the PRE-hardening contract: identical to
+    ``_keep_us`` but KEEPS ambiguous rows ("N Locations", bare non-foreign
+    city, unknown) instead of dropping them. Explicit foreign country/city is
+    still dropped. This is the rollback the guest ``GUEST_US_STRICT=0`` path
+    reverts to, kept separate so the board hard-filter above is unaffected."""
+    return _keep_us(job, keep_ambiguous=True)
 
 
 # ----------------------------------------------------------------------
@@ -1075,7 +1102,7 @@ def run_career_pages_search(
             -(j.get("match_score") or 0),
             j.get("days_ago") if j.get("days_ago") is not None else 99))
 
-    jobs = _score_jobs(jobs, titles, skills, skill_terms)
+    jobs = _score_jobs(jobs, titles, skills, skill_terms, resume_years)
     _rank(jobs)
 
     if partial_cb:
@@ -1096,7 +1123,7 @@ def run_career_pages_search(
         if (j.get("days_ago") if j.get("days_ago") is not None else 99) <= 3
     ][:enrich_recent_n]
     if _enrich_details(top):
-        _score_jobs(top, titles, skills, skill_terms)
+        _score_jobs(top, titles, skills, skill_terms, resume_years)
         _rank(jobs)
         if coll is not None:
             by_id = {j["job_id"]: j for j in top if j.get("description")}

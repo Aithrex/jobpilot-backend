@@ -116,6 +116,20 @@ _STATUS_TO_TRACKER = {
 # always a suggestion, never an auto-transition.
 _UNGROUNDED_CONFIDENCE_CAP = 0.60
 
+# E1 (defect E): map the coarse tracker vocab onto the canonical OUTCOME axis
+# (application_ledger_service.OUTCOME_STATUSES). The tracker mirror in
+# tailoring_records stays authoritative during the transition; this is the
+# write-through that also lands the outcome on the canonical `applications` row.
+# `viewed` is included defensively though _STATUS_TO_TRACKER never emits it today.
+_TRACKER_TO_OUTCOME = {
+    "applied": "applied",
+    "viewed": "viewed",
+    "interviewing": "interviewing",
+    "offer": "offer",
+    "rejected": "rejected",
+    "ghosted": "ghosted",
+}
+
 
 # ---------------------------------------------------------------------------
 # Config / feature flag
@@ -563,7 +577,29 @@ def _apply_tracker_status(user_email: str, record_id: str, tracker_status: str) 
         {"record_id": record_id, "user_email": user_email},
         {"$set": updates},
     )
-    return bool(res.matched_count)
+    matched = bool(res.matched_count)
+
+    # E1 (defect E): write-through the OUTCOME axis onto the canonical
+    # `applications` row. ONLY when the tailoring mirror actually matched a row
+    # (so an unknown record writes NOTHING here either) and best-effort — a
+    # canonical-write hiccup must never break the mail flow, so we swallow it to
+    # a WARN. The tailoring_records mirror above stays authoritative until E3.
+    if matched:
+        outcome = _TRACKER_TO_OUTCOME.get(tracker_status)
+        if outcome:
+            try:
+                # Lazy import: avoid an import cycle + keep it off the cold-start
+                # path (the ledger is only needed once a mail signal lands).
+                from services import application_ledger_service as als
+
+                als.set_outcome(user_email, record_id=record_id,
+                                outcome=outcome, source="mail_ingress")
+            except Exception as e:  # canonical write is non-authoritative in E1
+                logger.warning(
+                    "mail-ingress: canonical set_outcome failed (record=%s): %s",
+                    str(record_id)[:24], e)
+
+    return matched
 
 
 # ---------------------------------------------------------------------------

@@ -39,6 +39,19 @@ def _application_status(record: Dict[str, Any]) -> str:
     return str(app.get("status") or "draft")
 
 
+def _canonical_overrides(user_email: str) -> Dict[str, str]:
+    """E3 (defect E) canonical-preferred DUAL-READ: {record_id -> funnel bucket}
+    from the canonical `applications` ledger. Prefer this over
+    tailoring_records.application.status when a canonical row exists; fall back to
+    the tailoring_records mirror otherwise (kept until the deferred mirror-drop).
+    Best-effort — an empty map degrades cleanly to today's behavior."""
+    try:
+        from services import application_ledger_service as als
+        return als.outcome_buckets_for_records(user_email)
+    except Exception:
+        return {}
+
+
 def _record_summary(record: Dict[str, Any]) -> Dict[str, Any]:
     jd = record.get("jd_analysis") or {}
     app = record.get("application") or {}
@@ -193,8 +206,10 @@ def get_funnel_analytics(user_email: str) -> Dict[str, Any]:
         "withdrawn": 0,
     }
     rows = list(_tailoring_collection().find({"user_email": user_email}))
+    overrides = _canonical_overrides(user_email)
     for row in rows:
-        status = _application_status(row)
+        # E3 dual-read: prefer the canonical applications outcome per record.
+        status = overrides.get(row.get("record_id")) or _application_status(row)
         if status not in counts:
             counts["draft"] += 1
         else:

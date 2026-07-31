@@ -21,6 +21,7 @@ jobs:
   offline-suite:
     name: Offline tests + evals
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       # Mirrors deploy.yml's smoke test: never touch SSM / prod guards in CI.
       ENVIRONMENT: development

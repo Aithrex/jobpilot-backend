@@ -1,0 +1,8 @@
+# Worker deps — deliberately tiny. Chromium + Playwright come from the base
+# image. NO boto3, NO google-cloud-*, NO Mongo driver: the worker holds no cloud
+# credentials and reaches everything it needs through the AWS callback surface
+# over plain HTTPS.
+playwright==1.48.0
+flask==3.0.3
+gunicorn==23.0.0
+requests==2.32.3

@@ -80,6 +80,22 @@ def current_db():
     return db_connect.DBConnect().get_db()
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """Rate limiting is now DISTRIBUTED (Mongo-backed), so the counters
+    survive in mongomock across tests in one pytest process just like the
+    process-global in-memory limiter does. Clear both before every test so
+    route tests stay order-independent."""
+    from utils.security import get_rate_limiter
+
+    get_rate_limiter()._requests.clear()
+    try:
+        current_db()["rate_limit_buckets"].delete_many({})
+    except Exception:
+        pass
+    yield
+
+
 @pytest.fixture()
 def mock_db():
     """A clean in-memory Mongo for one test."""

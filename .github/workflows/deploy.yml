@@ -31,8 +31,15 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
-            shared:  ['shared/**', 'infra/**', '.github/workflows/**']
-            executor: ['services/apply_executor/**', 'shared/python/services/browser_executor.py', 'shared/python/services/ats_executor.py', 'shared/python/services/ats_detector.py']
+            shared:  ['shared/**', 'infra/**', '.github/workflows/**', 'scripts/build_layer.sh', 'scripts/package.sh']
+            # The image does `COPY shared/python /opt/python` — the WHOLE tree —
+            # so it depends on every shared module, not a hand-picked few. The
+            # old three-file list silently shipped a stale executor: fixes to
+            # application_question_bank / apply_forms / ats_adapters deployed to
+            # the four zip Lambdas but never reached the container that actually
+            # fills forms, so prod ran old fill logic (2026-07-29). Keep this in
+            # step with the COPY above, not with a guess about imports.
+            executor: ['services/apply_executor/**', 'shared/python/**']
             auth:    ['services/auth/**']
             jobs:    ['services/jobs/**']
             resume:  ['services/resume/**']
@@ -167,7 +174,7 @@ jobs:
           REPO="${REGISTRY}/${PROJECT}-apply-executor-${ENVIRONMENT}"
           # --provenance/--sbom=false: attestation manifests make an OCI index
           # that Lambda rejects ("image manifest ... not supported").
-          docker build --provenance=false --sbom=false \
+          docker build --platform linux/amd64 --provenance=false --sbom=false \
             -f services/apply_executor/Dockerfile -t "$REPO:prod" .
           docker push "$REPO:prod"
       - name: Update function code
@@ -188,4 +195,15 @@ jobs:
     if: always() && needs.deploy-services.result == 'success'
     steps:
       - name: Health check via the edge
-        run: curl -fsS https://aspirely.me/api/health || echo "health check pending (edge/DNS not live yet)"
+        continue-on-error: true
+        run: |
+          set +e
+          for i in 1 2 3; do
+            if curl -fsS --max-time 15 https://aspirely.me/api/health; then
+              echo "health ok"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "health check pending (edge/DNS not live yet)"
+          exit 0

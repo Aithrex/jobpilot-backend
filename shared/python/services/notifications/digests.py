@@ -280,7 +280,7 @@ def build_evening_summary(user_email: str) -> Dict[str, Any]:
 
     submitted = activity.get("submitted", 0)
     moved = activity.get("moved", [])
-    cta_url = _app_url("/?tab=applications")  # FE route: confirm with frontend-engineer
+    cta_url = _app_url("/app/apply")  # J: canonical `/next` applications route
 
     bits = [f"{submitted} application{'s' if submitted != 1 else ''} submitted today"]
     if moved:

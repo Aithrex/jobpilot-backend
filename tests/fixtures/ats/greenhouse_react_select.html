@@ -1,0 +1,120 @@
+<!doctype html>
+<!-- Aithrex-owned synthetic fixture. Reproduces the MODERN Greenhouse
+     (job-boards.greenhouse.io) application form, whose enumerated controls are
+     react-select comboboxes rather than <select> elements.
+
+     The shape is copied from the live markup that broke production on
+     2026-07-28 (executor log: "no option matched 'United States of America' for
+     country"), with the employer's identity and the emotion hash suffixes kept
+     but the copy neutralised:
+
+       * the control is an <input role="combobox" class="select__input"> — so
+         recon reports type=text and NO options, because none exist in the DOM;
+       * the choices live in a `.select__menu` that is NOT rendered until the
+         listbox is opened (modelled here as display:none, revealed on click —
+         see tests/ats_dom.FakePage._react_select_click);
+       * the only way to commit a value is CLICKING a rendered `.select__option`;
+       * the vendor's own opener is <button aria-label="Toggle flyout">;
+       * the option spellings are the form's, not the user's ("United States of
+         America", not the declared "United States") — which is exactly why the
+         labels have to be read and matched rather than typed.
+
+     NEVER a real employer. -->
+<html><head><meta charset="utf-8"><title>Apply - Aithrex</title></head>
+<body>
+<h1>Apply for Senior Backend Engineer at Aithrex</h1>
+<form id="application_form" action="https://boards.greenhouse.io/aithrex/jobs/4200" method="post">
+  <div class="field-wrapper">
+    <label id="first_name-label" for="first_name" class="label">First Name<span aria-hidden="true">*</span></label>
+    <input id="first_name" class="input input__single-line" type="text" aria-required="true" value="">
+  </div>
+  <div class="field-wrapper">
+    <label id="email-label" for="email" class="label">Email<span aria-hidden="true">*</span></label>
+    <input id="email" class="input input__single-line" type="text" aria-required="true" value="">
+  </div>
+
+  <fieldset class="phone-input">
+    <legend class="visually-hidden">Phone</legend>
+    <div class="phone-input__country">
+      <div class="select">
+        <div class="select__container">
+          <label id="country-label" for="country" class="label select__label">Country<span aria-hidden="true">*</span></label>
+          <div class="select-shell remix-css-b62m3t-container">
+            <div>
+              <div class="select__control remix-css-13cymwt-control">
+                <div class="select__value-container remix-css-hlgwow">
+                  <div class="select__placeholder remix-css-1jqq78o-placeholder" id="react-select-country-placeholder"></div>
+                  <div class="select__input-container remix-css-19bb58m" data-value="">
+                    <input class="select__input" id="country" type="text" role="combobox"
+                           aria-autocomplete="list" aria-expanded="false" aria-haspopup="true"
+                           aria-labelledby="country-label" aria-required="true"
+                           autocomplete="off" spellcheck="false" value="">
+                  </div>
+                </div>
+                <div class="select__indicators remix-css-1wy0on6">
+                  <button type="button" class="icon-button icon-button--sm" aria-label="Toggle flyout" tabindex="-1"></button>
+                </div>
+              </div>
+            </div>
+            <div class="select__menu remix-css-1nmdiq5-menu" style="display:none">
+              <div class="select__menu-list remix-css-qr46ko">
+                <!-- ALPHABETICAL, like the real list. That ordering is the whole
+                     point of "British Indian Ocean Territory" being here: it
+                     precedes "India" and CONTAINS it, so the old substring
+                     (`:has-text`) click picked the wrong country. -->
+                <div class="select__option" role="option" id="react-select-country-option-0">British Indian Ocean Territory</div>
+                <div class="select__option" role="option" id="react-select-country-option-1">Canada</div>
+                <div class="select__option" role="option" id="react-select-country-option-2">India</div>
+                <div class="select__option" role="option" id="react-select-country-option-3">United Kingdom of Great Britain and Northern Ireland</div>
+                <div class="select__option" role="option" id="react-select-country-option-4">United States of America</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="phone-input__phone">
+      <label id="phone-label" for="phone" class="label">Phone<span aria-hidden="true">*</span></label>
+      <input id="phone" class="input input__single-line" type="tel" aria-required="true" value="">
+    </div>
+  </fieldset>
+
+  <div class="field-wrapper">
+    <div class="select">
+      <div class="select__container">
+        <label id="question_100-label" for="question_100" class="label select__label">Are you legally authorized to work in the United States?<span aria-hidden="true">*</span></label>
+        <div class="select-shell remix-css-b62m3t-container">
+          <div>
+            <div class="select__control remix-css-13cymwt-control">
+              <div class="select__value-container remix-css-hlgwow">
+                <div class="select__input-container remix-css-19bb58m" data-value="">
+                  <input class="select__input" id="question_100" type="text" role="combobox"
+                         aria-autocomplete="list" aria-expanded="false" aria-haspopup="true"
+                         aria-labelledby="question_100-label" aria-required="true"
+                         autocomplete="off" spellcheck="false" value="">
+                </div>
+              </div>
+              <div class="select__indicators remix-css-1wy0on6">
+                <button type="button" class="icon-button icon-button--sm" aria-label="Toggle flyout" tabindex="-1"></button>
+              </div>
+            </div>
+          </div>
+          <div class="select__menu remix-css-1nmdiq5-menu" style="display:none">
+            <div class="select__menu-list remix-css-qr46ko">
+              <div class="select__option" role="option" id="react-select-question_100-option-0">Yes</div>
+              <div class="select__option" role="option" id="react-select-question_100-option-1">No</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="field-wrapper">
+    <div id="upload-label-resume" class="label upload-label">Resume/CV<span class="required">*</span></div>
+    <input id="resume" class="visually-hidden" type="file" accept=".pdf,.doc,.docx,.txt,.rtf">
+  </div>
+  <div id="application-confirmation" style="display:none"></div>
+  <button type="submit">Submit application</button>
+</form>
+</body></html>

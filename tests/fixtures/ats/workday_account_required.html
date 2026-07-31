@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- Aithrex-owned synthetic fixture. Workday candidate-ACCOUNT gate: a per-tenant
+     sign-in / create-account wall in front of the wizard. The adapter must PAUSE
+     (waiting_human) with a clear pending action and NEVER auto-create an account
+     here. Keyed by data-automation-id + a password field. NEVER a real employer. -->
+<html><head><meta charset="utf-8"><title>Sign In - Aithrex (Workday)</title></head>
+<body class="wd-theme-canvas wd-blue">
+<div data-automation-id="signInContent" class="wd-auth">
+  <h1>Sign in to apply</h1>
+  <div data-automation-id="formField-email" class="wd-field">
+    <label>Email Address</label>
+    <input data-automation-id="email" aria-label="Email Address" type="email" required>
+  </div>
+  <div data-automation-id="formField-password" class="wd-field">
+    <label>Password</label>
+    <input data-automation-id="password" aria-label="Password" type="password" required>
+  </div>
+  <button data-automation-id="signInSubmitButton" type="button">Sign In</button>
+  <button data-automation-id="createAccountLink" type="button">Create Account</button>
+</div>
+</body></html>

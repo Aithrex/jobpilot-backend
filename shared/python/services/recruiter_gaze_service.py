@@ -26,7 +26,7 @@ spend via entitlements_service BEFORE dispatching the job.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from services.claude_client import claude_json, CLAUDE_PRO
 
@@ -346,14 +346,74 @@ def six_second_impression(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Result cache — a read only changes when the resume changes, so we cache it
+# per resume version. This keeps the tab's auto-run-on-mount from re-charging
+# quota (and re-spending on the LLM) every time the user opens it.
+# ---------------------------------------------------------------------------
+_READS_COLLECTION = "six_seconds_reads"
+
+
+def six_seconds_fingerprint(resume: Optional[Dict[str, Any]]) -> str:
+    """Stable identity of the resume version a read was computed against.
+
+    Changes when the active resume is swapped or re-parsed, so a cached read is
+    reused only while the underlying resume is unchanged.
+    """
+    if not resume:
+        return ""
+    return f"{resume.get('resume_id') or ''}:{resume.get('parsed_at') or ''}"
+
+
+def get_cached_six_seconds(user_email: str, fingerprint: str) -> Optional[Dict[str, Any]]:
+    """Return the cached read for this user + resume version, or None."""
+    if not user_email or not fingerprint:
+        return None
+    try:
+        from utils.db_connect import DBConnect
+
+        doc = DBConnect().get_db()[_READS_COLLECTION].find_one(
+            {"user_email": user_email, "fingerprint": fingerprint}
+        )
+    except Exception as e:  # pragma: no cover
+        logger.warning("six_seconds: cache read failed for %s: %s", user_email, e)
+        return None
+    result = (doc or {}).get("result")
+    return result if isinstance(result, dict) else None
+
+
+def _store_six_seconds(user_email: str, fingerprint: str, result: Dict[str, Any]) -> None:
+    """Persist a fresh read (one doc per user, keyed to the current fingerprint)
+    so re-opening the tab is free until the resume changes."""
+    if not user_email or not fingerprint or not isinstance(result, dict):
+        return
+    try:
+        from datetime import datetime, timezone
+        from utils.db_connect import DBConnect
+
+        DBConnect().get_db()[_READS_COLLECTION].update_one(
+            {"user_email": user_email},
+            {"$set": {
+                "user_email": user_email,
+                "fingerprint": fingerprint,
+                "result": result,
+                "updated_at": datetime.now(timezone.utc),
+            }},
+            upsert=True,
+        )
+    except Exception as e:  # pragma: no cover
+        logger.warning("six_seconds: cache write failed for %s: %s", user_email, e)
+
+
+# ---------------------------------------------------------------------------
 # Top-level job entry
 # ---------------------------------------------------------------------------
-def build_six_seconds(user_email: str) -> Dict[str, Any]:
+def build_six_seconds(user_email: str, fingerprint: str = "") -> Dict[str, Any]:
     """Job entry (job_type='six_seconds'). Loads the user's structured resume,
     computes the deterministic gaze, and generates the grounded impression.
 
     Returns {"gaze": {...}, "impression": {...}} or {"error": "no_resume"} when
-    the user has no parsed resume yet.
+    the user has no parsed resume yet. On success the read is cached against the
+    resume version so a later passive re-open serves it without re-charging.
     """
     from services.resume_parser import ResumeParser
     from utils.db_connect import DBConnect
@@ -365,6 +425,8 @@ def build_six_seconds(user_email: str) -> Dict[str, Any]:
     structured = resume["structured"]
     gaze = compute_gaze(structured)
     impression = six_second_impression(structured)
+    result = {"gaze": gaze, "impression": impression}
+    _store_six_seconds(user_email, fingerprint or six_seconds_fingerprint(resume), result)
     logger.info("six_seconds: built gaze (%d sections) + impression for %s",
                 len(gaze.get("sections", [])), user_email)
-    return {"gaze": gaze, "impression": impression}
+    return result

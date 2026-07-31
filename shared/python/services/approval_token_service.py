@@ -282,13 +282,34 @@ def make_link(action: str, user_email: str, application_ids: Optional[List[str]]
 # ---------------------------------------------------------------------------
 # Verify + claim
 # ---------------------------------------------------------------------------
-def verify_and_claim(token: str) -> Dict[str, Any]:
-    """Verify a token and atomically claim its single use.
+def verify(token: str) -> Dict[str, Any]:
+    """Verify a token WITHOUT consuming its single use (a read-only *peek*).
 
-    Order (spec §2): constant-time HMAC compare → ``exp`` check → atomic
-    single-use claim of ``jti``. Raises a typed ``ApprovalTokenError`` on any
-    failure; returns the verified payload
+    Runs the same cryptographic authenticity + shape + expiry checks as
+    ``verify_and_claim`` (steps 1-2), but does NOT touch the ``used`` flag, so
+    the token stays claimable exactly once by a later ``verify_and_claim``.
+
+    P1-APPROVE-GET: the emailed magic-link GET calls this to decide where to
+    redirect (it must be side-effect-free — a bare GET must never mutate), and
+    the authenticated, CSRF-safe POST calls ``verify_and_claim`` to actually
+    consume the token and perform the approval. Raises a typed
+    ``ApprovalTokenError`` on any failure; returns the verified payload
     ``{jti, user_email, action, application_ids, exp}`` on success.
+
+    NOTE: this does not check whether the ``jti`` record still exists / has been
+    used — that is the claim's job. A peek is authenticity + freshness only.
+    """
+    claim, _payload_b64 = _authenticate(token)
+    if _now().timestamp() >= claim["exp"]:
+        raise TokenExpired("link expired")
+    return claim
+
+
+def _authenticate(token: str) -> tuple[Dict[str, Any], str]:
+    """Shared verify core: constant-time HMAC compare + payload shape check.
+
+    Returns ``(claim, payload_b64)``. Does NOT check expiry or single-use — the
+    two public entrypoints (``verify`` peek, ``verify_and_claim``) layer those on.
     """
     if not token or not isinstance(token, str) or len(token) > _MAX_TOKEN_LENGTH:
         raise TokenInvalid("missing or oversized token")
@@ -311,7 +332,18 @@ def verify_and_claim(token: str) -> Dict[str, Any]:
         payload = json.loads(_b64d(payload_b64).decode("utf-8"))
     except (ValueError, TypeError, UnicodeDecodeError):
         raise TokenInvalid("bad payload encoding")
-    claim = _validate_payload(payload)
+    return _validate_payload(payload), payload_b64
+
+
+def verify_and_claim(token: str) -> Dict[str, Any]:
+    """Verify a token and atomically claim its single use.
+
+    Order (spec §2): constant-time HMAC compare → ``exp`` check → atomic
+    single-use claim of ``jti``. Raises a typed ``ApprovalTokenError`` on any
+    failure; returns the verified payload
+    ``{jti, user_email, action, application_ids, exp}`` on success.
+    """
+    claim, _payload_b64 = _authenticate(token)
 
     # 2. Expiry (the TTL index is the backstop; this is the authoritative check).
     if _now().timestamp() >= claim["exp"]:

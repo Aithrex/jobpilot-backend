@@ -32,10 +32,51 @@ _AUTO_SUBMIT_COLLECTIONS = (
     # in `ready` (extension submit path). Clear it too so ledger rows left by
     # other test files (shared mongomock) don't leak into these assertions.
     "applications",
+    "resume_assets",
+    "user_preferences",
 )
 
 USER_A = "alice@aspirely.me"
 USER_B = "bob@aspirely.me"
+
+
+def _seed_ready_profile(email: str):
+    """Satisfy READY_REQUIRED_FIELDS so PUT settings can enable auto-submit."""
+    import services.apply_onboarding_service as onb
+    d = current_db()
+    d.resume_assets.delete_many({"user_email": email})
+    d.user_preferences.delete_many({"user_email": email})
+    d.resume_assets.insert_one({
+        "resume_id": f"asset-{email}", "owner_type": "user",
+        "user_email": email,
+        "structured": {"contact": {
+            "name": "Alice Smith", "email": email, "phone": "+1-555-0100",
+        }},
+        "parse_status": "parsed", "parsed_at": "2026-01-01T00:00:00+00:00",
+    })
+    onb.save_answers(email, {
+        "phone_device_type": "Mobile",
+        "address_line1": "1 Main St",
+        "city": "Phoenix",
+        "state": "Arizona",
+        "postal_code": "85001",
+        "country": "United States of America",
+        "work_authorized_us": True,
+        "requires_sponsorship": False,
+        "current_title": "Software Engineer",
+        "current_company": "Acme Inc",
+        "work_start_date": "01/2022",
+        "role_description": "Built and shipped product features.",
+        "over_18": True,
+    })
+
+
+def _enable_auto_submit(call, email=USER_A):
+    _seed_ready_profile(email)
+    resp = call("put", "/api/apply/auto-submit/settings",
+                {"auto_submit_enabled": True})
+    assert resp.status_code == 200, resp.get_json()
+    return resp
 
 
 @pytest.fixture()
@@ -119,10 +160,12 @@ def test_settings_roundtrip_and_opt_in_default_false(db, app):
     assert resp.status_code == 200
     assert resp.get_json()["auto_submit_enabled"] is False
 
+    # Incomplete profile cannot enable.
     resp = call("put", "/api/apply/auto-submit/settings", {"auto_submit_enabled": True})
-    assert resp.status_code == 200
-    assert resp.get_json()["auto_submit_enabled"] is True
+    assert resp.status_code == 400
+    assert resp.get_json().get("error") == "profile_incomplete"
 
+    _enable_auto_submit(call, USER_A)
     resp = call("get", "/api/apply/auto-submit/settings", None)
     assert resp.get_json()["auto_submit_enabled"] is True
 
@@ -138,7 +181,7 @@ def test_settings_put_rejects_non_bool(db, app):
 # ---------------------------------------------------------------------------
 def test_approve_creates_record_with_undo_window(db, app):
     call = _client(app, USER_A)
-    call("put", "/api/apply/auto-submit/settings", {"auto_submit_enabled": True})
+    _enable_auto_submit(call, USER_A)
 
     resp = call("post", "/api/apply/auto-submit/approve",
                 {"application_id": "job-1", "answers": {"q1": "grounded answer"}})
@@ -155,7 +198,7 @@ def test_approve_creates_record_with_undo_window(db, app):
 
 def test_reapprove_is_idempotent_noop(db, app):
     call = _client(app, USER_A)
-    call("put", "/api/apply/auto-submit/settings", {"auto_submit_enabled": True})
+    _enable_auto_submit(call, USER_A)
     r1 = call("post", "/api/apply/auto-submit/approve",
               {"application_id": "job-1", "answers": {"q": "a"}})
     assert r1.status_code == 201
@@ -173,7 +216,7 @@ def test_reapprove_is_idempotent_noop(db, app):
 # ---------------------------------------------------------------------------
 def test_cannot_submit_before_undo_until(db, app):
     call = _client(app, USER_A)
-    call("put", "/api/apply/auto-submit/settings", {"auto_submit_enabled": True})
+    _enable_auto_submit(call, USER_A)
     call("post", "/api/apply/auto-submit/approve",
          {"application_id": "job-1", "answers": {"q": "a"}})
 
@@ -216,7 +259,7 @@ def test_eligible_after_undo_then_submit_then_double_submit_409(db):
 # ---------------------------------------------------------------------------
 def test_cancel_within_window_then_cannot_submit(db, app):
     call = _client(app, USER_A)
-    call("put", "/api/apply/auto-submit/settings", {"auto_submit_enabled": True})
+    _enable_auto_submit(call, USER_A)
     call("post", "/api/apply/auto-submit/approve",
          {"application_id": "job-1", "answers": {"q": "a"}})
 
@@ -311,13 +354,13 @@ def test_cross_user_isolation_service(db):
 def test_cross_user_isolation_route(db, app):
     # A approves through the route.
     call_a = _client(app, USER_A)
-    call_a("put", "/api/apply/auto-submit/settings", {"auto_submit_enabled": True})
+    _enable_auto_submit(call_a, USER_A)
     call_a("post", "/api/apply/auto-submit/approve",
            {"application_id": "job-x", "answers": {"q": "a"}})
 
     # B (opted in) tries to submit A's application → 404 approval_not_found.
     call_b = _client(app, USER_B)
-    call_b("put", "/api/apply/auto-submit/settings", {"auto_submit_enabled": True})
+    _enable_auto_submit(call_b, USER_B)
     resp = call_b("post", "/api/apply/auto-submit/mark-submitted", {"application_id": "job-x"})
     assert resp.status_code == 404
     assert resp.get_json()["error"] == "approval_not_found"
@@ -347,6 +390,8 @@ if __name__ == "__main__":  # allow `python tests/test_auto_submit.py`
 # Extension ↔ auto-apply LEDGER bridge (the wired submit path)
 # ---------------------------------------------------------------------------
 def _ready_ledger_app(user=USER_A):
+    # F: the extension submit bridge surfaces APPROVED ledger rows (was `ready`).
+    # Drive the row through the F path: gathering → ready_for_review → approved.
     view, _ = als.create_application(
         user, company="Acme", title="Cloud Engineer",
         jd_text="Build AWS infra with Terraform and Kubernetes.",
@@ -354,7 +399,9 @@ def _ready_ledger_app(user=USER_A):
         apply_url="https://job-boards.greenhouse.io/acme/jobs/999")
     aid = view["application_id"]
     als.mark_gathering(user, aid)
-    als.mark_ready(user, aid, autonomy="auto", confidence_score=0.95, tailoring_record_id=None)
+    als.mark_ready_for_review(user, aid, autonomy="auto", confidence_score=0.95,
+                              tailoring_record_id=None)
+    als.approve(user, [aid], approved_by="system")
     return aid
 
 

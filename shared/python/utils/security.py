@@ -1,9 +1,12 @@
 """Security utilities for input validation and sanitization."""
+import hashlib
 import ipaddress
 import os
 import re
 import html
 import logging
+import time
+from datetime import datetime, timezone
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -228,22 +231,23 @@ class InputSanitizer:
 
 class RateLimiter:
     """
-    Simple in-memory rate limiter.
+    In-memory (per-container) sliding-window rate limiter.
 
-    Note: On AWS Lambda, each invocation may run in a different container, so state
-    does not persist across requests. This provides best-effort per-container limiting
-    only. API Gateway throttling (configured in Terraform) is the primary rate limit.
+    NOT a security control on its own: on AWS Lambda each concurrently-running
+    container keeps its own dict, so the effective ceiling is
+    (containers x max_requests). Use it only as the CHEAP FIRST PASS in front
+    of ``DistributedRateLimiter`` (see ``check_rate_limit`` below), which holds
+    the authoritative, cross-container count in MongoDB.
     """
 
     def __init__(self):
         self._requests = {}
-    
+
     def is_rate_limited(self, key: str, max_requests: int = 100, window_seconds: int = 60) -> bool:
         """
         Check if a key is rate limited.
         Returns True if rate limit exceeded.
         """
-        import time
         current_time = time.time()
 
         # Periodic cleanup to prevent memory growth (every 100 checks)
@@ -272,7 +276,6 @@ class RateLimiter:
     
     def cleanup(self):
         """Remove stale entries to prevent memory growth"""
-        import time
         current_time = time.time()
         
         keys_to_remove = []
@@ -284,8 +287,145 @@ class RateLimiter:
             del self._requests[key]
 
 
-# Global rate limiter instance
+class DistributedRateLimiter:
+    """Authoritative rate limiter: one fixed-window counter per (key, window)
+    held in MongoDB, incremented atomically.
+
+    Why this exists: ``RateLimiter`` above keeps state in a per-container dict.
+    With N concurrently-warm Lambda containers the real ceiling becomes
+    N x max_requests, so "10 uploads per hour per client" was never actually
+    enforced. API Gateway throttling cannot express a per-client-per-hour rule
+    either (it is per-route and account-wide), so the limit has to live in the
+    one piece of state every container shares: Mongo.
+
+    Mechanics (same shape as guest_global_counters / guest_challenge_velocity):
+    a single ``find_one_and_update`` with ``$inc`` + ``upsert`` is atomic on the
+    server, so concurrent containers cannot interleave a lost update. The window
+    index is baked into the document id, so a new window starts on a fresh doc
+    and old docs are reaped by a TTL index on ``expires_at``.
+
+    Fixed windows (not sliding) are deliberate: one round trip, no array
+    growth, no read-modify-write. The known trade-off is that a client can
+    burst up to 2x the limit across a window boundary; that is an acceptable
+    price for a limit that is actually shared.
+
+    No raw IP is stored: the document id is a salted-free sha256 of the
+    composite key, and only a coarse non-PII ``bucket`` label is kept for ops.
+    """
+
+    COLLECTION = "rate_limit_buckets"
+
+    def __init__(self, collection_name: str = COLLECTION):
+        self._collection_name = collection_name
+        self._index_ready = False
+
+    def _collection(self):
+        # Imported lazily: utils.security is imported by modules that must not
+        # pull in pymongo/db config at import time (cold-start cost).
+        from utils.db_connect import DBConnect
+
+        return DBConnect().get_db()[self._collection_name]
+
+    def _ensure_index(self, collection) -> None:
+        if self._index_ready:
+            return
+        try:
+            collection.create_index("expires_at", expireAfterSeconds=0)
+        except Exception:  # pragma: no cover - index may already exist / no perms
+            pass
+        self._index_ready = True  # never retry per request
+
+    def is_rate_limited(
+        self,
+        key: str,
+        max_requests: int = 100,
+        window_seconds: int = 60,
+        fail_open: bool = False,
+    ) -> bool:
+        """True when this key has exceeded ``max_requests`` in the current
+        window, counted across ALL containers.
+
+        ``fail_open`` decides what a storage error means. See
+        ``check_rate_limit`` for the policy split.
+        """
+        if max_requests <= 0:
+            return True
+        window_seconds = max(1, int(window_seconds or 1))
+        now = time.time()
+        window_index = int(now // window_seconds)
+        composite = f"{key}|{window_seconds}|{window_index}"
+        doc_id = hashlib.sha256(composite.encode("utf-8")).hexdigest()
+        # Keep the leading, non-identifying part of the key (e.g. "guest:onboard")
+        # for dashboards; the client-identifying tail never lands in Mongo.
+        bucket = ":".join(str(key).split(":")[:2])[:64]
+        expires_at = datetime.fromtimestamp(
+            (window_index + 2) * window_seconds, tz=timezone.utc
+        )
+        try:
+            from pymongo import ReturnDocument
+
+            collection = self._collection()
+            self._ensure_index(collection)
+            doc = collection.find_one_and_update(
+                {"_id": doc_id},
+                {
+                    "$inc": {"count": 1},
+                    "$setOnInsert": {"bucket": bucket, "expires_at": expires_at},
+                },
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
+            return int((doc or {}).get("count") or 0) > max_requests
+        except Exception as e:
+            logger.error(
+                "distributed rate limiter unavailable for bucket=%s (fail_%s): %s",
+                bucket, "open" if fail_open else "closed", type(e).__name__,
+            )
+            return not fail_open
+
+
+# Global rate limiter instances
 _rate_limiter = RateLimiter()
+_distributed_rate_limiter = DistributedRateLimiter()
+
 
 def get_rate_limiter() -> RateLimiter:
     return _rate_limiter
+
+
+def get_distributed_rate_limiter() -> DistributedRateLimiter:
+    return _distributed_rate_limiter
+
+
+def check_rate_limit(
+    key: str,
+    max_requests: int = 100,
+    window_seconds: int = 60,
+    fail_open: bool = False,
+) -> bool:
+    """THE rate-limit decision. True = reject the request.
+
+    Two stages, in order:
+      1. Cheap per-container first pass. If THIS container alone has already
+         used the whole allowance, the shared count has certainly been exceeded
+         too, so we can reject without a Mongo round trip. This can only ever
+         short-circuit to "limited" - it can never grant a request.
+      2. The AUTHORITATIVE distributed counter. Every request that survives
+         stage 1 is counted here, so the limit holds across containers.
+
+    Storage-failure policy (``fail_open``):
+      * EXPENSIVE / abusable endpoints (guest onboard, guest matches, tailor,
+        download, claim, auth) pass fail_open=False - a Mongo outage must not
+        become an open door to unmetered LLM, scrape or storage spend.
+      * CHEAP READ endpoints (job polling, session lookup) pass fail_open=True
+        - these are what an ALREADY-ADMITTED user is doing every couple of
+        seconds, and a brief Mongo blip should degrade to "unthrottled reads",
+        not "every active session breaks". The blast radius of an unlimited
+        read is a few extra Mongo reads; the blast radius of a blocked poll is
+        a broken product for everyone mid-flow.
+    """
+    if _rate_limiter.is_rate_limited(key, max_requests, window_seconds):
+        return True
+    return _distributed_rate_limiter.is_rate_limited(
+        key, max_requests, window_seconds, fail_open=fail_open
+    )

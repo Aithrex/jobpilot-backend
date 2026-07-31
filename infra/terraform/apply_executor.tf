@@ -14,12 +14,65 @@ variable "apply_executor_image_tag" {
   description = "ECR image tag the executor Lambda runs (CI pushes :prod)."
 }
 
+variable "apply_executor_monthly_budget" {
+  type        = number
+  default     = 50
+  description = "USD monthly budget alert for the apply-executor plane (tag-filtered)."
+}
+
+variable "apply_executor_log_retention_days" {
+  type        = number
+  default     = 30
+  description = "CloudWatch log retention for the apply-executor Lambda."
+}
+
+locals {
+  apply_executor_tags = {
+    Name       = "${var.project}-apply-executor-${var.environment}"
+    Service    = "apply-executor"
+    Feature    = "auto-apply"
+    Component  = "apply-executor"
+    DataClass  = "sensitive"
+  }
+}
+
 resource "aws_ecr_repository" "apply_executor" {
   name                 = "${var.project}-apply-executor-${var.environment}"
   image_tag_mutability = "MUTABLE"
   image_scanning_configuration {
     scan_on_push = true
   }
+  tags = local.apply_executor_tags
+}
+
+resource "aws_ecr_lifecycle_policy" "apply_executor" {
+  repository = aws_ecr_repository.apply_executor.name
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Expire untagged images after 7 days"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 7
+        }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "Keep last 10 tagged images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["prod", "sha-"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 10
+        }
+        action = { type = "expire" }
+      },
+    ]
+  })
 }
 
 # Dedicated least-privilege role (NOT the shared lambda_exec role).
@@ -33,11 +86,17 @@ resource "aws_iam_role" "apply_executor_exec" {
       Principal = { Service = "lambda.amazonaws.com" }
     }]
   })
+  tags = local.apply_executor_tags
 }
 
 resource "aws_iam_role_policy_attachment" "apply_executor_basic" {
   role       = aws_iam_role.apply_executor_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy_attachment" "apply_executor_xray" {
+  role       = aws_iam_role.apply_executor_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
 }
 
 resource "aws_iam_role_policy" "apply_executor_inline" {
@@ -47,19 +106,68 @@ resource "aws_iam_role_policy" "apply_executor_inline" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "ReadResumeWriteProof"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject"]
-        Resource = ["${aws_s3_bucket.resumes.arn}/*"]
+        Sid    = "ReadTailoredResume"
+        Effect = "Allow"
+        Action = ["s3:GetObject"]
+        Resource = [
+          "${aws_s3_bucket.resumes.arn}/tailoring/*",
+          "${aws_s3_bucket.resumes.arn}/resume-assets/*",
+          "${aws_s3_bucket.resumes.arn}/guest/*",
+          "${aws_s3_bucket.resumes.arn}/*/base/*",
+          "${aws_s3_bucket.resumes.arn}/*/generated/*",
+        ]
       },
       {
-        Sid      = "DecryptAtsCredentials" # for create_account (Oracle, Phase 2)
+        Sid      = "WriteAuditProof"
         Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
+        Action   = ["s3:PutObject", "s3:GetObject"]
+        Resource = ["${aws_s3_bucket.resumes.arn}/auto-apply-audit/*"]
+      },
+      {
+        # Bucket default SSE uses aws/s3; allow via S3 service only.
+        Sid      = "S3SseKms"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Resource = ["*"]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "s3.${data.aws_region.current.name}.amazonaws.com"
+          }
+        }
+      },
+      {
+        Sid    = "SsmReadMongo"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter", "ssm:GetParameters"]
+        Resource = [
+          "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter${var.ssm_path_prefix}/mongodb-uri",
+        ]
+      },
+      {
+        Sid       = "SsmSecureStringDecrypt"
+        Effect    = "Allow"
+        Action    = ["kms:Decrypt"]
+        Resource  = ["*"]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "ssm.${data.aws_region.current.name}.amazonaws.com"
+          }
+        }
+      },
+      {
+        Sid      = "DecryptAtsCredentials"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
         Resource = [aws_kms_key.credentials.arn]
-      }
+      },
     ]
   })
+}
+
+resource "aws_cloudwatch_log_group" "apply_executor" {
+  name              = "/aws/lambda/${var.project}-apply-executor-${var.environment}"
+  retention_in_days = var.apply_executor_log_retention_days
+  tags              = local.apply_executor_tags
 }
 
 resource "aws_lambda_function" "apply_executor" {
@@ -72,28 +180,120 @@ resource "aws_lambda_function" "apply_executor" {
   timeout     = 300  # one form is seconds; headroom for slow multi-step forms
 
   # Cost ceiling + per-domain politeness cap: at most 5 browsers at once.
-  # Enabled 2026-07-12 after the account concurrency limit was raised 10 → 1000
-  # (Service Quotas L-B99A9384), leaving ample unreserved headroom.
   reserved_concurrent_executions = 5
 
   environment {
     variables = {
-      ENVIRONMENT      = var.environment
-      RESUME_S3_BUCKET = aws_s3_bucket.resumes.bucket
-      DB_NAME          = var.db_name
-      USE_SSM_SECRETS  = "true"
-      SSM_MONGODB_URI  = "${var.ssm_path_prefix}/mongodb-uri"
+      ENVIRONMENT              = var.environment
+      RESUME_S3_BUCKET         = aws_s3_bucket.resumes.bucket
+      DB_NAME                  = var.db_name
+      USE_SSM_SECRETS          = "true"
+      SSM_MONGODB_URI          = "${var.ssm_path_prefix}/mongodb-uri"
+      APPLY_EXECUTOR_DIAGNOSTICS = "true" # selftest + probe_form; submit_test still gated
+      CREDENTIALS_KMS_KEY_ID     = aws_kms_key.credentials.arn
     }
   }
 
   tracing_config { mode = "Active" }
+
+  tags = local.apply_executor_tags
 
   # CI pushes new images + updates the function code; Terraform must not revert.
   lifecycle {
     ignore_changes = [image_uri]
   }
 
-  depends_on = [aws_iam_role_policy_attachment.apply_executor_basic]
+  depends_on = [
+    aws_iam_role_policy_attachment.apply_executor_basic,
+    aws_iam_role_policy_attachment.apply_executor_xray,
+    aws_cloudwatch_log_group.apply_executor,
+  ]
+}
+
+resource "aws_cloudwatch_metric_alarm" "apply_executor_errors" {
+  alarm_name          = "${var.project}-apply-executor-${var.environment}-errors"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 3
+  treat_missing_data  = "notBreaching"
+  alarm_description   = "Apply-executor Lambda errors ≥3 in 5m"
+  dimensions = {
+    FunctionName = aws_lambda_function.apply_executor.function_name
+  }
+  tags = local.apply_executor_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "apply_executor_throttles" {
+  alarm_name          = "${var.project}-apply-executor-${var.environment}-throttles"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Throttles"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_description   = "Apply-executor throttled (reserved concurrency ceiling)"
+  dimensions = {
+    FunctionName = aws_lambda_function.apply_executor.function_name
+  }
+  tags = local.apply_executor_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "apply_executor_duration" {
+  alarm_name          = "${var.project}-apply-executor-${var.environment}-duration"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Duration"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 270000 # 270s — warn before 300s hard timeout
+  treat_missing_data  = "notBreaching"
+  alarm_description   = "Apply-executor duration near 300s timeout"
+  dimensions = {
+    FunctionName = aws_lambda_function.apply_executor.function_name
+  }
+  tags = local.apply_executor_tags
+}
+
+resource "aws_budgets_budget" "apply_executor" {
+  name         = "${var.project}-apply-executor-${var.environment}"
+  budget_type  = "COST"
+  limit_amount = tostring(var.apply_executor_monthly_budget)
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  cost_filter {
+    name   = "TagKeyValue"
+    values = ["user:Component$apply-executor"]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 50
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = ["harshith.siddardha@gmail.com"]
+  }
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 75
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = ["harshith.siddardha@gmail.com"]
+  }
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 90
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = ["harshith.siddardha@gmail.com"]
+  }
 }
 
 # Let the resume Lambda's role invoke the executor (LambdaInvokeExecutor).
@@ -112,9 +312,6 @@ resource "aws_iam_role_policy" "resume_invoke_executor" {
 
 # The CI (GitHub Actions) deployer needs ECR auth + push to build/push the
 # apply-executor container image (the four zip Lambdas + layer never needed ECR).
-# The CI user is managed outside this stack, so attach ONLY this inline policy by
-# name. Applied via CLI 2026-07-12 to unblock the failed deploy run; captured here
-# as code (a `terraform apply` adopts it — PutUserPolicy is create-or-replace).
 resource "aws_iam_user_policy" "ci_ecr" {
   name = "jobpilot-ci-ecr"
   user = "jobpilot-ci-deployer"
@@ -147,4 +344,8 @@ resource "aws_iam_user_policy" "ci_ecr" {
 
 output "apply_executor_ecr_url" {
   value = aws_ecr_repository.apply_executor.repository_url
+}
+
+output "apply_executor_function_name" {
+  value = aws_lambda_function.apply_executor.function_name
 }

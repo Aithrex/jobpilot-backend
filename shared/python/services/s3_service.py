@@ -30,8 +30,16 @@ class ResumeStorageService:
     def client(self):
         if self._client is None:
             import boto3
+            from botocore.config import Config
 
-            self._client = boto3.client("s3")
+            # SigV4 is REQUIRED for SSE-KMS presigned PUTs signed with temporary
+            # (assumed-role) credentials: the default SigV2 presign returns HTTP
+            # 400 on the KMS-encrypted mail bucket (the Worker's raw-MIME upload).
+            # SigV4 is the modern default and works for every S3 op, so forcing it
+            # globally is safe. region_name is picked up from AWS_REGION.
+            self._client = boto3.client(
+                "s3", config=Config(signature_version="s3v4")
+            )
         return self._client
 
     @property
@@ -435,6 +443,126 @@ class ResumeStorageService:
         except Exception as e:
             logger.error("Failed to generate presigned URL for %s: %s", _redact_key(s3_key), e)
             raise
+
+    # -----------------------------------------------------------------
+    # Managed-mailbox helpers (managed-mailbox-v1 §3): a DIFFERENT bucket
+    # (APPLY_MAIL_BUCKET, SSE-KMS) than the resume store, so every method
+    # below takes an explicit ``bucket`` (defaults to the resume bucket for
+    # backwards-compat). All raw MIME / attachment bytes ride short-lived
+    # presigned URLs or KMS-encrypted put_object; nothing is bucket-public.
+    # -----------------------------------------------------------------
+
+    def generate_presigned_put(
+        self,
+        s3_key: str,
+        *,
+        bucket: str = None,
+        content_type: str = None,
+        kms_key_id: str = None,
+        expiry: int = 900,
+    ) -> dict:
+        """Presigned, one-object PUT for a caller with NO AWS creds (the
+        Cloudflare Worker). Returns ``{"url", "headers"}`` — the SSE-KMS headers
+        are part of the SIGNED policy, so the client MUST send them verbatim or
+        S3 rejects the upload (that is what pins the object to our CMK).
+
+        managed-mailbox-v1 §4.1: the presigned URL is the Worker's ONLY
+        capability — one key, short TTL, no bucket-wide grant."""
+        target = bucket or self.bucket
+        if not target:
+            raise ValueError("presigned PUT requires a bucket")
+        params: dict = {"Bucket": target, "Key": s3_key}
+        headers: dict = {}
+        if content_type:
+            params["ContentType"] = content_type
+            headers["Content-Type"] = content_type
+        if kms_key_id:
+            params["ServerSideEncryption"] = "aws:kms"
+            params["SSEKMSKeyId"] = kms_key_id
+            headers["x-amz-server-side-encryption"] = "aws:kms"
+            headers["x-amz-server-side-encryption-aws-kms-key-id"] = kms_key_id
+        url = self.client.generate_presigned_url(
+            "put_object", Params=params, ExpiresIn=expiry
+        )
+        logger.info("Generated presigned PUT for %s (expiry=%ds)", _redact_key(s3_key), expiry)
+        return {"url": url, "headers": headers}
+
+    def generate_presigned_get(
+        self,
+        s3_key: str,
+        *,
+        bucket: str = None,
+        expiry: int = 300,
+    ) -> str:
+        """Short-lived presigned GET for an object in an explicit bucket.
+
+        Used by the managed-mailbox read API (managed-mailbox-v1 §5): the
+        sanitized-HTML body and validated attachment bytes are handed to the
+        client ONLY through one of these short-TTL URLs — never a bucket-wide
+        grant, and never the raw MIME. Defaults to a 5-minute TTL."""
+        target = bucket or self.bucket
+        if not target:
+            raise ValueError("presigned GET requires a bucket")
+        url = self.client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": target, "Key": s3_key},
+            ExpiresIn=expiry,
+        )
+        logger.info("Generated presigned GET for %s (expiry=%ds)", _redact_key(s3_key), expiry)
+        return url
+
+    def get_object_bytes(self, s3_key: str, *, bucket: str = None) -> bytes:
+        """Download an object's raw bytes from an explicit bucket."""
+        target = bucket or self.bucket
+        if not target:
+            raise ValueError("get_object_bytes requires a bucket")
+        response = self.client.get_object(Bucket=target, Key=s3_key)
+        data = response["Body"].read()
+        logger.info("Downloaded object %s (%d bytes)", _redact_key(s3_key), len(data))
+        return data
+
+    def put_object_bytes(
+        self,
+        s3_key: str,
+        body: bytes,
+        *,
+        bucket: str = None,
+        content_type: str = "application/octet-stream",
+        kms_key_id: str = None,
+    ) -> str:
+        """Store bytes (sanitized HTML / extracted text / validated attachment)
+        under an explicit bucket, KMS-encrypted when a CMK is supplied."""
+        target = bucket or self.bucket
+        if not target:
+            raise ValueError("put_object_bytes requires a bucket")
+        kwargs: dict = {
+            "Bucket": target,
+            "Key": s3_key,
+            "Body": body,
+            "ContentType": content_type,
+        }
+        if kms_key_id:
+            kwargs["ServerSideEncryption"] = "aws:kms"
+            kwargs["SSEKMSKeyId"] = kms_key_id
+        self.client.put_object(**kwargs)
+        logger.info("Stored object %s (%d bytes)", _redact_key(s3_key), len(body or b""))
+        return s3_key
+
+    def delete_object(self, s3_key: str, *, bucket: str = None) -> bool:
+        """Best-effort delete of a single object from an explicit bucket (used by
+        the managed-mailbox thread delete to clean up raw MIME / text / sanitized
+        html / attachment bytes). Idempotent: a missing object is not an error.
+        Returns True on a successful delete call, False otherwise — never raises,
+        so a cleanup hiccup can't block the owner-scoped DB delete."""
+        target = bucket or self.bucket
+        if not target or not s3_key:
+            return False
+        try:
+            self.client.delete_object(Bucket=target, Key=s3_key)
+            return True
+        except Exception as e:
+            logger.warning("Failed to delete object %s: %s", _redact_key(s3_key), e)
+            return False
 
     @staticmethod
     def _sanitize_filename(name: str) -> str:

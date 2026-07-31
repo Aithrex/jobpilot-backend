@@ -1,6 +1,21 @@
 """
 JD Match Scorer — deterministic resume-vs-JD overlap scoring.
 
+SUPERSEDED by `services/fit_score.py` (ADR-002,
+docs/adr/2026-07-21-guest-discovery-freshness-and-fit.md). Do not build new
+callers on this module.
+
+Why it was replaced: the denominator here comes from the RESUME's own skill
+list, clamped to [8, 14] (see `score_one`). That measures "how much of this
+resume appears in this posting", not job fit, and it makes every matched
+skill worth a flat 7.14 points, so the 0-100 scale has only ~15 reachable
+values and ties are pervasive. `fit_score` derives required skills from the
+JOB DESCRIPTION and separates required from preferred.
+
+It is retained because `evals/test_fit_score_ranking.py` ranks the same
+labeled pool with both engines, so the improvement is a measured number
+rather than a claim.
+
 Reuses JD text the pipeline already scraped (no extra fetches, no LLM calls)
 to compute a fast per-job match score against the user's stored resume.
 

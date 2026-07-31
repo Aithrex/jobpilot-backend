@@ -69,6 +69,19 @@ variable "frontend_url" {
   description = "Public site URL (FRONTEND_URL / BACKEND_PUBLIC_URL env vars; same origin)."
 }
 
+# Managed Application Mailbox (managed-mailbox-v1). See managed_mailbox.tf.
+variable "mail_bucket_name" {
+  type        = string
+  default     = ""
+  description = "Override for the managed-mailbox S3 bucket name. Empty = project-mail-environment-accountid (globally-unique default, mirrors the résumé bucket)."
+}
+
+variable "mail_raw_retention_days" {
+  type        = number
+  default     = 365
+  description = "Days to retain raw MIME under mail/raw/ before expiry. Metadata lives in Mongo and is unaffected."
+}
+
 # Per-service sizing. resume runs long async LLM work, so it gets the most.
 variable "service_config" {
   type = map(object({

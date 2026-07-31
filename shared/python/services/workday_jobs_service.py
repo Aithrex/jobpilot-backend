@@ -336,84 +336,156 @@ _FACET_UNSUPPORTED: set = set()
 _FACET_LOCK = Lock()
 
 # "in" is deliberately absent: Indian postings like "Hyderabad IN" would
-# match it. Indiana rows don't need the rescue — anything not explicitly
-# foreign is kept by the default tier anyway.
+# match it. State CODES only — spelled-out state NAMES live in
+# _US_STATE_NAME_RE so single-token rows like "Indiana" survive the hard
+# filter (a bare "Indiana" has no state code and no country word).
 _US_STATE_RE = re.compile(
     r"\b(al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|ia|ks|ky|la|me|md|ma|mi"
     r"|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut"
     r"|vt|va|wa|wv|wi|wy|dc)\b", re.IGNORECASE,
 )
 
-# Explicit non-US markers seen in enterprise Workday locationsText values.
-# Checked ONLY after the US-positive tier, so "Paris, TX" / "Vienna, VA" /
-# "Ontario, CA" are already kept before these substrings are consulted.
-_NON_US_MARKERS = (
-    "india", "canada", "united kingdom", "ireland", "poland", "philippines",
-    "mexico", "brazil", "china", "japan", "singapore", "australia",
-    "germany", "france", "spain", "italy", "netherlands", "romania",
-    "hungary", "czech", "israel", "egypt", "colombia", "argentina",
-    "costa rica", "malaysia", "vietnam", "thailand", "indonesia",
-    "switzerland", "sweden", "denmark", "norway", "finland", "belgium",
-    "austria", "portugal", "greece", "turkey", "united arab emirates",
-    "saudi", "qatar", "south africa", "kenya", "nigeria", "hong kong",
-    "taiwan", "korea", "new zealand", "chile", "peru", "sri lanka",
-    "pakistan", "bangladesh",
-    # City / hub tells that appear without a country suffix:
-    "pune", "bengaluru", "bangalore", "hyderabad", "chennai", "mumbai",
-    "new delhi", "noida", "gurgaon", "gurugram", "kolkata", "ahmedabad",
-    "toronto", "vancouver", "montreal", "mississauga", "ottawa", "calgary",
-    "london", "edinburgh", "glasgow", "belfast", "leeds", "dublin, ireland",
-    "warsaw", "krakow", "gdansk", "bucharest", "budapest", "prague",
-    "lisbon", "madrid", "barcelona", "paris, fr", "munich", "berlin, de",
-    "frankfurt", "amsterdam", "zurich", "geneva", "stockholm", "copenhagen",
-    "oslo", "helsinki", "brussels", "milan, it", "tel aviv", "cairo",
-    "nairobi", "lagos", "dubai", "abu dhabi", "riyadh", "doha", "seoul",
-    "taipei", "jakarta", "kuala lumpur", "ho chi minh", "hanoi", "tokyo",
-    "osaka", "sydney", "melbourne", "brisbane", "shanghai", "beijing",
-    "shenzhen", "makati", "manila", "taguig", "cebu", "guadalajara",
-    "monterrey", "sao paulo", "colombo", "karachi", "lahore", "islamabad",
+# Full US state NAMES. Word-boundary matched so "Indiana" keeps (and does NOT
+# collide with the "india" country marker, which needs its own \b) and
+# "Ontario, California" keeps (California rescues the row; "ontario" is NOT a
+# foreign marker). "georgia"/"washington" resolve to the US state — the
+# far-commoner reading in these feeds — because no foreign COUNTRY marker
+# for them exists in the blocklist below.
+_US_STATE_NAMES = (
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+    "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana",
+    "maine", "maryland", "massachusetts", "michigan", "minnesota",
+    "mississippi", "missouri", "montana", "nebraska", "nevada",
+    "new hampshire", "new jersey", "new mexico", "new york",
+    "north carolina", "north dakota", "ohio", "oklahoma", "oregon",
+    "pennsylvania", "rhode island", "south carolina", "south dakota",
+    "tennessee", "texas", "utah", "vermont", "virginia", "washington",
+    "west virginia", "wisconsin", "wyoming", "district of columbia",
+    "puerto rico",
 )
-# Word-boundary matching — "india" must not fire inside "Indianapolis".
-_NON_US_RE = re.compile(
-    r"\b(" + "|".join(re.escape(m) for m in _NON_US_MARKERS) + r")\b",
+_US_STATE_NAME_RE = re.compile(
+    r"\b(" + "|".join(re.escape(m) for m in _US_STATE_NAMES) + r")\b",
+    re.IGNORECASE,
+)
+
+# --- Foreign COUNTRY / province markers -------------------------------------
+# Checked FIRST — an explicit non-US COUNTRY always drops, so "Remote - India"
+# and "Bengaluru, India" never reach the US tier. Word-boundary matched so
+# "india" NEVER fires inside "Indiana"/"Indianapolis".
+_NON_US_COUNTRY_MARKERS = (
+    "india", "canada", "united kingdom", "uk", "ireland", "poland",
+    "philippines", "mexico", "brazil", "china", "japan", "singapore",
+    "australia", "germany", "france", "spain", "italy", "netherlands",
+    "romania", "hungary", "czech", "israel", "egypt", "colombia",
+    "argentina", "costa rica", "malaysia", "vietnam", "thailand",
+    "indonesia", "switzerland", "sweden", "denmark", "norway", "finland",
+    "belgium", "austria", "portugal", "greece", "turkey",
+    "united arab emirates", "uae", "saudi", "qatar", "south africa",
+    "kenya", "nigeria", "hong kong", "taiwan", "korea", "new zealand",
+    "chile", "peru", "sri lanka", "pakistan", "bangladesh",
+)
+_NON_US_COUNTRY_RE = re.compile(
+    r"\b(" + "|".join(re.escape(m) for m in _NON_US_COUNTRY_MARKERS) + r")\b",
     re.IGNORECASE,
 )
 # Comma-anchored so "On-site" / "Ab initio" prose never matches — Canadian
 # postings write provinces as "Toronto, ON" / "Vancouver, BC".
 _CA_PROVINCE_RE = re.compile(r",\s*(on|bc|ab|qc|mb|sk|ns|nb|nl|pe)\b", re.IGNORECASE)
 
+# --- Foreign CITY markers ---------------------------------------------------
+# Checked AFTER the US-positive tier, so US namesakes rescued by their state
+# survive: "Paris, TX", "Warsaw, IN", "Melbourne, FL", "Dublin, OH",
+# "Vienna, VA", "London, KY", "Manchester, NH", "Vancouver, WA". A BARE
+# foreign hub city (no US signal) drops here.
+_NON_US_CITY_MARKERS = (
+    # India (tier-1 + tier-2 hubs + common spellings)
+    "pune", "bengaluru", "bangalore", "hyderabad", "chennai", "mumbai",
+    "new delhi", "delhi", "noida", "gurgaon", "gurugram", "kolkata",
+    "ahmedabad", "kochi", "cochin", "coimbatore", "trivandrum",
+    "thiruvananthapuram", "indore", "nagpur", "vadodara", "mysore",
+    "mysuru", "chandigarh", "jaipur", "bhubaneswar", "visakhapatnam",
+    "vizag",
+    # Canada
+    "toronto", "vancouver", "montreal", "mississauga", "ottawa", "calgary",
+    "waterloo",
+    # UK / Ireland / Europe
+    "london", "edinburgh", "glasgow", "belfast", "leeds", "manchester",
+    "dublin", "warsaw", "krakow", "gdansk", "bucharest", "budapest",
+    "prague", "lisbon", "madrid", "barcelona", "munich", "berlin",
+    "frankfurt", "amsterdam", "zurich", "geneva", "stockholm", "copenhagen",
+    "oslo", "helsinki", "brussels", "milan",
+    # MEA
+    "tel aviv", "cairo", "nairobi", "lagos", "dubai", "abu dhabi", "riyadh",
+    "doha",
+    # APAC / LatAm
+    "seoul", "taipei", "jakarta", "kuala lumpur", "ho chi minh", "hanoi",
+    "tokyo", "osaka", "sydney", "melbourne", "brisbane", "shanghai",
+    "beijing", "shenzhen", "makati", "manila", "taguig", "cebu",
+    "guadalajara", "monterrey", "sao paulo", "mexico city", "colombo",
+    "karachi", "lahore", "islamabad",
+)
+_NON_US_CITY_RE = re.compile(
+    r"\b(" + "|".join(re.escape(m) for m in _NON_US_CITY_MARKERS) + r")\b",
+    re.IGNORECASE,
+)
 
-def _geo_keep_us(loc_text: str) -> bool:
-    """Tiered US filter, applied to EVERY row when us_only is set.
+# Clear-remote tells with NO country attached -> KEEP (a foreign country in
+# the same string is already caught by _NON_US_COUNTRY_RE first, so
+# "Remote - India" drops before we get here).
+_REMOTE_RE = re.compile(
+    r"\b(remote|anywhere|work[ -]?from[ -]?home|wfh|virtual|telecommute)\b",
+    re.IGNORECASE,
+)
+# Workday multi-location rollups ("5 Locations", "Multiple Locations") — a
+# bare list-view row whose country the detail page resolves later.
+_MULTI_LOC_RE = re.compile(r"\blocations?\b", re.IGNORECASE)
 
-    1. Country-level US signal ("United States", "USA", "US") -> keep.
-    2. US state code -> keep. Runs BEFORE the marker tier so collisions like
-       "Paris, TX" / "Vienna, VA" / "Ontario, CA" are rescued.
-    3. Explicit non-US marker (country, foreign hub city, ", ON"-style
-       Canadian province) -> drop. Catches "Remote India" and "Hyderabad IN"
-       — which is why "remote" alone is NOT a keep signal earlier.
-    4. Ambiguous ("6 Locations", "Remote", bare city, empty) -> keep.
-       Dropping ambiguous rows would silently lose valid US roles; the
-       server-side facet already biased page 1 toward US where honored.
+
+def _geo_keep_us(loc_text: str, country_code: Optional[str] = None,
+                 *, defer_multi: bool = False) -> bool:
+    """HARD US geo filter, applied to EVERY row when us_only is set.
+
+    Decision order (keep clearly-US or clearly-remote, DROP everything
+    ambiguous — the product's hard-filter contract):
+
+    0. Authoritative enrichment ``country_code`` wins over any text heuristic:
+       "US" -> keep, any other non-empty value -> drop.
+    1. Explicit non-US COUNTRY / Canadian province -> DROP. Runs first so
+       "Remote - India", "Bengaluru, India", "Toronto, ON" never survive.
+    2. US country word ("United States"/"USA"/"US") or US state (CODE or full
+       NAME) -> KEEP. Runs before the foreign-CITY tier so US cities that
+       share a foreign name are rescued by their state: "Paris, TX",
+       "Warsaw, IN", "Dublin, OH", "Ontario, California", "Indiana".
+    3. Bare foreign hub CITY with no US signal -> DROP.
+    4. Clearly REMOTE with no foreign marker ("Remote", "Remote - US",
+       "Anywhere", "Work from home") -> KEEP.
+    5. Multi-location rollup ("N Locations") -> KEPT only at the LIST stage
+       (defer_multi=True) so detail enrichment can resolve the country;
+       dropped everywhere else.
+    6. Else (bare non-foreign city, empty/unknown, "N Locations" at serve
+       time) -> DROP. THIS is the hard-filter change: ambiguous used to KEEP.
+
+    Verified cases (see module __main__ scratch): "Bengaluru, India" DROP,
+    "Pune" DROP, "Remote" KEEP, "Remote - India" DROP, "Austin, TX" KEEP,
+    "Indiana" KEEP (NOT foreign), "Ontario, California" KEEP (NOT foreign),
+    "N Locations" DROP (list stage KEEP for enrichment), "" DROP.
+
+    DELEGATES to ``services.us_geo``, which is now the single implementation
+    of this rule (this function and ``career_pages_service._keep_us`` had
+    drifted apart while both were live). The tiers above still describe what
+    happens; ``us_geo`` additionally makes the two-letter state-code tier
+    POSITIONAL, which is what stopped "Hyderabad-Hi-Tec City" (Hawaii) and
+    "CA - Toronto" (California) leaking into US-only slices, and it accepts a
+    bare "US" plus a large-US-city list, which recovered ~1,500 real US rows
+    per 20,000 that this version dropped.
     """
-    loc = (loc_text or "").strip().lower()
-    if not loc or "location" in loc:
-        return True
-    # Pre-tier: "Toronto" outranks the state-code rescue — Canadian rows like
-    # "CA-Toronto-York St" would otherwise be kept by the "ca" token.
-    if "toronto" in loc:
-        return False
-    if "united states" in loc or "usa" in loc:
-        return True
-    if re.search(r"\b(us|u\.s\.)\b", loc):
-        return True
-    if _US_STATE_RE.search(loc):
-        return True
-    if _NON_US_RE.search(loc):
-        return False
-    if _CA_PROVINCE_RE.search(loc):
-        return False
-    return True
+    from services import us_geo
+
+    # `country_code` here is the enrichment's ISO-2; `us_geo` normalizes any
+    # spelling of "United States" and treats a non-US value as authoritative,
+    # which is exactly the tier-0 behaviour this function had.
+    return us_geo.keep_us(loc_text, country_code, defer_multi=defer_multi)
 
 
 def _fetch_tenant_term(
@@ -502,7 +574,10 @@ def _fetch_tenant_term(
             loc_text = (jp.get("locationsText") or "").strip()
             # Geo filtering ALWAYS runs — the facet is only a narrowing hint
             # (some tenants silently ignore it and return worldwide rows).
-            if us_only and not _geo_keep_us(loc_text):
+            # defer_multi keeps "N Locations" rollups so detail enrichment can
+            # resolve their country; the serve-time re-filter drops any that
+            # enrichment did not prove US.
+            if us_only and not _geo_keep_us(loc_text, defer_multi=True):
                 continue
             if location_lc:
                 haystack = loc_text.lower()
@@ -721,6 +796,18 @@ def _attach_feasibility(jobs: List[Dict[str, Any]], resume_skills: List[str],
                security clearance. The tab hides these by default.
 
     Left unset when there's no parsed resume — we refuse to guess.
+
+    THIS FUNCTION DOES NOT TOUCH `match_score`. It used to: a `stretch` row lost
+    11 points per missing year and a `skip` row was clamped to 12, AFTER
+    `_score_jobs` had already written `match_score`, `fit_band` and
+    `score_version` from `services.fit_score`. The row then carried a number
+    that (a) no longer matched the band or the version stamped beside it and
+    (b) double-penalised gaps `fit_score` already caps
+    (`severe_experience_gap` 50, `clearance_missing` 40, `unrelated_role` 30).
+    Feasibility is a DIFFERENT question from fit - "can this résumé be tailored
+    into this JD without inventing anything" vs "does this person match" - and
+    it has its own clearly-labelled fields (`tailor_feasibility`,
+    `feasibility_reason`) with their own UI treatment. Keep them separate.
     """
     if not resume_skills:
         return
@@ -746,14 +833,9 @@ def _attach_feasibility(jobs: List[Dict[str, Any]], resume_skills: List[str],
                     verdict, reason = "skip", f"Asks ~{req}+ yrs experience vs ≈{resume_years} on resume"
                 elif gap >= 2:
                     verdict, reason = "stretch", f"Asks ~{req}+ yrs vs ≈{resume_years} — a stretch"
-                    # Graded experience penalty so an under-qualified role can't
-                    # headline as a perfect score (gap 2→-11, 3→-22, 4→-33).
-                    job["match_score"] = max(0, (job.get("match_score") or 0) - (gap - 1) * 11)
             if verdict:
                 job["tailor_feasibility"] = verdict
                 job["feasibility_reason"] = reason
-                if verdict == "skip":
-                    job["match_score"] = min(job.get("match_score") or 0, 12)
             continue
         title_fams = _families_in(title)
         core = set(title_fams)
@@ -790,9 +872,6 @@ def _attach_feasibility(jobs: List[Dict[str, Any]], resume_skills: List[str],
                 verdict, reason = "skip", f"Asks ~{req}+ yrs experience vs ≈{resume_years} on resume"
             elif gap >= 2:
                 verdict, reason = "stretch", f"Asks ~{req}+ yrs vs ≈{resume_years} — a stretch"
-                # Graded experience penalty (years-gap stretch only, not the
-                # partial-off-stack / management stretches below).
-                job["match_score"] = max(0, (job.get("match_score") or 0) - (gap - 1) * 11)
             elif conflicts and overlap:
                 labels = ", ".join(_STACK_FAMILIES[k][0] for k in sorted(conflicts))
                 verdict, reason = "stretch", f"Partially off-stack ({labels}) — tailorable via {', '.join(_STACK_FAMILIES[k][0] for k in sorted(overlap))}"
@@ -804,10 +883,6 @@ def _attach_feasibility(jobs: List[Dict[str, Any]], resume_skills: List[str],
             verdict, reason = "stretch", "Management-track title — not an IC engineering role"
         job["tailor_feasibility"] = verdict
         job["feasibility_reason"] = reason
-        if verdict == "skip":
-            # An off-target row must never outrank a real one, whatever
-            # incidental skills its JD mentions.
-            job["match_score"] = min(job.get("match_score") or 0, 12)
 
 
 # ----------------------------------------------------------------------
@@ -910,26 +985,36 @@ def _score_jobs(
     titles: List[str],
     skills: List[str],
     skill_terms: List[str],
+    resume_years: Optional[int] = None,
+    structured: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Attach match_score / matched_skills / missing_skills to every job.
 
-    Deterministic (no LLM). Three signals:
-      - skill overlap of the resume skills against title + description (the
-        description exists once _enrich_details has run for that row — same
-        regex semantics as jd_match_scorer);
-      - a title-family bonus (+45) when the job title covers all core tokens
-        of one of the user's titles;
-      - a skill-signal bonus (+20) when the title DOESN'T match but the row
-        either overlaps resume skills or was retrieved by a skill-derived
-        search term — this is what keeps differently-titled roles ("Member
-        of Technical Staff") ranked instead of buried at zero.
+    ADR-002: this now delegates to `services.fit_score`, the SAME versioned
+    engine the guest and authenticated display paths use. Previously this
+    function ran its own formula (base = min(55, matched*6) plus +45/+20/+12
+    bonuses) to SELECT and order candidates, and then guest_service.score_one
+    overwrote `match_score` with a different formula. Selection and
+    presentation disagreed about what a good match was. One engine now does
+    both.
 
-    Nothing is ever dropped here — scoring only orders; recall is preserved.
+    The retrieval signal (this row came back for a skill-derived search term)
+    and the stack-family alignment are NOT part of the displayed fit score.
+    They are ranking concerns, so they live in `rank_score`, which callers may
+    order by; `match_score` stays the honest candidate-to-job fit.
+
+    Nothing is ever dropped here - scoring only orders; recall is preserved.
     """
+    from services import fit_score
+
     skill_rx = [(s, _build_match_regex(s)) for s in skills]
     matchers = _role_matchers(titles)
     skill_terms_set = {t.lower() for t in skill_terms}
     primary_fams, resume_fams = _resume_family_weights(skills)
+    # A real parsed resume gives applied-experience evidence; a bare skill
+    # list degrades to listed claims only (never invented into experience).
+    profile = (fit_score.build_resume_profile(structured) if structured
+               else fit_score._profile_from_skills(skills, titles, resume_years))
 
     for job in jobs:
         title_lc = job["title"].lower()
@@ -938,30 +1023,35 @@ def _score_jobs(
         matched = [s for s, rx in skill_rx if rx is not None and rx.search(blob)]
         matched_set = set(matched)
         missing = [s for s, _ in skill_rx if s not in matched_set][:8]
-        # Base measures JD COVERAGE, not "fraction of resume used" — a
-        # 50-skill resume matching 10 of a JD's asks is a great fit, not a
-        # 20%. ~6 points per matched skill, saturating at 55 so the
-        # title/skill boosts still differentiate the top of the scale.
-        base = min(55, len(matched) * 6) if skills else 0
         title_matched = any(all(tok in title_lc for tok in m) for m in matchers)
         skill_signal = bool(matched) or bool(
             skill_terms_set & {str(t).lower() for t in (job.get("matched_terms") or [])}
         )
-        # Stack alignment: a cloud-primary resume must rank cloud-centered
-        # JDs above equally title-matched off-stack ones. Cache the family
-        # counts on the job so _attach_feasibility reuses this scan instead of
-        # re-sweeping the full description.
+        # Cache the family counts on the job so _attach_feasibility reuses
+        # this scan instead of re-sweeping the full description.
         fam_counts = _family_counts(blob)
         job["_fam_counts"] = fam_counts
         job_fams = set(fam_counts)
         align = 12 if job_fams & primary_fams else (6 if job_fams & resume_fams else 0)
-        score = min(100, base + (45 if title_matched else (20 if skill_signal else 0)) + align)
-        if not skills and not title_matched:
-            score = 15  # neutral floor so the ring isn't a sea of zeros
-        job["match_score"] = score
+
+        verdict = fit_score.score_one(
+            jd_text=job.get("description") or "",
+            title=job["title"],
+            profile=profile,
+            location=job.get("location") or "",
+        )
+        job["match_score"] = verdict["match_score"]
+        job["fit_band"] = verdict["band"]
+        job["fit_confidence"] = verdict["confidence"]
+        job["score_version"] = verdict["score_version"]
+        # Resume-relative overlap is still the most useful thing to SHOW next
+        # to a feed row, so those two lists keep their existing meaning.
         job["matched_skills"] = matched[:12]
         job["missing_skills"] = missing
         job["title_matched"] = title_matched
+        # Internal ordering only. Never displayed, never persisted as fit.
+        job["rank_score"] = min(
+            100, verdict["match_score"] + (6 if skill_signal else 0) + align // 3)
         job["seniority"] = _seniority_full(
             job["title"], job.get("description") or "", job.get("_exp") or "")
     return jobs
@@ -1317,9 +1407,11 @@ def run_workday_jobs_search(
         days = _days_ago(j.get("date_posted") or "", tz_offset)
         if days is None or days > WINDOW_DAYS:
             continue
-        # country_code is set by detail enrichment (possibly via a cached
-        # earlier run) — it outranks the locationsText heuristic.
-        if us_only and j.get("country_code") not in (None, "US"):
+        # Serve-time HARD geo: authoritative country_code (from detail
+        # enrichment, possibly via a cached earlier run) outranks the
+        # locationsText heuristic; unresolved "N Locations"/ambiguous rows
+        # (country_code None, no US/remote text) drop here (defer_multi off).
+        if us_only and not _geo_keep_us(j.get("location") or "", j.get("country_code")):
             continue
         j["days_ago"] = days
         # The card label must agree with the viewer-local bucket (the old
@@ -1340,7 +1432,7 @@ def run_workday_jobs_search(
             j.get("days_ago") if j.get("days_ago") is not None else 99,
         ))
 
-    jobs = _score_jobs(jobs, titles, skills, skill_terms)
+    jobs = _score_jobs(jobs, titles, skills, skill_terms, resume_years)
     _rank(jobs)
 
     # Fetch full descriptions for the top slice, then rescore those rows on
@@ -1371,12 +1463,12 @@ def run_workday_jobs_search(
     ][:enrich_recent_n]
     enriched = _enrich_details(top, tz_offset)
     if enriched:
-        _score_jobs(top, titles, skills, skill_terms)
+        _score_jobs(top, titles, skills, skill_terms, resume_years)
         # startDate refinement can push a row past the window, and the
         # detail country resolves "N Locations" rows definitively.
         jobs = [j for j in jobs
                 if j.get("days_ago") is not None and j["days_ago"] <= WINDOW_DAYS
-                and not (us_only and j.get("country_code") not in (None, "US"))]
+                and (not us_only or _geo_keep_us(j.get("location") or "", j.get("country_code")))]
         _rank(jobs)
         # Persist descriptions/exact dates/geo into the cache so repeat
         # searches serve them without re-fetching 200 detail pages.
@@ -1396,8 +1488,12 @@ def run_workday_jobs_search(
             _write_cache(coll, key, raw_jobs)
 
     jobs = jobs[:GLOBAL_KEEP]
+    # Feasibility no longer rewrites `match_score`, so the ranking established
+    # above still holds — no re-rank here. Users who do not want to see rows the
+    # base résumé cannot be tailored into filter on `tailor_feasibility`
+    # ("Hide unrealistic"), which is an explicit, labelled control rather than a
+    # silent 12-point clamp on a number stamped `fit-v2.0`.
     _attach_feasibility(jobs, skills, resume_years)
-    _rank(jobs)  # feasibility caps skip-row scores — order must reflect it
     _attach_sponsorship(jobs)
     for j in jobs:
         j.pop("_fam_counts", None)  # internal scan cache — never leak to client

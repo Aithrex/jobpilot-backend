@@ -130,14 +130,37 @@ INDEX_SPECS = [
     # find_one_and_update {entry_id, state}); uuid4 → unique.
     ("quota_ledger", [("entry_id", ASCENDING)],
      {"unique": True, "name": "entry_id_unique"}),
-    # Caller-supplied dedup key (reserve_tailor idempotency) — unique sparse
-    # so a client retry can't double-reserve.
-    ("quota_ledger", [("idempotency_key", ASCENDING)],
-     {"unique": True, "sparse": True, "name": "idempotency_key_unique"}),
+    # Caller-supplied dedup key (reserve / reserve_tailor idempotency).
+    #
+    # SCOPED, not global. The old `idempotency_key_unique` made the key namespace
+    # CROSS-TENANT and PERPETUAL, which is exactly how the match sweep's daily cap
+    # stopped binding: `normalized_job_identity` is derived from the SHARED
+    # job_postings row, so every user matching one posting produces the same key,
+    # and the global unique index meant the second user's insert collided with the
+    # first user's entry (while the owner-less lookup in quota_ledger_service
+    # happily returned that foreign reservation). The namespace that matches the
+    # lookup filter (`quota_ledger_service._idem_filter`) is
+    # (user_email, feature, date, idempotency_key): idempotent for ONE owner
+    # within ONE feature period, and expiring with that period.
+    #
+    # partialFilterExpression (NOT sparse): a compound sparse index still indexes
+    # every doc that has ANY of the keys, and every entry carries user_email —
+    # so the entries WITHOUT an idempotency_key would collide with each other.
+    ("quota_ledger", [("user_email", ASCENDING), ("feature", ASCENDING),
+                      ("date", ASCENDING), ("idempotency_key", ASCENDING)],
+     {"unique": True, "name": "user_feature_date_idempotency_unique",
+      "partialFilterExpression": {"idempotency_key": {"$exists": True}}}),
     # Per-actor daily reads: entries_count_for_users filters
     # {user_email $in, date, state $in}.
     ("quota_ledger", [("user_email", ASCENDING), ("date", ASCENDING)],
      {"name": "user_email_date"}),
+    # TTL: a ledger entry is only meaningful inside its own quota period (the
+    # longest is monthly), and the counter it settles is keyed by that period.
+    # Without a TTL the collection grows forever AND stale idempotency keys keep
+    # answering lookups from long-closed periods. 60 days outlives the longest
+    # period plus audit slack; `reserved_at` is stamped on every entry.
+    ("quota_ledger", [("reserved_at", ASCENDING)],
+     {"expireAfterSeconds": 60 * 24 * 3600, "name": "ttl_reserved_at"}),
     # feature_usage real doc shape is {user_email, date, feature} — confirmed at
     # entitlements_service.py:241 (find_one) and :273 ($inc upsert). Matches the
     # existing migrate_users_v2 index name so this is a clean no-op re-assert.
@@ -145,13 +168,25 @@ INDEX_SPECS = [
      {"unique": True, "name": "user_date_feature_unique"}),
 
     # === saved_jobs =======================================================
-    # job_service:241 already creates saved_jobs.job_id unique (dedup). The HOT
-    # READ path is {user_email}: overview_service:57/98, recommendations:63/128,
-    # beta_features:232, daily_pipeline:146 — none indexed. Add it.
+    # DEFECT L FIX: dedup is PER-USER, not global. A source-prefixed job_id
+    # ("{source}:{id}", job_service:1588) is a per-posting canonical id SHARED
+    # across users; the OLD global unique on job_id alone (job_id_1) blocked user
+    # B from saving a posting user A already saved (upsert filter {job_id,
+    # user_email} matched nothing -> insert -> DuplicateKeyError on the global
+    # unique). The correct dedup key is (user_email, job_id): idempotent per user,
+    # collision-free across users. This compound ALSO serves the HOT {user_email}
+    # read prefix (overview_service:57/98, recommendations:63/128, beta_features:232,
+    # daily_pipeline:146), so the standalone user_email_idx below is now a redundant
+    # prefix — kept conservatively (harmless read-path duplicate; safe to drop later).
+    #
+    # SAFE REINDEX ORDER: run() (create pass) builds this compound unique BEFORE
+    # run_drops(POST_CREATE_DROP_INDEXES) drops the old job_id_1 — so there is never
+    # a window without per-user dedup protection. The compound build CANNOT fail on
+    # existing data: today at most one row exists per job_id (the global unique held),
+    # so no (user_email, job_id) pair can collide.
     ("saved_jobs", [("user_email", ASCENDING)], {"name": "user_email_idx"}),
-    # Re-assert the dedup index with PyMongo's default name so it matches the
-    # runtime-created one (job_service.create_index("job_id", unique=True)).
-    ("saved_jobs", [("job_id", ASCENDING)], {"unique": True, "name": "job_id_1"}),
+    ("saved_jobs", [("user_email", ASCENDING), ("job_id", ASCENDING)],
+     {"unique": True, "name": "user_email_job_id_unique"}),
 
     # === tailoring_records (application history) ===========================
     # record_id is a uuid4, queried as {record_id}/{record_id,user_email}
@@ -235,12 +270,26 @@ INDEX_SPECS = [
     ("applications", [("user_email", ASCENDING), ("status", ASCENDING)], {"name": "user_email_status"}),
     ("applications", [("posting_closes_at", ASCENDING)], {"sparse": True, "name": "posting_closes_at_sparse"}),
     ("applications", [("application_id", ASCENDING)], {"unique": True, "name": "application_id_unique"}),
+    # E1/E2 upsert race guard (defect E): set_outcome find-or-creates the
+    # canonical row on (user_email, tailoring_record_id). Unique PARTIAL (NOT
+    # plain sparse): a compound sparse index still indexes every doc carrying ANY
+    # keyed field (all rows have user_email), so a null tailoring_record_id would
+    # collide — the partial filter limits uniqueness to rows that actually link a
+    # tailored résumé, the set two concurrent mail/gmail/manual signals could
+    # duplicate. Mirrors application_ledger_service.ensure_indexes().
+    ("applications", [("user_email", ASCENDING), ("tailoring_record_id", ASCENDING)],
+     {"unique": True, "name": "user_email_tailoring_record_id_unique",
+      "partialFilterExpression": {"tailoring_record_id": {"$type": "string"}}}),
     # approval tokens (Tranche 1 §2)
     ("approval_tokens", [("jti", ASCENDING)], {"unique": True, "name": "jti_unique"}),
     ("approval_tokens", [("exp", ASCENDING)], {"expireAfterSeconds": 0, "name": "ttl_exp"}),
     # ATS credential vault (Tranche 1 §4)
     ("ats_credentials", [("user_email", ASCENDING), ("ats_family", ASCENDING), ("tenant", ASCENDING)], {"unique": True, "name": "user_family_tenant_unique"}),
     ("ats_credential_audit", [("user_email", ASCENDING), ("at", DESCENDING)], {"name": "user_email_at"}),
+    # Reveal step-up challenges (reveal_reauth_service). ONE live code per user,
+    # server-reaped so a forgotten challenge can't outlive its window.
+    ("credential_reveal_challenges", [("user_email", ASCENDING)], {"unique": True, "name": "user_email_unique"}),
+    ("credential_reveal_challenges", [("expires_at", ASCENDING)], {"expireAfterSeconds": 0, "name": "ttl_expires_at"}),
 
     # === auto-apply Tranche 2/3 ============================================
     # cross-user trend signal
@@ -250,6 +299,13 @@ INDEX_SPECS = [
     ("auto_apply_answers", [("user_email", ASCENDING), ("application_id", ASCENDING)], {"unique": True, "name": "user_application_unique"}),
     ("auto_apply_freezes", [("user_email", ASCENDING), ("application_id", ASCENDING)], {"unique": True, "name": "user_application_unique"}),
     ("auto_apply_freezes", [("status", ASCENDING), ("next_check_at", ASCENDING)], {"name": "status_next_check"}),
+    # Managed-mailbox OTP grants (application_otp_service.ensure_indexes)
+    ("application_otp_grants", [("user_email", ASCENDING), ("message_id", ASCENDING)],
+     {"unique": True, "name": "user_message_unique"}),
+    ("application_otp_grants", [("user_email", ASCENDING), ("application_id", ASCENDING), ("status", ASCENDING)],
+     {"name": "user_app_status"}),
+    ("application_otp_grants", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expires_at"}),
     # self-growing answer library
     ("application_answer_library", [("user_email", ASCENDING), ("norm_key", ASCENDING)], {"unique": True, "name": "user_email_norm_key_unique"}),
 
@@ -329,6 +385,15 @@ INDEX_SPECS = [
      {"name": "user_email_status"}),
     ("merge_candidates", [("candidate_id", ASCENDING)], {"unique": True, "name": "candidate_id_unique"}),
 
+    # === Recruiter's Six Seconds cache (§6.11.2) ==========================
+    # recruiter_gaze_service caches one read per user, keyed to the active
+    # resume version. _store_six_seconds: update_one({user_email}, upsert);
+    # get_cached_six_seconds: find_one({user_email, fingerprint}). One doc per
+    # user, so unique on user_email both enforces that and serves the read
+    # (equality on the unique prefix locates the single doc).
+    ("six_seconds_reads", [("user_email", ASCENDING)],
+     {"unique": True, "name": "user_email_unique"}),
+
     # === Sponsorship intel (§6.3) — upsert/lookup key is the normalized employer.
     ("sponsorship_signals", [("employer_norm", ASCENDING)],
      {"unique": True, "name": "employer_norm_unique"}),
@@ -369,6 +434,67 @@ INDEX_SPECS = [
     ("email_ingress", [("purge_after", ASCENDING)], {"expireAfterSeconds": 0, "name": "ttl_purge_after"}),
     ("mail_ingress_suggestions", [("suggestion_id", ASCENDING)], {"unique": True, "name": "suggestion_id_unique"}),
     ("mail_ingress_suggestions", [("user_email", ASCENDING)], {"name": "by_user"}),
+
+    # === Managed Application Mailbox (managed-mailbox-v1 §2) ================
+    # Mirrors managed_mailbox_service.ensure_indexes() (names/keys/options MUST
+    # match so a runtime ensure_indexes call is a clean no-op re-assert). One
+    # mailbox per user; the mail_aliases.local_part unique index spans ALL
+    # states (active/paused/retired) — it is BOTH the collision race backstop
+    # for provision/rotate AND the §1.3 tombstone anti-recycle guard.
+    ("managed_mailboxes", [("user_email", ASCENDING)], {"unique": True, "name": "uniq_user_email"}),
+    ("managed_mailboxes", [("mailbox_id", ASCENDING)], {"unique": True, "name": "uniq_mailbox_id"}),
+    ("mail_aliases", [("local_part", ASCENDING)], {"unique": True, "name": "uniq_local_part"}),
+    ("mail_aliases", [("alias_id", ASCENDING)], {"unique": True, "name": "uniq_alias_id"}),
+    ("mail_aliases", [("mailbox_id", ASCENDING)], {"name": "by_mailbox_id"}),
+    ("mail_aliases", [("user_email", ASCENDING)], {"name": "by_user_email"}),
+
+    # === Managed Mailbox forwarding (managed-mailbox-v1 §1.2 / §8.1) ========
+    # mail_forward_verifications: mirrors managed_mailbox_service.ensure_indexes()
+    # (names/keys/options MUST match so a runtime ensure_indexes call is a clean
+    # no-op re-assert). token is the single-use claim key
+    # (confirm_forward_verification find_one({token})); user_email scopes the
+    # IDOR check; TTL (~24h) reaps un-clicked verification tokens.
+    ("mail_forward_verifications", [("token", ASCENDING)],
+     {"unique": True, "name": "uniq_fv_token"}),
+    ("mail_forward_verifications", [("user_email", ASCENDING)],
+     {"name": "fv_by_user_email"}),
+    ("mail_forward_verifications", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "fv_ttl_expires_at"}),
+    # mail_forward_counters: mail_forward_service._within_daily_cap does an atomic
+    # find_one_and_update(upsert) on {user_email, day} — the unique index is a
+    # CORRECTNESS requirement so concurrent Lambdas can't spawn twin counters and
+    # under-count the per-user daily forward cap.
+    ("mail_forward_counters", [("user_email", ASCENDING), ("day", ASCENDING)],
+     {"unique": True, "name": "user_email_day_unique"}),
+
+    # === Managed Mailbox inbound storage (managed-mailbox-v1 §2/§4) =========
+    # Mirrors mail_store_service.ensure_indexes() (names/keys MUST match so a
+    # runtime ensure_indexes call is a clean no-op re-assert).
+    # mail_threads: thread_id (uuid) unique; inbox list find({user_email})
+    # sort last_message_at desc; per-application thread lookup.
+    ("mail_threads", [("thread_id", ASCENDING)], {"unique": True, "name": "uniq_thread_id"}),
+    ("mail_threads", [("user_email", ASCENDING), ("last_message_at", DESCENDING)],
+     {"name": "user_last_message_at"}),
+    ("mail_threads", [("user_email", ASCENDING), ("application_id", ASCENDING)],
+     {"name": "user_application_id"}),
+    # mail_messages: the (alias_id, provider_message_id) unique index is the
+    # idempotency backstop (D8 — a re-delivered message can't double-store);
+    # message_id (uuid) unique; thread + unread reads.
+    ("mail_messages", [("alias_id", ASCENDING), ("provider_message_id", ASCENDING)],
+     {"unique": True, "name": "uniq_alias_provider_message_id"}),
+    ("mail_messages", [("message_id", ASCENDING)], {"unique": True, "name": "uniq_message_id"}),
+    ("mail_messages", [("thread_id", ASCENDING)], {"name": "by_thread_id"}),
+    ("mail_messages", [("user_email", ASCENDING), ("read", ASCENDING)], {"name": "user_read"}),
+    # mail_attachments: attachment_id (uuid) unique; per-message listing.
+    ("mail_attachments", [("attachment_id", ASCENDING)],
+     {"unique": True, "name": "uniq_attachment_id"}),
+    ("mail_attachments", [("message_id", ASCENDING)], {"name": "by_message_id"}),
+    # mail_commit_tokens: one-use two-phase-commit capability; TTL (~15 min)
+    # reaps expired/unused tokens. commit_token is the atomic claim key.
+    ("mail_commit_tokens", [("commit_token", ASCENDING)],
+     {"unique": True, "name": "uniq_commit_token"}),
+    ("mail_commit_tokens", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expires_at"}),
 
     # === Admin cockpit + Stripe billing bones (§6.9/§6.10).
     # stripe_events unique is a CORRECTNESS requirement (webhook idempotency).
@@ -467,6 +593,28 @@ INDEX_SPECS = [
     # platform_config is keyed on _id (default index) — nothing extra needed;
     # guest_global_counters + guest_challenge_velocity ($inc counters) ride _id.
 
+    # === Distributed rate limiting + challenge lifecycle ====================
+    # DistributedRateLimiter (utils/security.py) replaced the per-container
+    # in-memory dict, which on 4 independently-scaled Lambdas meant the real
+    # limit was (containers x limit). Buckets are keyed on _id
+    # ("<scope>:<subject>:<window>") so the counter $inc rides the default
+    # index; this TTL is purely reclamation of expired windows.
+    # NOTE: prod already carries this exact TTL index under Mongo's DEFAULT name
+    # `expires_at_1` (created lazily without an explicit name). Re-asserting it
+    # under a different name fails with IndexOptionsConflict (code 85, "already
+    # exists with a different name") — same key + same expireAfterSeconds, only
+    # the name differs. Pin to the existing name so this is an idempotent no-op.
+    ("rate_limit_buckets", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "expires_at_1"}),
+    # guest_challenges: issue -> verify -> redeem. Verification looks up by
+    # challenge_id, so that must be unique; expiry drives both the one-time
+    # semantics and reclamation. Without the TTL these accumulate forever,
+    # since a challenge that is never solved is never redeemed or deleted.
+    ("guest_challenges", [("challenge_id", ASCENDING)],
+     {"unique": True, "name": "challenge_id_unique"}),
+    ("guest_challenges", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expires_at"}),
+
     # === job_match_snapshots (Resume Platform v3 §1.4) ======================
     # Guest matches live HERE (moved out of guest_sessions/guest_quota_subjects
     # embedded matched_jobs — those embedded paths are gone; the fresh DB
@@ -483,6 +631,173 @@ INDEX_SPECS = [
     # (TTL ignores non-date values, so claimed snapshots are retained).
     ("job_match_snapshots", [("purge_after", ASCENDING)],
      {"expireAfterSeconds": 0, "name": "ttl_purge_after"}),
+    # ADR-003 inventory bridge: job_inventory_service.link_snapshot_jobs pushes
+    # canonical job_ids onto the snapshot. Reverse lookup "which snapshots
+    # referenced this posting" (invalidate on closure) filters {job_ids: <id>}.
+    # Multikey; sparse because snapshots written before the bridge lack it.
+    ("job_match_snapshots", [("job_ids", ASCENDING)],
+     {"sparse": True, "name": "job_ids_idx"}),
+
+    # === job_postings (ADR-003 canonical inventory) =======================
+    # Every spec below is derived from a real query in
+    # shared/python/services/job_inventory_service.py (one exception, named in
+    # its own comment: `active_cost_first_seen_at` serves
+    # services/apply_match_sweep.py, the only reader that scans by
+    # first_seen_at rather than posted_at).
+    # The function is named in
+    # the comment. Compound key order is equality -> sort -> range throughout.
+    # Each one is verified with explain("executionStats") by
+    # scripts/explain_job_inventory.py — run it after applying this migration.
+    #
+    # Write cost note: 7 indexes on the highest-write collection in the system.
+    # Ingestion is scheduled and batched (EventBridge, not per-request), so the
+    # write amplification lands on a background path, while the read paths it
+    # serves are on the guest request path where a COLLSCAN across the whole
+    # posting corpus would be fatal.
+    #
+    # upsert_posting / get_posting / touch_seen / mark_requirements_parsed /
+    # close_posting all filter {source, source_job_id}. This is THE identity of
+    # a posting: unique enforces at-least-once idempotency at the storage layer
+    # (ADR-003 has no queue dedup), so a concurrent double-delivery raises
+    # DuplicateKeyError instead of creating a twin doc.
+    ("job_postings", [("source", ASCENDING), ("source_job_id", ASCENDING)],
+     {"unique": True, "name": "source_job_id_unique"}),
+    # get_by_job_id / resolve_jd filter {job_id} — the opaque canonical id
+    # handed to snapshots, tailoring and the FE. uuid4 hex, so unique is safe.
+    ("job_postings", [("job_id", ASCENDING)],
+     {"unique": True, "name": "job_id_unique"}),
+    # THE retrieval path. find_active_fresh(role_family=...) issues
+    #   {status:"active", role_family:<eq>, cost_class:<eq|$in>,
+    #    posted_at:{$gte:cutoff}}  sort {posted_at:-1}
+    # Equality (status, role_family, cost_class) -> sort/range (posted_at desc).
+    # cost_class sits LAST among the equalities because the authenticated feed
+    # passes {$in:[free,paid]} while guests pass "free" (ADR-004): as the final
+    # equality field, an $in becomes a SORT_MERGE over index bounds rather than
+    # a blocking in-memory sort. posted_at is descending in the key to match the
+    # sort direction exactly (a reversed scan also works, but matching avoids
+    # any question about it).
+    ("job_postings", [("status", ASCENDING), ("role_family", ASCENDING),
+                      ("cost_class", ASCENDING), ("posted_at", DESCENDING)],
+     {"name": "active_role_cost_posted_at"}),
+    # Same path with NO role filter (browse all fresh postings for a cost
+    # class). role_family sits between status and posted_at in the index above,
+    # so omitting it would leave a gap and force a blocking sort — hence this
+    # deliberate second, shorter index rather than reusing the first.
+    ("job_postings", [("status", ASCENDING), ("cost_class", ASCENDING),
+                      ("posted_at", DESCENDING)],
+     {"name": "active_cost_posted_at"}),
+    # NEW-SINCE-WATERMARK retrieval: apply_match_sweep._new_postings issues
+    #   {status:"active", cost_class:"free", first_seen_at:{$gt:watermark},
+    #    posted_at_confidence:{$ne:"unknown"}, role_family:{$in:[...]}}
+    #   sort {first_seen_at: 1}   limit CANDIDATE_LIMIT
+    # Equality (status, cost_class) -> sort+range (first_seen_at asc). This is a
+    # DIFFERENT axis from every index above: those are all keyed on `posted_at`
+    # (when the EMPLOYER published), while the sweep needs "what did WE first
+    # see since I last looked" — the only marker that is monotonic per crawl and
+    # therefore safe as a resumable cursor (`$setOnInsert` in
+    # job_inventory_service.upsert_posting). No existing index can serve it: the
+    # compound ones lead with status but then diverge on posted_at, so a
+    # first_seen_at range degrades to a filtered scan of the whole active set.
+    # Measured need: 18.6k live docs and growing, swept every 15 minutes (96
+    # COLLSCANs/day without this).
+    # role_family stays a RESIDUAL filter rather than a key field: it arrives as
+    # an $in of 1-4 families and putting it between the equalities and the sort
+    # key would force a blocking in-memory sort on the watermark cursor, which
+    # is the one thing the sweep cannot afford (it must read in first_seen_at
+    # order to advance the watermark without skipping rows).
+    # first_seen_at is ASCENDING in the key to match the sort direction exactly.
+    ("job_postings", [("status", ASCENDING), ("cost_class", ASCENDING),
+                      ("first_seen_at", ASCENDING)],
+     {"name": "active_cost_first_seen_at"}),
+    # Location-scoped retrieval: find_active_fresh(location_key=...) adds
+    # {"locations.key": <eq>}. `locations` is an array, so this index is
+    # MULTIKEY. MEASURED (scripts/explain_job_inventory.py, 1000-doc scratch
+    # corpus with multi-location docs): IXSCAN on active_location_posted_at,
+    # nReturned=60 keys=60 docs=60, NO blocking SORT — the multikey field
+    # carries an EQUALITY bound and the sort field (posted_at) is not multikey,
+    # which is exactly the case where Mongo can still use the index for the
+    # sort. locations is bounded to 12 entries per doc (normalize_locations),
+    # so the multikey fan-out stays bounded.
+    ("job_postings", [("status", ASCENDING), ("locations.key", ASCENDING),
+                      ("posted_at", DESCENDING)],
+     {"name": "active_location_posted_at"}),
+    # Maintenance path: find_stale_for_verification issues
+    #   {status:"active", source:<eq>, last_verified_at:{$lt:cutoff}}
+    #   sort {last_verified_at: 1}
+    # Equality (status, source) -> sort+range (last_verified_at asc), so the
+    # sweep is a bounded index range with no in-memory sort. close_unseen's
+    # {source, status, last_seen_at:{$lt}} uses the same (status, source)
+    # prefix and finishes with a short filtered scan.
+    ("job_postings", [("status", ASCENDING), ("source", ASCENDING),
+                      ("last_verified_at", ASCENDING)],
+     {"name": "status_source_last_verified"}),
+    # Parse-once lookup: find_by_content_hash / find_parsed_requirements filter
+    # {content_hash} and {content_hash, normalization_version,
+    # requirements.extractor_version}. content_hash is the prefix, so ONE index
+    # serves both the bare lookup and the versioned one. This is what makes a
+    # JD fetched by two different sources get extracted exactly once.
+    ("job_postings", [("content_hash", ASCENDING),
+                      ("normalization_version", ASCENDING)],
+     {"name": "content_hash_norm_version"}),
+    # Retention: purge_expired filters {purge_at:{$lte:now}, status:{$in:closed}}.
+    # DELIBERATELY NOT A TTL INDEX. purge_at is only ever stamped by
+    # close_posting/set_purge_at, and set_purge_at refuses to stamp a live doc —
+    # but if that invariant were ever broken, a TTL index would silently delete
+    # real, live inventory with no audit trail. A plain index + the explicit
+    # bounded sweeper re-checks the closed status at delete time and logs the
+    # count into job_ingestion_runs. partialFilterExpression keeps the index to
+    # the closed minority instead of every active posting.
+    ("job_postings", [("purge_at", ASCENDING)],
+     {"name": "purge_at_retention",
+      "partialFilterExpression": {"purge_at": {"$exists": True}}}),
+    # Employer roll-ups (per-company boards, diversity capping in ranking):
+    # {employer_id, status} filters.
+    ("job_postings", [("employer_id", ASCENDING), ("status", ASCENDING)],
+     {"name": "employer_id_status"}),
+    # expire_aged_postings: {status: active, posted_at: {$lt: cutoff}} — the
+    # rolling 7-day window sweep. Without this the daily maintenance job
+    # COLLSCANs the whole live inventory to find the tail that aged out.
+    ("job_postings", [("status", ASCENDING), ("posted_at", ASCENDING)],
+     {"name": "status_posted_at_expiry"}),
+    # (job_id lookups for pin_posting / resolve_jd reuse `job_id_unique` above.)
+    # purge_expired reads {purge_at, status} then splits on `pinned`; a pinned
+    # posting must be archive-verified before deletion. Sparse because pinning
+    # is rare by construction (only postings a user actually acted on).
+    ("job_postings", [("pinned", ASCENDING), ("purge_at", ASCENDING)],
+     {"name": "pinned_purge_guard",
+      "partialFilterExpression": {"pinned": {"$exists": True}}}),
+
+    # === job_source_state (leases / watermarks — the SQS replacement) ======
+    # _state_key: every lease/watermark/backoff op filters {source, shard}.
+    # Unique enforces one state doc per shard, which is what makes
+    # acquire_lease's guarded find_one_and_update a real mutual exclusion.
+    ("job_source_state", [("source", ASCENDING), ("shard", ASCENDING)],
+     {"unique": True, "name": "source_shard_unique"}),
+    # due_shards(source=...) — the scheduler's pick list: leases free/expired
+    # AND out of backoff. Equality on source, range on next_attempt_at.
+    ("job_source_state", [("source", ASCENDING), ("next_attempt_at", ASCENDING)],
+     {"name": "source_next_attempt_at"}),
+    # Cross-source expired-lease sweep (a crashed worker's shard): range scan on
+    # lease_expiry alone, no source equality.
+    ("job_source_state", [("lease_expiry", ASCENDING)],
+     {"name": "lease_expiry_idx"}),
+
+    # === job_ingestion_runs (observability — we have no DLQ, ADR-003) ======
+    # bump_run_counts / record_run_failure / finish_run all filter {run_id}
+    # (uuid4 hex → unique is safe and protects counter attribution).
+    ("job_ingestion_runs", [("run_id", ASCENDING)],
+     {"unique": True, "name": "run_id_unique"}),
+    # recent_runs(source) — {source} equality, sort started_at desc.
+    ("job_ingestion_runs", [("source", ASCENDING), ("started_at", DESCENDING)],
+     {"name": "source_started_at"}),
+    # Correlating a run back to the invocation that produced it.
+    ("job_ingestion_runs", [("trace_id", ASCENDING)],
+     {"sparse": True, "name": "trace_id_idx"}),
+    # Runs are logs: start_run stamps expire_at = now + 30d. TTL is correct HERE
+    # (unlike job_postings) because losing an old run record costs an audit
+    # trail, not inventory.
+    ("job_ingestion_runs", [("expire_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "ttl_expire_at"}),
 ]
 
 # Indexes DROPPED by this migration (Guest Onboarding v2: plaintext identity
@@ -493,6 +808,23 @@ DROP_INDEXES = [
     ("guest_sessions", "identity_emails"),
     ("guest_sessions", "identity_phones"),
     ("guest_sessions", "identity_resume_hashes"),
+]
+
+# Indexes dropped AFTER the create pass (safe-reindex ordering). A superseded
+# UNIQUE index may be dropped only once its replacement exists, else there is a
+# window with no uniqueness enforcement. run_drops(POST_CREATE_DROP_INDEXES) is
+# therefore called in main() AFTER run() (create pass), never before.
+POST_CREATE_DROP_INDEXES = [
+    # DEFECT L: the global unique job_id_1 is superseded by the per-user compound
+    # unique user_email_job_id_unique (created above in run()). Dropping the global
+    # unique is what actually lets user B save a posting user A already saved.
+    ("saved_jobs", "job_id_1"),
+    # Same class of bug on the quota ledger: the GLOBAL unique on idempotency_key
+    # is superseded by the (user_email, feature, date, idempotency_key) partial
+    # unique created above. It must go, or user B reserving under a key user A
+    # already used still collides — a cross-tenant denial instead of B's own
+    # reservation.
+    ("quota_ledger", "idempotency_key_unique"),
 ]
 
 
@@ -509,9 +841,9 @@ def _fmt(keys, opts):
     return f"{{{key_str}}}{suffix}"
 
 
-def run_drops(db, dry_run: bool):
+def run_drops(db, dry_run: bool, drops=DROP_INDEXES):
     """Drop superseded indexes (v1 → v2 migrations). Missing indexes skip."""
-    for coll, name in DROP_INDEXES:
+    for coll, name in drops:
         label = f"{coll}.{name}"
         if dry_run:
             print(f"  [would-drop]   {label}")
@@ -567,6 +899,9 @@ def main():
 
     run_drops(db, dry_run)
     created, existed, failed = run(db, dry_run)
+    # Safe-reindex ordering: drop superseded UNIQUE indexes ONLY after their
+    # replacements were built by the create pass above (DEFECT L: job_id_1).
+    run_drops(db, dry_run, POST_CREATE_DROP_INDEXES)
 
     print("\n== Summary by collection ==")
     all_colls = sorted({c for c, _, _ in INDEX_SPECS})
