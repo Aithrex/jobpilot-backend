@@ -40,6 +40,36 @@ def _provider() -> str:
     return (_get_config_value("EMAIL_PROVIDER", "ses") or "ses").strip().lower()
 
 
+def _fallback_provider() -> str:
+    """The transport to retry on when the primary one fails.
+
+    A single-provider mailer turns any provider-side problem — a revoked API
+    token, an expired credential, a regional outage — into total, SILENT email
+    loss, because `send_email` swallows failures so mail can never break signup
+    or password reset. That combination is what let a dead ZeptoMail token stop
+    every password-reset email without anything visibly breaking. The two
+    transports have independent credentials, so the other one is very unlikely
+    to be down at the same moment.
+
+    Defaults to "the one we aren't using"; set EMAIL_FALLBACK_PROVIDER to
+    `none` to disable, or name a provider explicitly.
+    """
+    configured = (_get_config_value("EMAIL_FALLBACK_PROVIDER", "") or "").strip().lower()
+    if configured:
+        return "" if configured in ("none", "off", "disabled") else configured
+    return "ses" if _provider() == "zeptomail" else "zeptomail"
+
+
+def _can_use(provider: str) -> bool:
+    """True if `provider` has the credentials it needs. Used to skip a fallback
+    that would only fail again."""
+    if not _from_address():
+        return False
+    if provider == "zeptomail":
+        return bool(_zepto_token())
+    return provider == "ses"
+
+
 def _from_address() -> str:
     """The From header, e.g. `Aspirely <no-reply@aspirely.me>`. Shared across
     providers — reads EMAIL_FROM_ADDRESS first, falling back to the legacy
@@ -72,6 +102,60 @@ def email_configured() -> bool:
     if _provider() == "zeptomail":
         return bool(_zepto_token())
     return True  # ses only needs a From address
+
+
+def provider_name() -> str:
+    """The transport that would be used for the next send. Exposed so callers
+    can log/report which provider a failed send belonged to."""
+    return _provider()
+
+
+def is_suppressed(email: str) -> bool:
+    """True if `email` is on the bounce/complaint suppression list. Never raises
+    — a suppression-store outage reports False (not suppressed)."""
+    try:
+        from services import email_suppression
+        return email_suppression.is_suppressed(email)
+    except Exception:
+        return False
+
+
+def diagnose(to_email: str = "") -> dict:
+    """Why would (or wouldn't) a send to `to_email` go out?
+
+    Returns a secret-free snapshot for the admin ops panel: no token value, only
+    whether one is present. `blocked_by` is the first reason a send would be a
+    no-op, or None when the send should reach the provider.
+    """
+    from_addr = _from_address()
+    provider = _provider()
+    fallback = _fallback_provider()
+    has_token = bool(_zepto_token())
+    suppressed = is_suppressed(to_email) if to_email else False
+    fallback_usable = bool(fallback and fallback != provider and _can_use(fallback))
+
+    blocked_by = None
+    if not from_addr:
+        blocked_by = "no_from_address"
+    elif suppressed:
+        blocked_by = "recipient_suppressed"
+    elif provider == "zeptomail" and not has_token and not fallback_usable:
+        blocked_by = "no_zeptomail_token"
+
+    return {
+        "provider": provider,
+        "fallback_provider": fallback or None,
+        "fallback_usable": fallback_usable,
+        "from_address": from_addr,
+        "reply_to": _reply_to(),
+        "api_url": _zepto_url() if provider == "zeptomail" else None,
+        "region": _ses_region() if provider == "ses" else None,
+        "token_present": has_token,
+        "configured": email_configured(),
+        "recipient": to_email or None,
+        "recipient_suppressed": suppressed,
+        "blocked_by": blocked_by,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -115,15 +199,18 @@ def send_email(
     # Gate on the EFFECTIVE sender (respecting a from_addr override), not just the
     # default EMAIL_FROM_ADDRESS — otherwise a forward from MAIL_FORWARD_FROM would
     # fall to the dev console whenever the default sender is unset.
-    if not from_addr or (_provider() == "zeptomail" and not _zepto_token()):
+    # An unconfigured PRIMARY is only a dead end when the fallback can't cover
+    # for it — otherwise let the send proceed and fail over below.
+    if not from_addr or (
+        _provider() == "zeptomail" and not _zepto_token() and not _can_use(_fallback_provider())
+    ):
         logger.info(
             "[email:dev-fallback] (provider=%s not configured) To=%s | Subject=%s\n%s",
             _provider(), to_email, subject, text_body,
         )
         return False
 
-    provider = _provider()
-    try:
+    def _dispatch(provider: str) -> bool:
         if provider == "zeptomail":
             return _send_via_zeptomail(
                 to_email, subject, html_body, text_body, from_addr,
@@ -133,14 +220,38 @@ def send_email(
             to_email, subject, html_body, text_body, from_addr,
             reply_to=reply_to, headers=headers,
         )
+
+    primary = _provider()
+    try:
+        return _dispatch(primary)
     except Exception as e:
-        # Log the content so a dev/ops can still recover the link if the
-        # provider is down.
-        logger.warning(
-            "[email:send-failed] provider=%s %s — falling back to log. To=%s | Subject=%s\n%s",
-            provider, e, to_email, subject, text_body,
-        )
-        return False
+        primary_error = e
+
+    # Primary failed. Try the other transport before giving up — see
+    # _fallback_provider() for why a single-provider mailer is a liability here.
+    fallback = _fallback_provider()
+    if fallback and fallback != primary and _can_use(fallback):
+        try:
+            sent = _dispatch(fallback)
+            logger.warning(
+                "[email:failover] primary=%s failed (%s); delivered via %s. To=%s | Subject=%s",
+                primary, primary_error, fallback, to_email, subject,
+            )
+            return sent
+        except Exception as e2:
+            logger.error(
+                "[email:all-providers-failed] primary=%s (%s) fallback=%s (%s). To=%s | Subject=%s\n%s",
+                primary, primary_error, fallback, e2, to_email, subject, text_body,
+            )
+            return False
+
+    # Log the content so a dev/ops can still recover the link if the
+    # provider is down.
+    logger.warning(
+        "[email:send-failed] provider=%s %s — falling back to log. To=%s | Subject=%s\n%s",
+        primary, primary_error, to_email, subject, text_body,
+    )
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +363,39 @@ def send_password_reset(to_email: str, reset_link: str) -> bool:
         f"If you didn't request this, ignore this email."
     )
     return send_email(to_email, subject, html_body, text_body)
+
+
+def send_test(to_email: str, *, ignore_suppression: bool = False) -> dict:
+    """Admin diagnostic: attempt a real send and REPORT the provider's error.
+
+    `send_email` deliberately swallows failures so a dead mail provider can never
+    break signup or password reset. That makes "no email arrived" undebuggable
+    from the outside, so this sibling keeps the provider's actual response
+    (e.g. ZeptoMail's "sender domain not verified") instead of logging it away.
+    Admin-gated — the error text can name internal config.
+    """
+    result = diagnose(to_email)
+    if result["blocked_by"] and not (ignore_suppression and result["blocked_by"] == "recipient_suppressed"):
+        result.update(sent=False, error=f"blocked before dispatch: {result['blocked_by']}")
+        return result
+
+    subject = f"{APP_NAME} email delivery test"
+    html_body = (
+        '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">'
+        f"<p>This is a delivery test from {APP_NAME}. If you can read it, transactional "
+        "email (password resets included) is reaching this address.</p></div>"
+    )
+    try:
+        from_addr = _from_address()
+        text_body = _strip_html(html_body)
+        if _provider() == "zeptomail":
+            _send_via_zeptomail(to_email, subject, html_body, text_body, from_addr)
+        else:
+            _send_via_ses(to_email, subject, html_body, text_body, from_addr)
+        result.update(sent=True, error=None)
+    except Exception as e:
+        result.update(sent=False, error=f"{type(e).__name__}: {e}")
+    return result
 
 
 def send_welcome(to_email: str, app_url: str = "") -> bool:

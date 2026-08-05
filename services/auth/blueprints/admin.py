@@ -87,6 +87,60 @@ def ops_user_detail(email):
     return jsonify(ops.user_detail(email, redact=not unredact, actor=get_jwt_identity())), 200
 
 
+# --- Email delivery diagnostics -------------------------------------------
+# `/auth/request-password-reset` answers "ok" whether or not the mail actually
+# went out (deliberately — it must not leak which addresses have accounts). That
+# makes a broken provider indistinguishable from a happy path from the outside,
+# so these three admin-only routes are where "the reset email never arrived"
+# gets answered: what the config is, what the provider says, and un-suppressing
+# an address that a past bounce/complaint parked on the deny list.
+@admin_bp.route("/ops/email-health", methods=["GET"])
+@admin_required
+def ops_email_health():
+    from services import email_service
+    email = (request.args.get("email") or "").strip().lower()
+    payload = email_service.diagnose(email)
+    if email:
+        user = _db().users.find_one({"email": email}, {"auth_providers": 1, "password_hash": 1, "is_deleted": 1})
+        payload["account_exists"] = bool(user)
+        payload["account_has_password"] = bool(user and user.get("password_hash"))
+        payload["account_providers"] = (user or {}).get("auth_providers", [])
+        payload["account_closed"] = bool(user and user.get("is_deleted"))
+        # A reset mail is only ever attempted for an address that resolves to a
+        # user, so "no token rows" means the lookup missed, not that mail failed.
+        payload["reset_tokens_issued"] = _db().password_reset_tokens.count_documents({"user_email": email})
+        last = _db().password_reset_tokens.find_one({"user_email": email}, sort=[("created_at", -1)])
+        payload["last_reset_token_at"] = _iso((last or {}).get("created_at"))
+        payload["last_reset_token_used"] = bool((last or {}).get("used"))
+    return jsonify(payload), 200
+
+
+@admin_bp.route("/ops/email-test", methods=["POST"])
+@admin_required
+def ops_email_test():
+    from services import email_service
+    d = request.get_json(force=True, silent=True) or {}
+    to = (d.get("email") or get_jwt_identity() or "").strip().lower()
+    if not to:
+        return jsonify({"error": "email is required"}), 400
+    res = email_service.send_test(to, ignore_suppression=bool(d.get("ignore_suppression")))
+    logger.info("[ops] email-test to=%s sent=%s error=%s", to, res.get("sent"), res.get("error"))
+    return jsonify(res), (200 if res.get("sent") else 502)
+
+
+@admin_bp.route("/ops/email-unsuppress", methods=["POST"])
+@admin_required
+def ops_email_unsuppress():
+    from services import email_suppression
+    d = request.get_json(force=True, silent=True) or {}
+    to = (d.get("email") or "").strip().lower()
+    if not to:
+        return jsonify({"error": "email is required"}), 400
+    email_suppression.remove_suppression(to)
+    logger.info("[ops] email-unsuppress email=%s actor=%s", to, get_jwt_identity())
+    return jsonify({"ok": True, "email": to, "suppressed": email_suppression.is_suppressed(to)}), 200
+
+
 @admin_bp.route("/ops/content-samples", methods=["GET"])
 @admin_required
 def ops_content_samples():

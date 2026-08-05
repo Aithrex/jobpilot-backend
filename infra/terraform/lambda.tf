@@ -35,13 +35,22 @@ resource "aws_lambda_function" "service" {
       FRONTEND_URL       = var.frontend_url
       BACKEND_PUBLIC_URL = var.frontend_url
       # Transactional + notification email. EMAIL_PROVIDER selects the transport
-      # (zeptomail | ses); default is ses. We use ZeptoMail (Zoho transactional)
-      # because SES production access was denied — the aspirely.me domain must be
-      # a verified sender in ZeptoMail. From/Reply-To are shared across providers
-      # (email_service falls back to the SES_* names, so these stay authoritative).
-      EMAIL_PROVIDER   = "zeptomail"
-      SES_FROM_ADDRESS = "Aspirely <no-reply@aspirely.me>"
-      SES_REPLY_TO     = "support@aithrex.tech"
+      # (zeptomail | ses). ZeptoMail was adopted while SES production access was
+      # still pending; that access has since been GRANTED and aspirely.me is a
+      # verified, DKIM-signed SES identity, so both transports are live.
+      #
+      # EMAIL_FALLBACK_PROVIDER is the safety net. email_service swallows send
+      # errors by design (a dead mailer must never break signup or password
+      # reset), which means a bad credential silently drops 100% of mail — an
+      # invalid ZeptoMail token did exactly that to password-reset emails. With
+      # a fallback set, the other transport (independent credentials) picks up
+      # the send and logs `[email:failover]`. Set to "none" to disable.
+      # From/Reply-To are shared across providers (email_service falls back to
+      # the SES_* names, so these stay authoritative).
+      EMAIL_PROVIDER          = "zeptomail"
+      EMAIL_FALLBACK_PROVIDER = "ses"
+      SES_FROM_ADDRESS        = "Aspirely <no-reply@aspirely.me>"
+      SES_REPLY_TO            = "support@aithrex.tech"
       # ZeptoMail Send Mail token (SecureString via SSM). Non-US Mail Agents also
       # need ZEPTOMAIL_API_URL (default is the .com host).
       SSM_ZEPTOMAIL_TOKEN = "${var.ssm_path_prefix}/zeptomail-token"

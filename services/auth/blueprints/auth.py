@@ -257,8 +257,15 @@ def login():
         return jsonify({"error": "Account temporarily locked due to failed attempts. Try again later."}), 429
 
     if not user.get("password_hash"):
-        # Social-only account with no password set.
-        return jsonify({"error": "This account uses social sign-in. Continue with your provider or reset your password."}), 400
+        # Social-only account with no password set. `social_only` lets the client
+        # steer to the in-session "add a password" flow (Settings > Profile)
+        # instead of the reset email, which is the reliable path.
+        return jsonify({
+            "error": "This account was created with social sign-in and has no password yet. "
+                     "Sign in with your provider, then add a password under Settings > Profile.",
+            "social_only": True,
+            "auth_providers": user.get("auth_providers", []),
+        }), 400
 
     if not User.verify_password(password, user["password_hash"]):
         _register_failed_attempt(email)
@@ -461,7 +468,17 @@ def request_password_reset():
         from utils.config import AppUrlsConfig
         from services import email_service
         link = f"{AppUrlsConfig.FRONTEND_URL}/reset-password?token={token}"
-        email_service.send_password_reset(email, link)
+        sent = email_service.send_password_reset(email, link)
+        if not sent:
+            # The response to the caller stays generic (no enumeration), but a
+            # silent no-send is an outage, not a non-event: without this line a
+            # misconfigured provider / suppressed address looks identical to a
+            # happy path in the logs. Grep `reset-email-not-sent` to find it.
+            logger.error(
+                "reset-email-not-sent email=%s provider=%s configured=%s suppressed=%s",
+                email, email_service.provider_name(),
+                email_service.email_configured(), email_service.is_suppressed(email),
+            )
     except Exception as e:
         # Don't fail the request if email dispatch fails — log it (the dev
         # fallback also logs the link to the console).
@@ -498,6 +515,83 @@ def reset_password():
     )
     _reset_tokens().update_one({"_id": rec["_id"]}, {"$set": {"used": True, "used_at": _now()}})
     return jsonify({"ok": True, "message": "Your password has been reset. You can now log in."}), 200
+
+
+@auth_bp.route("/set-password", methods=["POST"])
+@jwt_required()
+def set_password():
+    """Set or change the password for the SIGNED-IN account.
+
+    This is the in-session counterpart to the emailed reset link, and the answer
+    for social-only accounts: someone who signed up with "Continue with Google"
+    has no password_hash, so /login rejects them and the only way in was a reset
+    email — which leaves them locked out of password login whenever mail delivery
+    is broken. A valid JWT already proves control of the account, so no email
+    round-trip is needed.
+
+    Rules:
+      - Account already HAS a password  -> `current_password` is required and
+        must verify (400 otherwise). Prevents a stolen/borrowed session from
+        silently taking the account over.
+      - Social-only account (no hash)   -> `current_password` is not required;
+        the JWT (minted by the OAuth callback) is the proof.
+
+    Errors are 400/403/429 per the auth contract — never 401 (the frontend
+    force-logs-out on any 401, which would be wrong for a bad current password).
+    """
+    email = get_jwt_identity()
+    data = request.get_json(force=True, silent=True) or {}
+    new_password = data.get("new_password") or ""
+    current_password = data.get("current_password") or ""
+
+    user = _users().find_one({"email": email})
+    if not user:
+        return jsonify({"error": "Account not found"}), 400
+    if user.get("is_deleted"):
+        return jsonify({"error": "This account has been closed."}), 403
+
+    has_password = bool(user.get("password_hash"))
+    if has_password:
+        # Throttle only the branch that verifies a secret.
+        if _ip_throttled("set-password", max_requests=20):
+            return jsonify({"error": "Too many attempts. Please try again later."}), 429
+        if not current_password:
+            return jsonify({"error": "Enter your current password."}), 400
+        if not User.verify_password(current_password, user["password_hash"]):
+            return jsonify({"error": "Current password is incorrect."}), 400
+
+    ok, msg = User.validate_password(new_password)
+    if not ok:
+        return jsonify({"error": msg}), 400
+    if has_password and User.verify_password(new_password, user["password_hash"]):
+        return jsonify({"error": "Choose a password you haven't used here before."}), 400
+
+    _users().update_one(
+        {"email": email},
+        {
+            "$set": {"password_hash": User.hash_password(new_password), "updated_at": _now(), "login_attempts": 0},
+            "$unset": {"lockout_until": ""},
+            "$addToSet": {"auth_providers": "password"},
+        },
+    )
+    # Any reset link already in flight is now stale — burn it so an old email
+    # sitting in an inbox can't overwrite the password just chosen.
+    try:
+        _reset_tokens().update_many(
+            {"user_email": email, "used": False},
+            {"$set": {"used": True, "used_at": _now(), "invalidated_by": "set-password"}},
+        )
+    except Exception as e:  # pragma: no cover - best effort
+        logger.warning("reset-token invalidation failed for %s: %s", email, e)
+
+    providers = list(user.get("auth_providers") or [])
+    if "password" not in providers:
+        providers.append("password")
+    return jsonify({
+        "ok": True,
+        "message": "Password set. You can now sign in with your email and password.",
+        "auth_providers": providers,
+    }), 200
 
 
 # ---------------------------------------------------------------------------
