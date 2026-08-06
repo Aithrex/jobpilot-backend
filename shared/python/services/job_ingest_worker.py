@@ -201,8 +201,13 @@ _REGISTRY_CACHE: Dict[str, List[Dict[str, Any]]] = {}
 # call with no search term. Term-driven boards (Amazon, Eightfold, Phenom, ORC,
 # Uber) are intentionally out of scope: they cannot be paged newest-first, so
 # they cannot honour the early-stop rule.
+# Boards whose whole open-roles list comes back in one request, with no search
+# term needed. A catalog row whose `ats` is NOT here is silently skipped by
+# `_load_career_members`, so the rows exist, the fetcher exists, the tests pass -
+# and the crawler never visits it. Adding a fetcher without adding it here ships
+# a source that returns nothing.
 _TERMLESS_ATS = ("greenhouse", "lever", "ashby", "smartrecruiters",
-                 "workable", "recruitee")
+                 "workable", "recruitee", "neogov")
 
 # Which ATS platforms expose a per-posting detail endpoint. The rest ship the
 # body in the listing payload, so they need no second request at all.
@@ -377,8 +382,71 @@ _HOST_ALLOW: Dict[str, Tuple[str, ...]] = {
         "api.smartrecruiters.com",
         "apply.workable.com",
         ".recruitee.com",
+        "www.governmentjobs.com",
     ),
 }
+
+
+# Hosts the LIVENESS PROBE may touch. Deliberately a second list rather than an
+# addition to `_HOST_ALLOW`: those are the machine-readable list APIs the crawl
+# reads, these are the PUBLIC apply pages a candidate would click, and they are
+# different hosts (`boards-api.greenhouse.io` vs `boards.greenhouse.io`).
+# Widening the crawl list to cover probing would grow the fetch surface for no
+# reason, so the two capabilities stay separately allowlisted.
+_PROBE_HOST_ALLOW: Dict[str, Tuple[str, ...]] = {
+    SOURCE_WORKDAY: (".myworkdayjobs.com",),
+    SOURCE_CAREER: (
+        "boards.greenhouse.io",
+        "job-boards.greenhouse.io",
+        "jobs.lever.co",
+        "jobs.ashbyhq.com",
+        "jobs.smartrecruiters.com",
+        "careers.smartrecruiters.com",
+        "apply.workable.com",
+        ".recruitee.com",
+        "www.governmentjobs.com",
+    ),
+}
+
+
+def _allowed_by(table: Dict[str, Tuple[str, ...]], source: str, url: str) -> bool:
+    try:
+        parsed = urlparse(str(url or ""))
+    except Exception:
+        return False
+    if (parsed.scheme or "").lower() != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    for allowed in table.get(source, ()):
+        if allowed.startswith("."):
+            if host.endswith(allowed):
+                return True
+        elif host == allowed:
+            return True
+    return False
+
+
+def probe_host_allowed(source: str, url: str) -> bool:
+    return _allowed_by(_PROBE_HOST_ALLOW, source, url)
+
+
+def assert_probe_url(source: str, url: str) -> str:
+    """Probe-side twin of `assert_outbound_url`, same fail-closed posture.
+
+    The canonical_url is the one URL in this module that came from a THIRD PARTY
+    rather than being built from the server-side registry, so the SSRF guard
+    here is load-bearing rather than defence in depth.
+    """
+    if not probe_host_allowed(source, url):
+        raise ValueError("probe host not allowed for this source")
+    from services.jd_fetcher import url_is_safe
+
+    ok, reason = url_is_safe(url)
+    if not ok:
+        raise ValueError(f"probe url blocked: {reason}")
+    return url
 
 
 def host_allowed(source: str, url: str) -> bool:
@@ -503,7 +571,8 @@ def http_get_json(source: str, url: str, policy: HostPolicy, *,
                   deadline: float, stop: Optional[threading.Event] = None,
                   timeout: float = REQUEST_TIMEOUT,
                   method: str = "GET",
-                  json_body: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+                  json_body: Optional[Dict[str, Any]] = None,
+                  extra_headers: Optional[Dict[str, str]] = None) -> Optional[Any]:
     """One guarded outbound request with jittered retry.
 
     Returns the decoded JSON, or None for "give up on this URL" (blocked host,
@@ -528,12 +597,13 @@ def http_get_json(source: str, url: str, policy: HostPolicy, *,
         if remaining <= 0.5:
             return None
         eff_timeout = max(0.5, min(float(timeout), remaining))
+        headers = dict(_HTTP_HEADERS, **(extra_headers or {}))
         try:
             if method == "POST":
                 resp = requests.post(url, json=json_body or {},
-                                     headers=_HTTP_HEADERS, timeout=eff_timeout)
+                                     headers=headers, timeout=eff_timeout)
             else:
-                resp = requests.get(url, headers=_HTTP_HEADERS, timeout=eff_timeout)
+                resp = requests.get(url, headers=headers, timeout=eff_timeout)
         except Exception as exc:  # requests.RequestException and friends
             policy.note_failure(host)
             logger.debug("ingest %s: network error on %s (%s)", source, host,
@@ -565,6 +635,56 @@ _HTTP_HEADERS = {
     "Accept": "application/json",
     "Content-Type": "application/json",
 }
+
+# A public apply page is HTML and often bot-sensitive, so the probe does not
+# claim to want JSON and does not send a JSON content type.
+_PROBE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; JobPilotIngest/1.0)",
+    "Accept": "text/html,application/xhtml+xml",
+}
+
+
+def http_probe_status(source: str, url: str, policy: HostPolicy, *,
+                      deadline: float, stop: Optional[threading.Event] = None,
+                      timeout: float = REQUEST_TIMEOUT) -> Optional[int]:
+    """HTTP status of one apply URL, or None for "could not find out".
+
+    HEAD, not GET: the question is only whether the page still exists, and a
+    HEAD costs the employer a fraction of a page render. Some ATSs answer HEAD
+    with 405, in which case we retry once with GET and read the status only -
+    the body is never downloaded into memory beyond the stream header.
+
+    None is returned for every inconclusive condition (blocked host, circuit
+    open, out of budget, timeout, network error). The caller must treat None as
+    "no information", never as dead - which is the whole reason this returns an
+    Optional instead of a bool.
+    """
+    import requests
+
+    assert_probe_url(source, url)
+    host = HostPolicy.host_of(url)
+    if (stop is not None and stop.is_set()) or time.monotonic() >= deadline:
+        return None
+    if not policy.acquire(host, deadline=deadline, stop=stop):
+        return None
+    remaining = deadline - time.monotonic()
+    if remaining <= 0.5:
+        return None
+    eff_timeout = max(0.5, min(float(timeout), remaining))
+    try:
+        resp = requests.head(url, headers=_PROBE_HEADERS, timeout=eff_timeout,
+                             allow_redirects=True)
+        if resp.status_code == 405 or resp.status_code == 501:
+            resp = requests.get(url, headers=_PROBE_HEADERS, timeout=eff_timeout,
+                                allow_redirects=True, stream=True)
+            resp.close()
+    except Exception as exc:
+        policy.note_failure(host)
+        logger.debug("probe %s: network error on %s (%s)", source, host,
+                     type(exc).__name__)
+        return None
+    policy.note_success(host)
+    return int(resp.status_code)
 
 
 # ---------------------------------------------------------------------------
@@ -684,10 +804,43 @@ def _parse_iso(value: Any) -> Optional[datetime]:
     return None
 
 
+# Pay fields, by the names the six boards actually use. Deliberately a TOP-LEVEL
+# lookup on a known list rather than handing the whole job dict to the parser
+# and letting it hunt: that parser accepts generic range keys (`min`/`max`,
+# `from`/`to`, `start`/`end`), and a job payload has unrelated fields by those
+# names - `start` is a start date, not a floor - so a blind search would invent
+# salaries. Absent here simply means the description fallback decides.
+_PAY_KEYS = ("pay_input_ranges", "salaryRange", "salary_range", "compensation",
+             "compensationTierSummary", "salary", "payRange", "pay")
+
+
+def _pay_of(job: Dict[str, Any]) -> Any:
+    if not isinstance(job, dict):
+        return None
+    for key in _PAY_KEYS:
+        value = job.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _neogov_date(raw: Any) -> Optional[datetime]:
+    """NeoGov publishes MM/DD/YY. Unparseable -> None, which the caller treats
+    as "skip", never as "posted today" (ADR-001)."""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%m/%d/%y").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
 def _listing_row(member: Dict[str, Any], raw_id: Any, *, title: str, url: str,
                  posted_at: Optional[datetime], location: Any,
                  description: str = "", employment_type: str = "",
-                 posted_text: str = "", detail_ref: str = "") -> Dict[str, Any]:
+                 posted_text: str = "", detail_ref: str = "",
+                 compensation: Any = None) -> Dict[str, Any]:
     """One listing hit in the shape `inv.normalize_posting` consumes.
 
     `cost_class` is hard-coded `free`: both registries are direct ATS boards.
@@ -706,6 +859,11 @@ def _listing_row(member: Dict[str, Any], raw_id: Any, *, title: str, url: str,
         "locations": location if isinstance(location, (list, tuple)) else [location],
         "description": description or "",
         "employment_type": employment_type or "",
+        # Whatever shape the board used, if anything. `salary_normalizer` reads
+        # SHAPES rather than one vendor's field names, so a board that renames
+        # its pay field still lands here, and one that publishes nothing simply
+        # yields no band rather than a zero.
+        "compensation": compensation,
         "posted_at": posted_at,
         "posted_at_confidence": inv.CONFIDENCE_EXACT if posted_at else inv.CONFIDENCE_UNKNOWN,
         "raw_posted_text": posted_text,
@@ -823,7 +981,8 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
             rows.append(_listing_row(
                 member, job.get("id"), title=job.get("title") or "",
                 url=job.get("absolute_url") or "", posted_at=posted_at,
-                location=((job.get("location") or {}).get("name")) or ""))
+                location=((job.get("location") or {}).get("name")) or "",
+                compensation=_pay_of(job)))
 
     elif ats == "lever":
         url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
@@ -838,7 +997,7 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
                 location=(job.get("categories") or {}).get("location") or "",
                 # Lever ships the body in the listing, so this source needs no
                 # detail request at all - but it is spread across four fields.
-                description=_lever_body(job)))
+                description=_lever_body(job), compensation=_pay_of(job)))
 
     elif ats == "ashby":
         url = f"https://api.ashbyhq.com/posting-api/job-board/{slug}"
@@ -854,7 +1013,8 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
                 url=job.get("jobUrl") or "", posted_at=posted_at,
                 location=job.get("location") or "",
                 employment_type=str(job.get("employmentType") or ""),
-                description=str(job.get("descriptionPlain") or "")))
+                description=str(job.get("descriptionPlain") or ""),
+                compensation=_pay_of(job)))
 
     elif ats == "smartrecruiters":
         url = (f"https://api.smartrecruiters.com/v1/companies/{slug}/postings"
@@ -869,7 +1029,35 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
                 member, job.get("id"), title=job.get("name") or "",
                 url=(job.get("ref") or {}).get("jobAd") or "", posted_at=posted_at,
                 location=", ".join(str(loc.get(k) or "") for k in ("city", "region", "country")),
-                detail_ref=str(job.get("id") or "")))
+                detail_ref=str(job.get("id") or ""), compensation=_pay_of(job)))
+
+    elif ats == "neogov":
+        # POST, and the XHR header is required - a GET or a bare POST 404s.
+        # `http_get_json` already speaks POST because Workday CXS needs it.
+        url = f"https://www.governmentjobs.com/careers/{slug}/home/loadJobsOnMaps"
+        # Measured: the body format is irrelevant (JSON or form both work) but
+        # WITHOUT this header the endpoint returns 404, which reads as "no such
+        # agency" rather than "you asked wrong".
+        data = http_get_json(SOURCE_CAREER, url, policy, deadline=deadline, stop=stop,
+                             method="POST", json_body={},
+                             extra_headers={"X-Requested-With": "XMLHttpRequest"})
+        for job in ((data or {}).get("jobList") or []) if isinstance(data, dict) else []:
+            posted_at = _neogov_date(job.get("PostingDate"))
+            if posted_at is None or posted_at < cutoff:
+                continue
+            job_id = job.get("ID")
+            # `Classification` is the human title; `JobTitle` is a URL slug.
+            title = str(job.get("Classification") or "").strip()
+            if not job_id or not title:
+                continue
+            rows.append(_listing_row(
+                member, job_id, title=title,
+                url=f"https://www.governmentjobs.com/careers/{slug}/jobs/{job_id}",
+                posted_at=posted_at,
+                location=str(job.get("Location") or ""),
+                employment_type=str(job.get("JobType") or ""),
+                description=str(job.get("FullDescription") or ""),
+                compensation=job.get("SalaryInfo")))
 
     elif ats == "workable":
         url = f"https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true"
@@ -1510,7 +1698,9 @@ def _persist_requirements(source: str, source_job_id: str, content_hash: str,
 def run_maintenance(*, now: Optional[datetime] = None,
                     purge_limit: int = 5000,
                     expire_limit: int = 5000,
-                    verify_limit: int = 0) -> Dict[str, Any]:
+                    verify_limit: int = 0,
+                    probe_limit: int = 0,
+                    probe_budget_seconds: float = 60.0) -> Dict[str, Any]:
     """Daily housekeeping: age out, close, purge, and re-verify.
 
     Order matters. Expiry closes first so the rows it closes are purge-eligible
@@ -1535,6 +1725,11 @@ def run_maintenance(*, now: Optional[datetime] = None,
     }
     if verify_limit:
         result["verified"] = verify_liveness(limit=int(verify_limit), now=now)
+    # Off unless a limit is passed, so enabling outbound probing of employer
+    # infrastructure is always an explicit decision at the call site.
+    if probe_limit:
+        result["probed"] = probe_liveness(limit=int(probe_limit), now=now,
+                                          budget_seconds=probe_budget_seconds)
     return result
 
 
@@ -1570,6 +1765,141 @@ def verify_liveness(*, limit: int = 200, now: Optional[datetime] = None
             if inv.close_posting(src, row.get("source_job_id") or "",
                                  reason="unverified", now=now):
                 out["closed"] += 1
+    return out
+
+
+# Only these mean "this posting is gone". Everything else - 200, any 3xx, 403
+# (bot-walled), 429 (throttled), any 5xx, any network error - is inconclusive
+# and closes nothing. An ATS that blocks us is a fact about us, not about the
+# requisition.
+PROBE_DEAD_STATUSES = (404, 410)
+# Consecutive dead readings before closing. Two, not one: closing a live
+# posting costs a candidate an application they would have made, while carrying
+# a dead one for an extra maintenance tick costs one wasted click. A CDN or
+# regional blip that 404s once does not survive two sweeps.
+PROBE_STRIKES_TO_CLOSE = _env_int("JOB_INGEST_PROBE_STRIKES", 2)
+# Circuit breaker for the CONCLUSION, not the connection. If most of what a host
+# returns in one sweep reads dead, the likelier explanation is that the host
+# changed its URL scheme or is serving 404 under load - not that every employer
+# on it closed at once. This is the same worry that keeps VERIFY_STALE_HOURS
+# far from the crawl cycle time, applied to a signal that acts much faster.
+PROBE_MAX_DEAD_RATIO = _env_float("JOB_INGEST_PROBE_MAX_DEAD_RATIO", 0.5)
+PROBE_MIN_HOST_SAMPLE = _env_int("JOB_INGEST_PROBE_MIN_HOST_SAMPLE", 8)
+# Postings younger than this are never probed: several ATSs publish to their
+# list API before the public detail page propagates, so a fresh posting can be
+# genuinely 404 for minutes while being perfectly real.
+PROBE_GRACE_HOURS = _env_int("JOB_INGEST_PROBE_GRACE_HOURS", 6)
+PROBE_INTERVAL_HOURS = _env_int("JOB_INGEST_PROBE_INTERVAL_HOURS", 24)
+
+
+def probe_liveness(*, limit: int = 200, now: Optional[datetime] = None,
+                   budget_seconds: float = 60.0,
+                   stop: Optional[threading.Event] = None) -> Dict[str, int]:
+    """Ask apply URLs directly whether they still exist, and close the dead.
+
+    Everything else in this module infers death from ABSENCE: `_close_stale_in_shard`
+    when a listing stops returning a posting, `verify_liveness` when no crawl has
+    confirmed one for days. Both are blind to the common case where an ATS keeps
+    a requisition in its list API after the detail page has closed - the posting
+    looks perfectly live to us and dead to the candidate who clicks it.
+
+    Bounded on purpose: a slice per sweep, least-recently-probed first, inside a
+    wall-clock budget and behind the same per-host spacing the crawl uses. This
+    runs against employer infrastructure, so it stays polite before it stays
+    fast.
+
+    LEAVE THIS OFF - measured 2026-08-05
+    ------------------------------------
+    It was built on the assumption that employers routinely keep a CLOSED
+    requisition on their list endpoint, so the posting looks live to the crawl
+    and dead to whoever clicks Apply. That assumption was tested rather than
+    trusted, against jobs the boards were listing at the time:
+
+        Airbnb (greenhouse)          30 checked   0 dead
+        State of Washington (neogov) 28 checked   0 dead
+        City of Seattle (neogov)     29 checked   0 dead
+        Workday, 40 tenants          35 checked   0 dead
+        -----------------------------------------------
+        TOTAL                       122 checked   0 dead
+
+    Zero of 122 bounds the true rate below roughly 2.5%, and probably far
+    lower. The existing signals - a posting vanishing from the list, and the
+    72h `verify_liveness` backstop - are evidently catching closures already.
+
+    Turning this on would therefore spend thousands of nightly requests against
+    employer infrastructure to find almost nothing, which is a real cost paid
+    for an imagined problem. It stays in the tree because it is also the
+    instrument that produced the table above: if dead links are ever actually
+    reported, run it on a sample and get a number before changing anything.
+
+    Re-measure before enabling. Do not enable on the strength of this docstring.
+    """
+    now = now or _utcnow()
+    deadline = time.monotonic() + max(1.0, float(budget_seconds))
+    policy = HostPolicy()
+    out = {"probed": 0, "dead": 0, "closed": 0, "inconclusive": 0, "skipped_host": 0}
+
+    grace = now - timedelta(hours=max(0, PROBE_GRACE_HOURS))
+    due = now - timedelta(hours=max(1, PROBE_INTERVAL_HOURS))
+    per_source = max(1, int(limit) // max(1, len(SOURCES)))
+
+    for src in SOURCES:
+        try:
+            rows = inv.find_for_liveness_probe(
+                src, limit=per_source, first_seen_before=grace, probed_before=due)
+        except Exception as exc:  # pragma: no cover - never break maintenance
+            logger.warning("probe: selection failed for %s: %s", src, type(exc).__name__)
+            continue
+
+        # Decide per host only after the whole sweep, so the ratio guard sees a
+        # sample instead of reacting to the first reading.
+        pending: List[Tuple[str, str, str]] = []   # (host, source_job_id, url)
+        dead_by_host: Dict[str, int] = defaultdict(int)
+        seen_by_host: Dict[str, int] = defaultdict(int)
+
+        for row in rows:
+            if (stop is not None and stop.is_set()) or time.monotonic() >= deadline:
+                break
+            url = str(row.get("canonical_url") or "")
+            sjid = str(row.get("source_job_id") or "")
+            if not url or not sjid:
+                continue
+            host = HostPolicy.host_of(url)
+            try:
+                status = http_probe_status(src, url, policy, deadline=deadline, stop=stop)
+            except ValueError:
+                # Not probe-allowlisted (or SSRF-refused). Says nothing about
+                # the posting, so it must not count as a reading.
+                continue
+            out["probed"] += 1
+            seen_by_host[host] += 1
+            if status is None:
+                out["inconclusive"] += 1
+                continue
+            if status in PROBE_DEAD_STATUSES:
+                out["dead"] += 1
+                dead_by_host[host] += 1
+                pending.append((host, sjid, url))
+            else:
+                # A live reading is worth recording immediately: it resets any
+                # strikes this posting had accumulated.
+                inv.record_liveness_probe(src, sjid, alive=True, now=now)
+
+        for host, sjid, url in pending:
+            seen = seen_by_host.get(host, 0)
+            ratio = dead_by_host.get(host, 0) / seen if seen else 0.0
+            if seen >= PROBE_MIN_HOST_SAMPLE and ratio > PROBE_MAX_DEAD_RATIO:
+                # Systemic, not per-posting. Record nothing - not even a strike -
+                # because a strike here would close everything on this host on
+                # the next sweep, which is precisely the outcome being avoided.
+                out["skipped_host"] += 1
+                logger.warning("probe: %s looks systemically dead (%d/%d), closing nothing",
+                               host, dead_by_host.get(host, 0), seen)
+                continue
+            strikes = inv.record_liveness_probe(src, sjid, alive=False, now=now)
+            if strikes >= PROBE_STRIKES_TO_CLOSE:
+                if inv.close_posting(src, sjid, reason=inv.CLOSED_REASON_LINK_DEAD, now=now):
+                    out["closed"] += 1
     return out
 
 

@@ -2155,11 +2155,21 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             #              applied to is never lost" guarantee);
             #   verify  -> close postings no crawl has reconfirmed in 72h, the
             #              backstop for a shard stuck in backoff.
+            #   probe   -> ask a bounded slice of apply URLs directly whether
+            #              they still exist, and close the ones that answer
+            #              404/410. The only signal here that is not an
+            #              inference from absence: an ATS that keeps a closed
+            #              requisition in its list API looks live to every other
+            #              check. OFF unless the schedule passes a limit, because
+            #              it is the only step that makes outbound requests to
+            #              employer infrastructure.
             # purge_at is stamped exclusively by close_posting, so a live
             # posting is unreachable from here. Idempotent by nature.
             from services import job_ingest_worker
             result = job_ingest_worker.run_maintenance(
                 verify_limit=int(payload.get("verify_limit") or 2000),
+                probe_limit=int(payload.get("probe_limit") or 0),
+                probe_budget_seconds=float(payload.get("probe_budget_seconds") or 60.0),
             )
             svc.complete_job(job_id, result)
 
