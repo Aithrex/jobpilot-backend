@@ -137,6 +137,7 @@ _ATS_LABEL = {
     "recruitee": "Recruitee", "amazon": "Amazon Jobs",
     "eightfold": "Eightfold", "phenom": "Phenom",
     "orc": "Oracle Recruiting", "uber": "Uber Careers",
+    "neogov": "GovernmentJobs",
 }
 
 # Explicit non-US markers for ATS location strings (board APIs often give
@@ -146,10 +147,20 @@ _ATS_LABEL = {
 _COUNTRY_OK = {"us", "usa", "united states", "united states of america"}
 
 
+def _salary_display(raw: Any, description: str = "") -> str:
+    """Rendered pay band, or "" - never a guess. See salary_normalizer."""
+    try:
+        from services import salary_normalizer
+        return salary_normalizer.display(
+            salary_normalizer.parse(raw, text=str(description or "")[:4000]))
+    except Exception:  # pragma: no cover - display must never break a row
+        return ""
+
+
 def _row(company: Dict[str, str], raw_id: Any, title: str, url: str,
          date_posted: str, location: str, description: str = "",
          is_remote: Optional[bool] = None, country: str = "",
-         meta: str = "", exp: str = "") -> Dict[str, Any]:
+         meta: str = "", exp: str = "", compensation: Any = None) -> Dict[str, Any]:
     days = _days_ago(date_posted) if date_posted else None
     row = {
         "job_id": f"{company['ats']}:{company['slug']}:{raw_id}",
@@ -168,6 +179,14 @@ def _row(company: Dict[str, str], raw_id: Any, title: str, url: str,
         "is_remote": bool(is_remote) if is_remote is not None
                      else bool(_REMOTE_RE.search(location or "")),
         "source": _ATS_LABEL.get(company["ats"], company["ats"]),
+        # Salary, through the SAME normalizer the inventory path uses. Without
+        # this the two serving paths disagree: the inventory feed showed a pay
+        # band and the live-crawl fallback showed nothing for the very same job,
+        # which reads as a bug rather than as a missing field. Empty string when
+        # the employer published nothing, which is the common case (measured
+        # 2026-08-05: 0% of Greenhouse and Workday postings carry one, ~35-80%
+        # of government ones do).
+        "salary": _salary_display(compensation, description),
     }
     if meta:
         # Inline board metadata (function / department / experience level) that
@@ -324,6 +343,68 @@ def _fetch_recruitee(c: Dict[str, str]) -> List[Dict[str, Any]]:
     return out
 
 
+def _neogov_iso(raw: Any) -> str:
+    """NeoGov posts dates as MM/DD/YY. Unparseable -> "" so the date is UNKNOWN
+    rather than invented (ADR-001). Measured across 781 live postings from two
+    agencies: zero unparseable, so this is a guard, not a common path."""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        return datetime.strptime(text, "%m/%d/%y").replace(tzinfo=timezone.utc).isoformat()
+    except ValueError:
+        return ""
+
+
+def _fetch_neogov(c: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Government employers (states, counties, cities) on NeoGov/GovernmentJobs.
+
+    POST, not GET, and it needs the XHR header - this is the agency page's own
+    job-list call. Every GET variant 404s, which is why this vendor was
+    initially written off as unfetchable; see scripts/probe_new_ats.py for the
+    discovery record.
+
+    One request returns the agency's whole board (706 for State of Washington,
+    75 for City of Seattle), so there is no paging to walk and no per-job detail
+    fetch - the same whole-board shape as Greenhouse rather than the per-term
+    search shape of the enterprise fetchers.
+    """
+    r = _SESSION.post(
+        f"https://www.governmentjobs.com/careers/{c['slug']}/home/loadJobsOnMaps",
+        data={}, headers={"X-Requested-With": "XMLHttpRequest"},
+        timeout=HEAVY_REQUEST_TIMEOUT)
+    r.raise_for_status()
+    out = []
+    for j in (r.json() or {}).get("jobList") or []:
+        job_id = j.get("ID")
+        if not job_id:
+            continue
+        # `JobTitle` is a URL SLUG ("utility-rate-analyst-senior-economist-senior"),
+        # not a title. The human title is `Classification`. Using JobTitle would
+        # put hyphenated slugs on every card and wreck title-based role
+        # classification downstream.
+        title = str(j.get("Classification") or "").strip()
+        if not title:
+            continue
+        remote = str(j.get("RemoteWorkOptionText") or "").strip().lower()
+        out.append(_row(
+            c, job_id, title,
+            # No URL in the payload; the public permalink is built from the ID.
+            f"https://www.governmentjobs.com/careers/{c['slug']}/jobs/{job_id}",
+            _neogov_iso(j.get("PostingDate")),
+            str(j.get("Location") or "").strip(),
+            description=str(j.get("FullDescription") or ""),
+            compensation=j.get("SalaryInfo"),
+            is_remote=bool(remote and remote not in ("no", "none", "onsite")),
+            country="us",
+            # Department + job type are real signal for an agency board, where
+            # titles are terse and civil-service coded.
+            meta=" ".join(x for x in (str(j.get("DepartmentName") or ""),
+                                      str(j.get("JobType") or "")) if x),
+        ))
+    return out
+
+
 FETCHERS: Dict[str, Callable[[Dict[str, str]], List[Dict[str, Any]]]] = {
     "greenhouse": _fetch_greenhouse,
     "lever": _fetch_lever,
@@ -331,6 +412,7 @@ FETCHERS: Dict[str, Callable[[Dict[str, str]], List[Dict[str, Any]]]] = {
     "smartrecruiters": _fetch_smartrecruiters,
     "workable": _fetch_workable,
     "recruitee": _fetch_recruitee,
+    "neogov": _fetch_neogov,
 }
 
 

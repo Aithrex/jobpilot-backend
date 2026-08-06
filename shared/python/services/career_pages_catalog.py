@@ -1323,6 +1323,29 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Kalepa", "ats": "greenhouse", "slug": "kalepa", "industry": "insurance"},
     {"display_name": "Flock Homes", "ats": "greenhouse", "slug": "flockhomes", "industry": "real_estate"},
     {"display_name": "Patch", "ats": "greenhouse", "slug": "patch", "industry": "energy"},
+
+    # --- NeoGov / GovernmentJobs.com (2026-08-05) -------------------------
+    # US public sector: states, counties, cities. Each row live-verified on the
+    # date above - POSTed to /careers/{slug}/home/loadJobsOnMaps and confirmed a
+    # non-empty jobList. 18 candidates were tried and 8 rejected (oregon,
+    # arizona, tennessee, austintx, phoenix, denver, charlottenc, atlantaga all
+    # returned 0), so do not add rows by pattern-matching a city name - the slug
+    # is not derivable and an unverified guess is silently empty forever.
+    #
+    # `docs/workday-tenant-expansion.md` §6.4 flagged this vein as the biggest
+    # unclaimed one, and it is heavily NON-TECH (public works, nursing, admin,
+    # inspectors, analysts), which is exactly the market `fit_score`'s 31-family
+    # taxonomy exists to serve and the tech-only catalogs do not reach.
+    {"display_name": "State of Washington", "ats": "neogov", "slug": "washington", "industry": "government"},
+    {"display_name": "State of Colorado", "ats": "neogov", "slug": "colorado", "industry": "government"},
+    {"display_name": "King County", "ats": "neogov", "slug": "kingcounty", "industry": "government"},
+    {"display_name": "City of Sacramento", "ats": "neogov", "slug": "sacramento", "industry": "government"},
+    {"display_name": "Fairfax County", "ats": "neogov", "slug": "fairfaxcounty", "industry": "government"},
+    {"display_name": "City of Seattle", "ats": "neogov", "slug": "seattle", "industry": "government"},
+    {"display_name": "City of San Jose", "ats": "neogov", "slug": "sanjoseca", "industry": "government"},
+    {"display_name": "City of Portland", "ats": "neogov", "slug": "portlandor", "industry": "government"},
+    {"display_name": "City of San Diego", "ats": "neogov", "slug": "sandiego", "industry": "government"},
+    {"display_name": "City of Las Vegas", "ats": "neogov", "slug": "lasvegas", "industry": "government"},
 ]
 
 INDUSTRIES: List[str] = sorted({r["industry"] for r in CAREER_PAGES_CATALOG})
