@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -66,6 +67,7 @@ _ATS_LABEL = {
     "greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
     "smartrecruiters": "SmartRecruiters", "workable": "Workable",
     "recruitee": "Recruitee", "workday": "Workday",
+    "neogov": "GovernmentJobs",
 }
 
 
@@ -112,7 +114,16 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
         "apply_link": url,
         "url": url,
         "description": "",          # body lives in S3; scoring uses requirements
-        "salary": "",
+        # Was hard-coded "" - nothing upstream stored a salary, so the card had
+        # nothing to show and the filter had nothing to compare. `salary` is the
+        # display string; `salary_min_annual` is what a numeric filter reads,
+        # and it is None (not 0) when undisclosed, so "unknown" and "unpaid"
+        # stay distinguishable.
+        "salary": str((doc.get("compensation") or {}).get("display") or ""),
+        "salary_min_annual": (doc.get("compensation") or {}).get("annual_min"),
+        "salary_max_annual": (doc.get("compensation") or {}).get("annual_max"),
+        "salary_currency": (doc.get("compensation") or {}).get("currency") or "",
+        "salary_confidence": (doc.get("compensation") or {}).get("confidence") or "",
         "employment_type": doc.get("employment_type") or "",
         "is_remote": work_mode == "remote",
         "h1b_sponsor": False,
@@ -251,22 +262,73 @@ def _score_rows(rows: List[Dict[str, Any]], user_email: str,
         }
 
 
+# Parenthetical / trailing fragments that are POSTING NOISE rather than part of
+# the role. Only these are stripped for the dedupe key - see `_title_key`.
+_TITLE_NOISE = re.compile(
+    r"\b(remote|hybrid|on[- ]?site|onsite|work from home|wfh|full[- ]?time|part[- ]?time|"
+    r"contract|temporary|temp|intern(ship)?|permanent|perm|"
+    r"m/w/d|f/m/d|w/m/d|d/f/m|h/f|all genders|any gender)\b",
+    re.IGNORECASE,
+)
+# "Req ID: 4471", "(Job ID 88213)", "#R-102934" - unique per requisition, so
+# leaving them in guarantees two copies of one opening never collapse.
+_TITLE_REQ_ID = re.compile(r"\b(job|req|requisition)?\s*id[:#\s]*[\w-]+\b", re.IGNORECASE)
+_TITLE_TRAILING_CODE = re.compile(r"[#(\[]\s*[a-z]{0,3}[-_]?\d{3,}\s*[)\]]?", re.IGNORECASE)
+
+
+def _title_key(title: Any) -> str:
+    """Title reduced to the part that identifies the ROLE, for dedupe only.
+
+    Deliberately NOT `job_inventory_service.normalize_title`. That one strips
+    every parenthetical, which is correct for its job (grouping and retrieval)
+    but destructive here: it maps "Software Engineer (Backend)" and "Software
+    Engineer (Frontend)" both to "software engineer", so collapsing on it would
+    silently HIDE a real second opening. Losing a job from the feed is a worse
+    failure than showing one twice.
+
+    So strip only what is provably noise - work mode, employment type, gender
+    tags, and per-requisition ids - and keep every other qualifier, which means
+    two genuinely different roles stay two rows.
+    """
+    t = str(title or "").lower()
+    t = _TITLE_REQ_ID.sub(" ", t)
+    t = _TITLE_TRAILING_CODE.sub(" ", t)
+    t = _TITLE_NOISE.sub(" ", t)
+    # Brackets that are now empty (or only punctuation) contributed nothing.
+    t = re.sub(r"[(\[{]\s*[-,/|]*\s*[)\]}]", " ", t)
+    t = re.sub(r"[^a-z0-9+#/ .-]+", " ", t)
+    t = re.sub(r"[\s.\-/]+", " ", t)
+    return t.strip()
+
+
 def _dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Collapse the same opening listed more than once.
 
     Employers routinely publish one requisition per location, and large ones
     re-post the same role across sub-boards, so an undeduped feed shows the same
-    job three times in the top five. `(company, title, location)` is the same
-    key the guest merge uses; the freshest copy wins so the displayed age stays
-    honest.
+    job three times in the top five. The freshest copy wins so the displayed age
+    stays honest.
+
+    The key is NORMALIZED identity, not the raw display strings. Matching on the
+    display strings is why duplicates still got through: the same opening
+    reaches us as "Google" and "Google LLC", as "Backend Engineer" and "Backend
+    Engineer (Remote)", and with a per-requisition id glued into the title - all
+    of which are byte-unequal and none of which are different jobs. `employer_id_of`
+    and `normalize_location` already exist for exactly this and are what the
+    inventory itself stores; only the title needs a narrower rule (`_title_key`).
     """
+    # Lazy, matching the rest of this module: the inventory service pulls in
+    # pymongo and the feed is imported on paths that never touch Mongo.
+    from services import job_inventory_service as inv
+
     best: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     order: List[Tuple[str, str, str]] = []
     for row in rows:
+        location = str(row.get("location") or "").strip()
         key = (
-            str(row.get("company") or "").strip().lower(),
-            str(row.get("title") or "").strip().lower(),
-            str(row.get("location") or "").strip().lower(),
+            inv.employer_id_of(row.get("company")),
+            _title_key(row.get("title")),
+            inv.normalize_location(location)["key"] if location else "",
         )
         prev = best.get(key)
         if prev is None:
@@ -314,6 +376,10 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     companies = [str(c).strip() for c in (payload.get("companies") or []) if str(c or "").strip()]
     us_only = bool(payload.get("us_only", True))
     remote_only = bool(payload.get("remote_only", False))
+    try:
+        min_salary = float(payload.get("min_salary") or 0) or 0.0
+    except (TypeError, ValueError):
+        min_salary = 0.0
     user_email = str(payload.get("user_email") or "")
     tz_offset = _clamp_tz_offset(payload.get("tz_offset_minutes"))
 
@@ -366,6 +432,16 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
             continue
         if us_only and not us_geo.keep_us_row(row):
             continue
+        # Salary floor. Drops rows whose band is KNOWN and below the floor, and
+        # keeps rows with no stated band. That asymmetry is deliberate: most
+        # postings do not publish a salary, so treating unknown as "fails the
+        # filter" would empty the feed and, worse, would silently hide the
+        # market rather than narrow it. The row carries `salary_confidence` so
+        # the frontend can label what it is showing.
+        if min_salary:
+            top = row.get("salary_max_annual") or row.get("salary_min_annual")
+            if top is not None and top < min_salary:
+                continue
         rows.append(row)
     rows = _dedupe(rows)
 
@@ -407,6 +483,7 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         "industries_available": _industries_for(source),
         "cache_hit": True,
         "us_only": us_only,
+        "min_salary": min_salary or None,
         "resume_skill_count": len(skills),
         "diagnostics": {"task_errors": 0, "served_from": "inventory",
                         "candidates": len(docs)},

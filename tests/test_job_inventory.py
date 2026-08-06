@@ -435,8 +435,13 @@ def test_role_family_uses_the_same_taxonomy_the_scorer_uses():
 def test_seniority_uses_the_scorer_taxonomy():
     assert inv.seniority_of("Staff Backend Engineer") == "staff"
     assert inv.seniority_of("Backend Engineer Intern") == "entry"
-    assert inv.seniority_of("Backend Engineer") == "mid"
+    # Was pinned to "mid". Changed deliberately: `fit_score.title_level` returns
+    # None here, and storing that as `mid` asserted a level the posting never
+    # stated, then let an equality filter hide every unmarked title from any
+    # other band. See test_an_unmarked_title_is_unknown_not_mid below.
+    assert inv.seniority_of("Backend Engineer") == inv.SENIORITY_UNKNOWN
     assert set(inv.SENIORITY_LEVELS) >= {"entry", "mid", "senior", "staff"}
+    assert inv.SENIORITY_UNKNOWN not in inv.SENIORITY_LEVELS
 
 
 def test_find_active_fresh_sorts_newest_first(db):
@@ -515,3 +520,66 @@ def test_filters_reject_operator_injection(db):
     assert inv.get_by_job_id({"$ne": None}) is None
     assert inv.find_by_content_hash({"$ne": None}) == []
     assert inv.find_active_fresh(role_family={"$ne": None}, now=NOW) != []
+
+
+# ---------------------------------------------------------------------------
+# Seniority. `fit_score.title_level` returns None for a title with no level
+# marker, and most real titles have none - so what we store for "unknown"
+# decides whether the seniority filter narrows the market or hides it.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("title", [
+    "Software Engineer", "Data Analyst", "Registered Nurse", "Accountant",
+])
+def test_an_unmarked_title_is_unknown_not_mid(title):
+    """Defaulting to `mid` asserted a level the posting never stated, and
+    because retrieval filters on the stored value, it also meant `mid` silently
+    absorbed everything unclassified."""
+    assert inv.seniority_of(title) == inv.SENIORITY_UNKNOWN
+
+
+@pytest.mark.parametrize("title,level", [
+    ("Senior Software Engineer", "senior"),
+    ("Staff Engineer", "staff"),
+    ("Engineering Director", "director"),
+])
+def test_a_marked_title_still_reads_its_level(title, level):
+    assert inv.seniority_of(title) == level
+
+
+def test_a_seniority_filter_does_not_hide_unmarked_postings(db):
+    """The failure this guards. A candidate filtering for `entry` used to lose
+    every posting whose title carried no marker - which is most of them."""
+    NOW_ = NOW
+    for i, title in enumerate(["Junior Developer", "Software Engineer"]):
+        inv.upsert_posting({
+            "source": "career-pages", "source_job_id": f"sen-{i}",
+            "url": f"https://boards.greenhouse.io/x/jobs/{i}",
+            "company": "Acme", "title": title, "location": ["Austin, TX, USA"],
+            "description": "x" * 300, "cost_class": "free",
+            "posted_at": NOW_ - timedelta(days=1),
+        }, now=NOW_)
+
+    rows = inv.find_active_fresh(source="career-pages", seniority="entry",
+                                 max_age_days=30, now=NOW_)
+    titles = {r["title_raw"] for r in rows}
+
+    assert "Junior Developer" in titles
+    assert "Software Engineer" in titles, \
+        "an unmarked title must not be excluded by a seniority filter"
+
+
+def test_a_seniority_filter_still_excludes_a_different_stated_level(db):
+    """Riding unknown along must not turn the filter into a no-op."""
+    for i, title in enumerate(["Junior Developer", "Engineering Director"]):
+        inv.upsert_posting({
+            "source": "career-pages", "source_job_id": f"lvl-{i}",
+            "url": f"https://boards.greenhouse.io/x/jobs/{i}",
+            "company": "Acme", "title": title, "location": ["Austin, TX, USA"],
+            "description": "x" * 300, "cost_class": "free",
+            "posted_at": NOW - timedelta(days=1),
+        }, now=NOW)
+
+    titles = {r["title_raw"] for r in inv.find_active_fresh(
+        source="career-pages", seniority="entry", max_age_days=30, now=NOW)}
+    assert "Engineering Director" not in titles

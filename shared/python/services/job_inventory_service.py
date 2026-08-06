@@ -69,6 +69,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
+from services import salary_normalizer
 from utils.db_connect import DBConnect
 from utils.security import InputSanitizer
 
@@ -85,7 +86,12 @@ logger = logging.getLogger(__name__)
 # the new fields and would be invisible to an industry or company filter
 # forever. The bump makes them all look stale exactly once, and the next pass
 # over each shard rewrites them.
-NORMALIZATION_VERSION = 2
+# v3: postings carry `compensation` (annualized, currency-aware). Salary was
+# never stored at all, so every row already in the inventory has no band and
+# `_listing_implies_same_content` would keep refreshing only `last_seen_at`,
+# leaving them permanently invisible to a salary filter. The bump makes them
+# look stale exactly once so the next pass over each shard rewrites them.
+NORMALIZATION_VERSION = 3
 # The requirement extractor's contract version (ADR-002). A bump re-parses.
 #
 # v2: the role taxonomy gained ~180 phrases and a `hardware_engineering` family,
@@ -120,6 +126,11 @@ CLOSED_STATUSES = (STATUS_CLOSED, STATUS_EXPIRED)
 CLOSED_REASON_NOT_SEEN = "not-seen"      # the board stopped listing it
 CLOSED_REASON_AGED_OUT = "aged-out"      # older than the servable window
 CLOSED_REASON_UNVERIFIED = "unverified"  # no crawl has confirmed it in days
+# The apply URL itself answered 404/410. Distinct from `not-seen` on purpose:
+# that one infers death from ABSENCE in a listing, this one is the posting
+# saying so directly. ATSs routinely keep a requisition in the listing JSON
+# after its detail page has closed, which is the case nothing else catches.
+CLOSED_REASON_LINK_DEAD = "link-dead"
 
 COST_CLASS_FREE = "free"    # direct ATS - guest-eligible (ADR-004)
 COST_CLASS_PAID = "paid"    # metered aggregator - NEVER on the guest path
@@ -336,15 +347,31 @@ def role_family_of(title: Any) -> str:
 
 # fit_score.title_level's vocabulary, plus the "no marker in the title" default.
 SENIORITY_LEVELS = ("entry", "mid", "senior", "staff", "director", "executive")
+# Not a level. The honest answer for a title that states none.
+SENIORITY_UNKNOWN = "unknown"
 
 
 def seniority_of(title: Any) -> str:
-    """Seniority band, again from `fit_score` so writer and reader agree."""
+    """Seniority band, again from `fit_score` so writer and reader agree.
+
+    Unmarked titles return `unknown`, NOT `mid`. `fit_score.title_level` returns
+    None when a title carries no level marker, and "Software Engineer",
+    "Data Analyst" and "Registered Nurse" are all unmarked - which is most of
+    the market. Defaulting those to `mid` made two silent claims at once: it
+    asserted a level the posting never stated, and because RETRIEVAL filters on
+    the stored value with an equality, it meant a candidate filtering for
+    `entry` never saw a single unmarked posting while `mid` quietly absorbed
+    everything unclassified.
+
+    This is the same rule `role_family_of` already documents for `other`:
+    unknown means genuinely unclassified, and unknown is never used to exclude
+    a posting from retrieval.
+    """
     try:
         from services import fit_score
-        return fit_score.title_level(normalize_title(title)) or "mid"
+        return fit_score.title_level(normalize_title(title)) or SENIORITY_UNKNOWN
     except Exception:  # pragma: no cover
-        return "mid"
+        return SENIORITY_UNKNOWN
 
 
 def employer_id_of(name: Any) -> str:
@@ -503,11 +530,23 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
         "industry": _safe_key(raw.get("industry"), 40) or "other",
         "ats": _safe_key(raw.get("ats"), 30),
         "tenant": _safe_key(raw.get("tenant"), 120),
+        # Compensation, or absent. The description is offered as a fallback but
+        # the result carries `confidence`, so a caller can tell an employer's
+        # stated band from a number scraped out of prose. Absent is a real and
+        # common answer - most postings do not disclose - and it is stored as a
+        # missing field rather than a zero, because a zero would read as "this
+        # job pays nothing" to every comparison downstream.
+        "compensation": salary_normalizer.normalize(
+            raw.get("compensation") or raw.get("salary") or raw.get("pay"),
+            text=description_text,
+        ),
         "normalization_version": NORMALIZATION_VERSION,
         "scoring_version": SCORING_VERSION,
         "content_hash": content_hash,
         "description_chars": len(description_text),
     }
+    if doc["compensation"] is None:
+        doc.pop("compensation")
 
     # Body offload. The matching path scores off `requirements`, never the raw
     # text, so a JD in Mongo is dead weight on a shared-tier cluster. Push it to
@@ -1049,6 +1088,10 @@ _CARD_PROJECTION = {
     "cost_class": 1, "source_quality": 1, "content_hash": 1, "requirements": 1,
     "status": 1, "last_verified_at": 1, "description_ref": 1,
     "description_chars": 1, "industry": 1, "ats": 1, "tenant": 1,
+    # A field stored but not projected is a field that does not exist as far as
+    # every read path is concerned - the card renders from THIS shape, so an
+    # omission here reads exactly like a normalizer that never captured it.
+    "compensation": 1,
 }
 
 
@@ -1198,7 +1241,14 @@ def find_active_fresh(
         query["work_mode"] = wm
     sen = _safe_family(seniority, 20)
     if sen:
-        query["seniority"] = sen
+        # Unknown rides along with whatever band was asked for. Most postings do
+        # not state a level, so an equality filter here would hide the majority
+        # of the market behind a distinction the employer never drew. Widening
+        # RETRIEVAL cannot lower precision - `fit_score` decides ordering, and
+        # it is the component that actually knows how well the candidate fits -
+        # which is the same argument `role_family` above is built on.
+        query["seniority"] = ({"$in": [sen, SENIORITY_UNKNOWN]}
+                              if sen != SENIORITY_UNKNOWN else sen)
 
     # Feed-tab filters. The authenticated tabs let a user narrow to a source, an
     # industry set or a specific company; those used to be applied by choosing
@@ -1240,6 +1290,104 @@ def find_stale_for_verification(
         .sort("last_verified_at", 1)
         .limit(max(1, int(limit)))
     )
+
+
+def find_for_liveness_probe(
+    source: str, *, limit: int = 200, first_seen_before: Optional[datetime] = None,
+    probed_before: Optional[datetime] = None,
+) -> List[Dict[str, Any]]:
+    """Active postings due an apply-URL probe, least-recently-probed first.
+
+    Sorting on `liveness_probed_at` ascending with missing-first is what makes a
+    bounded sweep cover the whole inventory over time instead of re-probing the
+    same head every tick.
+
+    `first_seen_before` is a grace period, and it is not optional in practice: a
+    posting discovered minutes ago may not have a live detail page yet (several
+    ATSs publish to their list API before the public page propagates), and
+    probing it would close a job that was never dead.
+    """
+    query: Dict[str, Any] = {
+        "status": STATUS_ACTIVE,
+        "source": _safe_key(source, 60),
+        # No URL, nothing to probe - and never let a missing field look dead.
+        "canonical_url": {"$nin": [None, ""]},
+    }
+    if first_seen_before is not None:
+        cutoff = _safe_dt(first_seen_before)
+        if cutoff is None:
+            raise ValueError("find_for_liveness_probe requires a tz-aware datetime")
+        query["first_seen_at"] = {"$lt": cutoff}
+    fields = {"_id": 0, "job_id": 1, "source": 1, "source_job_id": 1,
+              "canonical_url": 1, "liveness_probed_at": 1,
+              "liveness_dead_strikes": 1}
+    cap = max(1, int(limit))
+
+    # TWO passes, never-probed first, rather than one sort on `liveness_probed_at`.
+    # A single ascending sort relies on where the driver ranks a MISSING field,
+    # which is not something to bet a sweep on: real MongoDB orders missing
+    # first, mongomock does not, so the "oldest first" guarantee would hold in
+    # production and silently invert under test. Asking the two questions
+    # separately is explicit and behaves identically everywhere.
+    never = list(
+        _postings()
+        .find(dict(query, liveness_probed_at={"$exists": False}), fields)
+        .limit(cap)
+    )
+    if len(never) >= cap or probed_before is None:
+        return never[:cap]
+
+    cutoff = _safe_dt(probed_before)
+    if cutoff is None:
+        raise ValueError("find_for_liveness_probe requires a tz-aware datetime")
+    aged = list(
+        _postings()
+        .find(dict(query, liveness_probed_at={"$lt": cutoff}), fields)
+        .sort("liveness_probed_at", 1)
+        .limit(cap - len(never))
+    )
+    return never + aged
+
+
+def record_liveness_probe(
+    source: str, source_job_id: str, *, alive: bool,
+    now: Optional[datetime] = None,
+) -> int:
+    """Stamp a probe result and return the CONSECUTIVE dead-reading count.
+
+    A live reading resets the counter to zero rather than decrementing it, so
+    the strikes only ever mean "dead this many times in a row". The caller
+    closes on a threshold; this function never closes, so there is exactly one
+    place (`close_posting`) that can move a posting out of `active`.
+    """
+    now = now or _now()
+    key = {"source": _safe_key(source, 60),
+           "source_job_id": _safe_str(source_job_id, 200),
+           "status": STATUS_ACTIVE}
+
+    if alive:
+        # Nothing to read back: a live reading always means zero strikes.
+        _postings().update_one(
+            key, {"$set": {"liveness_probed_at": now, "liveness_dead_strikes": 0}})
+        return 0
+
+    # `update_one` + a projected read rather than one `find_one_and_update`.
+    # The increment is still atomic, which is the part that matters with several
+    # Lambdas on one shard; only the read-back is separate, and a strike counter
+    # that is momentarily one behind cannot close anything early - the threshold
+    # is checked against a value that only ever grows. The alternative returns
+    # the WHOLE posting (no other `find_one_and_update` in this module passes a
+    # projection either), and pulling a JD body per probe to read one integer is
+    # not a trade worth making.
+    result = _postings().update_one(
+        key, {"$set": {"liveness_probed_at": now}, "$inc": {"liveness_dead_strikes": 1}})
+    if not result.matched_count:
+        return 0
+    doc = _postings().find_one(key, {"_id": 0, "liveness_dead_strikes": 1}) or {}
+    try:
+        return int(doc.get("liveness_dead_strikes") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def resolve_jd(job_id: str) -> Optional[Dict[str, Any]]:

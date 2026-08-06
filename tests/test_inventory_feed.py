@@ -220,3 +220,145 @@ def test_no_resume_and_no_skills_scores_nothing_rather_than_guessing(db):
     assert result is not None
     assert result["resume_skill_count"] == 0
     assert all(j["match_score"] == 0 for j in result["jobs"])
+
+
+# ---------------------------------------------------------------------------
+# Dedupe key. These run against `_dedupe` directly: the collapse rule is pure
+# and the DB round-trip in the test above only obscures which shapes it catches.
+# ---------------------------------------------------------------------------
+
+def _row(company, title, location, days_ago=3):
+    return {"company": company, "title": title, "location": location,
+            "days_ago": days_ago, "job_id": f"{company}|{title}|{days_ago}"}
+
+
+@pytest.mark.parametrize("a,b,why", [
+    (("Google", "Software Engineer III", "New York, NY"),
+     ("Google LLC", "Software Engineer III", "New York, NY"),
+     "legal suffix"),
+    (("Stripe", "Backend Engineer", "Seattle, WA"),
+     ("Stripe", "Backend Engineer (Remote)", "Seattle, WA"),
+     "work-mode tag in the title"),
+    (("Acme", "Data Analyst (Req ID: 4471)", "Austin, TX"),
+     ("Acme", "Data Analyst", "Austin, TX"),
+     "per-requisition id glued into the title"),
+    (("Acme", "Data Analyst", "Austin, TX"),
+     ("Acme", "Data Analyst - Full Time", "Austin, TX"),
+     "employment type"),
+])
+def test_one_opening_published_two_ways_collapses(a, b, why):
+    """Every one of these is a single opening that reached us twice. Matching on
+    the raw display strings let all of them through - they are byte-unequal and
+    none of them is a different job."""
+    out = feed._dedupe([_row(*a), _row(*b)])
+    assert len(out) == 1, f"duplicate survived: {why}"
+
+
+@pytest.mark.parametrize("a,b", [
+    (("Acme", "Software Engineer (Backend)", "Austin, TX"),
+     ("Acme", "Software Engineer (Frontend)", "Austin, TX")),
+    (("Acme", "Engineer I", "Austin, TX"),
+     ("Acme", "Engineer II", "Austin, TX")),
+    (("Acme", "Data Analyst", "Austin, TX"),
+     ("Acme", "Data Analyst", "Seattle, WA")),
+    (("Acme", "Data Analyst", "Austin, TX"),
+     ("Acme Staffing", "Data Analyst", "Austin, TX")),
+])
+def test_genuinely_different_openings_are_never_merged(a, b):
+    """The failure that matters. `job_inventory_service.normalize_title` strips
+    EVERY parenthetical, so keying on it would map (Backend) and (Frontend) to
+    the same string and drop a real job off the feed. Showing a job twice is a
+    blemish; hiding one is a lost application."""
+    out = feed._dedupe([_row(*a), _row(*b)])
+    assert len(out) == 2
+
+
+def test_the_freshest_copy_of_a_duplicate_wins():
+    """The displayed age has to stay honest once copies collapse."""
+    out = feed._dedupe([
+        _row("Google LLC", "Software Engineer", "New York, NY", days_ago=9),
+        _row("Google", "Software Engineer (Remote)", "New York, NY", days_ago=1),
+    ])
+    assert len(out) == 1
+    assert out[0]["days_ago"] == 1
+
+
+def test_dedupe_preserves_input_order():
+    """Ranking happens before this; collapsing must not reshuffle it."""
+    rows = [_row("A", "Engineer", "Austin, TX"), _row("B", "Engineer", "Austin, TX"),
+            _row("C", "Engineer", "Austin, TX")]
+    assert [r["company"] for r in feed._dedupe(rows)] == ["A", "B", "C"]
+
+
+# ---------------------------------------------------------------------------
+# Salary. The inventory stored none at all and the row hard-coded "", so the
+# filter had nothing to compare - these pin capture, surfacing, and the one
+# semantic that decides whether the filter is useful or destructive.
+# ---------------------------------------------------------------------------
+
+def _seed_paid(sjid, *, comp, tenant="paid"):
+    inv.upsert_posting({
+        "source": "career-pages", "source_job_id": sjid,
+        "url": f"https://boards.greenhouse.io/{tenant}/jobs/{sjid}",
+        "company": f"Payer {sjid}", "title": "Senior DevOps Engineer",
+        "location": ["Austin, TX, USA"], "description": JD,
+        "cost_class": "free", "industry": "tech", "ats": "greenhouse",
+        "tenant": tenant, "compensation": comp,
+        "posted_at": NOW - timedelta(days=2),
+    }, now=NOW)
+    profile = fit_score.extract_requirements(JD, "Senior DevOps Engineer")
+    inv.mark_requirements_parsed("career-pages", sjid,
+                                 inv.get_posting("career-pages", sjid)["content_hash"],
+                                 profile, now=NOW)
+
+
+def test_a_stated_band_reaches_the_card(db):
+    _seed_paid("has-pay", comp={"min": 120000, "max": 150000, "currency": "USD"})
+    doc = inv.get_posting("career-pages", "has-pay")
+    row = feed._row_from_posting(doc, tz_offset=-420)
+    assert row["salary"] == "$120,000 - $150,000 a year"
+    assert row["salary_min_annual"] == 120000
+    assert row["salary_confidence"] == "structured"
+
+
+def test_an_undisclosed_salary_is_none_not_zero(db):
+    """Zero would read as "this job pays nothing" to every comparison
+    downstream, and would fail any salary floor. Unknown is not a number."""
+    _seed(1, tenant="nopay")
+    doc = inv.get_posting("career-pages", "nopay:Senior-0")
+    row = feed._row_from_posting(doc, tz_offset=-420)
+    assert row["salary"] == ""
+    assert row["salary_min_annual"] is None
+
+
+def test_a_salary_floor_drops_only_bands_it_can_actually_compare(db):
+    """The decision that makes this filter safe. Most postings do not publish a
+    salary, so treating unknown as "fails the filter" would not narrow the feed
+    - it would empty it, and hide most of the market without saying so."""
+    _seed(30, tenant="nopay")                       # no band at all
+    _seed_paid("low", comp={"min": 60000, "max": 70000, "currency": "USD"})
+    _seed_paid("high", comp={"min": 180000, "max": 220000, "currency": "USD"})
+
+    result = feed.build_feed("career-pages", _payload(min_salary=150000))
+    companies = {j["company"] for j in result["jobs"]}
+
+    assert "Payer high" in companies, "a band above the floor must survive"
+    assert "Payer low" not in companies, "a band below the floor must be dropped"
+    assert any(c.startswith("Nopay") for c in companies), \
+        "postings with no stated band must NOT be filtered out"
+
+
+def test_no_floor_means_no_salary_filtering(db):
+    _seed(30, tenant="nopay")
+    _seed_paid("low", comp={"min": 60000, "max": 70000, "currency": "USD"})
+    result = feed.build_feed("career-pages", _payload())
+    assert "Payer low" in {j["company"] for j in result["jobs"]}
+
+
+def test_an_hourly_band_is_compared_annualized(db):
+    """$60/hr is above a $100k floor; comparing the raw 60 would drop it."""
+    _seed(30, tenant="nopay")
+    _seed_paid("hourly", comp={"min": 60, "max": 75, "currency": "USD",
+                               "interval": "hourly"})
+    result = feed.build_feed("career-pages", _payload(min_salary=100000))
+    assert "Payer hourly" in {j["company"] for j in result["jobs"]}
