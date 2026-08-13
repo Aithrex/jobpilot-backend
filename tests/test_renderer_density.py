@@ -150,8 +150,8 @@ def test_docx_renders_with_times(tmp_path):
     doc = Document(io.BytesIO(data))
     assert doc.styles["Normal"].font.name == "Times New Roman"
     text = "\n".join(p.text for p in doc.paragraphs)
-    # Overleaf template: \MakeUppercase name
-    assert "SURYA KOMMUGURI" in text
+    # Name renders in Title Case (e.g. "Surya Kommuguri", not all caps).
+    assert "Surya Kommuguri" in text
     assert "EXPERIENCE" in text
 
 
@@ -163,14 +163,14 @@ def test_pdf_embeds_tinos():
     assert b"Tinos" in pdf_bytes
 
 
-def test_pdf_name_renders_uppercase():
-    """Template's \\MakeUppercase — the text layer must carry the caps name
-    (and the parseability checker must still find it)."""
+def test_pdf_name_renders_title_case():
+    """Name renders in Title Case (e.g. "Surya Kommuguri", not all caps) —
+    and the parseability checker must still find it in the text layer."""
     from services.pdf_ats_check import extract_pdf_text
 
     pdf_bytes = ResumeRenderer().generate_pdf(SPARSE)
     text, _ = extract_pdf_text(pdf_bytes)
-    assert "SURYA KOMMUGURI" in text
+    assert "Surya Kommuguri" in text
 
 
 # ---------------------------------------------------------------------------

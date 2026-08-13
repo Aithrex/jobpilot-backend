@@ -381,11 +381,11 @@ class ResumeRenderer:
         pdf.set_y(mt)
         w = pdf.w - 2 * ml  # usable width ≈ 184.6mm
 
-        # Name in ALL CAPS (centered, bold) — matches the user's Overleaf
-        # template (\MakeUppercase{\huge ...}). PDF metadata keeps the
-        # Title Case form set above.
+        # Name in Title Case (centered, bold) — e.g. "Harshith Siddardha
+        # Manne" rather than "HARSHITH SIDDARDHA MANNE". `name` is already
+        # normalized to Title Case above via _title_case_name.
         pdf.set_font(self._FONT_FAMILY, "B", self._NAME_SIZE)
-        pdf.cell(w, 6.5, name.upper(), align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(w, 6.5, name, align="C", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(0.5)  # \nameskip = \smallskip
 
         # ── Contact line (centered, pipe-separated, plain black text) ──
@@ -1072,8 +1072,9 @@ class ResumeRenderer:
         name = self._title_case_name(name)
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        # ALL CAPS name — matches the Overleaf template's \MakeUppercase.
-        run = p.add_run(name.upper())
+        # Title Case name — e.g. "Harshith Siddardha Manne" (name is already
+        # normalized to Title Case above via _title_case_name).
+        run = p.add_run(name)
         set_run_font(run, title_size, bold=True)
         tight(p, before=0, after=1.0)
 
