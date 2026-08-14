@@ -102,10 +102,10 @@ CONSTRAINT_CAPS: Dict[str, int] = {
     # body-less row scored 72 "good match" against a resume it had literally
     # never been compared to. That is the single most damaging failure this
     # engine can produce: a confident number attached to no evidence, sitting
-    # in a guest's top five next to real matches. Capped into "possible match"
-    # so it can still be browsed but can never outrank a posting we actually
-    # read.
-    "insufficient_job_requirements": 45,
+    # in a guest's top five next to real matches. Capped into "weak match" so
+    # it can still be browsed but can never outrank a posting we actually read,
+    # and never reads as a "possible match" (>=50) it has no evidence to claim.
+    "insufficient_job_requirements": 40,
 }
 
 BANDS: Sequence[Tuple[int, str]] = (
@@ -836,6 +836,16 @@ _LEVEL_YEARS: Dict[str, int] = {
     "entry": 0, "mid": 3, "senior": 5, "staff": 8, "director": 10, "executive": 12,
 }
 
+# Ordinal seniority bands, used to compare a resume's title level against the
+# posting's. `title_level` never yields "mid", but the map carries it so the
+# `_LEVEL_YEARS` fallback level is orderable too.
+_LEVEL_ORDER: Dict[str, int] = {
+    "entry": 0, "mid": 1, "senior": 2, "staff": 3, "director": 4, "executive": 5,
+}
+# Bands where a two-plus-band under-level is a genuine screen-out signal, not
+# just a stretch.
+_SENIOR_PLUS: frozenset = frozenset({"senior", "staff", "director", "executive"})
+
 
 def title_level(title: Any) -> Optional[str]:
     t = _norm(title)
@@ -1499,11 +1509,19 @@ def _coverage(reqs_list: Sequence[str], prof: Dict[str, Any]
 
 def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any]
                       ) -> Tuple[float, str, bool]:
-    """(points, detail, severe_gap_flag)"""
+    """(points, detail, severe_gap_flag).
+
+    Scored primarily off the years gap, then corrected by the resume's title
+    SENIORITY band. Dated-years alone miss the case of someone with several
+    noisy years but only ever junior/associate titles applying to a Staff role
+    - the band comparison catches that, and the symmetric over-qualification
+    case for entry roles.
+    """
     mx = COMPONENT_MAX["experience"]
     have = prof.get("years")
     want = reqs.get("required_years")
     job_level = reqs.get("job_level")
+    res_level = prof.get("level")
 
     if want is None and job_level in _LEVEL_YEARS:
         want = _LEVEL_YEARS[job_level]
@@ -1511,25 +1529,61 @@ def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any]
     else:
         stated = want is not None
 
+    # Ordinal band gap (job minus resume). Positive = under-levelled.
+    level_gap: Optional[int] = None
+    if job_level in _LEVEL_ORDER and res_level in _LEVEL_ORDER:
+        level_gap = _LEVEL_ORDER[job_level] - _LEVEL_ORDER[res_level]
+
     if have is None or want is None:
+        # Years unknown on one side. A clear two-plus-band under-level for a
+        # senior+ posting is still a real signal, so don't hand out the neutral
+        # "unknown" credit in that case.
+        if level_gap is not None and level_gap >= 2 and job_level in _SENIOR_PLUS:
+            return mx * 0.30, ("Your job titles read below the seniority this role "
+                               "asks for."), True
         return mx * 0.65, "Years of experience are not stated on both sides.", False
 
     gap = want - have
     if gap <= 0:
         if job_level in ("entry",) and have >= want + 6:
-            return mx * 0.7, (
+            pts, detail, severe = mx * 0.7, (
                 f"You have about {have} years, well above what this entry level "
                 f"role asks for."), False
-        return float(mx), (
-            f"You have about {have} years against roughly {want} asked for."), False
-    if gap <= 1:
-        return mx * 0.85, f"You have about {have} years against roughly {want} asked for.", False
-    if gap <= 2:
-        return mx * 0.65, f"About {gap} years short of the {want} years asked for.", False
-    if gap <= 4:
-        return mx * 0.35, f"About {gap} years short of the {want} years asked for.", False
-    severe = stated or job_level in ("staff", "director", "executive", "senior")
-    return mx * 0.12, f"About {gap} years short of the {want} years asked for.", severe
+        else:
+            pts, detail, severe = float(mx), (
+                f"You have about {have} years against roughly {want} asked for."), False
+    elif gap <= 1:
+        pts, detail, severe = (
+            mx * 0.85, f"You have about {have} years against roughly {want} asked for.", False)
+    elif gap <= 2:
+        pts, detail, severe = (
+            mx * 0.65, f"About {gap} years short of the {want} years asked for.", False)
+    elif gap <= 4:
+        pts, detail, severe = (
+            mx * 0.35, f"About {gap} years short of the {want} years asked for.", False)
+    else:
+        severe = stated or job_level in _SENIOR_PLUS
+        pts, detail, severe = (
+            mx * 0.12, f"About {gap} years short of the {want} years asked for.", severe)
+
+    # Seniority-band correction. Only ever dampens - it cannot lift a weak
+    # years score, so a padded resume can't buy seniority points.
+    if level_gap is not None and level_gap >= 2:
+        cap = mx * 0.4
+        if pts > cap:
+            pts, detail = cap, ("Your job titles read well below the seniority this "
+                                "role asks for.")
+        if job_level in _SENIOR_PLUS:
+            severe = True
+    elif level_gap is not None and level_gap == 1 and pts > mx * 0.75:
+        pts = mx * 0.75
+    elif (level_gap is not None and level_gap <= -2 and job_level == "entry"
+          and pts > mx * 0.7):
+        # Markedly over-levelled for an entry role - a common auto-reject.
+        pts, detail = mx * 0.7, ("Your seniority is well above what this entry level "
+                                 "role asks for.")
+
+    return pts, detail, severe
 
 
 def _score_domain(reqs: Dict[str, Any], prof: Dict[str, Any]) -> Tuple[float, str]:
@@ -1835,7 +1889,11 @@ def score(resume: Dict[str, Any], job: Dict[str, Any],
             applied_caps.append(str(c.get("type")))
 
     band = band_for(final)
-    confidence = _confidence(reqs, prof)
+    # A posting we could not read requirements from cannot yield a confident
+    # number no matter how much the resume side lit up - the comparison had
+    # nothing real on the job side. Floor the confidence so the UI never
+    # presents a title-only guess as anything better than low confidence.
+    confidence = _confidence(reqs, prof) if has_job_requirements(reqs) else "low"
     covered_all = req_covered + [p for p in pref_covered if p not in req_covered]
     missing_all = req_missing + [p for p in pref_missing if p not in req_missing]
 
