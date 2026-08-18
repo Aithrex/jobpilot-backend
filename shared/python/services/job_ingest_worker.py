@@ -619,6 +619,15 @@ def _load_members(source: str) -> List[Dict[str, Any]]:
     else:
         members = _load_seed_members(source)
 
+    # Seeds for a source that ALSO has a catalog (Taleo rides on career-pages)
+    # would otherwise be defined and never loaded: the branch above returns the
+    # catalog and stops. `_SEED_ENDPOINTS` is the only bootstrap a vendor with
+    # no catalog has, so dropping it silently ships a vendor that returns zero -
+    # which is precisely what this module's own `_TERMLESS_ATS` comment warns
+    # about. Deduped by the member_key/identity pass below.
+    if source in (SOURCE_WORKDAY, SOURCE_CAREER):
+        members = members + _load_seed_members(source)
+
     keys: Set[str] = {m["member_key"] for m in members}
     identities: Set[Tuple[str, str, str]] = {_identity_of(m) for m in members}
     for member in _mongo_members(source):

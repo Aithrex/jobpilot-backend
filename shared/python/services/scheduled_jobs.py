@@ -289,6 +289,24 @@ def run_apply_hourly() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
+def _source_for_ingest_rule(name: str) -> Optional[str]:
+    """`ingest_career_pages` -> `career-pages`, for any source the worker knows.
+
+    EventBridge rule names cannot contain a hyphen in the same places a source
+    key can, so the rule is the source with `-` written as `_`. Deriving the map
+    means a new source is reachable the moment the worker declares it.
+    """
+    try:
+        from services.job_ingest_worker import SOURCES
+    except Exception:  # pragma: no cover - defensive
+        SOURCES = ("workday", "career-pages")
+    suffix = (name or "")[len("ingest_"):]
+    for source in SOURCES:
+        if suffix == source.replace("-", "_"):
+            return source
+    return None
+
+
 def dispatch_scheduled(name: str) -> Dict[str, Any]:
     """Route an EventBridge scheduled trigger to its sweep. Never raises."""
     try:
@@ -366,8 +384,13 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             if name == "ingest_maintenance":
                 job_type, payload = "job_ingest_maintenance", {}
             else:
-                source = {"ingest_workday": "workday",
-                          "ingest_career_pages": "career-pages"}.get(name)
+                # DERIVED from the worker's source list, not hand-listed here.
+                # The comment above promises that adding a shard schedule is a
+                # Terraform-only change; with a literal dict that was false, and
+                # it is why `oracle` and `icims` had EventBridge-shaped names
+                # but no branch to receive them. A rule whose source is missing
+                # here fires forever and dispatches nothing.
+                source = _source_for_ingest_rule(name)
                 if source is None:
                     logger.warning("[scheduled] unknown ingest rule: %s", name)
                     return {"error": "unknown job", "name": name}

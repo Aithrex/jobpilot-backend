@@ -81,12 +81,25 @@ locals {
     # backoff and self-invokes one `job_ingest_shard` job per shard. Adding or
     # resizing a shard is then a code/env change, not a Terraform change.
     #
-    # Coverage: 112 shards / 16 per tick = 7 ticks. At one tick per 15 minutes
-    # the whole registry is re-crawled about every 1h45m, comfortably inside
-    # the 7-day guest freshness window (ADR-001). The two sources are offset by
-    # 7 minutes so their fan-outs do not overlap.
+    # Coverage: each source is dispatched independently, <=16 shards per tick,
+    # one tick per 15 minutes. Workday (48) re-crawls in ~45m, career-pages
+    # (64) in ~1h, Oracle (48) in ~45m and iCIMS (96) in ~1h30m - all well
+    # inside the 7-day guest freshness window (ADR-001). iCIMS is the slowest
+    # by construction: one connection at ~2.5s spacing, vendor-wide.
     ingest_workday      = { expression = "cron(0/15 * * * ? *)", desc = "Workday shard ingestion tick (48 shards, <=16/tick)" }
     ingest_career_pages = { expression = "cron(7/15 * * * ? *)", desc = "Career-page shard ingestion tick (64 shards, <=16/tick)" }
+    # ADR-004 gave Oracle ORC and iCIMS their own sources, with their own shard
+    # counts, precisely because they cost far more per member than a board API
+    # does. What it did not do was give them a RULE, so `job_ingest_worker`
+    # declared four sources while EventBridge only ever fired two — the code
+    # deployed, the tests passed, and `job_source_state` never grew an `oracle`
+    # or `icims` row because nothing asked it to. That is the binding
+    # constraint on G1/G2, and it is here, not in the providers.
+    #
+    # Offsets continue the existing 7-minute stagger so four fan-outs never
+    # overlap: :00 workday, :07 career-pages, :11 oracle, :04 icims.
+    ingest_oracle = { expression = "cron(11/15 * * * ? *)", desc = "Oracle ORC shard ingestion tick (48 shards, <=16/tick)" }
+    ingest_icims  = { expression = "cron(4/15 * * * ? *)", desc = "iCIMS shard ingestion tick (96 shards, <=16/tick)" }
     # Retention sweep: deletes only postings that are BOTH closed and past
     # purge_at. purge_at is stamped exclusively by close_posting, so a live
     # posting is unreachable from this job (see job_inventory_service:645).
