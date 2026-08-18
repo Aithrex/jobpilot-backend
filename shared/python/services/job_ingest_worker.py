@@ -66,6 +66,35 @@ Cost and safety rules enforced here
   is ever used as a URL. Every request additionally passes a per-source host
   allowlist and the `jd_fetcher` SSRF guard.
 
+Vendors arrive through `ats_providers`, not through this file (ADR-004)
+----------------------------------------------------------------------
+The four tables a vendor used to have to be hand-added to (`_TERMLESS_ATS`,
+`_ATS_WITH_DETAIL`, `_HOST_ALLOW`, `_PROBE_HOST_ALLOW`) are now DERIVED from
+`services.ats_providers.registry`, and listing routes through
+`provider.list_jobs` when a provider is registered for a member's vendor. The
+comment on `_TERMLESS_ATS` used to warn that forgetting one table ships a source
+returning nothing; that failure is now structural rather than documented, which
+is the whole point of the registry.
+
+Two things about that routing are load-bearing:
+
+* the allowlist NEVER depends on a successful provider import. It falls back to
+  the literal, known-good lists below, because this is the SSRF boundary and it
+  must fail toward "the old list", never toward "empty" or "allow all";
+* `JOB_INGEST_USE_PROVIDERS` turns the new path off without a deploy, and
+  `_list_workday` / `_list_career` stay as the fallback, because Workday and the
+  seven board vendors are live and working today.
+
+Pacing is keyed on the VENDOR, not the hostname
+-----------------------------------------------
+`HostPolicy` used to space requests per hostname, which is right for Greenhouse
+(every tenant shares one API host) and wrong for iCIMS: every tenant is its own
+hostname (`careers-<slug>.icims.com`) but the anti-bot wall counts per SOURCE
+IP across all of them. Measured (ADR-004 §3.2): six concurrent requests spread
+over sixty distinct iCIMS hostnames returned 405 "Human Verification" on all
+sixty. The key therefore comes from `ats_registry.pacing_key_for(vendor, host)`
+whenever a vendor is known, and falls back to the hostname otherwise.
+
 Concurrency shape (deliberately not the old shape)
 --------------------------------------------------
 `guest_service.py:1159-1194` calls `shutdown(wait=False, cancel_futures=True)`,
@@ -90,7 +119,8 @@ from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor
 from concurrent.futures import wait as futures_wait
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
+                    Set, Tuple)
 from urllib.parse import urlparse
 
 from services import job_inventory_service as inv
@@ -125,14 +155,33 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 SOURCE_WORKDAY = "workday"
 SOURCE_CAREER = "career-pages"
-SOURCES = (SOURCE_WORKDAY, SOURCE_CAREER)
+# Oracle ORC and iCIMS get their OWN sources rather than joining career-pages
+# because a source is the unit of shard sizing and durable backoff, and both
+# cost radically more per member than a board API does: an ORC pod can hold
+# 7,381 requisitions (37 pages at a 15s timeout) and an iCIMS tenant is capped
+# at one connection with 2.5s spacing. Sharing career-pages' 64 shards would let
+# one Oracle pod eat a shard that also owed twenty Greenhouse boards.
+#
+# Taleo deliberately does NOT get one, and shares career-pages via
+# `source_of_vendor`. It is a shrinking surface (ADR-004 §3.3: five of six
+# probed zones are NXDOMAIN) and every endpoint needs a portal id we cannot
+# derive, so a dedicated shard set would be almost entirely empty shards that
+# `dispatch_due_shards` still pays a state upsert for on every tick.
+SOURCE_ORACLE = "oracle"
+SOURCE_ICIMS = "icims"
+SOURCES = (SOURCE_WORKDAY, SOURCE_CAREER, SOURCE_ORACLE, SOURCE_ICIMS)
 
 # ~21 tenants / ~20 companies per shard. See the module docstring: the shard is
 # the retry unit under ADR-003, so it is sized for a cheap re-run, not for
-# throughput.
+# throughput. The two new counts are sized from COST PER MEMBER rather than
+# from today's member count (which is a handful of seeds until discovery fills
+# `company_ats_endpoints`): at ADR-004's G1/G2 targets these keep a shard at
+# roughly one ORC pod and ~5 iCIMS tenants, which is what fits in 90 seconds.
 SHARD_COUNTS: Dict[str, int] = {
     SOURCE_WORKDAY: _env_int("JOB_INGEST_WORKDAY_SHARDS", 48),
     SOURCE_CAREER: _env_int("JOB_INGEST_CAREER_SHARDS", 64),
+    SOURCE_ORACLE: _env_int("JOB_INGEST_ORACLE_SHARDS", 48),
+    SOURCE_ICIMS: _env_int("JOB_INGEST_ICIMS_SHARDS", 96),
 }
 
 # ADR-001: the guest boundary. Listing stops here; nothing older is paged for.
@@ -148,6 +197,28 @@ MAX_LISTING_PAGES = _env_int("JOB_INGEST_MAX_PAGES", 5)
 LISTING_PAGE_SIZE = 20
 REQUEST_TIMEOUT = _env_float("JOB_INGEST_REQUEST_TIMEOUT", 8.0)
 DETAIL_TIMEOUT = _env_float("JOB_INGEST_DETAIL_TIMEOUT", 6.0)
+
+# Route listing through `ats_providers` when a provider is registered for the
+# member's vendor. ON by default; the flag exists so the live Workday and
+# career-pages crawl can be reverted to `_list_workday` / `_list_career` from
+# the console without a deploy.
+USE_PROVIDERS = _env_flag("JOB_INGEST_USE_PROVIDERS", True)
+
+# Wall-clock ceiling on ONE member's listing when it goes through a provider.
+# Without it a single slow vendor consumes the shard: iCIMS paces at 2.5s with
+# max_concurrency=1 and pages up to 25 times, which is 65 seconds of a 90-second
+# budget for one tenant, and every other member of the shard would get nothing.
+# A member cut short is a resumable partial, which ADR-003 already permits.
+MEMBER_BUDGET_SECONDS = _env_float("JOB_INGEST_MEMBER_BUDGET", 30.0)
+
+# Inline detail fetches one member may spend (from the shard-wide `max_details`
+# budget). Only ever spent on rows the LISTING left undated - see
+# `_list_via_provider`.
+MAX_INLINE_DETAILS_PER_MEMBER = _env_int("JOB_INGEST_INLINE_DETAILS", 20)
+
+# Ceiling on `company_ats_endpoints` rows read per vendor when building a
+# registry. The collection is designed to grow without bound; a shard must not.
+MONGO_ENDPOINTS_PER_VENDOR = _env_int("JOB_INGEST_MONGO_ENDPOINTS", 20000)
 
 # Per-host politeness. Career pages concentrate on a handful of ATS hosts
 # (686 of 1309 companies are Greenhouse), so one shard can hit
@@ -197,21 +268,75 @@ def _default_owner() -> str:
 _REGISTRY_LOCK = threading.Lock()
 _REGISTRY_CACHE: Dict[str, List[Dict[str, Any]]] = {}
 
-# Career-page ATS platforms whose LIST endpoint returns the whole board in one
-# call with no search term. Term-driven boards (Amazon, Eightfold, Phenom, ORC,
-# Uber) are intentionally out of scope: they cannot be paged newest-first, so
-# they cannot honour the early-stop rule.
-# Boards whose whole open-roles list comes back in one request, with no search
-# term needed. A catalog row whose `ats` is NOT here is silently skipped by
-# `_load_career_members`, so the rows exist, the fetcher exists, the tests pass -
-# and the crawler never visits it. Adding a fetcher without adding it here ships
-# a source that returns nothing.
-_TERMLESS_ATS = ("greenhouse", "lever", "ashby", "smartrecruiters",
-                 "workable", "recruitee", "neogov")
+# The literals these tables USED to be, kept as the fallback the derived values
+# below degrade to. Not dead code: they are the last known-good crawl, and the
+# rule for every table derived from the provider registry is that a failed
+# import must leave the existing sources working rather than emptying a table.
+_LEGACY_TERMLESS_ATS: Tuple[str, ...] = (
+    "greenhouse", "lever", "ashby", "smartrecruiters", "workable", "recruitee",
+    "neogov")
+_LEGACY_ATS_WITH_DETAIL: Tuple[str, ...] = ("greenhouse", "smartrecruiters",
+                                            "workable")
 
-# Which ATS platforms expose a per-posting detail endpoint. The rest ship the
-# body in the listing payload, so they need no second request at all.
-_ATS_WITH_DETAIL = ("greenhouse", "smartrecruiters", "workable")
+
+def _ats_registry() -> Any:
+    """The provider registry, or None when it cannot be imported.
+
+    Every caller must handle None. One broken vendor module must not take job
+    ingestion down, and the SSRF allowlist in particular must never widen or
+    empty because an import failed.
+    """
+    try:
+        from services.ats_providers import registry as ats_registry
+
+        return ats_registry
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("ingest: ats_providers unavailable (%s: %s)",
+                       type(exc).__name__, exc)
+        return None
+
+
+def _derived_tuple(attr: str, fallback: Tuple[str, ...]) -> Tuple[str, ...]:
+    registry = _ats_registry()
+    if registry is None:
+        return fallback
+    try:
+        values = tuple(getattr(registry, attr)())
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("ingest: %s() failed (%s)", attr, type(exc).__name__)
+        return fallback
+    # An empty answer means the registry loaded no providers at all, which is a
+    # broken import rather than a real "no vendors" state.
+    return values or fallback
+
+
+# Vendors whose LIST endpoint returns the whole board newest-first with no
+# search term. Only these may join the background sweep, because ADR-003's
+# early-stop rule needs that ordering. Derived from `provider.termless`: a
+# vendor used to have to be added here BY HAND, and the rows, the fetcher and
+# the tests could all be perfect while the crawler never visited it.
+_TERMLESS_ATS: Tuple[str, ...] = _derived_tuple("termless_vendors",
+                                                _LEGACY_TERMLESS_ATS)
+
+# Which vendors expose a per-posting detail endpoint. The rest ship the body in
+# the listing payload, so they need no second request at all.
+_ATS_WITH_DETAIL: Tuple[str, ...] = _derived_tuple("detail_vendors",
+                                                   _LEGACY_ATS_WITH_DETAIL)
+
+# Which SOURCE (i.e. which shard set and which durable backoff row) a vendor is
+# swept under. The default is career-pages ON PURPOSE: a vendor registered
+# tomorrow with no entry here is swept immediately under the shared source
+# rather than silently never crawled, which is the exact trap the old
+# hand-maintained `_TERMLESS_ATS` comment documented.
+_VENDOR_SOURCE: Dict[str, str] = {
+    "workday": SOURCE_WORKDAY,
+    "oracle_orc": SOURCE_ORACLE,
+    "icims": SOURCE_ICIMS,
+}
+
+
+def source_of_vendor(vendor: Any) -> str:
+    return _VENDOR_SOURCE.get(_slug(vendor, 60), SOURCE_CAREER)
 
 
 def _slug(value: Any, limit: int = 120) -> str:
@@ -235,6 +360,7 @@ def _load_workday_members() -> List[Dict[str, Any]]:
         seen.setdefault(tenant, {
             "member_key": tenant,
             "source": SOURCE_WORKDAY,
+            "vendor": "workday",
             "tenant": tenant,
             "wd_host": _slug(row.get("wd_host")) or "wd1",
             "site": str(row.get("site") or "External"),
@@ -251,18 +377,232 @@ def _load_career_members() -> List[Dict[str, Any]]:
     for row in CAREER_PAGES_CATALOG:
         ats = _slug(row.get("ats"))
         slug = _slug(row.get("slug"))
+        # The source check is not redundant with the termless check: `_TERMLESS_ATS`
+        # now covers all eleven vendors, so without it a Workday or Oracle row
+        # appearing in this catalog would be crawled as a career page and land in
+        # `_list_career`, which has no branch for it.
         if not ats or not slug or ats not in _TERMLESS_ATS:
+            continue
+        if source_of_vendor(ats) != SOURCE_CAREER:
             continue
         key = f"{ats}-{slug}"
         seen.setdefault(key, {
             "member_key": key,
             "source": SOURCE_CAREER,
+            "vendor": ats,
             "ats": ats,
             "slug": slug,
             "display_name": str(row.get("display_name") or slug),
             "industry": str(row.get("industry") or "other"),
         })
+
+    # ENTERPRISE_CATALOG (Phenom / Eightfold / …) is a separate literal from
+    # CAREER_PAGES_CATALOG. Without this loop those MNCs are interactive-only
+    # even when a termless provider is registered for them.
+    try:
+        from services.career_pages_service import ENTERPRISE_CATALOG
+    except Exception:
+        ENTERPRISE_CATALOG = []
+    for row in ENTERPRISE_CATALOG:
+        ats = _slug(row.get("ats"))
+        if ats == "orc":
+            ats = "oracle_orc"
+        slug = _slug(row.get("slug"))
+        if not ats or not slug or ats not in _TERMLESS_ATS:
+            continue
+        if source_of_vendor(ats) != SOURCE_CAREER:
+            continue
+        member = _endpoint_member(
+            ats, tenant=slug, site="",
+            host=str(row.get("host") or "").strip().lower(),
+            display_name=str(row.get("display_name") or slug),
+            industry=str(row.get("industry") or "other"),
+            extra=dict(row.get("extra") or {}))
+        seen.setdefault(member["member_key"], member)
     return list(seen.values())
+
+
+# Bootstrap endpoints for the two new sources.
+#
+# There is no Python catalog for Oracle or iCIMS and there is not meant to be
+# one: under ADR-004 the registry is `company_ats_endpoints` in Mongo, filled by
+# discovery. These are the ONLY endpoints with a recorded live verification
+# (ADR-004 §3.1 for the two ORC pods and their reported `TotalJobsCount`;
+# `scripts/probe_new_ats.py` for the iCIMS portal it pulled 50 postings from),
+# and they exist so each new source is crawlable, and observably so, before
+# discovery has run. `member_key` is minted exactly as `Endpoint.member_key`
+# does, so a seed and its later Mongo row are the same member rather than two.
+#
+# Deliberately NOT seeded: Taleo. Every zone needs an opaque portal id that is
+# not derivable and that we do not have for `tetratech`, and the provider
+# reports that as a configuration gap rather than pretending the employer has no
+# openings. A seed here would be a member that can only ever return zero.
+_SEED_ENDPOINTS: Tuple[Dict[str, str], ...] = (
+    {"vendor": "oracle_orc", "tenant": "jpmc", "site": "CX_1",
+     "host": "jpmc.fa.oraclecloud.com", "display_name": "JPMorgan Chase",
+     "industry": "banking"},
+    {"vendor": "oracle_orc", "tenant": "eeho", "site": "CX_1",
+     "host": "eeho.fa.us2.oraclecloud.com", "display_name": "Oracle",
+     "industry": "tech"},
+    # Rivian's PUBLIC board. `internal-careers-rivian` also answers, and serves
+    # well-formed rows, but it is the employee-only redeployment board - those
+    # postings cannot be applied to from outside the company, so ingesting them
+    # would put unreachable jobs in front of seekers. `IcimsProvider` rejects
+    # internal boards during discovery; this seed must not smuggle one back in.
+    {"vendor": "icims", "tenant": "us-careers-rivian", "site": "",
+     "host": "us-careers-rivian.icims.com", "display_name": "Rivian",
+     "industry": "automotive"},
+)
+
+
+def _member_key_for(vendor: str, tenant: str, site: str = "") -> str:
+    """`Endpoint.member_key`, recomputed here rather than imported.
+
+    Must stay byte-identical to `ats_providers.base.Endpoint.member_key`: under
+    ADR-003 this is the PREFIX of every `source_job_id` a board writes, so a
+    divergence would fork one employer's inventory into two.
+    """
+    base = f"{vendor}-{tenant}"
+    if site:
+        base = f"{base}-{site}"
+    return _slug(base, 140)
+
+
+def _endpoint_member(vendor: str, *, tenant: str, site: str = "", host: str = "",
+                     display_name: str = "", industry: str = "",
+                     extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """One crawlable member, in the shape every listing path here expects.
+
+    Carries the legacy per-source field names (`tenant`/`wd_host`/`site` for
+    Workday, `ats`/`slug` for career pages) alongside the vendor-neutral ones, so
+    `_list_workday` and `_list_career` keep working on a member that came out of
+    Mongo rather than out of a catalog.
+    """
+    extra = dict(extra or {})
+    member: Dict[str, Any] = {
+        "member_key": _member_key_for(vendor, tenant, site),
+        "source": source_of_vendor(vendor),
+        "vendor": vendor,
+        "ats": vendor,
+        "tenant": tenant,
+        "slug": tenant,
+        "site": site,
+        "host": host,
+        "display_name": display_name or tenant,
+        "industry": industry or "other",
+        "extra": extra,
+    }
+    if vendor == "workday":
+        member["wd_host"] = _slug(extra.get("wd_host")) or "wd1"
+        member["site"] = site or "External"
+    return member
+
+
+def _load_seed_members(source: str) -> List[Dict[str, Any]]:
+    return [_endpoint_member(row["vendor"], tenant=row["tenant"],
+                             site=row.get("site") or "",
+                             host=row.get("host") or "",
+                             display_name=row.get("display_name") or "",
+                             industry=row.get("industry") or "")
+            for row in _SEED_ENDPOINTS
+            if source_of_vendor(row["vendor"]) == source
+            and row["vendor"] in _TERMLESS_ATS]
+
+
+def _mongo_members(source: str) -> List[Dict[str, Any]]:
+    """Members from `company_ats_endpoints`, or [] if that is unreachable.
+
+    ADR-004 §4.4: `registry_members` reads the UNION of catalog and Mongo, so
+    nothing regresses while the collection is empty or the cluster is down. This
+    therefore never raises and never blocks - a crawl that cannot read the new
+    registry must still crawl the old one.
+
+    Queried per vendor so the `(vendor, status)` index does the work instead of a
+    collection scan, and capped per vendor because that collection is designed to
+    grow without bound while a shard is not.
+    """
+    vendors = [v for v in _TERMLESS_ATS if source_of_vendor(v) == source]
+    if not vendors:
+        return []
+    try:
+        from services import company_registry_service as company_registry
+    except Exception as exc:
+        logger.warning("ingest: company registry unavailable (%s)",
+                       type(exc).__name__)
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for vendor in vendors:
+        try:
+            docs = list(company_registry.iter_endpoints(
+                vendor=vendor, limit=MONGO_ENDPOINTS_PER_VENDOR))
+        except Exception as exc:
+            logger.warning("ingest: endpoint read failed for %s (%s)",
+                           vendor, type(exc).__name__)
+            continue
+        for doc in docs:
+            tenant = str(doc.get("tenant") or "").strip()
+            if not tenant:
+                continue
+            out.append(_endpoint_member(
+                vendor, tenant=tenant,
+                site=str(doc.get("site") or "").strip(),
+                host=str(doc.get("host") or "").strip().lower(),
+                display_name=str(doc.get("display_name") or "").strip(),
+                industry=str(doc.get("industry") or "").strip(),
+                extra=doc.get("extra") or {}))
+    return out
+
+
+def _vendor_of(member: Dict[str, Any]) -> str:
+    """The provider key for a member, whatever field it arrived under.
+
+    Legacy Workday members name no vendor at all and legacy career members name
+    it `ats`, so this is the one place that reconciles the three spellings.
+    """
+    return _slug(member.get("vendor")
+                 or member.get("ats")
+                 or ("workday" if member.get("source") == SOURCE_WORKDAY
+                     else ""), 60)
+
+
+def _identity_of(member: Dict[str, Any]) -> Tuple[str, str, str]:
+    """(vendor, tenant, site), lowercased - the board's real identity.
+
+    Deduping on `member_key` alone is not enough. The legacy Workday catalog
+    keys a member on the bare tenant while `Endpoint.member_key` keys it on
+    `workday-<tenant>-<site>`, so once `seed_from_catalogs` has run, the same
+    board arrives twice under two different keys - and two keys means two
+    `source_job_id` prefixes, i.e. every Workday posting duplicated.
+    """
+    tenant = str(member.get("tenant") or member.get("slug") or "").strip().lower()
+    return (_vendor_of(member), tenant,
+            str(member.get("site") or "").strip().lower())
+
+
+def _load_members(source: str) -> List[Dict[str, Any]]:
+    """Catalog members first, then anything Mongo adds that is genuinely new.
+
+    Catalog order is preserved and catalog rows win every collision, so turning
+    the new registry on cannot move or restate an existing member.
+    """
+    if source == SOURCE_WORKDAY:
+        members = _load_workday_members()
+    elif source == SOURCE_CAREER:
+        members = _load_career_members()
+    else:
+        members = _load_seed_members(source)
+
+    keys: Set[str] = {m["member_key"] for m in members}
+    identities: Set[Tuple[str, str, str]] = {_identity_of(m) for m in members}
+    for member in _mongo_members(source):
+        identity = _identity_of(member)
+        if member["member_key"] in keys or identity in identities:
+            continue
+        keys.add(member["member_key"])
+        identities.add(identity)
+        members.append(member)
+    return members
 
 
 def registry_members(source: str) -> List[Dict[str, Any]]:
@@ -278,7 +618,7 @@ def registry_members(source: str) -> List[Dict[str, Any]]:
         cached = _REGISTRY_CACHE.get(src)
         if cached is not None:
             return cached
-    members = _load_workday_members() if src == SOURCE_WORKDAY else _load_career_members()
+    members = _load_members(src)
     with _REGISTRY_LOCK:
         _REGISTRY_CACHE[src] = members
     return members
@@ -373,7 +713,11 @@ def registry_stats() -> Dict[str, Any]:
 # Outbound safety: server-built URLs, host allowlist, SSRF guard
 # ---------------------------------------------------------------------------
 
-_HOST_ALLOW: Dict[str, Tuple[str, ...]] = {
+# The literal, known-good lists. These are the FALLBACK, and the reason the
+# derived tables below are built with `|` rather than `=`: this is the SSRF
+# boundary, so a failed provider import must leave it at the old list, never at
+# "empty" (which silently stops the live crawl) and never at "allow all".
+_LEGACY_HOST_ALLOW: Dict[str, Tuple[str, ...]] = {
     SOURCE_WORKDAY: (".myworkdayjobs.com",),
     SOURCE_CAREER: (
         "boards-api.greenhouse.io",
@@ -393,7 +737,7 @@ _HOST_ALLOW: Dict[str, Tuple[str, ...]] = {
 # different hosts (`boards-api.greenhouse.io` vs `boards.greenhouse.io`).
 # Widening the crawl list to cover probing would grow the fetch surface for no
 # reason, so the two capabilities stay separately allowlisted.
-_PROBE_HOST_ALLOW: Dict[str, Tuple[str, ...]] = {
+_LEGACY_PROBE_HOST_ALLOW: Dict[str, Tuple[str, ...]] = {
     SOURCE_WORKDAY: (".myworkdayjobs.com",),
     SOURCE_CAREER: (
         "boards.greenhouse.io",
@@ -407,6 +751,37 @@ _PROBE_HOST_ALLOW: Dict[str, Tuple[str, ...]] = {
         "www.governmentjobs.com",
     ),
 }
+
+
+def _derived_host_allow(legacy: Dict[str, Tuple[str, ...]],
+                        attr: str) -> Dict[str, Tuple[str, ...]]:
+    """Legacy hosts for each source, plus every host the providers declare.
+
+    The added set is vendor-wide rather than per-source because a source is no
+    longer a fixed vendor list: once members come from `company_ats_endpoints`,
+    any provider's endpoint can turn up in the career-pages sweep (that is how
+    Taleo is covered). Narrowing this back to per-vendor would be strictly
+    tighter and is the obvious next refinement; it needs the guard to be handed
+    the member's vendor everywhere, not just on the provider path.
+
+    Every source gets a key, including the new ones, so `_allowed_by` never has
+    to distinguish "no entry" from "empty entry".
+    """
+    registry = _ats_registry()
+    added: Tuple[str, ...] = ()
+    if registry is not None:
+        try:
+            added = tuple(getattr(registry, attr)())
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("ingest: %s() failed (%s)", attr, type(exc).__name__)
+    return {src: tuple(sorted(set(legacy.get(src, ())) | set(added)))
+            for src in SOURCES}
+
+
+_HOST_ALLOW: Dict[str, Tuple[str, ...]] = _derived_host_allow(
+    _LEGACY_HOST_ALLOW, "api_hosts")
+_PROBE_HOST_ALLOW: Dict[str, Tuple[str, ...]] = _derived_host_allow(
+    _LEGACY_PROBE_HOST_ALLOW, "portal_hosts")
 
 
 def _allowed_by(table: Dict[str, Tuple[str, ...]], source: str, url: str) -> bool:
@@ -926,7 +1301,7 @@ def _list_workday(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolic
             if not title:
                 continue
             posted_text = (posting.get("postedOn") or "").strip()
-            posted_at = _parse_iso(_approx_iso_from_relative(posted_text))
+            posted_at = _parse_iso(_approx_iso_from_relative(posted_text, now=now))
             if posted_at is None:
                 # ADR-001: an unknown date is never promoted to "today". The row
                 # is skipped, and - importantly - it does NOT count as crossing
@@ -1156,9 +1531,178 @@ def _epoch_ms(value: Any) -> Optional[datetime]:
         return None
 
 
+# Vendors whose listing already has a battle-tested path in this file.
+# Routing those through providers would change live Workday/Greenhouse
+# behaviour without rewriting the ingest tests — G8 forbids that. New
+# vendors (oracle_orc, icims, jobvite, bamboohr, taleo) have NO legacy
+# path, so they MUST go through the provider or they ingest nothing.
+_LEGACY_LISTING_VENDORS = frozenset({
+    "workday", "greenhouse", "lever", "ashby", "smartrecruiters",
+    "workable", "recruitee", "neogov",
+})
+
+
+def _endpoint_from_member(member: Dict[str, Any]):
+    from services.ats_providers.base import Endpoint
+
+    vendor = _vendor_of(member)
+    extra = dict(member.get("extra") or {})
+    if vendor == "workday" and not extra.get("wd_host"):
+        extra["wd_host"] = member.get("wd_host") or "wd1"
+    return Endpoint(
+        vendor=vendor,
+        tenant=str(member.get("tenant") or member.get("slug") or ""),
+        site=str(member.get("site") or ""),
+        host=str(member.get("host") or "").strip().lower(),
+        display_name=str(member.get("display_name") or ""),
+        industry=str(member.get("industry") or "other"),
+        extra=extra,
+    )
+
+
+def _provider_fetch_context(member: Dict[str, Any], *, cutoff: datetime,
+                            deadline: float, stop: Optional[threading.Event]):
+    """A FetchContext whose guard is THIS worker's SSRF allowlist.
+
+    Providers must not grow a second outbound path. The crawler's host
+    allowlist + `jd_fetcher.url_is_safe` stay load-bearing; the provider
+    just speaks the vendor protocol on top.
+    """
+    import time as _time
+    from services.ats_providers.base import FetchContext
+    from services.ats_providers.http import PacedSession, make_fetchers
+
+    source = str(member.get("source") or "")
+    member_deadline = min(deadline, _time.monotonic() + MEMBER_BUDGET_SECONDS)
+
+    def guard(_vendor: str, url: str) -> str:
+        return assert_outbound_url(source, url)
+
+    get_json, get_text, post_json = make_fetchers(
+        PacedSession(), guard=guard, deadline=member_deadline, stop=stop)
+    cutoff_iso = cutoff.astimezone(timezone.utc).isoformat() if cutoff else None
+    return FetchContext(
+        get_json=get_json, get_text=get_text, post_json=post_json,
+        deadline=member_deadline, stop=stop, cutoff_iso=cutoff_iso,
+        logger=logger,
+    )
+
+
+def _raw_job_to_listing(member: Dict[str, Any], job: Any, *,
+                        cutoff: datetime) -> Optional[Dict[str, Any]]:
+    posted_at = _parse_iso(getattr(job, "posted_at", "") or "")
+    # Newest-first vendors (ORC) can stop paging at the boundary; HTML vendors
+    # (iCIMS) cannot, so an undated row is kept rather than dropped. A dated
+    # row past the cutoff is always dropped — that is ADR-001.
+    if posted_at is not None and posted_at < cutoff:
+        return None
+    rid = str(getattr(job, "source_job_id", "") or "").strip()
+    title = str(getattr(job, "title", "") or "").strip()
+    if not rid or not title:
+        return None
+    detail = str(getattr(job, "detail_url", "") or "")
+    return _listing_row(
+        member, rid,
+        title=title,
+        url=str(getattr(job, "apply_url", "") or ""),
+        posted_at=posted_at,
+        location=getattr(job, "location", "") or "",
+        description=str(getattr(job, "description", "") or ""),
+        employment_type=str(getattr(job, "employment_type", "") or ""),
+        posted_text=str(getattr(job, "raw_posted_text", "") or ""),
+        detail_ref=detail or rid,
+        compensation=getattr(job, "compensation", None),
+    )
+
+
+def _list_via_provider(member: Dict[str, Any], *, cutoff: datetime,
+                       deadline: float,
+                       stop: Optional[threading.Event] = None
+                       ) -> Optional[List[Dict[str, Any]]]:
+    """List through the registered provider, or None to fall back.
+
+    None means "this vendor has no provider / the registry is down" — the
+    caller then uses `_list_workday` / `_list_career`. An empty list means
+    the provider ran and the board is empty, which must NOT fall through
+    or a working iCIMS tenant would be re-fetched by a Greenhouse URL.
+    """
+    registry = _ats_registry()
+    if registry is None:
+        return None
+    vendor = _vendor_of(member)
+    provider = registry.get(vendor)
+    if provider is None:
+        return None
+    endpoint = _endpoint_from_member(member)
+    if not endpoint.tenant:
+        return []
+    ctx = _provider_fetch_context(member, cutoff=cutoff, deadline=deadline,
+                                  stop=stop)
+    rows: List[Dict[str, Any]] = []
+    try:
+        for job in provider.list_jobs(endpoint, ctx):
+            if ctx.should_stop():
+                break
+            row = _raw_job_to_listing(member, job, cutoff=cutoff)
+            if row is not None:
+                rows.append(row)
+    except Exception as exc:
+        from services.ats_providers.base import ChallengeError
+        if isinstance(exc, ChallengeError):
+            logger.warning("ingest: %s challenged on %s (%s)",
+                           vendor, endpoint.member_key, exc)
+            return []
+        logger.warning("ingest: provider %s failed for %s (%s: %s)",
+                       vendor, endpoint.member_key, type(exc).__name__, exc)
+        return []
+    return rows
+
+
+def _detail_via_provider(row: Dict[str, Any], member: Dict[str, Any], *,
+                         deadline: float,
+                         stop: Optional[threading.Event] = None) -> Optional[str]:
+    registry = _ats_registry()
+    if registry is None:
+        return None
+    vendor = _vendor_of(member)
+    provider = registry.get(vendor)
+    if provider is None or not getattr(provider, "has_detail", False):
+        return None
+    from services.ats_providers.base import RawJob
+
+    endpoint = _endpoint_from_member(member)
+    ctx = _provider_fetch_context(
+        member, cutoff=datetime(1970, 1, 1, tzinfo=timezone.utc),
+        deadline=deadline, stop=stop)
+    raw_id = (str(row.get("_detail_ref") or "")
+              or str(row.get("source_job_id") or "").rsplit(":", 1)[-1])
+    job = RawJob(
+        source_job_id=raw_id,
+        title=str(row.get("title") or ""),
+        apply_url=str(row.get("url") or ""),
+        description=str(row.get("description") or ""),
+        detail_url=str(row.get("_detail_ref") or ""),
+    )
+    try:
+        detailed = provider.fetch_detail(endpoint, job, ctx)
+    except Exception as exc:
+        logger.debug("ingest: detail %s %s failed (%s)",
+                     vendor, raw_id, type(exc).__name__)
+        return ""
+    if detailed is None:
+        return ""
+    return str(detailed.description or "")[:15000]
+
+
 def list_member(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy,
                 deadline: float, stop: Optional[threading.Event] = None,
                 now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    vendor = _vendor_of(member)
+    if USE_PROVIDERS and vendor not in _LEGACY_LISTING_VENDORS:
+        listed = _list_via_provider(member, cutoff=cutoff, deadline=deadline,
+                                    stop=stop)
+        if listed is not None:
+            return listed
     if member.get("source") == SOURCE_WORKDAY:
         return _list_workday(member, cutoff=cutoff, policy=policy,
                              deadline=deadline, stop=stop, now=now)
@@ -1220,6 +1764,13 @@ def _needs_http_detail(row: Dict[str, Any], member: Dict[str, Any]) -> bool:
     """
     if row.get("description"):
         return False
+    vendor = _vendor_of(member)
+    if vendor not in _LEGACY_LISTING_VENDORS:
+        registry = _ats_registry()
+        provider = registry.get(vendor) if registry is not None else None
+        if provider is not None:
+            return bool(getattr(provider, "has_detail", False)
+                        and (row.get("_detail_ref") or row.get("source_job_id")))
     if member.get("source") == SOURCE_WORKDAY:
         return bool(row.get("_detail_ref"))
     return member.get("ats") in _ATS_WITH_DETAIL
@@ -1233,6 +1784,11 @@ def fetch_detail(row: Dict[str, Any], member: Dict[str, Any], *, policy: HostPol
     if row.get("description"):
         return str(row["description"])
     source = member["source"]
+    vendor = _vendor_of(member)
+    if USE_PROVIDERS and vendor not in _LEGACY_LISTING_VENDORS:
+        body = _detail_via_provider(row, member, deadline=deadline, stop=stop)
+        if body is not None:
+            return body
 
     if source == SOURCE_WORKDAY:
         path = row.get("_detail_ref") or ""

@@ -1,0 +1,573 @@
+"""Career portal discovery — turn "a company exists" into "a board we crawl".
+
+The core inversion (ADR-004 §2.1)
+---------------------------------
+The obvious approach is to GUESS: for each company try
+`boards.greenhouse.io/{slug}`, `jobs.lever.co/{slug}`,
+`{slug}.wd1.myworkdayjobs.com` ... That is O(companies x vendors x host-variants)
+- Workday alone shards tenants across `wd1`..`wd103`, so ruling out one vendor
+for one company costs 103 requests - and it is wrong often enough to be useless,
+because tenant slugs frequently do not match company names (Bread Financial's
+Workday tenant is `alliancedata`).
+
+Fingerprinting inverts it. Fetch the company's own site, find its careers page,
+and match every link and script src against the vendor patterns declared by the
+providers. The employer TELLS US which ATS they use and what their tenant is, in
+the href of their own "View openings" button. Two requests per company, all
+vendors evaluated at once, and it works regardless of how unrelated the slug is
+to the name.
+
+It also discovers vendors we have not implemented: recurring unmatched
+ATS-looking hosts are counted in `unknown_hosts` so the next vendor to build is
+chosen from evidence rather than intuition.
+
+Politeness
+----------
+This crawls small businesses' own websites, so it is deliberately conservative:
+robots.txt is honoured and cached, requests are paced per host, HTML is size
+capped, and at most a handful of pages are read per company. A discovery pass
+has no deadline to race - being slow is fine, being rude is not.
+"""
+from __future__ import annotations
+
+import logging
+import re
+import socket
+import time
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from urllib.parse import urljoin, urlparse
+
+from services.ats_providers import registry as ats_registry
+from services.ats_providers.base import (STATUS_BLOCKED, STATUS_CANDIDATE,
+                                         ChallengeError, Endpoint,
+                                         FetchContext, ValidationResult)
+
+logger = logging.getLogger(__name__)
+
+#: Paths tried on a company domain, in order. Ordered by observed hit rate, and
+#: kept short because every entry is a request against a small business's site.
+CAREER_PATHS: Tuple[str, ...] = (
+    "/careers", "/jobs", "/company/careers", "/about/careers",
+    "/careers/jobs", "/en/careers", "/about-us/careers", "/join-us",
+    "/work-with-us", "/employment", "/opportunities", "/careers/open-positions",
+)
+
+#: Anchor text that marks a careers link when we crawl the homepage.
+_CAREER_TEXT_RE = re.compile(
+    r"\b(careers?|jobs?|join\s+(?:us|our\s+team)|work\s+(?:with|for)\s+us|"
+    r"open\s+(?:roles|positions)|we[''']?re\s+hiring|employment|vacancies)\b",
+    re.IGNORECASE)
+
+_HREF_RE = re.compile(r"""(?:href|src|action|content|data-url)\s*=\s*["']([^"']{4,400})["']""",
+                      re.IGNORECASE)
+#: Bare URLs in inline JS/JSON config blobs — several site builders inject the
+#: ATS endpoint there rather than as an href.
+_BARE_URL_RE = re.compile(r"""https?://[A-Za-z0-9.\-]+\.[A-Za-z]{2,}[^\s"'<>)\]]{0,300}""")
+
+MAX_HTML_BYTES = 1_500_000
+MAX_PAGES_PER_COMPANY = 6
+
+#: Hosts that are never an employer's own site and would waste a fetch.
+_SKIP_HOST_RE = re.compile(
+    r"(?:^|\.)(?:facebook|twitter|x|linkedin|instagram|youtube|tiktok|"
+    r"google|googleapis|gstatic|doubleclick|cloudflare|jquery|bootstrapcdn|"
+    r"fontawesome|w3\.org|schema\.org|wordpress|wixsite|godaddy)\.",
+    re.IGNORECASE)
+
+
+# ---------------------------------------------------------------------------
+# robots.txt
+# ---------------------------------------------------------------------------
+
+class RobotsCache:
+    """Per-run robots.txt cache.
+
+    Fail-OPEN on a fetch error and fail-CLOSED on an explicit Disallow. A site
+    that does not answer has not refused; a site that says no has.
+    """
+
+    def __init__(self, ctx: FetchContext, user_agent: str = "JobPilotIngest"):
+        self._ctx = ctx
+        self._ua = user_agent
+        self._cache: Dict[str, Any] = {}
+
+    def allows(self, url: str) -> bool:
+        try:
+            parsed = urlparse(url)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+        except Exception:
+            return False
+        parser = self._cache.get(origin)
+        if parser is None:
+            parser = self._load(origin)
+            self._cache[origin] = parser
+        if parser is False:
+            return True          # no robots.txt / unreadable -> allowed
+        try:
+            return bool(parser.can_fetch(self._ua, url))
+        except Exception:
+            return True
+
+    def _load(self, origin: str) -> Any:
+        from urllib.robotparser import RobotFileParser
+        status, body = self._ctx.get_text(f"{origin}/robots.txt", timeout=6.0,
+                                          vendor="discovery")
+        if status != 200 or not body:
+            return False
+        parser = RobotFileParser()
+        try:
+            parser.parse(body[:200_000].splitlines())
+        except Exception:
+            return False
+        return parser
+
+
+# ---------------------------------------------------------------------------
+# Domain resolution
+# ---------------------------------------------------------------------------
+
+_LEGAL_WORDS = re.compile(
+    r"\b(llc|inc|corp|corporation|company|co|ltd|limited|lp|llp|pllc|pc|the)\b",
+    re.IGNORECASE)
+
+
+def candidate_domains(name: str, known: str = "") -> List[str]:
+    """Plausible domains for a company, best first.
+
+    Guessing a domain is far cheaper and more accurate than guessing an ATS
+    slug (companies overwhelmingly own `<theirname>.com`), and every guess is
+    confirmed by checking that the fetched page actually names the company -
+    see `_page_mentions`. A wrong guess costs one HEAD-ish request and is
+    discarded; it never produces an endpoint on its own.
+    """
+    if known:
+        host = known.strip().lower()
+        host = re.sub(r"^https?://", "", host).split("/")[0]
+        if host:
+            return [host]
+    base = _LEGAL_WORDS.sub(" ", str(name or "").lower())
+    base = re.sub(r"[^a-z0-9\s\-]", " ", base)
+    tokens = [t for t in base.split() if t]
+    if not tokens:
+        return []
+    joined = "".join(tokens)
+    hyphen = "-".join(tokens)
+    out: List[str] = []
+    for stem in dict.fromkeys([joined, hyphen, tokens[0] if len(tokens) > 1 else ""]):
+        if not stem or len(stem) < 3:
+            continue
+        out.extend([f"{stem}.com", f"www.{stem}.com"])
+    return out[:4]
+
+
+def _resolves(host: str) -> bool:
+    try:
+        socket.getaddrinfo(host, 443)
+        return True
+    except OSError:
+        return False
+
+
+def _page_mentions(body: str, name: str) -> bool:
+    """Cheap confirmation that a guessed domain belongs to this company.
+
+    Guarding against the very common case where `<name>.com` is a parked domain
+    or an unrelated business. Matches on the longest name token so
+    "Acme Widgets LLC" is confirmed by a page mentioning "Acme".
+    """
+    tokens = [t for t in re.split(r"\W+", str(name or "").lower())
+              if len(t) > 3 and not _LEGAL_WORDS.match(t)]
+    if not tokens:
+        return True
+    longest = max(tokens, key=len)
+    return longest in (body or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# Result
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DiscoveryResult:
+    company_id: str = ""
+    name: str = ""
+    domain: str = ""
+    endpoints: List[Endpoint] = field(default_factory=list)
+    validated: List[Tuple[Endpoint, ValidationResult]] = field(default_factory=list)
+    pages_fetched: int = 0
+    unknown_hosts: Dict[str, int] = field(default_factory=dict)
+    blocked: bool = False
+    detail: str = ""
+
+    @property
+    def found(self) -> int:
+        return len(self.endpoints)
+
+    @property
+    def working(self) -> int:
+        return sum(1 for _e, r in self.validated if r.ok)
+
+
+# ---------------------------------------------------------------------------
+# The engine
+# ---------------------------------------------------------------------------
+
+#: Hosts that clearly belong to SOME ATS but matched no provider. Surfaced so
+#: the next vendor to implement is picked from evidence.
+_ATS_HINT_RE = re.compile(
+    r"(?:^|\.)(?:jobs?|careers?|recruit\w*|talent|hire|apply|workforce|hcm|ats)"
+    r"[a-z0-9\-]*\.[a-z]{2,}$", re.IGNORECASE)
+
+
+class PortalDiscovery:
+    def __init__(self, ctx: FetchContext, *, validate: bool = True,
+                 max_pages: int = MAX_PAGES_PER_COMPANY):
+        self.ctx = ctx
+        self.robots = RobotsCache(ctx)
+        self.validate = validate
+        self.max_pages = max(1, int(max_pages))
+        self.last_status: Any = None
+
+    # -- fetching ------------------------------------------------------------
+
+    def _get_html(self, url: str) -> Optional[str]:
+        if not self.robots.allows(url):
+            self.last_status = "robots"
+            logger.debug("discovery: robots disallow %s", url)
+            return None
+        status, body = self.ctx.get_text(url, timeout=10.0, vendor="discovery")
+        # Recorded so "found nothing" can be told apart from "was never let in".
+        # Corporate sites behind a bot wall return 403/503 to any non-browser
+        # UA, and that is a completely different problem from an employer who
+        # genuinely has no careers page - it needs a different fix, so the two
+        # must not look identical in the results.
+        self.last_status = status if status is not None else "network"
+        if status != 200 or not body:
+            return None
+        return body[:MAX_HTML_BYTES]
+
+    # -- link extraction -----------------------------------------------------
+
+    @staticmethod
+    def extract_urls(html: str, base_url: str) -> List[str]:
+        """Every absolute URL a page references.
+
+        Attributes AND bare URLs in inline script/JSON, because site builders
+        (Wix, Squarespace, Webflow) frequently inject the ATS embed as a config
+        value rather than as an anchor href - and that config value is exactly
+        the link that names the tenant.
+        """
+        out: List[str] = []
+        seen: Set[str] = set()
+
+        def add(raw: str) -> None:
+            raw = (raw or "").strip()
+            if not raw or raw.startswith(("data:", "javascript:", "mailto:",
+                                          "tel:", "#")):
+                return
+            try:
+                absolute = urljoin(base_url, raw)
+            except Exception:
+                return
+            if not absolute.startswith(("http://", "https://")):
+                return
+            if absolute not in seen:
+                seen.add(absolute)
+                out.append(absolute[:600])
+
+        for m in _HREF_RE.finditer(html):
+            add(m.group(1))
+        for m in _BARE_URL_RE.finditer(html):
+            add(m.group(0))
+        return out
+
+    @staticmethod
+    def career_links(html: str, base_url: str) -> List[str]:
+        """Same-site links whose text or href looks like a careers page."""
+        try:
+            from lxml import html as lxml_html
+            doc = lxml_html.fromstring(html)
+        except Exception:
+            return []
+        base_host = (urlparse(base_url).hostname or "").lower()
+        out: List[str] = []
+        seen: Set[str] = set()
+        for a in doc.xpath("//a[@href]"):
+            href = (a.get("href") or "").strip()
+            if not href or href.startswith(("#", "mailto:", "tel:")):
+                continue
+            text = " ".join((a.text_content() or "").split())[:120]
+            if not (_CAREER_TEXT_RE.search(text) or _CAREER_TEXT_RE.search(href)):
+                continue
+            try:
+                absolute = urljoin(base_url, href)
+            except Exception:
+                continue
+            host = (urlparse(absolute).hostname or "").lower()
+            # Off-site careers links are the JACKPOT (that IS the ATS URL), so
+            # they are kept; same-site ones are pages to crawl next.
+            if absolute in seen:
+                continue
+            seen.add(absolute)
+            out.append(absolute)
+            if len(out) >= 12:
+                break
+        return out
+
+    # -- the pass ------------------------------------------------------------
+
+    def discover(self, name: str, *, domain: str = "",
+                 company_id: str = "") -> DiscoveryResult:
+        res = DiscoveryResult(company_id=company_id, name=name)
+        host = self._resolve_domain(name, domain, res)
+        if not host:
+            res.detail = "no reachable domain"
+            return res
+        res.domain = host
+
+        collected: Dict[str, Endpoint] = {}
+        urls_seen: List[str] = []
+        pages = 0
+
+        home_html = self._get_html(f"https://{host}/")
+        if home_html:
+            pages += 1
+            urls_seen.extend(self.extract_urls(home_html, f"https://{host}/"))
+            targets = self.career_links(home_html, f"https://{host}/")
+        else:
+            targets = []
+
+        # Homepage links first (they point where the employer actually publishes
+        # jobs), then the conventional paths as a fallback.
+        for path in CAREER_PATHS:
+            targets.append(f"https://{host}{path}")
+
+        visited: Set[str] = {f"https://{host}/"}
+        queue: List[Tuple[str, int]] = [(t, 1) for t in targets]
+
+        while queue:
+            if pages >= self.max_pages or self.ctx.should_stop():
+                break
+            target, depth = queue.pop(0)
+            if target in visited:
+                continue
+            visited.add(target)
+            thost = (urlparse(target).hostname or "").lower()
+            if not thost or _SKIP_HOST_RE.search(thost):
+                continue
+            # An off-site careers link may itself already BE the ATS URL, in
+            # which case fingerprint it directly and skip the fetch entirely.
+            if thost != host and not thost.endswith(f".{host}"):
+                if ats_registry.match_url(target):
+                    urls_seen.append(target)
+                    continue
+            html = self._get_html(target)
+            if not html:
+                continue
+            pages += 1
+            urls_seen.append(target)
+            urls_seen.extend(self.extract_urls(html, target))
+
+            # Second hop. Large employers routinely put the ATS link one level
+            # below /careers ("Search open roles" -> /careers/search -> the
+            # board), so stopping at depth 1 misses them entirely. Only taken
+            # while nothing has matched yet, so a company whose board we already
+            # found costs no extra requests.
+            if depth < 2 and not ats_registry.endpoints_from_urls(urls_seen):
+                for link in self.career_links(html, target)[:4]:
+                    if link not in visited:
+                        queue.append((link, depth + 1))
+
+        res.pages_fetched = pages
+        if pages == 0:
+            res.detail = f"no page fetched (last={self.last_status})"
+        elif not urls_seen:
+            res.detail = "pages fetched but no links extracted"
+        for ep in ats_registry.endpoints_from_urls(urls_seen):
+            ep.company_id = company_id
+            ep.display_name = name
+            collected.setdefault(ep.member_key, ep)
+        res.unknown_hosts = self._unknown_ats_hosts(urls_seen, host)
+
+        # Fallback: a modern careers page is often a React shell that loads its
+        # jobs by XHR, so the board URL is nowhere in the served HTML and
+        # fingerprinting - which is otherwise the better strategy - finds
+        # nothing. For the handful of vendors with ONE shared API host, a slug
+        # guess is a single definitive request, so a bounded probe recovers
+        # exactly these companies. Strictly a fallback: it runs only when
+        # fingerprinting came up empty, and only for `slug_probe` vendors.
+        if not collected:
+            for ep in self._slug_probe(name, host):
+                collected.setdefault(ep.member_key, ep)
+            if collected:
+                res.detail = "found by slug probe"
+
+        for ep in collected.values():
+            ep.company_id = company_id
+            ep.display_name = name
+        res.endpoints = list(collected.values())
+
+        if self.validate and res.endpoints:
+            res.validated = self._validate(res.endpoints)
+            if any(r.status == STATUS_BLOCKED for _e, r in res.validated):
+                res.blocked = True
+        return res
+
+    def _slug_probe(self, name: str, domain: str) -> List[Endpoint]:
+        """Try a small set of likely slugs against single-host board APIs.
+
+        Bounded on purpose: `slug_probe` vendors only (see AtsProvider), the
+        first two candidate slugs, and a stop on the first hit. Worst case is a
+        handful of requests against APIs built to be polled, versus the hundreds
+        that guessing Workday hosts would cost - which is why those vendors opt
+        out rather than being probed here.
+        """
+        found: List[Endpoint] = []
+        for provider in ats_registry.all_providers():
+            if not getattr(provider, "slug_probe", False):
+                continue
+            if self.ctx.should_stop():
+                break
+            for slug in list(provider.slug_candidates(name, domain))[:2]:
+                if self.ctx.should_stop():
+                    break
+                ep = Endpoint(vendor=provider.vendor, tenant=slug,
+                              display_name=name, status=STATUS_CANDIDATE)
+                try:
+                    result = provider.validate(ep, self.ctx)
+                except ChallengeError:
+                    break
+                except Exception:
+                    continue
+                if result.ok:
+                    ep.status = result.status
+                    found.append(ep)
+                    break
+        return found
+
+    def _resolve_domain(self, name: str, domain: str,
+                        res: DiscoveryResult) -> str:
+        for cand in candidate_domains(name, domain):
+            if self.ctx.should_stop():
+                return ""
+            if not _resolves(cand):
+                continue
+            if domain:
+                return cand      # caller-supplied: trust it, do not re-confirm
+            html = self._get_html(f"https://{cand}/")
+            if html is None:
+                continue
+            res.pages_fetched += 1
+            if _page_mentions(html, name):
+                return cand
+        return ""
+
+    @staticmethod
+    def _unknown_ats_hosts(urls: Iterable[str], own_host: str) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for url in urls:
+            host = (urlparse(url).hostname or "").lower()
+            if not host or host == own_host or host.endswith(f".{own_host}"):
+                continue
+            if _SKIP_HOST_RE.search(host):
+                continue
+            if not _ATS_HINT_RE.search(host):
+                continue
+            if ats_registry.match_url(url):
+                continue
+            counts[host] = counts.get(host, 0) + 1
+        return counts
+
+    def _validate(self,
+                  endpoints: Sequence[Endpoint]
+                  ) -> List[Tuple[Endpoint, ValidationResult]]:
+        out: List[Tuple[Endpoint, ValidationResult]] = []
+        for ep in endpoints:
+            if self.ctx.should_stop():
+                break
+            provider = ats_registry.get(ep.vendor)
+            if provider is None:
+                continue
+            try:
+                result = provider.validate(ep, self.ctx)
+            except ChallengeError as exc:
+                result = ValidationResult(STATUS_BLOCKED, detail=str(exc))
+            except Exception as exc:
+                logger.debug("discovery: validate %s failed: %s",
+                             ep.member_key, type(exc).__name__)
+                continue
+            ep.status = result.status
+            out.append((ep, result))
+        return out
+
+
+# ---------------------------------------------------------------------------
+# Batch driver
+# ---------------------------------------------------------------------------
+
+def discover_batch(companies: Sequence[Dict[str, Any]], ctx: FetchContext, *,
+                   persist: bool = True,
+                   validate: bool = True) -> Dict[str, Any]:
+    """Run discovery over a claimed queue batch and record the outcome.
+
+    Persistence is per company rather than at the end so a run that hits its
+    deadline still banks everything it learned - a discovery pass is expensive
+    and losing it to a timeout would be the costliest possible failure.
+    """
+    engine = PortalDiscovery(ctx, validate=validate)
+    stats = {"companies": 0, "endpoints": 0, "validated": 0, "blocked": 0,
+             "no_portal": 0, "unknown_hosts": {}}
+
+    for row in companies:
+        if ctx.should_stop():
+            break
+        name = str(row.get("name") or "")
+        if not name:
+            continue
+        stats["companies"] += 1
+        result = engine.discover(name, domain=str(row.get("domain") or ""),
+                                 company_id=str(row.get("company_id") or ""))
+        stats["endpoints"] += result.found
+        stats["validated"] += result.working
+        if result.blocked:
+            stats["blocked"] += 1
+        for host, n in (result.unknown_hosts or {}).items():
+            stats["unknown_hosts"][host] = stats["unknown_hosts"].get(host, 0) + n
+
+        if not persist:
+            continue
+        try:
+            _persist(result)
+        except Exception as exc:
+            logger.warning("discovery: persist failed for %s: %s", name,
+                           type(exc).__name__)
+    return stats
+
+
+def _persist(result: DiscoveryResult) -> None:
+    from services import company_registry_service as reg
+
+    if result.domain and result.company_id:
+        try:
+            reg.upsert_company({"company_id": result.company_id,
+                                "name": result.name, "domain": result.domain,
+                                "source": "discovery"})
+        except Exception:
+            pass
+
+    validated_keys = {e.member_key: r for e, r in result.validated}
+    for ep in result.endpoints:
+        key = reg.upsert_endpoint(ep, company_id=result.company_id,
+                                  display_name=result.name,
+                                  source="discovery")
+        vr = validated_keys.get(key) or validated_keys.get(ep.member_key)
+        if vr is not None:
+            reg.record_validation(key, vr)
+
+    if result.company_id:
+        state = (reg.DISCOVERY_DONE if result.endpoints
+                 else reg.DISCOVERY_NO_PORTAL)
+        reg.complete_discovery(result.company_id, state=state,
+                               endpoints_found=result.found,
+                               detail=result.detail)

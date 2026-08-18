@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 
 SOURCE_WORKDAY = "workday"
 SOURCE_CAREER = "career-pages"
+# Oracle and iCIMS are ingested under their own source keys (ADR-004 shards)
+# but they belong on the career-pages tab: they are "not Workday". Querying
+# only `career-pages` would hide every ORC/iCIMS requisition from seekers.
+CAREER_FEED_SOURCES = ("career-pages", "oracle", "icims")
 
 # How many postings the ranking stage considers. Scoring is a few microseconds
 # per row off a precomputed profile, so this is chosen for recall.
@@ -68,6 +72,13 @@ _ATS_LABEL = {
     "smartrecruiters": "SmartRecruiters", "workable": "Workable",
     "recruitee": "Recruitee", "workday": "Workday",
     "neogov": "GovernmentJobs",
+    "oracle_orc": "Oracle Recruiting",
+    "icims": "iCIMS",
+    "jobvite": "Jobvite",
+    "bamboohr": "BambooHR",
+    "taleo": "Taleo",
+    "phenom": "Phenom",
+    "eightfold": "Eightfold",
 }
 
 
@@ -403,7 +414,8 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
                               sorted((profile or {}).get("families") or ()))
     try:
         docs = inv.find_active_fresh(
-            source=source,
+            source=None if source == SOURCE_CAREER else source,
+            sources=CAREER_FEED_SOURCES if source == SOURCE_CAREER else None,
             role_families=families or None,
             industries=industries or None,
             tenants=companies or None,

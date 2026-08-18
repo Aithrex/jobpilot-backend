@@ -182,6 +182,32 @@ def test_a_workday_query_never_returns_career_page_rows(db):
     assert feed.build_feed("workday", _payload()) is None
 
 
+def test_oracle_and_icims_postings_surface_on_the_career_pages_tab(db):
+    """ORC/iCIMS ingest under their own source keys; seekers still see them."""
+    _seed(15, source="career-pages", tenant="acme")
+    for i in range(20):
+        sjid = f"jpmc:orc-{i}"
+        inv.upsert_posting({
+            "source": "oracle", "source_job_id": sjid,
+            "url": f"https://jpmc.fa.oraclecloud.com/hcmUI/job/{i}",
+            "company": f"JPMorgan {i}", "title": "Senior DevOps Engineer",
+            "location": ["Austin, TX, USA"], "description": JD,
+            "employment_type": "Full time", "cost_class": "free",
+            "source_quality": "direct", "industry": "tech",
+            "ats": "oracle_orc", "tenant": "jpmc",
+            "posted_at": NOW - timedelta(days=2),
+        }, now=NOW)
+        profile = fit_score.extract_requirements(JD, "Senior DevOps Engineer")
+        inv.mark_requirements_parsed(
+            "oracle", sjid, inv.get_posting("oracle", sjid)["content_hash"],
+            profile, now=NOW)
+    result = feed.build_feed("career-pages", _payload())
+    assert result is not None
+    tenants = {j["tenant"] for j in result["jobs"]}
+    assert "jpmc" in tenants
+    assert "acme" in tenants
+
+
 def test_non_us_rows_are_dropped_when_us_only(db):
     """Uses the tab's OWN geo filter. A country-code check passes almost
     everything, because boards ship free-text locations and the inventory

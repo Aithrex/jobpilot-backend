@@ -655,6 +655,12 @@ ENTERPRISE_FETCHERS: Dict[str, Callable[[Dict[str, str], List[str]], List[Dict[s
 ENTERPRISE_CATALOG: List[Dict[str, Any]] = [
     {"display_name": "Amazon", "ats": "amazon", "slug": "amazon",
      "industry": "tech", "host": "www.amazon.jobs", "extra": {}},
+    {"display_name": "JPMorgan Chase", "ats": "orc", "slug": "jpmc",
+     "industry": "banking", "host": "jpmc.fa.oraclecloud.com",
+     "extra": {"site_number": "CX_1"}},
+    {"display_name": "Oracle", "ats": "orc", "slug": "oracle",
+     "industry": "tech", "host": "eeho.fa.us2.oraclecloud.com",
+     "extra": {"site_number": "CX_1"}},
     {"display_name": "Microsoft", "ats": "eightfold", "slug": "microsoft",
      "industry": "tech", "host": "apply.careers.microsoft.com",
      "extra": {"domain": "microsoft.com", "variant": "pcsx"}},

@@ -1182,6 +1182,7 @@ def find_active_fresh(
     work_mode: Optional[str] = None,
     seniority: Optional[str] = None,
     source: Optional[str] = None,
+    sources: Optional[Iterable[str]] = None,
     industries: Optional[Iterable[str]] = None,
     tenants: Optional[Iterable[str]] = None,
     projection: Optional[Dict[str, Any]] = None,
@@ -1254,9 +1255,13 @@ def find_active_fresh(
     # industry set or a specific company; those used to be applied by choosing
     # which catalog rows to crawl, which is meaningless once the crawl is
     # scheduled rather than per-request. They are read filters now.
-    src = _safe_key(source, 60)
-    if src:
-        query["source"] = src
+    srcs = [s for s in (_safe_key(s, 60) for s in (sources or [])) if s]
+    if srcs:
+        query["source"] = {"$in": srcs} if len(srcs) > 1 else srcs[0]
+    else:
+        src = _safe_key(source, 60)
+        if src:
+            query["source"] = src
     inds = [i for i in (_safe_key(i, 40) for i in (industries or [])) if i]
     if inds:
         query["industry"] = {"$in": inds} if len(inds) > 1 else inds[0]

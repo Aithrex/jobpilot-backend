@@ -28,6 +28,34 @@ here so the next person does not repeat the requests:
 
 * **iCIMS** (emory, rivian): every pattern returns HTML, no JSON, no embedded job
   payload. INDEPENDENTLY CONFIRMS the doc's Tier C verdict. Do not build.
+
+  **SUPERSEDED 2026-08-17. This conclusion was wrong and cost ~4,000 employers.**
+  iCIMS GRADUATED: it is now a real provider
+  (`services/ats_providers/icims.py`), verified live pulling 50 postings from
+  `internal-careers-rivian`. See ADR-004 §3.2.
+
+  The observation above was accurate; the inference from it was not. "No JSON"
+  is not "not fetchable" - `lxml>=5.0.0` has been a runtime dependency the whole
+  time. What the run actually established was the narrower fact that iCIMS is
+  not a JSON API.
+
+  Two things had to be true at once, and this prober could see neither:
+    1. `GET /jobs/search?ss=1&in_iframe=1` DOES return 200 and ~26KB of real,
+       server-rendered HTML - but with an empty result set and the text "Sorry,
+       no jobs were found", because the search needs a session-bound `hashed`
+       token carried in the page's own `<form id="searchForm" action=...>`.
+       Fetch the shell first, reuse the token and cookie, then page. Precisely
+       the NeoGov lesson below, repeated: the endpoint was always there, the
+       probe just did not speak its protocol.
+    2. `*.icims.com` is WILDCARD DNS and the anti-bot wall is per source IP
+       across all tenants, so bursts return 405 "Human Verification" on every
+       host at once. Serial requests ~2.5s apart run indefinitely at 200.
+
+  The generalisable lesson, and the reason this note is this long: **a verdict is
+  only as wide as the instrument that produced it.** This script looks for JSON
+  APIs, so "not usable" can only ever mean "not a JSON API". When it says a
+  vendor is unfetchable, that is a hypothesis about the vendor AND about the
+  prober - check the second one too.
 * **NeoGov / governmentjobs.com** (washington, seattle): **FETCHABLE**, via
   `POST /careers/{slug}/home/loadJobsOnMaps` with an `X-Requested-With:
   XMLHttpRequest` header and an empty form body. 706 jobs for `washington` and
@@ -110,6 +138,11 @@ PATTERNS: Dict[str, List[str]] = {
         "https://jobs.jobvite.com/careers/{slug}/jobs.json",
         "https://jobs.jobvite.com/{slug}/search",
     ],
+    # icims GRADUATED (2026-08-17) -> services/ats_providers/icims.py. Left here
+    # ONLY as a worked example of the failure mode this script is prone to (see
+    # the module docstring): every pattern below returns 200 HTML with zero jobs,
+    # because none of them carries the `hashed` token the search requires. A
+    # prober that scores "did a job array come back" reads that as "dead vendor".
     "icims": [
         "https://careers-{slug}.icims.com/jobs/search?in_iframe=1",
         "https://{slug}.icims.com/jobs/search?in_iframe=1",

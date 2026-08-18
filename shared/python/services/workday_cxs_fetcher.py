@@ -352,12 +352,14 @@ _DAY_RE = re.compile(r"(\d+)\+?\s+day", re.IGNORECASE)
 _MONTH_RE = re.compile(r"(\d+)\+?\s+month", re.IGNORECASE)
 
 
-def _approx_iso_from_relative(posted_on: str) -> str:
+def _approx_iso_from_relative(posted_on: str, now: Optional[datetime] = None) -> str:
     """Convert "Posted 2 Days Ago" into an approximate ISO date."""
     text = (posted_on or "").strip().lower()
     if not text:
         return ""
-    now = datetime.now(timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     if "today" in text or "just" in text:
         return now.isoformat()
     if "yesterday" in text:

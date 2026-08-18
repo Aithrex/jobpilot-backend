@@ -798,6 +798,42 @@ INDEX_SPECS = [
     # trail, not inventory.
     ("job_ingestion_runs", [("expire_at", ASCENDING)],
      {"expireAfterSeconds": 0, "name": "ttl_expire_at"}),
+
+    # === ADR-004 employer graph ===========================================
+    # Mirrors company_registry_service.ensure_indexes() (names/keys/options
+    # MUST match so a runtime ensure_indexes call is a clean no-op re-assert).
+    # companies: lookup by id, the priority sweep that feeds discovery_queue,
+    # and the name+state join used to merge state-registry + federal sources.
+    ("companies", [("company_id", ASCENDING)],
+     {"unique": True, "name": "company_id_uniq"}),
+    ("companies", [("discovery_status", ASCENDING), ("priority", DESCENDING)],
+     {"name": "discovery_priority"}),
+    ("companies", [("name_normalized", ASCENDING), ("state", ASCENDING)],
+     {"name": "name_state"}),
+    ("companies", [("state", ASCENDING)], {"name": "state"}),
+    ("companies", [("domain", ASCENDING)],
+     {"name": "domain", "sparse": True}),
+    # company_ats_endpoints: member_key is the crawl identity (ADR-003 prefix);
+    # (vendor, status) is how job_ingest_worker._mongo_members pages;
+    # revalidation walks status + last_checked_at.
+    ("company_ats_endpoints", [("member_key", ASCENDING)],
+     {"unique": True, "name": "member_key_uniq"}),
+    ("company_ats_endpoints", [("vendor", ASCENDING), ("status", ASCENDING)],
+     {"name": "vendor_status"}),
+    ("company_ats_endpoints", [("company_id", ASCENDING)],
+     {"name": "company", "sparse": True}),
+    ("company_ats_endpoints", [("status", ASCENDING),
+                               ("last_checked_at", ASCENDING)],
+     {"name": "revalidation"}),
+    # discovery_queue: unique per company so two shards cannot enqueue the
+    # same employer twice; claim_order is the lease-claim scan.
+    ("discovery_queue", [("company_id", ASCENDING)],
+     {"unique": True, "name": "company_uniq"}),
+    ("discovery_queue", [("state", ASCENDING), ("priority", DESCENDING),
+                         ("created_at", ASCENDING)],
+     {"name": "claim_order"}),
+    ("discovery_queue", [("lease_expiry", ASCENDING)],
+     {"name": "lease", "sparse": True}),
 ]
 
 # Indexes DROPPED by this migration (Guest Onboarding v2: plaintext identity
