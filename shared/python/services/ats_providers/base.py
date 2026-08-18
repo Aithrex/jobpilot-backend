@@ -472,3 +472,21 @@ class ChallengeError(RuntimeError):
         super().__init__(f"{vendor} challenge"
                          + (f" (status={status})" if status else "")
                          + (f": {detail}" if detail else ""))
+
+
+class PortalMovedError(RuntimeError):
+    """Raised when a tenant's board has migrated off this vendor entirely.
+
+    Distinct from `ChallengeError` (retry later) and from an ordinary empty
+    board (keep, it will have openings again). A migrated portal will NEVER
+    serve jobs again, but the employer has not stopped hiring — their postings
+    moved to another vendor. So the destination travels with the error, and
+    discovery re-fingerprints it instead of the employer silently vanishing
+    from the index.
+    """
+
+    def __init__(self, vendor: str, destination: str = ""):
+        self.vendor = vendor
+        self.destination = destination
+        super().__init__(f"{vendor} portal moved"
+                         + (f" to {destination}" if destination else ""))

@@ -444,14 +444,40 @@ _SEED_ENDPOINTS: Tuple[Dict[str, str], ...] = (
     {"vendor": "oracle_orc", "tenant": "eeho", "site": "CX_1",
      "host": "eeho.fa.us2.oraclecloud.com", "display_name": "Oracle",
      "industry": "tech"},
-    # Rivian's PUBLIC board. `internal-careers-rivian` also answers, and serves
-    # well-formed rows, but it is the employee-only redeployment board - those
-    # postings cannot be applied to from outside the company, so ingesting them
-    # would put unreachable jobs in front of seekers. `IcimsProvider` rejects
-    # internal boards during discovery; this seed must not smuggle one back in.
-    {"vendor": "icims", "tenant": "us-careers-rivian", "site": "",
-     "host": "us-careers-rivian.icims.com", "display_name": "Rivian",
-     "industry": "automotive"},
+    # iCIMS seeds. Each was verified on 2026-08-18 to return real postings
+    # through `IcimsProvider.list_jobs`, not merely to answer 200 - `*.icims.com`
+    # is wildcard DNS, so "the host resolves" and even "the host serves HTML"
+    # prove nothing about whether a tenant exists.
+    #
+    # The previous seed here was `us-careers-rivian`, and it is instructive:
+    # Rivian has MIGRATED off iCIMS. That host still answers 200, with a
+    # 143-byte body whose only content is `window.top.location.href =
+    # 'https://careers.rivian.com/jobs'`. So the one seed the whole iCIMS source
+    # had could never yield a posting, and the source would have measured as
+    # "deployed and returning zero" rather than as "misconfigured".
+    #
+    # `careers-emory` is deliberately NOT here either: it is a landing page that
+    # iframes the real board. `staff-emory` is where Emory's jobs are. A portal
+    # that renders is not the same thing as a portal that hires.
+    {"vendor": "icims", "tenant": "staff-emory", "site": "",
+     "host": "staff-emory.icims.com", "display_name": "Emory University",
+     "industry": "education"},
+    {"vendor": "icims", "tenant": "careers-fremontbank", "site": "",
+     "host": "careers-fremontbank.icims.com", "display_name": "Fremont Bank",
+     "industry": "banking"},
+    {"vendor": "icims", "tenant": "careers-fresenius-kabi", "site": "",
+     "host": "careers-fresenius-kabi.icims.com",
+     "display_name": "Fresenius Kabi", "industry": "pharma"},
+    # Taleo, now that it is configurable. ADR-004 §3.3 declined to seed it
+    # because "every zone needs an opaque portal id that is not derivable and
+    # that we do not have"; `TaleoProvider._discover_portal` now reads that id
+    # off the zone's own career-section page, so a bare zone is enough.
+    {"vendor": "taleo", "tenant": "aarcorp", "site": "",
+     "host": "aarcorp.taleo.net", "display_name": "AAR Corp",
+     "industry": "aerospace"},
+    {"vendor": "taleo", "tenant": "baesystems", "site": "",
+     "host": "baesystems.taleo.net", "display_name": "BAE Systems",
+     "industry": "aerospace"},
 )
 
 

@@ -5,15 +5,39 @@ from services.ats_providers.boards import BambooHrProvider, JobviteProvider
 
 
 class _Ctx:
-    def __init__(self, payload):
+    """Minimal FetchContext stand-in.
+
+    Carries BOTH fetchers: several providers are HTML, not JSON, and a context
+    that only speaks `get_json` silently forces a test to be written against a
+    protocol the vendor does not serve — which is exactly how Jobvite and
+    BambooHR shipped parsing fabricated payloads while their tests passed.
+    """
+
+    def __init__(self, payload=None, text=None, texts=None):
         self.payload = payload
+        self.text = text
+        self.texts = texts or {}
         self.cutoff_iso = None
+        self.calls = []
 
     def should_stop(self):
         return False
 
+    def log(self, *args, **kwargs):
+        pass
+
     def get_json(self, url, params=None, timeout=None, vendor=""):
+        self.calls.append(url)
+        if isinstance(self.payload, dict) and url in self.payload:
+            return 200, self.payload[url]
         return 200, self.payload
+
+    def get_text(self, url, params=None, timeout=None, vendor=""):
+        self.calls.append(url)
+        for key, body in self.texts.items():
+            if key in url:
+                return 200, body
+        return 200, self.text
 
 
 def test_at_least_twelve_vendors_including_oracle_and_icims():
@@ -28,32 +52,128 @@ def test_at_least_twelve_vendors_including_oracle_and_icims():
     assert len(vendors) >= 14
 
 
-def test_jobvite_parses_positions_payload():
-    ctx = _Ctx({"positions": [{
-        "id": "jv-1", "title": "Staff Engineer",
-        "applyUrl": "https://jobs.jobvite.com/acme/job/jv-1",
-        "postedDate": "2026-08-01", "location": "Austin, TX",
-        "jobDescription": "<p>Build things</p>",
-    }]})
+#: A verbatim slice of `https://jobs.jobvite.com/actionet/search` (2026-08-18).
+#: Kept as real markup rather than a tidied approximation: the reason the old
+#: Jobvite test passed against a broken provider is that its fixture was
+#: invented, so it could only ever prove the parser agreed with the test author.
+_JOBVITE_HTML = """
+<table class="jv-job-list">
+  <tr>
+    <td class="jv-job-list-name">
+      <a href="/actionet/job/ouFyAfw1">Engineering and Installation Technician</a>
+    </td>
+    <td class="jv-job-list-location">
+        Honolulu,
+        Nizhny
+    </td>
+  </tr>
+  <tr>
+    <td class="jv-job-list-name">
+      <a href="/actionet/job/o2cAzfw7">Enterprise Operations Manager</a>
+    </td>
+    <td class="jv-job-list-location">
+      <div class="jv-meta">2 Locations</div>
+    </td>
+  </tr>
+</table>
+"""
+
+
+def test_jobvite_parses_the_html_board_it_actually_serves():
+    ctx = _Ctx(text=_JOBVITE_HTML)
     jobs = list(JobviteProvider().list_jobs(
-        Endpoint(vendor="jobvite", tenant="acme"), ctx))
-    assert len(jobs) == 1
-    assert jobs[0].title == "Staff Engineer"
-    assert jobs[0].source_job_id == "jv-1"
-    assert "Build things" in jobs[0].description
+        Endpoint(vendor="jobvite", tenant="actionet"), ctx))
+    assert [j.source_job_id for j in jobs] == ["ouFyAfw1", "o2cAzfw7"]
+    assert jobs[0].title == "Engineering and Installation Technician"
+    assert jobs[0].apply_url == \
+        "https://jobs.jobvite.com/actionet/job/ouFyAfw1"
+    assert jobs[0].location == "Honolulu, Nizhny"
 
 
-def test_bamboohr_parses_careers_list():
-    ctx = _Ctx({"result": [{
-        "id": "42", "jobOpeningName": "Backend Engineer",
-        "locationLabel": "Remote, US", "datePosted": "2026-08-10",
-        "departmentLabel": "Engineering", "employmentStatusLabel": "Full-Time",
-    }]})
+def test_jobvite_does_not_store_a_location_count_as_a_place():
+    """"2 Locations" is a count. Storing it makes the req match nowhere."""
+    ctx = _Ctx(text=_JOBVITE_HTML)
+    jobs = list(JobviteProvider().list_jobs(
+        Endpoint(vendor="jobvite", tenant="actionet"), ctx))
+    assert jobs[1].location == ""
+
+
+def test_jobvite_treats_the_marketing_redirect_as_not_a_board():
+    """An unknown slug 200s onto Jobvite's own support page.
+
+    Read as "a board with no jobs", such a tenant is kept and re-crawled for
+    ever; it has to read as "not a board".
+    """
+    ctx = _Ctx(text='<html><body>job-seeker-support</body></html>')
+    jobs = list(JobviteProvider().list_jobs(
+        Endpoint(vendor="jobvite", tenant="nope"), ctx))
+    assert jobs == []
+
+
+def test_jobvite_never_claims_a_posting_date():
+    """Jobvite publishes none, on listing or detail (ADR-001)."""
+    assert JobviteProvider().date_confidence == "unknown"
+    ctx = _Ctx(text=_JOBVITE_HTML)
+    jobs = list(JobviteProvider().list_jobs(
+        Endpoint(vendor="jobvite", tenant="actionet"), ctx))
+    assert all(j.posted_at == "" for j in jobs)
+
+
+#: The shape `24slg.bamboohr.com/careers/list` really returns (2026-08-18).
+#: Note what is ABSENT: no `datePosted`, no `locationLabel`. Both were in the
+#: previous fixture, and neither exists.
+_BAMBOO_LIST = {"meta": {"totalCount": 1}, "result": [{
+    "id": "549", "jobOpeningName": "Admin - Solar Cell",
+    "departmentLabel": "Operation EV/Solar",
+    "employmentStatusLabel": "Full-Time", "employmentType": None,
+    "location": {"city": "Wattana", "state": "Bangkok"},
+    "atsLocation": {"country": None, "state": None, "city": None},
+    "isRemote": None, "locationType": "0",
+}]}
+
+_BAMBOO_DETAIL = {"meta": {}, "result": {"jobOpening": {
+    "datePosted": "2026-01-26", "compensation": "17k-19k",
+    "description": "<p>Role Summary</p><p>The Administrative Officer...</p>",
+    "employmentStatusLabel": "Full-Time",
+    "departmentLabel": "Operation EV/Solar",
+    "jobOpeningShareUrl": "https://24slg.bamboohr.com/careers/549",
+}}}
+
+
+def test_bamboohr_reads_the_nested_location_object():
+    """`location` is a dict; `str()` of it would index literal Python."""
+    ctx = _Ctx(_BAMBOO_LIST)
     jobs = list(BambooHrProvider().list_jobs(
-        Endpoint(vendor="bamboohr", tenant="acme"), ctx))
-    assert jobs[0].title == "Backend Engineer"
-    assert jobs[0].apply_url == "https://acme.bamboohr.com/careers/42"
-    assert jobs[0].department == "Engineering"
+        Endpoint(vendor="bamboohr", tenant="24slg"), ctx))
+    assert jobs[0].title == "Admin - Solar Cell"
+    assert jobs[0].location == "Wattana, Bangkok"
+    assert jobs[0].department == "Operation EV/Solar"
+    assert jobs[0].apply_url == "https://24slg.bamboohr.com/careers/549"
+
+
+def test_bamboohr_listing_claims_no_date_and_detail_supplies_it():
+    """The listing has no date field at all; `/detail` is where it lives."""
+    assert BambooHrProvider().date_confidence == "unknown"
+    ctx = _Ctx(_BAMBOO_LIST)
+    endpoint = Endpoint(vendor="bamboohr", tenant="24slg")
+    listed = list(BambooHrProvider().list_jobs(endpoint, ctx))[0]
+    assert listed.posted_at == ""
+    assert listed.date_confidence == "unknown"
+
+    detail = BambooHrProvider().fetch_detail(
+        endpoint, listed, _Ctx(_BAMBOO_DETAIL))
+    assert detail is not None
+    assert detail.posted_at.startswith("2026-01-26")
+    assert detail.date_confidence == "exact"
+    assert detail.compensation == "17k-19k"
+    assert "Role Summary" in detail.description
+
+
+def test_bamboohr_skips_vendor_infrastructure_labels():
+    """`www.bamboohr.com/careers/list` is marketing HTML, not a board."""
+    provider = BambooHrProvider()
+    assert provider.endpoint_from_match({"tenant": "www"}, "") is None
+    assert provider.endpoint_from_match({"tenant": "24slg"}, "") is not None
 
 
 def test_jobvite_and_bamboohr_fingerprints_capture_tenant():

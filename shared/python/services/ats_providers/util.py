@@ -254,3 +254,69 @@ def looks_remote(*parts: Any) -> Optional[bool]:
         if p and _REMOTE_RE.search(str(p)):
             return True
     return None
+
+
+# ---------------------------------------------------------------------------
+# Fabricated timestamps
+# ---------------------------------------------------------------------------
+
+def _seconds_into_day(dt: datetime) -> float:
+    return (dt.hour * 3600 + dt.minute * 60 + dt.second
+            + dt.microsecond / 1_000_000.0)
+
+
+def looks_minted_now(value: Any, *, now: Optional[datetime] = None,
+                     tolerance_seconds: float = 300.0) -> bool:
+    """True when a published timestamp was minted from the page's OWN clock.
+
+    Some ATS portals emit schema.org `datePosted` for SEO without having a real
+    posting date to put in it, and fill it from `now()` shifted by a constant.
+    Observed live on `staff-emory.icims.com` (2026-08-18): every requisition
+    reported
+
+        datePosted   2024-08-18T04:54:40.821Z     <- render time minus 2 years
+        validThrough 2027-08-18T04:54:40.821Z     <- render time plus 1 year
+
+    and the sub-second component moved with each request. Meanwhile
+    `careers-fremontbank.icims.com` published `2026-08-14T04:00:00.000Z`, a
+    genuine date. So this is a per-portal misconfiguration, not a vendor-wide
+    one, and it cannot be handled by disbelieving the vendor as a whole.
+
+    Ingesting the synthetic value is not a cosmetic problem. A date two years
+    old is dropped outright by the freshness cutoff, so the employer silently
+    contributes zero postings; a date shifted the other way would be worse,
+    re-dating stale requisitions as fresh — the exact harm ADR-001 exists to
+    prevent.
+
+    The discriminator is deliberately narrow, because a false positive discards
+    a real date:
+
+      * a NON-ZERO sub-second component — real feeds publish whole seconds,
+        usually midnight or a whole hour (`.000Z` above), because a posting date
+        is a date, not an instant; and
+      * a time-of-day within `tolerance_seconds` of ours, comparing time-of-day
+        ONLY so the vendor's year/date offset is irrelevant.
+
+    Both must hold. A `.000Z` stamp is never rejected however close to now it
+    falls, and a millisecond-precision stamp from an unrelated hour is kept.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return False
+    iso = to_iso(text)
+    if not iso:
+        return False
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(timezone.utc)
+    if dt.microsecond == 0:
+        return False
+
+    ref = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    delta = abs(_seconds_into_day(dt) - _seconds_into_day(ref))
+    delta = min(delta, 86400.0 - delta)   # wrap around midnight
+    return delta <= float(tolerance_seconds)

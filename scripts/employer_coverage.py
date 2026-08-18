@@ -178,6 +178,100 @@ def cmd_discover(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# discover-tenants  (vendor-first)
+# ---------------------------------------------------------------------------
+
+def cmd_discover_tenants(args: argparse.Namespace) -> int:
+    """Enumerate a vendor's tenants from public archives, then validate them.
+
+    `discover` is COMPANY-first: it needs a company that we already know exists
+    and whose domain we already have, then asks that company's own site which
+    ATS it uses. That is the right primary strategy (ADR-004 §2.1) and it is
+    also the reason the long tail is unreachable — state registries publish
+    names, not domains, and the smallest employers are on nobody's list.
+
+    This is the other direction. Vendors that give every customer their own
+    hostname have already published their customer list, in Common Crawl's URL
+    index and in Certificate Transparency. Read the tenants off the vendor and
+    work backwards to the employer.
+
+    Nothing here decides a tenant is real: an archived hostname is a CANDIDATE
+    (wildcard DNS resolves anything, crawled URLs go 404, certificates outlive
+    customers). `provider.validate()` promotes it, exactly as it does for a
+    fingerprinted endpoint.
+    """
+    from services import company_registry_service as reg
+    from services.ats_providers import registry as ats_registry
+    from services.ats_providers.base import Endpoint
+    from services.ats_providers.http import simple_context
+    from services import tenant_discovery
+
+    vendors = args.vendor or [v for v, _d in tenant_discovery.SUBDOMAIN_VENDORS]
+    domains = dict(tenant_discovery.SUBDOMAIN_VENDORS)
+
+    totals: Dict[str, int] = {"candidates": 0, "validated": 0, "empty": 0,
+                              "dead": 0, "blocked": 0, "skipped": 0}
+    for vendor in vendors:
+        domain = domains.get(vendor)
+        if not domain:
+            logger.warning("no tenant domain known for %s — skipping", vendor)
+            continue
+        provider = ats_registry.get(vendor)
+        if provider is None:
+            logger.warning("no provider registered for %s — skipping", vendor)
+            continue
+
+        logger.info("enumerating %s tenants under *.%s", vendor, domain)
+        candidates = tenant_discovery.discover_vendor_tenants(
+            vendor, domain, cc_pages=args.cc_pages,
+            use_crtsh=args.use_crtsh)
+        logger.info("%s: %d candidate hostnames", vendor, len(candidates))
+        totals["candidates"] += len(candidates)
+        if args.dry_run:
+            for cand in candidates[:args.limit]:
+                logger.info("    %-52s %s", cand.host, sorted(cand.sources))
+            continue
+
+        # Validation is the expensive half and some vendors are deliberately
+        # slow (iCIMS paces at 2.5s with one connection), so it gets its own
+        # budget and the highest-confidence candidates go first.
+        ctx = simple_context(budget_seconds=args.budget,
+                             guard=_guard_for_discovery())
+        checked = 0
+        for cand in candidates:
+            if checked >= args.limit or ctx.should_stop():
+                break
+            endpoint = Endpoint(vendor=vendor, tenant=cand.label,
+                                host=cand.host)
+            checked += 1
+            try:
+                result = provider.validate(endpoint, ctx)
+            except Exception as exc:
+                logger.debug("%s: %s validate failed (%s)", vendor, cand.host,
+                             type(exc).__name__)
+                totals["skipped"] += 1
+                continue
+            status = getattr(result, "status", "") or ""
+            totals[status] = totals.get(status, 0) + 1
+            # Only a board that actually served rows is worth a row of its own.
+            # Persisting every candidate would fill `company_ats_endpoints` with
+            # hostnames that merely resolve, which is precisely the mistake
+            # wildcard DNS invites.
+            if status not in ("validated", "empty"):
+                continue
+            key = reg.upsert_endpoint(endpoint,
+                                      display_name=cand.label,
+                                      source=f"tenant-archive:{vendor}")
+            reg.record_validation(key, result)
+            logger.info("    %-46s %-10s %5d  %s", cand.host, status,
+                        getattr(result, "job_count", 0),
+                        (getattr(result, "sample_title", "") or "")[:40])
+
+    logger.info("discover-tenants: %s", totals)
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # revalidate
 # ---------------------------------------------------------------------------
 
@@ -370,6 +464,22 @@ def main() -> int:
     p.add_argument("--no-validate", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_discover)
+
+    p = sub.add_parser("discover-tenants",
+                       help="enumerate a vendor's tenants from public archives")
+    p.add_argument("--vendor", action="append", default=[],
+                   help="vendor key (repeatable); default = every enumerable one")
+    p.add_argument("--limit", type=int, default=200,
+                   help="candidates to VALIDATE per vendor")
+    p.add_argument("--budget", type=float, default=900.0,
+                   help="seconds of validation per vendor")
+    p.add_argument("--cc-pages", type=int, default=6,
+                   help="Common Crawl index pages to read per vendor")
+    p.add_argument("--use-crtsh", action="store_true",
+                   help="also query crt.sh (often unavailable)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="list candidates without validating or writing")
+    p.set_defaults(func=cmd_discover_tenants)
 
     p = sub.add_parser("revalidate", help="re-check known endpoints")
     p.add_argument("--limit", type=int, default=200)

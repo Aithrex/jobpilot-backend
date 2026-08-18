@@ -73,6 +73,13 @@ from services.ats_providers.util import html_to_text, looks_remote, to_iso
 
 _PAGE_SIZE = 25          # server-fixed; `pageSize` in pagingData confirms it
 
+#: The numeric portal id as the career-section page prints it. Matched loosely
+#: (`portal=`, `portal:`, `"portal" : "…"`) because the surrounding markup
+#: differs between Taleo template versions, while the id itself is always a run
+#: of at least six digits.
+_PORTAL_ID_RE = re.compile(r"portal[\"']?\s*[:=]\s*[\"']?(\d{6,})",
+                           re.IGNORECASE)
+
 
 def _search_body(page: int, keyword: str = "") -> Dict[str, Any]:
     return {
@@ -145,6 +152,36 @@ class TaleoProvider(AtsProvider):
         portal = str(extra.get("portal") or extra.get("portal_id") or "").strip()
         return portal if portal.isdigit() else ""
 
+    def _discover_portal(self, zone: str, ctx: FetchContext) -> str:
+        """Read the numeric portal id off the career section's own page.
+
+        ADR-004 §3.3 concluded that Taleo could not be seeded because "every
+        zone needs an opaque portal id that is not derivable and that we do not
+        have". The id is not derivable — but it is not hidden either. It is
+        printed in the career-section page that the zone's bare search URL
+        redirects to (verified on `aarcorp.taleo.net`, 2026-08-18):
+
+            GET https://{zone}.taleo.net/careersection/jobsearch.ftl
+              -> 302 /careersection/2/jobsearch.ftl
+              -> body contains  portal=101430233
+
+        One extra GET per zone converts Taleo from "cannot be configured" into
+        an ordinary source. The searchjobs POST for that portal then returned
+        200 requisitions for AAR Corp, with titles, locations and real posted
+        dates — so this is a live surface, not the vestige the ADR assumed.
+
+        Returns "" when the zone does not resolve or publishes no portal, which
+        is a configuration answer, not a claim that the employer has no jobs.
+        """
+        status, body = ctx.get_text(
+            f"https://{zone}.taleo.net/careersection/jobsearch.ftl",
+            params={"lang": "en"}, timeout=self.policy.timeout,
+            vendor=self.vendor)
+        if status != 200 or not body:
+            return ""
+        m = _PORTAL_ID_RE.search(body)
+        return m.group(1) if m else ""
+
     def _url(self, zone: str) -> str:
         return f"https://{zone}.taleo.net/careersection/rest/jobboard/searchjobs"
 
@@ -153,10 +190,21 @@ class TaleoProvider(AtsProvider):
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
         zone = self._zone(endpoint)
-        portal = self._portal(endpoint)
-        if not zone or not portal:
-            ctx.log("info", "taleo: %s missing zone/portal, skipping",
+        if not zone:
+            ctx.log("info", "taleo: %s has no zone, skipping",
                     endpoint.member_key)
+            return
+        portal = self._portal(endpoint)
+        if not portal:
+            portal = self._discover_portal(zone, ctx)
+            if portal:
+                # Cache on the endpoint so a re-list in the same run, and the
+                # `company_ats_endpoints` row written from it, skip the extra
+                # request next time.
+                endpoint.extra = dict(endpoint.extra or {})
+                endpoint.extra["portal"] = portal
+        if not portal:
+            ctx.log("info", "taleo: %s publishes no portal id, skipping", zone)
             return
         if ctx.post_json is None:
             return
@@ -173,7 +221,13 @@ class TaleoProvider(AtsProvider):
                 url, params={"lang": "en", "portal": portal},
                 json_body=_search_body(page, keyword),
                 timeout=self.policy.timeout, vendor=self.vendor,
-                extra_headers={"X-Requested-With": "XMLHttpRequest"})
+                # `tz` is REQUIRED. Without it this endpoint answers 500 —
+                # not 400, so it reads as a broken zone rather than a malformed
+                # request, which is how Taleo stayed "unbuildable". Isolated on
+                # `aarcorp` (2026-08-18): tz alone -> 200 with 25 rows; Referer
+                # alone -> 500. Cookies are irrelevant.
+                extra_headers={"X-Requested-With": "XMLHttpRequest",
+                               "tz": "GMT+00:00"})
             if self.policy.is_challenge(status):
                 raise ChallengeError(self.vendor, status)
             if status != 200 or not isinstance(payload, dict):
@@ -253,14 +307,38 @@ class TaleoProvider(AtsProvider):
                 locations.append(value)
         location = "; ".join(locations[:3])[:160]
 
+        # Most career sections DO publish a posting date, as one more entry in
+        # the same positional array ("Aug 17, 2026" on `aarcorp`). The response
+        # names the title and location columns but not this one, so it is found
+        # by parsing: a column that is not the title, not a location and that
+        # `to_iso` accepts as a calendar date IS the date. Nothing is inferred
+        # when no column parses — ADR-001, the row stays undated.
+        used = {int(i) for i in (raw.get("locationsColumns") or [])
+                if str(i).lstrip("-").isdigit()}
+        try:
+            used.add(int(raw.get("linkedColumn", 0)))
+        except (TypeError, ValueError):
+            pass
+        posted = ""
+        for idx, value in enumerate(columns):
+            if idx in used:
+                continue
+            text = str(value).strip()
+            if not text or text.startswith("["):
+                continue
+            iso = to_iso(text)
+            if iso:
+                posted = iso
+                break
+
         return RawJob(
             source_job_id=job_id,
             title=title[:200],
             apply_url=(f"https://{zone}.taleo.net/careersection/jobdetail.ftl"
                        f"?job={job_id}&lang=en"),
             location=location,
-            posted_at="",                 # ADR-001: none published in the list
-            date_confidence=DATE_UNKNOWN,
+            posted_at=posted,
+            date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
             remote=looks_remote(title, location),
             detail_url=(f"https://{zone}.taleo.net/careersection/rest/jobboard"
                         f"/jobDetail"),

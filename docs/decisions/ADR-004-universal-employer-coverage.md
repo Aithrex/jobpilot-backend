@@ -314,3 +314,74 @@ The generalisable lesson, which is why it is recorded here rather than only in a
 **"returns HTML" and "returns no JSON" are statements about a response, not about feasibility.**
 The probe was built to find JSON APIs, so it could only ever conclude that something was or was
 not a JSON API. A verdict is only as wide as the instrument that produced it.
+
+---
+
+## 8. Addendum — 2026-08-18: measured against live endpoints
+
+This ADR was written from probes and then implemented; the implementation was
+never run against production. `scripts/live_provider_check.py` was built to ask
+the only question that decides whether a seeker sees a posting — *does our code
+still speak this vendor's protocol today?* — and it changed several conclusions
+above. Full detail in `docs/coverage/ats-vendor-coverage.md`.
+
+**Where the pipeline actually stood.** `companies`, `company_ats_endpoints` and
+`discovery_queue` were all empty; `job_source_state` held shards only for
+`workday` and `career-pages`, so the `oracle` and `icims` sources this ADR
+defines had never been dispatched. Of 15 registered providers, **7 produced
+postings in production**: Oracle ORC, iCIMS, SmartRecruiters, Taleo, Jobvite,
+BambooHR and Eightfold were all at zero.
+
+**§3.2 (iCIMS) was right that it is fetchable and understated the work.** The
+protocol was correct; the parsing was not. Titles carried a screen-reader label
+prefix, locations were found on ~1 row in 6, and no dates were produced despite
+`date_confidence = DATE_EXACT`. Reading the `iCIMS_JobCardItem` structure gives
+100% location coverage on the same board.
+
+**§3.3 (Taleo) was wrong.** "Every zone needs an opaque portal id that is not
+derivable and that we do not have" — the id is printed in the career-section page
+the zone's own search URL redirects to. The REST endpoint additionally requires a
+`tz` header, without which it answers **500**, so a malformed request was
+indistinguishable from a dead zone. AAR Corp returns 200 requisitions.
+
+**The seed in §4 could never have worked.** `us-careers-rivian` — the only iCIMS
+endpoint seeded — has migrated off iCIMS and answers 200 with a JS redirect stub.
+
+**Two providers were confidently wrong in the other direction.** Jobvite and
+BambooHR were recorded as working because their endpoints returned HTTP 200.
+Jobvite's `jobs.json` returns HTML; BambooHR's listing has neither `datePosted`
+nor `locationLabel`, both of which its parser read, and its `location` is a dict
+whose `str()` would have been indexed as a place. Their unit tests passed
+throughout, because the fixtures invented the same fields.
+
+The generalisation §7 draws for iCIMS holds in both directions: **"returns HTML"
+is not "not fetchable", and "returns 200" is not "returns jobs."**
+
+**§4.5 needs one correction.** The prioritisation argument is sound, but the
+premise that state registries are the route to the long tail does not survive
+measurement. A systematic sweep of 35 state open-data portals found corporate
+registries in exactly five — the five already implemented. More importantly a
+registry yields a NAME, and fingerprinting needs a DOMAIN, so the chain breaks at
+the second step for most rows. `services/tenant_discovery.py` reaches the same
+employers vendor-first, from Common Crawl and Certificate Transparency, with no
+company list at all: one run over `*.bamboohr.com` returned 96 live employer
+boards. See `docs/coverage/state-registry-coverage.md`.
+
+**G5 should be read carefully.** "51 jurisdictions with a working adapter" is
+true, but 43 of those adapters are the same `FederalProxyAdapter` over the same
+national datasets. It means "no jurisdiction is unreachable", not "51 registries
+are being harvested".
+
+**Vendor count.** G3 is met and exceeded: 19 providers registered, all 19
+verified returning live postings. Added since this ADR: UKG, Paylocity, Rippling
+and Cornerstone — payroll-attached and mid-market ATS platforms, chosen because
+their customers are the small employers whose postings no aggregator carries.
+
+**One infrastructure defect worth recording.** `make_fetchers` used the bare
+`requests` module, so every request was cookieless. Cornerstone publishes a
+bearer token in its anonymous shell page but rejects a search that presents the
+token without the session cookie issued alongside it — a correct token still got
+a 401. Fetchers now share a per-thread `requests.Session` for the life of one
+member's crawl. This is the same failure class as iCIMS's two-step `hashed`
+token and Taleo's `tz` header: **a handshake protocol looks like a broken
+endpoint when only the last step is sent.**

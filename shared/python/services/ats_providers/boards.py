@@ -41,9 +41,11 @@ A posting whose date field is missing or unparseable yields `posted_at=""` and
 """
 from __future__ import annotations
 
+import re
 from dataclasses import replace as _replace
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Optional, Tuple
+from urllib.parse import urljoin
 
 from services.ats_providers.base import (DATE_EXACT, DATE_UNKNOWN, AtsProvider,
                                          ChallengeError, CrawlPolicy, Endpoint,
@@ -869,92 +871,179 @@ class NeoGovProvider(_BoardProvider):
 # ---------------------------------------------------------------------------
 
 class JobviteProvider(_BoardProvider):
-    """Jobvite public board JSON.
+    """Jobvite public boards — HTML, because Jobvite does not serve JSON.
 
-    Two URL shapes are in the wild. `jobs.jobvite.com/{slug}/jobs.json` is the
-    one that actually returns a job array (verified pattern in
-    `scripts/probe_new_ats.py`); the `/api/v1/company/{slug}/jobs` sibling is
-    tried second because a minority of tenants 404 the first and 200 the
-    second. Either way this is a single-host board API, so slug-probe is safe.
+    Correcting the record (verified live 2026-08-18)
+    ------------------------------------------------
+    This provider was written against `jobs.jobvite.com/{slug}/jobs.json`, on
+    the strength of a pattern recorded in `scripts/probe_new_ats.py`. That URL
+    does respond 200 — with `Content-Type: text/html`. It is not a JSON API and
+    was probably never one; a 200 was mistaken for a working endpoint because
+    nothing checked what came back. `/api/v1/company/{slug}/jobs`, the
+    documented-looking fallback, redirects every slug to Jobvite's marketing
+    site at `/support/job-seeker-support/?invalid=1` — also 200.
+
+    So the old code could only ever yield zero rows for every tenant, which is
+    exactly what production shows: Jobvite has 0 postings in `job_postings`.
+    This is the same lesson ADR-004 §7 draws for iCIMS, in the other direction:
+    there, "returns HTML" was wrongly read as "not fetchable"; here, "returns
+    200" was wrongly read as "returns jobs". **A status code is not a payload.**
+
+    What Jobvite actually serves
+    ----------------------------
+    `GET https://jobs.jobvite.com/{slug}/search` renders the COMPLETE board in
+    one page — there is no pagination to follow — as a table:
+
+        <td class="jv-job-list-name"><a href="/{slug}/job/{id}">Title</a></td>
+        <td class="jv-job-list-location">Honolulu, Hawaii</td>
+
+    The id (`ouFyAfw1`) is an opaque stable token. Multi-location reqs render
+    `<div class="jv-meta">2 Locations</div>` instead of a place, which is a
+    count and not a location, so it is dropped rather than stored.
+
+    Dates: Jobvite publishes NONE. Not on the listing, not on the detail page,
+    and there is no `JobPosting` JSON-LD. Hence `date_confidence = DATE_UNKNOWN`
+    — declaring `DATE_EXACT` and shipping empty strings is the mismatch
+    `scripts/live_provider_check.py` now fails a provider for.
+
+    Some tenants serve the same board from their own domain
+    (`careers.victaulic.com`), which is why a redirect off `jobs.jobvite.com` is
+    followed rather than treated as a dead board.
     """
 
     vendor = "jobvite"
     label = "Jobvite"
-    has_detail = False
+    has_detail = True
+    #: Jobvite publishes no posting date anywhere on the public board.
+    date_confidence = DATE_UNKNOWN
     api_hosts = ("jobs.jobvite.com",)
     portal_hosts = ("jobs.jobvite.com",)
     fingerprints = (
-        fp(r"https?://jobs\.jobvite\.com/(?:api/v\d+/company/)?"
-           r"(?P<tenant>[A-Za-z0-9_\-]+)", confidence=90),
         fp(r"https?://jobs\.jobvite\.com/(?P<tenant>[A-Za-z0-9_\-]+)/",
+           confidence=90),
+        fp(r"https?://jobs\.jobvite\.com/(?P<tenant>[A-Za-z0-9_\-]+)$",
            confidence=85),
     )
-    _RESERVED = frozenset({"api", "careers", "jobs", "search", "company"})
+    _RESERVED = frozenset({"api", "careers", "jobs", "search", "company",
+                           "support", "job"})
+    #: Employee-only boards, same rule as iCIMS: they serve well-formed rows an
+    #: outsider can never apply to, so showing them is worse than omitting them.
+    _INTERNAL_RE = re.compile(r"(?:^|-)(?:internal|employee|redeploy)(?:-|$)",
+                              re.IGNORECASE)
+
+    _ROW_RE = re.compile(
+        r'<td[^>]*class="[^"]*jv-job-list-name[^"]*"[^>]*>(.*?)</td>\s*'
+        r'<td[^>]*class="[^"]*jv-job-list-location[^"]*"[^>]*>(.*?)</td>',
+        re.IGNORECASE | re.DOTALL)
+    _HREF_RE = re.compile(r'href="([^"]*/job/([A-Za-z0-9_\-]+))[^"]*"',
+                          re.IGNORECASE)
+    #: "2 Locations" is a count, not a place. Storing it would make every
+    #: multi-site req match nowhere and look like it is hiring in a town called
+    #: "2 Locations".
+    _MULTI_RE = re.compile(r"^\s*\d+\s+locations?\s*$", re.IGNORECASE)
 
     def endpoint_from_match(self, fields: Dict[str, str],
                             url: str) -> Optional[Endpoint]:
         tenant = (fields.get("tenant") or "").strip()
         if not tenant or tenant.lower() in self._RESERVED:
             return None
+        if self._INTERNAL_RE.search(tenant):
+            return None
         return Endpoint(vendor=self.vendor, tenant=tenant)
+
+    # -- listing -------------------------------------------------------------
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
         slug = endpoint.tenant
-        payload = self._get_json(
-            ctx, f"https://jobs.jobvite.com/{slug}/jobs.json")
-        if payload is None:
-            payload = self._get_json(
-                ctx, f"https://jobs.jobvite.com/api/v1/company/{slug}/jobs")
-        for job in _jobvite_rows(payload):
+        if not slug:
+            return
+        base = f"https://jobs.jobvite.com/{slug}"
+        status, body = ctx.get_text(f"{base}/search", params={},
+                                    timeout=self.policy.timeout,
+                                    vendor=self.vendor)
+        if self.policy.is_challenge(status, body or ""):
+            raise ChallengeError(self.vendor, status)
+        if status != 200 or not body:
+            return
+        # Jobvite bounces unknown slugs to its own marketing site with a 200.
+        # Without this an invalid tenant reads as "a board with no jobs" and is
+        # retained and re-crawled forever.
+        if "job-seeker-support" in body and "jv-job-list-name" not in body:
+            ctx.log("info", "jobvite: %s is not a live board", slug)
+            return
+
+        seen: set = set()
+        for match in self._ROW_RE.finditer(body):
             if ctx.should_stop():
                 return
-            title = str(job.get("title") or job.get("jobTitle")
-                        or job.get("text") or "").strip()
-            rid = str(job.get("id") or job.get("jobId")
-                      or job.get("requisitionId") or "").strip()
-            if not rid or not title:
+            name_cell, loc_cell = match.group(1), match.group(2)
+            href_match = self._HREF_RE.search(name_cell)
+            if not href_match:
                 continue
-            posted = to_iso(job.get("postedDate") or job.get("datePosted")
-                            or job.get("createdDate") or job.get("updatedDate"))
-            if self._too_old(ctx, posted):
+            href, rid = href_match.group(1), href_match.group(2)
+            if rid in seen:
                 continue
-            apply_url = str(job.get("applyUrl") or job.get("url")
-                            or job.get("hostedUrl") or job.get("jobUrl")
-                            or f"https://jobs.jobvite.com/{slug}/job/{rid}")
-            loc = job.get("location")
-            if isinstance(loc, dict):
-                loc = _join(loc.get("city"), loc.get("state"), loc.get("country"))
+            title = " ".join(html_to_text(name_cell).split())
+            if not title:
+                continue
+            seen.add(rid)
+
+            location = " ".join(html_to_text(loc_cell).split())
+            if self._MULTI_RE.match(location):
+                location = ""
+            url = urljoin(base + "/", href.lstrip("/")) if href.startswith("/") \
+                else href
+            if href.startswith("/"):
+                url = f"https://jobs.jobvite.com{href}"
             yield RawJob(
                 source_job_id=rid,
-                title=title,
-                apply_url=apply_url,
-                location=str(loc or "").strip(),
-                posted_at=posted,
-                date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
-                description=html_to_text(
-                    job.get("jobDescription") or job.get("description")
-                    or job.get("descriptionHtml") or "")[:20000],
-                employment_type=str(job.get("jobType") or job.get("type") or ""),
-                compensation=_pay_of(job),
-                remote=looks_remote(title, loc, job.get("workplaceType")),
+                title=title[:200],
+                apply_url=url,
+                location=location[:160],
+                posted_at="",
+                date_confidence=DATE_UNKNOWN,
+                remote=looks_remote(title, location),
+                detail_url=url,
             )
 
+    # -- detail --------------------------------------------------------------
 
-def _jobvite_rows(payload: Any) -> List[Dict[str, Any]]:
-    if isinstance(payload, list):
-        return [r for r in payload if isinstance(r, dict)]
-    if not isinstance(payload, dict):
-        return []
-    for key in ("positions", "jobs", "requisitions", "data"):
-        rows = payload.get(key)
-        if isinstance(rows, list):
-            return [r for r in rows if isinstance(r, dict)]
-        if isinstance(rows, dict):
-            inner = rows.get("jobs") or rows.get("items") or []
-            if isinstance(inner, list):
-                return [r for r in inner if isinstance(r, dict)]
-    return []
+    _DESC_RE = re.compile(
+        r'<div[^>]*class="[^"]*jv-job-detail-description[^"]*"[^>]*>(.*?)'
+        r'(?:<div[^>]*class="[^"]*jv-job-detail-bottom-actions|</body>)',
+        re.IGNORECASE | re.DOTALL)
+
+    def fetch_detail(self, endpoint: Endpoint, job: RawJob,
+                     ctx: FetchContext) -> Optional[RawJob]:
+        """The JD body. Deliberately does NOT invent a posting date.
+
+        Jobvite detail pages carry no date and no `JobPosting` JSON-LD, so this
+        returns a description and leaves `posted_at` empty — ADR-001: a missing
+        date stays missing.
+        """
+        url = job.detail_url or job.apply_url
+        if not url:
+            return None
+        status, body = ctx.get_text(url, params={},
+                                    timeout=self.policy.detail_timeout,
+                                    vendor=self.vendor)
+        if self.policy.is_challenge(status, body or ""):
+            raise ChallengeError(self.vendor, status)
+        if status != 200 or not body:
+            return None
+        m = self._DESC_RE.search(body)
+        description = html_to_text(m.group(1)) if m else ""
+        if not description:
+            return None
+        return RawJob(
+            source_job_id=job.source_job_id,
+            title=job.title,
+            apply_url=job.apply_url,
+            description=description[:40000],
+            posted_at="",
+            date_confidence=DATE_UNKNOWN,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -962,17 +1051,50 @@ def _jobvite_rows(payload: Any) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 class BambooHrProvider(_BoardProvider):
-    """BambooHR careers list JSON.
+    """BambooHR public boards — listing for identity, detail for everything else.
 
-    `GET https://{slug}.bamboohr.com/careers/list` returns
-    `{result: [{id, jobOpeningName, locationLabel, datePosted, ...}]}`.
-    Each tenant is its own hostname, like Recruitee; per-host pacing is
-    correct (unlike iCIMS there is no vendor-wide wall).
+    Corrected against the live API on 2026-08-18. The previous version mapped
+    fields BambooHR does not send, so every row it produced was wrong in ways
+    that a fixture test could not catch because the fixture invented the same
+    fields:
+
+      * `datePosted` — **not present on the listing at all**. The class
+        nonetheless declared `date_confidence = DATE_EXACT`, promising dates it
+        could never deliver.
+      * `locationLabel` — also absent. The real field is `location`, a DICT
+        (`{"city": "Wattana", "state": "Bangkok"}`), and `str()` of it was being
+        stored verbatim, so the index would have carried locations reading
+        `{'city': 'Wattana', 'state': 'Bangkok'}`.
+
+    What the vendor actually serves:
+
+        GET /careers/list            -> {"meta": {"totalCount": 8},
+                                         "result": [{id, jobOpeningName,
+                                                     departmentLabel,
+                                                     employmentStatusLabel,
+                                                     location{city,state},
+                                                     isRemote, locationType}]}
+        GET /careers/{id}/detail     -> {"result": {"jobOpening": {
+                                            datePosted, description,
+                                            compensation, minimumExperience,
+                                            jobOpeningShareUrl, ...}}}
+
+    So the date, the JD and the salary all live on the DETAIL call, which is why
+    this provider now declares `has_detail = True`. That matters more here than
+    for most vendors: BambooHR's customers are overwhelmingly small employers,
+    which is exactly the population whose postings are invisible on aggregators
+    — a row with no description and no salary is not much use to a job seeker
+    even once it is indexed.
     """
 
     vendor = "bamboohr"
     label = "BambooHR"
-    has_detail = False
+    #: The listing carries no date, no description and no pay; all three come
+    #: from `/careers/{id}/detail`.
+    has_detail = True
+    #: Honest about the LISTING. `fetch_detail` upgrades a row to `exact` when
+    #: it reads a real `datePosted`.
+    date_confidence = DATE_UNKNOWN
     api_hosts = (".bamboohr.com",)
     portal_hosts = (".bamboohr.com",)
     fingerprints = (
@@ -981,7 +1103,11 @@ class BambooHrProvider(_BoardProvider):
         fp(r"https?://(?P<tenant>[A-Za-z0-9][A-Za-z0-9\-]*?)\.bamboohr\.com",
            confidence=70),
     )
-    _RESERVED = frozenset({"www", "app", "api", "static", "cdn"})
+    #: `www` and friends resolve like any tenant and answer `/careers/list` with
+    #: BambooHR's own marketing HTML, so an unfiltered label yields a board
+    #: that is permanently empty.
+    _RESERVED = frozenset({"www", "app", "api", "static", "cdn", "help",
+                           "marketplace", "resources", "blog", "smetrics"})
 
     def endpoint_from_match(self, fields: Dict[str, str],
                             url: str) -> Optional[Endpoint]:
@@ -991,35 +1117,94 @@ class BambooHrProvider(_BoardProvider):
         return Endpoint(vendor=self.vendor, tenant=tenant,
                         host=f"{tenant.lower()}.bamboohr.com")
 
+    @staticmethod
+    def _location_of(job: Dict[str, Any]) -> str:
+        """City/state/country from whichever shape this tenant uses.
+
+        `location` is a dict on every tenant observed; `atsLocation` is the
+        newer sibling and is usually all-nulls. `locationLabel` is accepted only
+        because a string costs nothing to support if some tenant does send one.
+        """
+        label = job.get("locationLabel")
+        if isinstance(label, str) and label.strip():
+            return label.strip()[:160]
+        for key in ("location", "atsLocation"):
+            loc = job.get(key)
+            if not isinstance(loc, dict):
+                continue
+            joined = _join(loc.get("city"),
+                           loc.get("state") or loc.get("province"),
+                           loc.get("country"))
+            if joined:
+                return joined[:160]
+        return ""
+
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
-        slug = endpoint.tenant
-        payload = self._get_json(
-            ctx, f"https://{slug}.bamboohr.com/careers/list")
+        slug = (endpoint.tenant or "").strip().lower()
+        if not slug or slug in self._RESERVED:
+            return
+        host = (endpoint.host or f"{slug}.bamboohr.com").strip().lower()
+        payload = self._get_json(ctx, f"https://{host}/careers/list")
         for job in self._rows(payload, "result"):
             if ctx.should_stop():
                 return
-            title = str(job.get("jobOpeningName") or job.get("jobOpening")
-                        or job.get("title") or "").strip()
+            title = str(job.get("jobOpeningName") or job.get("title")
+                        or "").strip()
             rid = str(job.get("id") or "").strip()
             if not rid or not title:
                 continue
-            posted = to_iso(job.get("datePosted") or job.get("postedDate"))
-            if self._too_old(ctx, posted):
-                continue
-            loc = str(job.get("locationLabel") or job.get("location") or "")
+            # No cutoff filter here on purpose: the listing has no date, so
+            # there is nothing to compare. Dropping undated rows would empty
+            # the vendor; ADR-001 keeps them and records them as undated.
+            location = self._location_of(job)
+            remote = job.get("isRemote")
             yield RawJob(
                 source_job_id=rid,
-                title=title,
-                apply_url=f"https://{slug}.bamboohr.com/careers/{rid}",
-                location=loc,
-                posted_at=posted,
-                date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
+                title=title[:200],
+                apply_url=f"https://{host}/careers/{rid}",
+                location=location,
+                posted_at="",
+                date_confidence=DATE_UNKNOWN,
                 department=str(job.get("departmentLabel") or ""),
-                employment_type=str(job.get("employmentStatusLabel") or ""),
-                compensation=_pay_of(job),
-                remote=looks_remote(title, loc),
+                employment_type=str(job.get("employmentStatusLabel")
+                                    or job.get("employmentType") or ""),
+                remote=(bool(remote) if isinstance(remote, bool)
+                        else looks_remote(title, location)),
+                detail_url=f"https://{host}/careers/{rid}/detail",
             )
+
+    def fetch_detail(self, endpoint: Endpoint, job: RawJob,
+                     ctx: FetchContext) -> Optional[RawJob]:
+        """The date, the JD and the pay band — none of which the listing has."""
+        url = job.detail_url
+        if not url:
+            slug = (endpoint.host or f"{endpoint.tenant}.bamboohr.com").lower()
+            url = f"https://{slug}/careers/{job.source_job_id}/detail"
+        payload = self._get_json(ctx, url,
+                                 timeout=self.policy.detail_timeout)
+        if not isinstance(payload, dict):
+            return None
+        result = payload.get("result")
+        opening = result.get("jobOpening") if isinstance(result, dict) else None
+        if not isinstance(opening, dict):
+            return None
+        posted = to_iso(opening.get("datePosted"))
+        description = html_to_text(opening.get("description") or "")
+        if not posted and not description:
+            return None
+        return RawJob(
+            source_job_id=job.source_job_id,
+            title=job.title,
+            apply_url=str(opening.get("jobOpeningShareUrl") or job.apply_url),
+            description=description[:40000],
+            posted_at=posted,
+            date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
+            employment_type=str(opening.get("employmentStatusLabel") or ""),
+            department=str(opening.get("departmentLabel") or ""),
+            # A free-text band ("17k-19k"); `normalize_posting` parses it.
+            compensation=opening.get("compensation") or None,
+        )
 
 
 register(GreenhouseProvider())

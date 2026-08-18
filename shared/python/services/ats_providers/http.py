@@ -181,9 +181,50 @@ def make_fetchers(
     distinguish "gone" from "challenged" without owning retry policy. The one
     exception is a challenge, which raises `ChallengeError` through
     `_maybe_challenge` so it can never be mistaken for an empty board.
+
+    Requests share a COOKIE JAR for the life of these fetchers
+    ---------------------------------------------------------
+    This used to call the bare `requests` module, so every request was
+    cookieless. That is invisible for a board API and fatal for a vendor whose
+    protocol is a handshake: Cornerstone publishes a bearer token in its
+    anonymous shell page but answers **401** to a search that presents the token
+    without the `ASP.NET_SessionId` cookie issued alongside it. The token alone
+    is not the credential — the token *plus the session* is. Same class of
+    failure as iCIMS's `hashed` token and Taleo's `tz` header: a two-step
+    protocol looks like a broken endpoint when only step two is sent.
+
+    The jar is scoped to one `make_fetchers` call — i.e. to one member's crawl
+    within one run — so nothing leaks between employers, and it disappears with
+    the run. It is thread-LOCAL because a provider may fetch with up to
+    `max_concurrency` workers and `requests.Session` is not documented as
+    thread-safe; per-thread sessions keep the connection pooling and the jar
+    without sharing mutable state across threads.
     """
     import requests as _requests
-    req = requests_module or _requests
+
+    if requests_module is not None:
+        req = requests_module
+    else:
+        _local = threading.local()
+
+        class _SessionProxy:
+            """`requests`-module-shaped facade over a per-thread Session."""
+
+            @staticmethod
+            def _session():
+                sess = getattr(_local, "session", None)
+                if sess is None:
+                    sess = _requests.Session()
+                    _local.session = sess
+                return sess
+
+            def get(self, *args, **kwargs):
+                return self._session().get(*args, **kwargs)
+
+            def post(self, *args, **kwargs):
+                return self._session().post(*args, **kwargs)
+
+        req = _SessionProxy()
 
     def _policy_for(vendor: str) -> CrawlPolicy:
         try:
