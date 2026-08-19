@@ -1,6 +1,6 @@
 """Unit tests for ResumeTailor._polish_skills — the deterministic,
 industry-agnostic skills post-pass (cross-category dedup, umbrella collapse,
-JD-relevance ordering, per-category cap, title normalization).
+JD-relevance ordering, title normalization).
 
 Pure dicts, no LLM, no DB.
 """
@@ -121,13 +121,15 @@ def test_alias_dedup_across_categories():
     assert len([s for s in all_items if "ostgre" in s]) == 1
 
 
-def test_category_cap_eight_jd_aligned_first():
+def test_jd_aligned_first_keeps_all_items():
+    """JD-aligned skills lead the category; extra original items are kept."""
     jd = {"required_skills": ["Go", "Rust"]}
     items = ["Skill%02d" % i for i in range(10)] + ["Go", "Rust"]
     out = _polish({"Languages": items}, jd)
     kept = out["skills"]["Languages"]
-    assert len(kept) == ResumeTailor._MAX_SKILLS_PER_CATEGORY
+    assert len(kept) == 12
     assert kept[0] == "Go" and kept[1] == "Rust"
+    assert "Skill09" in kept
 
 
 def test_categories_reordered_by_jd_relevance():
@@ -206,3 +208,146 @@ def test_collapsed_skills_survive_pdf_extraction():
     found = check["checks"]["skills_keywords_found"]
     total = check["checks"]["skills_keywords_total"]
     assert total > 0 and found / total >= 0.9
+
+
+# ---------------------------------------------------------------------------
+# Base-skill restore + evidenced JD adds (_ensure_jd_skills_coverage)
+# ---------------------------------------------------------------------------
+
+def _merge(original, tailored_skills, jd):
+    t = {"skills": copy.deepcopy(tailored_skills)}
+    t = ResumeTailor._ensure_jd_skills_coverage(t, original, jd)
+    return ResumeTailor._polish_skills(t, jd)
+
+
+def test_restore_keeps_all_base_skills_when_model_drops_them():
+    original = {
+        "skills": {
+            "Languages": ["Python", "SQL", "Go"],
+            "Cloud": ["AWS", "Docker", "Kubernetes"],
+        },
+        "summary": "",
+        "experience": [],
+        "projects": [],
+    }
+    out = _merge(
+        original,
+        {"Languages": ["Python"]},  # model dropped most of the list
+        {"required_skills": ["Python"]},
+    )
+    flat = [s for items in out["skills"].values() for s in items]
+    for skill in ("Python", "SQL", "Go", "AWS", "Docker", "Kubernetes"):
+        assert skill in flat, skill
+
+
+def test_jd_skills_lead_each_restored_category():
+    original = {
+        "skills": {"Languages": ["Python", "SQL", "Go"]},
+        "summary": "",
+        "experience": [],
+        "projects": [],
+    }
+    out = _merge(original, {"Languages": ["Python"]}, {"required_skills": ["Go"]})
+    assert out["skills"]["Languages"][0] == "Go"
+    assert "Python" in out["skills"]["Languages"]
+    assert "SQL" in out["skills"]["Languages"]
+
+
+def test_adds_jd_skill_mentioned_in_a_bullet():
+    original = {
+        "skills": {"Languages": ["Python"]},
+        "summary": "",
+        "experience": [{
+            "title": "Engineer", "company": "Acme",
+            "bullets": ["Deployed services on Kubernetes and Helm."],
+        }],
+        "projects": [],
+    }
+    out = _merge(
+        original,
+        {"Languages": ["Python"]},
+        {"required_skills": ["Kubernetes"]},
+    )
+    flat = [s for items in out["skills"].values() for s in items]
+    assert "Kubernetes" in flat
+    assert "Python" in flat
+
+
+def test_adds_implied_jd_skill_next_to_parent():
+    original = {
+        "skills": {"Frontend": ["React", "TypeScript"]},
+        "summary": "",
+        "experience": [],
+        "projects": [],
+    }
+    out = _merge(
+        original,
+        {"Frontend": ["React"]},
+        {"required_skills": ["HTML"]},
+    )
+    assert "HTML" in out["skills"]["Frontend"]
+    assert out["skills"]["Frontend"][0] == "HTML"
+    assert "React" in out["skills"]["Frontend"]
+    assert "TypeScript" in out["skills"]["Frontend"]
+
+
+def test_does_not_add_unevidenced_jd_skill():
+    original = {
+        "skills": {"Languages": ["Python"]},
+        "summary": "",
+        "experience": [{"title": "Engineer", "company": "Acme",
+                        "bullets": ["Built APIs in Python."]}],
+        "projects": [],
+    }
+    out = _merge(
+        original,
+        {"Languages": ["Python"]},
+        {"required_skills": ["Salesforce", "Qualys"]},
+    )
+    flat = [s.lower() for items in out["skills"].values() for s in items]
+    assert "salesforce" not in flat
+    assert "qualys" not in flat
+    assert "python" in flat
+
+
+def test_does_not_inject_jd_soft_traits():
+    original = {
+        "skills": {"Languages": ["Python"]},
+        "summary": "",
+        "experience": [],
+        "projects": [],
+    }
+    out = _merge(
+        original,
+        {"Languages": ["Python", "Comfort with Ambiguity"]},
+        {"required_skills": ["Comfort with Ambiguity", "Python"]},
+    )
+    flat = " ".join(s.lower() for items in out["skills"].values() for s in items)
+    assert "ambiguity" not in flat
+    assert "python" in flat
+
+
+def test_caps_new_jd_adds():
+    tools = [
+        "Kafka", "Redis", "GraphQL", "Terraform", "Ansible",
+        "Grafana", "Prometheus", "Snowflake", "Airflow", "Spark",
+    ]
+    original = {
+        "skills": {"Languages": ["Python"]},
+        "summary": "",
+        "experience": [{
+            "title": "Engineer", "company": "Acme",
+            "bullets": ["Used " + ", ".join(tools) + " in production."],
+        }],
+        "projects": [],
+    }
+    out = _merge(
+        original,
+        {"Languages": ["Python"]},
+        {"required_skills": tools},
+    )
+    flat = [s for items in out["skills"].values() for s in items]
+    added = [s for s in flat if s != "Python"]
+    assert len(added) == ResumeTailor._MAX_NEW_JD_SKILLS
+    assert "Python" in flat
+

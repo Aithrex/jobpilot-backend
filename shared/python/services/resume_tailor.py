@@ -587,11 +587,8 @@ class ResumeTailor:
             logger.warning("Regenerate integrity: %s", report.severity)
 
         # Run the SAME finalize sequence as tailor() so a regenerated résumé is
-        # deterministically cleaned the same way — skills coverage/cap, bullet
-        # allocation (one-page fit), target_role, and the match-gap report.
-        # Previously regenerate() ran only _restore_contact, so feedback like
-        # "cap my skills" wasn't enforced and regenerated docs diverged from
-        # tailored ones (only partially repaired later by the augmenter).
+        # deterministically cleaned the same way — base-skill restore, evidenced
+        # JD adds, bullet allocation, target_role, and the match-gap report.
         corrected = self._restore_contact(corrected, structured_resume)
         corrected = self._ensure_jd_skills_coverage(corrected, structured_resume, jd_analysis)
         corrected = self._polish_skills(corrected, jd_analysis)
@@ -661,15 +658,11 @@ class ResumeTailor:
     # non-skill/soft-trait strip. A truly cross-domain language with no bridge is
     # forbidden by the prompt and surfaced to the user by the match-gap reporter.
 
-    # Maximum items per skills category — industry-standard skills sections
-    # run 3-5 categories × ≤8 skills (~15-28 total): enough for honest ATS
-    # keyword coverage, short enough that a human recruiter doesn't read it
-    # as keyword soup. Fixed (no longer varies with project count — the old
-    # 14/10 project-based cap read a STALE project count anyway, since the
-    # augmenter adds projects after the tailor finalizes). The ATS scorer
-    # reads from JSON, so the cap also applies to JSON for consistency
-    # between rendered PDF and structured data.
-    _MAX_SKILLS_PER_CATEGORY = 8
+    # New JD skills that are evidenced (already on the base resume, in a
+    # bullet/project, or SOLID-implied) may be prepended — at most this many
+    # across the whole section. Original skills are never capped; a recruiter
+    # should still see the candidate's full list, not a JD-trimmed subset.
+    _MAX_NEW_JD_SKILLS = 6
 
     # Umbrella entry: at most this many sub-services in the parenthetical —
     # "AWS (EC2, S3, EKS, RDS)" — JD-matched members are never dropped.
@@ -1023,8 +1016,8 @@ class ResumeTailor:
              the most JD-relevant one)
           2. umbrella collapse — platform + sub-services become ONE entry:
              "AWS (EC2, S3, EKS, RDS)" (curated _UMBRELLA_GROUPS map)
-          3. per-category ordering (JD-aligned first, stable) + cap at
-             _MAX_SKILLS_PER_CATEGORY
+          3. per-category ordering (JD-aligned first, stable). Original skills
+             are not capped; new JD adds are capped upstream.
           4. category reorder by JD relevance (most relevant first — dict
              insertion order flows through to the rendered document)
           5. prune empty categories; normalize skills_section_title against
@@ -1182,14 +1175,13 @@ class ResumeTailor:
                 cats[cat] = new_items
             collapsed.append(entry)
 
-        # --- 3. Per-category ordering (JD-aligned first, stable) + cap ---
-        overflow: List[str] = []
+        # --- 3. Per-category ordering (JD-aligned first, stable) ---
+        # Original skills are kept in full. New JD adds were already capped
+        # in _ensure_jd_skills_coverage.
         for cat, items in cats.items():
             jd_aligned = [s for s in items if item_score(s) > 0]
             rest = [s for s in items if item_score(s) == 0]
-            ordered = jd_aligned + rest
-            overflow.extend(ordered[cls._MAX_SKILLS_PER_CATEGORY:])
-            cats[cat] = ordered[: cls._MAX_SKILLS_PER_CATEGORY]
+            cats[cat] = jd_aligned + rest
 
         # --- 4. Category reorder + 5. prune empties ---
         polished = {cat: cats[cat] for cat in category_rank() if cats[cat]}
@@ -1199,17 +1191,91 @@ class ResumeTailor:
             if not isinstance(items, list) and items:
                 polished[cat] = items
 
-        if removed_dupes or collapsed or overflow:
+        if removed_dupes or collapsed:
             logger.info(
                 "Tailor: skills polish — %d cross-category dupes removed %s, "
-                "%d umbrella collapses %s, %d over-cap items trimmed %s",
+                "%d umbrella collapses %s",
                 len(removed_dupes), removed_dupes,
                 len(collapsed), collapsed,
-                len(overflow), overflow,
             )
 
         tailored["skills"] = polished
         return tailored
+
+    @staticmethod
+    def _copy_skill_cats(skills: Any) -> Dict[str, List[str]]:
+        """Normalize a skills value into {category: [items]} (never mutates)."""
+        if isinstance(skills, list):
+            items = [str(s).strip() for s in skills if str(s).strip()]
+            return {"Skills": items} if items else {}
+        if not isinstance(skills, dict):
+            return {}
+        out: Dict[str, List[str]] = {}
+        for cat, items in skills.items():
+            if not isinstance(items, list):
+                continue
+            kept = [str(s).strip() for s in items if isinstance(s, str) and s.strip()]
+            if kept:
+                out[str(cat)] = kept
+        return out
+
+    @staticmethod
+    def _skill_form_set(term: str) -> set:
+        """Canonical + alias forms of a skill (lowercase)."""
+        raw = re.sub(r"\s*\([^)]*\)\s*$", "", str(term)).strip()
+        if not raw:
+            return set()
+        forms = {(normalize_single(raw) or raw).lower(), raw.lower()}
+        forms |= {f.lower() for f in (get_all_forms(raw) or [])}
+        return {f for f in forms if f}
+
+    @classmethod
+    def _skill_already_listed(cls, term: str, cats: Dict[str, List[str]]) -> bool:
+        want = cls._skill_form_set(term)
+        if not want:
+            return False
+        for items in cats.values():
+            for s in items:
+                if cls._skill_form_set(s) & want:
+                    return True
+        return False
+
+    @classmethod
+    def _term_in_resume_text(cls, term: str, haystack: str) -> bool:
+        """True if any alias of `term` appears as a whole token in haystack."""
+        if not haystack:
+            return False
+        for form in cls._skill_form_set(term):
+            if re.search(
+                r"(?<![A-Za-z0-9])" + re.escape(form) + r"(?![A-Za-z0-9])",
+                haystack,
+                re.IGNORECASE,
+            ):
+                return True
+        return False
+
+    @classmethod
+    def _category_for_new_skill(
+        cls,
+        term: str,
+        merged: Dict[str, List[str]],
+        model_cats: Dict[str, List[str]],
+    ) -> str:
+        """Place a new evidenced JD skill next to related original items."""
+        from utils.skill_implications import is_implied
+
+        for cat, items in merged.items():
+            if is_implied(term, items):
+                return cat
+        for cat, items in model_cats.items():
+            if cls._skill_already_listed(term, {cat: items}):
+                return cat
+        tl = term.lower()
+        for cat in merged:
+            cl = cat.lower()
+            if any(tok and tok in cl for tok in tl.split() if len(tok) > 3):
+                return cat
+        return next(iter(merged), "Skills")
 
     @classmethod
     def _ensure_jd_skills_coverage(
@@ -1218,61 +1284,35 @@ class ResumeTailor:
         original: Dict[str, Any],
         jd_analysis: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Clean the model's skills section — does NOT inject JD phrases.
+        """Restore base skills, then add evidenced JD skills.
 
-        HISTORY (why this no longer injects): this method used to paste ALL of
-        jd_analysis["required_skills"] (+ top keywords) into the skills section
-        to drive the Skills Alignment scorer, which credited a requirement only
-        when its literal phrase sat in the skills list. That scorer is now fixed
-        (resume_scorer._hard_skill_score credits a requirement backed ANYWHERE
-        in the resume — bullets/summary/skills — and CAPS the dimension when
-        keywords sit only in the skills list), so injection no longer buys any
-        score. Worse, it ran AFTER IntegrityGuard and re-introduced the
-        exact garbage the guard had stripped: JD soft-trait prose ("comfort with
-        ambiguity", "collaborative working style"), bare domains ("clinical
-        workflows", "EHR integration"), and vague phrases — because production JD
-        `required_skills` lists contain all of those. A human recruiter rejects a
-        skills section that mirrors the JD verbatim. So injection is DISABLED.
-
-        What this still does (pure cleanup, never additive):
-          - Noise-sweep: drop job-title fragments / company name / industry tags
-            the MODEL itself copied into a skills category.
-          - Soft-trait strip: drop JD culture-fit prose the model pasted in
-            (narrow, profession-agnostic; see fabrication_filter).
-        Skills CONTENT is the model's job (governed by the prompt); we only
-        remove the unambiguous non-skills it occasionally emits.
+        Source of truth is the parsed original resume, not the model's rewrite.
+        A JD term is added only when it is already on the original skills list
+        (then it is just kept), mentioned in original bullets/projects, or
+        SOLID-implied by an owned skill. Soft traits, job titles, and company
+        names are still stripped. New JD adds are capped at _MAX_NEW_JD_SKILLS;
+        original skills are never trimmed here.
         """
-        skills = tailored.get("skills", {})
-        if not isinstance(skills, dict) or not skills:
-            return tailored
+        from services.fabrication_filter import is_nonskill_soft_trait
+        from utils.skill_implications import is_implied
 
-        # Hard blacklist — production JD analyses pollute keywords with
-        # job-title fragments ("Backend Engineer", "Software Engineer II",
-        # "Platform Team"), the company name ("Rippling"), and industry
-        # tags ("HR Tech"). The model sometimes copies those into skills.
         company_name = (jd_analysis.get("company") or "").strip().lower()
         industry_raw = (jd_analysis.get("industry") or "").strip().lower()
-        # Industry often comes as "HR Tech / SaaS" — split on "/" so each
-        # half hits the exact-match guard.
         industry_parts = {p.strip() for p in industry_raw.split("/") if p.strip()}
         BLACKLIST_EXACT = {company_name, "saas", "platform team"} | industry_parts
         BLACKLIST_EXACT.discard("")
         BLACKLIST_SUBSTR = (
-            "engineer ii",        # title fragment
+            "engineer ii",
             "engineer iii",
             "software engineer",
             "backend engineer",
             "frontend engineer",
             "full stack engineer",
             "fullstack engineer",
-            "backend services",   # too generic, looks like a label
+            "backend services",
             "hr tech",
-            " team",              # "Platform Team", "Growth Team"
+            " team",
         )
-
-        # Compile word-boundary patterns once so we don't catch "backend
-        # engineer" inside "backend engineering" (the discipline is a
-        # legitimate skill term; the role title is not).
         noise_patterns = [
             re.compile(r"(?<![a-zA-Z])" + re.escape(s) + r"(?![a-zA-Z])")
             for s in BLACKLIST_SUBSTR
@@ -1284,32 +1324,77 @@ class ResumeTailor:
                 return True
             return any(p.search(t) for p in noise_patterns)
 
-        # Sweep: strip noise terms the model put in skills, and prune any
-        # category left empty.
-        from services.fabrication_filter import is_nonskill_soft_trait
+        def _reject_term(term: str) -> bool:
+            if not isinstance(term, str) or not term.strip():
+                return True
+            if _is_noise(term) or is_nonskill_soft_trait(term):
+                return True
+            if len(term.split()) > 5:
+                return True
+            return False
+
+        base = cls._copy_skill_cats((original or {}).get("skills"))
+        model = cls._copy_skill_cats(tailored.get("skills"))
+        merged = {cat: list(items) for cat, items in (base or model).items()}
+        if not merged:
+            return tailored
+
+        owned = flatten_skills(original or {}) or []
+        haystack = build_resume_text(original or {}) or ""
+
+        seen_jd = set()
+        jd_terms: List[str] = []
+        for raw in list(jd_analysis.get("required_skills") or []) + list(
+            jd_analysis.get("keywords") or []
+        ):
+            if _reject_term(raw):
+                continue
+            key = (normalize_single(raw) or raw).strip().lower()
+            if not key or key in seen_jd:
+                continue
+            seen_jd.add(key)
+            jd_terms.append(raw.strip())
+
+        added: List[str] = []
+        for term in jd_terms:
+            if len(added) >= cls._MAX_NEW_JD_SKILLS:
+                break
+            if cls._skill_already_listed(term, merged):
+                continue
+            evidenced = cls._term_in_resume_text(term, haystack) or is_implied(
+                term, owned
+            )
+            if not evidenced:
+                continue
+            display = normalize_single(term) or term
+            cat = cls._category_for_new_skill(term, merged, model)
+            merged.setdefault(cat, []).append(display)
+            added.append(display)
 
         removed: List[str] = []
-        for cat, items in list(skills.items()):
-            if not isinstance(items, list):
-                continue
+        for cat, items in list(merged.items()):
             kept = []
             for s in items:
-                if isinstance(s, str) and (_is_noise(s) or is_nonskill_soft_trait(s)):
+                if _reject_term(s):
                     removed.append(s)
                 else:
                     kept.append(s)
             if kept:
-                skills[cat] = kept
+                merged[cat] = kept
             else:
-                del skills[cat]
+                del merged[cat]
 
+        if added:
+            logger.info(
+                "Tailor: added %d evidenced JD skills to the original list: %s",
+                len(added), added,
+            )
         if removed:
             logger.info(
                 "Tailor: stripped %d non-skill terms from skills section: %s",
-                len(removed),
-                removed,
+                len(removed), removed,
             )
-        tailored["skills"] = skills
+        tailored["skills"] = merged
         return tailored
 
     # ------------------------------------------------------------------
@@ -1618,7 +1703,8 @@ class ResumeTailor:
             "   write an honest summary around their real strengths), and do NOT turn the summary\n"
             "   into a keyword list — it must read like a human wrote it.\n\n"
 
-            "2. Skills: 3-5 categories, MAX 8 skills per category, ~15-28 skills total. Most JD-relevant\n"
+            "2. Skills: keep EVERY original-resume skill; add a JD skill only if the candidate already\n"
+            "   has it (skills list, a bullet/project, or a direct implication). Most JD-relevant\n"
             "   category FIRST, and within each category list the most JD-relevant skills first. The\n"
             "   skills section is read TWICE: by the ATS (which wants real keyword overlap) and then by a\n"
             "   HUMAN recruiter (who rejects keyword soup). Both must pass. Rules for a HIGH-QUALITY\n"
