@@ -31,7 +31,7 @@ class ResumeRenderer:
     # changes live here in the renderer, not the content, so without a version
     # tag a cache "hit" would keep serving a PDF rendered by the OLD code.
     # Including this in the cache key forces a re-render after any format fix.
-    RENDER_VERSION = "2026-08-19.2"  # tight section gaps; leftover via leading
+    RENDER_VERSION = "2026-08-19.3"  # visible min gap under section rules
 
     # Allowed headings for the skills section. The tailor may pick one per
     # industry via `skills_section_title` (ResumeTailor normalizes it); this
@@ -178,7 +178,8 @@ class ResumeRenderer:
     #   post_header fires 5× (after each section's HR rule)
     _MIN_SECTION_GAP = 1.5     # before section header — clear visual break
     _MIN_ENTRY_GAP = 0.9       # between experiences / between projects
-    _MIN_POST_HEADER = 0.4     # after section HR, before first content
+    _MIN_POST_HEADER = 1.0     # after section HR, before first content
+                              # (0.4mm read as touching the rule on dense pages)
     _MIN_HEADER_GAP = 0.5      # after name+contact block
     _MIN_SKILL_GAP = 0.4       # compact separation between skill categories.
                                # Reference LaTeX uses \vspace{-2pt} (tighter
@@ -198,7 +199,7 @@ class ResumeRenderer:
     # between SUMMARY / EXPERIENCE / later sections.
     _MAX_SECTION_GAP = 2.8     # before a section header (not the first)
     _MAX_ENTRY_GAP = 2.2
-    _MAX_POST_HEADER = 1.2
+    _MAX_POST_HEADER = 1.6
     _MAX_HEADER_GAP = 2.0
     _MAX_SKILL_GAP = 2.2
 
@@ -1053,7 +1054,7 @@ class ResumeRenderer:
             p = doc.add_paragraph()
             run = p.add_run(title.upper())
             set_run_font(run, header_size, bold=True)
-            tight(p, before=section_gap, after=0.4)
+            tight(p, before=section_gap, after=2.8)
             add_bottom_border(p, size="4")
 
         def add_bullet(text: str, indent_emu=None):
@@ -1107,7 +1108,7 @@ class ResumeRenderer:
             p = doc.add_paragraph()
             run = p.add_run(summary)
             set_run_font(run, body_size)
-            tight(p, before=0.3, after=0.5)
+            tight(p, before=0, after=0.5)
 
         # ------------------- helper for a company/dates header line -------------------
         def header_line(left_bold: str, dates: str, bold_size: float):
