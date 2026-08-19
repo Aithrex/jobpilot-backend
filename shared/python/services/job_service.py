@@ -29,6 +29,99 @@ from utils.db_connect import DBConnect
 
 logger = logging.getLogger(__name__)
 
+# saved_jobs uses "interested" / "interview"; Apply → Tracker uses draft / interviewing.
+_SAVED_TO_TRACKER_STATUS = {
+    "interested": "draft",
+    "applied": "applied",
+    "interview": "interviewing",
+    "interviewing": "interviewing",
+    "offer": "offer",
+    "rejected": "rejected",
+    "withdrawn": "withdrawn",
+    "ghosted": "ghosted",
+}
+_LOCKED_TRACKER_STATUSES = frozenset({
+    "interviewing", "interview", "offer", "rejected", "ghosted", "withdrawn",
+})
+
+
+def _norm_job_label(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _sync_saved_job_to_tracker(
+    user_email: str,
+    job_id: str,
+    saved_status: str,
+    job_data: Dict[str, Any],
+) -> None:
+    """Move matching tailoring_records onto the same tracker column as saved_jobs."""
+    tracker_status = _SAVED_TO_TRACKER_STATUS.get(
+        (saved_status or "").strip().lower(),
+    )
+    if not tracker_status or not user_email:
+        return
+
+    db = DBConnect().get_db()
+    col = db.tailoring_records
+    now = datetime.now(timezone.utc)
+    company = _norm_job_label((job_data or {}).get("company"))
+    title = _norm_job_label((job_data or {}).get("title"))
+    apply_link = str((job_data or {}).get("apply_link") or "").strip()
+
+    matched: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    by_id = col.find_one(
+        {"user_email": user_email, "source_job_id": job_id},
+        sort=[("created_at", -1)],
+    )
+    if by_id and by_id.get("record_id"):
+        matched.append(by_id)
+        seen.add(by_id["record_id"])
+
+    if company and title:
+        for rec in col.find({"user_email": user_email}).sort("created_at", -1).limit(120):
+            rid = rec.get("record_id")
+            if not rid or rid in seen:
+                continue
+            jd = rec.get("jd_analysis") or {}
+            same_role = (
+                _norm_job_label(jd.get("company")) == company
+                and _norm_job_label(jd.get("job_title") or jd.get("title")) == title
+            )
+            same_url = bool(
+                apply_link
+                and str((rec.get("application") or {}).get("job_url") or "").strip()
+                == apply_link
+            )
+            if same_role or same_url:
+                matched.append(rec)
+                seen.add(rid)
+
+    for rec in matched:
+        current = ((rec.get("application") or {}).get("status") or "draft").lower()
+        if current in _LOCKED_TRACKER_STATUSES and current != tracker_status:
+            continue
+        rid = rec["record_id"]
+        set_fields: Dict[str, Any] = {
+            "application.status": tracker_status,
+            "application.updated_at": now,
+            "application.batch_confirmation_pending": False,
+            "updated_at": now,
+            "source_job_id": rec.get("source_job_id") or job_id,
+        }
+        if tracker_status == "applied":
+            set_fields["application.applied_at"] = now
+        col.update_one(
+            {"record_id": rid, "user_email": user_email},
+            {"$set": set_fields},
+        )
+        logger.info(
+            "saved_job→tailoring_record sync: %s → status=%s (job_id=%s)",
+            rid, tracker_status, job_id,
+        )
+
 
 # ======================================================================
 # Paid-source (cost_class) chokepoint
@@ -2180,41 +2273,14 @@ class JobService:
         if result:
             result["_id"] = str(result["_id"])
 
-        # Bidirectional sync — when a Daily Pipeline saved_job changes status
-        # AND the user has tailoring_records linked to it (source_job_id), keep
-        # the most recent tailoring_record in lockstep so the Applications
-        # kanban + Batch Tailor view both reflect the change. Daily Pipeline
-        # row "I applied" → tailoring_record auto-applied, no separate click.
-        # Best-effort; failure here doesn't block the saved_job update.
-        if status is not None:
+        # Bidirectional sync to Apply → Tracker (tailoring_records). Listing
+        # "I applied" used to only flip saved_jobs, so tailored cards stayed
+        # in Draft. Match by source_job_id, else company+title from the posting.
+        if status is not None and result:
             try:
-                from utils.db_connect import DBConnect
-                from datetime import datetime as _dt, timezone as _tz
-                _db = DBConnect().get_db()
-                trec = _db.tailoring_records.find_one(
-                    {"user_email": user_email, "source_job_id": job_id},
-                    sort=[("created_at", -1)],
-                    projection={"record_id": 1, "_id": 0},
+                _sync_saved_job_to_tracker(
+                    user_email, job_id, status, result.get("job_data") or {},
                 )
-                if trec and trec.get("record_id"):
-                    set_fields = {
-                        "application.status": status,
-                        "application.updated_at": _dt.now(_tz.utc),
-                        # Clear the batch-confirmation prompt — the user has
-                        # answered via the Daily Pipeline side.
-                        "application.batch_confirmation_pending": False,
-                        "updated_at": _dt.now(_tz.utc),
-                    }
-                    if status == "applied":
-                        set_fields["application.applied_at"] = _dt.now(_tz.utc)
-                    _db.tailoring_records.update_one(
-                        {"record_id": trec["record_id"], "user_email": user_email},
-                        {"$set": set_fields},
-                    )
-                    logger.info(
-                        "saved_job→tailoring_record sync: %s → status=%s",
-                        trec["record_id"], status,
-                    )
             except Exception as e:
                 logger.warning("saved_job→tailoring sync failed: %s", e)
 
