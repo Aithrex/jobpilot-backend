@@ -197,6 +197,7 @@ def generate_followup_message(user_email: str, record_id: str, channel: str = "e
 
 def get_funnel_analytics(user_email: str) -> Dict[str, Any]:
     counts: Dict[str, int] = {
+        "saved": 0,
         "draft": 0,
         "applied": 0,
         "interviewing": 0,

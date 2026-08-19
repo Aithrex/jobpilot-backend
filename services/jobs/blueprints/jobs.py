@@ -1179,6 +1179,27 @@ def save_job():
         return jsonify({"error": "Failed to save job"}), 500
 
 
+@jobs_bp.route("/tracker", methods=["POST"])
+@jwt_required()
+def touch_pipeline():
+    """Create/update Saved + Tracker for listing Save / open / apply / tailor."""
+    user_email = get_jwt_identity()
+    data = request.get_json(force=True) or {}
+    job = data.get("job")
+    intent = (data.get("intent") or "").strip().lower()
+    if not job or not isinstance(job, dict):
+        return jsonify({"error": "Job data is required"}), 400
+    try:
+        from services.job_service import get_job_service
+        saved = get_job_service().touch_pipeline(job, user_email, intent)
+        return jsonify({"job": saved}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Pipeline touch error: {e}")
+        return jsonify({"error": "Failed to update tracker"}), 500
+
+
 @jobs_bp.route("/saved/<job_id>", methods=["PUT"])
 @jwt_required()
 def update_saved(job_id):

@@ -222,6 +222,11 @@ def tailor_with_jd():
             "user_email": user_email,
             "quota_entry_id": entry_ids[0],
         }
+        source_job_id = InputSanitizer.sanitize_string(
+            str(data.get("source_job_id") or ""), max_length=256
+        )
+        if source_job_id:
+            payload["source_job_id"] = source_job_id
         try:
             job_id = svc.create_job("extract_and_tailor", payload, user_email=user_email)
             _quota_ledger.attach_job(entry_ids[0], job_id)
@@ -1052,7 +1057,7 @@ def delete_tailoring_record(record_id):
 # Update application tracker fields for a record.
 # ------------------------------------------------------------------
 _APPLICATION_STATUSES = {
-    "draft", "applied", "interviewing", "offer", "rejected", "withdrawn", "ghosted",
+    "saved", "draft", "applied", "interviewing", "offer", "rejected", "withdrawn", "ghosted",
 }
 
 # E1 (defect E) — this route's status vocabulary mapped onto the canonical
@@ -1062,6 +1067,7 @@ _APPLICATION_STATUSES = {
 # canonical `applications` row. "draft" is the pre-application state -> "none";
 # every other status maps to the same-named outcome.
 _STATUS_TO_OUTCOME = {
+    "saved": "none",
     "draft": "none",
     "applied": "applied",
     "interviewing": "interviewing",
@@ -1104,7 +1110,7 @@ def update_application(record_id):
         updates["application.batch_confirmation_pending"] = bool(data.get("batch_confirmation_pending"))
 
     for field in ("recruiter_name", "recruiter_email", "recruiter_company",
-                  "next_action_note", "notes", "job_url"):
+                  "next_action_note", "notes", "job_url", "resume_used"):
         if field in data:
             val = data.get(field)
             if isinstance(val, str):

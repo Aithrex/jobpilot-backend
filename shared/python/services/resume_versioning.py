@@ -100,6 +100,10 @@ def ensure_versions(record: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], bool]
     if versions:
         return versions, False
 
+    # Listing stubs have no tailored resume yet — do not seed an empty version.
+    if not record.get("tailored_resume"):
+        return [], False
+
     tailored = record.get("tailored_resume") or {}
     ats = record.get("ats_scores")
     seed = build_initial_version(tailored, source="initial", ats_scores=ats)

@@ -1225,7 +1225,7 @@ Output strict JSON: {{"status": "...", "confidence": 0.0-1.0, "reason": "one sho
 
 # Funnel direction. Lower index = earlier in the funnel. "rejected"/"ghosted"/
 # "withdrawn" are terminal — moving OUT of them needs strong evidence.
-_FUNNEL_ORDER = {"draft": 0, "applied": 1, "interviewing": 2, "offer": 3}
+_FUNNEL_ORDER = {"saved": 0, "draft": 1, "applied": 2, "interviewing": 3, "offer": 4}
 
 
 def _is_funnel_backwards(current: str, proposed: str) -> bool:

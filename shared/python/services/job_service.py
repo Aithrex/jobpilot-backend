@@ -29,9 +29,9 @@ from utils.db_connect import DBConnect
 
 logger = logging.getLogger(__name__)
 
-# saved_jobs uses "interested" / "interview"; Apply → Tracker uses draft / interviewing.
+# saved_jobs uses "interested" / "interview"; Apply → Tracker uses saved / draft / interviewing.
 _SAVED_TO_TRACKER_STATUS = {
-    "interested": "draft",
+    "interested": "saved",
     "applied": "applied",
     "interview": "interviewing",
     "interviewing": "interviewing",
@@ -43,32 +43,44 @@ _SAVED_TO_TRACKER_STATUS = {
 _LOCKED_TRACKER_STATUSES = frozenset({
     "interviewing", "interview", "offer", "rejected", "ghosted", "withdrawn",
 })
+_TRACKER_RANK = {
+    "saved": 0,
+    "draft": 1,
+    "applied": 2,
+    "interviewing": 3,
+    "interview": 3,
+    "offer": 4,
+    "rejected": 4,
+    "ghosted": 4,
+    "withdrawn": 4,
+}
+_PIPELINE_INTENTS = {
+    "saved": ("saved", "interested"),
+    "opened": ("draft", "interested"),
+    "tailor_started": ("draft", "interested"),
+    "applied": ("applied", "applied"),
+}
 
 
 def _norm_job_label(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
 
-def _sync_saved_job_to_tracker(
+def _has_tailored_resume(rec: Dict[str, Any]) -> bool:
+    if rec.get("tailored_resume"):
+        return True
+    return bool(rec.get("versions"))
+
+
+def _find_tracker_records(
+    col: Any,
     user_email: str,
     job_id: str,
-    saved_status: str,
     job_data: Dict[str, Any],
-) -> None:
-    """Move matching tailoring_records onto the same tracker column as saved_jobs."""
-    tracker_status = _SAVED_TO_TRACKER_STATUS.get(
-        (saved_status or "").strip().lower(),
-    )
-    if not tracker_status or not user_email:
-        return
-
-    db = DBConnect().get_db()
-    col = db.tailoring_records
-    now = datetime.now(timezone.utc)
+) -> List[Dict[str, Any]]:
     company = _norm_job_label((job_data or {}).get("company"))
     title = _norm_job_label((job_data or {}).get("title"))
     apply_link = str((job_data or {}).get("apply_link") or "").strip()
-
     matched: List[Dict[str, Any]] = []
     seen: set = set()
 
@@ -98,29 +110,117 @@ def _sync_saved_job_to_tracker(
             if same_role or same_url:
                 matched.append(rec)
                 seen.add(rid)
+    return matched
 
+
+def _upsert_tracker_stub(
+    user_email: str,
+    job_id: str,
+    job_data: Dict[str, Any],
+    tracker_status: str,
+    *,
+    resume_used: Optional[str] = None,
+) -> Optional[str]:
+    """Create or update the Apply → Tracker row for a listing job."""
+    if not user_email or not job_id:
+        return None
+    col = DBConnect().get_db().tailoring_records
+    now = datetime.now(timezone.utc)
+    job_data = job_data or {}
+    matched = _find_tracker_records(col, user_email, job_id, job_data)
+
+    jd = {
+        "job_title": job_data.get("title") or "",
+        "company": job_data.get("company") or "",
+        "location": job_data.get("location") or "",
+    }
+    apply_link = str(job_data.get("apply_link") or "").strip()
+
+    if not matched:
+        import uuid as _uuid
+        rid = str(_uuid.uuid4())
+        app: Dict[str, Any] = {
+            "status": tracker_status,
+            "updated_at": now,
+            "job_url": apply_link,
+            "batch_confirmation_pending": False,
+        }
+        if tracker_status == "applied":
+            app["applied_at"] = now
+            app["resume_used"] = resume_used or "base"
+        rec = {
+            "record_id": rid,
+            "user_email": user_email,
+            "source_job_id": job_id,
+            "source": "pipeline_stub",
+            "jd_text": str(job_data.get("description") or "")[:15000],
+            "jd_analysis": jd,
+            "application": app,
+            "created_at": now,
+            "updated_at": now,
+        }
+        col.insert_one(rec)
+        logger.info(
+            "tracker stub created: %s status=%s job_id=%s", rid, tracker_status, job_id
+        )
+        return rid
+
+    last_id = None
     for rec in matched:
         current = ((rec.get("application") or {}).get("status") or "draft").lower()
         if current in _LOCKED_TRACKER_STATUSES and current != tracker_status:
+            last_id = rec.get("record_id")
             continue
+        cur_rank = _TRACKER_RANK.get(current, 0)
+        new_rank = _TRACKER_RANK.get(tracker_status, 0)
+        next_status = tracker_status if new_rank >= cur_rank else current
         rid = rec["record_id"]
+        last_id = rid
         set_fields: Dict[str, Any] = {
-            "application.status": tracker_status,
+            "application.status": next_status,
             "application.updated_at": now,
             "application.batch_confirmation_pending": False,
             "updated_at": now,
             "source_job_id": rec.get("source_job_id") or job_id,
         }
-        if tracker_status == "applied":
-            set_fields["application.applied_at"] = now
+        if apply_link and not (rec.get("application") or {}).get("job_url"):
+            set_fields["application.job_url"] = apply_link
+        if not rec.get("jd_analysis"):
+            set_fields["jd_analysis"] = jd
+        if next_status == "applied":
+            set_fields["application.applied_at"] = (
+                (rec.get("application") or {}).get("applied_at") or now
+            )
+            if resume_used and not _has_tailored_resume(rec):
+                set_fields["application.resume_used"] = resume_used
+            elif _has_tailored_resume(rec):
+                set_fields["application.resume_used"] = "tailored"
         col.update_one(
             {"record_id": rid, "user_email": user_email},
             {"$set": set_fields},
         )
         logger.info(
-            "saved_job→tailoring_record sync: %s → status=%s (job_id=%s)",
-            rid, tracker_status, job_id,
+            "tracker stub updated: %s → status=%s (job_id=%s)",
+            rid, next_status, job_id,
         )
+    return last_id
+
+
+def _sync_saved_job_to_tracker(
+    user_email: str,
+    job_id: str,
+    saved_status: str,
+    job_data: Dict[str, Any],
+) -> None:
+    tracker_status = _SAVED_TO_TRACKER_STATUS.get(
+        (saved_status or "").strip().lower(),
+    )
+    if not tracker_status or not user_email:
+        return
+    resume_used = "base" if tracker_status == "applied" else None
+    _upsert_tracker_stub(
+        user_email, job_id, job_data, tracker_status, resume_used=resume_used,
+    )
 
 
 # ======================================================================
@@ -2239,20 +2339,74 @@ class JobService:
         return jobs
 
     def save_job(self, job: Dict[str, Any], user_email: str) -> Dict[str, Any]:
-        doc = {
-            "job_id": job.get("job_id", ""),
-            "user_email": user_email,
-            "job_data": job,
-            "status": "interested",
-            "notes": "",
-            "saved_at": datetime.now(timezone.utc),
-        }
+        now = datetime.now(timezone.utc)
+        job_id = job.get("job_id", "")
         self.saved_jobs.update_one(
-            {"job_id": doc["job_id"], "user_email": user_email},
-            {"$set": doc},
+            {"job_id": job_id, "user_email": user_email},
+            {
+                "$set": {
+                    "job_id": job_id,
+                    "user_email": user_email,
+                    "job_data": job,
+                },
+                "$setOnInsert": {
+                    "status": "interested",
+                    "notes": "",
+                    "saved_at": now,
+                },
+            },
             upsert=True,
         )
-        result = self.saved_jobs.find_one({"job_id": doc["job_id"], "user_email": user_email})
+        result = self.saved_jobs.find_one({"job_id": job_id, "user_email": user_email})
+        result["_id"] = str(result["_id"])
+        try:
+            self.touch_pipeline(job, user_email, "saved")
+        except Exception as e:
+            logger.warning("save_job tracker stub failed: %s", e)
+        return result
+
+    def touch_pipeline(
+        self, job: Dict[str, Any], user_email: str, intent: str,
+    ) -> Dict[str, Any]:
+        """Upsert saved_jobs + Tracker stub for listing Apply/Save actions."""
+        intent = (intent or "").strip().lower()
+        mapping = _PIPELINE_INTENTS.get(intent)
+        if not mapping:
+            raise ValueError("intent must be saved, opened, tailor_started, or applied")
+        tracker_status, saved_status = mapping
+        job_id = str((job or {}).get("job_id") or "").strip()
+        if not job_id:
+            raise ValueError("job.job_id is required")
+
+        existing = self.saved_jobs.find_one(
+            {"job_id": job_id, "user_email": user_email}
+        )
+        now = datetime.now(timezone.utc)
+        current_saved = (existing or {}).get("status") or "interested"
+        saved_rank = _TRACKER_RANK.get(
+            _SAVED_TO_TRACKER_STATUS.get(current_saved, "saved"), 0
+        )
+        want_rank = _TRACKER_RANK.get(tracker_status, 0)
+        next_saved = saved_status if want_rank >= saved_rank else current_saved
+
+        self.saved_jobs.update_one(
+            {"job_id": job_id, "user_email": user_email},
+            {
+                "$set": {
+                    "job_id": job_id,
+                    "user_email": user_email,
+                    "job_data": job,
+                    "status": next_saved,
+                },
+                "$setOnInsert": {"notes": "", "saved_at": now},
+            },
+            upsert=True,
+        )
+        resume_used = "base" if tracker_status == "applied" else None
+        _upsert_tracker_stub(
+            user_email, job_id, job, tracker_status, resume_used=resume_used,
+        )
+        result = self.saved_jobs.find_one({"job_id": job_id, "user_email": user_email})
         result["_id"] = str(result["_id"])
         return result
 

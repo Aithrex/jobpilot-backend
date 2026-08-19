@@ -64,3 +64,59 @@ def test_does_not_downgrade_interviewing_tracker_card(mock_db):
 
     rec = mock_db["tailoring_records"].find_one({"record_id": "rec-2"})
     assert rec["application"]["status"] == "interviewing"
+
+
+def test_applied_without_existing_record_creates_stub(mock_db):
+    mock_db["saved_jobs"].delete_many({})
+    mock_db["tailoring_records"].delete_many({})
+    svc = JobService()
+    svc.touch_pipeline(_posting(), USER, "applied")
+    rec = mock_db["tailoring_records"].find_one({"source_job_id": JOB_ID})
+    assert rec is not None
+    assert rec["application"]["status"] == "applied"
+    assert rec["application"]["resume_used"] == "base"
+    assert rec.get("tailored_resume") in (None, {})
+
+
+def test_save_lands_in_saved_column(mock_db):
+    mock_db["saved_jobs"].delete_many({})
+    mock_db["tailoring_records"].delete_many({})
+    svc = JobService()
+    svc.save_job(_posting(), user_email=USER)
+    rec = mock_db["tailoring_records"].find_one({"source_job_id": JOB_ID})
+    assert rec["application"]["status"] == "saved"
+
+
+def test_opened_promotes_saved_to_draft(mock_db):
+    mock_db["saved_jobs"].delete_many({})
+    mock_db["tailoring_records"].delete_many({})
+    svc = JobService()
+    svc.touch_pipeline(_posting(), USER, "saved")
+    svc.touch_pipeline(_posting(), USER, "opened")
+    rec = mock_db["tailoring_records"].find_one({"source_job_id": JOB_ID})
+    assert rec["application"]["status"] == "draft"
+
+
+def test_tailor_merges_into_existing_stub(mock_db):
+    mock_db["saved_jobs"].delete_many({})
+    mock_db["tailoring_records"].delete_many({})
+    svc = JobService()
+    svc.touch_pipeline(_posting(), USER, "applied")
+    from services.resume_service import _persist_tailoring_record
+
+    _persist_tailoring_record(
+        USER,
+        {"filename": "base.pdf"},
+        "JD text",
+        {"job_title": "Platform Engineer", "company": "Acme Corp"},
+        {"summary": "tailored"},
+        "extract_and_tailor",
+        source_job_id=JOB_ID,
+    )
+    recs = list(mock_db["tailoring_records"].find({"user_email": USER}))
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec["application"]["status"] == "applied"
+    assert rec["application"]["resume_used"] == "tailored"
+    assert rec["tailored_resume"]["summary"] == "tailored"
+

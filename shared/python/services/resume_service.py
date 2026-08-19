@@ -644,38 +644,88 @@ def _persist_tailoring_record(
     jd_analysis: Dict[str, Any],
     result: Dict[str, Any],
     source: str,
+    source_job_id: Optional[str] = None,
 ) -> Optional[str]:
     """Worker-side canonical tailoring_records persistence (spec 1.5).
 
-    The `tailor` and `extract_and_tailor` workers persist the record at
-    finalize time (mirrors batch_tailor_item / guest_tailor) so closing the
-    browser never loses completed tailoring history. POST /save-record stays
-    for ats_scores attach + streak and is idempotent-by-record_id — it will
-    NOT duplicate this record. Best effort: a persistence failure never fails
-    the tailor job (the result still reaches the poller).
+    Merges into an existing listing stub (source_job_id / company+title)
+    so Apply without tailor and later tailor share one Tracker card.
     """
     try:
         import uuid as _uuid
         from services.resume_versioning import build_initial_version
         from utils.db_connect import DBConnect as _DBC
+        from services.job_service import _find_tracker_records, _has_tailored_resume, _TRACKER_RANK
 
         _db = _DBC().get_db()
-        rid = str(_uuid.uuid4())
+        col = _db.tailoring_records
+        now = datetime.now(timezone.utc)
         initial = build_initial_version(result, source="initial", ats_scores=None)
-        _db.tailoring_records.insert_one({
+        job_data = {
+            "job_id": source_job_id or "",
+            "title": (jd_analysis or {}).get("job_title") or "",
+            "company": (jd_analysis or {}).get("company") or "",
+        }
+        existing = None
+        if user_email:
+            found = _find_tracker_records(
+                col, user_email, source_job_id or "", job_data,
+            )
+            existing = found[0] if found else None
+
+        if existing and existing.get("record_id"):
+            rid = existing["record_id"]
+            current = ((existing.get("application") or {}).get("status") or "draft").lower()
+            next_status = current
+            if _TRACKER_RANK.get(current, 0) < _TRACKER_RANK.get("draft", 1):
+                next_status = "draft"
+            col.update_one(
+                {"record_id": rid, "user_email": user_email},
+                {"$set": {
+                    "jd_text": (jd_text or existing.get("jd_text") or "")[:15000],
+                    "jd_analysis": jd_analysis or existing.get("jd_analysis"),
+                    "tailored_resume": result,
+                    "versions": [initial],
+                    "current_version_id": initial["version_id"],
+                    "ats_scores": None,
+                    "source": source,
+                    "source_job_id": existing.get("source_job_id") or source_job_id,
+                    "application.status": next_status,
+                    "application.resume_used": "tailored",
+                    "application.updated_at": now,
+                    "updated_at": now,
+                    "base_resume_filename": (resume or {}).get("filename")
+                    or existing.get("base_resume_filename") or "",
+                    "base_resume_s3_key": (resume or {}).get("s3_key")
+                    or existing.get("base_resume_s3_key") or "",
+                }},
+            )
+            logger.info(
+                "%s: merged tailoring into stub %s for %s", source, rid, user_email
+            )
+            return rid
+
+        rid = str(_uuid.uuid4())
+        col.insert_one({
             "record_id": rid,
             "user_email": user_email,
             "base_resume_filename": (resume or {}).get("filename") or "",
             "base_resume_s3_key": (resume or {}).get("s3_key") or "",
             "jd_text": (jd_text or "")[:15000],
             "jd_analysis": jd_analysis,
-            "tailored_resume": result,  # legacy mirror; versions[0] is canonical
+            "tailored_resume": result,
             "versions": [initial],
             "current_version_id": initial["version_id"],
             "ats_scores": None,
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "created_at": now,
+            "updated_at": now,
             "source": source,
+            "source_job_id": source_job_id,
+            "application": {
+                "status": "draft",
+                "resume_used": "tailored",
+                "updated_at": now,
+            },
         })
         logger.info(
             "%s: worker persisted tailoring_record %s for %s", source, rid, user_email
@@ -1466,7 +1516,8 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             # Worker-persisted canonical record (spec 1.5) — record_id rides
             # the job result; /save-record attaches ATS scores idempotently.
             record_id = _persist_tailoring_record(
-                user_email, resume, "", payload["jd_analysis"], result, "tailor"
+                user_email, resume, "", payload["jd_analysis"], result, "tailor",
+                source_job_id=(payload.get("source_job_id") or "").strip() or None,
             )
             svc.complete_job(
                 job_id, {"tailored_resume": result, "record_id": record_id}
@@ -1781,6 +1832,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             record_id = _persist_tailoring_record(
                 user_email, resume, jd_text, jd_analysis, result,
                 "extract_and_tailor",
+                source_job_id=(payload.get("source_job_id") or "").strip() or None,
             )
             svc.complete_job(
                 job_id,
