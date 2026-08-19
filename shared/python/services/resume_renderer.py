@@ -2,14 +2,14 @@
 Resume document renderer — PDF (fpdf2) and DOCX (python-docx) generation.
 
 Template-based rendering with zero AI involvement.
-Format: A4, 0.5in margins, Calibri-style font (Carlito embedded in PDF), adaptive density.
+Format: A4, 0.6in left/right and 0.4in top/bottom, Tinos/Times, adaptive density.
 Section order: Summary → Experience → Projects → Technical Skills → Education.
 """
 import io
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _two_page_enabled() -> bool:
@@ -31,7 +31,7 @@ class ResumeRenderer:
     # changes live here in the renderer, not the content, so without a version
     # tag a cache "hit" would keep serving a PDF rendered by the OLD code.
     # Including this in the cache key forces a re-render after any format fix.
-    RENDER_VERSION = "2026-07-17.1"  # sparse-resume gap ceilings raised (better fill/rhythm)
+    RENDER_VERSION = "2026-08-19.1"  # 0.4in top/bottom; tight heading/entry gaps
 
     # Allowed headings for the skills section. The tailor may pick one per
     # industry via `skills_section_title` (ResumeTailor normalizes it); this
@@ -139,11 +139,11 @@ class ResumeRenderer:
     # one page for typical 2-experience + up-to-3-project resumes. The Pass 2
     # distribution + tier fallback (10pt-tight → 9.5pt → 9pt) still handle
     # the densest layouts automatically.
-    _MARGIN_LR = 15.24         # 0.6 inch — matches the user's Overleaf template
-    _MARGIN_TOP = 15.24        # 0.6 inch
-    _MARGIN_BOTTOM = 15.24     # 0.6 inch
+    _MARGIN_LR = 15.24         # 0.6 inch left/right
+    _MARGIN_TOP = 10.16        # 0.4 inch
+    _MARGIN_BOTTOM = 10.16     # 0.4 inch
     _PAGE_H = 297.0            # A4 height mm
-    _AVAIL_H = _PAGE_H - _MARGIN_TOP - _MARGIN_BOTTOM  # ~271.6mm usable
+    _AVAIL_H = _PAGE_H - _MARGIN_TOP - _MARGIN_BOTTOM  # ~276.7mm usable
 
     # Font family: Tinos — the SIL-OFL, metric-identical twin of Times New
     # Roman, matching the user's own Overleaf template (resume.cls compiles
@@ -177,8 +177,8 @@ class ResumeRenderer:
     #   entry_gap fires up to 4× (between experience entries + between projects)
     #   post_header fires 5× (after each section's HR rule)
     _MIN_SECTION_GAP = 1.5     # before section header — clear visual break
-    _MIN_ENTRY_GAP = 1.5       # between experiences / between projects
-    _MIN_POST_HEADER = 1.0     # after section HR, before first content
+    _MIN_ENTRY_GAP = 0.9       # between experiences / between projects
+    _MIN_POST_HEADER = 0.4     # after section HR, before first content
     _MIN_HEADER_GAP = 0.5      # after name+contact block
     _MIN_SKILL_GAP = 0.4       # compact separation between skill categories.
                                # Reference LaTeX uses \vspace{-2pt} (tighter
@@ -193,18 +193,12 @@ class ResumeRenderer:
                                # extra 0.5mm read as dead space under the title)
 
     # Spacing ceilings — how much Pass 2 may inflate on sparse pages.
-    # Raised from the original micro-ceilings (2.8/2.4/1.8/0.8/0.9): those
-    # could absorb only ~15mm of slack, so any resume that measured short
-    # left a visible dead band at the bottom of the page. Combined with the
-    # up-tier font ladder, these let a sparse page reach ~90%+ visual fill
-    # while dense pages stay near the floors (Pass 2 is proportional).
-    # Ceilings raised so a genuinely sparse resume (e.g. 2 roles, no projects)
-    # distributes its slack as even breathing room instead of leaving a large
-    # dead band at the page bottom. Pass-2/3 are PROPORTIONAL, so dense resumes
-    # stay near the floors regardless — only sparse pages reach these ceilings.
-    _MAX_SECTION_GAP = 6.5     # before a section header
-    _MAX_ENTRY_GAP = 5.0
-    _MAX_POST_HEADER = 3.5
+    # Heading→content (`post_header`) and job→job (`entry_gap`) stay tight:
+    # leftover whitespace goes into between-section gaps and Pass-3 leading
+    # instead of opening holes under SUMMARY / between roles.
+    _MAX_SECTION_GAP = 8.0     # before a section header (not the first)
+    _MAX_ENTRY_GAP = 2.2
+    _MAX_POST_HEADER = 1.2
     _MAX_HEADER_GAP = 2.0
     _MAX_SKILL_GAP = 2.2
 
@@ -445,12 +439,22 @@ class ResumeRenderer:
 
         pdf.ln(header_gap)
 
-        # ── Helper: section header — LaTeX: \sectionskip, UPPERCASE title, \hrule 0.5pt ──
+        # ── Helper: section header — UPPERCASE title + hairline ──
+        # First section sits directly under the contact block (header_gap
+        # already applied). Later sections get section_gap so EXPERIENCE /
+        # PROJECTS still separate from the previous block, without stacking
+        # both gaps above SUMMARY.
+        first_section = True
+
         def section_header(title: str):
-            pdf.ln(section_gap)
+            nonlocal first_section
+            if first_section:
+                first_section = False
+            else:
+                pdf.ln(section_gap)
             pdf.set_font(self._FONT_FAMILY, "B", heading_size)
             pdf.cell(w, 4.5, title.upper(), new_x="LMARGIN", new_y="NEXT")
-            pdf.ln(0.5)  # \sectionlineskip = \medskip (small gap before rule)
+            pdf.ln(0.15)
             ry = pdf.get_y()
             pdf.set_draw_color(0, 0, 0)
             pdf.set_line_width(self._SECTION_HR_WIDTH)
@@ -783,16 +787,16 @@ class ResumeRenderer:
         # --- Pass 2: distribute remaining whitespace ---
         remaining = max(0, avail - min_height)
 
-        # Weight distribution: section gaps get 40%, entry gaps 30%,
-        # post-header 15%, header gap 10%, skill gaps 5%
+        # Weight distribution: leftover goes into between-section gaps (and
+        # then Pass-3 leading), not under headings or between roles.
         n_sections = max(slots["sections"], 1)
         n_entry_gaps = max(slots["entry_gaps"], 1)
         n_skill_rows = max(slots["skill_rows"], 1)
 
         total_slots = (
-            n_sections * 4      # section_gap weight
-            + n_entry_gaps * 3  # entry_gap weight
-            + n_sections * 1.5  # post_header weight
+            n_sections * 5      # section_gap weight
+            + n_entry_gaps * 0.6  # entry_gap — keep jobs tight
+            + n_sections * 0.3  # post_header — keep heading→content tight
             + 1 * 1             # header_gap weight
             + n_skill_rows * 0.5  # skill_gap weight
         )
@@ -802,9 +806,9 @@ class ResumeRenderer:
         else:
             unit = 0
 
-        section_gap = min(self._MIN_SECTION_GAP + unit * 4, self._MAX_SECTION_GAP)
-        entry_gap = min(self._MIN_ENTRY_GAP + unit * 3, self._MAX_ENTRY_GAP)
-        post_header = min(self._MIN_POST_HEADER + unit * 1.5, self._MAX_POST_HEADER)
+        section_gap = min(self._MIN_SECTION_GAP + unit * 5, self._MAX_SECTION_GAP)
+        entry_gap = min(self._MIN_ENTRY_GAP + unit * 0.6, self._MAX_ENTRY_GAP)
+        post_header = min(self._MIN_POST_HEADER + unit * 0.3, self._MAX_POST_HEADER)
         header_gap = min(self._MIN_HEADER_GAP + unit * 1, self._MAX_HEADER_GAP)
         skill_gap = min(self._MIN_SKILL_GAP + unit * 0.5, self._MAX_SKILL_GAP)
 
@@ -831,7 +835,7 @@ class ResumeRenderer:
         # Leading stretch fills a single page's dead band. On a 2-page render,
         # a partially-filled last page is expected — don't stretch content
         # across the page break.
-        if max_pages == 1 and s_max > 1.01 and (avail - h1) > 3.0:
+        if max_pages == 1 and s_max > 1.01 and (avail - h1) > 1.0:
             _, h2 = self._render_pdf(tailored, **knobs, stretch=s_max,
                                      measure_only=True)
             if h2 <= avail:
@@ -870,8 +874,8 @@ class ResumeRenderer:
     # DOCX generation (python-docx) — mirrors the PDF renderer's layout
     # ------------------------------------------------------------------
 
-    # Usable page height in pt (A4 297mm - 0.5in*2 margins ≈ 271.6mm ≈ 770pt).
-    _DOCX_AVAIL_PT = 755.0
+    # Usable page height in pt (A4 297mm − 0.4in top/bottom ≈ 276.7mm ≈ 784pt).
+    _DOCX_AVAIL_PT = 780.0
 
     def _estimate_docx_height_pt(
         self,
@@ -991,12 +995,12 @@ class ResumeRenderer:
         FONT = "Times New Roman"  # matches the Overleaf template; Tinos-identical metrics
         doc = Document()
 
-        # A4 page, 0.5in margins all around (mirrors the PDF's 12.7mm).
+        # A4 page: 0.6in left/right, 0.4in top/bottom (mirrors the PDF).
         for section in doc.sections:
             section.page_width = Mm(210)
             section.page_height = Mm(297)
-            section.top_margin = Inches(0.6)
-            section.bottom_margin = Inches(0.6)
+            section.top_margin = Inches(0.4)
+            section.bottom_margin = Inches(0.4)
             section.left_margin = Inches(0.6)
             section.right_margin = Inches(0.6)
 
@@ -1040,7 +1044,7 @@ class ResumeRenderer:
             bottom = OxmlElement("w:bottom")
             bottom.set(qn("w:val"), "single")
             bottom.set(qn("w:sz"), size)
-            bottom.set(qn("w:space"), "1")
+            bottom.set(qn("w:space"), "0")
             bottom.set(qn("w:color"), "000000")
             pBdr.append(bottom)
             pPr.append(pBdr)
@@ -1049,7 +1053,7 @@ class ResumeRenderer:
             p = doc.add_paragraph()
             run = p.add_run(title.upper())
             set_run_font(run, header_size, bold=True)
-            tight(p, before=section_gap, after=1.0)
+            tight(p, before=section_gap, after=0.4)
             add_bottom_border(p, size="4")
 
         def add_bullet(text: str, indent_emu=None):
@@ -1103,7 +1107,7 @@ class ResumeRenderer:
             p = doc.add_paragraph()
             run = p.add_run(summary)
             set_run_font(run, body_size)
-            tight(p, before=1.0, after=0.5)
+            tight(p, before=0.3, after=0.5)
 
         # ------------------- helper for a company/dates header line -------------------
         def header_line(left_bold: str, dates: str, bold_size: float):
@@ -1116,7 +1120,7 @@ class ResumeRenderer:
             if dates:
                 r2 = p.add_run(f"\t{dates}")
                 set_run_font(r2, body_size)
-            tight(p, before=1.5, after=0.0)
+            tight(p, before=0.6, after=0.0)
             return p
 
         # ------------------- EXPERIENCE -------------------
@@ -1252,15 +1256,15 @@ class ResumeRenderer:
 
         # Minimum spacing knobs (pt)
         min_section_gap = 2.0
-        min_entry_gap = 2.0
+        min_entry_gap = 1.5
         min_skill_gap = 0.0
         min_header_gap = 2.0
 
         # Max ceilings so fills don't explode on short resumes
-        max_section_gap = 12.0
-        max_entry_gap = 10.0
+        max_section_gap = 14.0
+        max_entry_gap = 6.0
         max_skill_gap = 4.0
-        max_header_gap = 10.0
+        max_header_gap = 8.0
 
         # Bidirectional ladder (mirrors the PDF's thresholded up-tiers): a
         # bigger font must be justified by emptiness — up-tiers are taken
@@ -1310,15 +1314,15 @@ class ResumeRenderer:
         # Distribute remaining whitespace (weights mirror the PDF renderer's)
         remaining = max(0, avail - min_h)
         total_weight = (
-            max(n_sections, 1) * 4
-            + max(n_entry_gaps, 1) * 3
+            max(n_sections, 1) * 5
+            + max(n_entry_gaps, 1) * 0.6
             + 1 * 1            # header gap
             + max(n_skill_rows, 1) * 0.5
         )
         unit = (remaining / total_weight) if total_weight > 0 and remaining > 0 else 0
 
-        section_gap = min(min_section_gap + unit * 4, max_section_gap)
-        entry_gap = min(min_entry_gap + unit * 3, max_entry_gap)
+        section_gap = min(min_section_gap + unit * 5, max_section_gap)
+        entry_gap = min(min_entry_gap + unit * 0.6, max_entry_gap)
         skill_gap = min(min_skill_gap + unit * 0.5, max_skill_gap)
         header_gap = min(min_header_gap + unit * 1, max_header_gap)
 

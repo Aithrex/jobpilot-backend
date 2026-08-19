@@ -231,6 +231,17 @@ def test_sparse_resume_stretch_capped_not_padded():
     )
 
 
+def test_heading_and_job_gaps_stay_tight():
+    """Pass-2 leftover must not open holes under SUMMARY or between roles."""
+    r = ResumeRenderer()
+    for resume in (SPARSE, MID_DENSITY, SENIOR):
+        layout = r._compute_pdf_layout(resume)
+        assert layout["post_header"] <= r._MAX_POST_HEADER + 1e-9
+        assert layout["entry_gap"] <= r._MAX_ENTRY_GAP + 1e-9
+        assert layout["post_header"] <= 1.2 + 1e-9
+        assert layout["entry_gap"] <= 2.2 + 1e-9
+
+
 def test_dense_resume_never_stretches():
     r = ResumeRenderer()
     layout = r._compute_pdf_layout(DENSITY_STRESS)
