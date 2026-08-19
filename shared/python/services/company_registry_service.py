@@ -70,6 +70,13 @@ DISCOVERY_PENDING = "pending"
 DISCOVERY_RUNNING = "running"
 DISCOVERY_DONE = "done"
 DISCOVERY_NO_PORTAL = "no_portal"
+#: Reached, but the answer was not ours to trust — the site rate-limited us, a
+#: bot wall answered, or the domain would not resolve. Deliberately NOT
+#: `no_portal`: that state is a CLAIM about the employer ("this company has no
+#: careers page") and is never retried, so recording it after a 429 writes a
+#: false negative into the registry permanently. `refill_queue` picks these up
+#: again like any pending row.
+DISCOVERY_DEFERRED = "deferred"
 DISCOVERY_FAILED = "failed"
 
 #: How many consecutive validation failures retire an endpoint. Deliberately
@@ -519,7 +526,7 @@ def refill_queue(limit: int = 5000) -> int:
     """
     col = _col(COMPANIES)
     cur = col.find(
-        {"discovery_status": DISCOVERY_PENDING},
+        {"discovery_status": {"$in": [DISCOVERY_PENDING, DISCOVERY_DEFERRED]}},
         {"company_id": 1, "priority": 1, "name": 1},
     ).sort("priority", -1).limit(int(limit))
     n = 0

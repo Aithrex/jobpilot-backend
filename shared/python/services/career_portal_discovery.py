@@ -659,11 +659,41 @@ def _persist(result: DiscoveryResult) -> None:
             reg.record_validation(key, vr)
 
     if result.company_id:
-        state = (reg.DISCOVERY_DONE if result.endpoints
-                 else reg.DISCOVERY_NO_PORTAL)
+        # `no_portal` is a CLAIM about the employer — "this company has no
+        # careers page" — and it is terminal: `refill_queue` never looks at it
+        # again. Recording it because we were rate-limited, bot-walled or could
+        # not resolve the domain writes a false negative that no later run will
+        # correct.
+        #
+        # That is not hypothetical. A burst at concurrency 48 got this host's IP
+        # rate-limited by the CDNs in front of a large slice of the S&P 500;
+        # every company probed during it returned zero endpoints and would have
+        # been filed as having no careers page. Intuit, Iron Mountain, Crocs and
+        # Qorvo all have one.
+        #
+        # So a result we could not trust is DEFERRED and tried again later.
+        if result.endpoints:
+            state = reg.DISCOVERY_DONE
+        elif result.blocked or _inconclusive(result):
+            state = reg.DISCOVERY_DEFERRED
+        else:
+            state = reg.DISCOVERY_NO_PORTAL
         reg.complete_discovery(result.company_id, state=state,
                                endpoints_found=result.found,
                                detail=result.detail)
+
+
+#: Result details that mean "we did not get a fair look", not "no portal".
+_INCONCLUSIVE = ("no reachable domain", "challenge", "429", "403", "robots",
+                 "blocked", "timeout", "network")
+
+
+def _inconclusive(result: "DiscoveryResult") -> bool:
+    detail = str(result.detail or "").lower()
+    if not result.domain:
+        # We never even reached a site, so we learned nothing about the employer.
+        return True
+    return any(marker in detail for marker in _INCONCLUSIVE)
 
 
 # ---------------------------------------------------------------------------
@@ -711,6 +741,17 @@ DISCOVERY_BUDGET_SECONDS = float(
 #: hard 300s ceiling; a worker killed mid-batch loses its run record and holds
 #: its leases until they lapse, so it stops with room rather than squeezing in
 #: one more batch it might not finish.
+#: Outbound requests per second across ALL hosts, for discovery only.
+#:
+#: Per-host pacing never engages here — every company is a different site — but
+#: a large share of them sit behind a few CDNs that limit by SOURCE IP. Measured
+#: at concurrency 48: twelve `429`s inside two seconds from unrelated companies
+#: (intuit.com, crocs.com, callawaygolf.com, ncino.com), each then parked in a
+#: 900s cooldown, so the company was lost for that run. Concurrency past this
+#: point buys nothing and costs coverage.
+DISCOVERY_GLOBAL_RATE = float(
+    os.getenv("DISCOVERY_GLOBAL_RATE", "12") or 12)
+
 DISCOVERY_RESERVE_SECONDS = float(
     os.getenv("DISCOVERY_RESERVE_SECONDS", "45") or 45)
 
@@ -831,6 +872,7 @@ def run_discovery_worker(*, batch: Optional[int] = None,
                               "domain": doc.get("domain") or ""})
 
         ctx = simple_context(budget_seconds=max(1.0, remaining),
+                             global_rate=DISCOVERY_GLOBAL_RATE,
                              guard=_worker_guard())
         try:
             stats = discover_batch(companies, ctx, persist=True, validate=True)

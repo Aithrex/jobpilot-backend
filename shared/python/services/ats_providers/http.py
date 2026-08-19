@@ -56,7 +56,24 @@ class PacedSession:
     `job_source_state.next_attempt_at`.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, global_rate: float = 0.0) -> None:
+        # Requests per second across ALL hosts, 0 = unlimited (the default, so
+        # every existing caller is unchanged).
+        #
+        # Per-HOST pacing is the wrong instrument for discovery, and the gap is
+        # measurable. Discovery visits ~80,000 DIFFERENT employer sites, so the
+        # per-host bucket never engages — but a large fraction of those sites
+        # sit behind a handful of CDNs (Cloudflare, Akamai) that rate-limit by
+        # SOURCE IP across their whole estate. At concurrency 48 a burst
+        # produced twelve `429`s inside two seconds from entirely unrelated
+        # companies — intuit.com, crocs.com, callawaygolf.com, ncino.com — and
+        # each one then sat in a 900s cooldown, so the company was lost for the
+        # run. Raising concurrency past that point makes discovery slower, not
+        # faster.
+        #
+        # A global bucket smooths the burst that trips them.
+        self._global_min_interval = (1.0 / global_rate) if global_rate > 0 else 0.0
+        self._global_next_at = 0.0
         self._lock = threading.Lock()
         self._next_at: Dict[str, float] = {}
         self._failures: Dict[str, int] = defaultdict(int)
@@ -118,6 +135,8 @@ class PacedSession:
             return False
         if self.in_cooldown(key):
             return False
+        if not self._global_gate(deadline, stop):
+            return False
         now = time.monotonic()
         with self._lock:
             if key in self.tripped:
@@ -138,6 +157,23 @@ class PacedSession:
                     time.monotonic() >= deadline:
                 return False
             time.sleep(min(0.05, max(0.0, end - time.monotonic())))
+        return True
+
+    def _global_gate(self, deadline: float, stop: Optional[Any] = None) -> bool:
+        """Hold the caller until the shared token bucket allows one request."""
+        if self._global_min_interval <= 0:
+            return True
+        with self._lock:
+            now = time.monotonic()
+            slot = max(now, self._global_next_at)
+            self._global_next_at = slot + self._global_min_interval
+        if slot >= deadline:
+            return False
+        while time.monotonic() < slot:
+            if (stop is not None and getattr(stop, "is_set", bool)()) or \
+                    time.monotonic() >= deadline:
+                return False
+            time.sleep(min(0.02, max(0.0, slot - time.monotonic())))
         return True
 
     def note_success(self, key: str) -> None:
@@ -360,6 +396,7 @@ def simple_context(*, budget_seconds: float = 120.0,
                    options: Optional[Dict[str, Any]] = None,
                    guard: Guard = _noop_guard,
                    session: Optional[PacedSession] = None,
+                   global_rate: float = 0.0,
                    logger_obj: Any = None) -> FetchContext:
     """A `FetchContext` for scripts, tests and one-off validation.
 
@@ -368,7 +405,7 @@ def simple_context(*, budget_seconds: float = 120.0,
     without duplicating it. Same providers, same protocol handling, no drift -
     the two divergent Workday tenant lists in this repo are what drift costs.
     """
-    sess = session or PacedSession()
+    sess = session or PacedSession(global_rate=global_rate)
     deadline = time.monotonic() + max(1.0, float(budget_seconds))
     get_json, get_text, post_json = make_fetchers(
         sess, guard=guard, deadline=deadline)

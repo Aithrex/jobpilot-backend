@@ -251,3 +251,45 @@ def test_batch_runs_companies_concurrently(monkeypatch):
     disc.discover_batch(rows, _StubCtx(), persist=False, concurrency=4)
 
     assert live["peak"] >= 2, "companies must not be fingerprinted one at a time"
+
+
+# ---------------------------------------------------------------------------
+# Discovery outcome classification
+# ---------------------------------------------------------------------------
+
+def test_an_unreached_company_is_not_recorded_as_having_no_portal():
+    """`no_portal` is terminal, so it must mean the EMPLOYER, not our luck.
+
+    `refill_queue` never revisits `no_portal`, so recording it after a 429, a
+    bot wall or a failed domain guess writes a false negative that no later run
+    corrects. Measured on live data: 4,420 of 6,468 companies filed as
+    "no portal" had detail `no reachable domain` — we never fetched a page.
+    """
+    from services import company_registry_service as reg
+    from services.career_portal_discovery import DiscoveryResult, _inconclusive
+
+    # Never reached a site at all.
+    assert _inconclusive(DiscoveryResult(company_id="c")) is True
+    # Reached one, but it refused us.
+    assert _inconclusive(DiscoveryResult(
+        company_id="c", domain="x.com",
+        detail="discovery challenge (status=429)")) is True
+    assert _inconclusive(DiscoveryResult(
+        company_id="c", domain="x.com", detail="robots disallow")) is True
+    # Reached one, read it, genuinely nothing there — that IS a claim we can make.
+    assert _inconclusive(DiscoveryResult(
+        company_id="c", domain="x.com", detail="no ats links found")) is False
+
+    assert reg.DISCOVERY_DEFERRED != reg.DISCOVERY_NO_PORTAL
+
+
+def test_deferred_companies_are_picked_up_again(monkeypatch):
+    """A deferred row is retryable; that is the whole point of the state."""
+    import inspect
+
+    from services import company_registry_service as reg
+
+    src = inspect.getsource(reg.refill_queue)
+    assert "DISCOVERY_DEFERRED" in src, (
+        "refill_queue must re-select deferred companies, or deferring them is "
+        "just a slower way of dropping them")
