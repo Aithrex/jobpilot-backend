@@ -216,7 +216,7 @@ def test_mid_density_fills_page():
     fill = layout["predicted_height"] / r._AVAIL_H
     assert fill >= 0.95, f"dead-band case must fill the page (got {fill:.1%})"
     # stretch stays within the leading ceiling
-    assert layout["stretch"] <= 1.25 + 1e-9
+    assert layout["stretch"] <= r._STRETCH_CAP + 1e-9
     assert layout["lh"] * layout["stretch"] <= r._MAX_LEADING_MM + 1e-6
 
 
@@ -227,19 +227,22 @@ def test_sparse_resume_stretch_capped_not_padded():
     layout = r._compute_pdf_layout(SPARSE)
     assert layout["body_size"] == 11.0
     assert layout["stretch"] == pytest.approx(
-        min(1.25, r._MAX_LEADING_MM / layout["lh"]), abs=1e-6
+        min(r._STRETCH_CAP, r._MAX_LEADING_MM / layout["lh"]), abs=1e-6
     )
 
 
 def test_heading_and_job_gaps_stay_tight():
-    """Pass-2 leftover must not open holes under SUMMARY or between roles."""
+    """Pass-2 leftover must not open holes under headings, between roles,
+    or between sections (SUMMARY → EXPERIENCE, etc.)."""
     r = ResumeRenderer()
     for resume in (SPARSE, MID_DENSITY, SENIOR):
         layout = r._compute_pdf_layout(resume)
         assert layout["post_header"] <= r._MAX_POST_HEADER + 1e-9
         assert layout["entry_gap"] <= r._MAX_ENTRY_GAP + 1e-9
+        assert layout["section_gap"] <= r._MAX_SECTION_GAP + 1e-9
         assert layout["post_header"] <= 1.2 + 1e-9
         assert layout["entry_gap"] <= 2.2 + 1e-9
+        assert layout["section_gap"] <= 2.8 + 1e-9
 
 
 def test_dense_resume_never_stretches():

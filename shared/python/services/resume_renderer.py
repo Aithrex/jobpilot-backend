@@ -31,7 +31,7 @@ class ResumeRenderer:
     # changes live here in the renderer, not the content, so without a version
     # tag a cache "hit" would keep serving a PDF rendered by the OLD code.
     # Including this in the cache key forces a re-render after any format fix.
-    RENDER_VERSION = "2026-08-19.1"  # 0.4in top/bottom; tight heading/entry gaps
+    RENDER_VERSION = "2026-08-19.2"  # tight section gaps; leftover via leading
 
     # Allowed headings for the skills section. The tailor may pick one per
     # industry via `skills_section_title` (ResumeTailor normalizes it); this
@@ -193,19 +193,20 @@ class ResumeRenderer:
                                # extra 0.5mm read as dead space under the title)
 
     # Spacing ceilings — how much Pass 2 may inflate on sparse pages.
-    # Heading→content (`post_header`) and job→job (`entry_gap`) stay tight:
-    # leftover whitespace goes into between-section gaps and Pass-3 leading
-    # instead of opening holes under SUMMARY / between roles.
-    _MAX_SECTION_GAP = 8.0     # before a section header (not the first)
+    # Heading→content, job→job, and between-section gaps stay tight.
+    # Leftover whitespace is absorbed by Pass-3 leading, not by holes
+    # between SUMMARY / EXPERIENCE / later sections.
+    _MAX_SECTION_GAP = 2.8     # before a section header (not the first)
     _MAX_ENTRY_GAP = 2.2
     _MAX_POST_HEADER = 1.2
     _MAX_HEADER_GAP = 2.0
     _MAX_SKILL_GAP = 2.2
 
     # Pass-3 leading ceiling: body line height may stretch up to this many mm.
-    # The stretch factor is additionally capped (below) so the 10pt base tier
-    # can't balloon on dense content.
-    _MAX_LEADING_MM = 5.4
+    # Paired with a 1.40 stretch cap so 11pt body (lh=4.0) can actually reach
+    # it — leftover on short pages fills via taller lines, not section gaps.
+    _MAX_LEADING_MM = 6.0
+    _STRETCH_CAP = 1.40
 
     # Up-tier ladder: (body_size, lh, lh_s, max_fill). A bigger font must be
     # JUSTIFIED by emptiness — each rung is taken only when the content at
@@ -787,14 +788,14 @@ class ResumeRenderer:
         # --- Pass 2: distribute remaining whitespace ---
         remaining = max(0, avail - min_height)
 
-        # Weight distribution: leftover goes into between-section gaps (and
-        # then Pass-3 leading), not under headings or between roles.
+        # Weight distribution: leftover must not open holes between sections,
+        # under headings, or between roles. Pass-3 leading absorbs the rest.
         n_sections = max(slots["sections"], 1)
         n_entry_gaps = max(slots["entry_gaps"], 1)
         n_skill_rows = max(slots["skill_rows"], 1)
 
         total_slots = (
-            n_sections * 5      # section_gap weight
+            n_sections * 0.5    # section_gap — keep SUMMARY→EXPERIENCE tight
             + n_entry_gaps * 0.6  # entry_gap — keep jobs tight
             + n_sections * 0.3  # post_header — keep heading→content tight
             + 1 * 1             # header_gap weight
@@ -806,7 +807,7 @@ class ResumeRenderer:
         else:
             unit = 0
 
-        section_gap = min(self._MIN_SECTION_GAP + unit * 5, self._MAX_SECTION_GAP)
+        section_gap = min(self._MIN_SECTION_GAP + unit * 0.5, self._MAX_SECTION_GAP)
         entry_gap = min(self._MIN_ENTRY_GAP + unit * 0.6, self._MAX_ENTRY_GAP)
         post_header = min(self._MIN_POST_HEADER + unit * 0.3, self._MAX_POST_HEADER)
         header_gap = min(self._MIN_HEADER_GAP + unit * 1, self._MAX_HEADER_GAP)
@@ -827,11 +828,10 @@ class ResumeRenderer:
         _, h1 = self._render_pdf(tailored, **knobs, stretch=1.0,
                                  measure_only=True)
         predicted = h1
-        # Stretch cap held at 1.25 — beyond this, leading reads as padding
-        # (design principle enforced by test_sparse_resume_stretch_capped_not_padded).
-        # Sparse resumes fill via the raised GAP ceilings + the augmenter adding
-        # content, not via ballooned line leading.
-        s_max = min(1.25, self._MAX_LEADING_MM / lh)
+        # Stretch cap held at _STRETCH_CAP — beyond this, leading reads as
+        # padding (enforced by test_sparse_resume_stretch_capped_not_padded).
+        # Sparse resumes fill via leading stretch, not via section-gap holes.
+        s_max = min(self._STRETCH_CAP, self._MAX_LEADING_MM / lh)
         # Leading stretch fills a single page's dead band. On a 2-page render,
         # a partially-filled last page is expected — don't stretch content
         # across the page break.
@@ -1261,7 +1261,7 @@ class ResumeRenderer:
         min_header_gap = 2.0
 
         # Max ceilings so fills don't explode on short resumes
-        max_section_gap = 14.0
+        max_section_gap = 6.0
         max_entry_gap = 6.0
         max_skill_gap = 4.0
         max_header_gap = 8.0
@@ -1314,22 +1314,22 @@ class ResumeRenderer:
         # Distribute remaining whitespace (weights mirror the PDF renderer's)
         remaining = max(0, avail - min_h)
         total_weight = (
-            max(n_sections, 1) * 5
+            max(n_sections, 1) * 0.5
             + max(n_entry_gaps, 1) * 0.6
             + 1 * 1            # header gap
             + max(n_skill_rows, 1) * 0.5
         )
         unit = (remaining / total_weight) if total_weight > 0 and remaining > 0 else 0
 
-        section_gap = min(min_section_gap + unit * 5, max_section_gap)
+        section_gap = min(min_section_gap + unit * 0.5, max_section_gap)
         entry_gap = min(min_entry_gap + unit * 0.6, max_entry_gap)
         skill_gap = min(min_skill_gap + unit * 0.5, max_skill_gap)
         header_gap = min(min_header_gap + unit * 1, max_header_gap)
 
         # Pass 3 (mirrors the PDF's leading stretch): whatever the gap
         # ceilings couldn't absorb goes into line spacing, interpolated
-        # linearly between 1.1 and 1.30. Estimator-driven, so fill is
-        # approximate; the 1.30 cap prevents overshoot onto page 2.
+        # linearly between 1.1 and 1.40. Estimator-driven, so fill is
+        # approximate; the 1.40 cap prevents overshoot onto page 2.
         line_spacing = 1.1
         h1 = self._estimate_docx_height_pt(
             tailored,
@@ -1344,17 +1344,17 @@ class ResumeRenderer:
             h2 = self._estimate_docx_height_pt(
                 tailored,
                 body_size=body_size,
-                line_spacing=1.30,
+                line_spacing=1.40,
                 section_gap=section_gap,
                 entry_gap=entry_gap,
                 skill_gap=skill_gap,
                 header_gap=header_gap,
             )
             if h2 <= avail:
-                line_spacing = 1.30
+                line_spacing = 1.40
             elif h2 > h1:
-                line_spacing = 1.1 + (avail - h1) * 0.2 / (h2 - h1)
-                line_spacing = max(1.1, min(line_spacing, 1.30))
+                line_spacing = 1.1 + (avail - h1) * 0.3 / (h2 - h1)
+                line_spacing = max(1.1, min(line_spacing, 1.40))
 
         return self._render_docx(
             tailored,
