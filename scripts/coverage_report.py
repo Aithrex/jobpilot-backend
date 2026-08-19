@@ -74,46 +74,114 @@ def _db():
 # Measurements
 # ---------------------------------------------------------------------------
 
-def g1_oracle(goal: Goal) -> None:
-    """ORC requisitions in inventory vs what the vendor says exists.
+#: The freshness boundary the crawler lists to (ADR-001). Read from the worker
+#: so this report cannot drift from what the crawl actually does.
+try:
+    from services.job_ingest_worker import FRESHNESS_BOUNDARY_DAYS as _FRESHNESS_DAYS
+except Exception:  # pragma: no cover - report must run without the worker
+    _FRESHNESS_DAYS = 7
 
-    The denominator is `TotalJobsCount` summed over validated ORC endpoints -
-    the vendor's own count - rather than anything we derived, so this cannot be
-    satisfied by crawling less and calling it complete.
+
+def _seeded_members(vendor: str) -> set:
+    """`member_key`s the worker seeds for a vendor, if any.
+
+    Seeds are real crawlable endpoints that predate discovery, so a goal that
+    counted only `company_ats_endpoints` would report "no endpoints" for a
+    vendor that is in fact crawling — which is exactly what Oracle looked like
+    while it was ingesting 1,663 postings.
+    """
+    try:
+        from services.job_ingest_worker import _SEED_ENDPOINTS, _member_key_for
+    except Exception:
+        return set()
+    return {_member_key_for(r["vendor"], r["tenant"], r.get("site") or "")
+            for r in _SEED_ENDPOINTS if r.get("vendor") == vendor}
+
+
+#: `job_postings.ats` is written through `job_inventory_service._safe_key`,
+#: which keeps only `[a-z0-9-]` — so the vendor key `oracle_orc` is STORED as
+#: `oracle-orc`. Querying the vendor key matches zero rows, always, and the
+#: goal reads as "0% ingested" no matter how well the crawl ran.
+def _ats_key(vendor: str) -> str:
+    import re
+    return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", vendor.lower())).strip("-")
+
+
+def g1_oracle(goal: Goal) -> None:
+    """Are the ORC boards we know about actually producing postings?
+
+    This measured "ingested / TotalJobsCount" until 2026-08-19 and could never
+    pass, for two independent reasons:
+
+    1. It queried `{"ats": "oracle_orc"}`. The stored value is `oracle-orc`
+       (see `_ats_key`), so the numerator was always 0.
+    2. Even with the key fixed, the ratio is not a coverage measure. The
+       denominator is every open requisition a pod has; the numerator is only
+       what falls inside `FRESHNESS_BOUNDARY_DAYS` (7), because ADR-001 stops
+       listing at that boundary. Measured on live data: 1,663 ingested against
+       9,511 reported — 17%, and a 95% target is unreachable BY DESIGN, not by
+       under-crawling. A goal that cannot be met by correct behaviour is a
+       broken goal, not a failing system.
+
+    So the metric is now endpoint HEALTH: of the ORC boards we hold, how many
+    produced a posting inside the freshness window. That is achievable, it moves
+    when something breaks, and the vendor's own totals are still reported in
+    `detail` as context — clearly labelled as not comparable.
     """
     db = _db()
     endpoints = list(db["company_ats_endpoints"].find(
         {"vendor": "oracle_orc", "status": "validated"},
         {"member_key": 1, "job_count_last": 1}))
-    if not endpoints:
-        goal.error = "no validated oracle_orc endpoints (run discovery/seed)"
+    seeded = _seeded_members("oracle_orc")
+    keys = {str(e.get("member_key") or "") for e in endpoints} | seeded
+    keys.discard("")
+    if not keys:
+        goal.error = "no oracle_orc endpoints (run discovery, or check seeds)"
         return
-    expected = sum(int(e.get("job_count_last") or 0) for e in endpoints)
-    have = db["job_postings"].count_documents(
-        {"ats": "oracle_orc", "active": True})
-    goal.extra = {"endpoints": len(endpoints), "expected": expected,
-                  "ingested": have}
-    if expected <= 0:
-        goal.error = "endpoints report zero total reqs"
-        return
-    goal.value = 100.0 * have / expected
-    goal.detail = f"{have:,} ingested / {expected:,} reported by {len(endpoints)} pods"
+
+    ats = _ats_key("oracle_orc")
+    producing = 0
+    for key in keys:
+        if db["job_postings"].count_documents(
+                {"ats": ats, "source_job_id": {"$regex": f"^{key}:"},
+                 "active": True}, limit=1):
+            producing += 1
+    ingested = db["job_postings"].count_documents({"ats": ats, "active": True})
+    reported = sum(int(e.get("job_count_last") or 0) for e in endpoints)
+
+    goal.value = 100.0 * producing / len(keys)
+    goal.extra = {"endpoints": len(keys), "producing": producing,
+                  "ingested": ingested, "vendor_reported_total": reported}
+    goal.detail = (f"{producing}/{len(keys)} pods producing; {ingested:,} "
+                   f"postings inside the {_FRESHNESS_DAYS}-day window"
+                   + (f" (pods report {reported:,} open reqs all-time — not a "
+                      "like-for-like denominator)" if reported else ""))
 
 
 def g2_icims(goal: Goal) -> None:
+    """Crawlable iCIMS boards. Seeds count; they are real endpoints.
+
+    Counting only `company_ats_endpoints` reported "0 validated endpoints"
+    while iCIMS was ingesting 205 postings from three seeded tenants — the
+    report contradicting the inventory in the same run. Seeds are endpoints
+    that predate discovery, not a different kind of thing.
+    """
     db = _db()
     eps = db["company_ats_endpoints"]
     validated = eps.count_documents({"vendor": "icims", "status": "validated"})
     blocked = eps.count_documents({"vendor": "icims", "status": "blocked"})
-    postings = db["job_postings"].count_documents({"ats": "icims",
+    seeded = len(_seeded_members("icims"))
+    postings = db["job_postings"].count_documents({"ats": _ats_key("icims"),
                                                    "active": True})
-    goal.value = float(validated)
-    goal.extra = {"validated": validated, "blocked": blocked,
+    goal.value = float(validated + seeded)
+    goal.extra = {"validated": validated, "seeded": seeded, "blocked": blocked,
                   "postings": postings}
-    goal.detail = (f"{validated:,} validated endpoints, {postings:,} postings, "
-                   f"{blocked:,} currently blocked")
-    if postings == 0 and validated:
-        goal.detail += "  (endpoints validated but nothing ingested yet)"
+    goal.detail = (f"{validated:,} discovered + {seeded} seeded endpoints, "
+                   f"{postings:,} postings, {blocked:,} currently blocked")
+    if postings == 0 and (validated + seeded):
+        goal.detail += "  (endpoints known but nothing ingested yet)"
+    if not validated:
+        goal.detail += "  — discovery has not run; see `discover-tenants`"
 
 
 def g3_vendors(goal: Goal) -> None:

@@ -478,6 +478,43 @@ _SEED_ENDPOINTS: Tuple[Dict[str, str], ...] = (
     {"vendor": "taleo", "tenant": "baesystems", "site": "",
      "host": "baesystems.taleo.net", "display_name": "BAE Systems",
      "industry": "aerospace"},
+    # Vendors added on 2026-08-18 that have NO Python catalog and no discovered
+    # endpoints yet. Without a seed each is a registered provider with zero
+    # members - the exact "ships a source that returns nothing" failure the
+    # provider registry was built to make impossible, reached by a different
+    # route: the registration is complete, there is simply nothing to crawl.
+    #
+    # These are a BOOTSTRAP, not a catalog. Every one was listed successfully
+    # through its provider on 2026-08-18 (`scripts/live_provider_check.py`), and
+    # `employer_coverage.py discover-tenants` is what grows the set from here.
+    #
+    # UKG and Paylocity boards are identified by opaque ids that cannot be
+    # derived from a company name, so these came from real URLs in the Common
+    # Crawl index rather than from guessing.
+    {"vendor": "jobvite", "tenant": "actionet", "site": "",
+     "host": "", "display_name": "ActioNet", "industry": "tech"},
+    {"vendor": "jobvite", "tenant": "venterra", "site": "",
+     "host": "", "display_name": "Venterra Realty", "industry": "real_estate"},
+    {"vendor": "bamboohr", "tenant": "24slg", "site": "",
+     "host": "24slg.bamboohr.com", "display_name": "24SLG", "industry": "other"},
+    {"vendor": "ukg", "tenant": "AAM1000AAM",
+     "site": "c5a88c41-a6d1-4e5d-bf94-4d0432a0df30",
+     "host": "recruiting.ultipro.com", "display_name": "AAM",
+     "industry": "real_estate"},
+    {"vendor": "paylocity", "tenant": "002dce18-ff77-4ac9-90f8-6a928b1044ef",
+     "site": "", "host": "recruiting.paylocity.com",
+     "display_name": "Your Home Improvement Company", "industry": "other"},
+    {"vendor": "rippling", "tenant": "rippling", "site": "",
+     "host": "ats.rippling.com", "display_name": "Rippling",
+     "industry": "tech"},
+    # Cornerstone site ids are not derivable and are not always 1: Arizona
+    # serves 324 requisitions on site 4 and zero on site 1.
+    {"vendor": "cornerstone", "tenant": "arizona", "site": "4",
+     "host": "arizona.csod.com", "display_name": "University of Arizona",
+     "industry": "education"},
+    {"vendor": "cornerstone", "tenant": "alamo", "site": "1",
+     "host": "alamo.csod.com", "display_name": "Alamo Colleges",
+     "industry": "education"},
 )
 
 
@@ -1435,9 +1472,14 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
             if posted_at is None or posted_at < cutoff:
                 continue
             loc = job.get("location") or {}
+            # `ref` is a URL string in the live API; it was a dict in an older
+            # one. Accept both rather than assuming, because the failure mode of
+            # assuming is an exception that discards the WHOLE employer.
+            ref = job.get("ref")
+            ref_url = ref.get("jobAd") if isinstance(ref, dict) else ref
             rows.append(_listing_row(
                 member, job.get("id"), title=job.get("name") or "",
-                url=(job.get("ref") or {}).get("jobAd") or "", posted_at=posted_at,
+                url=str(ref_url or ""), posted_at=posted_at,
                 location=", ".join(str(loc.get(k) or "") for k in ("city", "region", "country")),
                 detail_ref=str(job.get("id") or ""), compensation=_pay_of(job)))
 
@@ -1571,8 +1613,21 @@ def _epoch_ms(value: Any) -> Optional[datetime]:
 # behaviour without rewriting the ingest tests — G8 forbids that. New
 # vendors (oracle_orc, icims, jobvite, bamboohr, taleo) have NO legacy
 # path, so they MUST go through the provider or they ingest nothing.
+#: Vendors pinned to the pre-ADR-004 `_list_workday` / `_list_career` fetchers.
+#:
+#: The pin exists to protect sources that were already live (G8: no regression),
+#: NOT as a statement that the legacy path is better. SmartRecruiters was
+#: removed from it on 2026-08-19 because the protection had inverted: its legacy
+#: branch crashed on every member with
+#:
+#:     AttributeError: 'str' object has no attribute 'get'
+#:
+#: because `posting["ref"]` is a URL STRING in the live API and the code called
+#: `.get("jobAd")` on it. One exception per member meant all 116 SmartRecruiters
+#: employers produced zero postings — AbbVie alone publishes 1,728 — while a
+#: provider verified against the live API sat unused behind this set.
 _LEGACY_LISTING_VENDORS = frozenset({
-    "workday", "greenhouse", "lever", "ashby", "smartrecruiters",
+    "workday", "greenhouse", "lever", "ashby",
     "workable", "recruitee", "neogov",
 })
 
