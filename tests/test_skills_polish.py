@@ -107,8 +107,17 @@ def test_cross_category_dedup_keeps_most_relevant_category():
         "Tools": ["Git", "Python"],
         "Backend": ["Python", "Django"],
     }, jd)
-    assert "Python" in out["skills"]["Backend"]
-    assert "Python" not in out["skills"]["Tools"]
+    # Programming languages are filed under Languages, not Backend/Tools.
+    assert "Python" in out["skills"]["Languages"]
+    assert "Python" not in out["skills"].get("Tools", [])
+    assert "Django" in out["skills"]["Backend"]
+
+
+def test_empty_categories_pruned():
+    out = _polish({"Cloud": [], "Backend": ["Python"]})
+    assert "Cloud" not in out["skills"]
+    assert out["skills"]["Languages"] == ["Python"]
+    assert "Backend" not in out["skills"]
 
 
 def test_alias_dedup_across_categories():
@@ -141,11 +150,6 @@ def test_categories_reordered_by_jd_relevance():
                                "Microsoft Excel"],
     }, jd)
     assert list(out["skills"]) == ["Financial Analysis", "Languages"]
-
-
-def test_empty_categories_pruned():
-    out = _polish({"Cloud": [], "Backend": ["Python"]})
-    assert list(out["skills"]) == ["Backend"]
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +292,9 @@ def test_adds_implied_jd_skill_next_to_parent():
     assert "HTML" in out["skills"]["Frontend"]
     assert out["skills"]["Frontend"][0] == "HTML"
     assert "React" in out["skills"]["Frontend"]
-    assert "TypeScript" in out["skills"]["Frontend"]
+    # TypeScript is a programming language even when the original listed it
+    # under Frontend.
+    assert "TypeScript" in out["skills"]["Languages"]
 
 
 def test_does_not_add_unevidenced_jd_skill():
@@ -350,4 +356,73 @@ def test_caps_new_jd_adds():
     added = [s for s in flat if s != "Python"]
     assert len(added) == ResumeTailor._MAX_NEW_JD_SKILLS
     assert "Python" in flat
+
+
+# ---------------------------------------------------------------------------
+# Recategorize: languages vs concepts, heading clones, "X programming"
+# ---------------------------------------------------------------------------
+
+def test_non_languages_leave_languages_category():
+    out = _polish({
+        "Languages": [
+            "Java", "High-throughput", "Telemetry",
+            "Performance Optimization", "Python", "SQL",
+        ],
+        "Concepts & Methodologies": ["Microservices"],
+    })
+    langs = [s.lower() for s in out["skills"]["Languages"]]
+    assert "java" in langs and "python" in langs and "sql" in langs
+    assert "high-throughput" not in langs
+    assert "telemetry" not in langs
+    assert "performance optimization" not in langs
+    concepts = " ".join(s.lower() for s in out["skills"]["Concepts & Methodologies"])
+    assert "high-throughput" in concepts
+    assert "telemetry" in concepts
+    assert "performance optimization" in concepts
+
+
+def test_drops_item_that_repeats_category_heading():
+    out = _polish({
+        "Databases": ["PostgreSQL", "Databases", "MySQL", "MongoDB"],
+    })
+    items = [s.lower() for s in out["skills"]["Databases"]]
+    assert "databases" not in items
+    assert "postgresql" in items and "mysql" in items
+
+
+def test_java_programming_collapses_into_languages():
+    out = _polish({
+        "Languages": ["Java", "Python"],
+        "Frameworks & Libraries": [
+            "Java programming", "FastAPI", "Spring Boot", "React",
+        ],
+    })
+    langs = out["skills"]["Languages"]
+    assert langs.count("Java") == 1
+    assert "Python" in langs
+    frameworks = " ".join(out["skills"]["Frameworks & Libraries"])
+    assert "Java programming" not in frameworks
+    assert "FastAPI" in frameworks and "React" in frameworks
+
+
+def test_new_jd_skill_does_not_dump_into_languages():
+    original = {
+        "skills": {"Languages": ["Python"]},
+        "summary": "",
+        "experience": [{
+            "title": "Engineer", "company": "Acme",
+            "bullets": ["Shipped high-throughput telemetry on Kafka."],
+        }],
+        "projects": [],
+    }
+    out = _merge(
+        original,
+        {"Languages": ["Python"]},
+        {"required_skills": ["Kafka"]},
+    )
+    langs = [s.lower() for s in out["skills"].get("Languages", [])]
+    assert "kafka" not in langs
+    assert "python" in langs
+    flat = " ".join(s.lower() for items in out["skills"].values() for s in items)
+    assert "kafka" in flat
 

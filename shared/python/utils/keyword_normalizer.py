@@ -9,7 +9,8 @@ Architecture:
   NORMALIZATION_MAP — flat dict: lowercase alias → canonical form
   REVERSE_MAP      — canonical (lower) → {all lowercase aliases}
 """
-from typing import Dict, List, Set
+import re
+from typing import Dict, List, Optional, Set
 
 
 # ---------------------------------------------------------------------------
@@ -1146,6 +1147,23 @@ _SYNONYM_GROUPS = {
 NORMALIZATION_MAP: Dict[str, str] = _build_map(_SYNONYM_GROUPS)
 REVERSE_MAP: Dict[str, Set[str]] = _build_reverse(_SYNONYM_GROUPS)
 
+# Every alias of a programming language (for "is this a language?" checks).
+LANGUAGE_FORMS: Set[str] = {
+    s.lower().strip()
+    for group in _SYNONYM_GROUPS.get("programming_languages", [])
+    for s in group
+    if s.strip()
+}
+
+# First group wins so programming_languages beat later collisions.
+ALIAS_TO_GROUP: Dict[str, str] = {}
+for _gname, _entries in _SYNONYM_GROUPS.items():
+    for _synonyms in _entries:
+        for _alias in _synonyms:
+            _key = _alias.lower().strip()
+            if _key and _key not in ALIAS_TO_GROUP:
+                ALIAS_TO_GROUP[_key] = _gname
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -1186,6 +1204,37 @@ def normalize_keywords(keywords: List[str]) -> List[str]:
 def keyword_matches(keyword_a: str, keyword_b: str) -> bool:
     """Return True if two keywords are equivalent after normalization."""
     return normalize_single(keyword_a).lower() == normalize_single(keyword_b).lower()
+
+
+def is_programming_language(term: str) -> bool:
+    """True if `term` is a known programming/query/shell language.
+
+    Strips a trailing 'programming' / 'language' / 'lang' so
+    'Java programming' counts as Java. HTML/CSS are frontend, not languages.
+    """
+    if not term or not str(term).strip():
+        return False
+    raw = re.sub(r"\s*\([^)]*\)\s*$", "", str(term)).strip()
+    raw = re.sub(
+        r"\s+(programming|language|lang)\s*$", "", raw, flags=re.IGNORECASE
+    ).strip()
+    if not raw:
+        return False
+    forms = {raw.lower(), (normalize_single(raw) or raw).lower()}
+    return bool(forms & LANGUAGE_FORMS)
+
+
+def taxonomy_group(term: str) -> Optional[str]:
+    """Return the synonym-group name for a known skill, else None."""
+    if not term or not str(term).strip():
+        return None
+    raw = re.sub(r"\s*\([^)]*\)\s*$", "", str(term)).strip().lower()
+    if not raw:
+        return None
+    if raw in ALIAS_TO_GROUP:
+        return ALIAS_TO_GROUP[raw]
+    canon = (normalize_single(term) or term).lower().strip()
+    return ALIAS_TO_GROUP.get(canon)
 
 
 def get_all_forms(keyword: str) -> Set[str]:

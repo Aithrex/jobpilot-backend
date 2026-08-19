@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from schemas.resume_schemas import (
     TAILORED_RESUME_SCHEMA,
@@ -48,6 +48,8 @@ _TAILOR_MAX_TOKENS = 16384
 from utils.keyword_normalizer import (
     normalize_single,
     get_all_forms,
+    is_programming_language,
+    taxonomy_group,
 )
 
 logger = logging.getLogger(__name__)
@@ -1012,6 +1014,8 @@ class ResumeTailor:
         _cap_skills_per_category). The model decides skills CONTENT (prompt);
         this guards the structural floors regardless of what it emitted:
 
+          0. recategorize — languages stay languages; category-name clones
+             and "X programming" / concept phrases are moved or dropped
           1. cross-category dedup (same skill in two categories → keep it in
              the most JD-relevant one)
           2. umbrella collapse — platform + sub-services become ONE entry:
@@ -1086,6 +1090,7 @@ class ResumeTailor:
             for cat, items in skills.items()
             if isinstance(items, list)
         }
+        cats = cls._recategorize_skills(cats)
 
         def category_rank() -> List[str]:
             """Categories ordered most-JD-relevant first; ties keep the
@@ -1219,6 +1224,160 @@ class ResumeTailor:
                 out[str(cat)] = kept
         return out
 
+    _SKILL_BUCKET_HINTS = {
+        "language": ("language",),
+        "database": ("database",),
+        "cloud": ("cloud", "devops"),
+        "framework": ("framework", "librar", "frontend", "backend"),
+        "concept": ("concept", "methodolog"),
+        "tool": ("tool", "platform"),
+    }
+    _SKILL_BUCKET_FALLBACK = {
+        "language": "Languages",
+        "database": "Databases",
+        "cloud": "Cloud & DevOps",
+        "framework": "Frameworks & Libraries",
+        "concept": "Concepts & Methodologies",
+        "tool": "Tools & Platforms",
+    }
+    _TAXONOMY_TO_BUCKET = {
+        "programming_languages": "language",
+        "databases": "database",
+        "cloud": "cloud",
+        "devops": "cloud",
+        "frontend": "framework",
+        "backend": "framework",
+        "apis": "framework",
+        "mobile": "framework",
+        "ai_ml": "concept",
+        "methodologies": "concept",
+        "healthcare": "concept",
+        "finance": "concept",
+        "product": "concept",
+        "consulting": "concept",
+        "engineering_disciplines": "concept",
+        "project_mgmt": "concept",
+        "hr": "concept",
+        "marketing": "concept",
+        "sales": "concept",
+        "soft_skills": "concept",
+        "data_engineering": "tool",
+        "testing": "tool",
+        "security": "tool",
+        "cybersecurity": "tool",
+        "version_control": "tool",
+        "it_support": "tool",
+        "analytics": "tool",
+    }
+    _CONCEPT_IN_LANGUAGE_RE = re.compile(
+        r"throughput|telemetry|observability|optimization|"
+        r"architecture|compliance|pipeline|workflow|methodology|"
+        r"distributed|high[\s-]|low[\s-]latency",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _skill_bucket_of_category(cls, cat: str) -> Optional[str]:
+        cl = cat.lower()
+        for bucket, hints in cls._SKILL_BUCKET_HINTS.items():
+            if any(h in cl for h in hints):
+                return bucket
+        return None
+
+    @classmethod
+    def _category_for_bucket(
+        cls, bucket: str, cats: Dict[str, List[str]]
+    ) -> str:
+        hints = cls._SKILL_BUCKET_HINTS.get(bucket, ())
+        for cat in cats:
+            cl = cat.lower()
+            if any(h in cl for h in hints):
+                return cat
+        return cls._SKILL_BUCKET_FALLBACK.get(bucket, "Skills")
+
+    @staticmethod
+    def _item_echoes_category(item: str, cat: str) -> bool:
+        raw = re.sub(r"\s*\([^)]*\)\s*$", "", str(item)).strip().lower()
+        return bool(raw) and raw == str(cat).strip().lower()
+
+    @classmethod
+    def _language_display(cls, term: str) -> Optional[str]:
+        raw = re.sub(r"\s*\([^)]*\)\s*$", "", str(term)).strip()
+        stripped = re.sub(
+            r"\s+(programming|language|lang)\s*$",
+            "",
+            raw,
+            flags=re.IGNORECASE,
+        ).strip()
+        if is_programming_language(raw) or is_programming_language(stripped):
+            return normalize_single(stripped or raw) or (stripped or raw)
+        return None
+
+    @classmethod
+    def _bucket_for_skill(cls, term: str, current_cat: str) -> Optional[str]:
+        """Target bucket, or None to leave the item in its current category.
+
+        Only reshuffles language-category junk, 'X programming' labels, and
+        programming languages that were listed under Frameworks/Libraries.
+        Other headings (e.g. Storage) are left alone so polish stays local.
+        """
+        current = cls._skill_bucket_of_category(current_cat)
+        lang_disp = cls._language_display(term)
+        raw = re.sub(r"\s*\([^)]*\)\s*$", "", str(term)).strip()
+        has_lang_suffix = bool(
+            re.search(
+                r"\s+(programming|language|lang)\s*$", raw, flags=re.IGNORECASE
+            )
+        )
+
+        if current == "language":
+            if lang_disp:
+                return "language"
+            group = taxonomy_group(term)
+            if group and group != "programming_languages":
+                return cls._TAXONOMY_TO_BUCKET.get(group, "tool")
+            if cls._CONCEPT_IN_LANGUAGE_RE.search(str(term)):
+                return "concept"
+            if len(str(term).split()) >= 2:
+                return "concept"
+            return "language"
+
+        if lang_disp and (has_lang_suffix or current == "framework"):
+            return "language"
+        return None
+
+    @classmethod
+    def _recategorize_skills(
+        cls, cats: Dict[str, List[str]]
+    ) -> Dict[str, List[str]]:
+        """Move misfiled skills; drop items that repeat the category heading."""
+        if not cats:
+            return cats
+        parked: Dict[str, List[str]] = {}
+        rebuilt: Dict[str, List[str]] = {cat: [] for cat in cats}
+
+        for cat, items in cats.items():
+            current_bucket = cls._skill_bucket_of_category(cat)
+            for s in items:
+                if cls._item_echoes_category(s, cat):
+                    continue
+                dest = cls._bucket_for_skill(s, cat)
+                display = cls._language_display(s) or s
+                if dest and dest != current_bucket:
+                    parked.setdefault(dest, []).append(display)
+                else:
+                    rebuilt[cat].append(display)
+
+        ordered: Dict[str, List[str]] = {}
+        for cat, items in rebuilt.items():
+            if items:
+                ordered[cat] = items
+        for bucket, items in parked.items():
+            dest_cat = cls._category_for_bucket(bucket, ordered or cats)
+            ordered.setdefault(dest_cat, [])
+            ordered[dest_cat].extend(items)
+        return ordered
+
     @staticmethod
     def _skill_form_set(term: str) -> set:
         """Canonical + alias forms of a skill (lowercase)."""
@@ -1264,6 +1423,13 @@ class ResumeTailor:
         """Place a new evidenced JD skill next to related original items."""
         from utils.skill_implications import is_implied
 
+        if cls._language_display(term):
+            return cls._category_for_bucket("language", merged)
+        group = taxonomy_group(term)
+        if group and group != "programming_languages":
+            return cls._category_for_bucket(
+                cls._TAXONOMY_TO_BUCKET.get(group, "tool"), merged
+            )
         for cat, items in merged.items():
             if is_implied(term, items):
                 return cat
@@ -1272,10 +1438,14 @@ class ResumeTailor:
                 return cat
         tl = term.lower()
         for cat in merged:
+            if cls._skill_bucket_of_category(cat) == "language":
+                continue
+            if cls._item_echoes_category(term, cat):
+                continue
             cl = cat.lower()
             if any(tok and tok in cl for tok in tl.split() if len(tok) > 3):
                 return cat
-        return next(iter(merged), "Skills")
+        return cls._category_for_bucket("tool", merged)
 
     @classmethod
     def _ensure_jd_skills_coverage(
