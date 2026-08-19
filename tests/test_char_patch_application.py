@@ -127,13 +127,13 @@ class TestStatusPersistence:
 
     def test_valid_status_set_is_this_golden(self, client):
         # The route's accepted status vocabulary — the E1 outcome map must cover
-        # every one of these (draft -> "none", the rest map to themselves). The
-        # `client` fixture puts services/resume on sys.path so blueprints.resume
-        # imports the SAME module the loaded app registered.
+        # every one of these (saved/draft -> "none", the rest map to themselves).
+        # `client` puts services/resume on sys.path so blueprints.resume imports
+        # the SAME module the loaded app registered.
         import importlib
         mod = importlib.import_module("blueprints.resume")
         assert mod._APPLICATION_STATUSES == {
-            "draft", "applied", "interviewing", "offer", "rejected",
+            "saved", "draft", "applied", "interviewing", "offer", "rejected",
             "withdrawn", "ghosted",
         }
 
