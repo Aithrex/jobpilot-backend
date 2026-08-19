@@ -93,6 +93,24 @@ class CrawlPolicy:
     challenge_statuses: frozenset = frozenset({429})
     # Case-insensitive substrings that identify a challenge/interstitial body.
     challenge_markers: Tuple[str, ...] = ()
+    # When True, a challenge STATUS alone is not enough - the body must also
+    # match `challenge_markers`.
+    #
+    # This exists because the opposite default cost a whole discovery run. A
+    # vendor-wide cooldown is a big hammer: it stops every tenant of the vendor
+    # for `cooldown_seconds`. Tripping it on a bare status means one dead
+    # subdomain can silence thousands of live employers - and dead subdomains
+    # are exactly what tenant discovery feeds in, because Certificate
+    # Transparency lists a vendor's own infrastructure alongside its customers.
+    #
+    # Measured 2026-08-19: an iCIMS discovery pass over 90 candidates tripped
+    # the wall on the FIRST request and reported all 90 as "blocked", while
+    # `staff-emory` and `careers-fremontbank` were serving jobs normally the
+    # whole time. Non-employer hosts answer 404/401/403 with ordinary error
+    # pages; the REAL wall is a 2,115-byte "Human Verification" body, which is
+    # what `challenge_markers` matches. Requiring the marker keeps the
+    # protection and removes the false positive.
+    challenge_requires_marker: bool = False
     # How long the whole vendor sits out after a challenge (durable, written to
     # job_source_state.next_attempt_at).
     cooldown_seconds: float = 900.0
@@ -103,12 +121,16 @@ class CrawlPolicy:
 
     def is_challenge(self, status: Optional[int], body: str = "") -> bool:
         """True when a response is a soft block rather than a real answer."""
-        if status is not None and int(status) in self.challenge_statuses:
-            return True
+        marker_hit = False
         if body and self.challenge_markers:
             low = body[:4000].lower()
-            return any(m in low for m in self.challenge_markers)
-        return False
+            marker_hit = any(m in low for m in self.challenge_markers)
+        if marker_hit:
+            return True
+        if self.challenge_requires_marker:
+            # The status is not sufficient on its own for this vendor.
+            return False
+        return status is not None and int(status) in self.challenge_statuses
 
 
 # ---------------------------------------------------------------------------

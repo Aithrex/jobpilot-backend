@@ -181,6 +181,18 @@ def cmd_discover(args: argparse.Namespace) -> int:
 # discover-tenants  (vendor-first)
 # ---------------------------------------------------------------------------
 
+def _vendor_cooling(ctx, host: str, vendor: str) -> bool:
+    """True when the shared pacing key for this vendor is in cooldown."""
+    try:
+        from services.ats_providers.http import PacedSession
+        sess = getattr(ctx, "_session", None)
+        if sess is None:
+            return False
+        return sess.in_cooldown(sess.key_for(f"https://{host}/", vendor))
+    except Exception:
+        return False
+
+
 def cmd_discover_tenants(args: argparse.Namespace) -> int:
     """Enumerate a vendor's tenants from public archives, then validate them.
 
@@ -206,13 +218,15 @@ def cmd_discover_tenants(args: argparse.Namespace) -> int:
     from services.ats_providers.http import simple_context
     from services import tenant_discovery
 
-    vendors = args.vendor or [v for v, _d in tenant_discovery.SUBDOMAIN_VENDORS]
-    domains = dict(tenant_discovery.SUBDOMAIN_VENDORS)
+    vendors = args.vendor or [v for v, _d, _p in
+                              tenant_discovery.SUBDOMAIN_VENDORS]
+    domains = {v: (d, p) for v, d, p in tenant_discovery.SUBDOMAIN_VENDORS}
 
     totals: Dict[str, int] = {"candidates": 0, "validated": 0, "empty": 0,
-                              "dead": 0, "blocked": 0, "skipped": 0}
+                              "dead": 0, "blocked": 0, "skipped": 0,
+                              "not_attempted": 0}
     for vendor in vendors:
-        domain = domains.get(vendor)
+        domain, path_pattern = domains.get(vendor, ("", ""))
         if not domain:
             logger.warning("no tenant domain known for %s — skipping", vendor)
             continue
@@ -224,7 +238,7 @@ def cmd_discover_tenants(args: argparse.Namespace) -> int:
         logger.info("enumerating %s tenants under *.%s", vendor, domain)
         candidates = tenant_discovery.discover_vendor_tenants(
             vendor, domain, cc_pages=args.cc_pages,
-            use_crtsh=args.use_crtsh)
+            path_pattern=path_pattern, use_crtsh=args.use_crtsh)
         logger.info("%s: %d candidate hostnames", vendor, len(candidates))
         totals["candidates"] += len(candidates)
         if args.dry_run:
@@ -253,6 +267,20 @@ def cmd_discover_tenants(args: argparse.Namespace) -> int:
                 continue
             status = getattr(result, "status", "") or ""
             totals[status] = totals.get(status, 0) + 1
+
+            # A vendor-wide cooldown means every LATER candidate would be
+            # reported "blocked" without a request ever being made. That is not
+            # a measurement, it is the absence of one, and it reads in the
+            # summary as "90 employers are blocking us" when the truth is "we
+            # tried one". Stop, and say which it was.
+            if status == "blocked" and _vendor_cooling(ctx, cand.host, vendor):
+                remaining = max(0, min(args.limit, len(candidates)) - checked)
+                totals["not_attempted"] += remaining
+                logger.warning(
+                    "%s: vendor-wide cooldown after %d checked; %d candidates "
+                    "NOT attempted (this is not evidence about them)",
+                    vendor, checked, remaining)
+                break
             # Only a board that actually served rows is worth a row of its own.
             # Persisting every candidate would fill `company_ats_endpoints` with
             # hostnames that merely resolve, which is precisely the mistake

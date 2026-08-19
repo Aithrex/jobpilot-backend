@@ -515,6 +515,9 @@ _SEED_ENDPOINTS: Tuple[Dict[str, str], ...] = (
     {"vendor": "cornerstone", "tenant": "alamo", "site": "1",
      "host": "alamo.csod.com", "display_name": "Alamo Colleges",
      "industry": "education"},
+    {"vendor": "jazzhr", "tenant": "aamco", "site": "",
+     "host": "aamco.applytojob.com", "display_name": "AAMCO",
+     "industry": "automotive"},
 )
 
 

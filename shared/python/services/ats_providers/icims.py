@@ -150,6 +150,10 @@ class IcimsProvider(AtsProvider):
         detail_timeout=15.0,
         challenge_statuses=frozenset({403, 405, 429, 503}),
         challenge_markers=_CHALLENGE_MARKERS,
+        # A bare 4xx/5xx from ONE host is that host being dead, not the vendor
+        # walling us; only the interstitial body proves the wall. Without this,
+        # a single dead subdomain cools down every iCIMS tenant for 30 minutes.
+        challenge_requires_marker=True,
         # A tripped wall persists; sitting out 30 min beats hammering it and
         # extending the block for every other tenant.
         cooldown_seconds=1800.0,

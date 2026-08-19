@@ -98,6 +98,8 @@ PROBES: Dict[str, Dict[str, Any]] = {
     "cornerstone": {"tenant": "arizona", "site": "4",
                     "host": "arizona.csod.com",
                     "display_name": "University of Arizona"},
+    "jazzhr": {"tenant": "aamco", "host": "aamco.applytojob.com",
+               "display_name": "AAMCO"},
 }
 
 

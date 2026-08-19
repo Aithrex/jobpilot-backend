@@ -372,8 +372,14 @@ def simple_context(*, budget_seconds: float = 120.0,
     deadline = time.monotonic() + max(1.0, float(budget_seconds))
     get_json, get_text, post_json = make_fetchers(
         sess, guard=guard, deadline=deadline)
-    return FetchContext(get_json=get_json, get_text=get_text,
-                        post_json=post_json, deadline=deadline,
-                        cutoff_iso=cutoff_iso,
-                        logger=logger_obj or logger,
-                        options=dict(options or {}))
+    ctx = FetchContext(get_json=get_json, get_text=get_text,
+                       post_json=post_json, deadline=deadline,
+                       cutoff_iso=cutoff_iso,
+                       logger=logger_obj or logger,
+                       options=dict(options or {}))
+    # Exposed so a CALLER can ask whether a vendor is in cooldown. Without it a
+    # discovery loop cannot tell "this tenant is blocked" from "the vendor is
+    # cooling down and this tenant was never fetched", and reports the second
+    # as the first for every remaining candidate.
+    ctx._session = sess
+    return ctx

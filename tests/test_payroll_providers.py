@@ -372,3 +372,106 @@ def test_cornerstone_publishes_no_description_and_does_not_invent_one():
     rows = _csod_rows(Endpoint(vendor="cornerstone", tenant="arizona",
                                site="4"), _CsodCtx())
     assert rows[0].description == ""
+
+
+# ---------------------------------------------------------------------------
+# JazzHR
+# ---------------------------------------------------------------------------
+
+_JAZZ_HTML = """
+<ul class="list-group">
+  <li class="list-group-item">
+    <h3 class='list-group-item-heading'>
+      <a href="https://aamco.applytojob.com/apply/0GvcHbhhXv/Automotive-Technician">
+        Automotive  Technician                </a>
+    </h3>
+    <ul class='list-inline list-group-item-text'>
+      <li><i class='fa fa-map-marker'></i>Pasadena, CA</li>
+      <li><i class='fa fa-sitemap'></i>California</li>
+    </ul>
+  </li>
+  <li class="list-group-item">
+    <h3 class='list-group-item-heading'>
+      <a href="https://aamco.applytojob.com/apply/0ZYqmiY7jb/Service-Writer">Service Writer</a>
+    </h3>
+    <ul class='list-inline list-group-item-text'>
+      <li><i class='fa fa-sitemap'></i>Texas</li>
+    </ul>
+  </li>
+</ul>
+"""
+
+#: Only SOME JazzHR postings carry a `JobPosting` block — "Business Coach" on a
+#: live board has an `Organization` block and nothing else. A detail fetch that
+#: assumed one would be reading `None`.
+_JAZZ_DETAIL = '''<html><head>
+<script type="application/ld+json">
+{"@type":"Organization","name":"AAMCO","url":"https://www.aamco.com"}
+</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"JobPosting","title":"Automotive Technician",
+ "datePosted":"2026-07-15","employmentType":"FULL_TIME",
+ "description":"<p>Diagnose and repair vehicles.</p>"}
+</script></head></html>'''
+
+_JAZZ_DETAIL_NO_JOB = ('<html><head><script type="application/ld+json">'
+                       '{"@type":"Organization","name":"AAMCO"}'
+                       '</script></head></html>')
+
+
+def _jazz_rows(ctx):
+    from services.ats_providers.payroll import JazzHrProvider
+    return list(JazzHrProvider().list_jobs(
+        Endpoint(vendor="jazzhr", tenant="aamco",
+                 host="aamco.applytojob.com"), ctx))
+
+
+def test_jazzhr_reads_the_html_board():
+    rows = _jazz_rows(_Ctx(text=_JAZZ_HTML))
+    assert [r.source_job_id for r in rows] == ["0GvcHbhhXv", "0ZYqmiY7jb"]
+    assert rows[0].title == "Automotive Technician"
+    assert rows[0].apply_url.endswith("/apply/0GvcHbhhXv/Automotive-Technician")
+
+
+def test_jazzhr_distinguishes_location_from_department_by_icon():
+    """The two `<li>`s are identical but for the icon class.
+
+    Reading them positionally labels a board that omits one incorrectly — the
+    second row here has a department and NO location.
+    """
+    rows = _jazz_rows(_Ctx(text=_JAZZ_HTML))
+    assert rows[0].location == "Pasadena, CA"
+    assert rows[0].department == "California"
+    assert rows[1].location == ""
+    assert rows[1].department == "Texas"
+
+
+def test_jazzhr_listing_claims_no_date():
+    from services.ats_providers.payroll import JazzHrProvider
+    assert JazzHrProvider().date_confidence == "unknown"
+    assert all(r.posted_at == "" for r in _jazz_rows(_Ctx(text=_JAZZ_HTML)))
+
+
+def test_jazzhr_detail_picks_the_jobposting_not_the_organization():
+    """Both blocks are present; only one is the posting."""
+    from services.ats_providers.payroll import JazzHrProvider
+
+    provider = JazzHrProvider()
+    listed = _jazz_rows(_Ctx(text=_JAZZ_HTML))[0]
+    detail = provider.fetch_detail(
+        Endpoint(vendor="jazzhr", tenant="aamco"), listed,
+        _Ctx(text=_JAZZ_DETAIL))
+    assert detail is not None
+    assert detail.posted_at.startswith("2026-07-15")
+    assert detail.date_confidence == "exact"
+    assert "Diagnose and repair" in detail.description
+
+
+def test_jazzhr_detail_without_a_jobposting_block_is_not_an_error():
+    """Common on live boards; the row simply stays undated (ADR-001)."""
+    from services.ats_providers.payroll import JazzHrProvider
+
+    listed = _jazz_rows(_Ctx(text=_JAZZ_HTML))[0]
+    assert JazzHrProvider().fetch_detail(
+        Endpoint(vendor="jazzhr", tenant="aamco"), listed,
+        _Ctx(text=_JAZZ_DETAIL_NO_JOB)) is None

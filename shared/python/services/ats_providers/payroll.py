@@ -754,3 +754,155 @@ class CornerstoneProvider(AtsProvider):
 
 
 register(CornerstoneProvider())
+
+
+# ---------------------------------------------------------------------------
+# JazzHR
+# ---------------------------------------------------------------------------
+
+class JazzHrProvider(AtsProvider):
+    """JazzHR public boards (`{tenant}.applytojob.com`).
+
+    JazzHR sells almost exclusively to small employers — the population this
+    module exists for. There is no JSON API: `/apply/jobs.json` is a 404 and
+    `/apply/jobs/rss` returns a 2 KB error page, which is where a JSON-hunting
+    probe stops. `GET /apply` returns the COMPLETE board as HTML in one request
+    (123 jobs for AAMCO), with no pagination to follow.
+
+    Row shape (verified live 2026-08-19):
+
+        <li class="list-group-item">
+          <h3 class="list-group-item-heading">
+            <a href="https://{t}.applytojob.com/apply/{id}/{slug}">Title</a>
+          <ul class="list-inline list-group-item-text">
+            <li><i class="fa fa-map-marker"></i>Pasadena, CA</li>
+            <li><i class="fa fa-sitemap"></i>California</li>
+
+    The icon class is what distinguishes location from department — they are
+    otherwise identical `<li>`s, and reading them positionally mislabels every
+    board that omits one.
+
+    The listing carries no date; the posting page does, as a complete
+    `JobPosting` JSON-LD block with a real `datePosted`, the full description
+    and an employment type. Hence `has_detail = True`.
+    """
+
+    vendor = "jazzhr"
+    label = "JazzHR"
+
+    termless = True
+    has_detail = True
+    #: The listing has no date; `fetch_detail` earns it per row.
+    date_confidence = DATE_UNKNOWN
+    policy = _POLICY
+
+    api_hosts = (".applytojob.com",)
+    portal_hosts = (".applytojob.com",)
+    #: One board per subdomain and a readable slug, but the slug is the JazzHR
+    #: account name rather than the company name often enough that guessing is
+    #: not worth the request; tenants come from the archives instead.
+    slug_probe = False
+
+    fingerprints = (
+        fp(r"https?://(?P<tenant>[A-Za-z0-9][A-Za-z0-9\-]*)\.applytojob\.com"
+           r"/apply", confidence=92),
+        fp(r"https?://(?P<tenant>[A-Za-z0-9][A-Za-z0-9\-]*)\.applytojob\.com",
+           confidence=70),
+    )
+    _RESERVED = frozenset({"www", "api", "app", "help", "support"})
+
+    #: One job card. Non-greedy up to the next card so a board with a missing
+    #: `<ul>` cannot swallow the following row's fields.
+    _ROW_RE = re.compile(
+        r'<h3[^>]*class=["\'][^"\']*list-group-item-heading[^"\']*["\'][^>]*>\s*'
+        r'<a[^>]+href=["\']([^"\']*/apply/([A-Za-z0-9]+)/[^"\']*)["\'][^>]*>'
+        r'(.*?)</a>\s*</h3>(.*?)(?=<h3[^>]*list-group-item-heading|</ul>\s*</div>|\Z)',
+        re.IGNORECASE | re.DOTALL)
+    _LOC_RE = re.compile(r'fa-map-marker["\'][^>]*>\s*</i>\s*([^<]+)',
+                         re.IGNORECASE)
+    _DEPT_RE = re.compile(r'fa-sitemap["\'][^>]*>\s*</i>\s*([^<]+)',
+                          re.IGNORECASE)
+
+    def endpoint_from_match(self, fields: Dict[str, str],
+                            url: str) -> Optional[Endpoint]:
+        tenant = (fields.get("tenant") or "").strip().lower()
+        if not tenant or tenant in self._RESERVED:
+            return None
+        return Endpoint(vendor=self.vendor, tenant=tenant,
+                        host=f"{tenant}.applytojob.com")
+
+    def list_jobs(self, endpoint: Endpoint,
+                  ctx: FetchContext) -> Iterator[RawJob]:
+        tenant = (endpoint.tenant or "").strip().lower()
+        if not tenant or tenant in self._RESERVED:
+            return
+        host = (endpoint.host or f"{tenant}.applytojob.com").strip().lower()
+        status, body = ctx.get_text(f"https://{host}/apply", params={},
+                                    timeout=self.policy.timeout,
+                                    vendor=self.vendor)
+        if self.policy.is_challenge(status, body or ""):
+            raise ChallengeError(self.vendor, status)
+        if status != 200 or not body:
+            return
+
+        seen: set = set()
+        for match in self._ROW_RE.finditer(body):
+            if ctx.should_stop():
+                return
+            url, rid, title_html, tail = match.groups()
+            if rid in seen:
+                continue
+            title = " ".join(html_to_text(title_html).split())
+            if not title:
+                continue
+            seen.add(rid)
+            loc = self._LOC_RE.search(tail or "")
+            dept = self._DEPT_RE.search(tail or "")
+            location = " ".join(html_to_text(loc.group(1)).split()) if loc else ""
+            yield RawJob(
+                source_job_id=rid,
+                title=title[:200],
+                apply_url=url,
+                location=location[:160],
+                posted_at="",
+                date_confidence=DATE_UNKNOWN,
+                department=(" ".join(html_to_text(dept.group(1)).split())[:120]
+                            if dept else ""),
+                remote=looks_remote(title, location),
+                detail_url=url,
+            )
+
+    def fetch_detail(self, endpoint: Endpoint, job: RawJob,
+                     ctx: FetchContext) -> Optional[RawJob]:
+        """Date, full JD and employment type, from the posting's JSON-LD."""
+        url = job.detail_url or job.apply_url
+        if not url:
+            return None
+        status, body = ctx.get_text(url, params={},
+                                    timeout=self.policy.detail_timeout,
+                                    vendor=self.vendor)
+        if self.policy.is_challenge(status, body or ""):
+            raise ChallengeError(self.vendor, status)
+        if status != 200 or not body:
+            return None
+        ld = _job_posting_ld(body)
+        if not ld:
+            return None
+        posted_raw = ld.get("datePosted")
+        posted = "" if looks_minted_now(posted_raw) else to_iso(posted_raw)
+        description = html_to_text(ld.get("description") or "")
+        if not description and not posted:
+            return None
+        return RawJob(
+            source_job_id=job.source_job_id,
+            title=job.title,
+            apply_url=job.apply_url,
+            description=description[:40000],
+            posted_at=posted,
+            date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
+            employment_type=str(ld.get("employmentType") or ""),
+            compensation=ld.get("baseSalary") or None,
+        )
+
+
+register(JazzHrProvider())

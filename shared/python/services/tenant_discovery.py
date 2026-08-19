@@ -100,9 +100,19 @@ class TenantCandidate:
     label: str
     sources: Set[str] = field(default_factory=set)
 
+    #: Ordering weight per source. A host seen under the vendor's BOARD path is
+    #: a job board by construction; a host seen anywhere on the domain might be
+    #: the vendor's billing portal; a certificate proves only that a name
+    #: existed. Ranking by count alone made these indistinguishable, so an
+    #: alphabetical tie-break sent the validator through `academy`, `agents`,
+    #: `api-dev`, `autodiscover`, `billing`… and spent an entire 8-minute budget
+    #: without reaching one employer.
+    _WEIGHTS = {"commoncrawl:board": 100, "commoncrawl": 10, "certspotter": 1,
+                "crtsh": 1}
+
     @property
     def confidence(self) -> int:
-        return len(self.sources)
+        return sum(self._WEIGHTS.get(s, 1) for s in self.sources)
 
     def to_doc(self) -> Dict[str, Any]:
         return {"vendor": self.vendor, "host": self.host, "tenant": self.label,
@@ -313,6 +323,7 @@ def discover_vendor_tenants(vendor: str, domain: str, *,
                             use_certspotter: bool = True,
                             use_crtsh: bool = False,
                             cc_pages: int = 6,
+                            path_pattern: str = "",
                             exclude: Iterable[str] = (),
                             ) -> List[TenantCandidate]:
     """Candidate tenant hostnames for a vendor whose tenants are subdomains.
@@ -336,12 +347,30 @@ def discover_vendor_tenants(vendor: str, domain: str, *,
         cand.sources.add(source)
 
     if use_commoncrawl:
-        try:
-            for host in commoncrawl_hosts(f"*.{domain}", pages=cc_pages):
-                add(host, "commoncrawl")
-        except DiscoveryError as exc:
-            logger.warning("tenant_discovery: commoncrawl %s failed (%s)",
-                           domain, exc)
+        # A PATH-scoped pattern is both cheaper and more precise where a vendor
+        # has one. `*.icims.com` is large enough that the index times out on it
+        # (so iCIMS enumeration returned only Certificate Transparency's view,
+        # which for a wildcard-certificate vendor is the vendor's OWN
+        # infrastructure and not one employer). `*.icims.com/jobs/*` is four
+        # pages, and every host it returns is by construction a job board.
+        patterns = [f"*.{domain}{path_pattern}"] if path_pattern else []
+        patterns.append(f"*.{domain}")
+        for pattern in patterns:
+            try:
+                before = len(found)
+                scoped = bool(path_pattern) and pattern.endswith(path_pattern)
+                label = "commoncrawl:board" if scoped else "commoncrawl"
+                for host in commoncrawl_hosts(pattern, pages=cc_pages):
+                    add(host, label)
+                logger.info("tenant_discovery: %s -> %d new hosts",
+                            pattern, len(found) - before)
+                if path_pattern and pattern.endswith(path_pattern):
+                    # The scoped query answered; the broad one would only add
+                    # infrastructure hosts and risk a timeout.
+                    break
+            except DiscoveryError as exc:
+                logger.warning("tenant_discovery: commoncrawl %s failed (%s)",
+                               pattern, exc)
     if use_certspotter:
         try:
             for host in certspotter_hosts(domain):
@@ -365,11 +394,19 @@ def discover_vendor_tenants(vendor: str, domain: str, *,
 #: this module can enumerate them. A vendor NOT listed here (Greenhouse, Lever,
 #: Ashby, …) puts every tenant on one shared host as a path segment, which
 #: neither archive can enumerate — those are reached by fingerprinting instead.
-SUBDOMAIN_VENDORS: Tuple[Tuple[str, str], ...] = (
-    ("icims", "icims.com"),
-    ("bamboohr", "bamboohr.com"),
-    ("taleo", "taleo.net"),
-    ("recruitee", "recruitee.com"),
+#: `(vendor, tenant domain, board path pattern)`.
+#:
+#: The path is optional and exists for vendors whose bare domain is too large
+#: for the Common Crawl index to answer. It also raises precision: a host that
+#: appears under `/jobs/` is a board, whereas a host that merely appears under
+#: the domain may be the vendor's billing portal.
+SUBDOMAIN_VENDORS: Tuple[Tuple[str, str, str], ...] = (
+    ("icims", "icims.com", "/jobs/*"),
+    ("bamboohr", "bamboohr.com", "/careers*"),
+    ("taleo", "taleo.net", "/careersection/*"),
+    ("recruitee", "recruitee.com", ""),
+    ("jazzhr", "applytojob.com", "/apply*"),
+    ("cornerstone", "csod.com", "/ux/ats/careersite/*"),
 )
 
 
@@ -378,8 +415,9 @@ def discover_all(vendors: Optional[Sequence[str]] = None, **kwargs
     """Run `discover_vendor_tenants` for every enumerable vendor."""
     wanted = {v.strip().lower() for v in vendors} if vendors else None
     out: Dict[str, List[TenantCandidate]] = {}
-    for vendor, domain in SUBDOMAIN_VENDORS:
+    for vendor, domain, path in SUBDOMAIN_VENDORS:
         if wanted and vendor not in wanted:
             continue
-        out[vendor] = discover_vendor_tenants(vendor, domain, **kwargs)
+        out[vendor] = discover_vendor_tenants(vendor, domain,
+                                              path_pattern=path, **kwargs)
     return out
