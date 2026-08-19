@@ -158,14 +158,32 @@ _INDEX_CACHE: Optional[str] = None
 
 def latest_index() -> str:
     """Newest Common Crawl index id, e.g. `CC-MAIN-2026-30`."""
-    global _INDEX_CACHE
-    if _INDEX_CACHE:
-        return _INDEX_CACHE
-    data = json.loads(_get(_CC_COLLINFO, timeout=45).decode("utf-8", "replace"))
-    if not data:
-        raise DiscoveryError("collinfo.json was empty")
-    _INDEX_CACHE = str(data[0]["id"])
-    return _INDEX_CACHE
+    return recent_indexes(1)[0]
+
+
+_INDEXES_CACHE: List[str] = []
+
+
+def recent_indexes(count: int = 1) -> List[str]:
+    """The `count` newest monthly crawl ids, newest first.
+
+    Each monthly crawl samples the web independently, so a tenant missing from
+    one is often present in another — accumulating across a few snapshots is
+    the cheapest way to grow the candidate pool without touching the employer's
+    own site. It is also why this is capped and paced rather than run over every
+    archive: these are free public research indexes and the polite budget is
+    small.
+    """
+    global _INDEXES_CACHE
+    if len(_INDEXES_CACHE) < count:
+        data = json.loads(_get(_CC_COLLINFO, timeout=45)
+                          .decode("utf-8", "replace"))
+        if not data:
+            raise DiscoveryError("collinfo.json was empty")
+        _INDEXES_CACHE = [str(c["id"]) for c in data if c.get("id")]
+    if not _INDEXES_CACHE:
+        raise DiscoveryError("no Common Crawl indexes available")
+    return _INDEXES_CACHE[:max(1, count)]
 
 
 def commoncrawl_page_count(pattern: str, *, index: Optional[str] = None
@@ -323,6 +341,7 @@ def discover_vendor_tenants(vendor: str, domain: str, *,
                             use_certspotter: bool = True,
                             use_crtsh: bool = False,
                             cc_pages: int = 6,
+                            cc_snapshots: int = 1,
                             path_pattern: str = "",
                             exclude: Iterable[str] = (),
                             ) -> List[TenantCandidate]:
@@ -355,22 +374,32 @@ def discover_vendor_tenants(vendor: str, domain: str, *,
         # pages, and every host it returns is by construction a job board.
         patterns = [f"*.{domain}{path_pattern}"] if path_pattern else []
         patterns.append(f"*.{domain}")
+        try:
+            snapshots = recent_indexes(max(1, int(cc_snapshots)))
+        except DiscoveryError as exc:
+            logger.warning("tenant_discovery: no crawl index (%s)", exc)
+            snapshots = []
         for pattern in patterns:
-            try:
-                before = len(found)
-                scoped = bool(path_pattern) and pattern.endswith(path_pattern)
-                label = "commoncrawl:board" if scoped else "commoncrawl"
-                for host in commoncrawl_hosts(pattern, pages=cc_pages):
-                    add(host, label)
-                logger.info("tenant_discovery: %s -> %d new hosts",
-                            pattern, len(found) - before)
-                if path_pattern and pattern.endswith(path_pattern):
-                    # The scoped query answered; the broad one would only add
-                    # infrastructure hosts and risk a timeout.
-                    break
-            except DiscoveryError as exc:
-                logger.warning("tenant_discovery: commoncrawl %s failed (%s)",
-                               pattern, exc)
+            answered = False
+            for index in snapshots:
+                try:
+                    before = len(found)
+                    scoped = bool(path_pattern) and pattern.endswith(path_pattern)
+                    label = "commoncrawl:board" if scoped else "commoncrawl"
+                    for host in commoncrawl_hosts(pattern, index=index,
+                                                  pages=cc_pages):
+                        add(host, label)
+                    gained = len(found) - before
+                    logger.info("tenant_discovery: %s @%s -> %d new hosts",
+                                pattern, index, gained)
+                    answered = True
+                except DiscoveryError as exc:
+                    logger.warning("tenant_discovery: commoncrawl %s @%s "
+                                   "failed (%s)", pattern, index, exc)
+            if answered and path_pattern and pattern.endswith(path_pattern):
+                # The scoped query answered; the broad one would only add
+                # infrastructure hosts and risk a timeout.
+                break
     if use_certspotter:
         try:
             for host in certspotter_hosts(domain):

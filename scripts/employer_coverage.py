@@ -238,6 +238,7 @@ def cmd_discover_tenants(args: argparse.Namespace) -> int:
         logger.info("enumerating %s tenants under *.%s", vendor, domain)
         candidates = tenant_discovery.discover_vendor_tenants(
             vendor, domain, cc_pages=args.cc_pages,
+            cc_snapshots=args.cc_snapshots,
             path_pattern=path_pattern, use_crtsh=args.use_crtsh)
         logger.info("%s: %d candidate hostnames", vendor, len(candidates))
         totals["candidates"] += len(candidates)
@@ -503,6 +504,11 @@ def main() -> int:
                    help="seconds of validation per vendor")
     p.add_argument("--cc-pages", type=int, default=6,
                    help="Common Crawl index pages to read per vendor")
+    p.add_argument("--cc-snapshots", type=int, default=1,
+                   help="how many recent monthly crawls to accumulate over; "
+                        "each samples the web independently, so more snapshots "
+                        "means more tenants (be polite — these are free "
+                        "public research indexes)")
     p.add_argument("--use-crtsh", action="store_true",
                    help="also query crt.sh (often unavailable)")
     p.add_argument("--dry-run", action="store_true",

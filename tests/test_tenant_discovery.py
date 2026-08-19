@@ -16,7 +16,8 @@ def _no_network(monkeypatch):
     def _boom(*args, **kwargs):
         raise AssertionError("unexpected network call")
     monkeypatch.setattr(td, "_get", _boom)
-    monkeypatch.setattr(td, "_INDEX_CACHE", "CC-MAIN-2026-30")
+    monkeypatch.setattr(td, "_INDEXES_CACHE", ["CC-MAIN-2026-30",
+                                               "CC-MAIN-2026-25"])
 
 
 def _stub(monkeypatch, *, cc=(), certs=()):
@@ -144,6 +145,18 @@ def test_the_scoped_pattern_is_tried_first_and_alone(monkeypatch):
     td.discover_vendor_tenants("icims", "icims.com", path_pattern="/jobs/*",
                                use_certspotter=False)
     assert calls == ["*.icims.com/jobs/*"]
+
+
+def test_snapshots_accumulate_across_monthly_crawls(monkeypatch):
+    """Each monthly crawl samples independently, so more snapshots = more hosts."""
+    seen = {"CC-MAIN-2026-30": {"a.icims.com"},
+            "CC-MAIN-2026-25": {"b.icims.com"}}
+    monkeypatch.setattr(td, "commoncrawl_hosts",
+                        lambda p, index=None, **k: seen.get(index, set()))
+    found = td.discover_vendor_tenants("icims", "icims.com",
+                                       path_pattern="/jobs/*",
+                                       cc_snapshots=2, use_certspotter=False)
+    assert {c.label for c in found} == {"a", "b"}
 
 
 def test_broad_pattern_is_used_when_no_path_is_configured(monkeypatch):
