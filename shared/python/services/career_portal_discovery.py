@@ -223,6 +223,37 @@ _ATS_HINT_RE = re.compile(
     r"[a-z0-9\-]*\.[a-z]{2,}$", re.IGNORECASE)
 
 
+#: Total slug-guess requests one company may spend, across ALL vendors.
+#:
+#: Slug probing only runs when fingerprinting found nothing, which is the
+#: majority of companies — so its cost is paid on almost every row. Unbounded it
+#: was 8 vendors x 2 slugs = 16 requests, and every one lands on a SHARED board
+#: API host (`boards-api.greenhouse.io`, `apply.workable.com`, `api.lever.co`).
+#: With 16 companies in flight that is a burst of ~256 requests at six hosts,
+#: which is both the throughput bottleneck (they serialise on one host bucket)
+#: and rude: a live pass earned `apply.workable.com challenged, cooling down
+#: 900s`, taking Workable offline for every OTHER company too.
+#:
+#: A budget makes the cost per company bounded and predictable. It is spent in
+#: `_SLUG_PROBE_ORDER`, so the vendors most likely to hit go first and a company
+#: that is on Greenhouse is still found on the first request.
+SLUG_PROBE_BUDGET = int(os.getenv("DISCOVERY_SLUG_PROBE_BUDGET", "6") or 6)
+
+#: Probe order, most-likely-first. Greenhouse and Lever dominate the population
+#: this fallback exists for (JS-shell careers pages at tech companies); the
+#: per-tenant-subdomain vendors are last because a miss there is a DNS lookup
+#: rather than a cheap 404 on a shared host.
+_SLUG_PROBE_ORDER = ("greenhouse", "lever", "ashby", "smartrecruiters",
+                     "workable", "recruitee", "rippling", "bamboohr")
+
+
+def _slug_probe_order() -> List[Any]:
+    """Registered providers, ordered for probing."""
+    providers = {p.vendor: p for p in ats_registry.all_providers()}
+    ordered = [providers.pop(v) for v in _SLUG_PROBE_ORDER if v in providers]
+    return ordered + sorted(providers.values(), key=lambda p: p.vendor)
+
+
 class PortalDiscovery:
     def __init__(self, ctx: FetchContext, *, validate: bool = True,
                  max_pages: int = MAX_PAGES_PER_COMPANY):
@@ -427,12 +458,16 @@ class PortalDiscovery:
         out rather than being probed here.
         """
         found: List[Endpoint] = []
-        for provider in ats_registry.all_providers():
+        spent = 0
+        for provider in _slug_probe_order():
             if not getattr(provider, "slug_probe", False):
                 continue
-            if self.ctx.should_stop():
+            if self.ctx.should_stop() or spent >= SLUG_PROBE_BUDGET:
                 break
             for slug in list(provider.slug_candidates(name, domain))[:2]:
+                if spent >= SLUG_PROBE_BUDGET:
+                    break
+                spent += 1
                 if self.ctx.should_stop():
                     break
                 ep = Endpoint(vendor=provider.vendor, tenant=slug,
@@ -515,7 +550,7 @@ class PortalDiscovery:
 #: site, fetch `/careers` — and each company is a DIFFERENT host, so this does
 #: not concentrate load anywhere. It is the difference between draining the
 #: 59,673-company queue in days and draining it in hours.
-DISCOVERY_CONCURRENCY = int(os.getenv("DISCOVERY_CONCURRENCY", "8") or 8)
+DISCOVERY_CONCURRENCY = int(os.getenv("DISCOVERY_CONCURRENCY", "16") or 16)
 
 
 def discover_batch(companies: Sequence[Dict[str, Any]], ctx: FetchContext, *,
@@ -663,11 +698,22 @@ def _persist(result: DiscoveryResult) -> None:
 #: is exactly why this is a schedule and not a script.
 DISCOVERY_WORKERS_PER_TICK = int(
     os.getenv("DISCOVERY_WORKERS_PER_TICK", "16") or 16)
-DISCOVERY_BATCH_SIZE = int(os.getenv("DISCOVERY_BATCH_SIZE", "40") or 40)
+#: Companies claimed per batch. Smaller than it looks like it should be on
+#: purpose: the worker now loops batches until its deadline, and a SHORT batch
+#: wastes less of the tail. With a 40-company batch a worker that has 90s left
+#: cannot start one at all; with 25 it can.
+DISCOVERY_BATCH_SIZE = int(os.getenv("DISCOVERY_BATCH_SIZE", "25") or 25)
 DISCOVERY_BUDGET_SECONDS = float(
     os.getenv("DISCOVERY_BUDGET_SECONDS", "240") or 240)
 #: Keep the queue deeper than one tick can consume, so workers never idle
 #: waiting for a refill.
+#: Slack left at the end of a worker's budget. The caller is a Lambda with a
+#: hard 300s ceiling; a worker killed mid-batch loses its run record and holds
+#: its leases until they lapse, so it stops with room rather than squeezing in
+#: one more batch it might not finish.
+DISCOVERY_RESERVE_SECONDS = float(
+    os.getenv("DISCOVERY_RESERVE_SECONDS", "45") or 45)
+
 DISCOVERY_REFILL_MULTIPLE = int(
     os.getenv("DISCOVERY_REFILL_MULTIPLE", "4") or 4)
 
@@ -722,11 +768,21 @@ def dispatch_due_discovery(*, limit: Optional[int] = None,
 def run_discovery_worker(*, batch: Optional[int] = None,
                          budget: Optional[float] = None,
                          owner: str = "") -> Dict[str, Any]:
-    """One bounded worker: claim a leased batch and fingerprint it.
+    """Keep claiming leased batches until the budget runs out.
 
-    Never raises. A worker that blows up would leave its batch leased until the
-    lease lapses and tell the scheduler nothing; every failure mode here is
-    already per-company inside `discover_batch`.
+    This used to do ONE batch and return, which left the pipeline idle roughly
+    three quarters of the time: a 40-company batch finishes in ~194s and the
+    next tick is 15 minutes away, so the expensive part — a warm Lambda with
+    network in flight — was thrown away and re-provisioned for every batch.
+    Looping until the deadline turns the same tick into several batches.
+
+    `DISCOVERY_RESERVE_SECONDS` is why the loop stops early rather than at the
+    deadline: the caller is a Lambda with a hard 300s ceiling, and a worker
+    killed mid-batch loses its run record and holds its leases until they lapse.
+    Returning with time to spare is worth more than one extra company.
+
+    Never raises. A worker that blew up would tell the scheduler nothing; every
+    failure mode below it is already per-company inside `discover_batch`.
     """
     import time as _time
     from services import company_registry_service as reg
@@ -735,37 +791,62 @@ def run_discovery_worker(*, batch: Optional[int] = None,
     size = max(1, int(batch or DISCOVERY_BATCH_SIZE))
     seconds = float(budget or DISCOVERY_BUDGET_SECONDS)
     owner = owner or f"discovery-{int(_time.time() * 1000)}"
+    deadline = _time.monotonic() + seconds
 
-    try:
-        claimed = reg.claim_discovery_batch(owner, size=size)
-    except Exception as exc:
-        logger.warning("discovery worker: claim failed (%s)",
-                       type(exc).__name__)
-        return {"owner": owner, "claimed": 0, "error": type(exc).__name__}
-    if not claimed:
-        return {"owner": owner, "claimed": 0, "stats": {}}
+    totals: Dict[str, int] = {"companies": 0, "endpoints": 0, "validated": 0,
+                              "blocked": 0, "no_portal": 0, "errors": 0}
+    claimed_total = 0
+    batches = 0
+    drained = False
 
-    companies: List[Dict[str, Any]] = []
-    for item in claimed:
-        doc = {}
+    while True:
+        remaining = deadline - _time.monotonic()
+        # No point claiming a batch we cannot finish: the lease would be held
+        # while nothing happens to it.
+        if remaining <= DISCOVERY_RESERVE_SECONDS:
+            break
         try:
-            doc = reg.get_company(item["company_id"]) or {}
-        except Exception:
-            pass
-        companies.append({"company_id": item["company_id"],
-                          "name": doc.get("name") or "",
-                          "domain": doc.get("domain") or ""})
+            claimed = reg.claim_discovery_batch(owner, size=size)
+        except Exception as exc:
+            logger.warning("discovery worker: claim failed (%s)",
+                           type(exc).__name__)
+            return {"owner": owner, "claimed": claimed_total,
+                    "batches": batches, "stats": totals,
+                    "error": type(exc).__name__}
+        if not claimed:
+            drained = True          # queue empty, not out of time
+            break
 
-    ctx = simple_context(budget_seconds=seconds, guard=_worker_guard())
-    try:
-        stats = discover_batch(companies, ctx, persist=True, validate=True)
-    except Exception as exc:  # pragma: no cover - discover_batch is guarded
-        logger.warning("discovery worker: batch failed (%s)",
-                       type(exc).__name__)
-        return {"owner": owner, "claimed": len(claimed),
-                "error": type(exc).__name__}
-    stats.pop("unknown_hosts", None)
-    return {"owner": owner, "claimed": len(claimed), "stats": stats}
+        claimed_total += len(claimed)
+        batches += 1
+        companies: List[Dict[str, Any]] = []
+        for item in claimed:
+            doc = {}
+            try:
+                doc = reg.get_company(item["company_id"]) or {}
+            except Exception:
+                pass
+            companies.append({"company_id": item["company_id"],
+                              "name": doc.get("name") or "",
+                              "domain": doc.get("domain") or ""})
+
+        ctx = simple_context(budget_seconds=max(1.0, remaining),
+                             guard=_worker_guard())
+        try:
+            stats = discover_batch(companies, ctx, persist=True, validate=True)
+        except Exception as exc:  # pragma: no cover - discover_batch is guarded
+            logger.warning("discovery worker: batch failed (%s)",
+                           type(exc).__name__)
+            return {"owner": owner, "claimed": claimed_total,
+                    "batches": batches, "stats": totals,
+                    "error": type(exc).__name__}
+        stats.pop("unknown_hosts", None)
+        for key, value in stats.items():
+            if isinstance(value, int):
+                totals[key] = totals.get(key, 0) + value
+
+    return {"owner": owner, "claimed": claimed_total, "batches": batches,
+            "queue_drained": drained, "stats": totals}
 
 
 def _worker_guard():

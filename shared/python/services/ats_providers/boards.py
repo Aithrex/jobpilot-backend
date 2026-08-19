@@ -580,6 +580,15 @@ class WorkableProvider(_BoardProvider):
 
     # Workable serves the widget API and the public apply pages from the same
     # host, which is why it appears in both crawler allowlists unchanged.
+    #: NOT slug-probeable. Workable answers a burst of slug guesses with 429
+    #: and a vendor-wide cooldown — observed repeatedly during live discovery
+    #: ("apply.workable.com challenged, cooling down 900s"), which takes the
+    #: board offline for every OTHER company in the run too, including ones we
+    #: would have found by fingerprinting. A guess that reliably earns a rate
+    #: limit is not "a single definitive request"; Workable tenants come from
+    #: fingerprinting the employer's own careers page instead.
+    slug_probe = False
+
     api_hosts = ("apply.workable.com",)
     portal_hosts = ("apply.workable.com",)
 
