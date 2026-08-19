@@ -31,6 +31,9 @@ has no deadline to race - being slow is fine, being rude is not.
 from __future__ import annotations
 
 import logging
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import re
 import socket
 import time
@@ -506,42 +509,97 @@ class PortalDiscovery:
 # Batch driver
 # ---------------------------------------------------------------------------
 
+#: Companies fingerprinted concurrently inside ONE worker.
+#:
+#: Almost all of a company's 8-20s is network wait — resolve a domain, fetch the
+#: site, fetch `/careers` — and each company is a DIFFERENT host, so this does
+#: not concentrate load anywhere. It is the difference between draining the
+#: 59,673-company queue in days and draining it in hours.
+DISCOVERY_CONCURRENCY = int(os.getenv("DISCOVERY_CONCURRENCY", "8") or 8)
+
+
 def discover_batch(companies: Sequence[Dict[str, Any]], ctx: FetchContext, *,
                    persist: bool = True,
-                   validate: bool = True) -> Dict[str, Any]:
+                   validate: bool = True,
+                   concurrency: Optional[int] = None) -> Dict[str, Any]:
     """Run discovery over a claimed queue batch and record the outcome.
 
     Persistence is per company rather than at the end so a run that hits its
     deadline still banks everything it learned - a discovery pass is expensive
     and losing it to a timeout would be the costliest possible failure.
-    """
-    engine = PortalDiscovery(ctx, validate=validate)
-    stats = {"companies": 0, "endpoints": 0, "validated": 0, "blocked": 0,
-             "no_portal": 0, "unknown_hosts": {}}
 
-    for row in companies:
+    Companies are fingerprinted CONCURRENTLY. Each gets its own
+    `PortalDiscovery`: the engine carries per-company state (`last_status`, a
+    robots cache) that would race if shared, and a robots cache is per-host
+    anyway so nothing is lost by not sharing it.
+    """
+    workers = max(1, int(concurrency if concurrency is not None
+                         else DISCOVERY_CONCURRENCY))
+    stats = {"companies": 0, "endpoints": 0, "validated": 0, "blocked": 0,
+             "no_portal": 0, "errors": 0, "unknown_hosts": {}}
+    lock = threading.Lock()
+
+    def _one(row: Dict[str, Any]) -> None:
         if ctx.should_stop():
-            break
+            return
         name = str(row.get("name") or "")
         if not name:
-            continue
-        stats["companies"] += 1
-        result = engine.discover(name, domain=str(row.get("domain") or ""),
-                                 company_id=str(row.get("company_id") or ""))
-        stats["endpoints"] += result.found
-        stats["validated"] += result.working
-        if result.blocked:
-            stats["blocked"] += 1
-        for host, n in (result.unknown_hosts or {}).items():
-            stats["unknown_hosts"][host] = stats["unknown_hosts"].get(host, 0) + n
+            return
+        # One employer must never end the batch.
+        #
+        # `discover` reaches out to a company's OWN website, and any of them may
+        # rate-limit, hang or serve something that breaks a parser. A
+        # `ChallengeError` from a single site used to propagate out of here and
+        # kill the run: a live pass ended on a 429 from `ironmountain.com` after
+        # 46 companies, abandoning the other 59,672. For an unattended worker
+        # that is the difference between draining the queue and stopping on the
+        # first unlucky host.
+        try:
+            engine = PortalDiscovery(ctx, validate=validate)
+            result = engine.discover(name, domain=str(row.get("domain") or ""),
+                                     company_id=str(row.get("company_id") or ""))
+        except Exception as exc:
+            with lock:
+                stats["companies"] += 1
+                stats["errors"] += 1
+            logger.info("discovery: %s failed (%s: %s)", name,
+                        type(exc).__name__, str(exc)[:120])
+            return
+
+        with lock:
+            stats["companies"] += 1
+            stats["endpoints"] += result.found
+            stats["validated"] += result.working
+            if result.blocked:
+                stats["blocked"] += 1
+            for host, n in (result.unknown_hosts or {}).items():
+                stats["unknown_hosts"][host] = \
+                    stats["unknown_hosts"].get(host, 0) + n
 
         if not persist:
-            continue
+            return
         try:
             _persist(result)
         except Exception as exc:
             logger.warning("discovery: persist failed for %s: %s", name,
                            type(exc).__name__)
+
+    rows = [r for r in companies if r]
+    if workers == 1:
+        for row in rows:
+            if ctx.should_stop():
+                break
+            _one(row)
+        return stats
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_one, row) for row in rows]
+        for future in futures:
+            try:
+                future.result()
+            except Exception:  # pragma: no cover - `_one` swallows its own
+                with lock:
+                    stats["errors"] += 1
     return stats
 
 
@@ -571,3 +629,156 @@ def _persist(result: DiscoveryResult) -> None:
         reg.complete_discovery(result.company_id, state=state,
                                endpoints_found=result.found,
                                detail=result.detail)
+
+
+# ---------------------------------------------------------------------------
+# Scheduled worker
+# ---------------------------------------------------------------------------
+#
+# Discovery is not a script you run when you remember to. Measured on live data
+# (2026-08-19): 20.8 s per company, 59,673 companies pending — 344 hours
+# single-threaded. A one-off `employer_coverage.py discover` will never drain
+# that, which is why 99.9% of the company registry had never been probed while
+# the pipeline was, technically, "implemented".
+#
+# So it runs the way ingestion runs (ADR-003): an EventBridge tick fans out N
+# bounded workers, each claiming a leased batch. The lease is what makes the
+# fan-out safe — `claim_discovery_batch` hands a company to exactly one worker,
+# so workers need no shard assignment and no coordination, and a worker that
+# dies simply lets its lease lapse.
+#
+# The cost per company is almost all network wait (resolve a domain, fetch the
+# site, fetch `/careers`), so concurrency converts directly into throughput:
+# at these defaults the queue drains in hours rather than weeks.
+
+#: Workers fanned out per tick. Matches `job_ingest_worker.MAX_SHARDS_PER_TICK`
+#: so discovery and ingestion put comparable pressure on the account's Lambda
+#: concurrency.
+#:
+#: The arithmetic, measured rather than assumed (2026-08-19): 4.85s per company
+#: at `DISCOVERY_CONCURRENCY=8`, so one worker clears its 40-company batch in
+#: ~194s inside a 240s budget. 16 workers x 40 companies x 4 ticks/hour =
+#: 2,560 companies/hour, which puts a 59,673-company queue at roughly a day of
+#: continuous running — and the queue keeps growing as the registry does, which
+#: is exactly why this is a schedule and not a script.
+DISCOVERY_WORKERS_PER_TICK = int(
+    os.getenv("DISCOVERY_WORKERS_PER_TICK", "16") or 16)
+DISCOVERY_BATCH_SIZE = int(os.getenv("DISCOVERY_BATCH_SIZE", "40") or 40)
+DISCOVERY_BUDGET_SECONDS = float(
+    os.getenv("DISCOVERY_BUDGET_SECONDS", "240") or 240)
+#: Keep the queue deeper than one tick can consume, so workers never idle
+#: waiting for a refill.
+DISCOVERY_REFILL_MULTIPLE = int(
+    os.getenv("DISCOVERY_REFILL_MULTIPLE", "4") or 4)
+
+
+def dispatch_due_discovery(*, limit: Optional[int] = None,
+                           enqueue: Optional[Any] = None) -> Dict[str, Any]:
+    """Refill the queue and fan out bounded discovery workers.
+
+    Backpressure comes from the queue itself rather than from a shard table:
+    if the previous tick's workers still hold their leases, `refill_queue` has
+    less to add and the new workers claim smaller batches. Duplicate delivery of
+    the tick is harmless — the companies it would re-select are leased.
+    """
+    from services import company_registry_service as reg
+
+    workers = max(1, int(limit if limit is not None
+                         else DISCOVERY_WORKERS_PER_TICK))
+    want = workers * DISCOVERY_BATCH_SIZE * max(1, DISCOVERY_REFILL_MULTIPLE)
+    try:
+        refilled = reg.refill_queue(limit=want)
+    except Exception as exc:
+        logger.warning("discovery dispatch: refill failed (%s)",
+                       type(exc).__name__)
+        refilled = 0
+
+    if enqueue is None:
+        def enqueue(job_type: str, payload: Dict[str, Any]) -> str:
+            from services.resume_service import ResumeService, get_resume_service
+            job_id = get_resume_service().create_job(job_type, payload,
+                                                     "system@internal")
+            ResumeService.invoke_async(job_id, job_type, payload)
+            return job_id
+
+    enqueued: List[str] = []
+    for index in range(workers):
+        payload = {"batch": DISCOVERY_BATCH_SIZE,
+                   "budget": DISCOVERY_BUDGET_SECONDS,
+                   "worker": index}
+        try:
+            enqueued.append(enqueue("company_discovery_worker", payload))
+        except Exception as exc:
+            logger.warning("discovery dispatch: enqueue %d failed (%s)",
+                           index, type(exc).__name__)
+    try:
+        depth = reg.queue_depth()
+    except Exception:
+        depth = {}
+    return {"refilled": refilled, "workers": len(enqueued),
+            "queue_depth": depth, "jobs": enqueued}
+
+
+def run_discovery_worker(*, batch: Optional[int] = None,
+                         budget: Optional[float] = None,
+                         owner: str = "") -> Dict[str, Any]:
+    """One bounded worker: claim a leased batch and fingerprint it.
+
+    Never raises. A worker that blows up would leave its batch leased until the
+    lease lapses and tell the scheduler nothing; every failure mode here is
+    already per-company inside `discover_batch`.
+    """
+    import time as _time
+    from services import company_registry_service as reg
+    from services.ats_providers.http import simple_context
+
+    size = max(1, int(batch or DISCOVERY_BATCH_SIZE))
+    seconds = float(budget or DISCOVERY_BUDGET_SECONDS)
+    owner = owner or f"discovery-{int(_time.time() * 1000)}"
+
+    try:
+        claimed = reg.claim_discovery_batch(owner, size=size)
+    except Exception as exc:
+        logger.warning("discovery worker: claim failed (%s)",
+                       type(exc).__name__)
+        return {"owner": owner, "claimed": 0, "error": type(exc).__name__}
+    if not claimed:
+        return {"owner": owner, "claimed": 0, "stats": {}}
+
+    companies: List[Dict[str, Any]] = []
+    for item in claimed:
+        doc = {}
+        try:
+            doc = reg.get_company(item["company_id"]) or {}
+        except Exception:
+            pass
+        companies.append({"company_id": item["company_id"],
+                          "name": doc.get("name") or "",
+                          "domain": doc.get("domain") or ""})
+
+    ctx = simple_context(budget_seconds=seconds, guard=_worker_guard())
+    try:
+        stats = discover_batch(companies, ctx, persist=True, validate=True)
+    except Exception as exc:  # pragma: no cover - discover_batch is guarded
+        logger.warning("discovery worker: batch failed (%s)",
+                       type(exc).__name__)
+        return {"owner": owner, "claimed": len(claimed),
+                "error": type(exc).__name__}
+    stats.pop("unknown_hosts", None)
+    return {"owner": owner, "claimed": len(claimed), "stats": stats}
+
+
+def _worker_guard():
+    """SSRF guard for outbound discovery fetches.
+
+    Discovery deliberately reaches hosts that are not on any allowlist — that
+    is the point, it is visiting employers we have never seen — so the guard
+    here is `jd_fetcher.url_is_safe`, which blocks private/link-local space and
+    non-HTTP schemes rather than checking a vendor list.
+    """
+    def guard(_vendor: str, url: str) -> str:
+        from services.jd_fetcher import url_is_safe
+        if not url_is_safe(url):
+            raise ValueError("blocked: unsafe_url")
+        return url
+    return guard

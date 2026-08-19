@@ -116,3 +116,138 @@ def test_seed_members_are_well_formed(source):
         assert worker.source_of_vendor(member["vendor"]) == source
         # A seed whose vendor is not termless would never be swept.
         assert member["vendor"] in worker._TERMLESS_ATS, member
+
+
+# ---------------------------------------------------------------------------
+# Every rule must be handled, not just the ingest family
+# ---------------------------------------------------------------------------
+
+def _all_scheduler_rules() -> set:
+    if not _TF.exists():  # pragma: no cover
+        pytest.skip(f"{_TF} not present")
+    text = _TF.read_text(encoding="utf-8", errors="replace")
+    body = text.split("scheduled_jobs", 1)[-1]
+    return set(re.findall(r"^\s*([a-z][a-z0-9_]+)\s*=\s*\{\s*expression",
+                          body, re.MULTILINE))
+
+
+def test_every_scheduled_rule_has_a_dispatch_branch():
+    """A rule with no branch fires on schedule and does nothing.
+
+    That is precisely how `oracle` and `icims` sat idle: EventBridge-shaped
+    names existed in one layer and the dispatcher knew nothing about them. The
+    check is textual on purpose — it costs nothing and it fails the moment
+    someone adds a rule without wiring it.
+    """
+    dispatcher = (pathlib.Path(__file__).resolve().parents[1] / "shared"
+                  / "python" / "services" / "scheduled_jobs.py")
+    source = dispatcher.read_text(encoding="utf-8", errors="replace")
+
+    unhandled = []
+    for rule in _all_scheduler_rules():
+        if rule.startswith("ingest_"):
+            continue          # covered by the prefix branch + source mapping
+        if f'"{rule}"' not in source and f"'{rule}'" not in source:
+            unhandled.append(rule)
+    assert not unhandled, (
+        f"scheduler rules with no branch in scheduled_jobs.py: {unhandled}. "
+        f"Such a rule fires forever and dispatches nothing.")
+
+
+def test_discovery_is_scheduled_and_dispatchable():
+    """Discovery GROWS the registry; ingestion crawls it. Both need a tick."""
+    assert "discover_companies" in _all_scheduler_rules()
+    # And it must not be mistaken for an ingest source.
+    assert _source_for_ingest_rule("discover_companies") is None
+
+
+def test_discovery_worker_entrypoints_exist():
+    from services import career_portal_discovery as disc
+
+    assert callable(disc.dispatch_due_discovery)
+    assert callable(disc.run_discovery_worker)
+    assert disc.DISCOVERY_WORKERS_PER_TICK >= 1
+    assert disc.DISCOVERY_BATCH_SIZE >= 1
+
+
+# ---------------------------------------------------------------------------
+# Discovery batch concurrency
+# ---------------------------------------------------------------------------
+
+class _StubCtx:
+    def __init__(self):
+        self.cutoff_iso = None
+
+    def should_stop(self):
+        return False
+
+    def log(self, *a, **k):
+        pass
+
+    def get_text(self, *a, **k):
+        return 200, ""
+
+    def get_json(self, *a, **k):
+        return 200, None
+
+
+def test_one_failing_company_does_not_end_the_batch(monkeypatch):
+    """A live pass died on a 429 from one employer, abandoning 59,672 others.
+
+    Discovery reaches out to companies' OWN websites, so a hostile or broken
+    one is routine. It must cost a row, never the batch.
+    """
+    from services import career_portal_discovery as disc
+
+    seen = []
+
+    class _Engine:
+        def __init__(self, *a, **k):
+            pass
+
+        def discover(self, name, **kwargs):
+            seen.append(name)
+            if name == "boom":
+                raise RuntimeError("429 from the employer's own site")
+            return disc.DiscoveryResult(name=name)
+
+    monkeypatch.setattr(disc, "PortalDiscovery", _Engine)
+    rows = [{"name": n, "company_id": n} for n in ("a", "boom", "c")]
+    stats = disc.discover_batch(rows, _StubCtx(), persist=False, concurrency=1)
+
+    assert sorted(seen) == ["a", "boom", "c"], "every company must be attempted"
+    assert stats["companies"] == 3
+    assert stats["errors"] == 1
+
+
+def test_batch_runs_companies_concurrently(monkeypatch):
+    """Throughput is the whole point: 20.8s/company serial vs 4.85s at 8-way."""
+    import threading as _t
+
+    from services import career_portal_discovery as disc
+
+    live = {"now": 0, "peak": 0}
+    lock = _t.Lock()
+    gate = _t.Barrier(4, timeout=10)
+
+    class _Engine:
+        def __init__(self, *a, **k):
+            pass
+
+        def discover(self, name, **kwargs):
+            with lock:
+                live["now"] += 1
+                live["peak"] = max(live["peak"], live["now"])
+            try:
+                gate.wait()      # only passes if 4 run at once
+            except Exception:
+                pass
+            with lock:
+                live["now"] -= 1
+            return disc.DiscoveryResult(name=name)
+
+    monkeypatch.setattr(disc, "PortalDiscovery", _Engine)
+    rows = [{"name": f"c{i}", "company_id": f"c{i}"} for i in range(4)]
+    disc.discover_batch(rows, _StubCtx(), persist=False, concurrency=4)
+
+    assert live["peak"] >= 2, "companies must not be fingerprinted one at a time"

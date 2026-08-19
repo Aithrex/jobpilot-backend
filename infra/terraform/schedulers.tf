@@ -100,6 +100,20 @@ locals {
     # overlap: :00 workday, :07 career-pages, :11 oracle, :04 icims.
     ingest_oracle = { expression = "cron(11/15 * * * ? *)", desc = "Oracle ORC shard ingestion tick (48 shards, <=16/tick)" }
     ingest_icims  = { expression = "cron(4/15 * * * ? *)", desc = "iCIMS shard ingestion tick (96 shards, <=16/tick)" }
+    # Career-portal discovery: grows the crawlable registry rather than
+    # crawling it. A one-off script was never going to drain it — 99.9% of the
+    # company registry had never been probed — so it gets a tick.
+    #
+    # Measured 2026-08-19: 20.8s per company serially, 4.85s at
+    # DISCOVERY_CONCURRENCY=8, against 59,673 pending. At 16 workers x 40
+    # companies x 4 ticks/hour that is ~2,560 companies/hour, i.e. about a day
+    # of continuous running for the current queue — which keeps growing as the
+    # registry does.
+    #
+    # Offset to :02 so it does not fan out in the same minute as any ingest
+    # tick; discovery and ingestion both self-invoke Lambdas and share the
+    # account's concurrency.
+    discover_companies = { expression = "cron(2/15 * * * ? *)", desc = "Career-portal discovery fan-out (16 workers x 40 companies)" }
     # Retention sweep: deletes only postings that are BOTH closed and past
     # purge_at. purge_at is stamped exclusively by close_posting, so a live
     # posting is unreachable from this job (see job_inventory_service:645).

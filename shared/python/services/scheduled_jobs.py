@@ -370,6 +370,17 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             job_id = get_resume_service().create_job("ats_signal_aggregate", {}, "system@internal")
             ResumeService.invoke_async(job_id, "ats_signal_aggregate", {})
             return {"job": name, "enqueued": job_id}
+        if name == "discover_companies":
+            # ADR-004 career-portal discovery. Kept OUT of the `ingest_` family
+            # on purpose: those dispatch shards of a known registry, this one
+            # grows the registry itself, and conflating them would make the
+            # ingest tick's concurrency ceiling govern discovery too.
+            from services.resume_service import get_resume_service, ResumeService
+            job_type, payload = "company_discovery_dispatch", {}
+            job_id = get_resume_service().create_job(job_type, payload,
+                                                     "system@internal")
+            ResumeService.invoke_async(job_id, job_type, payload)
+            return {"job": name, "enqueued": job_id}
         if name.startswith("ingest_"):
             # ADR-003 canonical job inventory. One prefix branch covers every
             # ingestion rule so adding a shard schedule is a Terraform-only

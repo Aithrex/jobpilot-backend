@@ -2145,6 +2145,27 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result = job_ingest_worker.extract_requirements(payload.get("items") or [])
             svc.complete_job(job_id, result)
 
+        elif job_type == "company_discovery_dispatch":
+            # ADR-004 — the discovery twin of `job_ingest_dispatch`. An
+            # EventBridge tick lands here, refills `discovery_queue` and fans
+            # out bounded workers. Backpressure is the queue lease: companies
+            # still held by the previous tick's workers are not re-selected, so
+            # a duplicate delivery is a no-op rather than double work.
+            from services import career_portal_discovery as disc
+            result = disc.dispatch_due_discovery(limit=payload.get("limit"))
+            svc.complete_job(job_id, result)
+
+        elif job_type == "company_discovery_worker":
+            # One bounded batch of companies: resolve a domain, fetch the site
+            # and its careers page, fingerprint the ATS. `run_discovery_worker`
+            # never raises and every per-company failure is already isolated
+            # inside `discover_batch`, so a bad employer costs one row, not the
+            # batch.
+            from services import career_portal_discovery as disc
+            result = disc.run_discovery_worker(
+                batch=payload.get("batch"), budget=payload.get("budget"))
+            svc.complete_job(job_id, result)
+
         elif job_type == "job_ingest_maintenance":
             # ADR-003 retention sweep, now also the rolling-window enforcer:
             #   expire  -> close ACTIVE postings older than the 7-day guest
