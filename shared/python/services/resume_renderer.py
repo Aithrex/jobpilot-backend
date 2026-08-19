@@ -31,7 +31,7 @@ class ResumeRenderer:
     # changes live here in the renderer, not the content, so without a version
     # tag a cache "hit" would keep serving a PDF rendered by the OLD code.
     # Including this in the cache key forces a re-render after any format fix.
-    RENDER_VERSION = "2026-08-19.3"  # visible min gap under section rules
+    RENDER_VERSION = "2026-08-19.4"  # heading gap offset so bullet budget holds
 
     # Allowed headings for the skills section. The tailor may pick one per
     # industry via `skills_section_title` (ResumeTailor normalizes it); this
@@ -176,7 +176,9 @@ class ResumeRenderer:
     #   section_gap fires 5× (Summary, Experience, Projects, Skills, Education)
     #   entry_gap fires up to 4× (between experience entries + between projects)
     #   post_header fires 5× (after each section's HR rule)
-    _MIN_SECTION_GAP = 1.5     # before section header — clear visual break
+    _MIN_SECTION_GAP = 1.2     # before section header (not the first).
+                               # 0.3mm tighter than 1.5 so the 1.0mm post-header
+                               # floor does not steal experience-bullet budget.
     _MIN_ENTRY_GAP = 0.9       # between experiences / between projects
     _MIN_POST_HEADER = 1.0     # after section HR, before first content
                               # (0.4mm read as touching the rule on dense pages)
@@ -192,6 +194,8 @@ class ResumeRenderer:
     _EDU_ENTRY_GAP = 1.2       # gap between two education entries
     _JOB_TITLE_CELL_H = 4.0    # italic role-title line height (was 4.5 — the
                                # extra 0.5mm read as dead space under the title)
+    _NAME_CELL_H = 6.2         # name line (was 6.5 — offset for post_header floor)
+    _HEADING_CELL_H = 4.2      # section title cell (was 4.5 — same offset)
 
     # Spacing ceilings — how much Pass 2 may inflate on sparse pages.
     # Heading→content, job→job, and between-section gaps stay tight.
@@ -381,7 +385,7 @@ class ResumeRenderer:
         # Manne" rather than "HARSHITH SIDDARDHA MANNE". `name` is already
         # normalized to Title Case above via _title_case_name.
         pdf.set_font(self._FONT_FAMILY, "B", self._NAME_SIZE)
-        pdf.cell(w, 6.5, name, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(w, self._NAME_CELL_H, name, align="C", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(0.5)  # \nameskip = \smallskip
 
         # ── Contact line (centered, pipe-separated, plain black text) ──
@@ -455,7 +459,7 @@ class ResumeRenderer:
             else:
                 pdf.ln(section_gap)
             pdf.set_font(self._FONT_FAMILY, "B", heading_size)
-            pdf.cell(w, 4.5, title.upper(), new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(w, self._HEADING_CELL_H, title.upper(), new_x="LMARGIN", new_y="NEXT")
             pdf.ln(0.15)
             ry = pdf.get_y()
             pdf.set_draw_color(0, 0, 0)
