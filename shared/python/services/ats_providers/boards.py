@@ -914,6 +914,19 @@ class JobviteProvider(_BoardProvider):
     vendor = "jobvite"
     label = "Jobvite"
     has_detail = True
+    #: NOT slug-probeable, unlike the JSON boards this class sits with.
+    #:
+    #: `slug_probe` is documented as safe where "a slug guess is a single
+    #: definitive request" — Greenhouse either returns a board or 404s. Jobvite
+    #: answers EVERY wrong slug with HTTP 200 and ~200 KB of marketing HTML, so
+    #: a guess costs a full page fetch and parse to learn nothing. Observed in a
+    #: live discovery pass burning requests on `sysco`, `shopify`,
+    #: `hcahealthcare`, `norfolksouthern`, `teledynetechnologies` and their
+    #: hyphenated variants, none of which are Jobvite tenants.
+    #:
+    #: Jobvite tenants come from fingerprinting an employer's own careers page,
+    #: or from the archives via `tenant_discovery`.
+    slug_probe = False
     #: Jobvite publishes no posting date anywhere on the public board.
     date_confidence = DATE_UNKNOWN
     api_hosts = ("jobs.jobvite.com",)
