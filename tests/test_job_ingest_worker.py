@@ -624,9 +624,33 @@ def test_detail_budget_only_counts_rows_that_would_fetch(db, small_registry, mon
 
     out = w.run_shard(w.SOURCE_WORKDAY, shard, now=NOW, max_details=1)
 
-    assert out["counts"].get("detail_skipped_budget", 0) == 0
+    assert out["counts"].get("detail_deferred", 0) == 0
     assert db.job_postings.count_documents({}) == 5 * len(members), \
         "a body-in-listing row must never be dropped by the detail budget"
+
+
+def test_rows_past_the_detail_budget_are_written_not_discarded(
+        db, small_registry, monkeypatch):
+    """The budget bounds outbound REQUESTS, never the inventory.
+
+    Overflow rows used to be dropped. For a vendor whose listing carries no
+    body that meant losing nearly the whole employer: Rippling publishes 704
+    such postings, every one needed a fetch, and 5 survived a shard-wide budget
+    shared with twenty other boards. A posting with no description is still a
+    job a seeker can see; an unwritten one is not.
+    """
+    shard = w.shard_of(w.SOURCE_WORKDAY, small_registry[0]["member_key"])
+    members = w.shard_members(w.SOURCE_WORKDAY, shard)
+    # No description anywhere, so every row wants a detail fetch.
+    rows = {m["member_key"]: [_row(m, f"REQ-{i}") for i in range(5)]
+            for m in members}
+    _patch_shard_io(monkeypatch, rows)
+
+    out = w.run_shard(w.SOURCE_WORKDAY, shard, now=NOW, max_details=1)
+
+    assert out["counts"].get("detail_deferred", 0) == 5 * len(members) - 1
+    assert db.job_postings.count_documents({}) == 5 * len(members), \
+        "every listed row must reach the inventory, body or no body"
 
 
 def test_requirements_extraction_is_disabled_by_default():

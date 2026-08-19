@@ -2102,14 +2102,35 @@ def run_shard(
         free_rows = [p for p in needs_detail if not _needs_http_detail(p[1], p[0])]
         fetch_rows = [p for p in needs_detail if _needs_http_detail(p[1], p[0])]
         detail_targets = fetch_rows[:max(0, int(max_details))]
-        counts["detail_skipped_budget"] += len(fetch_rows) - len(detail_targets)
+        # Rows past the budget are DEFERRED, not discarded.
+        #
+        # They used to be dropped outright, and for a vendor whose listing
+        # carries no body that meant losing almost the whole employer. Rippling
+        # publishes 704 postings with no description and no date on the listing,
+        # so every row needed a detail fetch and competed for one shard-wide
+        # budget of `max_details` shared with ~20 other boards: 5 postings were
+        # written and 699 vanished. The same shape hits every HTML vendor added
+        # under ADR-004 (iCIMS, Jobvite, BambooHR, JazzHR, Taleo), which is why
+        # their counts were a rounding error next to their real boards.
+        #
+        # A posting with no description is still a job a seeker can see and
+        # apply to; an unwritten one is not. So the overflow is written from the
+        # LISTING, and enriched on a later tick: `_listing_implies_same_content`
+        # only short-circuits a row whose stored doc already HAS a body, so a
+        # body-less doc is re-queued for detail next run automatically. The
+        # budget still bounds outbound requests per tick, which is what it is
+        # for — it was never meant to bound the inventory.
+        deferred = fetch_rows[len(detail_targets):]
+        counts["detail_deferred"] += len(deferred)
         details = run_bounded(
             lambda pair: fetch_detail(pair[1], pair[0], policy=policy,
                                       deadline=deadline, stop=stop),
             detail_targets, max_workers=detail_workers, deadline=deadline, stop=stop)
-        # Body-in-listing rows join the write set without a request.
+        # Body-in-listing rows join the write set without a request; so do the
+        # deferred ones, with whatever the listing gave us.
         details = list(details) + [
-            (pair, str(pair[1].get("description") or ""), None) for pair in free_rows
+            (pair, str(pair[1].get("description") or ""), None)
+            for pair in free_rows + deferred
         ]
         counts["detail_free"] += len(free_rows)
         inv.renew_lease(src, shard_id, owner, now=now)

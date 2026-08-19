@@ -67,19 +67,52 @@ def enabled() -> bool:
 # Inventory doc -> tab row
 # ---------------------------------------------------------------------------
 
-_ATS_LABEL = {
+#: Display names for sources that predate the provider registry, or that are
+#: not providers at all.
+_ATS_LABEL_STATIC = {
     "greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby",
     "smartrecruiters": "SmartRecruiters", "workable": "Workable",
     "recruitee": "Recruitee", "workday": "Workday",
     "neogov": "GovernmentJobs",
-    "oracle_orc": "Oracle Recruiting",
-    "icims": "iCIMS",
-    "jobvite": "Jobvite",
-    "bamboohr": "BambooHR",
-    "taleo": "Taleo",
-    "phenom": "Phenom",
-    "eightfold": "Eightfold",
+    "amazon": "Amazon Jobs",
 }
+
+
+def _ats_key(vendor: str) -> str:
+    """The form `job_postings.ats` is STORED in.
+
+    `job_inventory_service._safe_key` keeps only `[a-z0-9-]`, so the vendor key
+    `oracle_orc` lands in the document as `oracle-orc`. A label table keyed on
+    the vendor form therefore missed every Oracle row and rendered the badge as
+    the generic "Career Page".
+    """
+    import re
+    return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-",
+                                     str(vendor or "").lower())).strip("-")
+
+
+def _ats_labels() -> Dict[str, str]:
+    """`{stored ats key: display name}` for every vendor we can crawl.
+
+    Derived from the provider registry rather than hand-listed, so a vendor
+    added there is labelled here without a second edit — the same reason
+    ADR-004 §4.1 derives the crawler's tables. A hand-written table is how
+    Oracle ended up mislabelled and how UKG, Paylocity, Rippling, Cornerstone
+    and JazzHR would have been.
+    """
+    labels = dict(_ATS_LABEL_STATIC)
+    try:
+        from services.ats_providers import registry as ats_registry
+        for provider in ats_registry.all_providers():
+            labels.setdefault(_ats_key(provider.vendor),
+                              provider.label or provider.vendor)
+            labels[_ats_key(provider.vendor)] = provider.label or provider.vendor
+    except Exception:  # pragma: no cover - the feed must render regardless
+        pass
+    return labels
+
+
+_ATS_LABEL = _ats_labels()
 
 
 def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[str, Any]]:
@@ -503,10 +536,33 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         "served_from": "inventory",
     }
     if source == SOURCE_CAREER:
-        from services.career_pages_catalog import ATS_KINDS
-
-        result["ats_available"] = ATS_KINDS
+        result["ats_available"] = _ats_available()
     return result
+
+
+def _ats_available() -> List[str]:
+    """ATS kinds the career tab may be filtered by.
+
+    This was `career_pages_catalog.ATS_KINDS`, i.e. the seven vendors that
+    happen to have Python catalog rows. Everything ADR-004 added — Oracle,
+    iCIMS, Taleo, Jobvite, BambooHR, UKG, Paylocity, Rippling, Cornerstone,
+    JazzHR — was therefore absent from the filter a seeker is offered, even
+    while its postings were in the results. Advertise what is actually
+    crawlable.
+    """
+    kinds = set()
+    try:
+        from services.career_pages_catalog import ATS_KINDS
+        kinds.update(ATS_KINDS)
+    except Exception:  # pragma: no cover
+        pass
+    try:
+        from services.ats_providers import registry as ats_registry
+        kinds.update(_ats_key(v) for v in ats_registry.vendors())
+    except Exception:  # pragma: no cover
+        pass
+    kinds.discard("workday")   # its own tab
+    return sorted(k for k in kinds if k)
 
 
 def _registry_size(source: str) -> int:
