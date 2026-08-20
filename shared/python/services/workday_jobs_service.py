@@ -1003,7 +1003,11 @@ def _score_jobs(
     They are ranking concerns, so they live in `rank_score`, which callers may
     order by; `match_score` stays the honest candidate-to-job fit.
 
-    Nothing is ever dropped here - scoring only orders; recall is preserved.
+    When ``titles`` classify into role families, rows whose live title falls
+    outside those families (and outside the resume profile's families) are
+    dropped after scoring. That keeps the whole Software Engineer family
+    (backend, fullstack, staff eng, ...) while excluding off-family titles
+    that keyword recall still pulled in.
     """
     from services import fit_score
 
@@ -1015,7 +1019,9 @@ def _score_jobs(
     # list degrades to listed claims only (never invented into experience).
     profile = (fit_score.build_resume_profile(structured) if structured
                else fit_score._profile_from_skills(skills, titles, resume_years))
+    allowed_families = _allowed_families_for_titles(titles, profile)
 
+    scored: List[Dict[str, Any]] = []
     for job in jobs:
         title_lc = job["title"].lower()
         blob = (job["title"] + "\n" + (job.get("description") or "")
@@ -1054,7 +1060,36 @@ def _score_jobs(
             100, verdict["match_score"] + (6 if skill_signal else 0) + align // 3)
         job["seniority"] = _seniority_full(
             job["title"], job.get("description") or "", job.get("_exp") or "")
-    return jobs
+        job_family = fit_score.classify_role(job["title"])
+        if job_family:
+            job["role_family"] = job_family
+        if allowed_families and job_family not in allowed_families:
+            continue
+        scored.append(job)
+    return scored
+
+
+def _allowed_families_for_titles(
+    titles: List[str],
+    profile: Optional[Dict[str, Any]] = None,
+) -> set:
+    """Role families the feed may show for this title set (+ resume families).
+
+    Empty when titles do not classify — callers then skip the family gate so
+    an unrecognised chip set does not empty the feed.
+    """
+    from services import fit_score
+
+    allowed: set = set()
+    for raw in titles or []:
+        fam = fit_score.classify_role(str(raw or ""))
+        if fam:
+            allowed.add(fam)
+    if allowed and profile:
+        for fam in (profile.get("families") or ()):
+            if fam:
+                allowed.add(str(fam))
+    return allowed
 
 
 # ----------------------------------------------------------------------

@@ -496,6 +496,16 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         return None
 
     _score_rows(rows, user_email, skills, resume_years, profile=profile)
+    # Live re-classify: stale inventory may still tag Systems Engineer as
+    # software_engineering. Keep only rows whose live title family is in the
+    # retrieval set (resume titles + resume profile families).
+    if families:
+        from services import fit_score
+        allowed = set(families)
+        rows = [
+            r for r in rows
+            if (fit_score.classify_role(r.get("title") or "") or "") in allowed
+        ]
     rows.sort(key=lambda j: (-(j.get("match_score") or 0),
                             j.get("days_ago") if j.get("days_ago") is not None else 99))
     rows = rows[:GLOBAL_KEEP]

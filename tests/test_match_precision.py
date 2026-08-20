@@ -50,7 +50,7 @@ class TestPhysicalQualifierVeto:
         ("DevOps Engineer", "devops"),
         ("Software Engineer", "software_engineering"),
         ("Backend Engineer", "software_engineering"),
-        ("Staff Systems Engineer, Messaging Technologies", "software_engineering"),
+        ("Staff Systems Engineer, Messaging Technologies", "devops"),
         ("Security Engineer", "security"),
         ("Data Engineer", "data_engineering"),
     ])

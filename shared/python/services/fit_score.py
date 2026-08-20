@@ -439,8 +439,12 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
         "frontend engineer", "front end engineer", "full stack", "fullstack",
         "web developer", "application developer", "programmer", "sde",
         "member of technical staff", "mobile engineer", "ios engineer", "ios developer",
-        "android engineer", "android developer", "systems engineer", "api engineer",
+        "android engineer", "android developer", "api engineer",
         "software architect", "development engineer",
+        # Software-flavored systems roles only. Bare "systems engineer" lives
+        # under devops (infra / IT systems) so a Software Engineer chip's
+        # family feed is not flooded with generic Systems Engineer postings.
+        "software systems engineer",
         # Engineering leadership reads as the same family: the requirements are
         # the discipline's, and a senior IC resume legitimately matches them.
         "engineering manager", "engineering lead", "engineering leader",
@@ -477,6 +481,9 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
         "devops", "site reliability", "sre", "platform engineer",
         "infrastructure engineer", "cloud engineer", "build engineer",
         "release engineer", "systems administrator", "sysadmin",
+        # Bare "systems engineer" is infra/IT systems, not software product eng.
+        # "software systems engineer" stays in software_engineering.
+        "systems engineer",
         "devsecops", "cloud architect", "infrastructure architect",
         "reliability engineer", "tech ops", "cloud operations",
     ],
@@ -756,7 +763,7 @@ _SOFTWARE_FAMILIES = frozenset({
 
 # Physical / plant / hardware domain qualifiers. Measured problem: the taxonomy
 # matches the ROLE NOUN ("reliability engineer" -> devops, "systems engineer" ->
-# software_engineering) and ignores the qualifier in front of it, so a live
+# devops) and ignores the qualifier in front of it, so a live
 # US-only devops feed ranked these ABOVE real SRE roles for a cloud engineer:
 #
 #   "Corrosion Reliability Engineer II/III"            -> devops   (score 75)
