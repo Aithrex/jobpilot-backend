@@ -139,17 +139,14 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
     work_mode = doc.get("work_mode") or ""
     ats = doc.get("ats") or ""
     url = str(doc.get("canonical_url") or "")
-    tenant = doc.get("tenant") or ""
 
-    from services.career_pages_catalog import is_marketplace_board
-
-    row = {
+    return {
         # The canonical inventory id, so a tab row can be tailored against and
         # pinned by the same reference the guest path and applications use.
         "job_id": doc.get("job_id"),
         "title": str(doc.get("title_raw") or "")[:200],
         "company": str(doc.get("employer_name") or ""),
-        "tenant": tenant,
+        "tenant": doc.get("tenant") or "",
         "ats": ats,
         "industry": doc.get("industry") or "other",
         "location": location or "Not specified",
@@ -179,9 +176,6 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
         "seniority": doc.get("seniority") or "",
         "_requirements": doc.get("requirements") or None,
     }
-    if is_marketplace_board(tenant) or is_marketplace_board(row["company"]):
-        row["board_kind"] = "marketplace"
-    return row
 
 
 def _posted_text(days: Optional[int]) -> str:
@@ -202,11 +196,22 @@ def _role_families(titles: Iterable[str], skills: Iterable[str],
                    resume_families: Optional[Iterable[str]] = None) -> List[str]:
     """Families to retrieve for.
 
-    Chip mode (titles present): classify chips, then union resume families so
-    retrieval stays wide while listing stays chip-gated.
+    Errs wide, exactly as the guest path does: retrieval that is too tight
+    returns nothing and reads as an empty market, while the scorer is good at
+    pushing a poor fit down. With no titles and no resume families at all we
+    return [] and retrieve unfiltered, which is the correct reading of "show me
+    everything".
 
-    Family mode (chips cleared): use resume families only. Never return []
-    meaning "unfiltered market" — that reads as an empty-chip free-for-all.
+    The RESUME's own families are unioned in because titles alone were far too
+    tight. Measured on the live inventory: a "cloud engineer / devops engineer /
+    site reliability engineer" search classifies to the single family `devops`,
+    which is 565 of 53,730 active postings — 366 Workday candidates and 199
+    career-page candidates, of which ~150 survived the geo filter. That is the
+    whole reason the feed looked thin and mediocre. The same user's resume also
+    classifies as `software_engineering`; unioning it takes retrieval to 2,528
+    and 1,952 respectively, a ~7x wider pool for the scorer to rank. Widening
+    RETRIEVAL cannot lower precision here — ordering is decided by `fit_score`,
+    and an off-family posting scores below the ones already being shown.
     """
     from services import fit_score
 
@@ -215,13 +220,14 @@ def _role_families(titles: Iterable[str], skills: Iterable[str],
         fam = fit_score.classify_role(str(value or ""))
         if fam and fam not in out:
             out.append(fam)
-    resume_fams = [str(fam) for fam in (resume_families or []) if fam]
+    # Only widen a filter that already exists. With no titles the caller wants
+    # everything, and injecting the resume's families there would NARROW the
+    # feed instead of widening it.
     if out:
-        for fam in resume_fams:
-            if fam not in out:
-                out.append(fam)
-        return out
-    return resume_fams
+        for fam in (resume_families or []):
+            if fam and fam not in out:
+                out.append(str(fam))
+    return out
 
 
 def _build_profile(user_email: str, resume_skills: List[str],
@@ -403,7 +409,6 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     read as "there are no jobs", which is false.
     """
     from services import job_inventory_service as inv
-    from services.career_pages_catalog import marketplace_sort_key
     from services.workday_jobs_service import (
         _attach_feasibility, _attach_sponsorship, _clamp_tz_offset,
         _load_resume_profile,
@@ -440,29 +445,6 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     profile = _build_profile(user_email, skills, resume_years)
     families = _role_families(titles, skills,
                               sorted((profile or {}).get("families") or ()))
-    if not titles and not families:
-        # No chips and no resume families — refuse an unbounded market dump.
-        return {
-            "ok": True,
-            "generated_at": started.isoformat(),
-            "jobs": [],
-            "total": 0,
-            "window_counts": {"today": 0, "d1": 0, "d3": 0, "d7": 0, "d30": 0},
-            "query_terms": [],
-            "tenants_total": _registry_size(source),
-            "tenants_done": _registry_size(source),
-            "tenants_with_results": 0,
-            "industries_available": _industries_for(source),
-            "cache_hit": True,
-            "us_only": us_only,
-            "min_salary": min_salary or None,
-            "resume_skill_count": len(skills),
-            "diagnostics": {"task_errors": 0, "served_from": "inventory",
-                            "listing_mode": "none", "candidates": 0},
-            "errors": [],
-            "served_from": "inventory",
-        }
-
     try:
         docs = inv.find_active_fresh(
             source=None if source == SOURCE_CAREER else source,
@@ -514,32 +496,23 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         return None
 
     _score_rows(rows, user_email, skills, resume_years, profile=profile)
-    # Listing gate: chips → token allowlist; empty chips → resume families.
-    from services import fit_score
-    from services.workday_jobs_service import title_matches_chips
-
-    if titles:
-        rows = [r for r in rows if title_matches_chips(r.get("title") or "", titles)]
-    else:
-        fam_set = set(families)
-        kept: List[Dict[str, Any]] = []
-        for r in rows:
-            fam = fit_score.classify_role(r.get("title") or "")
-            if fam and fam in fam_set:
-                r["role_family"] = fam
-                kept.append(r)
-        rows = kept
-    rows.sort(key=lambda j: (
-        marketplace_sort_key(j),
-        -(j.get("match_score") or 0),
-        j.get("days_ago") if j.get("days_ago") is not None else 99))
+    # Live re-classify: stale inventory may still tag Systems Engineer as
+    # software_engineering. Keep only rows whose live title family is in the
+    # retrieval set (resume titles + resume profile families).
+    if families:
+        from services import fit_score
+        allowed = set(families)
+        rows = [
+            r for r in rows
+            if (fit_score.classify_role(r.get("title") or "") or "") in allowed
+        ]
+    rows.sort(key=lambda j: (-(j.get("match_score") or 0),
+                            j.get("days_ago") if j.get("days_ago") is not None else 99))
     rows = rows[:GLOBAL_KEEP]
 
     _attach_feasibility(rows, skills, resume_years)
-    rows.sort(key=lambda j: (
-        marketplace_sort_key(j),
-        -(j.get("match_score") or 0),
-        j.get("days_ago") if j.get("days_ago") is not None else 99))
+    rows.sort(key=lambda j: (-(j.get("match_score") or 0),
+                             j.get("days_ago") if j.get("days_ago") is not None else 99))
     try:
         _attach_sponsorship(rows)
     except Exception as exc:  # pragma: no cover - enrichment is best effort

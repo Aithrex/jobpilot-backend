@@ -27,13 +27,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
-from services.career_pages_catalog import (
-    ATS_KINDS,
-    CAREER_PAGES_CATALOG,
-    INDUSTRIES,
-    is_marketplace_board,
-    marketplace_sort_key,
-)
+from services.career_pages_catalog import ATS_KINDS, CAREER_PAGES_CATALOG, INDUSTRIES
 from services.domain_classifier import user_role_noun_re
 from services.workday_jobs_service import (
     GLOBAL_KEEP,
@@ -49,10 +43,9 @@ from services.workday_jobs_service import (
     _env_int,
     _geo_keep_us,
     _html_to_text,
-    _load_resume_bundle,
+    _load_resume_profile,
     _role_matchers,
     _score_jobs,
-    resolve_feed_search_titles,
     _US_STATE_RE,
     _US_STATE_NAME_RE,
     _REMOTE_RE,
@@ -195,9 +188,6 @@ def _row(company: Dict[str, str], raw_id: Any, title: str, url: str,
         # of government ones do).
         "salary": _salary_display(compensation, description),
     }
-    if (company.get("board_kind") or "").lower() == "marketplace" or is_marketplace_board(company):
-        # Marketplace boards (Jobgether, ...) stay in the catalog but rank last.
-        row["board_kind"] = "marketplace"
     if meta:
         # Inline board metadata (function / department / experience level) that
         # the LIST endpoint already returned — folded into a SCORING-ONLY field
@@ -1035,7 +1025,7 @@ def run_career_pages_search(
         and (not industries or r.get("industry") in industries)
         and (not companies or r["slug"].lower() in companies)
     ]
-    skills, resume_years, structured = _load_resume_bundle(user_email)
+    skills, resume_years = _load_resume_profile(user_email)
     # Anonymous callers (guest scan) pass parsed skills/years directly so
     # scoring quality matches an authed run. Never overrides a real profile.
     if not user_email:
@@ -1047,38 +1037,10 @@ def run_career_pages_search(
                 resume_years = max(0, int(payload["resume_years"]))
         except (TypeError, ValueError):
             pass
-        guest_structured = payload.get("resume_structured") or payload.get("structured")
-        if isinstance(guest_structured, dict) and guest_structured:
-            structured = guest_structured
-
-    chip_titles = titles
-    retrieval_titles, listing_mode, _allowed_families = resolve_feed_search_titles(
-        chip_titles, skills, resume_years, structured,
-    )
-    if listing_mode == "none":
-        return {
-            "ok": True,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "jobs": [],
-            "total": 0,
-            "window_counts": {"today": 0, "d1": 0, "d3": 0, "d7": 0, "d30": 0},
-            "query_terms": [],
-            "tenants_total": len(rows),
-            "tenants_done": len(rows),
-            "tenants_with_results": 0,
-            "industries_available": INDUSTRIES,
-            "ats_available": ATS_KINDS,
-            "cache_hit": False,
-            "us_only": us_only,
-            "resume_skill_count": len(skills),
-            "diagnostics": {"listing_mode": "none", "task_errors": 0},
-            "errors": [],
-        }
-
-    title_terms = _derive_query_terms(retrieval_titles, cap=MAX_QUERY_TERMS)
+    title_terms = _derive_query_terms(titles, cap=MAX_QUERY_TERMS)
     # Widen tier-1 recall to the user's OWN profession (a nurse also keeps
     # "Charge Nurse"; a SWE is unchanged — this unions with the engineering net).
-    role_noun_re = user_role_noun_re(retrieval_titles)
+    role_noun_re = user_role_noun_re(titles)
     skill_terms = _derive_skill_terms(skills, title_terms,
                                       cap=TOTAL_TERMS_CAP - len(title_terms))
     terms = title_terms + skill_terms
@@ -1110,7 +1072,7 @@ def run_career_pages_search(
         collected: List[Dict[str, Any]] = []
         done = 0
         hits: set = set()
-        matchers = _role_matchers(chip_titles)
+        matchers = _role_matchers(titles)
         stream_rx = [(s, _build_match_regex(s)) for s in skills[:30]]
         prov_cache: Dict[str, Tuple[int, List[str]]] = {}
 
@@ -1224,16 +1186,11 @@ def run_career_pages_search(
         jobs = [j for j in jobs if j.get("is_remote")]
 
     def _rank(items: List[Dict[str, Any]]) -> None:
-        # Marketplace boards (Jobgether) stay in the list but pin below
-        # first-party employer postings for both Best match and recency order.
         items.sort(key=lambda j: (
-            marketplace_sort_key(j),
             -(j.get("match_score") or 0),
             j.get("days_ago") if j.get("days_ago") is not None else 99))
 
-    jobs = _score_jobs(
-        jobs, chip_titles, skills, skill_terms, resume_years, structured=structured,
-    )
+    jobs = _score_jobs(jobs, titles, skills, skill_terms, resume_years)
     _rank(jobs)
 
     if partial_cb:
@@ -1254,9 +1211,7 @@ def run_career_pages_search(
         if (j.get("days_ago") if j.get("days_ago") is not None else 99) <= 3
     ][:enrich_recent_n]
     if _enrich_details(top):
-        _score_jobs(
-            top, chip_titles, skills, skill_terms, resume_years, structured=structured,
-        )
+        _score_jobs(top, titles, skills, skill_terms, resume_years)
         _rank(jobs)
         if coll is not None:
             by_id = {j["job_id"]: j for j in top if j.get("description")}
@@ -1308,7 +1263,7 @@ def run_career_pages_search(
         "cache_hit": cache_hit,
         "us_only": us_only,
         "resume_skill_count": len(skills),
-        "diagnostics": {**diagnostics, "listing_mode": listing_mode},
+        "diagnostics": diagnostics,
         "errors": errors[:20],
     }
 
