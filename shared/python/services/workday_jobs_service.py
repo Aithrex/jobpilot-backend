@@ -34,7 +34,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from threading import Lock
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
@@ -948,16 +948,26 @@ def _attach_sponsorship(jobs: List[Dict[str, Any]]) -> None:
 
 def _load_resume_profile(user_email: str) -> Tuple[List[str], Optional[int]]:
     """Skills (resume-prominence order) + experience years for feasibility."""
+    skills, years, _structured = _load_resume_bundle(user_email)
+    return skills, years
+
+
+def _load_resume_bundle(
+    user_email: str,
+) -> Tuple[List[str], Optional[int], Optional[Dict[str, Any]]]:
+    """Skills, years, and structured resume (for family-mode listing)."""
     if not user_email:
-        return [], None
+        return [], None, None
     try:
         from schemas.resume_schemas import flatten_skills
         from services import resume_access
-        # v3: the active resume_assets doc via the canonical accessor.
         doc = resume_access.get_active_structured(user_email)
         if not doc:
-            return [], None
-        skills_raw = flatten_skills(doc.get("structured") or {}) or []
+            return [], None, None
+        structured = doc.get("structured") or {}
+        if not isinstance(structured, dict):
+            structured = {}
+        skills_raw = flatten_skills(structured) or []
         seen: set = set()
         skills: List[str] = []
         for s in skills_raw:
@@ -970,10 +980,39 @@ def _load_resume_profile(user_email: str) -> Tuple[List[str], Optional[int]]:
             years = int(years) if years is not None else None
         except (TypeError, ValueError):
             years = None
-        return skills, years
+        return skills, years, structured or None
     except Exception as e:
         logger.warning("workday-jobs: resume profile load failed for %s: %s", user_email, e)
-        return [], None
+        return [], None, None
+
+
+def _empty_jobs_result(
+    *,
+    skills: List[str],
+    us_only: bool,
+    tenants_total: int = 0,
+    query_terms: Optional[List[str]] = None,
+    diagnostics: Optional[Dict[str, Any]] = None,
+    errors: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Honest empty feed when chips and resume families are both absent."""
+    return {
+        "ok": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "jobs": [],
+        "total": 0,
+        "window_counts": {"today": 0, "d1": 0, "d3": 0, "d7": 0, "d30": 0},
+        "query_terms": list(query_terms or []),
+        "tenants_total": tenants_total,
+        "tenants_done": tenants_total,
+        "tenants_with_results": 0,
+        "industries_available": INDUSTRIES,
+        "cache_hit": False,
+        "us_only": us_only,
+        "resume_skill_count": len(skills),
+        "diagnostics": diagnostics or {"listing_mode": "none"},
+        "errors": list(errors or []),
+    }
 
 
 # ----------------------------------------------------------------------
@@ -1003,23 +1042,30 @@ def _score_jobs(
     They are ranking concerns, so they live in `rank_score`, which callers may
     order by; `match_score` stays the honest candidate-to-job fit.
 
-    When ``titles`` classify into role families, rows whose live title falls
-    outside those families (and outside the resume profile's families) are
-    dropped after scoring. That keeps the whole Software Engineer family
-    (backend, fullstack, staff eng, ...) while excluding off-family titles
-    that keyword recall still pulled in.
+    When the user (or resume AI) supplied title chips, only rows whose job
+    title covers every significant token of at least one chip are kept
+    (``title_matched``). When chips are cleared, listing falls back to the
+    resume's role families (family mode). With neither chips nor resume
+    families, nothing is listed.
     """
     from services import fit_score
 
     skill_rx = [(s, _build_match_regex(s)) for s in skills]
-    matchers = _role_matchers(titles)
+    # Chip mode is driven by the caller's raw titles, NOT `_role_matchers`:
+    # `_derive_query_terms([])` falls back to default engineering phrases, which
+    # would wrongly keep the chip allowlist active when chips were cleared.
+    clean_titles = [str(t).strip() for t in (titles or []) if str(t or "").strip()]
+    chip_mode = bool(clean_titles)
+    matchers = _role_matchers(clean_titles) if chip_mode else []
     skill_terms_set = {t.lower() for t in skill_terms}
     primary_fams, resume_fams = _resume_family_weights(skills)
     # A real parsed resume gives applied-experience evidence; a bare skill
     # list degrades to listed claims only (never invented into experience).
     profile = (fit_score.build_resume_profile(structured) if structured
                else fit_score._profile_from_skills(skills, titles, resume_years))
-    allowed_families = _allowed_families_for_titles(titles, profile)
+    family_gate = (
+        set() if chip_mode else _allowed_families_for_titles([], profile)
+    )
 
     scored: List[Dict[str, Any]] = []
     for job in jobs:
@@ -1029,7 +1075,9 @@ def _score_jobs(
         matched = [s for s, rx in skill_rx if rx is not None and rx.search(blob)]
         matched_set = set(matched)
         missing = [s for s, _ in skill_rx if s not in matched_set][:8]
-        title_matched = any(all(tok in title_lc for tok in m) for m in matchers)
+        title_matched = bool(matchers) and any(
+            all(tok in title_lc for tok in m) for m in matchers
+        )
         skill_signal = bool(matched) or bool(
             skill_terms_set & {str(t).lower() for t in (job.get("matched_terms") or [])}
         )
@@ -1063,20 +1111,37 @@ def _score_jobs(
         job_family = fit_score.classify_role(job["title"])
         if job_family:
             job["role_family"] = job_family
-        if allowed_families and job_family not in allowed_families:
+        if chip_mode:
+            if not title_matched:
+                continue
+        elif family_gate:
+            if not job_family or job_family not in family_gate:
+                continue
+        else:
+            # No chips and no resume families — refuse an unbounded market dump.
             continue
         scored.append(job)
     return scored
+
+
+def title_matches_chips(job_title: str, titles: List[str]) -> bool:
+    """True when ``job_title`` covers every significant token of one chip."""
+    matchers = _role_matchers(titles)
+    if not matchers:
+        return True
+    title_lc = (job_title or "").lower()
+    return any(all(tok in title_lc for tok in m) for m in matchers)
 
 
 def _allowed_families_for_titles(
     titles: List[str],
     profile: Optional[Dict[str, Any]] = None,
 ) -> set:
-    """Role families the feed may show for this title set (+ resume families).
+    """Role families from title chips and/or the resume profile.
 
-    Empty when titles do not classify — callers then skip the family gate so
-    an unrecognised chip set does not empty the feed.
+    Chip *listing* uses ``title_matches_chips``. Empty-chip *family mode*
+    listing and inventory retrieval use this set (resume families when chips
+    are cleared).
     """
     from services import fit_score
 
@@ -1085,11 +1150,66 @@ def _allowed_families_for_titles(
         fam = fit_score.classify_role(str(raw or ""))
         if fam:
             allowed.add(fam)
-    if allowed and profile:
+    if profile:
         for fam in (profile.get("families") or ()):
             if fam:
                 allowed.add(str(fam))
     return allowed
+
+
+def _family_seed_terms(families: Iterable[str], cap: int = 4) -> List[str]:
+    """Canonical search phrases for empty-chip family-mode retrieval."""
+    from services.fit_score import ROLE_FAMILIES
+
+    out: List[str] = []
+    for fam in families or []:
+        phrases = ROLE_FAMILIES.get(str(fam)) or []
+        if not phrases:
+            continue
+        seed = str(phrases[0]).strip()
+        if seed and seed not in out:
+            out.append(seed)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def _feed_profile(
+    skills: List[str],
+    titles: List[str],
+    resume_years: Optional[int],
+    structured: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    from services import fit_score
+
+    if structured:
+        return fit_score.build_resume_profile(structured)
+    return fit_score._profile_from_skills(skills, titles or None, resume_years)
+
+
+def resolve_feed_search_titles(
+    titles: List[str],
+    skills: List[str],
+    resume_years: Optional[int] = None,
+    structured: Optional[Dict[str, Any]] = None,
+) -> Tuple[List[str], str, set]:
+    """Chip vs family mode for Job feed Sync.
+
+    Returns ``(retrieval_titles, listing_mode, allowed_families)``:
+      - chips: user/AI title chips; listing is token-match allowlist
+      - family: chips cleared; retrieval seeds + listing from resume families
+      - none: no chips and no resume families (caller should return empty)
+    """
+    clean = [str(t).strip() for t in (titles or []) if str(t or "").strip()]
+    profile = _feed_profile(skills, clean, resume_years, structured)
+    families = _allowed_families_for_titles(clean, profile)
+    if clean:
+        return clean, "chips", families
+    if families:
+        seeds = _family_seed_terms(families, cap=MAX_QUERY_TERMS)
+        return seeds, "family", families
+    return [], "none", set()
+
 
 
 # ----------------------------------------------------------------------
@@ -1281,7 +1401,8 @@ def run_workday_jobs_search(
     ]
     # Resume skills drive retrieval (extra search terms), scoring, and the
     # tailor-feasibility verdicts; years feed the experience-gap check.
-    skills, resume_years = _load_resume_profile(user_email)
+    # Structured resume unlocks empty-chip family mode (role families).
+    skills, resume_years, structured = _load_resume_bundle(user_email)
     # Anonymous callers (the guest scan) have no profile doc — they pass the
     # guest's own parsed skills/years directly so scoring quality matches an
     # authed run. Never overrides a real profile.
@@ -1294,7 +1415,23 @@ def run_workday_jobs_search(
                 resume_years = max(0, int(payload["resume_years"]))
         except (TypeError, ValueError):
             pass
-    title_terms = _derive_query_terms(titles)
+        guest_structured = payload.get("resume_structured") or payload.get("structured")
+        if isinstance(guest_structured, dict) and guest_structured:
+            structured = guest_structured
+
+    chip_titles = titles
+    retrieval_titles, listing_mode, _allowed_families = resolve_feed_search_titles(
+        chip_titles, skills, resume_years, structured,
+    )
+    if listing_mode == "none":
+        return _empty_jobs_result(
+            skills=skills,
+            us_only=us_only,
+            tenants_total=len(rows),
+            diagnostics={"listing_mode": "none", "facet_fallbacks": 0, "task_errors": 0},
+        )
+
+    title_terms = _derive_query_terms(retrieval_titles)
     skill_terms = _derive_skill_terms(
         skills, title_terms, cap=TOTAL_TERMS_CAP - len(title_terms),
     )
@@ -1321,7 +1458,7 @@ def run_workday_jobs_search(
         fallback_tenants: set = set()
         done_tasks = 0
         tasks_per_tenant = max(1, len(terms))
-        matchers = _role_matchers(titles)
+        matchers = _role_matchers(chip_titles)
         # Provisional per-job scores for the streamed preview: real skill
         # matching against the TITLE (descriptions come later), computed once
         # per job (memoized) so snapshots stay cheap. Without this the
@@ -1467,7 +1604,9 @@ def run_workday_jobs_search(
             j.get("days_ago") if j.get("days_ago") is not None else 99,
         ))
 
-    jobs = _score_jobs(jobs, titles, skills, skill_terms, resume_years)
+    jobs = _score_jobs(
+        jobs, chip_titles, skills, skill_terms, resume_years, structured=structured,
+    )
     _rank(jobs)
 
     # Fetch full descriptions for the top slice, then rescore those rows on
@@ -1498,7 +1637,9 @@ def run_workday_jobs_search(
     ][:enrich_recent_n]
     enriched = _enrich_details(top, tz_offset)
     if enriched:
-        _score_jobs(top, titles, skills, skill_terms, resume_years)
+        _score_jobs(
+            top, chip_titles, skills, skill_terms, resume_years, structured=structured,
+        )
         # startDate refinement can push a row past the window, and the
         # detail country resolves "N Locations" rows definitively.
         jobs = [j for j in jobs
@@ -1568,7 +1709,7 @@ def run_workday_jobs_search(
         # 0 => this account has no parsed resume: the tab shows an upload
         # nudge because skill scores/feasibility are unavailable without it.
         "resume_skill_count": len(skills),
-        "diagnostics": diagnostics,
+        "diagnostics": {**diagnostics, "listing_mode": listing_mode},
         "errors": errors[:20],
     }
 

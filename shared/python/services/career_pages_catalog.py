@@ -414,7 +414,7 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Highspot", "ats": "lever", "slug": "highspot", "industry": "tech"},
     {"display_name": "Immutable", "ats": "lever", "slug": "immutable", "industry": "gaming"},
     {"display_name": "Included Health", "ats": "lever", "slug": "includedhealth", "industry": "healthtech"},
-    {"display_name": "Jobgether", "ats": "lever", "slug": "jobgether", "industry": "tech"},
+    {"display_name": "Jobgether", "ats": "lever", "slug": "jobgether", "industry": "tech", "board_kind": "marketplace"},
     {"display_name": "Kraken", "ats": "ashby", "slug": "kraken.com", "industry": "fintech"},
     {"display_name": "Ledger", "ats": "lever", "slug": "ledger", "industry": "fintech"},
     {"display_name": "Lyra Health", "ats": "lever", "slug": "lyrahealth", "industry": "healthtech"},
@@ -1350,3 +1350,34 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
 
 INDUSTRIES: List[str] = sorted({r["industry"] for r in CAREER_PAGES_CATALOG})
 ATS_KINDS: List[str] = sorted({r["ats"] for r in CAREER_PAGES_CATALOG})
+
+# Third-party job marketplaces hosted on an ATS (e.g. Lever) that list many
+# employers' roles under one board. Kept in the catalog for coverage, but feed
+# ranking pins them below first-party employer boards.
+MARKETPLACE_BOARD_SLUGS = frozenset(
+    (r["slug"] or "").lower()
+    for r in CAREER_PAGES_CATALOG
+    if (r.get("board_kind") or "").lower() == "marketplace"
+) | frozenset({"jobgether"})
+
+
+def is_marketplace_board(company_or_slug: object) -> bool:
+    """True for aggregator / marketplace ATS boards (Jobgether, ...)."""
+    if isinstance(company_or_slug, dict):
+        kind = str(company_or_slug.get("board_kind") or "").lower()
+        if kind == "marketplace":
+            return True
+        slug = str(company_or_slug.get("slug") or company_or_slug.get("tenant") or "")
+    else:
+        slug = str(company_or_slug or "")
+    return slug.strip().lower() in MARKETPLACE_BOARD_SLUGS
+
+
+def marketplace_sort_key(job: Dict) -> int:
+    """0 = first-party employer, 1 = marketplace (sort ascending → bottom)."""
+    if (job.get("board_kind") or "").lower() == "marketplace":
+        return 1
+    if is_marketplace_board(job.get("tenant") or job.get("company") or ""):
+        return 1
+    return 0
+
