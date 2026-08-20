@@ -139,14 +139,17 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
     work_mode = doc.get("work_mode") or ""
     ats = doc.get("ats") or ""
     url = str(doc.get("canonical_url") or "")
+    tenant = doc.get("tenant") or ""
 
-    return {
+    from services.career_pages_catalog import is_marketplace_board
+
+    row = {
         # The canonical inventory id, so a tab row can be tailored against and
         # pinned by the same reference the guest path and applications use.
         "job_id": doc.get("job_id"),
         "title": str(doc.get("title_raw") or "")[:200],
         "company": str(doc.get("employer_name") or ""),
-        "tenant": doc.get("tenant") or "",
+        "tenant": tenant,
         "ats": ats,
         "industry": doc.get("industry") or "other",
         "location": location or "Not specified",
@@ -176,6 +179,9 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
         "seniority": doc.get("seniority") or "",
         "_requirements": doc.get("requirements") or None,
     }
+    if is_marketplace_board(row) or str(doc.get("board_kind") or "").lower() == "marketplace":
+        row["board_kind"] = "marketplace"
+    return row
 
 
 def _posted_text(days: Optional[int]) -> str:
@@ -506,13 +512,18 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
             r for r in rows
             if (fit_score.classify_role(r.get("title") or "") or "") in allowed
         ]
-    rows.sort(key=lambda j: (-(j.get("match_score") or 0),
-                            j.get("days_ago") if j.get("days_ago") is not None else 99))
+    from services.career_pages_catalog import marketplace_sort_key
+    rows.sort(key=lambda j: (
+        marketplace_sort_key(j),
+        -(j.get("match_score") or 0),
+        j.get("days_ago") if j.get("days_ago") is not None else 99))
     rows = rows[:GLOBAL_KEEP]
 
     _attach_feasibility(rows, skills, resume_years)
-    rows.sort(key=lambda j: (-(j.get("match_score") or 0),
-                             j.get("days_ago") if j.get("days_ago") is not None else 99))
+    rows.sort(key=lambda j: (
+        marketplace_sort_key(j),
+        -(j.get("match_score") or 0),
+        j.get("days_ago") if j.get("days_ago") is not None else 99))
     try:
         _attach_sponsorship(rows)
     except Exception as exc:  # pragma: no cover - enrichment is best effort

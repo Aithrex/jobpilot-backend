@@ -27,7 +27,13 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
-from services.career_pages_catalog import ATS_KINDS, CAREER_PAGES_CATALOG, INDUSTRIES
+from services.career_pages_catalog import (
+    ATS_KINDS,
+    CAREER_PAGES_CATALOG,
+    INDUSTRIES,
+    is_marketplace_board,
+    marketplace_sort_key,
+)
 from services.domain_classifier import user_role_noun_re
 from services.workday_jobs_service import (
     GLOBAL_KEEP,
@@ -188,6 +194,10 @@ def _row(company: Dict[str, str], raw_id: Any, title: str, url: str,
         # of government ones do).
         "salary": _salary_display(compensation, description),
     }
+    if company.get("board_kind"):
+        row["board_kind"] = company["board_kind"]
+    elif is_marketplace_board(company):
+        row["board_kind"] = "marketplace"
     if meta:
         # Inline board metadata (function / department / experience level) that
         # the LIST endpoint already returned — folded into a SCORING-ONLY field
@@ -1186,7 +1196,10 @@ def run_career_pages_search(
         jobs = [j for j in jobs if j.get("is_remote")]
 
     def _rank(items: List[Dict[str, Any]]) -> None:
+        # Marketplace boards (Jobgether) stay in the list but pin below
+        # first-party employer postings — even when match_score is higher.
         items.sort(key=lambda j: (
+            marketplace_sort_key(j),
             -(j.get("match_score") or 0),
             j.get("days_ago") if j.get("days_ago") is not None else 99))
 

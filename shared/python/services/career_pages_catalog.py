@@ -414,7 +414,7 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Highspot", "ats": "lever", "slug": "highspot", "industry": "tech"},
     {"display_name": "Immutable", "ats": "lever", "slug": "immutable", "industry": "gaming"},
     {"display_name": "Included Health", "ats": "lever", "slug": "includedhealth", "industry": "healthtech"},
-    {"display_name": "Jobgether", "ats": "lever", "slug": "jobgether", "industry": "tech"},
+    {"display_name": "Jobgether", "ats": "lever", "slug": "jobgether", "industry": "tech", "board_kind": "marketplace"},
     {"display_name": "Kraken", "ats": "ashby", "slug": "kraken.com", "industry": "fintech"},
     {"display_name": "Ledger", "ats": "lever", "slug": "ledger", "industry": "fintech"},
     {"display_name": "Lyra Health", "ats": "lever", "slug": "lyrahealth", "industry": "healthtech"},
@@ -1350,3 +1350,29 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
 
 INDUSTRIES: List[str] = sorted({r["industry"] for r in CAREER_PAGES_CATALOG})
 ATS_KINDS: List[str] = sorted({r["ats"] for r in CAREER_PAGES_CATALOG})
+
+# Third-party job marketplaces hosted on an ATS (e.g. Lever) that list many
+# employers' roles under one board. Kept in the catalog for coverage, but feed
+# ranking pins them below first-party employer boards — even when score is higher.
+MARKETPLACE_BOARD_SLUGS = frozenset(
+    (r["slug"] or "").lower()
+    for r in CAREER_PAGES_CATALOG
+    if (r.get("board_kind") or "").lower() == "marketplace"
+)
+
+
+def is_marketplace_board(row_or_slug: object) -> bool:
+    """True for Jobgether-style marketplace aggregators."""
+    if isinstance(row_or_slug, dict):
+        kind = str(row_or_slug.get("board_kind") or "").lower()
+        if kind == "marketplace":
+            return True
+        slug = str(row_or_slug.get("tenant") or row_or_slug.get("slug") or "").lower()
+        company = str(row_or_slug.get("company") or row_or_slug.get("display_name") or "").lower()
+        return slug in MARKETPLACE_BOARD_SLUGS or company == "jobgether"
+    return str(row_or_slug or "").lower() in MARKETPLACE_BOARD_SLUGS
+
+
+def marketplace_sort_key(row: dict) -> int:
+    """0 = first-party employer, 1 = marketplace (sorts after)."""
+    return 1 if is_marketplace_board(row) else 0
