@@ -2020,6 +2020,19 @@ class BrowserExecutor(ExecutorAdapter):
             gaps.append({"field": "resume",
                          "reason": "resume_not_attached" if resume
                                    else "resume_missing"})
+        elif resume_attached:
+            # Attached, but the form STILL says it is missing — the async
+            # uploader has not settled (see _wait_for_resume_upload). Clicking
+            # Submit here posts a form that fails its own client-side validation
+            # and returns no confirmation, which is exactly what produced
+            # `no_confirmation_after_submit` on ClickHouse 2026-08-23.
+            try:
+                body = (page.inner_text("body") or "").lower()
+            except Exception:
+                body = ""
+            if ("resume/cv is required" in body or "resume is required" in body
+                    or "please attach a resume" in body):
+                gaps.append({"field": "resume", "reason": "resume_upload_unsettled"})
         return gaps
 
     def _needs_input(self, page, application: Dict[str, Any],
@@ -2450,6 +2463,51 @@ class BrowserExecutor(ExecutorAdapter):
                 out.append(sel)
         return out
 
+    #: How long to let an ATS finish processing an attached résumé before we
+    #: consider the field settled. Greenhouse's uploader is async.
+    _RESUME_UPLOAD_WAIT_MS = 12_000
+
+    def _wait_for_resume_upload(self, page) -> bool:
+        """Block until the attached résumé stops being reported as missing.
+
+        ``set_input_files`` returns as soon as the bytes are handed to the
+        input, but Greenhouse's React uploader processes the file
+        ASYNCHRONOUSLY and only then clears its "Resume/CV is required."
+        validation. The drive used to attach, fill the rest, and click Submit
+        inside that window — so the form failed its own client-side validation
+        and never posted.
+
+        Live evidence (ClickHouse, 2026-08-23): the audit screenshot shows the
+        résumé filename rendered as attached WHILE "Resume/CV is required." was
+        still displayed in red, and the submit produced
+        `no_confirmation_after_submit`. Nothing was sent.
+
+        Returns True when the field looks settled, False on timeout — a False is
+        NOT fatal on its own; `_presubmit_gaps` still owns the refusal to submit.
+        Never raises."""
+        deadline = self._RESUME_UPLOAD_WAIT_MS
+        step = 500
+        waited = 0
+        while waited < deadline:
+            try:
+                body = (page.inner_text("body") or "").lower()
+            except Exception:
+                return False
+            # The exact string Greenhouse renders while the field is unsatisfied.
+            still_required = ("resume/cv is required" in body
+                             or "resume is required" in body
+                             or "please attach a resume" in body)
+            if not still_required:
+                return True
+            try:
+                page.wait_for_timeout(step)
+            except Exception:
+                return False
+            waited += step
+        logger.info("resume upload: still reported missing after %dms — "
+                    "letting _presubmit_gaps decide", deadline)
+        return False
+
     def _attach_resume(self, page, resume: Tuple[str, bytes]) -> bool:
         """Attach the résumé; returns whether a file actually went in. Prefer
         direct ``set_input_files`` (works headless even when the input is
@@ -2467,6 +2525,7 @@ class BrowserExecutor(ExecutorAdapter):
         for sel in self._resume_input_selectors(page):
             try:
                 page.set_input_files(sel, files=[payload])
+                self._wait_for_resume_upload(page)
                 return True
             except Exception:
                 continue
