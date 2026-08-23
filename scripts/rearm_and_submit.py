@@ -53,12 +53,21 @@ def main():
     print(f"company     : {app.get('company')}  |  {app.get('title')}")
     print(f"status      : {app.get('status')}")
 
-    if app.get("status") != "approved":
+    status = app.get("status")
+
+    # Only a row still parked in `needs_input` needs re-arming. After
+    # `resume_after_answers` clears the queue the row is ALREADY in
+    # `ready_for_review`, and `update_needs_input` rejects that state
+    # ("cannot update needs_input from 'ready_for_review'").
+    if status == "needs_input":
         ledger.update_needs_input(user_email, aid, [])
         ledger.mark_ready_for_review(user_email, aid, autonomy="hold",
                                      confidence_score=0.88,
                                      tailoring_record_id=None)
-        print(f"re-armed    : {ledger.get_application(user_email, aid).get('status')}")
+        status = ledger.get_application(user_email, aid).get("status")
+        print(f"re-armed    : {status}")
+
+    if status != "approved":
         res = ledger.approve_with_result(
             user_email, [aid], approved_by="owner-authorized-test",
             snapshot_provider=lambda x: build_approval_snapshot(user_email, x))

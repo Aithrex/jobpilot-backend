@@ -1157,6 +1157,86 @@ def _option_concept(opt_norm: str) -> Optional[str]:
     return None
 
 
+#: "How did you hear about us?" is asked by nearly every ATS and worded
+#: differently by every employer, so a declared answer almost never appears
+#: verbatim in the option list. Token overlap cannot bridge it either:
+#: "company website" vs "company career site" share exactly ONE content token,
+#: and the containment rule needs two.
+#:
+#: Live consequence (Expedia, 2026-08-23): declared "Company website", offered
+#: "Company Career Site / Current Contingent Worker / Former Employee / I am an
+#: employee / I know someone in the company". No match -> the executor refused
+#: to guess (right call) and a fully-answered application parked on this one
+#: field, telling the user to go finish it by hand.
+#:
+#: Each cluster is one CHANNEL. Members are alternate spellings of the SAME
+#: fact, so resolving between them is normalization, not a value change — the
+#: same principle as the geography tables. Clusters stay DISTINCT: a referral is
+#: not a job board, and "Former Employee" is not "I am an employee".
+_SOURCE_CHANNEL_CLUSTERS = (
+    ("company_site", frozenset({
+        "company website", "company web site", "company career site",
+        "company careers site", "company career page", "company careers page",
+        "career site", "careers site", "career page", "careers page",
+        "corporate website", "corporate site", "employer website",
+        "our website", "company site", "organization website",
+    })),
+    ("linkedin", frozenset({"linkedin", "linked in", "linkedin com"})),
+    # GENERIC spellings only. Named boards (Indeed, Glassdoor, ZipRecruiter...)
+    # are deliberately ABSENT: putting them here would let a declared "Glassdoor"
+    # resolve to an offered "Indeed", which substitutes one fact for another.
+    # A named board matches only itself (exact equality) or nothing -> we ask.
+    ("job_board", frozenset({
+        "job board", "job boards", "online job board", "job search site",
+        "job site", "job posting site", "job aggregator",
+    })),
+    ("referral", frozenset({
+        "referral", "employee referral", "referred by an employee",
+        "referred by a friend", "i know someone in the company",
+        "i know someone who works here", "friend", "word of mouth",
+        "personal referral", "colleague",
+    })),
+    ("recruiter", frozenset({
+        "recruiter", "recruiting agency", "staffing agency", "headhunter",
+        "external recruiter", "agency", "sourced by a recruiter",
+    })),
+    ("former_employee", frozenset({
+        "former employee", "i am a former employee", "alumni", "alumnus",
+        "boomerang", "rehire",
+    })),
+    ("current_employee", frozenset({
+        "i am an employee", "current employee", "internal candidate",
+        "internal", "current contingent worker", "contingent worker",
+    })),
+    ("career_fair", frozenset({
+        "career fair", "job fair", "campus event", "university event",
+        "conference", "meetup", "hackathon",
+    })),
+    # Generic only, for the same reason as job_board: a declared "Twitter" must
+    # never resolve to an offered "Facebook".
+    ("social_media", frozenset({
+        "social media", "social network", "social",
+    })),
+)
+
+#: Fields whose options are source CHANNELS (see the table above).
+_SOURCE_CHANNEL_FIELDS = frozenset({"how_did_you_hear"})
+
+
+def _source_channel(norm: str) -> Optional[str]:
+    """The channel cluster a normalized option/value belongs to, or None.
+
+    Exact membership only — never substring or token overlap. An unknown
+    spelling returns None, which means "no match" and the caller asks. It can
+    never silently map one channel onto another."""
+    if not norm:
+        return None
+    for name, members in _SOURCE_CHANNEL_CLUSTERS:
+        if norm in members:
+            return name
+    return None
+
+
 _OPT_STOP = frozenset({"a", "an", "the", "or", "of", "not", "i", "am", "to",
                        "and", "in", "is", "are", "one", "more"})
 
@@ -1242,6 +1322,13 @@ def match_option(field_id: str, canonical_value: Any,
         # 1) exact normalized equality.
         elif canon_norm and opt_norm == canon_norm:
             score = 1.0
+        # 1b) SOURCE CHANNEL: same channel cluster (see _SOURCE_CHANNEL_CLUSTERS).
+        #     Exact cluster membership on both sides, so this can only resolve a
+        #     declared channel onto another spelling of that SAME channel.
+        elif (field_id in _SOURCE_CHANNEL_FIELDS
+              and _source_channel(canon_norm) is not None
+              and _source_channel(canon_norm) == _source_channel(opt_norm)):
+            score = 0.95
         else:
             opt_concept = _option_concept(opt_norm)
             # 2) same universal concept (decline / yes / no).

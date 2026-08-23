@@ -1673,6 +1673,80 @@ class WorkdayAdapter(AtsAdapter):
             return False
 
 
+    def options_for(self, field_id: str) -> List[str]:
+        """Enumerate a Workday dropdown's LIVE option texts.
+
+        The base implementation only reads native ``<option>`` elements and
+        returns [] for a custom widget, which makes ``fill_driver`` skip
+        ``match_option`` and fill the RAW canonical value. Workday renders its
+        selects as a button + ``[role=listbox]``, so every one of them took that
+        path.
+
+        Live consequence (Expedia, 2026-08-23): the user's declared
+        ``how_did_you_hear`` is "Company website"; the live control offers
+        "Company Career Site / Current Contingent Worker / Former Employee /
+        I am an employee / I know someone in the company". No option contains
+        "Company website", ``_fill_dropdown`` found nothing to click, and the row
+        parked on a `fill_failed` wall telling the user to go do it by hand —
+        for a field we had a perfectly good answer for.
+
+        Reading the options here lets the driver's existing
+        ``qb.match_option(field_id, value, options)`` map the canonical value
+        onto the form's own wording BEFORE ``_fill_dropdown`` runs.
+
+        Opens the popup, reads it, and closes it again. Returns [] on any
+        failure so the previous raw-fill behaviour still applies."""
+        native = super().options_for(field_id)
+        if native:
+            return native
+        page = self._page
+        if page is None or not hasattr(page, "locator"):
+            return []
+        handle = self._handle_for(self._canonical_key(field_id))
+        if not handle:
+            return []
+        opened = False
+        try:
+            wrapper = page.locator("[data-automation-id=%s]" % handle)
+            if not wrapper.count():
+                return []
+            btn = wrapper.locator("button[aria-haspopup=listbox]").first
+            if not btn.count():
+                btn = wrapper.locator("button").first
+            if not btn.count():
+                return []
+            btn.scroll_into_view_if_needed(timeout=3_000)
+            btn.click(timeout=5_000)
+            opened = True
+            page.wait_for_timeout(400)
+            texts: List[str] = []
+            for sel in ("[role=listbox] [role=option]",
+                        "[data-automation-id=promptOption]",
+                        "[role=listbox] li"):
+                loc = page.locator(sel)
+                for i in range(min(loc.count(), 80)):
+                    t = (loc.nth(i).text_content() or "").strip()
+                    # "Select One" is a placeholder, never a real answer.
+                    if t and t.lower() != "select one" and t not in texts:
+                        texts.append(t)
+                if texts:
+                    break
+            if texts:
+                logger.info("workday options_for(%s): %d live option(s)",
+                            field_id, len(texts))
+            return texts
+        except Exception as e:
+            logger.info("workday options_for(%s) failed: %s", field_id, e)
+            return []
+        finally:
+            if opened:
+                # Leave the widget as we found it; _fill_dropdown reopens it.
+                try:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(150)
+                except Exception:
+                    pass
+
     def _fill_dropdown(self, handle: str, el, value: str) -> bool:
         """Actuate a Workday custom dropdown by clicking the button, waiting for
         the listbox popup, and clicking the option that matches ``value``."""
