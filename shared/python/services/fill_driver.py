@@ -172,6 +172,16 @@ def _match_value(adapter, question: Dict[str, Any], field_id: str,
     except Exception:  # pragma: no cover - defensive
         match = None
     if match is None:
+        # Log the LIVE options. Without them "no_option_match" says a value was
+        # refused but not what the form actually offered, which makes this class
+        # of failure undiagnosable from logs alone — every occurrence needed a
+        # screenshot to resolve. Option labels are employer form text, not user
+        # data, so this stays PII-free.
+        try:
+            logger.info("no_option_match field=%s declared=%r offered=%r",
+                        field_id, value, [str(o)[:60] for o in options[:12]])
+        except Exception:  # pragma: no cover - logging is never load-bearing
+            pass
         return _NO_MATCH
     return match["option"]
 
