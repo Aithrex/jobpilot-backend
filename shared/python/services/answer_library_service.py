@@ -928,6 +928,45 @@ def _derive_location_facts(values: Dict[str, Any]) -> None:
             values["resides_contiguous_us"] = False
 
 
+def _application_email(user_email: str, contact: Dict[str, Any]) -> Optional[str]:
+    """The address to put on an APPLICATION FORM.
+
+    The managed alias when this deployment can actually receive mail at it,
+    otherwise the résumé's contact address.
+
+    WHY THE ALIAS. The whole point of the managed mailbox is that employer mail
+    lands somewhere WE can act on: verification links, OTPs and confirmations
+    drive the freeze/thaw loop automatically. Resolving this from
+    ``contact.email`` put the user's PERSONAL address on every application, so
+    an employer's verification mail went to an inbox the platform cannot read
+    and the loop could never close without the user.
+
+    Live evidence (ClickHouse, 2026-08-23): the submitted form carried the
+    personal Gmail, Greenhouse accepted the application and immediately asked
+    for email confirmation, and that OTP landed in the user's own inbox — the
+    one place the automation cannot see. The row parked on `oracle_verify`.
+
+    The user does NOT lose sight of anything: the alias forwards to their
+    registered address by default (`managed_mailbox_service.provision`), and the
+    in-app inbox keeps every message.
+
+    Returns None when there is no usable alias, and the CALLER then leaves the
+    already-resolved value alone. Returning the résumé address here instead
+    would overwrite a DECLARED ``user_preferences.email`` and invert the spec §2
+    precedence (declared > résumé) — which is exactly what
+    ``test_declared_pref_beats_resume`` caught."""
+    del contact  # resolution order is the caller's; this only offers the alias
+    try:
+        from services import managed_mailbox_service as mailbox
+        if not mailbox.can_receive_mail():
+            return None
+        return (mailbox.apply_alias(user_email) or "").strip() or None
+    except Exception as e:  # pragma: no cover - never block resolution on this
+        logger.warning("answer_library: managed alias lookup failed (%s) — "
+                       "keeping the already-resolved address", type(e).__name__)
+        return None
+
+
 def _load_canonical(user_email: str,
                     company: Optional[str] = None) -> Dict[str, Any]:
     """Assemble the user's DECLARED canonical values from real sources, in the
@@ -1028,6 +1067,13 @@ def _load_canonical(user_email: str,
     _fill_from_resume(values, structured, contact)
     # (3b) Restate declared location as the two facts employers ask for.
     _derive_location_facts(values)
+    # (3c) The address that goes ON THE FORM is the MANAGED alias — applied
+    # AFTER the declared-prefs sweep, which would otherwise reinstate the
+    # personal address and send every employer's verification mail to an inbox
+    # the platform cannot read. See _application_email.
+    _app_email = _application_email(user_email, contact)
+    if _app_email:
+        values["email"] = _app_email
 
     legal = _load_legal(prefs, user_email)
     escalations = _resume_company_escalations(structured, company)
