@@ -59,6 +59,16 @@ def main():
     # `resume_after_answers` clears the queue the row is ALREADY in
     # `ready_for_review`, and `update_needs_input` rejects that state
     # ("cannot update needs_input from 'ready_for_review'").
+    # `failed` is retryable, but ONLY back to `queued` — the transition table is
+    # keyed by DESTINATION and `STATUS_QUEUED: RETRYABLE_STATUSES` is the single
+    # legal retry edge ("explicit retry only"). It must then be re-gathered
+    # before it can reach ready_for_review.
+    if status == "failed":
+        ledger.transition(user_email, aid, "queued")
+        print(f"re-armed    : queued (from failed) — re-gather required, "
+              f"run scripts/gather_one_application.py next")
+        return 0
+
     if status == "needs_input":
         ledger.update_needs_input(user_email, aid, [])
         ledger.mark_ready_for_review(user_email, aid, autonomy="hold",

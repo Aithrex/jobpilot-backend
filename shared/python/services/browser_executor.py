@@ -2001,6 +2001,23 @@ class BrowserExecutor(ExecutorAdapter):
             keys = {str(k) for k in (q.get("field_id"), q.get("recon_id")) if k}
             if not keys:
                 continue
+            # A mid-wizard Workday control with no visible label keeps its raw
+            # automation-id as field_id, while the answer map is keyed
+            # canonically — so `linkedin_url` never intersects
+            # `socialNetworkAccounts--linkedInAccount` and a fully answered
+            # application parks asking for something already declared.
+            # normalize_field maps the handle correctly; widen the key set with it.
+            try:
+                from services import application_question_bank as _qb
+                for _raw in (q.get("field_id"), q.get("recon_id"), q.get("label")):
+                    if not _raw:
+                        continue
+                    _canon = _qb.normalize_field(str(_raw), allow_llm=False
+                                                 ).get("field_id")
+                    if _canon and _canon != "unknown":
+                        keys.add(str(_canon))
+            except Exception:  # pragma: no cover - never block the gate on this
+                pass
             name = str(q.get("field_id") or q.get("recon_id"))
             if keys & skipped_keys:
                 # We HAD a vetted value and could not place it (handle renamed /
@@ -2485,28 +2502,37 @@ class BrowserExecutor(ExecutorAdapter):
         Returns True when the field looks settled, False on timeout — a False is
         NOT fatal on its own; `_presubmit_gaps` still owns the refusal to submit.
         Never raises."""
+        # NOTE (correction): an earlier version polled for the text
+        # "Resume/CV is required.". That text does NOT exist before Submit —
+        # it is rendered by client-side validation AFTER the click — so the poll
+        # found nothing, declared the field settled, and returned instantly
+        # without waiting for anything. The upload is a NETWORK operation
+        # (Greenhouse PUTs the file straight to S3), so wait on the network.
         deadline = self._RESUME_UPLOAD_WAIT_MS
-        step = 500
-        waited = 0
-        while waited < deadline:
+        try:
+            # 1) The filename chip appearing proves the change event reached the
+            #    app and the upload has STARTED.
+            page.wait_for_selector(
+                "[data-testid*=file], [class*=file-name], [class*=fileName], "
+                "[class*=attachment], a[href*=resume]",
+                timeout=min(deadline, 6_000))
+        except Exception:
+            pass
+        try:
+            # 2) networkidle is the S3 PUT finishing. This is the actual signal
+            #    the old poll was missing.
+            page.wait_for_load_state("networkidle", timeout=deadline)
+            return True
+        except Exception:
+            # Busy page (polling/analytics) — fall back to a bounded settle so we
+            # still never click Submit the instant the bytes are handed over.
             try:
-                body = (page.inner_text("body") or "").lower()
+                page.wait_for_timeout(4_000)
             except Exception:
                 return False
-            # The exact string Greenhouse renders while the field is unsatisfied.
-            still_required = ("resume/cv is required" in body
-                             or "resume is required" in body
-                             or "please attach a resume" in body)
-            if not still_required:
-                return True
-            try:
-                page.wait_for_timeout(step)
-            except Exception:
-                return False
-            waited += step
-        logger.info("resume upload: still reported missing after %dms — "
-                    "letting _presubmit_gaps decide", deadline)
-        return False
+            logger.info("resume upload: networkidle not reached in %dms — "
+                        "used a bounded settle instead", deadline)
+            return False
 
     def _attach_resume(self, page, resume: Tuple[str, bytes]) -> bool:
         """Attach the résumé; returns whether a file actually went in. Prefer

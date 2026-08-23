@@ -458,6 +458,35 @@ class AtsAdapter(abc.ABC):
                 return q.get("recon_id") or field_id
             if q.get("recon_id") == field_id:
                 return field_id
+        return self._canonical_fallback_handle(field_id)
+
+    def _canonical_fallback_handle(self, field_id: str) -> str:
+        """Resolve a CANONICAL field_id onto a recon handle when recon never
+        classified the field.
+
+        A Workday control discovered mid-wizard often has no visible label, so
+        recon keeps the raw automation-id as its ``field_id``
+        (``socialNetworkAccounts--linkedInAccount``). The answer map is keyed
+        canonically (``linkedin_url``), the two never intersect, and a fully
+        answered application parks asking for something already declared.
+
+        ``normalize_field`` maps that handle correctly on its own, so use it as
+        a last resort. Returns ``field_id`` unchanged when nothing matches —
+        never guesses a control."""
+        try:
+            from services import application_question_bank as qb
+        except Exception:  # pragma: no cover - defensive
+            return field_id
+        for q in self._questions:
+            for raw in (q.get("recon_id"), q.get("field_id"), q.get("label")):
+                if not raw:
+                    continue
+                try:
+                    if qb.normalize_field(str(raw), allow_llm=False
+                                          ).get("field_id") == field_id:
+                        return str(q.get("recon_id") or raw)
+                except Exception:
+                    continue
         return field_id
 
     def _find_element(self, handle: str):
