@@ -151,6 +151,32 @@ def _is_enumerated(field_id: str) -> bool:
         return False
 
 
+def _answer_key(field_id: str, answers: Dict[str, Any]) -> Optional[str]:
+    """The key in ``answers`` that actually holds this control's value.
+
+    A Workday control discovered mid-wizard often has no visible label, so recon
+    keeps its raw automation-id as the field_id
+    (``formfield_accepttermsandagreements``). The answer map is keyed canonically
+    (``accept_terms``) and the two never intersect, so a fully answered
+    application stops and asks the user for something already declared — which is
+    exactly what parked the Expedia row on Voluntary Disclosures.
+
+    Tries the raw id, then the canonical id ``normalize_field`` derives from it.
+    Returns None when neither is present: this WIDENS the lookup, it never
+    invents a value and never relaxes the sensitivity gate."""
+    if field_id in answers and answers[field_id] not in (None, ""):
+        return field_id
+    try:
+        from services import application_question_bank as qb
+        canon = (qb.normalize_field(str(field_id), allow_llm=False) or {}).get("field_id")
+    except Exception:  # pragma: no cover - defensive
+        return None
+    if canon and canon != "unknown" and canon in answers \
+            and answers[canon] not in (None, ""):
+        return canon
+    return None
+
+
 def _match_value(adapter, question: Dict[str, Any], field_id: str,
                  value: Any) -> Any:
     """Return the exact form value to fill. For a select/radio (or an enumerated
@@ -213,7 +239,11 @@ def drive(adapter, answers: Dict[str, Any], *,
                 continue
             required = bool(q.get("required"))
             sensitive = _is_sensitive(q, fid)
-            has_answer = fid in answers and answers[fid] not in (None, "")
+            # Resolve by raw handle OR the canonical id the catalog derives from
+            # it — a mid-wizard Workday control keeps its automation-id, while the
+            # answer map is keyed canonically.
+            akey = _answer_key(fid, answers)
+            has_answer = akey is not None
 
             if not has_answer:
                 # No vetted value — NEVER guess. A required gap stops the run and
@@ -229,7 +259,7 @@ def drive(adapter, answers: Dict[str, Any], *,
                             field=fid, reason="unresolved",
                             review_snapshot=adapter.review_snapshot())
 
-            fill_value = _match_value(adapter, q, fid, answers[fid])
+            fill_value = _match_value(adapter, q, fid, answers[akey])
             if fill_value is _NO_MATCH:
                 # No confident option match for a select/radio.
                 if not required:
