@@ -1741,20 +1741,59 @@ class WorkdayAdapter(AtsAdapter):
                            "guess which belongs to this control", n)
         return None
 
-    @staticmethod
-    def _options_within(listbox):
-        """Option texts inside one popup. 'Select One' is a placeholder."""
-        texts = []
-        for sel in ("[role=option]", "[data-automation-id=promptOption]", "li"):
+    # A Workday prompt list is VIRTUALIZED: only the rendered window exists in
+    # the DOM, so reading it once yields a PREFIX of the real option set. Live:
+    # country enumerated 199 of ~250 entries and "United States of America" —
+    # alphabetically near the end — was never rendered, so a declared, valid
+    # country produced `no_option_match` and blocked the application.
+    _OPTION_SCROLL_PASSES = 40      # bounded: ~250-entry country list settles well inside this
+    _OPTION_HARD_CAP = 600          # never collect more than this from one popup
+
+    @classmethod
+    def _options_within(cls, listbox, page=None):
+        """Every option in one popup, scrolling a virtualized list to the end.
+
+        Stops as soon as a pass adds nothing new, so a short (non-virtualized)
+        list costs exactly one pass and behaves as before."""
+        texts: List[str] = []
+        sel = None
+        for candidate in ("[role=option]", "[data-automation-id=promptOption]", "li"):
             try:
-                loc = listbox.locator(sel)
-                for i in range(min(loc.count(), 200)):
-                    t = (loc.nth(i).text_content() or "").strip()
-                    if t and t.lower() != "select one" and t not in texts:
-                        texts.append(t)
+                if listbox.locator(candidate).count():
+                    sel = candidate
+                    break
             except Exception:
                 continue
-            if texts:
+        if sel is None:
+            return texts
+
+        for _ in range(cls._OPTION_SCROLL_PASSES):
+            grew = False
+            try:
+                loc = listbox.locator(sel)
+                n = loc.count()
+            except Exception:
+                break
+            for i in range(n):
+                try:
+                    t = (loc.nth(i).text_content() or "").strip()
+                except Exception:
+                    continue
+                # "Select One" is a placeholder, never a real answer.
+                if t and t.lower() != "select one" and t not in texts:
+                    texts.append(t)
+                    grew = True
+                    if len(texts) >= cls._OPTION_HARD_CAP:
+                        return texts
+            if not grew:
+                break
+            # Pull the next window into the DOM by scrolling the LAST rendered
+            # option into view; that is what the virtualizer listens to.
+            try:
+                listbox.locator(sel).last.scroll_into_view_if_needed(timeout=2_000)
+                if page is not None:
+                    page.wait_for_timeout(150)
+            except Exception:
                 break
         return texts
 
@@ -1810,7 +1849,7 @@ class WorkdayAdapter(AtsAdapter):
                             "popup this control owns — returning no options "
                             "rather than another field's", field_id)
                 return []
-            texts: List[str] = self._options_within(listbox)
+            texts: List[str] = self._options_within(listbox, page)
             if texts:
                 logger.info("workday options_for(%s): %d live option(s)",
                             field_id, len(texts))
