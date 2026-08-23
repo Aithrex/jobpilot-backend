@@ -2020,6 +2020,33 @@ def submit(application_id: str, user_email: str) -> Dict[str, Any]:
                 "application_id": application_id}
 
     answers = _load_answers(application_id, user_email)
+    # WIDEN the vetted answer map with every DECLARED profile value before the
+    # drive.
+    #
+    # `gather` recons only the FIRST page of the form. A Workday application is a
+    # 7-step wizard (My Information -> My Experience -> Application Questions ->
+    # Voluntary Disclosures -> Self Identify -> Review), and steps 2-7 are only
+    # discovered mid-drive. Any field the driver meets that is absent from
+    # `answers` stops the drive and parks a one-field `needs_input` — so a fully
+    # answerable application walked the user through one interruption PER FIELD
+    # (live: `how_did_you_hear`, then `country`, ... each needing its own
+    # re-drive) even though every value was already declared.
+    #
+    # SAFETY: this adds nothing new. `values` is profile/résumé-derived and
+    # `legal` contains ONLY keys the user actually declared (`_load_legal`
+    # never invents one), which is the same material `resolve()` draws on.
+    # The vetted per-application `answers` still WIN on conflict, and
+    # `fill_driver` only fills fields it actually finds on the page.
+    try:
+        from services import answer_library_service as _als
+        _canon = _als._load_canonical(user_email, company=str(app.get("company") or ""))
+        _wide = {**(_canon.get("values") or {}), **(_canon.get("legal") or {})}
+        _wide = {k: v for k, v in _wide.items() if v not in (None, "")}
+        _wide.update(answers)          # vetted answers always win
+        answers = _wide
+    except Exception as e:  # pragma: no cover - never block a submit on this
+        logger.warning("auto_apply submit %s: profile widen failed (%s) — "
+                       "driving with gathered answers only", application_id, e)
     resume_pdf = _resume_ref(app, user_email)
     # `ledger.get_application` PROJECTS OUT `user_email` (ownership is implied by
     # the query, so the row never carries it back). The executor runs in another
