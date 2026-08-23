@@ -1702,6 +1702,62 @@ class WorkdayAdapter(AtsAdapter):
             return False
 
 
+    def _listbox_for(self, btn):
+        """The popup THIS button owns, never merely 'a listbox on the page'.
+
+        Workday renders the popup in a portal outside the field wrapper, so it
+        cannot be found by scoping to the wrapper — but a page-wide
+        ``[role=listbox]`` matches any OTHER open listbox just as happily, which
+        is how `state` came to read the phone-country-code options. Prefer the
+        element the button explicitly owns; fall back to the single VISIBLE
+        listbox; refuse (and say so) when the page is ambiguous."""
+        page = self._page
+        if page is None or not hasattr(page, "locator"):
+            return None
+        for attr in ("aria-controls", "aria-owns"):
+            try:
+                ref = (btn.get_attribute(attr) or "").strip()
+            except Exception:
+                ref = ""
+            if not ref:
+                continue
+            try:
+                loc = page.locator('[id="%s"]' % ref.replace('"', ""))
+                if loc.count():
+                    return loc
+            except Exception:
+                continue
+        try:
+            vis = page.locator("[role=listbox]:visible")
+            n = vis.count()
+        except Exception:
+            return None
+        if n == 1:
+            return vis
+        if n > 1:
+            # Several popups open at once: we cannot tell which is ours, and
+            # guessing is how a value lands in the wrong control.
+            logger.warning("workday: %d listboxes visible at once — refusing to "
+                           "guess which belongs to this control", n)
+        return None
+
+    @staticmethod
+    def _options_within(listbox):
+        """Option texts inside one popup. 'Select One' is a placeholder."""
+        texts = []
+        for sel in ("[role=option]", "[data-automation-id=promptOption]", "li"):
+            try:
+                loc = listbox.locator(sel)
+                for i in range(min(loc.count(), 200)):
+                    t = (loc.nth(i).text_content() or "").strip()
+                    if t and t.lower() != "select one" and t not in texts:
+                        texts.append(t)
+            except Exception:
+                continue
+            if texts:
+                break
+        return texts
+
     def options_for(self, field_id: str) -> List[str]:
         """Enumerate a Workday dropdown's LIVE option texts.
 
@@ -1748,18 +1804,13 @@ class WorkdayAdapter(AtsAdapter):
             btn.click(timeout=5_000)
             opened = True
             page.wait_for_timeout(400)
-            texts: List[str] = []
-            for sel in ("[role=listbox] [role=option]",
-                        "[data-automation-id=promptOption]",
-                        "[role=listbox] li"):
-                loc = page.locator(sel)
-                for i in range(min(loc.count(), 80)):
-                    t = (loc.nth(i).text_content() or "").strip()
-                    # "Select One" is a placeholder, never a real answer.
-                    if t and t.lower() != "select one" and t not in texts:
-                        texts.append(t)
-                if texts:
-                    break
+            listbox = self._listbox_for(btn)
+            if listbox is None:
+                logger.info("workday options_for(%s): could not identify the "
+                            "popup this control owns — returning no options "
+                            "rather than another field's", field_id)
+                return []
+            texts: List[str] = self._options_within(listbox)
             if texts:
                 logger.info("workday options_for(%s): %d live option(s)",
                             field_id, len(texts))
@@ -1798,7 +1849,17 @@ class WorkdayAdapter(AtsAdapter):
             btn.click(timeout=5_000)
             self._page.wait_for_timeout(500)
             # Look for the listbox popup and click the matching option.
-            listbox = self._page.locator("[role=listbox]")
+            # Scoped to the popup this button owns: a page-wide match can click
+            # an option belonging to a DIFFERENT control.
+            listbox = self._listbox_for(btn)
+            if listbox is None:
+                logger.warning("workday fill_dropdown(%s): could not identify the "
+                               "popup this control owns — refusing to click", handle)
+                try:
+                    self._page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                return False
             candidates = [value]
             # Decline / prefer-not synonyms for EEO fields.
             vl = value.lower()
@@ -1822,8 +1883,9 @@ class WorkdayAdapter(AtsAdapter):
                         option.click(timeout=5_000)
                         self._page.wait_for_timeout(300)
                         return True
-            # Fallback: Workday sometimes uses [data-automation-id=promptOption].
-            options = self._page.locator("[data-automation-id=promptOption]")
+            # Workday sometimes uses [data-automation-id=promptOption] — still
+            # INSIDE our own popup, never page-wide.
+            options = listbox.locator("[data-automation-id=promptOption]")
             for i in range(min(options.count(), 80)):
                 opt = options.nth(i)
                 text = (opt.text_content() or "").strip()
