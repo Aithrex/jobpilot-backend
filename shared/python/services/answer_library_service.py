@@ -928,6 +928,34 @@ def _derive_location_facts(values: Dict[str, Any]) -> None:
             values["resides_contiguous_us"] = False
 
 
+_LINKEDIN_RE = re.compile(
+    r"^\s*(?:https?://)?(?:[a-z]{2,3}\.)?(?:www\.)?linkedin\.com/(.+?)/*\s*$", re.I)
+
+
+def _canonical_linkedin(url: Any) -> Any:
+    """Canonicalize a LinkedIn profile URL to ``https://www.linkedin.com/<path>``.
+
+    Workday validates this field STRICTLY and rejects anything without the
+    scheme + ``www.`` host, with "Invalid LinkedIn URL" — even though the URL
+    resolves fine in a browser.
+
+    Live evidence (Expedia, 2026-08-23): the declared value was
+    ``https://linkedin.com/in/<slug>`` (no ``www.``). The driver placed it
+    correctly and Workday refused the page with:
+        "Error - If you would like us to view your LinkedIn profile, provide
+         your profile URL (i.e. https://www.linkedin.com/in/YOURNAME)."
+
+    SPELLING normalization only — the host and path are preserved, so this can
+    only ever point at the SAME profile. A non-LinkedIn or unparseable value is
+    returned untouched rather than coerced."""
+    if not isinstance(url, str) or not url.strip():
+        return url
+    m = _LINKEDIN_RE.match(url)
+    if not m:
+        return url
+    return "https://www.linkedin.com/" + m.group(1)
+
+
 def _application_email(user_email: str, contact: Dict[str, Any]) -> Optional[str]:
     """The address to put on an APPLICATION FORM.
 
@@ -1074,6 +1102,9 @@ def _load_canonical(user_email: str,
     _app_email = _application_email(user_email, contact)
     if _app_email:
         values["email"] = _app_email
+    # (3d) LinkedIn URLs must carry scheme + www or Workday rejects the page.
+    if values.get("linkedin_url"):
+        values["linkedin_url"] = _canonical_linkedin(values["linkedin_url"])
 
     legal = _load_legal(prefs, user_email)
     escalations = _resume_company_escalations(structured, company)
