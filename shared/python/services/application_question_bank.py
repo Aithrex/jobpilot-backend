@@ -178,7 +178,16 @@ FIELDS: List[Dict[str, Any]] = [
         r"(?<!device )(?<!type)\bphone\b(?! device)(?! type)"]),
     _f("address_line1", "Street address", CAT_IDENTITY, SENS_SAFE, VT_TEXT, "text",
        [r"street address", r"address line 1", r"address line1", r"mailing address",
-        r"\baddress\b"]),
+        # The bare catch-all must NOT swallow an address COMPONENT field.
+        # `address_line1` precedes city/state/postal_code in the catalog, so
+        # within CAT_IDENTITY it matched first and "Please enter your current
+        # Address State (required)" / "... Address City ..." / "... Address Zip
+        # Code ..." ALL resolved to address_line1 (live: Expedia 2026-08-23).
+        # With a street address in the answer map that fills the STREET into the
+        # State and Zip controls of a real application — wrong data submitted
+        # under the user's name, not merely a miss.
+        r"\baddress\b(?!\s*(?:line\s*2|state|province|region|city|town|zip|"
+        r"postal|post\s*code|country|county)\b)"]),
     _f("address_line2", "Address line 2", CAT_IDENTITY, SENS_SAFE, VT_TEXT, "text",
        [r"address line 2", r"address line2", r"apartment", r"apt suite", r"unit number"]),
     _f("city", "City", CAT_IDENTITY, SENS_SAFE, VT_TEXT, "text",
