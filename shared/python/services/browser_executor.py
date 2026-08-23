@@ -1244,6 +1244,16 @@ class BrowserExecutor(ExecutorAdapter):
                                     user_email: str, tenant: str) -> bool:
         """Sign in or create a Workday candidate account via the credential vault."""
         if not user_email:
+            # This used to be the only SILENT early return in this function, and
+            # it fired on every single Workday application: `get_application`
+            # projects out `user_email`, so the caller's
+            # `application.get("user_email")` was always None. The gate no-opped,
+            # the row parked on `account_required`, and nothing anywhere said
+            # why. Never let this fail quietly again.
+            logger.warning(
+                "workday account: NO user_email reached the executor — cannot "
+                "resolve the credential vault, so the account gate cannot be "
+                "cleared. The caller must pass application['user_email'].")
             return False
         # PREFLIGHT: creating a Workday candidate account commits us to reading
         # a verification email. If this deployment cannot receive mail at a

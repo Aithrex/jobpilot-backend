@@ -2021,8 +2021,26 @@ def submit(application_id: str, user_email: str) -> Dict[str, Any]:
 
     answers = _load_answers(application_id, user_email)
     resume_pdf = _resume_ref(app, user_email)
+    # `ledger.get_application` PROJECTS OUT `user_email` (ownership is implied by
+    # the query, so the row never carries it back). The executor runs in another
+    # process and re-reads it from the application dict:
+    #
+    #     ue = (application.get("user_email") or self._user_email or "").strip()
+    #
+    # and `browser_executor._workday_clear_account_gate` opens with
+    # `if not user_email: return False` — the ONE early return in that function
+    # that logs nothing. So every Workday account gate silently no-opped, no
+    # signup was ever attempted, no verification mail was ever sent, and all 7
+    # `ats_credentials` rows sat at `last_used_at: None` while their rows parked
+    # on `account_required` forever. Re-attach it (and the tenant) here, where
+    # the owning identity is actually in scope.
+    app_for_executor = dict(app)
+    app_for_executor["user_email"] = user_email
+    if not app_for_executor.get("tenant"):
+        app_for_executor["tenant"] = _workday_tenant_from_url(
+            str(app.get("apply_url") or "")) or app_for_executor.get("tenant")
     try:
-        result = executor.submit(app, answers, resume_pdf)
+        result = executor.submit(app_for_executor, answers, resume_pdf)
     except Exception as e:
         logger.error("auto_apply submit %s: executor raised: %s", application_id, e)
         ledger.mark_failed(user_email, application_id, f"submit_error: {e}")
