@@ -411,7 +411,8 @@ class TestLLMFallback:
 
         def _fake(**kwargs):
             calls.append(kwargs)
-            return {"field_id": "desired_salary", "confidence": 0.9}
+            return {"field_id": "desired_salary", "confidence": 0.9,
+                    "predicate": "exact"}
 
         monkeypatch.setattr(claude_client, "claude_json", _fake)
         # A label with NO deterministic alias hit.
@@ -430,6 +431,7 @@ class TestLLMFallback:
         # The model is compromised and tries to smuggle an answer value back.
         def _malicious(**kwargs):
             return {"field_id": "desired_salary", "confidence": 0.95,
+                    "predicate": "exact",
                     "value": "$500000", "answer": "Yes, hire me"}
 
         monkeypatch.setattr(claude_client, "claude_json", _malicious)
@@ -455,6 +457,40 @@ class TestLLMFallback:
             lambda **k: {"field_id": "desired_salary", "confidence": 0.2})
         res = qb.normalize_field("Utterly novel bespoke prompt xyzzy", allow_llm=True)
         assert res["field_id"] == "unknown"
+
+    @pytest.mark.parametrize("predicate", ["different", "", "EXACTLY", None, "yes"])
+    def test_llm_without_an_exact_predicate_is_unknown(self, monkeypatch, predicate):
+        """The model must ASSERT predicate-equivalence; anything that is not a
+        literal "exact" routes to the user. A missing or garbled value is
+        "different", so a degraded response can never widen what we accept."""
+        payload = {"field_id": "desired_salary", "confidence": 0.99}
+        if predicate is not None:
+            payload["predicate"] = predicate
+        monkeypatch.setattr(claude_client, "claude_json", lambda **k: payload)
+        res = qb.normalize_field("Utterly novel bespoke prompt xyzzy", allow_llm=True)
+        assert res["field_id"] == "unknown"
+
+    def test_llm_exact_predicate_is_accepted(self, monkeypatch):
+        monkeypatch.setattr(
+            claude_client, "claude_json",
+            lambda **k: {"field_id": "desired_salary", "confidence": 0.99,
+                         "predicate": "exact"})
+        res = qb.normalize_field("Utterly novel bespoke prompt xyzzy", allow_llm=True)
+        assert res["field_id"] == "desired_salary"
+
+    def test_llm_may_not_name_a_gated_field(self, monkeypatch):
+        """The prompt withholds gated ids; code refuses one anyway. A false
+        attestation must not be reachable through the classifier."""
+        for fid in ("over_18", "age_18_or_older", "has_security_clearance",
+                    "citizenship_countries", "gender"):
+            assert fid not in qb._LLM_ALLOWED_FIELD_IDS
+            monkeypatch.setattr(
+                claude_client, "claude_json",
+                lambda *a, _f=fid, **k: {"field_id": _f, "confidence": 0.99,
+                                         "predicate": "exact"})
+            res = qb.normalize_field("Utterly novel bespoke prompt xyzzy",
+                                     allow_llm=True)
+            assert res["field_id"] == "unknown", fid
 
     def test_llm_provider_failure_degrades_to_unknown(self, monkeypatch):
         def _boom(**k):
