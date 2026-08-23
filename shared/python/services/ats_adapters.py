@@ -2149,6 +2149,79 @@ class WorkdayAdapter(AtsAdapter):
                 continue
         return False
 
+    # Consent checkboxes on a Create Account panel that may be ticked without
+    # asserting anything about the candidate. ALLOW-LIST, deliberately: the same
+    # panel can carry checkboxes that ARE claims about the person ("I am a
+    # protected veteran", "I am a US citizen"), and blanket-ticking those is the
+    # exact fabrication class AUTOAPPLY_REPAIR_SPEC.md §0 forbids. Acknowledging
+    # a privacy policy asserts nothing false — same rule as POLICY_ACCEPT_DEFAULT
+    # in application_question_bank.
+    _ACCOUNT_CONSENT_RE = re.compile(
+        r"(privacy\s+(policy|notice|statement)|terms\s+(of\s+use|and\s+conditions|of\s+service)"
+        r"|i\s+have\s+read|i\s+acknowledge|i\s+agree|candidate\s+privacy"
+        r"|data\s+(protection|processing)\s+notice)", re.I)
+
+    # A claim ABOUT the person — never auto-ticked, even if it also matches the
+    # allow-list above. Checked first and wins.
+    _ACCOUNT_CONSENT_NEVER_RE = re.compile(
+        r"(veteran|disab|citizen|sponsor|work\s+authoriz|felony|convict|clearance"
+        r"|gender|race|ethnic|hispanic|over\s+18|age\s+of\s+18|export\s+control)", re.I)
+
+    def _tick_account_consent(self) -> int:
+        """Tick REQUIRED consent checkboxes on the Create Account panel.
+
+        Workday refuses account creation with "Error: Please check the box to
+        continue" until the privacy-policy box is ticked. Nothing ticked it, so
+        every create-account attempt was rejected AFTER email + password +
+        verify-password had been filled correctly — which is indistinguishable
+        from a credential failure in the logs, and is why the Expedia row parked
+        on `account_required` on three consecutive runs.
+
+        Returns the number of boxes ticked. Never raises."""
+        page = self._page
+        if page is None:
+            return 0
+        ticked = 0
+        try:
+            boxes = page.locator("input[type=checkbox]")
+            count = min(boxes.count(), 12)
+        except Exception:
+            return 0
+        for i in range(count):
+            try:
+                box = boxes.nth(i)
+                if not box.is_visible() or box.is_checked():
+                    continue
+                label = ""
+                box_id = box.get_attribute("id")
+                for getter in (
+                    lambda: box.get_attribute("aria-label") or "",
+                    lambda: (page.locator(f"label[for='{box_id}']").first.inner_text()
+                             if box_id else ""),
+                    lambda: box.locator(
+                        "xpath=ancestor::*[self::label or self::div][1]").first.inner_text(),
+                ):
+                    try:
+                        label = (getter() or "").strip()
+                        if label:
+                            break
+                    except Exception:
+                        continue
+                if not label:
+                    continue
+                if self._ACCOUNT_CONSENT_NEVER_RE.search(label):
+                    logger.info("account consent: REFUSING to auto-tick a claim "
+                                "checkbox (%s)", label[:80])
+                    continue
+                if not self._ACCOUNT_CONSENT_RE.search(label):
+                    continue
+                box.check(timeout=3_000)
+                ticked += 1
+                logger.info("account consent: ticked %r", label[:80])
+            except Exception:
+                continue
+        return ticked
+
     def fill_account_credentials(self, email: str, password: str, *,
                                  create: bool = False) -> bool:
         """Fill sign-in or create-account form. Returns True if submit clicked."""
@@ -2303,6 +2376,10 @@ class WorkdayAdapter(AtsAdapter):
                     pass
 
         if create:
+            # Workday blocks Create Account with "Please check the box to
+            # continue" until the privacy-policy consent box is ticked. Must run
+            # AFTER the password fields are filled and BEFORE the submit click.
+            self._tick_account_consent()
             btn_sels = (
                 "[data-automation-id=createAccountSubmitButton]",
                 "button:has-text('Create Account')",
