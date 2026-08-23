@@ -461,7 +461,88 @@ def provision(
         )
         mailbox = _mailboxes().find_one({"user_email": email})
 
+    # Prove deliverability NOW, while nothing is waiting on it. Best-effort
+    # and never blocks provisioning - see send_deliverability_probe.
+    try:
+        send_deliverability_probe(email)
+    except Exception:  # pragma: no cover - provisioning must never fail on this
+        pass
     return _serialize_mailbox(mailbox)
+
+
+def send_deliverability_probe(user_email: str, *, force: bool = False) -> Dict[str, Any]:
+    """Send one self-addressed message to this user's managed alias so
+    ``has_ever_received`` can become True BEFORE anything depends on it.
+
+    WHY THIS EXISTS. ``browser_executor._workday_clear_account_gate`` refuses to
+    register an employer account unless ``has_ever_received(user)`` is True -
+    correctly, because registering an account whose verification mail we cannot
+    read strands a half-created account on a real employer's portal. But that
+    check is PER USER and starts False for everyone, and the only thing that
+    would flip it is inbound mail that the gate itself is preventing. Every new
+    user was therefore permanently locked out of Workday self-registration.
+
+    This breaks the deadlock with a round trip we initiate ourselves: we send to
+    the alias, Cloudflare's catch-all Worker delivers it back through
+    ``/mail-inbound/cloudflare/{slot,commit}``, and the stored message IS the
+    evidence. It is also genuinely useful mail - it tells the user the address
+    employers will see.
+
+    Idempotent and best-effort: never raises, and never sends twice unless
+    ``force``. The message is NOT relayed to the user's personal inbox -
+    ``mail_forward_service.should_forward`` is a fail-closed allow-list and this
+    is not an employer message.
+    """
+    out: Dict[str, Any] = {"sent": False, "reason": "", "alias": ""}
+    email = InputSanitizer.sanitize_email(user_email)
+    if not email:
+        out["reason"] = "invalid_user_email"
+        return out
+    if not can_receive_mail():
+        out["reason"] = "cannot_receive"
+        return out
+    if not force and has_ever_received(email):
+        out["reason"] = "already_received"
+        return out
+    try:
+        mailbox = _mailboxes().find_one({"user_email": email})
+        if not mailbox:
+            out["reason"] = "no_mailbox"
+            return out
+        if not force and mailbox.get("probe_sent_at"):
+            # One outstanding probe is enough; a second proves nothing new and
+            # would just be mail the user did not ask for.
+            out["reason"] = "probe_already_sent"
+            return out
+        alias = apply_alias(email) or ""
+        if not alias:
+            out["reason"] = "no_alias"
+            return out
+        out["alias"] = alias
+
+        from services.email_service import send_email
+        subject = "Your JobPilot application inbox is live"
+        html = (
+            "<p>Your dedicated application address is now active:</p>"
+            f"<p><strong>{alias}</strong></p>"
+            "<p>JobPilot uses this address when it applies on your behalf, so "
+            "employer confirmations, verification links and recruiter replies "
+            "arrive somewhere we can act on automatically. You do not need to "
+            "do anything &mdash; everything shows up in your JobPilot inbox.</p>"
+        )
+        ok = bool(send_email(alias, subject, html))
+        _mailboxes().update_one(
+            {"user_email": email},
+            {"$set": {"probe_sent_at": _now(), "probe_dispatched": ok,
+                      "updated_at": _now()}})
+        out["sent"] = ok
+        out["reason"] = "dispatched" if ok else "send_failed"
+        return out
+    except Exception as e:  # pragma: no cover - best effort, never blocks
+        logger.warning("managed_mailbox: deliverability probe failed: %s",
+                       type(e).__name__)
+        out["reason"] = "error"
+        return out
 
 
 def repair_local_part(user_email: str, display_name: Optional[str]) -> Dict[str, Any]:

@@ -103,6 +103,7 @@ SOURCE_PROFILE = "profile"              # résumé (resume_assets.structured)
 SOURCE_USER_STORE = "user_store"        # a value the user answered once
 SOURCE_RESUME_MATCH = "resume_match"    # résumé ESCALATION (spec §1) — Yes only
 SOURCE_POLICY_DECLINE = "policy_decline"  # protected-EEO auto-decline (spec §0.3)
+SOURCE_POLICY_SAFE = "policy_safe_default"  # consent-ack / marketing-opt-in default
 
 # Sources that are NOT fabrications — every one is either the user's own stated
 # data, a fact off their résumé, or an explicit "I decline to answer" (which
@@ -877,6 +878,56 @@ def _coerce_declared(value: Any, field: Dict[str, Any], qb: Any) -> Any:
     return value
 
 
+# The 48 contiguous states + DC. Alaska and Hawaii are deliberately ABSENT:
+# "do you reside in the 48 contiguous US" is False for them, and a US territory
+# is not a state at all.
+_CONTIGUOUS_US = frozenset("""
+AL AZ AR CA CO CT DE DC FL GA ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE
+NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY
+""".split())
+
+_US_COUNTRY_NAMES = frozenset({
+    "us", "usa", "u.s.", "u.s.a.", "united states", "united states of america",
+})
+
+
+def _derive_location_facts(values: Dict[str, Any]) -> None:
+    """Fill location fields that are pure RESTATEMENTS of declared data.
+
+    Only two, and both are facts the user already gave us:
+
+      * ``current_location``       — "Tempe, AZ, United States"
+      * ``resides_contiguous_us``  — country is unambiguously the US AND the
+        declared state is one of the 48 (+DC)
+
+    Deliberately NOT derived: "do you live in <city/county>?" and "is a commute
+    to <city> workable?". Both are knockout screening questions, and the honest
+    answer to a commute question depends on relocation intent — which
+    ``willing_to_relocate`` does NOT settle for a specific city. Those stay
+    unresolved and are asked. Mutates ``values`` in place; never overwrites a
+    value already present."""
+    city = str(values.get("city") or "").strip()
+    state = str(values.get("state") or "").strip()
+    country = str(values.get("country") or "").strip()
+
+    if not values.get("current_location"):
+        parts = [p for p in (city, state, country) if p]
+        if parts:
+            values["current_location"] = ", ".join(parts)
+
+    if values.get("resides_contiguous_us") is None:
+        if country and country.strip().lower() in _US_COUNTRY_NAMES:
+            st = state.upper().replace(".", "").strip()
+            if st in _CONTIGUOUS_US:
+                values["resides_contiguous_us"] = True
+            elif st in ("AK", "HI"):
+                values["resides_contiguous_us"] = False
+            # unknown/unparseable state -> leave undeclared, so the user is asked
+        elif country:
+            # A declared NON-US country answers this unambiguously.
+            values["resides_contiguous_us"] = False
+
+
 def _load_canonical(user_email: str,
                     company: Optional[str] = None) -> Dict[str, Any]:
     """Assemble the user's DECLARED canonical values from real sources, in the
@@ -975,6 +1026,8 @@ def _load_canonical(user_email: str,
     _reconcile_name_parts(values, prefs)
     # (3) Résumé-derived facts fill only what the declared prefs left empty.
     _fill_from_resume(values, structured, contact)
+    # (3b) Restate declared location as the two facts employers ask for.
+    _derive_location_facts(values)
 
     legal = _load_legal(prefs, user_email)
     escalations = _resume_company_escalations(structured, company)
@@ -1248,6 +1301,50 @@ def _policy_decline_value(qb: Any, field_id: str, bank_meta: Dict[str, Any],
     options = list(form_options or bank_meta.get("options") or [])
     match = qb.match_option(field_id, qb.DECLINE, options)
     return match["option"] if match else None
+
+
+def _policy_safe_default(qb: Any, field_id: str, bank_meta: Dict[str, Any],
+                        form_options: Optional[List[str]]) -> Any:
+    """The value for a SAFE field whose catalog policy answers it without a
+    declared value, or None.
+
+    Two cases, both of which ASSERT NOTHING FALSE about the candidate:
+
+      * ``accept_default``  — acknowledging a privacy notice, or certifying that
+        answers already given are true. The certification IS true: every answer
+        we submit is either declared by the user or read off their résumé.
+      * ``decline_default`` on a SAFE, non-EEO field — a marketing/SMS opt-in.
+        Declining asserts nothing and is the privacy-preserving default.
+
+    HARD SCOPE — mirrors ``_policy_decline_value``. This NEVER applies to work
+    authorization, sponsorship, citizenship, export-control person status, age,
+    criminal history or any other legal attestation: those are GATED
+    (``SENS_PROTECTED``/``SENS_LEGAL``) and never reach this path, and they are
+    re-checked here anyway. This must never become a blanket default map —
+    see AUTOAPPLY_REPAIR_SPEC.md §0.4.
+    """
+    if qb is None or not isinstance(bank_meta, dict):
+        return None
+    if bank_meta.get("sensitivity") != qb.SENS_SAFE:
+        return None
+    if bank_meta.get("category") in (qb.CAT_WORK_AUTH, qb.CAT_EEO):
+        return None
+    policy = bank_meta.get("default_policy")
+    if policy == qb.POLICY_ACCEPT_DEFAULT:
+        want = True
+    elif policy == qb.POLICY_DECLINE_DEFAULT:
+        want = False
+    else:
+        return None
+    if bank_meta.get("value_type") == qb.VT_BOOLEAN and not (form_options or []):
+        return want
+    wanted = ("yes", "y", "i agree", "agree", "i acknowledge", "acknowledge",
+              "i accept", "accept", "true") if want else (
+              "no", "n", "false", "decline", "opt out")
+    for o in list(form_options or bank_meta.get("options") or []):
+        if isinstance(o, str) and o.strip().lower() in wanted:
+            return o
+    return want
 
 
 def _escalated_yes(bank_meta: Dict[str, Any], qb: Any) -> Any:
@@ -1625,6 +1722,21 @@ def _resolve_normalized(user_email: str,
                 if required:
                     required_resolved += 1
             else:
+                # A SAFE field the catalog can answer on policy alone (consent
+                # acknowledgement -> accept, marketing opt-in -> decline). Both
+                # assert nothing false, so neither needs to interrupt the user.
+                # Measured at 13.6% of unclassifiable questions — see
+                # PHASE1-question-catalog-gaps.md.
+                safe = _policy_safe_default(qb, field_id, bank_meta,
+                                            item.get("options"))
+                if safe is not None:
+                    resolved[field_id] = _resolution(
+                        field_id, norm, safe, SOURCE_POLICY_SAFE, b_category,
+                        b_kind, sensitivity, review_required=False,
+                        confidence=0.9, source_version="policy")
+                    if required:
+                        required_resolved += 1
+                    continue
                 unresolved.append(field_id)
                 if vtype in (qb.VT_BOOLEAN, qb.VT_SELECT, qb.VT_YEARS,
                              qb.VT_MONEY, qb.VT_NUMBER, qb.VT_DATE):

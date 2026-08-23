@@ -65,6 +65,12 @@ POLICY_REQUIRED_ONBOARDING = "required_onboarding"
 POLICY_CONFIRM_DEFAULT = "confirm_default"
 POLICY_DECLINE_DEFAULT = "decline_default"
 POLICY_NEVER_DEFAULT = "never_default"
+# Auto-ANSWERABLE without a declared value because the answer asserts nothing
+# false about the user: acknowledging a privacy notice, or certifying that
+# answers already given are true. Same principle as DECLINE_DEFAULT on a
+# protected EEO field (AUTOAPPLY_REPAIR_SPEC.md §0.3) — NOT a blanket default
+# map, and never applicable to a legal ATTESTATION about the user.
+POLICY_ACCEPT_DEFAULT = "accept_default"
 
 # value_type
 VT_TEXT = "text"
@@ -78,6 +84,7 @@ VT_NUMBER = "number"
 VT_MONEY = "money"
 VT_YEARS = "years"
 VT_ESSAY = "essay"
+VT_FILE = "file"
 
 # Fields whose value must NEVER be guessed / inferred — the hard gate. A field is
 # gated iff its sensitivity is protected (EEO) or legal (work-auth / attestations).
@@ -145,6 +152,12 @@ FIELDS: List[Dict[str, Any]] = [
         r"(?<!user )(?<!file )(?<!company )(?<!first )(?<!last )(?<!given )(?<!middle )(?<!preferred )(?<!nick )\bname\b"]),
     _f("first_name", "First name", CAT_IDENTITY, SENS_SAFE, VT_TEXT, "text",
        [r"first name", r"given name", r"forename", r"legal first name"]),
+    # The résumé attachment. It is a FILE widget, not a question — but it was
+    # 116 of 367 "unknown" classifications (32%), making every job look
+    # un-automatable. The attach path already supplies it.
+    _f("resume_upload", "Résumé / CV", CAT_IDENTITY, SENS_SAFE, VT_FILE, "file",
+       [r"^resume\s*/?\s*cv$", r"^resume$", r"^cv$", r"attach (?:your )?(?:resume|cv)",
+        r"upload (?:your )?(?:resume|cv)", r"resume\s*/\s*cv"]),
     _f("middle_name", "Middle name", CAT_IDENTITY, SENS_SAFE, VT_TEXT, "text",
        [r"middle name", r"middle initial"]),
     _f("last_name", "Last name", CAT_IDENTITY, SENS_SAFE, VT_TEXT, "text",
@@ -437,6 +450,30 @@ FIELDS: List[Dict[str, Any]] = [
        negations=[r"not willing to travel", r"unable to travel"],
        default_policy=POLICY_CONFIRM_DEFAULT),
 
+    # Marketing / SMS opt-in. 4.0% of unclassified. Declining asserts nothing
+    # and is the privacy-preserving default, so it never needs to interrupt.
+    _f("sms_opt_in", "SMS / marketing opt-in", CAT_LOGISTICS, SENS_SAFE,
+       VT_BOOLEAN, "checkbox",
+       [r"opt.?in to receive", r"receive text message", r"via sms",
+        r"text message updates", r"updates from a recruiter",
+        r"receive (?:marketing|promotional)"],
+       default_policy=POLICY_DECLINE_DEFAULT),
+
+    # --- derived location facts (PHASE1 §3, 12.7% of unclassified) --------
+    # Both are RESTATEMENTS of declared data, never inferences about intent.
+    # "Do you live in <city/county>?" and "is a commute to <city> workable?" are
+    # deliberately NOT catalogued: a wrong answer there is a knockout, and the
+    # honest answer depends on relocation intent we must not guess.
+    _f("current_location", "Current location", CAT_LOGISTICS, SENS_SAFE, VT_TEXT, "text",
+       [r"current location", r"where are you (?:currently )?(?:located|based)",
+        r"your (?:current )?(?:city|location) of residence",
+        r"where do you (?:currently )?(?:live|reside)"]),
+    _f("resides_contiguous_us", "Reside in the contiguous US", CAT_LOGISTICS, SENS_SAFE,
+       VT_BOOLEAN, "radio",
+       [r"48 contiguous", r"contiguous (?:united states|us\b|u\.s\.)",
+        r"continental (?:united states|us\b|u\.s\.)",
+        r"reside in the (?:continental|contiguous)"]),
+
     # ================= SCREENING (from_profile / confirm_default) =======
     _f("years_experience", "Years of experience", CAT_SCREENING, SENS_SAFE, VT_YEARS, "number",
        [r"years of (?:professional |relevant |total )?experience",
@@ -556,6 +593,23 @@ FIELDS: List[Dict[str, Any]] = [
         r"complete .*i ?9", r"document(?:ation|s)? .*(?:employment eligibility|work eligibility)",
         r"verify .*employment eligibility"],
        default_policy=POLICY_NEVER_DEFAULT),
+
+    # --- consent / acknowledgement: asserts nothing about the user -------
+    # Measured at 9.6% of unclassified questions (PHASE1-question-catalog-gaps.md).
+    # SENS_SAFE on purpose: these are CAT_LEGAL by topic but reveal and assert
+    # nothing, so they are NOT gated and may be auto-accepted.
+    _f("privacy_notice_ack", "Privacy notice acknowledgement", CAT_LEGAL, SENS_SAFE,
+       VT_BOOLEAN, "checkbox",
+       [r"privacy (?:notice|policy|statement)", r"candidate privacy",
+        r"applicant privacy", r"data (?:protection|processing) notice",
+        r"personal data contained in your application"],
+       default_policy=POLICY_ACCEPT_DEFAULT),
+    _f("info_accuracy_certify", "Certify answers are accurate", CAT_LEGAL, SENS_SAFE,
+       VT_BOOLEAN, "checkbox",
+       [r"i certify that the information", r"certify .*(?:true and correct|accurate)",
+        r"i confirm all answers", r"information .*is true and (?:correct|complete)",
+        r"confidentiality acknowledg"],
+       default_policy=POLICY_ACCEPT_DEFAULT),
 
     # ================= FREE TEXT (grounded generation) ==================
     _f("cover_letter", "Cover letter", CAT_FREE_TEXT, SENS_SAFE, VT_ESSAY, "textarea",

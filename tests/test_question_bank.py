@@ -499,7 +499,7 @@ class TestCatalog:
             assert f["default_policy"] in {
                 qb.POLICY_FROM_PROFILE, qb.POLICY_REQUIRED_ONBOARDING,
                 qb.POLICY_CONFIRM_DEFAULT, qb.POLICY_DECLINE_DEFAULT,
-                qb.POLICY_NEVER_DEFAULT}
+                qb.POLICY_NEVER_DEFAULT, qb.POLICY_ACCEPT_DEFAULT}
             assert isinstance(f["aliases"], list) and f["aliases"]
 
     def test_eeo_uses_exact_us_categories(self):

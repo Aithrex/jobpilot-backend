@@ -261,6 +261,34 @@ def _saved_jobs(email: str) -> List[Dict[str, Any]]:
         return []
 
 
+# Tracker statuses that mean "this user has NOT acted on this posting yet", and
+# is therefore the ONLY set the auto-apply sweep may enqueue from.
+#
+# This is an ALLOW-list, and deliberately so. `saved_jobs.status` is the manual
+# tracker; `applications` is the auto-apply ledger. They are separate stores, so
+# the ledger's `(user_email, job_identity)` unique index CANNOT see a job the
+# user applied to by hand — its dedup gate passes and the sweep happily queues a
+# second application to an employer who already has one.
+#
+# Measured on live prod 2026-08-22: one `apply_hourly` tick queued 49 rows, of
+# which **44 were postings the user had already applied to manually** (Vanguard
+# twice, eBay, JPMorgan, AbbVie, Kong, Zipline, Woolpert, Pathward, ...). With
+# autonomy at the user's configured 0.6 those would have submitted duplicates
+# under their real name — the exact spam signal that gets a candidate filtered.
+#
+# A deny-list would reintroduce the bug the moment a new status is added, so any
+# UNRECOGNISED status is treated as "already acted on" and skipped. Missing the
+# occasional application is recoverable; sending a duplicate to a real employer
+# is not.
+_SWEEPABLE_SAVED_STATUSES = frozenset({"", "interested", "saved", "new", "matched"})
+
+
+def _is_sweepable(saved: Dict[str, Any]) -> bool:
+    """True only when the tracker says the user has not yet acted on this row."""
+    status = str((saved or {}).get("status") or "").strip().lower()
+    return status in _SWEEPABLE_SAVED_STATUSES
+
+
 def _match_fields(saved: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Normalize one saved_job doc into the fields the ledger needs. The raw
     posting lives under ``job_data`` (the shape job_service._normalize_job emits:
@@ -521,6 +549,13 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
     for saved in _saved_jobs(email)[: match_cap * 3]:
         if out["enqueued"] >= match_cap:
             break
+        # The user already applied / interviewed / was rejected -> never re-offer.
+        # See _SWEEPABLE_SAVED_STATUSES: the ledger dedup cannot see manual
+        # applications, so this is the only thing standing between the sweep and
+        # a duplicate submission.
+        if not _is_sweepable(saved):
+            out["skipped_already_actioned"] = out.get("skipped_already_actioned", 0) + 1
+            continue
         fields = _match_fields(saved)
         if not fields:
             continue
