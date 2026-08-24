@@ -2206,6 +2206,11 @@ class BrowserExecutor(ExecutorAdapter):
             page.click(sel, timeout=_CONTROL_CLICK_TIMEOUT_MS)
         except Exception:
             pass
+        # This control's OWN menu first — a Greenhouse page mounts several, and a
+        # page-wide read cannot tell whose rows are whose.
+        opts = _react_select_options(page, sel)
+        if opts:
+            return opts
         opts = _wait_for_listbox(page)
         if opts:
             return opts
@@ -2218,7 +2223,7 @@ class BrowserExecutor(ExecutorAdapter):
             page.keyboard.press("ArrowDown")
         except Exception:
             pass
-        opts = _rendered_options(page)
+        opts = _react_select_options(page, sel) or _rendered_options(page)
         if opts:
             return opts
         # (3) The vendor's own toggle.
@@ -2348,7 +2353,9 @@ class BrowserExecutor(ExecutorAdapter):
             # listbox is open and re-renders synchronously. Waiting per candidate
             # would spend `_LISTBOX_WAIT_MS` × 12 on a widget that renders
             # nothing — the exact budget burn this change is undoing.
-            options = _wait_for_listbox(page) if i == 0 else _rendered_options(page)
+            options = (_react_select_options(page, sel)
+                       or (_wait_for_listbox(page) if i == 0
+                           else _rendered_options(page)))
             if self._click_matching_option(options, field_id, value):
                 return
             # A listbox we could not enumerate at all. Substring-clicking it is
@@ -3094,6 +3101,47 @@ _TOGGLE_SELECTORS: Tuple[str, ...] = (
     ".select__dropdown-indicator",
     ".select__indicators button",
 )
+
+
+def _react_select_options(page, sel: str) -> List[Tuple[str, Any]]:
+    """Options of the react-select menu that BELONGS to ``sel``.
+
+    react-select derives its ids from the input id, so `#country` owns
+    `#react-select-country-listbox` and `#react-select-country-option-N`. That is
+    an exact address for one control's menu — which matters because a Greenhouse
+    page mounts several (the phone country-code picker is always present, and its
+    rows are in the DOM even while its menu is shut). A page-wide read cannot tell
+    those apart; this can.
+
+    Returns [] for anything that is not an id-addressable react-select, so the
+    caller falls back to the generic selectors."""
+    out: List[Tuple[str, Any]] = []
+    ident = (sel or "").strip()
+    if not ident.startswith("#"):
+        return out
+    ident = ident[1:]
+    if not ident or not re.match(r"^[A-Za-z0-9_\-]+$", ident):
+        return out
+    for opt_sel in ("[id^='react-select-%s-option-']" % ident,
+                    "#react-select-%s-listbox [role=option]" % ident):
+        try:
+            handles = page.query_selector_all(opt_sel) or []
+        except Exception:
+            continue
+        for handle in handles:
+            try:
+                if not handle.is_visible():
+                    continue
+                text = " ".join((handle.inner_text() or "").split())[:200]
+            except Exception:
+                continue
+            if text and not any(text == t for t, _ in out):
+                out.append((text, handle))
+            if len(out) >= _MAX_RENDERED_OPTIONS:
+                return out
+        if out:
+            return out
+    return out
 
 
 def _rendered_options(page) -> List[Tuple[str, Any]]:
