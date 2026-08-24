@@ -398,6 +398,57 @@ def notified(monkeypatch):
 
 
 class TestWallParksAndNotifies:
+    def test_the_verify_freeze_exists_BEFORE_the_submit_click(self, db):
+        """ORDERING, not matching. An ATS mails its one-time code the instant the
+        form posts; the wall is only reported ~90s later (measured twice live:
+        Affirm 02:00:10 vs 02:01:40, Cohere 03:09:54 vs 03:11:26). If the freeze
+        is created on the way OUT, the code lands with nothing to bind to.
+
+        So the freeze must already exist while the executor is mid-drive.
+        """
+        seen = {}
+
+        class _ObservingExecutor(_WallExecutor):
+            def submit(self, application, answers, resume_pdf=None):
+                # Mid-drive: this is the moment the ATS would mail the code.
+                seen["freeze"] = db.auto_apply_freezes.find_one(
+                    {"application_id": application.get("application_id")})
+                return super().submit(application, answers, resume_pdf)
+
+        _parked_row(executor=_ObservingExecutor())
+        assert seen["freeze"] is not None, (
+            "no freeze existed while the executor was driving — an emailed code "
+            "arriving now would have nothing to bind to")
+        assert seen["freeze"]["status"] == "waiting_verify"
+        assert seen["freeze"].get("pre_armed") is True
+
+    def test_a_run_that_never_walls_leaves_no_freeze_behind(self, db):
+        """A pre-armed freeze that outlives its run would claim OTHER
+        applications' codes — exactly what a stale Expedia freeze did to Affirm.
+        """
+        class _CleanExecutor(_WallExecutor):
+            def submit(self, application, answers, resume_pdf=None):
+                return {"status": "submitted", "confirmation": "Thanks!",
+                        "screenshot_ref": None, "wall": None}
+
+        view, _ = als.create_application(
+            USER, company="Beta", title="Platform Engineer",
+            jd_text="Kubernetes and Terraform.", source="greenhouse",
+            ats_family="greenhouse",
+            apply_url="https://job-boards.greenhouse.io/beta/jobs/9")
+        aid = view["application_id"]
+        als.mark_gathering(USER, aid)
+        als.mark_ready_for_review(USER, aid, autonomy="auto", confidence_score=0.95)
+        als.approve(USER, [aid], approved_by="system")
+        aas.set_executor(_CleanExecutor())
+        try:
+            aas.submit(aid, USER)
+        finally:
+            aas.set_executor(None)
+
+        left = db.auto_apply_freezes.find_one({"application_id": aid})
+        assert left is None, f"a pre-armed freeze survived a clean submit: {left}"
+
     def test_parking_notifies_the_user_with_a_deep_link_once(self, db, notified):
         aid = _parked_row()
         assert len(notified) == 1

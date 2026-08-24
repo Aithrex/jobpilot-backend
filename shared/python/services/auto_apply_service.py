@@ -2127,14 +2127,27 @@ def submit(application_id: str, user_email: str) -> Dict[str, Any]:
     if not app_for_executor.get("tenant"):
         app_for_executor["tenant"] = _workday_tenant_from_url(
             str(app.get("apply_url") or "")) or app_for_executor.get("tenant")
+    # The ATS mails its one-time code the instant the form posts, ~90s before the
+    # drive reports a wall back. Arm the freeze FIRST so the code has something to
+    # bind to when it lands; disarmed below on every outcome that is not a wall.
+    _prearmed = _prearm_verify_freeze(user_email, application_id)
     try:
         result = executor.submit(app_for_executor, answers, resume_pdf)
     except Exception as e:
         logger.error("auto_apply submit %s: executor raised: %s", application_id, e)
+        if _prearmed:
+            _disarm_verify_freeze(user_email, application_id)
         ledger.mark_failed(user_email, application_id, f"submit_error: {e}")
         raise
 
     st = result.get("status")
+    # Only a reported wall keeps the placeholder. Every other outcome disarms it
+    # here, in ONE place, so no branch can leak a freeze that later claims another
+    # application's code. `_park_verify` re-upserts (and promotes) on the wall
+    # path, and a grant already bound to this application stays bound — the
+    # binding lives on the grant, not the freeze.
+    if _prearmed and st != SUBMIT_WAITING_VERIFY:
+        _disarm_verify_freeze(user_email, application_id)
 
     if st == SUBMIT_SUCCESS:
         ledger.mark_submitted(user_email, application_id)
@@ -2675,6 +2688,55 @@ def _park_waiting_human(user_email: str, application_id: str,
 # ---------------------------------------------------------------------------
 # Oracle freeze / thaw (data-layer — NO hot browser is ever held)
 # ---------------------------------------------------------------------------
+def _prearm_verify_freeze(user_email: str, application_id: str) -> bool:
+    """Create a placeholder verify freeze BEFORE the submit click.
+
+    An ATS mails its one-time code the moment the form posts, but the freeze is
+    only written when the drive reports the wall back — ~90s later, measured on
+    two live applications. In that window the code arrives with no freeze to bind
+    to, and `_active_freeze` cannot bind to a row that does not exist.
+
+    Marked `pre_armed` and dated far out so `due_verify_waits` ignores it; a real
+    wall promotes it via `_park_verify`, which writes the same upsert key.
+    Returns True when THIS call created it (so only this call disarms it).
+    """
+    now = _now()
+    try:
+        res = _freezes_coll().update_one(
+            {"application_id": application_id, "user_email": user_email},
+            {"$setOnInsert": {
+                "kind": WALL_VERIFY, "needs": [], "status": "waiting_verify",
+                "attempts": 0, "created_at": now, "updated_at": now,
+                "pre_armed": True,
+                # Far enough out that the sweep never re-checks a wall we have no
+                # evidence exists; `_park_verify` resets this if one appears.
+                "next_check_at": now + timedelta(hours=6)}},
+            upsert=True,
+        )
+        return getattr(res, "upserted_id", None) is not None
+    except Exception as e:  # pragma: no cover - never block a submit on this
+        logger.warning("auto_apply %s: could not pre-arm the verify freeze (%s)",
+                       application_id, type(e).__name__)
+        return False
+
+
+def _disarm_verify_freeze(user_email: str, application_id: str) -> None:
+    """Drop a pre-armed freeze that no wall ever claimed.
+
+    Only removes one still marked `pre_armed`: once `_park_verify` promotes it the
+    marker is gone and the freeze is real. A pre-armed freeze left behind would
+    keep claiming codes meant for other applications — exactly what a stale
+    Expedia freeze did to Affirm.
+    """
+    try:
+        _freezes_coll().delete_one(
+            {"application_id": application_id, "user_email": user_email,
+             "pre_armed": True})
+    except Exception as e:  # pragma: no cover
+        logger.warning("auto_apply %s: could not disarm the verify freeze (%s)",
+                       application_id, type(e).__name__)
+
+
 def _park_verify(user_email: str, application_id: str,
                  wall: Dict[str, Any]) -> Dict[str, Any]:
     """Freeze a submit blocked on an Oracle wall: persist a `waiting_verify`
@@ -2689,15 +2751,27 @@ def _park_verify(user_email: str, application_id: str,
     needs = [_clean(n, 200) for n in needs[:20] if n]
     now = _now()
 
+    # `first_park` must mean "the first time a REAL wall was recorded", not "the
+    # doc was just inserted" — submit() now PRE-ARMS a placeholder freeze before
+    # the click (so an ATS code has something to bind to), which would otherwise
+    # make every genuine wall look like a re-park and silently drop the one
+    # notification telling the user to go finish it.
+    _prev = _freezes_coll().find_one(
+        {"application_id": application_id, "user_email": user_email},
+        {"_id": 0, "pre_armed": 1}) or {}
     res = _freezes_coll().update_one(
         {"application_id": application_id, "user_email": user_email},
         {"$set": {"kind": kind, "needs": needs, "status": "waiting_verify",
                   "next_check_at": now + timedelta(minutes=_VERIFY_BACKOFF_MINUTES[0]),
                   "updated_at": now},
+         # A real wall was observed: this is no longer a placeholder, so it must
+         # stop being disarmable.
+         "$unset": {"pre_armed": ""},
          "$setOnInsert": {"attempts": 0, "created_at": now}},
         upsert=True,
     )
-    first_park = getattr(res, "upserted_id", None) is not None
+    first_park = (getattr(res, "upserted_id", None) is not None
+                  or bool(_prev.get("pre_armed")))
 
     # Human-in-the-loop is the primary CAPTCHA strategy (see the captcha-strategy
     # decision): surface the wall with the apply URL so the FE can deep-link the
