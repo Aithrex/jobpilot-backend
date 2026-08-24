@@ -214,10 +214,25 @@ def test_should_forward_relays_meaningful_mail(subject, text):
     assert category != "system_noise"
 
 
-def test_an_ats_confirmation_is_not_allowlisted_by_default():
-    """`applied` is deliberately excluded (apply_daily_summary owns "we applied
-    for you"). This used to read as RELAYABLE only because a context-less message
-    took the fail-open oracle branch before the classifier ever ran."""
+def test_an_ats_confirmation_is_allowlisted_by_default():
+    """`applied` IS relayed now — reversing the earlier deferral to the digest.
+
+    It was excluded because `apply_daily_summary` reported the same event at
+    19:00, but that digest lives in `apply_scheduler`, which is disabled while
+    auto-apply is parked. A real application was submitted to an employer and the
+    user was told nothing. Per-event forwarding owns "we applied for you"; the
+    digest must not also list it (see MAIL_FORWARD_INCLUDE_APPLIED to opt out)."""
+    ok, category = fwd.should_forward({
+        "subject": "Application received",
+        "text": "Thank you for applying. We received your application.",
+        "from_domain": "greenhouse.io"})
+    assert ok is True
+    assert category != "system_noise"
+
+
+def test_confirmations_can_still_be_opted_out(monkeypatch):
+    """The digest may come back; the opt-out must keep working in that direction."""
+    monkeypatch.setenv("MAIL_FORWARD_INCLUDE_APPLIED", "false")
     assert fwd.should_forward({
         "subject": "Application received",
         "text": "Thank you for applying. We received your application.",
@@ -323,21 +338,35 @@ def test_forward_sends_link_only_notification(env, sent):
     assert "passed on your application" in call["html"]
 
 
-def test_forward_body_is_never_relayed(env, sent):
-    """The whole point of link-only: recruiter CONTENT stays in-app."""
+def test_forward_relays_the_sanitized_html_and_never_the_raw_mime(env, sent):
+    """OWNER DECISION (2026-08-24): forward the real content, not a pointer.
+
+    This REVERSES the previous link-only invariant, deliberately and with the
+    tradeoff understood: employer HTML now lands in the user's personal inbox, so
+    tracking pixels and links in it are no longer confined to the app. What still
+    holds, and is asserted here:
+
+      * only the SANITIZED object (`safe_html_s3_key`) is relayed — the raw MIME
+        (`raw_s3_key`) is never read on this path,
+      * the plain-text part stays a pointer, so a text-only client gets no
+        untrusted markup at all.
+    """
     _enable_forwarding()
     fwd.forward_notification(_seed_message(
         env,
-        text="Thank you for applying. After careful review we will not be moving forward. "
-             "SECRET-BODY-MARKER",
+        text="Thank you for applying. After careful review we will not be moving "
+             "forward. SECRET-BODY-MARKER",
         safe_html="<p>SECRET-HTML-MARKER</p>",
     ))
-    blob = (sent[0]["html"] + sent[0]["text"])
-    assert "SECRET-BODY-MARKER" not in blob
-    assert "SECRET-HTML-MARKER" not in blob
+    # The sanitized body IS relayed now.
+    assert "SECRET-HTML-MARKER" in sent[0]["html"]
+    # The raw text extract is NOT — we read one object, and it is the safe one.
+    assert "SECRET-BODY-MARKER" not in sent[0]["html"]
+    assert "SECRET-BODY-MARKER" not in sent[0]["text"]
+    assert "SECRET-HTML-MARKER" not in sent[0]["text"]
 
 
-def test_full_pipeline_sends_link_only_for_greenhouse_rejection(env, sent):
+def test_full_pipeline_forwards_a_greenhouse_rejection(env, sent):
     from datetime import timedelta
     _enable_forwarding()
     _db().tailoring_records.insert_one({
@@ -359,8 +388,9 @@ def test_full_pipeline_sends_link_only_for_greenhouse_rejection(env, sent):
     # The in-app inbox still stores the FULL message (no content drop at ingest).
     stored = _db().mail_messages.find_one({"message_id": res["message_id"]})
     assert stored["text_s3_key"]
-    # ...but the personal inbox only gets the pointer.
-    assert "careful review" not in blob
+    # ...and the personal inbox now gets the sanitized body too (owner decision),
+    # while the deep link into the app is still present.
+    assert "careful review" in blob
     assert f"{FRONTEND}/app/apply/{res['thread_id']}" in call["html"]
     # ORIGINAL subject preserved.
     assert call["subject"] == "Update on your application to Acme"
@@ -522,18 +552,35 @@ def test_classifier_outage_fails_closed(env, sent, monkeypatch):
     assert sent == []
 
 
-def test_application_confirmation_defers_to_the_daily_digest(env, sent):
-    """`applied` is NOT allow-listed by default: apply_scheduler's end-of-day
-    apply_daily_summary already reports every application submitted that day, so
-    per-event forwarding of the ATS acknowledgement would double-notify."""
+def test_application_confirmation_is_forwarded(env, sent):
+    """The employer's acknowledgement reaches the user's real inbox.
+
+    This is the Hide-My-Email round trip: the employer only ever sees the managed
+    alias, and the confirmation is relayed on so the user knows the application
+    actually landed. Previously this deferred to a 19:00 digest that is not
+    running, so a submitted application produced silence."""
     _enable_forwarding()
     out = fwd.forward_notification(_seed_message(
         env, subject="Application received",
         text="We received your application and will be in touch.",
         safe_html="<p>Received</p>",
     ))
-    assert out == {"sent": False, "reason": "not_allowlisted"}
-    assert sent == []
+    assert out == {"sent": True, "reason": "sent"}
+    assert len(sent) == 1
+
+
+def test_forward_carries_the_sanitized_body_not_the_raw_mime(env, sent):
+    """The owner asked for the real content, not a pointer. It must be the
+    SANITIZED object the in-app viewer renders — never `raw_s3_key`."""
+    _enable_forwarding()
+    fwd.forward_notification(_seed_message(
+        env, subject="Application received",
+        text="We received your application and will be in touch.",
+        safe_html="<p>Received-Marker-42</p>",
+    ))
+    assert len(sent) == 1
+    body = str(sent[0])
+    assert "Received-Marker-42" in body
 
 
 def test_include_applied_flag_re_arms_confirmations(env, sent, monkeypatch):

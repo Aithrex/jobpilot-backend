@@ -240,6 +240,36 @@ def is_system_noise(message: Dict[str, Any]) -> bool:
     return bool(_OTP_CONTEXT.search(blob) and _STANDALONE_CODE.search(blob))
 
 
+# An employer email larger than this is truncated in the forward: Gmail clips a
+# long message and an oversized send can fail outright.
+_FORWARD_BODY_MAX_CHARS = 60_000
+
+
+def _sanitized_body(message: Dict[str, Any]) -> str:
+    """The SANITIZED body, or "" when unavailable (then the forward is link-only).
+
+    Exactly the object the in-app viewer renders (`safe_html_s3_key`); the raw
+    MIME is never re-emitted. Bounded — a truncated body plus the link beats an
+    email too large to send."""
+    key = str(message.get("safe_html_s3_key") or "").strip()
+    if not key:
+        return ""
+    try:
+        from services.s3_service import get_storage_service
+        from services.mail_store_service import _apply_mail_bucket
+        body = get_storage_service().get_object_bytes(
+            key, bucket=_apply_mail_bucket()).decode("utf-8", "replace")
+    except Exception as e:  # pragma: no cover - degrade to link-only
+        logger.warning("mail-forward: body fetch failed (%s) — link-only",
+                       type(e).__name__)
+        return ""
+    if len(body) > _FORWARD_BODY_MAX_CHARS:
+        body = body[:_FORWARD_BODY_MAX_CHARS] + (
+            '<p style="color:#94a3b8;font-size:12px">'
+            "[truncated — open it in the app to read the rest]</p>")
+    return body
+
+
 def _allowed_statuses() -> set:
     """The ALLOW-LIST: which classifier statuses earn a personal-inbox ping.
 
@@ -260,10 +290,16 @@ def _allowed_statuses() -> set:
     raw = (_get_config_value("MAIL_FORWARD_ALLOWLIST", "") or "").strip()
     if raw:
         return {s for s in (p.strip().lower() for p in raw.split(",")) if s in STATUS_ENUM}
-    allowed = set(STATUS_ENUM) - {"applied"}
+    # `applied` (the ATS "we received your application" acknowledgement) is now
+    # INCLUDED by default. It was excluded because `apply_daily_summary` reported
+    # the same event at 19:00 — but that digest lives in `apply_scheduler`, which
+    # is disabled while auto-apply is parked, so a real submitted application told
+    # the user NOTHING. Per-event forwarding now owns "we applied for you"; the
+    # digest must not also list it or the same event notifies twice.
+    allowed = set(STATUS_ENUM)
     include_applied = (_get_config_value("MAIL_FORWARD_INCLUDE_APPLIED", "") or "").strip().lower()
-    if include_applied in _TRUE:
-        allowed.add("applied")
+    if include_applied in {"0", "false", "no", "off"}:
+        allowed.discard("applied")
     return allowed
 
 
@@ -464,6 +500,7 @@ def build_forward(
     clean_attachments: int,
     category: str = "",
     sender: str = "",
+    body_html: str = "",
 ) -> Dict[str, str]:
     """Build the LINK-ONLY notification (spec §6).
 
@@ -482,6 +519,20 @@ def build_forward(
         sender=who
     )
 
+    # The employer's own words, from the SANITIZED object the in-app viewer
+    # renders — the raw MIME (`raw_s3_key`) is still never re-emitted. Fenced so
+    # it is obvious where our text ends and theirs begins.
+    if body_html:
+        body_block = (
+            '<div style="margin:0 0 20px;padding:14px;border:1px solid #e2e8f0;'
+            'border-radius:8px;background:#f8fafc">' + body_html + "</div>"
+        )
+    else:
+        body_block = (
+            f'<p style="margin:0 0 20px;color:#64748b;font-size:13px">'
+            f'The full message is waiting in your {_esc(APP_NAME)} inbox.</p>'
+        )
+
     att_html = ""
     att_text = ""
     if clean_attachments:
@@ -498,9 +549,7 @@ def build_forward(
         f'<p style="margin:0 0 4px;color:#475569;font-size:14px">'
         f'Subject: {_esc(subject)}</p>'
         f'{att_html}'
-        f'<p style="margin:0 0 20px;color:#64748b;font-size:13px">'
-        f'The full message is waiting in your {_esc(APP_NAME)} inbox — we keep the '
-        f'content there so your personal inbox stays clean.</p>'
+        f'{body_block}'
         f'<p style="margin:0 0 20px">'
         f'<a href="{_esc(manage_link)}" style="background:#4f46e5;color:#fff;'
         'padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block;'
@@ -646,6 +695,7 @@ def forward_notification(message_doc: Dict[str, Any]) -> Dict[str, Any]:
         clean_attachments=clean_attachments,
         category=category,
         sender=str(message.get("from_name") or message.get("from_addr") or ""),
+        body_html=_sanitized_body(message),
     )
 
     # From: JobPilot-owned MAIL_FORWARD_FROM with a display name derived from the

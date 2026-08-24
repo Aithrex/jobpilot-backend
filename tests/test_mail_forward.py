@@ -235,11 +235,15 @@ def test_forward_sent_when_all_gates_pass(env, sent):
     assert deep in call["html"]
     assert deep in call["text"]
     assert "passed on your application" in call["html"]
-    assert "Thank you for applying" not in call["html"]
+    # OWNER DECISION (2026-08-24): the sanitized body is relayed now, so the
+    # employer's words DO appear — in the HTML part only. The plain-text part
+    # stays a pointer, so a text-only client still receives no untrusted markup.
+    assert "Thank you for applying" in call["html"]
+    assert "Thank you for applying" not in (call["text"] or "")
     assert "moving forward" not in call["text"].lower()
 
 
-def test_forward_is_link_only_and_inbox_keeps_everything(env, sent):
+def test_forward_carries_the_body_and_inbox_keeps_everything(env, sent):
     # Full pipeline: ingest a real Greenhouse rejection to S3, then notify.
     _enable_forwarding()
     _db().tailoring_records.insert_one({
@@ -262,9 +266,11 @@ def test_forward_is_link_only_and_inbox_keeps_everything(env, sent):
     # The IN-APP inbox kept the full message (no content drop at ingest)...
     stored = _db().mail_messages.find_one({"message_id": res["message_id"]})
     assert stored["text_s3_key"] and stored["safe_html_s3_key"]
-    # ...while the personal inbox got only the pointer.
-    assert "careful review" not in blob
-    assert "moving forward" not in blob
+    # ...and the personal inbox now receives the sanitized body too, per the
+    # owner's decision to reverse link-only. The tradeoff is explicit: employer
+    # HTML reaches the real inbox; only the RAW MIME is still never relayed.
+    assert "careful review" in blob
+    assert "moving forward" in blob
     # ORIGINAL subject + the "read it in app" link.
     assert sent[0]["subject"] == "Update on your application to Acme"
     assert f"{FRONTEND}/app/apply/{res['thread_id']}" in html
