@@ -1866,6 +1866,71 @@ class WorkdayAdapter(AtsAdapter):
                 except Exception:
                     pass
 
+    def capture_validation_errors(self) -> List[Dict[str, Any]]:
+        """Workday's own error surface, plus the base collector.
+
+        The base implementation reads `.field-error` / `[class*=error-message]` /
+        `[role=alert]` and keys controls by id/name. Workday uses neither: it
+        renders an "Errors Found" panel behind `data-automation-id` hooks and
+        identifies every control by `data-automation-id`. The result was
+        `field=None reason=validation_failed` with no message — three runs stopped
+        on REVIEW and every diagnosis needed an audit screenshot.
+
+        Returns the base errors PLUS Workday's, and LOGS them, so this class of
+        failure is self-diagnosing (same rationale as logging the live options on
+        `no_option_match`). Error text is employer form copy, not user data."""
+        out = super().capture_validation_errors()
+        seen = {(e.get("field"), e.get("message")) for e in out}
+        page = self._page
+        if page is None or not hasattr(page, "locator"):
+            return out
+
+        # 1. Workday's error messages.
+        for sel in ("[data-automation-id=errorMessage]",
+                    "[data-automation-id=validationErrorLabel]",
+                    "[data-automation-id=errorBanner]",
+                    "[data-automation-id*=rrorMessage]"):
+            try:
+                loc = page.locator(sel)
+                for i in range(min(loc.count(), 12)):
+                    node = loc.nth(i)
+                    if not node.is_visible():
+                        continue
+                    txt = (node.text_content() or "").strip()
+                    if not txt or (None, txt[:200]) in seen:
+                        continue
+                    seen.add((None, txt[:200]))
+                    out.append({"field": None, "message": txt[:200],
+                                "evidence": sel})
+            except Exception:
+                continue
+
+        # 2. Invalid controls keyed the way Workday actually keys them.
+        try:
+            loc = page.locator("[aria-invalid=true]")
+            for i in range(min(loc.count(), 12)):
+                node = loc.nth(i)
+                if not node.is_visible():
+                    continue
+                handle = (node.get_attribute("data-automation-id")
+                          or node.get_attribute("id")
+                          or node.get_attribute("name"))
+                if not handle or (handle, "required/invalid") in seen:
+                    continue
+                seen.add((handle, "required/invalid"))
+                out.append({"field": handle, "message": "required/invalid",
+                            "evidence": "aria-invalid[data-automation-id]"})
+        except Exception:
+            pass
+
+        if out:
+            logger.warning(
+                "workday validation errors (%d): %s", len(out),
+                " | ".join("%s: %s" % (e.get("field") or "-",
+                                       str(e.get("message"))[:200])
+                           for e in out[:6]))
+        return out
+
     def _fill_dropdown(self, handle: str, el, value: str) -> bool:
         """Actuate a Workday custom dropdown by clicking the button, waiting for
         the listbox popup, and clicking the option that matches ``value``."""
