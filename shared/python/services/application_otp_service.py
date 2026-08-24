@@ -227,11 +227,6 @@ def _active_freeze(user_email: str, from_addr: str = "",
         live.append((row, app or {}))
     if not live:
         return None
-    # One live verify wall: no ambiguity to resolve, so no evidence required.
-    # Evidence is what disambiguates BETWEEN candidates — demanding it here would
-    # refuse to bind a code to the only row that could possibly use it.
-    if len(live) == 1:
-        return live[0][0]
 
     # POSITIVE evidence only: the employer's name in the subject, or the sender's
     # ATS domain present in the apply_url. Without it we bind NOTHING — an unbound
@@ -254,9 +249,30 @@ def _active_freeze(user_email: str, from_addr: str = "",
         logger.info("application_otp: bound to %s (%s)",
                     matched[0][0].get("application_id"), matched[0][1])
         return matched[0][0]
-    logger.info("application_otp: %d live verify freeze(s), %d matched the sender "
-                "— leaving the grant UNBOUND rather than binding the wrong row",
-                len(live), len(matched))
+    if matched:
+        logger.info("application_otp: %d candidates matched the sender — "
+                    "ambiguous, leaving the grant UNBOUND", len(matched))
+        return None
+
+    # Nothing matched. If every candidate was READABLE and none is the employer
+    # this mail names, that is CONTRARY evidence — refuse, even with a single
+    # candidate. Binding anyway is exactly how a Greenhouse code for Cohere Health
+    # landed on a Workday MUFG row (2026-08-24): the right freeze did not exist
+    # yet (written 92s after the mail arrived) and the only live wall belonged to
+    # a different employer on a different ATS.
+    #
+    # Absence of information is NOT contradiction: a candidate with no readable
+    # ledger row contradicts nothing, so the single-candidate fallback still
+    # applies to those. An unbound grant is safe — `claim_for_verify` serves
+    # `application_id: None` to whichever row asks next.
+    readable = [(r, a) for r, a in live if a]
+    unreadable = [(r, a) for r, a in live if not a]
+    if readable and not unreadable:
+        logger.info("application_otp: %d live verify freeze(s), none matching the "
+                    "sender/subject — leaving the grant UNBOUND", len(live))
+        return None
+    if len(live) == 1:
+        return live[0][0]
     return None
 
 

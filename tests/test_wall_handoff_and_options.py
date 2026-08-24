@@ -267,6 +267,34 @@ class TestOtpGrantBinding:
         assert res["captured"] is True
         assert res["application_id"] == "app-affirm"
 
+    def test_a_lone_wall_for_a_different_employer_does_not_take_the_code(self, db):
+        """LIVE FAILURE, 2026-08-24 03:09.
+
+        Greenhouse mailed "Security code for your application to Cohere Health".
+        Cohere's freeze did not exist yet — it was written 92 SECONDS after the
+        mail arrived — so the only live verify wall belonged to MUFG, a Workday
+        application for a different employer. A single-candidate shortcut bound
+        the code there and stranded it.
+
+        One candidate is not a licence to ignore the sender. When the candidate is
+        readable and is plainly NOT the employer the mail names, that is contrary
+        evidence: bind nothing. `claim_for_verify` serves an unbound grant to
+        whichever row asks next, so nothing is lost by waiting.
+        """
+        from services import application_otp_service as otp
+        self._freeze(db, "app-mufg", "verify", 30)
+        self._app(db, "app-mufg", "MUFG", "needs_input",
+                  apply_url="https://mufgub.wd3.myworkdayjobs.com/MUFG-Careers/job/X")
+
+        res = otp.capture_from_noise_message(
+            user_email=USER, message_id="<gh3@greenhouse.io>",
+            subject="Security code for your application to Cohere Health",
+            text="Security code: LGUfNjOQ", html="",
+            from_addr="no-reply@us.greenhouse-mail.io")
+
+        assert res["captured"] is True
+        assert res["application_id"] != "app-mufg"
+
     def test_grant_stays_unbound_when_only_captcha_walls_are_open(self, db):
         """Better claimable-by-anyone than burned on a wall no email clears."""
         from services import application_otp_service as otp
