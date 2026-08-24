@@ -130,7 +130,18 @@ class LambdaInvokeExecutor(ExecutorAdapter):
             resp = _lambda().invoke(
                 FunctionName=_FUNCTION,
                 InvocationType="RequestResponse",
-                Payload=json.dumps({"method": method, "args": args}).encode("utf-8"),
+                # `default=str` is REQUIRED, not defensive. Mongo hands back
+                # real `datetime` objects, so any `freeze` dict (created_at /
+                # next_check_at / updated_at) or ledger row raised
+                # "Object of type datetime is not JSON serializable" — caught by
+                # the except below and returned as EXECUTOR_UNAVAILABLE. That made
+                # `verify_state` fail for EVERY application, silently, forever:
+                # the OTP was captured correctly and then never delivered to the
+                # page, so no emailed code could ever clear a wall. Live proof
+                # (Affirm, 2026-08-24): grant available, freeze bumped to
+                # attempts=1, and the executor Lambda never invoked at all.
+                Payload=json.dumps({"method": method, "args": args},
+                                   default=str).encode("utf-8"),
             )
         except Exception as e:
             logger.error("apply-executor invoke(%s) transport error: %s", method, e)
