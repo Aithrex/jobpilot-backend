@@ -891,6 +891,26 @@ _US_COUNTRY_NAMES = frozenset({
 })
 
 
+def _derive_signature_date(values: Dict[str, Any]) -> None:
+    """`date_signed` — the date the form is being signed, i.e. TODAY.
+
+    Derived at resolve time and never stored: a signature date read back from
+    user_preferences would be a false statement about when the form was signed.
+    Asserts nothing about the user, which is why it is safe to fill on a CC-305
+    Self Identify page where every other field is a protected attestation.
+
+    Live gap: Workday's `selfIdentifiedDisabilityData--dateSignedOn` is REQUIRED
+    and there was no catalog field to answer it, so the page reported
+    `dateSectionMonth-input: required/invalid` and the run could not complete
+    Self Identify on a tenant that enforces it.
+
+    MM/DD/YYYY — the format `WorkdayAdapter._fill_month_year` parses.
+    """
+    if values.get("date_signed") in (None, ""):
+        from datetime import datetime, timezone
+        values["date_signed"] = datetime.now(timezone.utc).strftime("%m/%d/%Y")
+
+
 def _derive_location_facts(values: Dict[str, Any]) -> None:
     """Fill location fields that are pure RESTATEMENTS of declared data.
 
@@ -1095,6 +1115,7 @@ def _load_canonical(user_email: str,
     _fill_from_resume(values, structured, contact)
     # (3b) Restate declared location as the two facts employers ask for.
     _derive_location_facts(values)
+    _derive_signature_date(values)
     # (3c) The address that goes ON THE FORM is the MANAGED alias — applied
     # AFTER the declared-prefs sweep, which would otherwise reinstate the
     # personal address and send every employer's verification mail to an inbox

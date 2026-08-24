@@ -315,7 +315,13 @@ FIELDS: List[Dict[str, Any]] = [
        # which would have written "No, I do not have a disability" into a text box
        # asking you to type "Yes". A real CC-305 form says "disability" many times
        # and still matches on any occurrence not followed by "accommodation".
-       [r"disabilit(?!y\s+accommodations?\b)", r"\bdisabled\b",
+       # ...and must not swallow the SIGNATURE DATE widget, whose Workday
+       # wrapper is literally "selfIdentifiedDisabilityData--dateSignedOn-
+       # dateSectionMonth-input". That resolved the date control to
+       # `disability_status` and typed "No, I do not have a disability" into a
+       # month/day spinner (live: `date missing segments ... m=0 y=0`).
+       [r"disabilit(?!y\s+accommodations?\b)(?!.*\bdate(?:signed|section))",
+        r"\bdisabled\b",
         r"person with a disability",
         r"please check one of the boxes", r"voluntary self.?identif",
         r"formfield.?disabilityform",
@@ -465,6 +471,13 @@ FIELDS: List[Dict[str, Any]] = [
        [r"notice period", r"notice do you need to give", r"notice .*required to serve",
         r"how (?:much|long) .*notice"],
        default_policy=POLICY_CONFIRM_DEFAULT),
+    # The date the form is SIGNED — today's date, derived, never stored. It
+    # asserts nothing about the user (unlike every other field on a CC-305
+    # page), so it is SENS_SAFE. Not read from user_preferences on purpose: a
+    # stale stored date would be a false statement about when this was signed.
+    _f("date_signed", "Date signed", CAT_LOGISTICS, SENS_SAFE, VT_TEXT, "text",
+       [r"date ?signed(?: ?on)?", r"\bdatesignedon\b", r"today.?s date",
+        r"signature date", r"date of signature"]),
     _f("earliest_start_date", "Earliest start date", CAT_LOGISTICS, SENS_SAFE, VT_DATE, "date",
        [r"start date", r"earliest .*start", r"when can you start",
         r"available to (?:begin|start)", r"availability to start",

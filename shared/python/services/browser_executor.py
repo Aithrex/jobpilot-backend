@@ -1028,13 +1028,28 @@ class BrowserExecutor(ExecutorAdapter):
 
                     if resume and isinstance(resume, tuple) and len(resume) == 2:
                         import tempfile, os as _os
-                        fd, resume_path = tempfile.mkstemp(suffix=".pdf")
-                        _os.write(fd, resume[1])
-                        _os.close(fd)
-                        try:
-                            adapter.upload_file("resume", resume_path)
-                        except Exception as e:
-                            logger.info("workday resume attach skipped: %s", e)
+                        # Workday PERSISTS the candidate profile across runs, so an
+                        # unconditional upload stacks one copy per re-drive — a
+                        # submitted application carried FIVE. Look before writing.
+                        already = self._existing_attachment_names(page)
+                        if already:
+                            logger.info(
+                                "workday resume: %d already attached (%s) — not "
+                                "re-uploading", len(already), "; ".join(already[:3]))
+                        else:
+                            # Name it for the human who opens it. mkstemp() gave the
+                            # ATS "tmpmvcdpq26.pdf"; the basename is what a recruiter
+                            # sees, so write into a temp DIR under a real filename.
+                            fname = self._resume_filename(
+                                resume[0], answers, application)
+                            resume_path = _os.path.join(tempfile.mkdtemp(), fname)
+                            try:
+                                with open(resume_path, "wb") as _fh:
+                                    _fh.write(resume[1])
+                                logger.info("workday resume: attaching %s", fname)
+                                adapter.upload_file("resume", resume_path)
+                            except Exception as e:
+                                logger.info("workday resume attach skipped: %s", e)
 
                     # Normalize the caller's key aliases and apply ONLY the
                     # defaults that assert nothing (see _workday_answers).
@@ -2483,6 +2498,64 @@ class BrowserExecutor(ExecutorAdapter):
     #: How long to let an ATS finish processing an attached résumé before we
     #: consider the field settled. Greenhouse's uploader is async.
     _RESUME_UPLOAD_WAIT_MS = 12_000
+
+    @staticmethod
+    def _resume_filename(given: str, answers: Dict[str, Any],
+                         application: Dict[str, Any]) -> str:
+        """`<Declared_Name>_<Posting_Title>.pdf`.
+
+        The ATS records the file's BASENAME and shows it to a human, so a
+        `tempfile.mkstemp()` name (of the form "tmpXXXXXXXX.pdf") is what the
+        recruiter sees.
+        Built from the DECLARED name plus the posting title — both already on
+        this drive; invents nothing. Falls back to whatever name the caller had.
+        """
+        answers = answers or {}
+        name = str(answers.get("full_name") or "").strip()
+        if not name:
+            name = " ".join(p for p in (answers.get("first_name"),
+                                        answers.get("last_name")) if p).strip()
+        role = str((application or {}).get("title") or "").strip()
+        ext = ".pdf"
+        low = str(given or "").lower()
+        if low.endswith((".docx", ".doc")):
+            ext = low[low.rfind("."):]
+        parts = []
+        for chunk in (name, role):
+            if not chunk:
+                continue
+            slug = re.sub(r"[^A-Za-z0-9]+", " ", chunk).strip()
+            slug = re.sub(r"\s+", "_", slug)
+            if slug:
+                parts.append(slug)
+        if not parts:
+            return given or ("resume" + ext)
+        return ("_".join(parts))[:120] + ext
+
+    def _existing_attachment_names(self, page) -> List[str]:
+        """Filenames ALREADY attached on this page.
+
+        Workday persists the candidate profile between runs, so a re-drive
+        re-uploads unless we look first — which is how one submitted application
+        ended up carrying five copies of the résumé. Selectors are the same set
+        `_wait_for_resume_upload` already relies on, plus Workday's own, and a
+        node only counts when its text actually reads like a document filename.
+        """
+        out: List[str] = []
+        for sel in ("[data-automation-id=file-upload-item]",
+                    "[data-automation-id*=fileUpload]",
+                    "[data-testid*=file]", "[class*=file-name]",
+                    "[class*=fileName]", "[class*=attachment]"):
+            try:
+                for el in page.query_selector_all(sel):
+                    txt = (el.text_content() or "").strip()
+                    if txt and re.search(r"\.(pdf|docx?|rtf|txt)\b", txt, re.I):
+                        short = txt[:120]
+                        if short not in out:
+                            out.append(short)
+            except Exception:
+                continue
+        return out
 
     def _wait_for_resume_upload(self, page) -> bool:
         """Block until the attached résumé stops being reported as missing.
