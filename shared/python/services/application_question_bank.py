@@ -428,7 +428,12 @@ FIELDS: List[Dict[str, Any]] = [
 
     # ================= LOGISTICS (confirm_default) ======================
     _f("how_did_you_hear", "How did you hear about us?", CAT_LOGISTICS, SENS_SAFE, VT_SELECT, "select",
-       [r"how did you hear", r"how did you (?:learn|find out) about",
+       # An optional adverb between "you" and the verb broke every one of these:
+       # Affirm asks "How did you FIRST learn about Affirm as an employer?", which
+       # matched nothing, kept its raw Greenhouse question id, and parked a field
+       # the user had already declared ("Company website").
+       [r"how did you (?:first |initially )?hear",
+        r"how did you (?:first |initially )?(?:learn|find out) about",
         r"where did you hear", r"how were you referred", r"referral source",
         r"how did you find (?:us|this (?:job|role|position)|out about)",
         r"\bsource\b", r"how did you come to (?:know|hear)"],
@@ -1363,6 +1368,20 @@ def _source_channel(norm: str) -> Optional[str]:
     for name, members in _SOURCE_CHANNEL_CLUSTERS:
         if norm in members:
             return name
+    # A company brands its own career-site option: "Affirm's Career Site",
+    # "Careers at Acme". Normalized that is "affirm s career site", which is not
+    # the cluster member "career site", so an exact test misses every branded
+    # spelling of the channel the user already declared.
+    #
+    # Containment is allowed ONLY for MULTI-WORD members. Single-word members are
+    # where the named boards live (indeed / glassdoor / linkedin / twitter), and
+    # ea354d8 made those match themselves or nothing after a declared "Glassdoor"
+    # resolved onto an offered "Indeed" — substituting one fact for another.
+    padded = " %s " % norm
+    for name, members in _SOURCE_CHANNEL_CLUSTERS:
+        for m in members:
+            if " " in m and (" %s " % m) in padded:
+                return name
     return None
 
 
@@ -1389,6 +1408,27 @@ def _strip_dial_code(opt_norm: str) -> str:
     follows is still STRICT (exact key or same synonym cluster), so a stripped
     label can only resolve to its OWN country or to nothing."""
     return _DIAL_CODE_TAIL.sub("", opt_norm).strip()
+
+
+_NEGATED_OPTION_RE = re.compile(
+    r"\b(?:have\s+not|has\s+not|had\s+not|do\s+not|does\s+not|did\s+not|"
+    r"never|none\s+of|no,|not\s+previously|am\s+not|was\s+not|were\s+not)\b",
+    re.IGNORECASE)
+
+
+def _negated_options(form_options: Optional[List[str]]) -> List[str]:
+    """The options that read as a NEGATIVE statement.
+
+    Used only to resolve a declared "No" onto a single long-form negative
+    ("I have not previously been employed at Affirm"). Returning more than one
+    means the form is ambiguous and the caller refuses."""
+    out = []
+    for raw in (form_options or []):
+        if raw in (None, ""):
+            continue
+        if _NEGATED_OPTION_RE.search(str(raw)):
+            out.append(str(raw))
+    return out
 
 
 def match_option(field_id: str, canonical_value: Any,
@@ -1463,6 +1503,14 @@ def match_option(field_id: str, canonical_value: Any,
             # 2) same universal concept (decline / yes / no).
             if concept is not None and opt_concept == concept:
                 score = 0.95
+            # 2b) A declared NO against long-form options, exactly one of which is
+            #     negated ("I have not previously been employed at Affirm" vs four
+            #     "I have been employed as ..." variants). Only the NEGATIVE is
+            #     unambiguous — a declared YES has four candidates here and must
+            #     keep refusing, so this deliberately does not mirror.
+            elif (concept == "no" and opt_concept is None
+                  and _negated_options(form_options) == [opt]):
+                score = 0.92
             elif canon_tokens:
                 # 3) token containment: fraction of canonical content tokens
                 #    present in the option (handles "White" -> "White (Not
