@@ -178,9 +178,18 @@ FIELDS: List[Dict[str, Any]] = [
         r"\bphonetype\b", r"device type"],
        options=["Mobile", "Home", "Work"]),
     _f("phone", "Phone number", CAT_IDENTITY, SENS_SAFE, VT_PHONE, "tel",
-       [r"phone ?number", r"mobile ?number", r"telephone ?number", r"cell number",
-        r"contact number", r"formfield.?phonenumber",
-        r"(?<!device )(?<!type)\bphone\b(?! device)(?! type)"]),
+       # THIRD instance of the address_line1 / disability_status catch-all shape:
+       # a bare phone alias swallows a phone COMPONENT control. Live (Expedia,
+       # 2026-08-23) `phoneNumber--extension` resolved to `phone`, so the full
+       # number was written into the EXTENSION box and the Review page read
+       # "+1 602-580-1838 x(602) 580-1838" — wrong data on a real application,
+       # and Workday rejects the format on submit. The component guard mirrors
+       # address_line1's exactly.
+       [r"phone ?number(?!\w*\s*(?:extension|ext\b))",
+        r"mobile ?number", r"telephone ?number", r"cell number",
+        r"contact number", r"formfield.?phonenumber(?!\w*\s*(?:extension|ext\b))",
+        r"(?<!device )(?<!type)\bphone\b(?! device)(?! type)"
+        r"(?!\w*\s*(?:extension|ext\b))"]),
     _f("address_line1", "Street address", CAT_IDENTITY, SENS_SAFE, VT_TEXT, "text",
        [r"street address", r"address line 1", r"address line1", r"mailing address",
         # The bare catch-all must NOT swallow an address COMPONENT field.
