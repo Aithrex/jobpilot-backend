@@ -891,6 +891,25 @@ _US_COUNTRY_NAMES = frozenset({
 })
 
 
+def _derive_ai_agent_disclosure(values: Dict[str, Any]) -> None:
+    """`ai_agent_disclosure` — always "Yes", because it is always true here.
+
+    Employers have begun asking outright whether an AI agent is submitting
+    (Attentive, 2026-08-24: "If you are an AI Agent applying on behalf of a
+    candidate, please select Yes"). Auto-apply IS an AI agent applying on behalf
+    of a candidate, so Yes is simply the fact.
+
+    This is the one gated-adjacent question the platform can answer WITHOUT a user
+    declaration, because it is about the platform rather than the user — and the
+    alternative ("Not Applicable") would be a false statement to an employer about
+    the submission itself. Owner policy, 2026-08-24: always disclose truthfully.
+
+    NOT overridden if already present, so an explicit user preference still wins.
+    """
+    if values.get("ai_agent_disclosure") in (None, ""):
+        values["ai_agent_disclosure"] = "Yes"
+
+
 def _derive_signature_date(values: Dict[str, Any]) -> None:
     """`date_signed` — the date the form is being signed, i.e. TODAY.
 
@@ -1116,6 +1135,7 @@ def _load_canonical(user_email: str,
     # (3b) Restate declared location as the two facts employers ask for.
     _derive_location_facts(values)
     _derive_signature_date(values)
+    _derive_ai_agent_disclosure(values)
     # (3c) The address that goes ON THE FORM is the MANAGED alias — applied
     # AFTER the declared-prefs sweep, which would otherwise reinstate the
     # personal address and send every employer's verification mail to an inbox

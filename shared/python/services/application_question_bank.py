@@ -633,6 +633,19 @@ FIELDS: List[Dict[str, Any]] = [
         r"legally old enough to work"],
        negations=[r"under 18", r"younger than 18"],
        default_policy=POLICY_NEVER_DEFAULT),
+    # "Are you an AI agent applying on behalf of a candidate?" — a factual question
+    # about the SUBMISSION MECHANISM, not an attestation about the user. Unlike
+    # every other gated field, the platform knows this answer about ITSELF with
+    # certainty: an auto-apply drive IS an AI agent, so the truthful answer is
+    # always Yes and no user declaration is needed. Distinct from
+    # `ai_use_attestation`, which is a COMMITMENT by the user not to use AI during
+    # assessments. SENS_SAFE because it asserts nothing about the user at all.
+    _f("ai_agent_disclosure", "Is an AI agent submitting this application?",
+       CAT_LOGISTICS, SENS_SAFE, VT_SELECT, "select",
+       [r"\bai agent\b", r"are you an? (?:ai|automated) (?:agent|system|assistant)",
+        r"agent applying on behalf of (?:a |the )?candidate",
+        r"applying on behalf of a candidate"],
+       options=["Yes", "No", "Not Applicable"]),
     _f("ai_use_attestation",
        "Do you agree not to use AI tools during the assessment / interview?",
        CAT_LEGAL, SENS_LEGAL, VT_SELECT, "select",
