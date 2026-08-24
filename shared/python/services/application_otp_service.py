@@ -164,7 +164,20 @@ def extract_otp_payload(
     return {"code": code, "links": uniq[:5]}
 
 
-def _active_freeze(user_email: str) -> Optional[Dict[str, Any]]:
+#: A freeze on a row in one of these can never use an emailed code.
+_TERMINAL_FOR_OTP = frozenset({
+    "submitted", "confirmed", "failed", "skipped", "skipped_duplicate",
+    "cancelled", "withdrawn", "unsupported",
+})
+#: Sender-domain fragments too generic to identify an ATS.
+_GENERIC_MAIL_BITS = frozenset({
+    "mail", "email", "smtp", "send", "sendgrid", "amazonses", "mailgun",
+    "notifications", "noreply", "no-reply", "reply", "info", "com", "net", "org",
+})
+
+
+def _active_freeze(user_email: str, from_addr: str = "",
+                   subject: str = "") -> Optional[Dict[str, Any]]:
     """The waiting_verify freeze an emailed code/link can actually clear.
 
     A user routinely has SEVERAL live freezes at once (live on 2026-07-28:
@@ -188,9 +201,62 @@ def _active_freeze(user_email: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.warning("application_otp: freeze lookup failed: %s", e)
         return None
-    for row in rows:
-        if str(row.get("kind") or "").strip().lower() != "captcha":
-            return row
+
+    candidates = [r for r in rows
+                  if str(r.get("kind") or "").strip().lower() != "captcha"]
+    if not candidates:
+        return None
+
+    # A freeze on a row that already reached a terminal state can never use a
+    # code, and while it lingers it STEALS codes meant for live applications.
+    # (Live: a `submitted` Expedia row held a `waiting_verify` freeze and claimed
+    # Greenhouse's code for Affirm.)
+    live = []
+    for row in candidates:
+        try:
+            from services import application_ledger_service as _ledger
+            app = _ledger.get_application(user_email, row.get("application_id"))
+        except Exception:
+            app = None
+        st = str((app or {}).get("status") or "").strip().lower()
+        # Exclude only what we can POSITIVELY show is terminal. An unreadable or
+        # missing row is not evidence of anything, and dropping it would silently
+        # shrink the candidate set.
+        if st in _TERMINAL_FOR_OTP:
+            continue
+        live.append((row, app or {}))
+    if not live:
+        return None
+    # One live verify wall: no ambiguity to resolve, so no evidence required.
+    # Evidence is what disambiguates BETWEEN candidates — demanding it here would
+    # refuse to bind a code to the only row that could possibly use it.
+    if len(live) == 1:
+        return live[0][0]
+
+    # POSITIVE evidence only: the employer's name in the subject, or the sender's
+    # ATS domain present in the apply_url. Without it we bind NOTHING — an unbound
+    # grant stays claimable by whichever application asks next, which beats
+    # burning it on a row that cannot use it.
+    subj = (subject or "").lower()
+    sender_host = (from_addr or "").split("@")[-1].lower()
+    sender_bits = {p for p in re.split(r"[.\-]", sender_host)
+                   if len(p) > 3 and p not in _GENERIC_MAIL_BITS}
+    matched = []
+    for row, app in live:
+        company = str(app.get("company") or "").strip().lower()
+        url = str(app.get("apply_url") or "").lower()
+        if company and subj and company in subj:
+            matched.append((row, "company in subject"))
+            continue
+        if sender_bits and any(b in url for b in sender_bits):
+            matched.append((row, "sender ATS domain in apply_url"))
+    if len(matched) == 1:
+        logger.info("application_otp: bound to %s (%s)",
+                    matched[0][0].get("application_id"), matched[0][1])
+        return matched[0][0]
+    logger.info("application_otp: %d live verify freeze(s), %d matched the sender "
+                "— leaving the grant UNBOUND rather than binding the wrong row",
+                len(live), len(matched))
     return None
 
 
@@ -216,7 +282,7 @@ def capture_from_noise_message(
     if not payload.get("code") and not payload.get("links"):
         return {"captured": False, "reason": "nothing_extracted"}
 
-    freeze = _active_freeze(user_email)
+    freeze = _active_freeze(user_email, from_addr=from_addr, subject=subject)
     app_id = application_id or (freeze or {}).get("application_id")
     if not app_id:
         # Keep the grant unbound briefly — verify_state can still claim by user.

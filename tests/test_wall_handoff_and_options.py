@@ -220,6 +220,53 @@ class TestOtpGrantBinding:
         assert res["captured"] is True
         assert res["application_id"] == "app-verify"
 
+    def _app(self, db, aid, company, status, apply_url=""):
+        db.applications.insert_one({
+            "user_email": USER, "application_id": aid, "company": company,
+            "title": "Engineer", "status": status, "apply_url": apply_url})
+
+    def test_a_submitted_row_cannot_steal_another_applications_code(self, db):
+        """LIVE FAILURE, 2026-08-24.
+
+        Greenhouse mailed "Security code for your application to Affirm". It bound
+        to the EXPEDIA row, because Expedia was already `submitted` yet still
+        carried a `waiting_verify` freeze, and Affirm's freeze did not exist yet.
+        `claim_for_verify` only serves the bound application_id, so the code was
+        stranded on a row that could never use it and the Affirm application was
+        never completed.
+        """
+        from services import application_otp_service as otp
+        self._freeze(db, "app-expedia", "verify", 30)          # newer, but DONE
+        self._app(db, "app-expedia", "Expedia Group", "submitted")
+
+        res = otp.capture_from_noise_message(
+            user_email=USER, message_id="<gh1@greenhouse.io>",
+            subject="Security code for your application to Affirm",
+            text="Security code: ORZTYWie", html="",
+            from_addr="no-reply@us.greenhouse-mail.io")
+
+        assert res["captured"] is True
+        # NOT the submitted row. Unbound is correct here — it stays claimable by
+        # whichever application actually asks.
+        assert res["application_id"] != "app-expedia"
+
+    def test_the_right_live_row_wins_when_several_are_open(self, db):
+        """With two live verify walls, the subject names the owner."""
+        from services import application_otp_service as otp
+        self._freeze(db, "app-expedia", "verify", 30)
+        self._app(db, "app-expedia", "Expedia Group", "needs_input")
+        self._freeze(db, "app-affirm", "verify", 10)
+        self._app(db, "app-affirm", "Affirm", "needs_input")
+
+        res = otp.capture_from_noise_message(
+            user_email=USER, message_id="<gh2@greenhouse.io>",
+            subject="Security code for your application to Affirm",
+            text="Security code: ORZTYWie", html="",
+            from_addr="no-reply@us.greenhouse-mail.io")
+
+        assert res["captured"] is True
+        assert res["application_id"] == "app-affirm"
+
     def test_grant_stays_unbound_when_only_captcha_walls_are_open(self, db):
         """Better claimable-by-anyone than burned on a wall no email clears."""
         from services import application_otp_service as otp

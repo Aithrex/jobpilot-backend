@@ -2138,6 +2138,11 @@ def submit(application_id: str, user_email: str) -> Dict[str, Any]:
 
     if st == SUBMIT_SUCCESS:
         ledger.mark_submitted(user_email, application_id)
+        # A submitted row can never use an emailed code, and a freeze left
+        # `waiting_verify` on it keeps CLAIMING codes meant for live applications
+        # — live on 2026-08-24, a submitted Expedia row took Greenhouse's security
+        # code for Affirm and stranded it. Close our own wall on success.
+        _resolve_freeze(application_id, user_email)
         confirmation = _clean(result.get("confirmation"), 500)
         screenshot_ref = _clean(result.get("screenshot_ref"), 500)
         _audit_submit(user_email, application_id, confirmation, screenshot_ref)

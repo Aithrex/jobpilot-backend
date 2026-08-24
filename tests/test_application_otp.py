@@ -58,7 +58,9 @@ def test_capture_stores_grant_without_active_freeze(monkeypatch):
 
   fake_col = FakeCol()
   monkeypatch.setattr(otp, "_coll", lambda: fake_col)
-  monkeypatch.setattr(otp, "_active_freeze", lambda _ue: None)
+  # `_active_freeze` now also takes the sender + subject, so it can tell WHICH
+  # application a code belongs to rather than binding by recency.
+  monkeypatch.setattr(otp, "_active_freeze", lambda *a, **k: None)
   monkeypatch.setattr(otp, "_db", lambda: type("DB", (), {"auto_apply_freezes": None})())
 
   out = otp.capture_from_noise_message(
