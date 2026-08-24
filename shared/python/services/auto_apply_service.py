@@ -184,6 +184,50 @@ def _configured_executor() -> ExecutorAdapter:
     return StubExecutor()
 
 
+def _manually_applied(user_email: str, app: Dict[str, Any]) -> Optional[str]:
+    """The user ALREADY applied to this posting by hand — reason, or None.
+
+    `saved_jobs` is the MANUAL tracker and the auto-apply `applications` ledger is
+    a separate store, so the ledger's unique (user_email, job_identity) index
+    cannot see a hand-filed application. That gap is what let one sweep tick queue
+    44 rows to employers the user had already applied to.
+
+    Nested under `job_data` — `job_data.apply_link` / `job_data.company` — NOT
+    top-level. A top-level read returns nothing and reports every row clean, which
+    is exactly how a check like this passes while being useless.
+
+    Narrow ON PURPOSE: exact apply_url, or company AND title together. Company
+    alone would block every other role at an employer the user applied to once.
+    """
+    try:
+        url = _norm_url(str(app.get("apply_url") or ""))
+        company = str(app.get("company") or "").strip().lower()
+        title = str(app.get("title") or "").strip().lower()
+        if not (url or (company and title)):
+            return None
+        for saved in DBConnect().get_db().saved_jobs.find(
+                {"user_email": user_email}, {"_id": 0, "status": 1, "job_data": 1}):
+            if str(saved.get("status") or "").strip().lower() != "applied":
+                continue
+            jd = saved.get("job_data") or {}
+            if url and _norm_url(str(jd.get("apply_link") or "")) == url:
+                return "apply_url matches a manual application"
+            sc = str(jd.get("company") or "").strip().lower()
+            st = str(jd.get("title") or "").strip().lower()
+            if company and title and sc == company and st == title:
+                return "company+title match a manual application"
+    except Exception as e:  # pragma: no cover - never block a submit on a lookup
+        logger.warning("auto_apply: manual-tracker check failed (%s) — not blocking",
+                       type(e).__name__)
+    return None
+
+
+def _norm_url(u: str) -> str:
+    """Compare apply URLs without tracking noise."""
+    u = (u or "").strip().lower().split("?")[0].split("#")[0]
+    return u.rstrip("/")
+
+
 def get_executor() -> ExecutorAdapter:
     """Return the active executor. Default = StubExecutor (no browser fleet);
     ``AUTO_APPLY_EXECUTOR=ats`` swaps in the real recon executor. This is the ONE
@@ -1990,6 +2034,23 @@ def submit(application_id: str, user_email: str) -> Dict[str, Any]:
         return {"status": "approval_invalidated", "application_id": application_id,
                 "ledger_status": ledger.STATUS_READY_FOR_REVIEW}
 
+    # LAST GATE before a real employer sees a second application from this user.
+    # The ledger CAS cannot see a hand-filed application (separate store), and the
+    # sweep's allow-list only guards the ENTRY point — a row that predates it, or
+    # arrived by another path, reaches here unchecked.
+    _dup_reason = _manually_applied(user_email, app)
+    if _dup_reason:
+        logger.warning("auto_apply submit %s: REFUSING — %s (company=%s)",
+                       application_id, _dup_reason, app.get("company"))
+        try:
+            ledger.transition(user_email, application_id, ledger.STATUS_CANCELLED)
+        except Exception as e:  # pragma: no cover - refusal stands either way
+            logger.warning("auto_apply submit %s: cancel after duplicate refusal "
+                           "failed (%s) — row left as-is, NOT submitted",
+                           application_id, type(e).__name__)
+        return {"status": "skipped_duplicate", "application_id": application_id,
+                "reason": _dup_reason}
+
     executor = get_executor()
     # Probe availability BEFORE grabbing the row, so an absent fleet leaves the
     # row in its approved state (there is no legal running→approved undo).
@@ -2801,8 +2862,17 @@ def recheck_verify(application_id: str, user_email: str) -> Dict[str, Any]:
         return {"status": "already_done", "application_id": application_id}
 
     executor = get_executor()
+    # `ledger.get_application` PROJECTS OUT `user_email`, and `verify_state` reads
+    # the owner off this dict to claim the mailbox OTP. Without it the claim is
+    # skipped and no emailed code is ever typed — §2.2 (0a730d4) in a second
+    # place. Re-attach it (and the tenant) here, where the identity is in scope.
+    app_for_executor = dict(app)
+    app_for_executor["user_email"] = user_email
+    if not app_for_executor.get("tenant"):
+        app_for_executor["tenant"] = _workday_tenant_from_url(
+            str(app.get("apply_url") or "")) or app_for_executor.get("tenant")
     try:
-        res = executor.verify_state(app, freeze)
+        res = executor.verify_state(app_for_executor, freeze)
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("auto_apply recheck %s: verify_state raised: %s", application_id, e)
         return _bump_verify(application_id, user_email, freeze)

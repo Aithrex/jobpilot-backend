@@ -1485,6 +1485,17 @@ class BrowserExecutor(ExecutorAdapter):
             aid = application.get("application_id") or ""
             if ue and aid:
                 grant = otp.claim_for_verify(ue, aid)
+            else:
+                # The ONE input that decides whether an emailed code gets typed.
+                # This used to fall through in silence: `ledger.get_application`
+                # projects out `user_email`, so every verify re-drive skipped the
+                # claim and no mailed code could ever clear a wall. Same silent
+                # shape as the Workday account gate in §2.2 — say it out loud.
+                logger.warning(
+                    "verify_state: NOT claiming an OTP — user_email=%r "
+                    "application_id=%r. An emailed code cannot be filled without "
+                    "both; the wall check below will run against a page nothing "
+                    "was typed into.", ue, aid)
         except Exception as e:
             logger.info("verify_state otp claim skipped: %s", e)
 
