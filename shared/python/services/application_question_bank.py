@@ -208,7 +208,14 @@ FIELDS: List[Dict[str, Any]] = [
        [r"\bcity\b", r"city of residence", r"which city"]),
     _f("state", "State", CAT_IDENTITY, SENS_SAFE, VT_TEXT, "text",
        [r"^state$", r"^state\*?$", r"state or province", r"state region",
-        r"\bprovince\b", r"(?<!local )\bstate\b(?! or local)"]),
+        r"\bprovince\b", # FIFTH instance of the catch-all shape, and the most dangerous: Cohere
+       # Health asks "...excluded from, debarred or otherwise ineligible to
+       # participate in STATE or federally funded programs...". The bare
+       # \bstate\b matched, so a federal-debarment ATTESTATION classified as the
+       # address `state` field — which is CAT_IDENTITY/SENS_SAFE, so it would
+       # bypass the legal gate entirely. Refuse when the word is part of
+       # "state or federal(ly)".
+       r"(?<!local )\bstate\b(?! or local)(?! or federal)"]),
     _f("postal_code", "Postal code", CAT_IDENTITY, SENS_SAFE, VT_TEXT, "text",
        [r"zip code", r"\bzip\b", r"postal code", r"post code", r"postcode"]),
     _f("country", "Country", CAT_IDENTITY, SENS_SAFE, VT_TEXT, "text",
@@ -638,6 +645,15 @@ FIELDS: List[Dict[str, Any]] = [
         r"you not use artificial intelligence",
         r"authenticity and originality of (?:your )?responses"],
        options=["Yes", "No"], default_policy=POLICY_NEVER_DEFAULT),
+    # Healthcare/government employers ask this constantly and it is a hard legal
+    # attestation — never guessable, and it must be GATED so it can only ever be
+    # filled from a declared value.
+    _f("excluded_debarred", "Excluded or debarred from federal/state programs?",
+       CAT_LEGAL, SENS_LEGAL, VT_BOOLEAN, "radio",
+       [r"\b(?:excluded|debarred|debarment|exclusion)\b",
+        r"ineligible to participate in (?:any )?(?:state|federal)",
+        r"\bopt out list\b", r"\bsam\.gov\b", r"list of excluded individuals"],
+       default_policy=POLICY_NEVER_DEFAULT),
     _f("criminal_history", "Have you been convicted of a crime?", CAT_LEGAL, SENS_LEGAL, VT_BOOLEAN, "radio",
        [r"criminal (?:history|record|background|conviction)", r"ever been convicted",
         r"\bfelony\b", r"\bconviction\b", r"convicted of (?:a|any) crime",
