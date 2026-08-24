@@ -563,6 +563,30 @@ class AtsAdapter(abc.ABC):
     # =====================================================================
     # Validation capture / review snapshot
     # =====================================================================
+    # An accessible uploader announces completion through `role=alert` — the same
+    # channel validation errors use. Treating that as an error made a SUCCESSFUL
+    # résumé upload abort the submit (see _is_success_notice's callers).
+    _SUCCESS_NOTICE_RE = re.compile(
+        r"(successfully|success\b|uploaded|attached|saved|complete[d]?\b|"
+        r"received|thank you)", re.IGNORECASE)
+    _ERROR_SIGNAL_RE = re.compile(
+        r"(error|invalid|required|must |cannot|can't|failed|"
+        r"missing|not valid|please (enter|select|provide|check|correct))",
+        re.IGNORECASE)
+
+    @classmethod
+    def _is_success_notice(cls, text: str) -> bool:
+        """True when a captured message reads as SUCCESS and carries no error
+        signal. Conservative on purpose: any error wording anywhere in the text
+        keeps the message. Refusing to submit on a false error is recoverable;
+        submitting past a real one is not."""
+        t = (text or "").strip()
+        if not t:
+            return False
+        if cls._ERROR_SIGNAL_RE.search(t):
+            return False
+        return bool(cls._SUCCESS_NOTICE_RE.search(t))
+
     def capture_validation_errors(self) -> List[Dict[str, Any]]:
         """Collect VISIBLE field-level validation errors (aria-invalid controls +
         shown error messages). Never invents an error."""
@@ -588,6 +612,9 @@ class AtsAdapter(abc.ABC):
                 if not txt or ("msg", txt) in seen:
                     continue
                 seen.add(("msg", txt))
+                if self._is_success_notice(txt):
+                    # e.g. "resume.pdf successfully uploaded" on [role=alert].
+                    continue
                 out.append({"field": None, "message": txt[:200], "evidence": sel})
         return out
 
@@ -1900,6 +1927,8 @@ class WorkdayAdapter(AtsAdapter):
                     if not txt or (None, txt[:200]) in seen:
                         continue
                     seen.add((None, txt[:200]))
+                    if self._is_success_notice(txt):
+                        continue
                     out.append({"field": None, "message": txt[:200],
                                 "evidence": sel})
             except Exception:
