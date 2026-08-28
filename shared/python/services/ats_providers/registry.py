@@ -23,6 +23,11 @@ from services.ats_providers.base import (AtsProvider, Endpoint, Fingerprint,
 logger = logging.getLogger(__name__)
 
 _LOCK = threading.RLock()
+#: Held across the built-in IMPORTS, and separate from `_LOCK` on purpose: the
+#: modules being imported call `register`, which takes `_LOCK`, so loading
+#: under that lock would rely on reentrancy from the loading thread while still
+#: letting other threads through. See `_load_builtins`.
+_LOAD_LOCK = threading.Lock()
 _PROVIDERS: Dict[str, AtsProvider] = {}
 _LOADED = False
 
@@ -49,21 +54,36 @@ def register(provider: AtsProvider, *, replace: bool = False) -> AtsProvider:
 
 
 def _load_builtins() -> None:
+    """Import the built-in providers exactly once, for the whole process.
+
+    The flag is set AFTER the imports and the whole thing runs under
+    `_LOAD_LOCK`. Setting it first - which is what this did - is a race with
+    real consequences rather than a theoretical one: a second thread calling
+    `get()` while the first was still importing saw `_LOADED = True`, returned
+    immediately, and read an EMPTY `_PROVIDERS`. So `get("greenhouse")`
+    returned None for a vendor that is registered.
+
+    Measured: an endpoint audit running six worker threads got a provider back
+    for 1 of 342 rows and silently skipped the other 341. Every concurrent
+    caller in this repo is exposed to it - `job_ingest_worker` fans out over a
+    shard's members, `discover_batch` over a batch of companies - and the
+    symptom there is not an error, it is a member that quietly lists nothing.
+    """
     global _LOADED
-    with _LOCK:
+    with _LOAD_LOCK:
         if _LOADED:
             return
+        # Imported for side effect (each module calls `register`). Failures are
+        # logged, never raised: one broken vendor module must not take down job
+        # search for every other vendor.
+        for mod in ("boards", "workday", "oracle_orc", "icims", "taleo",
+                    "payroll", "enterprise", "amazon", "radancy"):
+            try:
+                __import__(f"services.ats_providers.{mod}")
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("ats_providers: failed to load %s: %s (%s)",
+                               mod, exc, type(exc).__name__)
         _LOADED = True
-    # Imported for side effect (each module calls `register`). Failures are
-    # logged, never raised: one broken vendor module must not take down job
-    # search for every other vendor.
-    for mod in ("boards", "workday", "oracle_orc", "icims", "taleo",
-                "payroll", "enterprise", "amazon", "radancy"):
-        try:
-            __import__(f"services.ats_providers.{mod}")
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("ats_providers: failed to load %s: %s (%s)",
-                           mod, exc, type(exc).__name__)
 
 
 # ---------------------------------------------------------------------------

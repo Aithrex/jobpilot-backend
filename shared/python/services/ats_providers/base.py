@@ -484,6 +484,27 @@ class AtsProvider:
             return ValidationResult(STATUS_DEAD, 0,
                                     detail=f"{type(exc).__name__}: {exc}")
 
+    def board_owner(self, endpoint: Endpoint,
+                    ctx: FetchContext) -> Optional[str]:
+        """The employer name this board DECLARES, or None if the vendor does
+        not publish one.
+
+        This is the corroboration a slug GUESS needs. Validating a guessed slug
+        only proves that a board exists, not that it is this company's board,
+        and a wrong guess that validates is the worst kind of wrong: it does not
+        look like an error, it looks like coverage. Measured on a live sweep -
+        `greenhouse/super`, guessed for "Super Micro Computer, Inc.", is a real
+        board serving real jobs for **Super Technologies**.
+
+        Greenhouse and SmartRecruiters publish the owner and override this.
+        Lever and Ashby do not - Ashby's `JobBoard` type has no organization
+        name at all - so for those the caller falls back to
+        `util.slug_is_trustworthy`.
+
+        Returning None means "cannot say", never "does not match".
+        """
+        return None
+
     def canonical_url(self, endpoint: Endpoint, job: RawJob) -> str:
         return job.apply_url
 

@@ -211,6 +211,19 @@ class GreenhouseProvider(_BoardProvider):
             return None
         return Endpoint(vendor=self.vendor, tenant=tenant)
 
+    def board_owner(self, endpoint: Endpoint,
+                    ctx: FetchContext) -> Optional[str]:
+        """Greenhouse names the board's owner on the board itself, which is
+        what makes a guessed slug checkable here rather than merely plausible.
+        `/v1/boards/super` returns `{"name": "Super Technologies"}` - not Super
+        Micro Computer, whose name produced that guess."""
+        status, payload = ctx.get_json(
+            f"https://boards-api.greenhouse.io/v1/boards/{endpoint.tenant}",
+            params=None, timeout=self.policy.timeout, vendor=self.vendor)
+        if status != 200 or not isinstance(payload, dict):
+            return None
+        return str(payload.get("name") or "").strip() or None
+
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
         payload = self._get_json(
@@ -452,6 +465,7 @@ class SmartRecruitersProvider(_BoardProvider):
     label = "SmartRecruiters"
 
     has_detail = True
+    #: Set below `list_jobs`; see `board_owner`.
 
     api_hosts = ("api.smartrecruiters.com",)
     portal_hosts = ("jobs.smartrecruiters.com", "careers.smartrecruiters.com")
@@ -491,6 +505,23 @@ class SmartRecruitersProvider(_BoardProvider):
                 if variant not in out:
                     out.append(variant)
         return out[:6]
+
+    def board_owner(self, endpoint: Endpoint,
+                    ctx: FetchContext) -> Optional[str]:
+        """Every SmartRecruiters posting carries `company.name`, so one
+        one-row request says who the board belongs to. See
+        `AtsProvider.board_owner` for why a guessed slug needs that."""
+        status, payload = ctx.get_json(
+            f"https://api.smartrecruiters.com/v1/companies/"
+            f"{endpoint.tenant}/postings",
+            params={"limit": 1}, timeout=self.policy.timeout,
+            vendor=self.vendor)
+        if status != 200 or not isinstance(payload, dict):
+            return None
+        rows = payload.get("content") or []
+        if not rows or not isinstance(rows[0], dict):
+            return None
+        return str((rows[0].get("company") or {}).get("name") or "").strip() or None
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:

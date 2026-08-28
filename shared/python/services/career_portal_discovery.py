@@ -523,7 +523,19 @@ class PortalDiscovery:
         handful of requests against APIs built to be polled, versus the hundreds
         that guessing Workday hosts would cost - which is why those vendors opt
         out rather than being probed here.
+
+        CORROBORATED on purpose. A slug that validates only proves a board
+        exists, not that it is THIS company's board, and a wrong guess that
+        validates does not look like an error - it looks like coverage.
+        Measured on a live sweep: `greenhouse/super`, guessed from "Super Micro
+        Computer, Inc.", is a real board serving real jobs for **Super
+        Technologies**; `greenhouse/genius`, from "Genius Group Ltd", is an
+        unrelated "Invite-Only Job Board". So a hit is kept only when the board
+        NAMES this company (`provider.board_owner`, which Greenhouse and
+        SmartRecruiters answer) or, for vendors that publish no owner name, when
+        the slug is distinctive enough to stand alone (`slug_is_trustworthy`).
         """
+        from services.ats_providers.util import names_match, slug_is_trustworthy
         found: List[Endpoint] = []
         spent = 0
         for provider in _slug_probe_order():
@@ -545,10 +557,26 @@ class PortalDiscovery:
                     break
                 except Exception:
                     continue
-                if result.ok:
-                    ep.status = result.status
-                    found.append(ep)
-                    break
+                if not result.ok:
+                    continue
+                owner = None
+                try:
+                    owner = provider.board_owner(ep, self.ctx)
+                except Exception:
+                    owner = None
+                if owner is not None:
+                    if not names_match(name, owner):
+                        logger.info("discovery: %s/%s validates but belongs to "
+                                    "%r, not %r - not claiming it",
+                                    provider.vendor, slug, owner, name)
+                        continue
+                elif not slug_is_trustworthy(name, slug):
+                    # The vendor cannot say who owns the board and the slug is
+                    # not distinctive enough to stand on its own.
+                    continue
+                ep.status = result.status
+                found.append(ep)
+                break
         return found
 
     def _resolve_domain(self, name: str, domain: str, res: DiscoveryResult,

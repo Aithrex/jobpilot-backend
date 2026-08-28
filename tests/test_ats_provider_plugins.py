@@ -270,3 +270,111 @@ def test_amazon_maps_a_search_row_onto_a_raw_job():
     assert "Enrolled in a degree program" in raw.description
     # The employer's OWN statement of the band beats any title guess.
     assert raw.extra.get("seniority") == "intern"
+
+
+# ---------------------------------------------------------------------------
+# A guessed slug has to be corroborated
+# ---------------------------------------------------------------------------
+
+class TestSlugCorroboration:
+    """Validating a guessed slug proves a board EXISTS, not whose it is.
+
+    A wrong guess that validates is the worst shape of wrong: it serves real
+    jobs, so it reads as coverage rather than as an error, and those jobs are
+    then shown under another employer's name. Found in production - 8 of 352
+    board endpoints were somebody else's board, including "Garage Door
+    Specialist" filed as GDS Holdings, "Space Programs" as SpaceX, and "SIE
+    TAIWAN" as TSMC.
+    """
+
+    def test_a_generic_first_token_is_not_a_claimable_slug(self):
+        from services.ats_providers.util import slug_is_trustworthy
+
+        for name, slug in [("Super Micro Computer, Inc.", "super"),
+                           ("Genius Group Ltd", "genius"),
+                           ("Airship AI Holdings, Inc.", "airship"),
+                           ("Quantum Computing Inc.", "quantum"),
+                           ("APPLIED OPTOELECTRONICS, INC.", "applied"),
+                           ("PAID INC", "paid")]:
+            assert slug_is_trustworthy(name, slug) is False, f"{name} -> {slug}"
+
+    def test_a_distinctive_slug_still_stands_on_its_own(self):
+        """Lever and Ashby publish no owner name, so tightening this must not
+        cost the guesses that are plainly right."""
+        from services.ats_providers.util import slug_is_trustworthy
+
+        for name, slug in [("Palantir Technologies Inc.", "palantir"),
+                           ("Cerebras Systems Inc.", "cerebras"),
+                           ("VEEVA SYSTEMS INC", "veeva"),
+                           ("ServiceTitan, Inc.", "servicetitan"),
+                           ("Hinge Health, Inc.", "hinge-health"),
+                           ("Snowflake Inc.", "snowflake")]:
+            assert slug_is_trustworthy(name, slug) is True, f"{name} -> {slug}"
+
+    def test_a_board_title_is_not_a_different_company(self):
+        """"Careers at KKR" is KKR. Judging that a mismatch retires real
+        coverage to remove bad coverage."""
+        from services.ats_providers.util import names_match
+
+        assert names_match("KKR & Co. Inc.", "Careers at KKR")
+        assert names_match("BuzzFeed, Inc.", "Employment Opportunities at BuzzFeed, Inc.")
+        assert names_match("Clear Secure, Inc.", "CLEAR - Corporate")
+        assert names_match("CS Disco, Inc.", "DISCO")
+        assert names_match("ASURE SOFTWARE INC", "Asure Software")
+        assert not names_match("Super League Enterprise, Inc.", "Super Technologies")
+        assert not names_match("SPACE EXPLORATION TECHNOLOGIES CORP", "Space Programs")
+
+    def test_greenhouse_and_smartrecruiters_can_name_their_owner(self):
+        """The two vendors that publish it must expose it, because that is
+        what makes a guess checkable rather than merely plausible."""
+        from services.ats_providers import registry as ats_registry
+        from services.ats_providers.base import AtsProvider
+
+        for vendor in ("greenhouse", "smartrecruiters"):
+            provider = ats_registry.get(vendor)
+            assert provider.board_owner.__func__ is not AtsProvider.board_owner, \
+                f"{vendor} publishes an owner name and must return it"
+        # Lever and Ashby do not publish one; "cannot say" must stay None
+        # rather than becoming "does not match".
+        for vendor in ("lever", "ashby"):
+            provider = ats_registry.get(vendor)
+            assert provider.board_owner.__func__ is AtsProvider.board_owner
+
+
+def test_the_provider_registry_is_safe_to_load_concurrently():
+    """`_load_builtins` set its "already loaded" flag BEFORE importing, so a
+    second thread calling `get()` mid-import saw the flag, returned at once,
+    and read an empty registry - `get("greenhouse")` returned None for a
+    registered vendor. Measured: an audit on six threads resolved a provider
+    for 1 of 342 rows and silently skipped the rest. Every concurrent caller
+    here is exposed (`job_ingest_worker` fans out over a shard's members,
+    `discover_batch` over a batch of companies), and the symptom is not an
+    error but a member that quietly lists nothing.
+    """
+    # A FRESH interpreter, not `importlib.reload`. Reloading the registry
+    # clears `_PROVIDERS` but leaves the provider modules in `sys.modules`, so
+    # `__import__` is a no-op, `register` never runs again, and the registry
+    # stays permanently empty - it would fail this test for the wrong reason
+    # and poison every test after it in the same process.
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    script = textwrap.dedent("""
+        import concurrent.futures as cf
+        from services.ats_providers import registry as r
+        with cf.ThreadPoolExecutor(max_workers=16) as ex:
+            got = list(ex.map(lambda _: r.get("greenhouse") is not None,
+                              range(64)))
+        print(sum(got))
+    """)
+    out = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True,
+        cwd=str(root),
+        env={"PYTHONPATH": str(root / "shared" / "python"), "PATH": "/usr/bin:/bin"},
+        timeout=120)
+    assert out.returncode == 0, out.stderr[-800:]
+    assert out.stdout.strip() == "64", \
+        f"registry resolved {out.stdout.strip()}/64 under concurrency"

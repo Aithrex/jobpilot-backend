@@ -58,6 +58,8 @@ from services import company_registry_service as reg          # noqa: E402
 from services.ats_providers import registry as ats_registry    # noqa: E402
 from services.ats_providers.base import STATUS_VALIDATED, Endpoint  # noqa: E402
 from services.ats_providers.http import simple_context         # noqa: E402
+from services.ats_providers.util import (names_match,          # noqa: E402
+                                         slug_is_trustworthy)
 
 #: Only vendors with ONE shared API host, where a wrong guess is a cheap 404
 #: rather than a DNS lookup or a hit against a shared anti-bot budget. Workday,
@@ -117,6 +119,27 @@ def main() -> int:
                     continue
                 if result.status != STATUS_VALIDATED or not result.job_count:
                     continue
+                # A board that validates is a real board. Proving it is THIS
+                # company's board is a separate question, and skipping it is
+                # how `greenhouse/super` (Super Technologies) got recorded for
+                # Super Micro Computer - a perfectly live board, filed under
+                # the wrong employer, which reads as coverage rather than as an
+                # error. See `AtsProvider.board_owner`.
+                try:
+                    owner = provider.board_owner(endpoint, ctx)
+                except Exception:
+                    owner = None
+                if owner is not None:
+                    if not names_match(name, owner):
+                        with lock:
+                            stats["wrong_owner"] += 1
+                            print(f"  skip {provider.vendor}/{slug}: board is "
+                                  f"{owner!r}, not {name!r}", flush=True)
+                        continue
+                elif not slug_is_trustworthy(name, slug):
+                    with lock:
+                        stats["weak_slug"] += 1
+                    continue
                 with lock:
                     stats[provider.vendor] += 1
                     hits.append((name, provider.vendor, slug,
@@ -146,6 +169,8 @@ def main() -> int:
     for vendor, n in stats.most_common():
         if vendor != "miss":
             print(f"   {vendor:16s} {n}")
+    print(f"rejected: {stats['wrong_owner']} named another company, "
+          f"{stats['weak_slug']} too weak a slug to claim")
     if not args.apply:
         print("\ndry-run: nothing written (pass --apply)")
     return 0

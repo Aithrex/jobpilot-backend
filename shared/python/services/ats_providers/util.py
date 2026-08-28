@@ -320,3 +320,110 @@ def looks_minted_now(value: Any, *, now: Optional[datetime] = None,
     delta = abs(_seconds_into_day(dt) - _seconds_into_day(ref))
     delta = min(delta, 86400.0 - delta)   # wrap around midnight
     return delta <= float(tolerance_seconds)
+
+
+# ---------------------------------------------------------------------------
+# Slug-guess corroboration
+# ---------------------------------------------------------------------------
+
+#: Ordinary English words that turn up as the FIRST token of a company name and
+#: are therefore terrible slug guesses: somebody else owns that board.
+#:
+#: Measured, not imagined. A slug sweep over SEC-classified software companies
+#: guessed `greenhouse/super` for "Super Micro Computer, Inc." and got **Super
+#: Technologies**; `greenhouse/genius` for "Genius Group Ltd" and got an
+#: unrelated "Invite-Only Job Board"; `greenhouse/airship` for "Airship AI
+#: Holdings" and got Airship, the mobile-marketing company. Each validated
+#: perfectly - a real board serving real jobs - for the wrong employer, which
+#: is the worst possible shape of wrong: it does not look like an error, it
+#: looks like coverage.
+_GENERIC_FIRST_TOKENS = frozenset({
+    "super", "genius", "applied", "quantum", "paid", "glow", "airship",
+    "advanced", "american", "national", "global", "general", "united",
+    "first", "premier", "prime", "smart", "bright", "clear", "core",
+    "digital", "data", "cloud", "cyber", "secure", "safe", "open", "next",
+    "new", "modern", "future", "summit", "pioneer", "frontier", "atlas",
+    "apex", "vertex", "matrix", "nexus", "pulse", "spark", "swift", "rapid",
+    "direct", "select", "elite", "alpha", "beta", "delta", "omega", "sigma",
+    "north", "south", "east", "west", "central", "pacific", "atlantic",
+    "capital", "financial", "industrial", "commercial", "professional",
+    "universal", "standard", "quality", "value", "pro", "one", "true",
+    "science", "sciences", "energy", "power", "health", "medical", "bio",
+    "life", "green", "blue", "red", "silver", "gold", "diamond", "star",
+    "sun", "moon", "river", "lake", "mountain", "eagle", "falcon", "phoenix",
+})
+
+
+def slug_is_trustworthy(company_name: str, slug: str) -> bool:
+    """Is `slug` a safe guess for `company_name` with NO other corroboration?
+
+    Used only for vendors whose board API cannot name its owner (Lever and
+    Ashby publish no organization name). Where the vendor CAN say - Greenhouse
+    returns `name`, SmartRecruiters returns `company.name` on every posting -
+    ask it instead of trusting this.
+
+    Accepts two shapes and nothing else:
+
+      * the whole name run together  - "servicetitan", "westerndigital";
+      * a distinctive single token    - "palantir", "cerebras", "veeva".
+
+    "Distinctive" means at least five characters and not an ordinary English
+    word. That is a heuristic and is written down as one, but it is the
+    difference between `lever/palantir` (right) and `greenhouse/super` (a real
+    board belonging to a different company).
+    """
+    import re as _re
+
+    slug_key = _re.sub(r"[^a-z0-9]", "", str(slug or "").lower())
+    if not slug_key:
+        return False
+    name = _re.sub(r"\b(inc|corp|corporation|co|ltd|limited|plc|holdings|"
+                   r"group|llc|lp|sa|se|nv|ag|the)\b", " ",
+                   str(company_name or "").lower())
+    tokens = [t for t in _re.split(r"[^a-z0-9]+", name) if t]
+    if not tokens:
+        return False
+    distinctive = (len(slug_key) >= 5
+                   and slug_key not in _GENERIC_FIRST_TOKENS)
+    if slug_key == "".join(tokens):
+        # A multi-word name run together is distinctive by construction
+        # ("servicetitan", "hingehealth"). A ONE-word name is not: "Genius
+        # Group Ltd" reduces to "genius", and greenhouse/genius is somebody
+        # else's board - so a single-token name has to earn it the same way a
+        # first-token guess does.
+        return len(tokens) > 1 or distinctive
+    return slug_key in tokens and distinctive
+
+
+def names_match(company_name: str, board_name: str) -> bool:
+    """Does a board's DECLARED owner name refer to this company?
+
+    Compared on letters only, so "Asure Software" matches "ASURE SOFTWARE INC"
+    and "TradeDesk" matches "Trade Desk, Inc.". One name being a prefix of the
+    other is accepted ("Sandisk" for "Sandisk Corp"); anything else is not.
+    """
+    import re as _re
+
+    def key(v: str) -> str:
+        v = str(v or "").lower()
+        # Board TITLES, not company names: "Careers at KKR", "Employment
+        # Opportunities at BuzzFeed, Inc.", "CLEAR - Corporate". Judging those
+        # as a different company is a false alarm that costs real coverage.
+        v = _re.sub(r"^\s*(careers?|jobs?|employment opportunities|"
+                    r"open positions|work)\s+(at|with|for)\s+", " ", v)
+        v = _re.sub(r"[-\u2013,]\s*(corporate|careers?|jobs?|"
+                    r"job board|hq)\s*$", " ", v)
+        v = _re.sub(r"\b(inc|corp|corporation|co|ltd|limited|plc|holdings|"
+                    r"group|llc|lp|sa|se|nv|ag|the)\b", " ", v)
+        return _re.sub(r"[^a-z0-9]", "", v)
+
+    a, b = key(company_name), key(board_name)
+    if not a or not b:
+        return False
+    if a == b or a.startswith(b) or b.startswith(a):
+        return True
+    # Containment either way, for a parent/brand pairing that is still plainly
+    # the same name ("CS Disco, Inc." <-> "DISCO"). Bounded at four characters
+    # so a short token cannot match by accident.
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    return len(shorter) >= 4 and shorter in longer
