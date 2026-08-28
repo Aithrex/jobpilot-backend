@@ -283,13 +283,283 @@ def test_an_unreached_company_is_not_recorded_as_having_no_portal():
     assert reg.DISCOVERY_DEFERRED != reg.DISCOVERY_NO_PORTAL
 
 
-def test_deferred_companies_are_picked_up_again(monkeypatch):
-    """A deferred row is retryable; that is the whole point of the state."""
-    import inspect
+@pytest.fixture
+def _reg_db():
+    from services import company_registry_service as reg
+    d = reg._db()
+    for c in (reg.COMPANIES, reg.QUEUE):
+        d[c].delete_many({})
+    return d
+
+
+def _company(reg, cid, *, name, priority, status, last=None):
+    doc = {"company_id": cid, "name": name, "priority": priority,
+           "discovery_status": status}
+    if last is not None:
+        doc["last_discovered_at"] = last
+    reg._db()[reg.COMPANIES].insert_one(doc)
+
+
+def test_refill_makes_deferred_companies_claimable_again(_reg_db):
+    """A deferred row is retryable; that is the whole point of the state.
+
+    This used to be an `inspect.getsource(...)` grep for the string
+    "DISCOVERY_DEFERRED", which the stalled implementation passed happily
+    while producing no claimable work at all. Assert the OUTCOME instead: after
+    a refill, can a worker actually claim the company?
+
+    Live state that motivated this (aspirely_db, 2026-08-27): 7,380 queue rows,
+    of which 4,437 deferred / 2,059 no_portal / 872 done / 12 running and
+    **zero pending**. `refill_queue` reported 7,368 rows refilled; 16 workers
+    on a 15-minute tick claimed nothing, every tick, for eight days.
+    """
+    from datetime import timedelta
 
     from services import company_registry_service as reg
 
-    src = inspect.getsource(reg.refill_queue)
-    assert "DISCOVERY_DEFERRED" in src, (
-        "refill_queue must re-select deferred companies, or deferring them is "
-        "just a slower way of dropping them")
+    now = reg._now()
+    stale = now - timedelta(days=reg.DISCOVERY_RETRY_AFTER_DAYS + 1)
+    _company(reg, "c-def", name="Deferred Co", priority=30,
+             status=reg.DISCOVERY_DEFERRED, last=stale)
+    # Its queue row is already there, in the terminal state a previous run left.
+    reg._db()[reg.QUEUE].insert_one({
+        "company_id": "c-def", "state": reg.DISCOVERY_DEFERRED, "priority": 30,
+        "attempts": 1, "created_at": stale, "lease_owner": None,
+        "lease_expiry": None})
+
+    assert reg.claim_discovery_batch("w0", size=5) == [], "precondition"
+
+    made_claimable = reg.refill_queue(limit=100)
+    assert made_claimable == 1, "refill must COUNT work it created, not rows it read"
+
+    claimed = reg.claim_discovery_batch("w1", size=5)
+    assert [c["company_id"] for c in claimed] == ["c-def"]
+
+
+def test_refill_does_not_rearm_a_settled_company(_reg_db):
+    """`done` and `no_portal` are conclusions, not cooldowns."""
+    from services import company_registry_service as reg
+
+    for cid, state in (("c-done", reg.DISCOVERY_DONE),
+                       ("c-none", reg.DISCOVERY_NO_PORTAL)):
+        _company(reg, cid, name=cid, priority=30, status=state,
+                 last=reg._now())
+        reg._db()[reg.QUEUE].insert_one({
+            "company_id": cid, "state": state, "priority": 30, "attempts": 1,
+            "created_at": reg._now(), "lease_owner": None,
+            "lease_expiry": None})
+
+    assert reg.refill_queue(limit=100) == 0
+    assert reg.claim_discovery_batch("w1", size=5) == []
+
+
+def test_refill_does_not_starve_the_low_priority_tail(_reg_db):
+    """The selection window must MOVE between ticks.
+
+    `sort("priority", -1)` with a hard limit picks the same rows forever, so a
+    tail below the cut is never served rather than served late. Live proof:
+    4,436 companies at priority 30 against a 1,600-row refill budget, with
+    74,477 more at priority 1 that the query could not physically reach.
+    """
+    from datetime import timedelta
+
+    from services import company_registry_service as reg
+
+    now = reg._now()
+    # Same priority; one was probed recently, one has never been probed.
+    _company(reg, "c-probed", name="Probed", priority=30,
+             status=reg.DISCOVERY_DEFERRED, last=now - timedelta(days=30))
+    _company(reg, "c-fresh", name="Never probed", priority=30,
+             status=reg.DISCOVERY_PENDING)
+
+    picked = [d["company_id"] for d in reg._db()[reg.COMPANIES].find(
+        {}, {"company_id": 1}).sort([("priority", -1),
+                                     ("last_discovered_at", 1)])]
+    assert picked[0] == "c-fresh", (
+        "a company we have never probed must outrank one we already tried")
+
+
+def test_a_deferred_company_waits_out_its_cooldown(_reg_db):
+    """Retrying is right; retrying every fifteen minutes is not."""
+    from services import company_registry_service as reg
+
+    _company(reg, "c-hot", name="Just deferred", priority=30,
+             status=reg.DISCOVERY_DEFERRED, last=reg._now())
+    reg._db()[reg.QUEUE].insert_one({
+        "company_id": "c-hot", "state": reg.DISCOVERY_DEFERRED, "priority": 30,
+        "attempts": 1, "created_at": reg._now(), "lease_owner": None,
+        "lease_expiry": None})
+
+    assert reg.refill_queue(limit=100) == 0
+    assert reg.claim_discovery_batch("w1", size=5) == []
+
+
+# ---------------------------------------------------------------------------
+# Tech classification -> discovery order
+# ---------------------------------------------------------------------------
+
+class TestTechClassification:
+    """Which employers get probed first.
+
+    `refill_queue` selects by `priority DESC`, so this classification IS the
+    discovery order. Live shape of the registry it has to sort (2026-08-27):
+    82,492 companies, of which 74,477 sat at priority 1 and are almost entirely
+    single-member state-registry shells - a 4,000-row sample found 0.5% whose
+    NAME even contains a technology word. The 7,987 SEC filers are where the
+    software employers actually are.
+    """
+
+    def test_sic_decides_before_the_name(self):
+        from services import company_registry_service as reg
+
+        # The registrant's own filed classification.
+        assert reg.classify_tech("NVIDIA CORP", "3674") == "software"
+        assert reg.classify_tech("Alphabet Inc.", "7370") == "software"
+        assert reg.classify_tech("Apple Inc.", "3571") == "software"
+        assert reg.classify_tech("COGNEX CORP", "3823") == "tech_adjacent"
+        assert reg.classify_tech("Tesla, Inc.", "3711") is None
+
+    def test_an_unfiled_sic_falls_back_to_the_published_description(self):
+        from services import company_registry_service as reg
+
+        assert reg.classify_tech(
+            "Some Co", "7389",
+            "Services-Computer Programming, Data Processing") == "software"
+
+    def test_name_evidence_is_priced_below_a_filed_signal(self):
+        """A state-registry shell called "... Technologies LLC" must not
+        outrank a real SEC filer. It should sort ahead of its own unscored
+        neighbours and nothing more."""
+        from services import company_registry_service as reg
+
+        shell = reg.signals_for_company({"name": "SUMMIT TECHNOLOGIES LLC"})
+        assert shell == {"software_name": True}
+        filer = reg.signals_for_company(
+            {"name": "NVIDIA CORP", "sic": "3674", "edgar": True})
+        assert filer == {"software": True}
+
+        assert reg.score_priority({"software_name": True}) \
+            < reg.score_priority({"edgar": True}) \
+            < reg.score_priority({"edgar": True, "software": True})
+        # And a proven H-1B sponsor still beats a plausible software employer.
+        assert reg.score_priority({"h1b": True}) > reg.score_priority({"software": True})
+
+    def test_a_company_with_a_sic_never_gets_the_name_signal(self):
+        """Belt and braces: once we know the filed classification, the name
+        heuristic must not add a second, weaker vote for the same fact."""
+        from services import company_registry_service as reg
+
+        out = reg.signals_for_company(
+            {"name": "ACME TECHNOLOGIES INC", "sic": "3711"})
+        assert out == {}
+
+
+# ---------------------------------------------------------------------------
+# Domain confirmation
+# ---------------------------------------------------------------------------
+
+class TestDomainConfirmation:
+    """A stored domain is a previous GUESS, not ground truth.
+
+    `_resolve_domain` used to return a caller-supplied domain unverified
+    ("caller-supplied: trust it, do not re-confirm"), which promoted one
+    unconfirmed guess into permanent fact. Live examples from the registry:
+    `AMAZON COM INC` was stored as `amazon-com.com` - a parked host answering
+    202 with an empty page - and `Alphabet Inc.` as `alphabet.com`, which is
+    BMW's fleet-leasing business.
+    """
+
+    def test_a_supplied_domain_is_tried_first_but_not_exclusively(self):
+        """Returning ONLY the stored value meant a bad one suppressed every
+        derivable guess as well as skipping confirmation - two failures
+        compounding."""
+        from services.career_portal_discovery import candidate_domains
+
+        got = candidate_domains("Acme Widgets Inc", known="stored.example")
+        assert got[0] == "stored.example", "the hint still goes first"
+        assert any("acmewidgets" in c for c in got[1:]), \
+            "a bad stored domain must not hide the derivable guesses"
+
+    def test_every_name_token_must_appear_not_just_the_longest(self):
+        from services.career_portal_discovery import _page_mentions
+
+        page = "we build technology for everyone"
+        # "technology" is the longest token of "MICRON TECHNOLOGY INC", and the
+        # old rule confirmed this page on that alone.
+        assert _page_mentions(page, "MICRON TECHNOLOGY INC") is False
+        assert _page_mentions("micron technology memory",
+                              "MICRON TECHNOLOGY INC") is True
+
+    def test_the_ticker_confirms_on_its_own(self):
+        """A site printing the registrant's ticker is that registrant's site."""
+        from services.career_portal_discovery import _page_mentions
+
+        assert _page_mentions("investor relations - NASDAQ: CGNX", "Some Holding Co",
+                              ticker="CGNX") is True
+
+    def test_a_single_token_name_is_confirmed_by_its_own_domain(self):
+        """The ordinary "acme.com belongs to Acme Widgets" case must still
+        pass, or narrowing the rule costs real employers."""
+        from services.career_portal_discovery import _page_mentions
+
+        assert _page_mentions("welcome to cognex", "COGNEX CORP",
+                              host="cognex.com") is True
+
+
+class TestNoPortalRequiresLookingAtTheCareersPage:
+    """`no_portal` is terminal, so it must be a finding, not a shrug.
+
+    Live discovery run, 2026-08-27, after the queue was unstalled: Salesforce,
+    Apple, Microsoft, Broadcom, Shopify, Atlassian, Dell and Synopsys were each
+    filed `no_portal` with the detail "read 4-6 page(s) on <domain>, no ATS
+    link found". Every one of them has a careers page; the crawl had read the
+    marketing site and never reached it, because those careers pages are React
+    shells that fingerprinting cannot see into.
+
+    Reading six pages of a marketing site is not evidence about an employer's
+    hiring. It is inconclusive, and `deferred` is the state for that.
+    """
+
+    def _result(self, **over):
+        from services.career_portal_discovery import DiscoveryResult
+        res = DiscoveryResult(company_id="c1", name="Acme")
+        res.domain = "acme.com"
+        for k, v in over.items():
+            setattr(res, k, v)
+        return res
+
+    def test_marketing_pages_only_is_not_a_no_portal_verdict(self, monkeypatch):
+        from services import career_portal_discovery as disc
+        from services import company_registry_service as reg
+
+        seen = {}
+        monkeypatch.setattr(reg, "complete_discovery",
+                            lambda cid, **kw: seen.update(kw))
+        monkeypatch.setattr(reg, "upsert_company", lambda *a, **kw: "c1")
+        disc._persist(self._result(pages_fetched=6, career_pages_read=0))
+        assert seen["state"] == reg.DISCOVERY_DEFERRED
+        assert "careers page" in seen["detail"]
+
+    def test_reading_the_careers_page_and_finding_nothing_IS_a_verdict(self, monkeypatch):
+        from services import career_portal_discovery as disc
+        from services import company_registry_service as reg
+
+        seen = {}
+        monkeypatch.setattr(reg, "complete_discovery",
+                            lambda cid, **kw: seen.update(kw))
+        monkeypatch.setattr(reg, "upsert_company", lambda *a, **kw: "c1")
+        disc._persist(self._result(pages_fetched=3, career_pages_read=2))
+        assert seen["state"] == reg.DISCOVERY_NO_PORTAL
+        assert seen["detail"], "a terminal state must carry its evidence"
+
+    def test_the_single_word_stem_form_is_always_offered(self):
+        """`palantir.com` was generated LAST and truncated off the end, so
+        discovery settled on `palantir-technologies.com`, found nothing, and
+        wrote a terminal `no_portal`. Palantir's board is on Lever."""
+        from services.career_portal_discovery import candidate_domains
+
+        for name, wanted in [("PALANTIR TECHNOLOGIES INC", "palantir.com"),
+                             ("SAP SE", "sap.com")]:
+            got = candidate_domains(name)
+            assert wanted in got, f"{name}: {got}"
+            assert got.index(wanted) <= 2, f"{name} must try {wanted} early: {got}"

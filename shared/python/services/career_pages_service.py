@@ -651,11 +651,52 @@ def _fetch_uber(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
         return []
 
 
+def _fetch_radancy(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
+    """Radancy Talent Acquisition Cloud, on the employer's own hostname.
+
+    Deliberately thin. The protocol lives in
+    `services.ats_providers.radancy.RadancyProvider` - the one place the
+    background crawl also reads it from - and this adapter only translates the
+    interactive path's (company dict, terms) call into it and the result back
+    into `_row`. Writing the HTTP a second time here is how the two Workday
+    tenant lists in this repo drifted apart, and there is no reason to repeat
+    it for a vendor added after the provider registry existed.
+    """
+    host = str(c.get("host") or "").strip().lower()
+    if not host:
+        return []
+    from services.ats_providers import registry as ats_registry
+    from services.ats_providers.base import Endpoint
+    from services.ats_providers.http import simple_context
+
+    provider = ats_registry.get("radancy")
+    if provider is None:                       # pragma: no cover - defensive
+        return []
+    endpoint = Endpoint(vendor="radancy", tenant=str(c.get("slug") or host),
+                        site="", host=host)
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for term in (terms or [""])[:3]:
+        ctx = simple_context(budget_seconds=REQUEST_TIMEOUT * 3,
+                             options={"keyword": term})
+        try:
+            for job in provider.list_jobs(endpoint, ctx):
+                if job.source_job_id in seen:
+                    continue
+                seen.add(job.source_job_id)
+                out.append(_row(c, job.source_job_id, job.title, job.apply_url,
+                                job.posted_at, job.location))
+        except Exception:                      # one vendor must not fail a tab
+            continue
+    return out
+
+
 ENTERPRISE_FETCHERS: Dict[str, Callable[[Dict[str, str], List[str]], List[Dict[str, Any]]]] = {
     "amazon": _fetch_amazon,
     "eightfold": _fetch_eightfold,
     "phenom": _fetch_phenom,
     "orc": _fetch_orc,
+    "radancy": _fetch_radancy,
     "uber": _fetch_uber,
 }
 

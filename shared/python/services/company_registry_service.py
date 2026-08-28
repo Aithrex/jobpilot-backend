@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import time
 import uuid
@@ -169,11 +170,135 @@ def company_id_for(name: Any, state: Any = "") -> str:
 _SIGNAL_WEIGHTS: Dict[str, int] = {
     "h1b": 50,
     "edgar": 30,
+    # This company builds software, chips or cloud infrastructure - i.e. it is
+    # an employer of the engineers this product is mostly for. Confirmed from
+    # the SEC-assigned SIC code, which is the registrant's own filing rather
+    # than our guess. Weighted below `h1b` (a proven sponsor beats a plausible
+    # one) and above `sam`, so within any tier the software employers drain
+    # first. See `classify_tech`.
+    "software": 40,
+    # Hardware, components, telecom, instruments and medical devices: heavy
+    # embedded/firmware/cloud hiring, but not primarily software companies.
+    "tech_adjacent": 15,
     "sam": 20,
     "known_domain": 15,
+    # Name-only evidence ("... Technologies LLC"). Deliberately much weaker
+    # than the SIC-confirmed signal: the state registries are full of
+    # single-member shells whose names say "Technologies" and whose careers
+    # page does not exist. It is enough to sort them ahead of an unscored
+    # neighbour, not enough to outrank a company with a real filing signal.
+    "software_name": 12,
     "multi_state": 10,
     "recent_filing": 5,
 }
+
+# ---------------------------------------------------------------------------
+# Tech classification
+# ---------------------------------------------------------------------------
+#
+# SEC-assigned SIC codes. These come from the registrant's own filings
+# (`data.sec.gov/submissions/CIK*.json`), so unlike a name heuristic they are
+# not something we inferred.
+#
+# The two sets are deliberately different in kind, not just in degree:
+#   SOFTWARE      - the company's product IS software, a chip, or a cloud
+#                   service. Frontend/backend/ML/cloud/embedded hiring.
+#   TECH_ADJACENT - the company builds electronics, networks or instruments.
+#                   Real engineering hiring, but a minority of it is software.
+SOFTWARE_SIC: frozenset = frozenset({
+    "7370",   # Services-Computer Programming, Data Processing, Etc.
+    "7371",   # Services-Computer Programming, Data Processing
+    "7372",   # Services-Prepackaged Software
+    "7373",   # Services-Computer Integrated Systems Design
+    "7374",   # Services-Computer Processing & Data Preparation
+    "7375",   # Services-Information Retrieval Services
+    "7377",   # Services-Computer Rental & Leasing
+    "7378",   # Services-Computer Maintenance & Repair
+    "7379",   # Services-Computer Programming (misc)
+    "3571",   # Electronic Computers
+    "3572",   # Computer Storage Devices
+    "3575",   # Computer Terminals
+    "3576",   # Computer Communications Equipment
+    "3577",   # Computer Peripheral Equipment
+    "3674",   # Semiconductors & Related Devices
+    "3559",   # Special Industry Machinery (semiconductor capital equipment)
+})
+TECH_ADJACENT_SIC: frozenset = frozenset({
+    "3661", "3663", "3669",           # comms equipment
+    "3670", "3672", "3675", "3676",   # electronic components / PCBs
+    "3677", "3678", "3679",
+    "3812", "3823", "3825", "3826", "3827", "3829",   # instruments
+    "3841", "3845",                   # medical devices (embedded + cloud)
+    "4813", "4899",                   # telecom services
+    "7389",                           # services-computer/business, mixed bag
+})
+
+# Description keywords, used when a SIC arrives that the sets above do not
+# name. The description is published alongside the code by SEC, so this is
+# still the registrant's own classification rather than an inference.
+_SOFTWARE_SIC_WORDS = re.compile(
+    r"(prepackaged software|computer programming|data processing|"
+    r"computer integrated systems|information retrieval|electronic computers|"
+    r"computer storage|computer peripheral|computer communications|"
+    r"semiconductor)", re.IGNORECASE)
+
+# Name evidence, for the ~74,000 rows that come from state registries and have
+# no SIC at all. Word-boundary matched, and deliberately narrow: "solutions",
+# "group", "ventures" and "consulting" are NOT here, because they carry no
+# information about whether anyone writes code.
+_SOFTWARE_NAME = re.compile(
+    r"\b(software|technologies|technology|systems|semiconductor|"
+    r"microelectronics|computing|computer|cyber|cybersecurity|analytics|"
+    r"informatics|robotics|automation|cloud|datacenter|data\s?center|"
+    r"artificial\s+intelligence|machine\s+learning|\bai\b|\bml\b|"
+    r"digital|internet|networks?|telecom|biotech|labs?|interactive|"
+    r"applications?|platforms?)\b", re.IGNORECASE)
+
+
+def classify_tech(name: str = "", sic: Any = None,
+                  sic_description: str = "") -> Optional[str]:
+    """"software" | "tech_adjacent" | None.
+
+    SIC first, because it is the company's own filed classification; the name
+    is consulted only when there is no SIC, and it produces the weaker
+    `software_name` signal rather than this one (see `signals_for_company`).
+    """
+    # The DESCRIPTION is checked first, and only for the software case. It is
+    # the more specific evidence: SEC ships it alongside the code, and where
+    # the two disagree it is because a code covers a broad bucket ("7389,
+    # Services-Computer Programming, Data Processing, Etc.") that this file
+    # placed in `TECH_ADJACENT_SIC` for its median member. A registrant whose
+    # own published description says "computer programming" is a software
+    # employer whatever bucket its code sits in.
+    if sic_description and _SOFTWARE_SIC_WORDS.search(str(sic_description)):
+        return "software"
+    code = re.sub(r"\D", "", str(sic or ""))[:4]
+    if code:
+        if code in SOFTWARE_SIC:
+            return "software"
+        if code in TECH_ADJACENT_SIC:
+            return "tech_adjacent"
+    return None
+
+
+def signals_for_company(record: Dict[str, Any]) -> Dict[str, Any]:
+    """The tech signals implied by a company record.
+
+    Split out of `upsert_company` so the same rule serves the ingest path and
+    the backfill, and so a test can exercise it without Mongo.
+    """
+    out: Dict[str, Any] = {}
+    kind = classify_tech(str(record.get("name") or ""),
+                         record.get("sic"),
+                         str(record.get("sic_description") or ""))
+    if kind:
+        out[kind] = True
+    elif not record.get("sic") and _SOFTWARE_NAME.search(str(record.get("name") or "")):
+        # No filed classification to go on. Name evidence only, and priced as
+        # such - it moves a row up its own tier, it does not promote it into
+        # the tier above.
+        out["software_name"] = True
+    return out
 
 
 def score_priority(signals: Optional[Dict[str, Any]] = None,
@@ -223,6 +348,10 @@ def upsert_company(record: Dict[str, Any]) -> str:
     cid = record.get("company_id") or company_id_for(name, state)
 
     signals = dict(record.get("signals") or {})
+    # Derived, not supplied: whether this employer builds software is a fact
+    # about the record (its SIC, its name), so every writer gets it without
+    # having to know to pass it. See `signals_for_company`.
+    signals.update(signals_for_company(record))
     now = _now()
     set_fields: Dict[str, Any] = {
         "name": name,
@@ -505,36 +634,104 @@ def endpoint_counts() -> Dict[str, Any]:
 # discovery_queue
 # ---------------------------------------------------------------------------
 
+#: States a queue row may be RE-ARMED out of. `done` and `no_portal` are
+#: conclusions about the employer and are never retried here (revalidation of a
+#: known endpoint is a different job, on `REVALIDATE_AFTER_DAYS`).
+_REARMABLE_STATES: Tuple[str, ...] = (DISCOVERY_DEFERRED, DISCOVERY_FAILED)
+
+#: How long a `deferred` company waits before discovery tries it again. It was
+#: deferred because the answer was not ours to trust (a 429, a bot wall, a DNS
+#: blip), so retrying is right - retrying every fifteen minutes is not.
+DISCOVERY_RETRY_AFTER_DAYS = int(
+    os.getenv("DISCOVERY_RETRY_AFTER_DAYS", "7") or 7)
+
+
 def enqueue_discovery(company_id: str, *, priority: int = 1,
-                      reason: str = "") -> None:
+                      reason: str = "", rearm: bool = False) -> bool:
+    """Put a company on the discovery queue. True when it is now CLAIMABLE.
+
+    `rearm` is the difference between a queue row existing and a queue row
+    being work. Without it this function is `$setOnInsert` only, so a row that
+    has already run keeps its terminal state forever and re-enqueuing it is a
+    no-op that still reports success. That is not hypothetical: measured on
+    live `aspirely_db` (2026-08-27) the queue held 7,380 rows - 4,437
+    `deferred`, 2,059 `no_portal`, 872 `done`, 12 `running` - and **zero**
+    `pending`. `claim_discovery_batch` only claims `pending`/`running`, so
+    every one of the 16 workers on every 15-minute tick claimed nothing, while
+    `refill_queue` reported 7,368 rows "refilled". Discovery had been running
+    at 4 companies/day against a 75,124-company backlog: ~51 years.
+    """
     now = _now()
-    _col(QUEUE).update_one(
-        {"company_id": company_id},
-        {"$set": {"priority": int(priority), "reason": reason[:120]},
-         "$setOnInsert": {"company_id": company_id, "state": DISCOVERY_PENDING,
-                          "created_at": now, "attempts": 0,
-                          "lease_owner": None, "lease_expiry": None}},
-        upsert=True)
+    update: Dict[str, Any] = {
+        "$set": {"priority": int(priority), "reason": reason[:120]},
+        "$setOnInsert": {"company_id": company_id, "state": DISCOVERY_PENDING,
+                         "created_at": now, "attempts": 0,
+                         "lease_owner": None, "lease_expiry": None},
+    }
+    if not rearm:
+        _col(QUEUE).update_one({"company_id": company_id}, update, upsert=True)
+        return False
+
+    # Re-arm in one atomic step, guarded on the state so a row another worker
+    # is holding (`running`, live lease) is never yanked out from under it.
+    res = _col(QUEUE).update_one(
+        {"company_id": company_id, "state": {"$in": list(_REARMABLE_STATES)}},
+        {"$set": {"priority": int(priority), "reason": reason[:120],
+                  "state": DISCOVERY_PENDING, "lease_owner": None,
+                  "lease_expiry": None, "rearmed_at": now}})
+    if res.matched_count:
+        return True
+    # Not present, or in a state we must not touch. Upsert covers the first.
+    res = _col(QUEUE).update_one({"company_id": company_id}, update, upsert=True)
+    return bool(res.upserted_id)
 
 
 def refill_queue(limit: int = 5000) -> int:
-    """Top the queue up with the highest-priority companies not yet probed.
+    """Make the highest-priority un-probed companies CLAIMABLE. Returns how many.
 
     Pull-based rather than push-based: registry ingest writes millions of
     `companies` rows and must not also write millions of queue rows. The queue
     stays small and is refilled from the priority index.
+
+    Two things here are load-bearing and both were wrong before:
+
+    * **Deferred companies are re-armed, not merely re-visited.** The
+      `DISCOVERY_DEFERRED` docstring says "refill_queue picks these up again
+      like any pending row" and that was simply not true - see
+      `enqueue_discovery`. They are picked up once their cooldown has elapsed.
+
+    * **The sort has a tiebreak.** `sort("priority", -1)` with a hard `limit`
+      selects the SAME rows on every tick forever, so a lower-priority tail is
+      not merely served late, it is never served at all. Live proof: 4,436
+      companies sat at priority 30 and 74,477 at priority 1, and a 1,600-row
+      refill budget could not physically reach past the priority-30 block. The
+      ascending `last_discovered_at` tiebreak puts never-probed companies (the
+      field is absent, which sorts first) ahead of ones we have already tried,
+      so the window moves every tick instead of standing still.
+
+    The return value counts rows that became claimable, NOT rows visited. The
+    old count reported 7,368 while creating no work at all, which is precisely
+    how a fully stalled pipeline looked healthy.
     """
+    now = _now()
+    cutoff = now - timedelta(days=max(0, DISCOVERY_RETRY_AFTER_DAYS))
     col = _col(COMPANIES)
+    query = {"$or": [
+        {"discovery_status": DISCOVERY_PENDING},
+        {"discovery_status": DISCOVERY_DEFERRED,
+         "$or": [{"last_discovered_at": None},
+                 {"last_discovered_at": {"$exists": False}},
+                 {"last_discovered_at": {"$lt": cutoff}}]},
+    ]}
     cur = col.find(
-        {"discovery_status": {"$in": [DISCOVERY_PENDING, DISCOVERY_DEFERRED]}},
-        {"company_id": 1, "priority": 1, "name": 1},
-    ).sort("priority", -1).limit(int(limit))
+        query, {"company_id": 1, "priority": 1, "name": 1},
+    ).sort([("priority", -1), ("last_discovered_at", 1)]).limit(int(limit))
     n = 0
     for doc in cur:
-        enqueue_discovery(doc["company_id"],
-                          priority=int(doc.get("priority") or 1),
-                          reason="registry")
-        n += 1
+        if enqueue_discovery(doc["company_id"],
+                             priority=int(doc.get("priority") or 1),
+                             reason="registry", rearm=True):
+            n += 1
     return n
 
 

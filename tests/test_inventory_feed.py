@@ -388,3 +388,77 @@ def test_an_hourly_band_is_compared_annualized(db):
                                "interval": "hourly"})
     result = feed.build_feed("career-pages", _payload(min_salary=100000))
     assert "Payer hourly" in {j["company"] for j in result["jobs"]}
+
+
+# ---------------------------------------------------------------------------
+# Postings whose vendor publishes no date
+# ---------------------------------------------------------------------------
+
+class TestUndatedPostings:
+    """A posting with no date is still a real opening.
+
+    Measured on live inventory (2026-08-27): 9,456 ACTIVE postings carried
+    `posted_at: None`, 7,725 of them iCIMS - whose search results are HTML with
+    the date only on the detail page. Two independent gates hid every one of
+    them: `find_active_fresh` filtered `posted_at >= cutoff`, and
+    `_row_from_posting` returned None. Whole employers were affected;
+    `uscareers-pepsico` had 275 openings no user could ever be shown.
+
+    ADR-001 says never CLAIM a date we do not have. It does not say hide the
+    job.
+    """
+
+    @staticmethod
+    def _post(sjid, *, posted_at):
+        inv.upsert_posting({
+            "source": "icims", "source_job_id": sjid,
+            "url": f"https://careers-x.icims.com/jobs/{sjid}",
+            "company": "Acme", "title": "Software Engineer I",
+            "location": ["Austin, TX, USA"], "description": JD,
+            "cost_class": "free", "source_quality": "direct",
+            "ats": "icims", "tenant": "acme", "posted_at": posted_at,
+        }, now=NOW)
+
+    def test_retrieval_excludes_undated_rows_by_default(self, db):
+        self._post("DATED", posted_at=NOW - timedelta(days=1))
+        self._post("UNDATED", posted_at=None)
+        got = {d["source_job_id"] for d in
+               inv.find_active_fresh(max_age_days=30, now=NOW)}
+        assert got == {"DATED"}, "the guest freshness promise must not change"
+
+    def test_include_undated_gives_them_their_own_slice(self, db):
+        """They can never win a `posted_at` sort, so ORing them into the main
+        query returns exactly zero of them once the dated set fills `limit` -
+        measured at 0 rows out of 1,500 before this was split out."""
+        for i in range(5):
+            self._post(f"D{i}", posted_at=NOW - timedelta(days=i + 1))
+        self._post("UNDATED", posted_at=None)
+        docs = inv.find_active_fresh(max_age_days=30, limit=5,
+                                     include_undated=True, now=NOW)
+        ids = [d["source_job_id"] for d in docs]
+        assert "UNDATED" in ids
+        # Dated rows first: a posting we can date outranks one we cannot.
+        assert ids.index("UNDATED") == len(ids) - 1
+
+    def test_an_undated_row_is_labelled_not_backdated(self):
+        """It must never be handed a posting date it did not publish."""
+        doc = {
+            "job_id": "j1", "title_raw": "Software Engineer I",
+            "employer_name": "D-Wave", "posted_at": None,
+            "posted_at_confidence": inv.CONFIDENCE_UNKNOWN,
+            "first_seen_at": NOW - timedelta(days=3),
+            "locations": [{"raw": "Austin, TX", "key": "austin-tx"}],
+            "canonical_url": "https://example.com/j1",
+        }
+        row = feed._row_from_posting(doc, tz_offset=0)
+        assert row is not None, "an undated posting must still reach the feed"
+        assert row["date_confidence"] == "unknown"
+        assert row["date_posted"] == "", "no invented posting date"
+        assert row["days_ago"] is None, "sorts last, never first"
+        assert "first seen" in row["posted_text"].lower()
+        assert row["first_seen_days_ago"] == 3
+
+    def test_a_row_with_neither_date_is_still_dropped(self):
+        doc = {"job_id": "j2", "title_raw": "X", "employer_name": "Y",
+               "posted_at": None, "first_seen_at": None, "locations": []}
+        assert feed._row_from_posting(doc, tz_offset=0) is None

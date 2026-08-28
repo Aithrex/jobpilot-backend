@@ -64,7 +64,7 @@ import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
@@ -345,31 +345,52 @@ def role_family_of(title: Any) -> str:
         return "other"
 
 
-# fit_score.title_level's vocabulary, plus the "no marker in the title" default.
-SENIORITY_LEVELS = ("entry", "mid", "senior", "staff", "director", "executive")
-# Not a level. The honest answer for a title that states none.
+# `fit_score.LEVELS`, plus the "no marker anywhere" default. Read from
+# fit_score rather than restated, because a band this module knows and the
+# scorer does not (or the reverse) is a filter that silently matches nothing -
+# which is exactly what "Junior" was until `fit_score.normalize_level` existed.
+def _levels() -> Tuple[str, ...]:
+    try:
+        from services import fit_score
+        return tuple(fit_score.LEVELS)
+    except Exception:  # pragma: no cover - taxonomy unavailable
+        return ("intern", "entry", "mid", "senior", "staff", "director",
+                "executive")
+
+
+SENIORITY_LEVELS = _levels()
+# Not a level. The honest answer for a posting that states none.
 SENIORITY_UNKNOWN = "unknown"
 
 
-def seniority_of(title: Any) -> str:
-    """Seniority band, again from `fit_score` so writer and reader agree.
+def seniority_of(title: Any, *, description: Any = "",
+                 required_years: Any = None) -> str:
+    """Seniority band, from `fit_score` so writer and reader agree.
 
-    Unmarked titles return `unknown`, NOT `mid`. `fit_score.title_level` returns
-    None when a title carries no level marker, and "Software Engineer",
-    "Data Analyst" and "Registered Nurse" are all unmarked - which is most of
-    the market. Defaulting those to `mid` made two silent claims at once: it
-    asserted a level the posting never stated, and because RETRIEVAL filters on
-    the stored value with an equality, it meant a candidate filtering for
-    `entry` never saw a single unmarked posting while `mid` quietly absorbed
-    everything unclassified.
+    Reads the TITLE first, then the description, then the years the posting
+    asks for - `fit_score.level_from_signals` owns that order. The title alone
+    used to be the only input, and it left 134,467 of 284,416 live postings
+    (47%) at `unknown` while `requirements.required_years` sat extracted on the
+    very same document. "Minimum 2 years of experience" is the employer's own
+    statement of the band; declining to read it is not caution, it is throwing
+    away an answer we already have.
 
-    This is the same rule `role_family_of` already documents for `other`:
-    unknown means genuinely unclassified, and unknown is never used to exclude
-    a posting from retrieval.
+    Unmarked postings still return `unknown`, NOT `mid`. "Software Engineer"
+    with no body and no stated years genuinely states no level, and defaulting
+    it made two silent claims at once: it asserted a band the posting never
+    stated, and - because RETRIEVAL filters on the stored value - it meant a
+    candidate filtering for `entry` never saw a single unmarked posting while
+    `mid` quietly absorbed everything unclassified.
+
+    This is the same rule `role_family_of` documents for `other`: unknown means
+    genuinely unclassified, and unknown is never used to exclude a posting from
+    retrieval (`find_active_fresh` always ORs it in).
     """
     try:
         from services import fit_score
-        return fit_score.title_level(normalize_title(title)) or SENIORITY_UNKNOWN
+        return fit_score.level_from_signals(
+            normalize_title(title), description=description,
+            required_years=required_years) or SENIORITY_UNKNOWN
     except Exception:  # pragma: no cover
         return SENIORITY_UNKNOWN
 
@@ -512,7 +533,12 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
         "title_raw": title_raw,
         "title_normalized": title_normalized,
         "role_family": _safe_family(raw.get("role_family")) or role_family_of(title_raw),
-        "seniority": _safe_family(raw.get("seniority"), 20) or seniority_of(title_raw),
+        "seniority": (_safe_family(raw.get("seniority"), 20)
+                      or seniority_of(title_raw,
+                                      description=description_text,
+                                      required_years=(raw.get("requirements") or {}).get(
+                                          "required_years")
+                                      if isinstance(raw.get("requirements"), dict) else None)),
         "locations": locations,
         "work_mode": normalize_work_mode(
             raw.get("work_mode"), title=title_raw,
@@ -1092,6 +1118,12 @@ _CARD_PROJECTION = {
     # every read path is concerned - the card renders from THIS shape, so an
     # omission here reads exactly like a normalizer that never captured it.
     "compensation": 1,
+    # The freshness bound for a row that publishes no posting date. Without it
+    # projected, `find_active_fresh(include_undated=True)` can admit a row that
+    # the card builder then has nothing to date it by, and it gets dropped one
+    # layer later - the exact shape of silent loss this projection's own
+    # comment warns about.
+    "first_seen_at": 1,
 }
 
 
@@ -1187,6 +1219,7 @@ def find_active_fresh(
     tenants: Optional[Iterable[str]] = None,
     projection: Optional[Dict[str, Any]] = None,
     limit: int = 60,
+    include_undated: bool = False,
     now: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
     """THE retrieval path: active + fresh, optionally by role family.
@@ -1197,10 +1230,51 @@ def find_active_fresh(
         {status: "active", role_family: <eq>, cost_class: {$in: [...]},
          posted_at: {$gte: cutoff}}  sort: {posted_at: -1}
 
-    ADR-001: postings with an unknown date are excluded rather than assumed
-    fresh - hence the explicit posted_at_confidence gate.
+    ADR-001: postings with an unknown date are never assumed fresh - hence the
+    explicit posted_at_confidence gate. `include_undated` does not weaken that;
+    see below.
     ADR-004: callers on the guest path pass cost_classes=["free"], which is
     enforced structurally here, before any read, not by configuration.
+
+    `include_undated`
+    -----------------
+    Some vendors publish no date in their LISTING at all - iCIMS is the whole
+    of it in practice, because its search results are HTML with the date only
+    on the detail page. Those rows are stored with `posted_at: None` and
+    `posted_at_confidence: "unknown"`, and the two gates above then exclude
+    every one of them from every read. Measured on live inventory
+    (2026-08-27): **9,456 active postings, 7,725 of them iCIMS**, crawled,
+    normalized, stored and structurally unreachable. Whole employers were
+    affected - `uscareers-pepsico` had 275 openings that no user could ever be
+    shown.
+
+    Excluding them was right in spirit and wrong in mechanism. The rule that
+    matters is "never CLAIM a date we do not have"; hiding the job is a
+    different and much more expensive decision, and it is the same mistake
+    this module already calls out for `role_family: other` and
+    `seniority: unknown` - unknown must not be used to exclude.
+
+    So `include_undated=True` admits them on a bound we DO have:
+    `first_seen_at`, the moment the crawler observed the posting live. That is
+    a real lower bound on freshness rather than an assumption, it is indexed
+    (`active_cost_first_seen_at`), and the row still carries
+    `posted_at_confidence: "unknown"` so the surface renders it as undated
+    instead of inventing a posting date. Sorting on `posted_at` descending
+    puts them AFTER every dated row, which is the correct ordering: a row we
+    can date outranks one we cannot.
+
+    It stays OFF by default, and the guest path leaves it off, because ADR-001
+    gives anonymous users a strict seven-day freshness promise that a
+    first-seen bound cannot make.
+
+    The undated rows are fetched as their OWN bounded query rather than ORed
+    into the main one. That is not a style choice: the result is sorted by
+    `posted_at` descending, an undated row sorts last by construction, and the
+    dated set alone already exceeds `limit` for every real family - so a single
+    merged query returns exactly zero undated rows no matter how the filter is
+    written. Measured before this split: `include_undated=True` changed the
+    result set by 0 rows out of 1,500. A guaranteed slice is what actually
+    makes them reachable.
 
     Normalized role/title/skill retrieval only. No Atlas Search, no vector
     index: nothing in this repo benchmarks a recall or latency win from one,
@@ -1213,9 +1287,9 @@ def find_active_fresh(
     query: Dict[str, Any] = {
         "status": STATUS_ACTIVE,
         "cost_class": {"$in": classes} if len(classes) != 1 else classes[0],
-        "posted_at": {"$gte": cutoff},
-        "posted_at_confidence": {"$ne": CONFIDENCE_UNKNOWN},
     }
+    query["posted_at"] = {"$gte": cutoff}
+    query["posted_at_confidence"] = {"$ne": CONFIDENCE_UNKNOWN}
     # Role family accepts a SET, not just one value. A resume rarely maps to a
     # single family cleanly (a "Platform Engineer" is legitimately devops and
     # software_engineering; a "Data Engineer" overlaps data_engineering and
@@ -1269,12 +1343,28 @@ def find_active_fresh(
     if tens:
         query["tenant"] = {"$in": tens} if len(tens) > 1 else tens[0]
 
-    return list(
-        _postings()
-        .find(query, projection or _CARD_PROJECTION)
-        .sort("posted_at", -1)
-        .limit(max(1, int(limit)))
+    proj = projection or _CARD_PROJECTION
+    lim = max(1, int(limit))
+    dated = list(
+        _postings().find(query, proj).sort("posted_at", -1).limit(lim)
     )
+    if not include_undated:
+        return dated
+
+    # Their own slice, on their own bound and their own sort. Capped at a
+    # fifth of the budget so a source that publishes no dates cannot crowd out
+    # the dated market, and appended AFTER the dated rows so the caller's
+    # ordering still prefers a posting we can date.
+    undated_query = dict(query)
+    undated_query.pop("posted_at", None)
+    undated_query["posted_at_confidence"] = CONFIDENCE_UNKNOWN
+    undated_query["first_seen_at"] = {"$gte": cutoff}
+    undated = list(
+        _postings().find(undated_query, proj)
+        .sort("first_seen_at", -1)
+        .limit(max(1, lim // 5))
+    )
+    return dated + undated
 
 
 def find_stale_for_verification(

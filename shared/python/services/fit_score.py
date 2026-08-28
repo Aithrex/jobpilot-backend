@@ -829,39 +829,286 @@ def classify_role(text: Any) -> Optional[str]:
 # Seniority
 # ---------------------------------------------------------------------------
 
+# The bands, lowest to highest. `intern` is a band of its own and NOT a synonym
+# for `entry`: a candidate six weeks from a Master's is looking for a new-grad
+# role, and folding internships into `entry` fills that feed with unpaid summer
+# positions while burying the graduate programmes they actually want. The
+# separation also runs the other way - an intern posting is a real result for
+# someone still enrolled.
+LEVELS: Tuple[str, ...] = ("intern", "entry", "mid", "senior", "staff",
+                           "director", "executive")
+
+# Titles that contain a band word but do NOT carry that band. Checked BEFORE
+# `_LEVEL_PATTERNS`, because each one is a measured misclassification off the
+# live inventory (2026-08-27, 284,416 postings):
+#
+#   "staff"     -> 59,218 rows, 21% of the corpus, which is not a shape any
+#                  real labour market has. The bulk were "RN Staff Nurse",
+#                  "Staff Accountant" and "Staff Pharmacist", where "staff"
+#                  means rank-and-file - the OPPOSITE of the IC staff band.
+#   "manager"   -> "Restaurant Shift Manager", "Retail Store Manager",
+#                  "PT Merchandising Manager" all read as staff-level ICs.
+#   "assistant" -> pulled "Assistant Director" and "Assistant Vice President"
+#                  down into entry.
+#   "associate" -> pulled "Associate Director" and "Associate Professor" down
+#                  into entry.
+_STAFF_IS_RANK_AND_FILE = re.compile(
+    r"(?<![a-z])staff\s+(nurse|rn|lpn|cna|pharmacist|physician|therapist|"
+    r"technician|tech|technologist|assistant|associate|accountant|auditor|"
+    r"attorney|counsel|writer|editor|chaplain|counselor|aide|clerk|"
+    r"interpreter|dietitian|psychologist|surveyor|appraiser|sergeant|officer)"
+    r"(?![a-z])")
+# "Assistant/Associate <senior thing>" is senior, not junior.
+_JUNIOR_WORD_IS_SENIOR = re.compile(
+    r"(?<![a-z])(assistant|associate|deputy)\s+"
+    r"(director|vice president|vp|president|dean|professor|principal|chief|"
+    r"head|superintendent|controller|treasurer|commissioner|administrator|"
+    r"general counsel|partner)(?![a-z])")
+
+# The reverse demotion: band words that mean TRAINEE in medicine and academia.
+# "Clinical Fellow", "Research Fellow" and "Chief Resident" are early-career
+# posts, and reading them as director/executive puts a first-year doctor in the
+# same band as a VP.
+_SENIOR_WORD_IS_TRAINEE = re.compile(
+    r"(?<![a-z])((clinical|research|post ?doctoral|postdoc|teaching|medical|"
+    r"surgical|academic|graduate)\s+fellow|chief\s+resident|"
+    r"fellowship)(?![a-z])")
+
 _LEVEL_PATTERNS: Sequence[Tuple[str, re.Pattern]] = (
-    ("executive", re.compile(r"(?<![a-z])(chief|vp of|vice president|head of|cto|ceo|cfo)(?![a-z])")),
-    ("director", re.compile(r"(?<![a-z])(director|principal|distinguished|fellow)(?![a-z])")),
-    ("staff", re.compile(r"(?<![a-z])(staff|architect|lead|manager|supervisor)(?![a-z])")),
-    ("senior", re.compile(r"(?<![a-z])(senior|sr\.?|iii|iv)(?![a-z])")),
-    ("entry", re.compile(r"(?<![a-z])(intern|internship|junior|jr\.?|entry level|entry-level|"
-                         r"associate|graduate|trainee|apprentice|assistant|i{1,2})(?![a-z])")),
+    # 1. Internships and co-ops FIRST, so "Software Engineer Intern" does not
+    #    fall through to the entry rule and become indistinguishable from a
+    #    new-grad role.
+    ("intern", re.compile(r"(?<![a-z])(intern|interns|interne|internship|"
+                          r"co[ -]?op|summer analyst|summer associate|"
+                          r"industrial placement|work placement|"
+                          r"placement student|student worker|"
+                          r"student assistant|praktikum)(?![a-z])")),
+    # `avp` is deliberately absent: at a bank "AVP" is Assistant Vice
+    # President, a mid-band individual contributor, not an officer.
+    ("executive", re.compile(r"(?<![a-z])(chief|c[eft]o|coo|cio|ciso|cmo|chro|"
+                             r"vp|svp|evp|vice president|head of|"
+                             r"president|managing director|"
+                             r"executive director)(?![a-z])")),
+    # `partner` is deliberately absent: "Partner Solutions Engineer" and
+    # "Channel Partner Manager" are not partners.
+    ("director", re.compile(r"(?<![a-z])(director|principal|distinguished|"
+                            r"fellow|dean|superintendent)(?![a-z])")),
+    # 4. The IC staff band. `manager`, `supervisor` and `lead` are NOT here any
+    #    more - see `_MANAGER_LEVEL` below, which reads them at the band they
+    #    actually sit at.
+    ("staff", re.compile(r"(?<![a-z])(staff|architect)(?![a-z])")),
+    # The numeric alternatives carry their own, TIGHTER boundaries: a bare
+    # `(?<![a-z])` lets the trailing digit of "Engineer R-1234" match `[34]`
+    # and file the posting as senior, and the trailing `.` of "Autonomy 2.0"
+    # gets past a plain `(?![a-z0-9])`.
+    ("senior", re.compile(r"(?<![a-z])(senior|snr|sr\.?)(?![a-z])|"
+                          r"(?<![a-z0-9])(i{3,4}|iv|[34])(?![a-z0-9.])")),
+    # 6. Early career. This list is the answer to "I never see early-career
+    #    roles": the old one carried only intern/junior/graduate/trainee/
+    #    apprentice/associate/assistant, and so missed the phrasing most large
+    #    employers actually use for their graduate pipeline - "New Grad",
+    #    "Early Career", "Campus Hire", "Rotational Program", "University
+    #    Graduate", "Engineer I". Every alternative below appears in live
+    #    inventory titles.
+    ("entry", re.compile(
+        r"(?<![a-z])("
+        r"new\s?grad(uate)?s?|recent\s+grad(uate)?|university\s+grad(uate)?|"
+        r"college\s+grad(uate)?|grad(uate)?\s+(engineer|developer|analyst|"
+        r"scientist|programme|program|scheme|role|hire|trainee)|"
+        r"campus\s+(hire|recruit|program|programme)|on[ -]campus|"
+        r"early\s+(career|professional|talent)|early[ -]in[ -]career|"
+        r"entry[ -]?level|entry\s+career|"
+        r"rotational|rotation\s+program|"
+        r"leadership\s+development\s+program|"
+        r"junior|jnr|jr\.?|trainee|apprentice(ship)?|fresher|"
+        r"graduate|associate|assistant|"
+        r"level\s*[12]|l[12]|tier\s*[12]|grade\s*[12]"
+        r")(?![a-z0-9])|"
+        r"(?<![a-z0-9])(i{1,2}|[12])(?![a-z0-9.])")),
+)
+
+# Management titles, read by what they MANAGE rather than by the bare word.
+# Checked after the executive/director rules (so "Director of Engineering" and
+# "VP, Sales" are already claimed) and before the IC bands.
+_MANAGER_LEVEL: Sequence[Tuple[str, re.Pattern]] = (
+    # A senior/group/general manager is a real second-line band.
+    ("senior", re.compile(r"(?<![a-z])(senior|sr\.?|group|general|regional|"
+                          r"district|division|area|plant|site|national|global)"
+                          r"\s+manager(?![a-z])")),
+    # An assistant/associate/shift/team manager is not.
+    ("entry", re.compile(r"(?<![a-z])(assistant|associate|shift|trainee)\s+"
+                         r"(manager|supervisor|lead)(?![a-z])")),
+    # Everything else that manages people or a shift: mid. "Restaurant
+    # Manager", "Engineering Manager", "Team Lead", "Shift Supervisor".
+    ("mid", re.compile(r"(?<![a-z])(manager|mgr|supervisor|lead|foreman|"
+                       r"crew chief)(?![a-z])")),
 )
 
 # Years a level normally implies, used only when the posting names no number.
 _LEVEL_YEARS: Dict[str, int] = {
-    "entry": 0, "mid": 3, "senior": 5, "staff": 8, "director": 10, "executive": 12,
+    "intern": 0, "entry": 0, "mid": 3, "senior": 5, "staff": 8,
+    "director": 10, "executive": 12,
 }
 
 # Ordinal seniority bands, used to compare a resume's title level against the
-# posting's. `title_level` never yields "mid", but the map carries it so the
-# `_LEVEL_YEARS` fallback level is orderable too.
-_LEVEL_ORDER: Dict[str, int] = {
-    "entry": 0, "mid": 1, "senior": 2, "staff": 3, "director": 4, "executive": 5,
-}
+# posting's. Inserting `intern` at the bottom shifts every band by one and so
+# leaves every EXISTING gap unchanged; only comparisons against `intern` are
+# new.
+_LEVEL_ORDER: Dict[str, int] = {name: i for i, name in enumerate(LEVELS)}
 # Bands where a two-plus-band under-level is a genuine screen-out signal, not
 # just a stretch.
 _SENIOR_PLUS: frozenset = frozenset({"senior", "staff", "director", "executive"})
+# Bands an early-career candidate is actually looking at.
+EARLY_CAREER_LEVELS: frozenset = frozenset({"intern", "entry"})
+
+# Every spelling of a band we accept from a USER preference, a resume, or a
+# stored document, mapped onto `LEVELS`.
+#
+# This map exists because of a silent zero-results bug: onboarding stores
+# `user_preferences.experience_level` as "Junior", "Entry", "Mid", "Senior" -
+# and "Junior" is not a value `job_postings.seniority` has ever held, so a
+# filter built from it matched nothing at all. A vocabulary the writer and the
+# reader do not share is not a filter, it is an outage.
+_LEVEL_ALIASES: Dict[str, str] = {
+    "intern": "intern", "internship": "intern", "co-op": "intern",
+    "coop": "intern", "student": "intern", "trainee": "intern",
+
+    "entry": "entry", "entry level": "entry", "entry-level": "entry",
+    "entrylevel": "entry", "junior": "entry", "jr": "entry", "jnr": "entry",
+    "new grad": "entry", "new graduate": "entry", "newgrad": "entry",
+    "graduate": "entry", "grad": "entry", "recent graduate": "entry",
+    "early career": "entry", "early-career": "entry", "associate": "entry",
+    "apprentice": "entry", "fresher": "entry", "0-2": "entry",
+    "beginner": "entry",
+
+    "mid": "mid", "mid level": "mid", "mid-level": "mid", "midlevel": "mid",
+    "intermediate": "mid", "experienced": "mid", "3-5": "mid",
+
+    "senior": "senior", "sr": "senior", "senior level": "senior",
+    "senior-level": "senior", "6-10": "senior",
+
+    "staff": "staff", "architect": "staff", "expert": "staff",
+
+    "director": "director", "principal": "director", "manager": "mid",
+    "lead": "mid", "head": "executive", "executive": "executive",
+    "vp": "executive", "c-level": "executive", "chief": "executive",
+}
+
+
+def normalize_level(value: Any) -> Optional[str]:
+    """Any spelling of a seniority band -> one of `LEVELS`, or None.
+
+    The single place a level string is interpreted. Callers that read a level
+    off a user preference, a resume or a stored document go through this rather
+    than lowercasing and hoping, because the writers of those three do not
+    agree on spelling and never have.
+    """
+    key = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    if not key:
+        return None
+    if key in LEVELS:
+        return key
+    if key in _LEVEL_ALIASES:
+        return _LEVEL_ALIASES[key]
+    # "Junior Engineer", "Entry-Level (0-2 years)": fall back to reading it as
+    # a title, which is the same vocabulary by another route.
+    return title_level(key)
 
 
 def title_level(title: Any) -> Optional[str]:
+    """The band a TITLE states, or None when it states none.
+
+    None is a real answer and is never coerced to `mid`: "Software Engineer",
+    "Data Analyst" and "Registered Nurse" carry no marker, and that is most of
+    the market. `level_from_signals` resolves those from the description.
+    """
     t = _norm(title)
     if not t.strip():
         return None
+    # Demotions and promotions that the ordered scan below would get wrong.
+    if _JUNIOR_WORD_IS_SENIOR.search(t):
+        return "director" if re.search(
+            r"(?<![a-z])(assistant|associate|deputy)\s+"
+            r"(vice president|vp|president|chief|dean|general counsel)"
+            r"(?![a-z])", t) else "senior"
+    if _SENIOR_WORD_IS_TRAINEE.search(t):
+        return "entry"
+    staff_is_rank_and_file = bool(_STAFF_IS_RANK_AND_FILE.search(t))
+
     for level, rx in _LEVEL_PATTERNS:
+        if level == "staff" and staff_is_rank_and_file:
+            # "Staff Nurse" is not the staff band. Keep scanning: a genuine
+            # marker later in the title still wins, and otherwise the
+            # management scan below or `None` answers.
+            continue
+        if rx.search(t):
+            return level
+    for level, rx in _MANAGER_LEVEL:
         if rx.search(t):
             return level
     return None
+
+
+# Phrases in a BODY that state an early-career target even when the title does
+# not. Deliberately narrow: each one is an employer saying the quiet part out
+# loud, not an inference from tone.
+_EARLY_CAREER_JD = re.compile(
+    r"(new\s?grad(uate)?s?|recent\s+grad(uate)?|graduating\s+(senior|student)|"
+    r"campus\s+(hire|recruit)|early[ -]in[ -]career|early\s+career\s+program|"
+    r"entry[ -]?level|no\s+prior\s+experience|no\s+experience\s+required|"
+    r"0\s*[-to]{1,3}\s*2\s+years|1\s*[-to]{1,3}\s*2\s+years|"
+    r"less\s+than\s+(one|two|1|2)\s+years?)")
+_INTERN_JD = re.compile(r"(internship|intern\s+program|co[ -]?op\s+(program|term)|"
+                        r"summer\s+internship|currently\s+enrolled)")
+
+# Years -> band, for a posting whose TITLE names no level. The bands match
+# `_LEVEL_YEARS` read backwards, so `level_from_signals` and `_score_experience`
+# cannot disagree about what "5 years" means.
+_YEARS_TO_LEVEL: Sequence[Tuple[int, str]] = (
+    (2, "entry"), (4, "mid"), (7, "senior"), (9, "staff"), (11, "director"),
+)
+
+
+def level_from_signals(title: Any, *, description: Any = "",
+                       required_years: Any = None) -> Optional[str]:
+    """The band, resolved from every signal available, or None.
+
+    Title first, because a stated level is the employer's own answer. Then the
+    body, then the years the posting asks for.
+
+    Why this exists: on the live corpus 134,467 of 284,416 postings (47%) had
+    `seniority: unknown` because the title was the ONLY input, while
+    `requirements.required_years` was already extracted and sitting on the same
+    document. Reading a band off "minimum 2 years of experience" is not a guess
+    - it is the posting's own requirement, restated in the vocabulary the feed
+    filters on.
+    """
+    stated = title_level(title)
+    if stated:
+        return stated
+
+    body = _norm(description)[:4000]
+    if body:
+        if _INTERN_JD.search(body):
+            return "intern"
+        if _EARLY_CAREER_JD.search(body):
+            return "entry"
+
+    years = required_years
+    if years is None and body:
+        years = _required_years(body)
+    if years is None:
+        return None
+    try:
+        years = int(years)
+    except (TypeError, ValueError):
+        return None
+    if years < 0:
+        return None
+    for ceiling, level in _YEARS_TO_LEVEL:
+        if years <= ceiling:
+            return level
+    return "executive"
 
 
 # ---------------------------------------------------------------------------
@@ -1136,7 +1383,13 @@ def _extract_requirements_cached(jd_text: str, title: str) -> Dict[str, Any]:
         # whole body - benefits and EEO sections mention other professions
         # ("you will partner with our nursing staff") and would misfile the row.
         "role_family": classify_role(title_blob) or classify_role(blob[:3000]),
-        "job_level": title_level(title_blob) or title_level(blob[:400]),
+        # Title first, then the body, then the years the posting itself asks
+        # for. Reading the level off "minimum 2 years of experience" is not an
+        # inference - it is the posting's own requirement restated in the
+        # vocabulary the feed filters on, and it is why `job_level` is now
+        # answerable for postings whose title carries no marker (most of them).
+        "job_level": level_from_signals(title_blob, description=blob[:4000],
+                                        required_years=_required_years(combined)),
         "industries": sorted(_industries(combined)),
         "work_mode": _work_mode(combined),
         "licenses": licenses,
@@ -1342,7 +1595,7 @@ def build_resume_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
         "titles": [t for t in titles if t.strip()],
         "families": families,
         "years": _resume_years(resume),
-        "level": next((lv for lv in (title_level(t) for t in titles) if lv), None),
+        "level": resume_level(titles),
         "degree_level": _degree_level(_norm(" ".join(
             str((e or {}).get("degree") or "") for e in (resume.get("education") or [])
             if isinstance(e, dict)))),
@@ -1350,6 +1603,32 @@ def build_resume_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
         "location": _norm((resume.get("contact") or {}).get("location") or ""),
         "has_dated_experience": _resume_years(resume) is not None,
     }
+
+
+def resume_level(titles: Sequence[Any]) -> Optional[str]:
+    """The HIGHEST band any of a resume's titles states, or None.
+
+    Not "the first title that states one". That was order-dependent in a way
+    that quietly mis-levels people: a resume listing
+    ["Cloud/DevOps Engineer", "Associate Software Developer Intern", ...]
+    resolves its first title to None and its second to `intern`, so a
+    candidate with two years and a Master's was scored as an intern - and
+    `_score_experience` then capped their points on the ENTRY roles they were
+    actually applying to, because entry is one band above intern.
+
+    Taking the maximum is the honest read: an internship on a resume is
+    something a person has ALSO done, never a ceiling on what they are. It is
+    also the conservative direction for the over-qualification branch, which is
+    the only place a higher band costs a candidate points.
+    """
+    best: Optional[str] = None
+    for title in titles or []:
+        level = title_level(title)
+        if level is None:
+            continue
+        if best is None or _LEVEL_ORDER.get(level, -1) > _LEVEL_ORDER.get(best, -1):
+            best = level
+    return best
 
 
 def _profile_from_skills(resume_skills: Sequence[str],
@@ -1372,7 +1651,7 @@ def _profile_from_skills(resume_skills: Sequence[str],
         "titles": title_list,
         "families": {f for f in (classify_role(t) for t in title_list) if f},
         "years": years,
-        "level": next((lv for lv in (title_level(t) for t in title_list) if lv), None),
+        "level": resume_level(title_list),
         "degree_level": 0,
         "industries": set(),
         "location": "",
@@ -1552,7 +1831,7 @@ def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any]
 
     gap = want - have
     if gap <= 0:
-        if job_level in ("entry",) and have >= want + 6:
+        if job_level in EARLY_CAREER_LEVELS and have >= want + 6:
             pts, detail, severe = mx * 0.7, (
                 f"You have about {have} years, well above what this entry level "
                 f"role asks for."), False
@@ -1582,13 +1861,23 @@ def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any]
                                 "role asks for.")
         if job_level in _SENIOR_PLUS:
             severe = True
-    elif level_gap is not None and level_gap == 1 and pts > mx * 0.75:
+    elif (level_gap is not None and level_gap == 1 and pts > mx * 0.75
+          and job_level not in EARLY_CAREER_LEVELS):
+        # One band under is a stretch worth pricing - EXCEPT into an
+        # early-career role, where it is the intended progression rather than a
+        # gap. Someone whose only titles are internships is precisely who a
+        # new-grad requisition is written for, and `resume_level` reads them as
+        # `intern`, one band below `entry`. Docking them here punished the
+        # candidate for matching the posting.
         pts = mx * 0.75
-    elif (level_gap is not None and level_gap <= -2 and job_level == "entry"
-          and pts > mx * 0.7):
-        # Markedly over-levelled for an entry role - a common auto-reject.
-        pts, detail = mx * 0.7, ("Your seniority is well above what this entry level "
-                                 "role asks for.")
+    elif (level_gap is not None and level_gap <= -2
+          and job_level in EARLY_CAREER_LEVELS and pts > mx * 0.7):
+        # Markedly over-levelled for an early-career role - a common
+        # auto-reject. `EARLY_CAREER_LEVELS`, not `== "entry"`: `intern` is now
+        # its own band, and a director applying to an internship is the same
+        # mismatch this branch exists to price.
+        pts, detail = mx * 0.7, ("Your seniority is well above what this early "
+                                 "career role asks for.")
 
     return pts, detail, severe
 

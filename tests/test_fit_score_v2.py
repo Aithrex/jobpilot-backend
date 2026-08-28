@@ -566,3 +566,150 @@ class TestCopyRule:
         for s in self._strings(v):
             assert not any(ch in s for ch in self.FORBIDDEN), s
             assert s.isascii(), s
+
+
+# ---------------------------------------------------------------------------
+# Seniority taxonomy
+# ---------------------------------------------------------------------------
+
+class TestSeniorityTaxonomy:
+    """The bands a seeker filters on, and the misreads that emptied them.
+
+    Every case below is a title taken from live `job_postings` (2026-08-27,
+    284,416 rows). The measurement that motivated the rewrite: `staff` held
+    59,218 rows - 21% of the whole corpus, a shape no labour market has -
+    because `manager|supervisor|lead` were staff markers, while `mid` held
+    4,957 and could not be reached from a title at all.
+    """
+
+    @pytest.mark.parametrize("title", [
+        "New Grad Software Engineer",
+        "2026 University Graduate - Software Engineer",
+        "Early Career Data Analyst",
+        "Campus Hire - Analyst",
+        "Rotational Program Associate",
+        "Junior Developer",
+        "Graduate Engineer Trainee",
+        "Software Engineer I",
+        "Software Engineer II",
+        "Entry Level Technician",
+        "Apprentice Electrician",
+    ])
+    def test_early_career_titles_land_in_entry(self, title):
+        """The old vocabulary had only intern/junior/graduate/trainee/
+        apprentice/associate/assistant, so "New Grad", "Early Career",
+        "Campus Hire" and "Rotational" - how large employers actually title a
+        graduate pipeline - all came back unclassified."""
+        assert fit_score.title_level(title) == "entry", title
+
+    @pytest.mark.parametrize("title", [
+        "Software Engineering Intern",
+        "Data Science Internship - Summer 2027",
+        "Engineering Co-op",
+    ])
+    def test_internships_are_their_own_band(self, title):
+        """`intern` is not a synonym for `entry`. A candidate six weeks from
+        graduating wants new-grad roles, and answering "entry" with unpaid
+        summer positions is not answering the question."""
+        assert fit_score.title_level(title) == "intern", title
+
+    @pytest.mark.parametrize("title,expected", [
+        # Live rows that the old rule filed as `staff`.
+        ("Restaurant Shift Manager", "entry"),
+        ("Retail Store Manager", "mid"),
+        ("Sales Manager", "mid"),
+        ("Team Lead", "mid"),
+        ("Lead Cashier", "mid"),
+        ("Night Shift Assistant Manager", "entry"),
+        # ... and the ones that really are the IC staff band.
+        ("Staff Product Manager", "staff"),
+        ("Sr Staff Endpoint Systems Engineer", "staff"),
+        ("Solutions Architect", "staff"),
+    ])
+    def test_management_titles_are_not_the_ic_staff_band(self, title, expected):
+        assert fit_score.title_level(title) == expected, title
+
+    def test_staff_nurse_is_not_a_staff_engineer(self):
+        """In healthcare and accounting "staff" means rank-and-file - the
+        opposite of the IC band. "RN Staff Nurse Burn ICU" was filed as
+        `staff` alongside Distinguished Engineers."""
+        assert fit_score.title_level("RN Staff Nurse Burn ICU Full-time Nights") != "staff"
+        assert fit_score.title_level("Staff Accountant") != "staff"
+
+    @pytest.mark.parametrize("title,expected", [
+        ("Assistant Director of Nursing", "senior"),
+        ("Associate Professor", "senior"),
+        ("Assistant Vice President", "director"),
+    ])
+    def test_a_junior_word_before_a_senior_role_is_not_junior(self, title, expected):
+        assert fit_score.title_level(title) == expected, title
+
+    @pytest.mark.parametrize("title", [
+        "Clinical Research Fellow",
+        "Chief Resident",
+    ])
+    def test_medical_trainee_titles_are_not_leadership(self, title):
+        """"Fellow" and "Chief" mean TRAINEE in medicine. Reading them as
+        director/executive put a first-year doctor in the VP band."""
+        assert fit_score.title_level(title) == "entry", title
+
+    @pytest.mark.parametrize("title", [
+        "Engineer R-1234",          # requisition id, not a level
+        "Autonomy 2.0 Engineer",    # version number, not a level
+        "Software Engineer",        # genuinely unmarked
+        "Registered Nurse",
+    ])
+    def test_a_title_with_no_level_marker_returns_none(self, title):
+        assert fit_score.title_level(title) is None, title
+
+    def test_level_is_resolved_from_the_postings_own_stated_years(self):
+        """47% of live postings were `unknown` while `required_years` sat
+        extracted on the same document. Reading it is not a guess."""
+        assert fit_score.level_from_signals("Software Engineer",
+                                            required_years=1) == "entry"
+        assert fit_score.level_from_signals("Software Engineer",
+                                            required_years=8) == "staff"
+        assert fit_score.level_from_signals(
+            "Software Engineer",
+            description="We hire recent graduates. 0-2 years of experience.") == "entry"
+        assert fit_score.level_from_signals(
+            "Analyst",
+            description="A summer internship; you must be currently enrolled.") == "intern"
+        # A stated title always wins over the body.
+        assert fit_score.level_from_signals(
+            "Senior Software Engineer", required_years=0) == "senior"
+        # Nothing stated anywhere is still None, never a default.
+        assert fit_score.level_from_signals("Software Engineer") is None
+
+    @pytest.mark.parametrize("value,expected", [
+        ("Junior", "entry"), ("junior", "entry"), ("New Grad", "entry"),
+        ("Entry-Level", "entry"), ("Mid", "mid"), ("Senior", "senior"),
+        ("intern", "intern"), ("Lead", "mid"), ("", None), (None, None),
+    ])
+    def test_user_level_spellings_map_onto_the_stored_vocabulary(self, value, expected):
+        """`user_preferences.experience_level` stores "Junior", which is not a
+        value `job_postings.seniority` has ever held. A filter built from it
+        matched nothing at all - an outage, not a preference."""
+        assert fit_score.normalize_level(value) == expected
+
+    def test_a_resume_takes_its_HIGHEST_band_not_its_first(self):
+        """"First title that states a level" is order-dependent. A resume
+        reading ["Cloud/DevOps Engineer", "Associate Software Developer
+        Intern"] resolved to `intern`, and `_score_experience` then docked the
+        candidate on the entry roles they were applying to."""
+        assert fit_score.resume_level(
+            ["Software Engineer Intern", "Senior Software Engineer"]) == "senior"
+        assert fit_score.resume_level(["Software Engineer"]) is None
+
+    def test_an_intern_resume_is_not_docked_on_an_entry_role(self):
+        """intern -> entry is the intended progression, not a stretch."""
+        mx = COMPONENT_MAX["experience"]
+        pts, _detail, severe = fit_score._score_experience(
+            {"job_level": "entry", "required_years": 0},
+            {"level": "intern", "years": 2})
+        assert pts == float(mx) and severe is False
+        # A senior role IS still a real gap for the same resume.
+        pts, _detail, severe = fit_score._score_experience(
+            {"job_level": "senior", "required_years": 5},
+            {"level": "intern", "years": 2})
+        assert pts < mx * 0.5 and severe is True

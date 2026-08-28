@@ -230,6 +230,62 @@ _NON_US_CITY_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
+# Tier 2a - foreign hub cities with NO US namesake
+# ---------------------------------------------------------------------------
+# The tier-2 rescue exists for real US namesakes: "Dublin, OH", "Paris, KY",
+# "Vancouver, WA", "Melbourne, FL" are all US postings that a foreign city
+# marker would otherwise drop, and STRICT positional state evidence is what
+# saves them. Measured on the live inventory, that rescue works: of 17,208
+# clearly-non-US active rows, the filter kept 248 - and 243 of those were
+# genuine US towns my audit's own regex had flagged by name.
+#
+# The other five were a real leak, and all of one shape: a foreign hub whose
+# SUBDIVISION code collides with a US state code, so the rescue fires on the
+# city's own region.
+#
+#     "Chennai, TN"  -> TN is Tamil Nadu, read as Tennessee   (4 rows, JLL)
+#     "Jakarta, ID"  -> ID is Indonesia,  read as Idaho       (1 row,  S&P Global)
+#
+# There is no "Chennai, Tennessee" and no "Jakarta, Idaho", so for these cities
+# the rescue can only ever be wrong. Listing them here makes the marker a hard
+# drop instead. Membership is deliberately conservative - a city stays on the
+# rescue path unless it certainly has no US namesake - because a wrong entry
+# here removes real US jobs, which is the worse error. "Delhi" is therefore
+# absent (Delhi, NY and Delhi, CA), as are Berlin, Lima, Naples, Milan, Rome,
+# Manila, Bogota, Panama City, Saint Petersburg, Wellington and Montevideo.
+_NON_US_CITY_NO_NAMESAKE = frozenset({
+    # India - the tech hubs. Their state codes TN, KA, MH, AP, TS, GJ, WB, OR
+    # and UP overlap the US set at TN and OR.
+    "pune", "bengaluru", "bangalore", "hyderabad", "chennai", "mumbai",
+    "noida", "gurgaon", "gurugram", "kolkata", "ahmedabad", "kochi", "cochin",
+    "coimbatore", "trivandrum", "thiruvananthapuram", "indore", "nagpur",
+    "vadodara", "mysore", "mysuru", "chandigarh", "jaipur", "bhubaneswar",
+    "visakhapatnam", "vizag", "gandhinagar", "thane", "navi mumbai",
+    "secunderabad",
+    # Greater China
+    "shanghai", "beijing", "shenzhen", "guangzhou", "chengdu", "hangzhou",
+    "suzhou", "wuhan", "xian", "taipei",
+    # SEA / APAC. "ID" (Indonesia) collides with Idaho, "SG" and "MY" do not.
+    "jakarta", "bandung", "kuala lumpur", "penang", "ho chi minh", "hanoi",
+    "bangkok", "makati", "taguig", "cebu",
+    "quezon city", "pasig", "seoul", "busan", "yokohama", "nagoya",
+    # Gulf / MEA
+    "dubai", "abu dhabi", "riyadh", "doha", "kuwait city", "manama", "muscat",
+    "tel aviv", "haifa", "casablanca", "tunis", "johannesburg", "cape town",
+    "pretoria",
+    # LatAm
+    "sao paulo", "rio de janeiro", "brasilia", "belo horizonte",
+    "porto alegre", "campinas", "guadalajara", "monterrey", "queretaro",
+    "mexico city", "buenos aires", "medellin",
+    # South Asia
+    "karachi", "lahore", "islamabad", "dhaka", "kathmandu", "colombo",
+})
+_NON_US_CITY_NO_NAMESAKE_RE = re.compile(
+    r"\b(" + "|".join(re.escape(m) for m in sorted(_NON_US_CITY_NO_NAMESAKE))
+    + r")\b", re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
 # Tier 5 — POSITIONAL state code
 # ---------------------------------------------------------------------------
 # "in" stays out: "Hyderabad IN" would otherwise read as Indiana. Rows that
@@ -484,6 +540,12 @@ def keep_us(location: Any,
     #    Washington") or STRICT positional state evidence ("Berlin, CT") —
     #    never on a stray two-letter substring ("Hyderabad-Hi-Tec City",
     #    "CA - Toronto", "CA, Ontario").
+    #    2a. ...unless the hub has no US namesake at all, in which case the
+    #    rescue can only ever fire on the city's OWN subdivision code
+    #    ("Chennai, TN" -> Tamil Nadu; "Jakarta, ID" -> Indonesia) and there is
+    #    nothing for it to rescue.
+    if _NON_US_CITY_NO_NAMESAKE_RE.search(loc):
+        return False
     if _NON_US_CITY_RE.search(loc):
         return bool(_US_STATE_NAME_RE.search(loc) or state_position_match(loc))
 

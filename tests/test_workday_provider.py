@@ -65,11 +65,19 @@ def test_workday_undated_row_is_unknown_not_today():
     assert jobs[0].date_confidence == DATE_UNKNOWN
 
 
-def test_workday_termless_listing_stops_at_the_freshness_boundary():
+def test_workday_listing_keeps_reading_past_an_old_row():
+    """An old row does NOT end the page.
+
+    The termless CXS board is ordered newest-first only within blocks, so a
+    stale row says nothing about the rows below it. Measured on
+    `cisco.wd5/Cisco_Careers`: offset 20 opens with "Posted 10 Days Ago" while
+    offsets 100-459 hold 318 more postings under 7 days old. The old rule -
+    stop at the first stale row - reported 18 of Cisco's 336 fresh openings.
+    """
     from datetime import timedelta
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-    pages = [{
+    page = {
         "jobPostings": [
             {"title": "Fresh", "externalPath": "job/new",
              "bulletFields": ["N"], "postedOn": "Posted Today",
@@ -77,26 +85,99 @@ def test_workday_termless_listing_stops_at_the_freshness_boundary():
             {"title": "Stale", "externalPath": "job/old",
              "bulletFields": ["O"], "postedOn": "Posted 30+ Days Ago",
              "locationsText": "NY"},
-            {"title": "ShouldNotYield", "externalPath": "job/later",
+            {"title": "FreshAfterStale", "externalPath": "job/later",
              "bulletFields": ["L"], "postedOn": "Posted Today",
              "locationsText": "NY"},
         ],
-    }]
+    }
     called = {"n": 0}
 
     def post_json(url, *, json_body=None, timeout=None, vendor=""):
         called["n"] += 1
-        return 200, pages[0]
+        return 200, page
 
     ep = Endpoint(vendor="workday", tenant="acme", site="External",
                   extra={"wd_host": "wd1"})
-    jobs = list(WorkdayProvider().list_jobs(
-        ep, _ctx(post_json=post_json, cutoff_iso=cutoff)))
+    ctx = _ctx(post_json=post_json, cutoff_iso=cutoff)
+    jobs = list(WorkdayProvider().list_jobs(ep, ctx))
     titles = [j.title for j in jobs]
-    assert "ShouldNotYield" not in titles
-    assert "Stale" not in titles
+    assert "FreshAfterStale" in titles, "a stale row must not end the page"
+    assert "Stale" not in titles, "the stale row itself is still dropped"
     assert "Fresh" in titles
+    # Three rows is a short page, so the board is exhausted after ONE request
+    # and the listing is a complete census.
     assert called["n"] == 1
+    assert ctx.listing_truncated is False
+
+
+def test_workday_listing_stops_after_a_run_of_all_stale_pages():
+    """Paging ends on `stale_page_tolerance` CONSECUTIVE pages with nothing
+    fresh - not on the first stale row, and not only when the board runs out."""
+    from datetime import timedelta
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    provider = WorkdayProvider()
+    tolerance = provider.policy.stale_page_tolerance
+    assert tolerance >= 1, "Workday must tolerate a run of stale pages"
+
+    def _page(fresh: bool, tag: str):
+        posted = "Posted Today" if fresh else "Posted 30+ Days Ago"
+        return {"jobPostings": [
+            {"title": f"{tag}-{i}", "externalPath": f"job/{tag}-{i}",
+             "bulletFields": [f"{tag}-{i}"], "postedOn": posted,
+             "locationsText": "NY"}
+            for i in range(provider.policy.page_size)
+        ]}
+
+    # Page 0 fresh, then a stale run one page LONGER than the tolerance.
+    offsets = []
+
+    def post_json(url, *, json_body=None, timeout=None, vendor=""):
+        offset = (json_body or {}).get("offset", 0)
+        offsets.append(offset)
+        page_no = offset // provider.policy.page_size
+        return 200, _page(page_no == 0, f"p{page_no}")
+
+    ep = Endpoint(vendor="workday", tenant="acme", site="External",
+                  extra={"wd_host": "wd1"})
+    ctx = _ctx(post_json=post_json, cutoff_iso=cutoff)
+    jobs = list(provider.list_jobs(ep, ctx))
+
+    assert len(jobs) == provider.policy.page_size, "only page 0 was fresh"
+    # 1 fresh page + (tolerance + 1) stale pages before the streak trips.
+    assert len(offsets) == 1 + tolerance + 1
+    assert ctx.listing_truncated is False
+
+
+def test_workday_listing_reports_truncation_when_the_page_cap_stops_it():
+    """A board still yielding fresh rows at the page cap is NOT a census.
+
+    `job_ingest_worker._close_stale_in_shard` closes postings a listed member
+    did not re-see. If a cut-short listing claimed to be complete, every
+    posting past the cap would be closed on each tick - inventory deleted by a
+    page cap rather than by an employer.
+    """
+    from datetime import timedelta
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    provider = WorkdayProvider()
+
+    def post_json(url, *, json_body=None, timeout=None, vendor=""):
+        offset = (json_body or {}).get("offset", 0)
+        return 200, {"jobPostings": [
+            {"title": f"Fresh-{offset}-{i}", "externalPath": f"job/{offset}-{i}",
+             "bulletFields": [f"R-{offset}-{i}"], "postedOn": "Posted Today",
+             "locationsText": "NY"}
+            for i in range(provider.policy.page_size)
+        ]}
+
+    ep = Endpoint(vendor="workday", tenant="acme", site="External",
+                  extra={"wd_host": "wd1"})
+    ctx = _ctx(post_json=post_json, cutoff_iso=cutoff)
+    jobs = list(provider.list_jobs(ep, ctx))
+
+    assert len(jobs) == provider.policy.max_pages * provider.policy.page_size
+    assert ctx.listing_truncated is True
 
 
 def test_greenhouse_uses_first_published_never_updated_at():

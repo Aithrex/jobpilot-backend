@@ -4,11 +4,25 @@ Every DIRECT-fetch row (career_pages / workday / enterprise / orc / uber) was li
 on 2026-07-17: its public JSON endpoint returned HTTP 200 with real job rows
 using the exact URL patterns the existing fetchers use (see
 career_pages_service.FETCHERS / ENTERPRISE_FETCHERS and
-workday_cxs_fetcher._fetch_tenant). Companies whose direct source is
-bot-walled or failed verification (Google, Meta, Apple, Tesla, IBM, Salesforce
-wd12, Walmart CXS 410, AMD, Lockheed iCIMS, ...) are engine "aggregator":
-fetched through JSearch with a STRICT employer-name match so only that
-company's postings pass. Re-verify rather than hand-guessing new rows.
+workday_cxs_fetcher._fetch_tenant). Companies whose direct source is genuinely
+bot-walled are engine "aggregator": fetched through JSearch with a STRICT
+employer-name match so only that company's postings pass. Re-verify rather than
+hand-guessing new rows.
+
+Re-verified 2026-08-27. Five names previously listed here as bot-walled were
+not, and are now direct: Salesforce (wd12/External_Career_Site, 1,546),
+Accenture (wd103/AccentureCareers, 2,000), Johnson & Johnson (jj.wd5/JJ,
+1,811), Lockheed Martin (Eightfold pcsx, 2,195) and AMD (Radancy, 1,205). Each
+was found by fingerprinting the employer's own careers page rather than by
+guessing a tenant, then validated through its provider.
+
+Still genuinely unreachable from a plain HTTP client, re-probed the same day and
+deliberately left on the metered path: Google, Meta, Apple, IBM, Tesla, Walmart,
+Goldman Sachs, American Express, McKinsey (JS shells whose APIs need a browser
+session or a CSRF handshake) and SAP (SuccessFactors RMK, which answers with
+HTML tiles and needs a provider this repo does not have yet). UnitedHealth is on
+Taleo but its portal id is not derivable, which `job_ingest_worker` already
+documents as a configuration gap rather than an empty employer.
 
 Row shape: {display_name, slug, sector, engine, ...engine-specific}:
   engine "career_pages": + ats                     (slug = board slug)
@@ -71,8 +85,14 @@ MNC_CATALOG: List[Dict[str, Any]] = [
      "extra": {"domain": "qualcomm.com", "variant": "pcsx"}},
     {"display_name": "Intel", "slug": "intel", "sector": "semiconductors",
      "engine": "workday", "tenant": "intel", "wd_host": "wd1", "site": "External"},
+    # Was `aggregator` (metered JSearch). AMD's careers page still links
+    # `careers-amd.icims.com`, but validating that endpoint returns a stub
+    # reading "migrated to https://careers.amd.com/jobs" - it answers 200 and
+    # serves zero jobs. The Radancy host serves 1,205 (138 inside a 7-day
+    # window), verified 2026-08-27.
     {"display_name": "AMD", "slug": "amd", "sector": "semiconductors",
-     "engine": "aggregator", "aliases": ["advanced micro devices"]},
+     "engine": "enterprise", "fetcher": "radancy", "host": "careers.amd.com",
+     "extra": {}},
     {"display_name": "Broadcom", "slug": "broadcom", "sector": "semiconductors",
      "engine": "workday", "tenant": "broadcom", "wd_host": "wd1", "site": "External_Career"},
     {"display_name": "Micron", "slug": "micron", "sector": "semiconductors",
@@ -83,8 +103,11 @@ MNC_CATALOG: List[Dict[str, Any]] = [
      "engine": "workday", "tenant": "asml", "wd_host": "wd3", "site": "ASMLEXT1"},
 
     # ── enterprise_software ──────────────────────────────────────────────
+    # Was `aggregator`. `salesforce.wd12/External_Career_Site` validated live
+    # on 2026-08-27 with 1,546 postings.
     {"display_name": "Salesforce", "slug": "salesforce", "sector": "enterprise_software",
-     "engine": "aggregator", "aliases": ["salesforce.com"]},
+     "engine": "workday", "tenant": "salesforce", "wd_host": "wd12",
+     "site": "External_Career_Site"},
     {"display_name": "Adobe", "slug": "adobe", "sector": "enterprise_software",
      "engine": "workday", "tenant": "adobe", "wd_host": "wd5", "site": "external_experienced"},
     {"display_name": "Oracle", "slug": "oracle", "sector": "enterprise_software",
@@ -141,8 +164,10 @@ MNC_CATALOG: List[Dict[str, Any]] = [
      "engine": "enterprise", "fetcher": "phenom", "host": "jobs.merck.com", "extra": {}},
     {"display_name": "Eli Lilly", "slug": "lilly", "sector": "healthcare_pharma",
      "engine": "enterprise", "fetcher": "phenom", "host": "careers.lilly.com", "extra": {}},
+    # Was `aggregator`. Fingerprinted off careers.jnj.com and validated live on
+    # 2026-08-27: 1,811 postings.
     {"display_name": "Johnson & Johnson", "slug": "jnj", "sector": "healthcare_pharma",
-     "engine": "aggregator", "aliases": ["johnson and johnson"]},
+     "engine": "workday", "tenant": "jj", "wd_host": "wd5", "site": "JJ"},
     {"display_name": "UnitedHealth Group", "slug": "unitedhealthgroup", "sector": "healthcare_pharma",
      "engine": "aggregator", "aliases": ["unitedhealthcare", "optum"]},
     {"display_name": "CVS Health", "slug": "cvshealth", "sector": "healthcare_pharma",
@@ -155,8 +180,11 @@ MNC_CATALOG: List[Dict[str, Any]] = [
      "engine": "aggregator", "aliases": ["mckinsey and company"]},
     {"display_name": "Deloitte", "slug": "deloitte", "sector": "consulting",
      "engine": "aggregator", "aliases": ["deloitte us", "deloitte consulting"]},
+    # Was `aggregator`. Fingerprinted off accenture.com/careers and validated
+    # live on 2026-08-27: 2,000 postings. Note the pod - wd103, not wd1/wd5.
     {"display_name": "Accenture", "slug": "accenture", "sector": "consulting",
-     "engine": "aggregator", "aliases": []},
+     "engine": "workday", "tenant": "accenture", "wd_host": "wd103",
+     "site": "AccentureCareers"},
     {"display_name": "PwC", "slug": "pwc", "sector": "consulting",
      "engine": "workday", "tenant": "pwc", "wd_host": "wd3", "site": "Global_Experienced_Careers"},
     {"display_name": "Gartner", "slug": "gartner", "sector": "consulting",
@@ -179,8 +207,13 @@ MNC_CATALOG: List[Dict[str, Any]] = [
      "engine": "aggregator", "aliases": ["tesla motors"]},
     {"display_name": "Boeing", "slug": "boeing", "sector": "automotive_aerospace",
      "engine": "workday", "tenant": "boeing", "wd_host": "wd1", "site": "EXTERNAL_CAREERS"},
+    # Was `aggregator`. Eightfold, and specifically the `pcsx` variant with
+    # `domain=lockheedmartin.com`: the `classic` /api/apply/v2/jobs path 403s on
+    # this tenant while pcsx returns 2,195 postings. Verified 2026-08-27.
     {"display_name": "Lockheed Martin", "slug": "lockheedmartin", "sector": "automotive_aerospace",
-     "engine": "aggregator", "aliases": []},
+     "engine": "enterprise", "fetcher": "eightfold",
+     "host": "lockheedmartin.eightfold.ai",
+     "extra": {"domain": "lockheedmartin.com", "variant": "pcsx"}},
     {"display_name": "Northrop Grumman", "slug": "northropgrumman", "sector": "automotive_aerospace",
      "engine": "workday", "tenant": "ngc", "wd_host": "wd1", "site": "Northrop_Grumman_External_Site"},
     {"display_name": "General Motors", "slug": "generalmotors", "sector": "automotive_aerospace",

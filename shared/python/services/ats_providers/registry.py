@@ -58,7 +58,7 @@ def _load_builtins() -> None:
     # logged, never raised: one broken vendor module must not take down job
     # search for every other vendor.
     for mod in ("boards", "workday", "oracle_orc", "icims", "taleo",
-                "payroll", "enterprise"):
+                "payroll", "enterprise", "amazon", "radancy"):
         try:
             __import__(f"services.ats_providers.{mod}")
         except Exception as exc:  # pragma: no cover - defensive

@@ -434,13 +434,25 @@ def test_role_family_uses_the_same_taxonomy_the_scorer_uses():
 
 def test_seniority_uses_the_scorer_taxonomy():
     assert inv.seniority_of("Staff Backend Engineer") == "staff"
-    assert inv.seniority_of("Backend Engineer Intern") == "entry"
+    # `intern` is its own band, no longer folded into `entry`. A candidate six
+    # weeks from graduating wants new-grad roles, and a feed that answers
+    # "entry" with unpaid summer positions is not answering the question.
+    assert inv.seniority_of("Backend Engineer Intern") == "intern"
+    assert inv.seniority_of("New Grad Backend Engineer") == "entry"
+    # Resolved from the posting's own stated requirement, not the title.
+    assert inv.seniority_of("Backend Engineer", required_years=1) == "entry"
+    assert inv.seniority_of("Backend Engineer", required_years=8) == "staff"
+    assert inv.seniority_of(
+        "Backend Engineer",
+        description="We are hiring recent graduates; 0-2 years of experience.",
+    ) == "entry"
     # Was pinned to "mid". Changed deliberately: `fit_score.title_level` returns
     # None here, and storing that as `mid` asserted a level the posting never
     # stated, then let an equality filter hide every unmarked title from any
     # other band. See test_an_unmarked_title_is_unknown_not_mid below.
     assert inv.seniority_of("Backend Engineer") == inv.SENIORITY_UNKNOWN
-    assert set(inv.SENIORITY_LEVELS) >= {"entry", "mid", "senior", "staff"}
+    assert set(inv.SENIORITY_LEVELS) >= {"intern", "entry", "mid", "senior",
+                                        "staff"}
     assert inv.SENIORITY_UNKNOWN not in inv.SENIORITY_LEVELS
 
 

@@ -1796,18 +1796,45 @@ def normalize_seniority(value: Any) -> str:
     return v if v in GUEST_SENIORITY_LEVELS else "any"
 
 
+#: `fit_score.LEVELS` folded onto the three views this toggle offers.
+#: Internships land in `entry` because the guest toggle has no fourth view;
+#: the authenticated feed keeps them apart.
+_GUEST_VIEW_OF_LEVEL: Dict[str, str] = {
+    "intern": "entry", "entry": "entry", "mid": "mid", "senior": "senior",
+    "staff": "senior", "director": "senior", "executive": "senior",
+}
+
+
 def _seniority_of(title: Any) -> str:
-    """Deterministic title-marker classifier: 'senior' | 'mid' | 'entry' |
-    'neutral' (no marker — shows in every view). Senior markers win so
-    "Senior Associate" classifies senior."""
+    """'senior' | 'mid' | 'entry' | 'neutral' (no marker — shows everywhere).
+
+    Delegates to `fit_score.title_level`, the one classifier the crawler, the
+    inventory and the scorer all use. The three regexes this used to own were
+    a fourth, weaker copy of that vocabulary, and because `_SENIORITY_ALLOWED`
+    turns the result into a HARD exclusion, everything the copy missed was
+    invisible in the view it belonged to. It had no "campus", "rotational",
+    "trainee", "fresher", "university graduate", "associate", "level 1" or
+    "Engineer I/II" — i.e. most of how large employers actually title their
+    graduate pipeline — so an `entry` guest was shown almost nothing, which is
+    exactly the complaint that prompted this. It also read "Lead" and
+    "Architect" as senior with no regard for "Lead Cashier".
+
+    Falls back to the local regexes only if the scorer cannot be imported: this
+    is a display filter and it must degrade, not raise.
+    """
     t = str(title or "")
-    if _SENIOR_TITLE_RE.search(t):
-        return "senior"
-    if _ENTRY_TITLE_RE.search(t):
-        return "entry"
-    if _MID_TITLE_RE.search(t):
-        return "mid"
-    return "neutral"
+    try:
+        from services import fit_score
+        level = fit_score.title_level(t)
+        return _GUEST_VIEW_OF_LEVEL.get(level or "", "neutral")
+    except Exception:  # pragma: no cover - taxonomy unavailable
+        if _SENIOR_TITLE_RE.search(t):
+            return "senior"
+        if _ENTRY_TITLE_RE.search(t):
+            return "entry"
+        if _MID_TITLE_RE.search(t):
+            return "mid"
+        return "neutral"
 
 
 # A marker EXCLUDES mismatched views; neutral titles show everywhere.

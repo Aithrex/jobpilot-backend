@@ -103,6 +103,9 @@ class PhenomProvider(AtsProvider):
         "talent.lowes.com",
         "jobs.ecolab.com",
         "careers.landolakesinc.com",
+        # From MNC_CATALOG, which the background crawl now loads. Verified
+        # 2026-08-27: POST /widgets returns real postings.
+        "careers.toyota.com",
         ".phenompeople.com",
     )
     portal_hosts = api_hosts
@@ -227,6 +230,9 @@ class EightfoldProvider(AtsProvider):
     api_hosts = (
         "apply.careers.microsoft.com",
         "explore.jobs.netflix.net",
+        # From MNC_CATALOG, which the background crawl now loads. Verified
+        # 2026-08-27: the pcsx search returns 710 US openings.
+        "careers.qualcomm.com",
         ".eightfold.ai",
     )
     portal_hosts = api_hosts

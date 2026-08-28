@@ -187,3 +187,45 @@ class TestHasForeignMarker:
                                           "Austin, TX", "US", ""])
     def test_false_for_ambiguous_or_us(self, location):
         assert us_geo.has_foreign_marker(location) is False
+
+
+# ---------------------------------------------------------------------------
+# Foreign hub whose subdivision code collides with a US state code
+# ---------------------------------------------------------------------------
+
+class TestForeignHubStateCodeCollision:
+    """The tier-2 rescue must not fire on a city's OWN region.
+
+    Audited against live inventory (2026-08-27): of 17,208 clearly-non-US
+    active postings, `keep_us` kept 248 - and 243 of those were genuine US
+    towns the audit's own regex had flagged by name (Dublin OH, Paris KY,
+    Vancouver WA, Melbourne FL). The other five were real leaks, all one shape:
+
+        "Chennai, TN"  -> TN is Tamil Nadu, read as Tennessee   (4, JLL)
+        "Jakarta, ID"  -> ID is Indonesia,  read as Idaho       (1, S&P Global)
+
+    There is no Chennai, Tennessee. For a hub with no US namesake the rescue
+    can only ever be wrong.
+    """
+
+    @pytest.mark.parametrize("loc", [
+        "Chennai, TN", "Jakarta, ID", "Bengaluru, KA", "Bhubaneswar, OR",
+        "Hyderabad, TS", "Pune, MH", "Shenzhen, GD", "Dubai, DU",
+    ])
+    def test_a_hub_with_no_us_namesake_is_never_rescued(self, loc):
+        assert us_geo.keep_us(loc) is False, loc
+
+    @pytest.mark.parametrize("loc", [
+        "Dublin, OH", "Dublin, CA", "Paris, KY", "Vancouver, WA",
+        "Berlin, CT", "London, KY", "Ontario, CA",
+        "United States-Florida-Melbourne", "Delhi, NY",
+    ])
+    def test_a_genuine_us_namesake_still_survives(self, loc):
+        """The rescue exists for these; narrowing it must not cost them."""
+        assert us_geo.keep_us(loc) is True, loc
+
+    @pytest.mark.parametrize("loc", [
+        "Toronto, Ontario, Canada", "Bangalore, India", "London, UK",
+    ])
+    def test_explicitly_foreign_still_drops(self, loc):
+        assert us_geo.keep_us(loc) is False, loc

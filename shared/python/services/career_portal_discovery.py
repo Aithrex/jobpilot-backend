@@ -144,24 +144,42 @@ def candidate_domains(name: str, known: str = "") -> List[str]:
     see `_page_mentions`. A wrong guess costs one HEAD-ish request and is
     discarded; it never produces an endpoint on its own.
     """
+    out_known: List[str] = []
     if known:
         host = known.strip().lower()
         host = re.sub(r"^https?://", "", host).split("/")[0]
         if host:
-            return [host]
+            # FIRST, not ONLY. Returning just the stored value meant a bad
+            # stored domain suppressed every derivable guess as well as
+            # skipping confirmation - two failures compounding, and the reason
+            # `amazon-com.com` could park Amazon at zero endpoints forever.
+            out_known = [host]
     base = _LEGAL_WORDS.sub(" ", str(name or "").lower())
     base = re.sub(r"[^a-z0-9\s\-]", " ", base)
     tokens = [t for t in base.split() if t]
     if not tokens:
-        return []
+        return out_known
     joined = "".join(tokens)
     hyphen = "-".join(tokens)
-    out: List[str] = []
-    for stem in dict.fromkeys([joined, hyphen, tokens[0] if len(tokens) > 1 else ""]):
-        if not stem or len(stem) < 3:
-            continue
-        out.extend([f"{stem}.com", f"www.{stem}.com"])
-    return out[:4]
+    first = tokens[0] if len(tokens) > 1 else ""
+
+    # BARE stems before their `www.` twins, and the first-token stem right
+    # after the joined one. The old order was
+    # [joined, www.joined, hyphen, www.hyphen, first] truncated to 4, which put
+    # the single-word form - the one companies with a multi-word legal name
+    # actually own - off the end of the list entirely.
+    #
+    # It cost real employers. Live discovery run, 2026-08-27:
+    #   PALANTIR TECHNOLOGIES INC -> settled on `palantir-technologies.com`
+    #                                and reported "no ATS link found";
+    #                                `palantir.com` serves a Lever board.
+    #   SAP SE                    -> settled on `www.sapse.com`; sap.com.
+    # Both were then written as `no_portal`, which is terminal.
+    stems = [t for t in dict.fromkeys([joined, first, hyphen])
+             if t and len(t) >= 3]
+    out = [f"{stem}.com" for stem in stems]
+    out += [f"www.{stem}.com" for stem in stems]
+    return list(dict.fromkeys(out_known + out))[:6]
 
 
 def _resolves(host: str) -> bool:
@@ -172,19 +190,59 @@ def _resolves(host: str) -> bool:
         return False
 
 
-def _page_mentions(body: str, name: str) -> bool:
+def _name_tokens(name: str) -> List[str]:
+    """Significant tokens of a company name (legal suffixes removed)."""
+    return [t for t in re.split(r"\W+", str(name or "").lower())
+            if len(t) > 3 and not _LEGAL_WORDS.match(t)]
+
+
+def _page_mentions(body: str, name: str, *, host: str = "",
+                   ticker: str = "") -> bool:
     """Cheap confirmation that a guessed domain belongs to this company.
 
-    Guarding against the very common case where `<name>.com` is a parked domain
-    or an unrelated business. Matches on the longest name token so
-    "Acme Widgets LLC" is confirmed by a page mentioning "Acme".
+    Guards the very common case where `<name>.com` is a parked domain or an
+    unrelated business.
+
+    Requires EVERY significant token, not just the longest one. The old
+    longest-token rule confirmed "MICRON TECHNOLOGY INC" from any page saying
+    "technology", which is most pages on the internet; a multi-token name is
+    the main thing that makes a guess checkable at all, and using one token
+    threw that away.
+
+    A ticker printed on the page is accepted as proof on its own, because a
+    site that names the registrant's ticker is that registrant's site.
+
+    KNOWN LIMITATION - two companies can share a name, and no amount of reading
+    the homepage distinguishes them. Live example from this registry:
+    `alphabet.com` was stored as the domain for **Alphabet Inc.** (Google's
+    parent) and is actually **BMW's Alphabet**, the fleet-leasing business. Its
+    homepage says "Alphabet", so every text rule here passes it. What protects
+    the inventory in that case is not this function but the fact that a guessed
+    domain is now re-confirmed on every run rather than trusted once and stored
+    forever (see `_resolve_domain`), plus the catalogs, which reach the large
+    ambiguous names by fingerprint rather than by guess.
     """
-    tokens = [t for t in re.split(r"\W+", str(name or "").lower())
-              if len(t) > 3 and not _LEGAL_WORDS.match(t)]
+    low = (body or "").lower()
+    tick = str(ticker or "").strip().lower()
+    if tick and len(tick) >= 3 and re.search(rf"\b{re.escape(tick)}\b", low):
+        return True
+    tokens = _name_tokens(name)
     if not tokens:
         return True
-    longest = max(tokens, key=len)
-    return longest in (body or "").lower()
+    if all(t in low for t in tokens):
+        return True
+    # A host whose registrable stem IS the name, on a page that says it, is the
+    # ordinary "cognex.com belongs to COGNEX CORP" case that all-token matching
+    # would be too strict for.
+    #
+    # SINGLE-token names only. Allowing it for multi-token names re-opens the
+    # hole: `candidate_domains("Advanced Micro Devices Inc")` offers
+    # `advanced.com`, whose stem is a name token and whose page says
+    # "advanced", so the guess would confirm against an unrelated company.
+    if len(tokens) != 1:
+        return False
+    stem = re.sub(r"^www\.", "", str(host or "").lower()).split(".")[0]
+    return bool(stem) and stem == tokens[0] and stem in low
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +257,9 @@ class DiscoveryResult:
     endpoints: List[Endpoint] = field(default_factory=list)
     validated: List[Tuple[Endpoint, ValidationResult]] = field(default_factory=list)
     pages_fetched: int = 0
+    #: Of those, how many were a CAREERS page rather than marketing pages off
+    #: the homepage. `no_portal` is gated on this - see `_persist`.
+    career_pages_read: int = 0
     unknown_hosts: Dict[str, int] = field(default_factory=dict)
     blocked: bool = False
     detail: str = ""
@@ -352,11 +413,11 @@ class PortalDiscovery:
     # -- the pass ------------------------------------------------------------
 
     def discover(self, name: str, *, domain: str = "",
-                 company_id: str = "") -> DiscoveryResult:
+                 company_id: str = "", ticker: str = "") -> DiscoveryResult:
         res = DiscoveryResult(company_id=company_id, name=name)
-        host = self._resolve_domain(name, domain, res)
+        host = self._resolve_domain(name, domain, res, ticker=ticker)
         if not host:
-            res.detail = "no reachable domain"
+            res.detail = res.detail or "no reachable domain"
             return res
         res.domain = host
 
@@ -400,6 +461,12 @@ class PortalDiscovery:
             if not html:
                 continue
             pages += 1
+            # Did we actually reach a CAREERS page, or just more marketing
+            # site? `no_portal` is only a claim we can make about an employer
+            # whose careers page we read, so the two are counted separately.
+            if _CAREER_TEXT_RE.search(urlparse(target).path or "") or \
+                    _CAREER_TEXT_RE.search(target):
+                res.career_pages_read += 1
             urls_seen.append(target)
             urls_seen.extend(self.extract_urls(html, target))
 
@@ -484,21 +551,36 @@ class PortalDiscovery:
                     break
         return found
 
-    def _resolve_domain(self, name: str, domain: str,
-                        res: DiscoveryResult) -> str:
+    def _resolve_domain(self, name: str, domain: str, res: DiscoveryResult,
+                        ticker: str = "") -> str:
+        """The company's own site, confirmed - never merely supplied.
+
+        A stored `domain` used to be returned unverified ("caller-supplied:
+        trust it"). It is not ground truth: the stored values were written by
+        an EARLIER discovery guess, so the shortcut promoted one unconfirmed
+        guess into permanent fact and skipped the only check that would have
+        caught it. Two live examples from this registry: `AMAZON COM INC` was
+        stored as `amazon-com.com`, a parked host that answers 202 with an
+        empty page, and `Alphabet Inc.` as `alphabet.com`, which is BMW's
+        fleet-leasing business.
+
+        Confirming costs nothing extra: the homepage is fetched moments later
+        anyway to read its career links, so this is the same request either
+        way. A supplied domain still goes FIRST - it is a strong hint - it just
+        no longer bypasses the check.
+        """
         for cand in candidate_domains(name, domain):
             if self.ctx.should_stop():
                 return ""
             if not _resolves(cand):
                 continue
-            if domain:
-                return cand      # caller-supplied: trust it, do not re-confirm
             html = self._get_html(f"https://{cand}/")
             if html is None:
                 continue
             res.pages_fetched += 1
-            if _page_mentions(html, name):
+            if _page_mentions(html, name, host=cand, ticker=ticker):
                 return cand
+            res.detail = "domain did not confirm"
         return ""
 
     @staticmethod
@@ -592,6 +674,7 @@ def discover_batch(companies: Sequence[Dict[str, Any]], ctx: FetchContext, *,
         try:
             engine = PortalDiscovery(ctx, validate=validate)
             result = engine.discover(name, domain=str(row.get("domain") or ""),
+                                     ticker=str(row.get("ticker") or ""),
                                      company_id=str(row.get("company_id") or ""))
         except Exception as exc:
             with lock:
@@ -676,11 +759,33 @@ def _persist(result: DiscoveryResult) -> None:
             state = reg.DISCOVERY_DONE
         elif result.blocked or _inconclusive(result):
             state = reg.DISCOVERY_DEFERRED
+        elif not result.career_pages_read:
+            # We read the marketing site and never reached a careers page, so
+            # we have not looked where the answer lives. Saying "this employer
+            # has no careers page" on that basis is the same unfounded terminal
+            # claim `scripts/requeue_unfounded_no_portal.py` had to repair 2,058
+            # of - it just carries evidence now, which makes it auditable
+            # rather than correct.
+            state = reg.DISCOVERY_DEFERRED
+            result.detail = (result.detail
+                             or f"read {result.pages_fetched} page(s) on "
+                                f"{result.domain or '?'}, none of them a "
+                                f"careers page")
         else:
             state = reg.DISCOVERY_NO_PORTAL
+        # A terminal state MUST carry its evidence. 2,058 of the 2,059
+        # `no_portal` rows in the live queue recorded an empty detail, so
+        # there is no way to tell from the record whether we ever fetched a
+        # page - and the claim is unfalsifiable rather than merely wrong. It
+        # matters most exactly where it is least believable: NVIDIA, Apple,
+        # Microsoft, Salesforce, Broadcom, SAP, Dell, Palantir and Shopify
+        # were all filed as having no careers page.
+        detail = result.detail or (
+            f"read {result.pages_fetched} page(s) on {result.domain or '?'}, "
+            f"no ATS link found")
         reg.complete_discovery(result.company_id, state=state,
                                endpoints_found=result.found,
-                               detail=result.detail)
+                               detail=detail)
 
 
 #: Result details that mean "we did not get a fair look", not "no portal".
@@ -869,7 +974,11 @@ def run_discovery_worker(*, batch: Optional[int] = None,
                 pass
             companies.append({"company_id": item["company_id"],
                               "name": doc.get("name") or "",
-                              "domain": doc.get("domain") or ""})
+                              "domain": doc.get("domain") or "",
+                              # Proof a guessed domain belongs to THIS
+                              # registrant: a site printing the ticker is that
+                              # registrant's site. Positive signal only.
+                              "ticker": doc.get("ticker") or ""})
 
         ctx = simple_context(budget_seconds=max(1.0, remaining),
                              global_rate=DISCOVERY_GLOBAL_RATE,

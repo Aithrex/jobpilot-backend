@@ -118,6 +118,28 @@ class CrawlPolicy:
     # --- paging ---
     page_size: int = 50
     max_pages: int = 20
+    # How many CONSECUTIVE fully-stale pages a termless crawl tolerates before
+    # it concludes the board holds nothing fresher and stops.
+    #
+    # 0 keeps the original rule: stop at the FIRST row older than the cutoff.
+    # That rule assumes a termless listing is globally sorted newest-first, and
+    # for Workday that assumption is measurably false. Measured 2026-08-27
+    # against `cisco.wd5` (`Cisco_Careers`, 1,227 postings, empty searchText):
+    #
+    #     offset   0  -> "Posted Today" x5, "Posted Yesterday"
+    #     offset  20  -> "Posted 10 Days Ago"          <-- old rule stops here
+    #     offset 100..459 -> a CONTIGUOUS block containing 336 rows <= 7 days
+    #
+    # The board is ordered newest-first only WITHIN blocks; the blocks
+    # themselves are not ordered against each other. Stopping at the first
+    # stale row therefore ingested ~20 of Cisco's 336 fresh postings, and the
+    # same shape held for NVIDIA (434 fresh in the first 600) and Intel (a
+    # stale row on page ONE). That single rule is why large Workday employers
+    # showed up in the feed with a handful of rows each.
+    #
+    # A vendor whose listing really is globally ordered leaves this at 0 and
+    # keeps the cheaper stop.
+    stale_page_tolerance: int = 0
 
     def is_challenge(self, status: Optional[int], body: str = "") -> bool:
         """True when a response is a soft block rather than a real answer."""
@@ -337,6 +359,17 @@ class FetchContext:
     logger: Any = None
     # Free-form knobs (search terms for term-driven vendors, etc.)
     options: Dict[str, Any] = field(default_factory=dict)
+    #: Set by a provider when its listing stopped for a reason OTHER than
+    #: "the board is exhausted or conclusively older than the cutoff" - i.e.
+    #: the page cap, the deadline, or cooperative cancellation.
+    #:
+    #: The crawler MUST NOT treat a truncated listing as a complete census of
+    #: the employer's fresh openings: `job_ingest_worker._close_stale_in_shard`
+    #: closes postings a listed member did not re-see, so a member that was cut
+    #: short would have its unreached-but-live postings marked closed on every
+    #: tick. That is inventory deletion caused by a page cap, not by an
+    #: employer taking a job down.
+    listing_truncated: bool = False
 
     def should_stop(self) -> bool:
         import time as _time

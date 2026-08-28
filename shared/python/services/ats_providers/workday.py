@@ -12,11 +12,22 @@ Three facts about that request are load-bearing and none of them are guessable:
 
 * **`limit` is capped at 20.** Larger values are not honoured, so a board is
   walked 20 rows at a time and page count — not page size — is the budget.
-* **An EMPTY `searchText` returns the tenant's whole board in posted-date
-  order.** That is what makes Workday termless under ADR-003 and lets the crawl
-  early-stop at the freshness boundary. The old live path crossed every tenant
+* **An EMPTY `searchText` returns the tenant's whole board.** That is what
+  makes Workday termless under ADR-003. The old live path crossed every tenant
   with up to six search terms, which is where 6,078 of ~7,400 requests came
-  from, and a term query is relevance-ordered, so it cannot early-stop at all.
+  from, and a term query is relevance-ordered.
+* **That termless board is NOT globally sorted newest-first.** This file used
+  to claim it was, and the crawl's early-stop rule was built on the claim.
+  Measured 2026-08-27 on `cisco.wd5/Cisco_Careers` (1,227 postings): offset 0
+  is "Posted Today", offset 20 opens with "Posted 10 Days Ago" - and offsets
+  100 through 459 hold a contiguous block of 336 postings no more than 7 days
+  old. Workday orders newest-first WITHIN blocks and does not order the blocks
+  against each other, so "the first old row means the rest are older" is false
+  and cost this employer ~94% of its fresh inventory. `CrawlPolicy.stale_page_
+  tolerance` replaces that rule with a run of consecutive all-stale pages. No
+  server-side sort parameter fixes this: `sortBy=POSTING_DATE_DESC`, `sort`,
+  `sortBy=postedOn` and a `jobPostingDate` facet were each probed live and all
+  four returned byte-identical pages to the unsorted request.
 * **The URL has THREE identity components**, not one: tenant, the `wdN` pod the
   customer is hosted on, and the site path. Guessing costs
   `103 host variants x N site names` per company, which is why discovery
@@ -43,6 +54,7 @@ therefore proves nothing, and the client-side geo filter downstream always runs.
 """
 from __future__ import annotations
 
+import os
 import re
 import threading
 from typing import Any, Dict, Iterator, Optional, Set, Tuple
@@ -55,6 +67,15 @@ from services.ats_providers.base import (DATE_RELATIVE, DATE_UNKNOWN,
                                          RawJob, ValidationResult, fp)
 from services.ats_providers.registry import register
 from services.ats_providers.util import from_relative, html_to_text, looks_remote
+
+
+def _env_int(name: str, default: int) -> int:
+    """Crawl-budget knob, readable without a deploy."""
+    try:
+        return int(str(os.getenv(name, "")).strip() or default)
+    except (TypeError, ValueError):
+        return default
+
 
 _HOST_SUFFIX = ".myworkdayjobs.com"
 
@@ -118,10 +139,37 @@ class WorkdayProvider(AtsProvider):
         timeout=8.0,
         detail_timeout=6.0,
         challenge_statuses=frozenset({429}),
-        # NOT tunable: CXS ignores a larger `limit`. The crawl budget is
-        # therefore spent in pages, and the cutoff normally ends it far sooner.
+        # NOT tunable: CXS ignores a larger `limit` (a `limit` of 100 is a
+        # hard 400). The crawl budget is therefore spent in pages.
         page_size=20,
-        max_pages=5,
+        # 5 pages = 100 rows, and the old first-stale-row stop usually ended a
+        # tenant at 20. Measured against live boards (see `stale_page_tolerance`
+        # on `CrawlPolicy`), a large tenant's fresh postings run to offset ~450
+        # and beyond, so 100 rows could not reach most of them no matter what
+        # the stop rule said. 30 pages = 600 rows, which covered every fresh row
+        # on Cisco (336 fresh, last at offset 459) and NVIDIA (434 fresh in the
+        # first 600) in one pass. At ~0.35s/page that is ~10s per tenant; a
+        # 48-shard split gives ~21 tenants per shard against a 90s budget with
+        # 6 listing workers, and `MEMBER_BUDGET_SECONDS` still caps any single
+        # slow tenant.
+        max_pages=_env_int("WORKDAY_MAX_LISTING_PAGES", 30),
+        # Workday is ordered newest-first only WITHIN blocks, so the crawl has
+        # to be able to step OVER a run of old ones. Sized from the measured
+        # gaps, not guessed: Cisco's fresh block starts at offset 100 behind
+        # four consecutive all-stale pages (offsets 20-80), so a tolerance of 3
+        # stops one page short of 318 live postings. Verified end to end
+        # against the real boards on 2026-08-27, fresh rows recovered per
+        # tenant (7-day cutoff, was ~20 each):
+        #
+        #     tolerance=3   tolerance=8   independent full-board count
+        #   Cisco      18          336          336
+        #   Intel     124          124          124
+        #   NVIDIA    433          433          434 (in the first 600)
+        #   Citi      600          600          600+ (board deeper than 30 pages)
+        #
+        # Eight pages is 160 consecutive stale rows, which still ends a board
+        # that has genuinely run out of fresh postings well inside `max_pages`.
+        stale_page_tolerance=_env_int("WORKDAY_STALE_PAGE_TOLERANCE", 8),
     )
 
     fingerprints = (
@@ -216,9 +264,18 @@ class WorkdayProvider(AtsProvider):
         us_only = bool((ctx.options or {}).get("us_only", True))
         facets = self._initial_facets(endpoint.tenant, us_only)
 
-        for page in range(int(self.policy.max_pages)):
+        max_pages = max(1, int(self.policy.max_pages))
+        tolerance = max(0, int(getattr(self.policy, "stale_page_tolerance", 0)))
+        stale_streak = 0
+        pages_read = 0
+        for page in range(max_pages):
             if ctx.should_stop():
+                # Out of budget with the board not exhausted. Say so: the
+                # crawler must not read a cut-short listing as "these are all
+                # the fresh openings this employer has" and close the rest.
+                ctx.listing_truncated = True
                 return
+            pages_read += 1
             body: Dict[str, Any] = {
                 "searchText": keyword,
                 "locations": [],
@@ -242,6 +299,10 @@ class WorkdayProvider(AtsProvider):
             if self.policy.is_challenge(status):
                 raise ChallengeError(self.vendor, status)
             if status != 200 or not isinstance(payload, dict):
+                # An error PART WAY through a board leaves the rest unread.
+                # Only a clean first-page failure is "this member has nothing".
+                if pages_read > 1:
+                    ctx.listing_truncated = True
                 return
 
             postings = [p for p in (payload.get("jobPostings") or [])
@@ -249,27 +310,43 @@ class WorkdayProvider(AtsProvider):
             if not postings:
                 return
 
-            crossed_cutoff = False
+            # A page is "stale" only when it produced NO row inside the
+            # cutoff. Unlike the old rule, a single old row no longer ends the
+            # crawl: Workday interleaves blocks that are each newest-first but
+            # are not ordered against one another, so the row after an old one
+            # is routinely fresh. See `CrawlPolicy.stale_page_tolerance`.
+            page_fresh = 0
             for posting in postings:
                 job = self._to_raw(endpoint, base, site, posting)
                 if job is None:
                     continue
                 if (ctx.cutoff_iso and job.posted_at
                         and job.posted_at < ctx.cutoff_iso):
-                    if keyword:
-                        # A term query is RELEVANCE-ordered, so an old row says
-                        # nothing about the rows after it. Drop this one and
-                        # keep reading.
-                        continue
-                    # Termless queries are newest-first, so everything below
-                    # this row is older too: stop the page and the paging.
-                    crossed_cutoff = True
-                    break
+                    # Old row: skipped, whether the query carried a term or
+                    # not. A term query is relevance-ordered and a termless one
+                    # is only block-ordered, so in neither case does this row
+                    # say anything about the rows after it.
+                    continue
+                page_fresh += 1
                 yield job
-            if crossed_cutoff:
-                return
+
+            if page_fresh:
+                stale_streak = 0
+            else:
+                stale_streak += 1
+                if stale_streak > tolerance:
+                    # `tolerance` consecutive pages with nothing fresh. With
+                    # tolerance=0 this is exactly the old "stop at the first
+                    # stale page" rule, which is what a globally-ordered vendor
+                    # still wants.
+                    return
+
             if len(postings) < page_size:
+                # A short page is the end of the board, not a stale run.
                 return
+
+        # Fell out of the loop: the page cap stopped us, not the board.
+        ctx.listing_truncated = True
 
     @staticmethod
     def _initial_facets(tenant: str, us_only: bool) -> Dict[str, Any]:

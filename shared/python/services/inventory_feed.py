@@ -123,14 +123,34 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
     """
     from services.workday_jobs_service import _days_ago
 
+    # A posting whose VENDOR publishes no date is still a real opening.
+    #
+    # This used to `return None` for it, and combined with the retrieval gate
+    # that meant 9,456 active postings - 7,725 of them iCIMS, including all 275
+    # of PepsiCo's - were crawled, stored, and unreachable by any user. iCIMS
+    # search results are HTML with the date only on the detail page, so this
+    # was not a handful of odd rows, it was most of a source.
+    #
+    # ADR-001 says never CLAIM a date we do not have. It does not say hide the
+    # job. So the row is kept, dated by `first_seen_at` - when the crawler
+    # actually observed it live, a real lower bound rather than an assumption -
+    # and labelled `date_confidence: "unknown"` with a posted_text that says so,
+    # rather than being given a posting date it never published. `days_ago`
+    # stays None, which every consumer already treats as "sorts last".
     posted_at = doc.get("posted_at")
-    if not isinstance(posted_at, datetime):
-        return None
+    dated = isinstance(posted_at, datetime)
+    if not dated:
+        posted_at = doc.get("first_seen_at")
+        if not isinstance(posted_at, datetime):
+            return None
     aware = posted_at if posted_at.tzinfo else posted_at.replace(tzinfo=timezone.utc)
     iso = aware.isoformat()
     days = _days_ago(iso, tz_offset)
     if days is None:
         return None
+    seen_days = days
+    if not dated:
+        days = None
 
     locations = doc.get("locations") or []
     first = locations[0] if isinstance(locations, list) and locations else {}
@@ -155,9 +175,15 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
         "location": location or "Not specified",
         "country_hint": country.lower(),
         "country_code": "US" if country.lower() in ("us", "usa", "united states") else None,
-        "date_posted": iso,
+        "date_posted": iso if dated else "",
         "days_ago": days,
-        "posted_text": _posted_text(days),
+        # What the row can honestly say about its age. A dated row gets the
+        # usual "2 days ago"; an undated one says when we first SAW it, which
+        # is a different and weaker claim, and is labelled as such.
+        "posted_text": (_posted_text(days) if dated
+                        else f"First seen {_posted_text(seen_days).lower()}"),
+        "date_confidence": ("exact" if dated else "unknown"),
+        "first_seen_days_ago": seen_days,
         "apply_link": url,
         "url": url,
         "description": "",          # body lives in S3; scoring uses requirements
@@ -461,6 +487,10 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
             max_age_days=WINDOW_DAYS,
             work_mode="remote" if remote_only else None,
             limit=CANDIDATE_LIMIT,
+            # The authenticated tabs are a browse surface, not the guest
+            # freshness promise, so a posting whose vendor publishes no date
+            # belongs here - ranked below every dated row, never hidden.
+            include_undated=True,
         )
     except Exception as exc:
         logger.warning("inventory_feed: retrieval failed for %s: %s",
@@ -503,15 +533,32 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
 
     _score_rows(rows, user_email, skills, resume_years, profile=profile)
     # Live re-classify: stale inventory may still tag Systems Engineer as
-    # software_engineering. Keep only rows whose live title family is in the
-    # retrieval set (resume titles + resume profile families).
+    # software_engineering. Keep rows whose live title family is in the
+    # retrieval set (resume titles + resume profile families) - and rows the
+    # classifier cannot place at all.
+    #
+    # That second clause is the fix for a silent drop. `classify_role` returns
+    # None rather than guessing, and the old expression turned that None into
+    # `""`, which is in no `allowed` set, so every title the taxonomy has no
+    # rule for was deleted here AFTER retrieval had deliberately kept it -
+    # `job_inventory_service.role_family_of` documents in as many words that
+    # "other" means unclassified and "is never used to exclude a posting from
+    # retrieval". Two layers, opposite rules, and the stricter one ran last.
+    #
+    # It lands hardest on exactly the postings an early-career seeker needs:
+    # "Technology Analyst", "Associate Consultant", "Rotational Program
+    # Associate" and most graduate-programme titles name no discipline, so the
+    # classifier declines - correctly - and the feed then threw them away.
+    # An off-family row that survives here is not a precision problem: ordering
+    # is decided by `fit_score`, which scores it below the rows already shown.
     if families:
         from services import fit_score
         allowed = set(families)
-        rows = [
-            r for r in rows
-            if (fit_score.classify_role(r.get("title") or "") or "") in allowed
-        ]
+        def _in_family(row: Dict[str, Any]) -> bool:
+            fam = fit_score.classify_role(row.get("title") or "")
+            return fam is None or fam in allowed
+
+        rows = [r for r in rows if _in_family(r)]
     from services.career_pages_catalog import marketplace_sort_key
     rows.sort(key=lambda j: (
         marketplace_sort_key(j),

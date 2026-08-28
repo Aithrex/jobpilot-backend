@@ -185,3 +185,88 @@ def test_jobvite_and_bamboohr_fingerprints_capture_tenant():
     assert hit is not None
     assert hit[0].vendor == "bamboohr"
     assert hit[1]["tenant"] == "acme"
+
+
+# ---------------------------------------------------------------------------
+# Catalog <-> registry coverage
+# ---------------------------------------------------------------------------
+
+def test_every_catalog_vendor_has_a_registered_provider():
+    """A catalog row naming a vendor with no provider is dropped in silence.
+
+    That is not a hypothetical. `ENTERPRISE_CATALOG` carried
+    `{"display_name": "Amazon", "ats": "amazon", ...}` from the day it was
+    written, no `amazon` provider was ever registered, and
+    `job_ingest_worker._load_career_members` skips any row whose `ats` is not
+    in the registry - so a live `job_postings` query for Amazon returned ZERO
+    while the catalog claimed to cover it, and `inventory_feed` even carried an
+    "Amazon Jobs" badge for a source that had never produced a posting.
+
+    The crawler now logs that skip. This test is the other half: the catalogs
+    and the registry must not drift apart in the first place.
+    """
+    from services.ats_providers import registry as ats_registry
+
+    known = set(ats_registry.vendors())
+    missing = {}
+
+    from services.career_pages_catalog import CAREER_PAGES_CATALOG
+    for row in CAREER_PAGES_CATALOG:
+        ats = str(row.get("ats") or "").strip().lower()
+        if ats and ats not in known:
+            missing.setdefault(ats, []).append(row.get("display_name"))
+
+    from services.career_pages_service import ENTERPRISE_CATALOG
+    for row in ENTERPRISE_CATALOG:
+        ats = str(row.get("ats") or "").strip().lower()
+        ats = "oracle_orc" if ats == "orc" else ats
+        if ats and ats not in known:
+            missing.setdefault(ats, []).append(row.get("display_name"))
+
+    from services.mnc_catalog import MNC_CATALOG
+    for row in MNC_CATALOG:
+        engine = str(row.get("engine") or "")
+        if engine in ("aggregator", "uber", "workday"):
+            continue          # metered / no provider / its own loader
+        ats = ("oracle_orc" if engine == "orc"
+               else str(row.get("ats") or row.get("fetcher") or "").strip().lower())
+        if ats and ats not in known:
+            missing.setdefault(ats, []).append(row.get("display_name"))
+
+    assert not missing, f"catalog vendors with no provider: {missing}"
+
+
+def test_the_amazon_provider_is_registered_and_termless():
+    from services.ats_providers import registry as ats_registry
+
+    provider = ats_registry.get("amazon")
+    assert provider is not None, "ENTERPRISE_CATALOG's Amazon row needs a provider"
+    assert provider.termless, "the background crawl only sweeps termless vendors"
+    assert "amazon" in ats_registry.termless_vendors()
+    # The listing carries the whole description, so a detail fetch buys nothing.
+    assert provider.has_detail is False
+
+
+def test_amazon_maps_a_search_row_onto_a_raw_job():
+    from services.ats_providers.amazon import AmazonProvider
+
+    raw = AmazonProvider._to_raw({
+        "id_icims": "10517649",
+        "title": "Software Development Engineer Intern, Annapurna Labs - 2027",
+        "job_path": "/en/jobs/10517649/software-development-engineer-intern",
+        "normalized_location": "Cupertino, California, USA",
+        "posted_date": "August 27, 2026",
+        "country_code": "USA",
+        "job_schedule_type": "full-time",
+        "description": "Build things.",
+        "basic_qualifications": "Enrolled in a degree program.",
+        "preferred_qualifications": "Python.",
+        "is_intern": True,
+    })
+    assert raw is not None
+    assert raw.source_job_id == "10517649"
+    assert raw.posted_at.startswith("2026-08-27")
+    assert raw.apply_url.startswith("https://www.amazon.jobs/en/jobs/")
+    assert "Enrolled in a degree program" in raw.description
+    # The employer's OWN statement of the band beats any title guess.
+    assert raw.extra.get("seniority") == "intern"

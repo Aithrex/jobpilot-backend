@@ -194,6 +194,12 @@ LISTING_WORKERS = _env_int("JOB_INGEST_LISTING_WORKERS", 6)
 DETAIL_WORKERS = _env_int("JOB_INGEST_DETAIL_WORKERS", 6)
 MAX_DETAIL_FETCHES = _env_int("JOB_INGEST_MAX_DETAILS", 120)
 MAX_LISTING_PAGES = _env_int("JOB_INGEST_MAX_PAGES", 5)
+# Workday gets its OWN, much deeper page budget, and the same names the
+# provider reads so the two listing paths cannot be tuned apart. `limit` is
+# capped at 20 by CXS, so depth is the only dial; 5 pages could not physically
+# reach the fresh block a large tenant keeps past offset 100.
+WORKDAY_MAX_LISTING_PAGES = _env_int("WORKDAY_MAX_LISTING_PAGES", 30)
+WORKDAY_STALE_PAGE_TOLERANCE = _env_int("WORKDAY_STALE_PAGE_TOLERANCE", 8)
 LISTING_PAGE_SIZE = 20
 REQUEST_TIMEOUT = _env_float("JOB_INGEST_REQUEST_TIMEOUT", 8.0)
 DETAIL_TIMEOUT = _env_float("JOB_INGEST_DETAIL_TIMEOUT", 6.0)
@@ -210,6 +216,31 @@ USE_PROVIDERS = _env_flag("JOB_INGEST_USE_PROVIDERS", True)
 # budget for one tenant, and every other member of the shard would get nothing.
 # A member cut short is a resumable partial, which ADR-003 already permits.
 MEMBER_BUDGET_SECONDS = _env_float("JOB_INGEST_MEMBER_BUDGET", 30.0)
+
+# Per-vendor overrides. Workday alone needs a longer one: its board is paged 20
+# rows at a time and a large tenant's fresh block runs past offset 400, so
+# reading it out costs ~15-25s (measured: Cisco 16.5s for 336 rows, NVIDIA 24s
+# for 433). The global 30s stays where it is because it was tuned for iCIMS,
+# which paces at 2.5s with `max_concurrency=1` - raising ITS ceiling would let
+# one iCIMS tenant eat most of a 90-second shard.
+MEMBER_BUDGET_OVERRIDES: Dict[str, float] = {
+    "workday": _env_float("JOB_INGEST_WORKDAY_MEMBER_BUDGET", 45.0),
+    "amazon": _env_float("JOB_INGEST_AMAZON_MEMBER_BUDGET", 45.0),
+}
+
+
+def member_budget_seconds(vendor: str) -> float:
+    return float(MEMBER_BUDGET_OVERRIDES.get((vendor or "").strip().lower(),
+                                             MEMBER_BUDGET_SECONDS))
+
+# Members are crawled in registry order, so a shard that runs out of budget
+# always runs out on the SAME tail members - they would never be listed at all.
+# That was survivable when a member cost one or two pages; with Workday paging
+# to 30 it is not. Rotating the start point by a coarse clock tick makes the
+# starved window move every run, so every member is reached regularly even when
+# no single run can reach them all. Deterministic within a run: `now` is the
+# one clock reading the whole run already shares.
+MEMBER_ROTATION_SECONDS = _env_float("JOB_INGEST_MEMBER_ROTATION", 900.0)
 
 # Inline detail fetches one member may spend (from the shard-wide `max_details`
 # budget). Only ever spent on rows the LISTING left undated - see
@@ -347,6 +378,52 @@ def _slug(value: Any, limit: int = 120) -> str:
     return "-".join(part for part in "".join(out).split("-") if part)[:limit]
 
 
+def _load_mnc_rows() -> List[Dict[str, Any]]:
+    """`MNC_CATALOG`, or [] if it cannot be imported.
+
+    The MNCs tab has its own live-verified catalog of ~70 of the largest
+    employers, and the crawler never read a single row of it. Cisco, Qualcomm,
+    Toyota, Broadcom, PayPal, Visa, Mastercard, Target, Nike, Boeing, Comcast
+    and the rest were reachable the whole time, through fetchers this worker
+    already owns - but reachable ONLY inside a user's request on that one tab.
+    The background crawl, and therefore `job_postings`, and therefore every
+    feed, digest and auto-apply sweep, had no idea they existed.
+
+    Rows whose `engine` is `aggregator` are deliberately NOT loaded. Those are
+    metered JSearch look-ups (Google, Meta, Apple, IBM, Tesla, AMD, Salesforce,
+    ...) and ADR-004 keeps `cost_class: paid` rows off the crawl and off the
+    anonymous path. Loading them here would be a billing decision disguised as
+    a catalog edit; those employers need a direct provider, not a wider net.
+    Same for `uber`, which has no provider.
+    """
+    try:
+        from services.mnc_catalog import MNC_CATALOG
+        return list(MNC_CATALOG)
+    except Exception as exc:  # pragma: no cover - catalog optional
+        logger.warning("ingest: MNC_CATALOG unavailable (%s)", type(exc).__name__)
+        return []
+
+
+#: `mnc_catalog.MNC_SECTORS` -> the `industry` vocabulary the other two
+#: catalogs and the feed's industry filter already speak.
+_MNC_SECTOR_INDUSTRY: Dict[str, str] = {
+    "big_tech": "tech",
+    "semiconductors": "semiconductors",
+    "enterprise_software": "tech",
+    "fintech": "fintech",
+    "finance_banking": "banking",
+    "healthcare_pharma": "pharma",
+    "consulting": "consulting",
+    "retail_consumer": "ecommerce_retail",
+    "automotive_aerospace": "automotive",
+    "media_entertainment": "media",
+}
+
+
+def _mnc_industry(row: Dict[str, Any]) -> str:
+    return _MNC_SECTOR_INDUSTRY.get(str(row.get("sector") or ""), "other")
+
+
 def _load_workday_members() -> List[Dict[str, Any]]:
     from services.workday_tenant_catalog import WORKDAY_TENANT_CATALOG
 
@@ -367,7 +444,50 @@ def _load_workday_members() -> List[Dict[str, Any]]:
             "display_name": str(row.get("display_name") or tenant),
             "industry": str(row.get("industry") or "other"),
         })
+
+    # The MNC tab's Workday rows. `setdefault` means the generated catalog wins
+    # on any tenant both name, so this can only ADD employers.
+    for row in _load_mnc_rows():
+        if str(row.get("engine") or "") != "workday":
+            continue
+        tenant = _slug(row.get("tenant"))
+        if not tenant:
+            continue
+        seen.setdefault(tenant, {
+            "member_key": tenant,
+            "source": SOURCE_WORKDAY,
+            "vendor": "workday",
+            "tenant": tenant,
+            "wd_host": _slug(row.get("wd_host")) or "wd1",
+            "site": str(row.get("site") or "External"),
+            "display_name": str(row.get("display_name") or tenant),
+            "industry": _mnc_industry(row),
+        })
     return list(seen.values())
+
+
+#: Vendors a catalog named that the provider registry does not know. Collected
+#: rather than silently skipped, and logged ONCE per process.
+#:
+#: This set is the bug that hid Amazon. `ENTERPRISE_CATALOG` has carried an
+#: Amazon row since it was written, but no provider was registered for the
+#: vendor key `amazon`, so the `ats not in _TERMLESS_ATS` guard below dropped it
+#: on every crawl without a word - and a live `job_postings` query for Amazon
+#: returned zero while the catalog claimed to cover it. A skip that produces no
+#: signal is indistinguishable from a vendor that has no openings.
+_UNKNOWN_VENDORS_LOGGED: set = set()
+
+
+def _skip_unknown_vendor(ats: str, display_name: str, catalog: str) -> None:
+    key = f"{catalog}:{ats}"
+    if key in _UNKNOWN_VENDORS_LOGGED:
+        return
+    _UNKNOWN_VENDORS_LOGGED.add(key)
+    logger.warning(
+        "ingest: %s names ATS vendor %r (first seen on %r) which has no "
+        "registered provider - every row for that vendor is being skipped. "
+        "Add a provider under services/ats_providers/ or remove the rows.",
+        catalog, ats, display_name)
 
 
 def _load_career_members() -> List[Dict[str, Any]]:
@@ -381,7 +501,11 @@ def _load_career_members() -> List[Dict[str, Any]]:
         # now covers all eleven vendors, so without it a Workday or Oracle row
         # appearing in this catalog would be crawled as a career page and land in
         # `_list_career`, which has no branch for it.
-        if not ats or not slug or ats not in _TERMLESS_ATS:
+        if not ats or not slug:
+            continue
+        if ats not in _TERMLESS_ATS:
+            _skip_unknown_vendor(ats, str(row.get("display_name") or slug),
+                                 "CAREER_PAGES_CATALOG")
             continue
         if source_of_vendor(ats) != SOURCE_CAREER:
             continue
@@ -408,7 +532,11 @@ def _load_career_members() -> List[Dict[str, Any]]:
         if ats == "orc":
             ats = "oracle_orc"
         slug = _slug(row.get("slug"))
-        if not ats or not slug or ats not in _TERMLESS_ATS:
+        if not ats or not slug:
+            continue
+        if ats not in _TERMLESS_ATS:
+            _skip_unknown_vendor(ats, str(row.get("display_name") or slug),
+                                 "ENTERPRISE_CATALOG")
             continue
         if source_of_vendor(ats) != SOURCE_CAREER:
             continue
@@ -417,6 +545,50 @@ def _load_career_members() -> List[Dict[str, Any]]:
             host=str(row.get("host") or "").strip().lower(),
             display_name=str(row.get("display_name") or slug),
             industry=str(row.get("industry") or "other"),
+            extra=dict(row.get("extra") or {}))
+        seen.setdefault(member["member_key"], member)
+
+    # MNC_CATALOG's non-Workday rows. Qualcomm (Eightfold, 710 live US
+    # openings) and Toyota (Phenom) exist ONLY here - they are in neither of
+    # the other two catalogs - so without this loop the crawler cannot reach
+    # them at all, no matter which flag is set.
+    for row in _load_mnc_rows():
+        engine = str(row.get("engine") or "")
+        slug = _slug(row.get("slug"))
+        name = str(row.get("display_name") or slug)
+        if not slug or engine == "workday":
+            continue                      # workday handled by its own loader
+        if engine in ("aggregator", "uber"):
+            continue                      # metered / no provider; see _load_mnc_rows
+        if engine == "career_pages":
+            ats = _slug(row.get("ats"))
+        elif engine == "orc":
+            ats = "oracle_orc"
+        else:                             # "enterprise": phenom / eightfold / amazon
+            ats = _slug(row.get("fetcher"))
+        if not ats:
+            continue
+        if ats not in _TERMLESS_ATS:
+            _skip_unknown_vendor(ats, name, "MNC_CATALOG")
+            continue
+        if source_of_vendor(ats) != SOURCE_CAREER:
+            continue
+        if engine == "career_pages":
+            seen.setdefault(f"{ats}-{slug}", {
+                "member_key": f"{ats}-{slug}",
+                "source": SOURCE_CAREER,
+                "vendor": ats,
+                "ats": ats,
+                "slug": slug,
+                "display_name": name,
+                "industry": _mnc_industry(row),
+            })
+            continue
+        member = _endpoint_member(
+            ats, tenant=slug, site="",
+            host=str(row.get("host") or "").strip().lower(),
+            display_name=name,
+            industry=_mnc_industry(row),
             extra=dict(row.get("extra") or {}))
         seen.setdefault(member["member_key"], member)
     return list(seen.values())
@@ -518,6 +690,33 @@ _SEED_ENDPOINTS: Tuple[Dict[str, str], ...] = (
     {"vendor": "jazzhr", "tenant": "aamco", "site": "",
      "host": "aamco.applytojob.com", "display_name": "AAMCO",
      "industry": "automotive"},
+
+    # Large employers found by running `PortalDiscovery.discover` against their
+    # own domains on 2026-08-27, then re-validated one by one through the
+    # provider (`AtsProvider.validate`) rather than trusted from the crawl.
+    # Job counts are what that validation actually returned:
+    #
+    #   Texas Instruments   601   Honeywell  1,347
+    #   Hilton            4,468   PepsiCo       50 (one page; iCIMS pages at 50)
+    #
+    # All four were `pending`/`deferred` in the company registry the whole time
+    # and none had ever produced a posting, because the discovery queue was
+    # stalled (see `company_registry_service.enqueue_discovery`). Seeding them
+    # here is not a substitute for that fix; it is how the four largest names
+    # the stall was hiding start producing inventory on the next tick rather
+    # than after the backlog drains.
+    {"vendor": "oracle_orc", "tenant": "edbz", "site": "CX_1",
+     "host": "edbz.fa.us2.oraclecloud.com", "display_name": "Texas Instruments",
+     "industry": "semiconductors"},
+    {"vendor": "oracle_orc", "tenant": "ibqbjb", "site": "CX_1",
+     "host": "ibqbjb.fa.ocs.oraclecloud.com", "display_name": "Honeywell",
+     "industry": "manufacturing"},
+    {"vendor": "oracle_orc", "tenant": "efet", "site": "CX_1",
+     "host": "efet.fa.us2.oraclecloud.com", "display_name": "Hilton",
+     "industry": "hospitality"},
+    {"vendor": "icims", "tenant": "uscareers-pepsico", "site": "",
+     "host": "uscareers-pepsico.icims.com", "display_name": "PepsiCo",
+     "industry": "ecommerce_retail"},
 )
 
 
@@ -1290,7 +1489,7 @@ def _listing_row(member: Dict[str, Any], raw_id: Any, *, title: str, url: str,
                  posted_at: Optional[datetime], location: Any,
                  description: str = "", employment_type: str = "",
                  posted_text: str = "", detail_ref: str = "",
-                 compensation: Any = None) -> Dict[str, Any]:
+                 compensation: Any = None, seniority: str = "") -> Dict[str, Any]:
     """One listing hit in the shape `inv.normalize_posting` consumes.
 
     `cost_class` is hard-coded `free`: both registries are direct ATS boards.
@@ -1315,6 +1514,12 @@ def _listing_row(member: Dict[str, Any], raw_id: Any, *, title: str, url: str,
         # yields no band rather than a zero.
         "compensation": compensation,
         "posted_at": posted_at,
+        # An employer's OWN statement of the band, when the board publishes one
+        # (Amazon's `is_intern` / `university_job`). `normalize_posting` prefers
+        # it over classifying the title, which is the right precedence: a
+        # graduate requisition titled plainly "Software Development Engineer"
+        # is unclassifiable from the title and perfectly clear from the flag.
+        "seniority": seniority or "",
         "posted_at_confidence": inv.CONFIDENCE_EXACT if posted_at else inv.CONFIDENCE_UNKNOWN,
         "raw_posted_text": posted_text,
         "cost_class": inv.COST_CLASS_FREE,
@@ -1340,10 +1545,17 @@ def _list_workday(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolic
     requests came from; an empty `searchText` returns the tenant's board in
     posted-date order, which is what a freshness crawl actually wants.
 
-    Early stop: as soon as a page contains a row at or past the boundary, we
-    stop - both for this page's remainder and for every later page. Because the
-    feed is newest-first, everything after that point is by construction older
-    than the guest window, so paging on would be pure waste.
+    Early stop: after `WORKDAY_STALE_PAGE_TOLERANCE` CONSECUTIVE pages that
+    yielded no row inside the boundary. It is deliberately not "stop at the
+    first old row": the termless CXS board is ordered newest-first only within
+    blocks, and the blocks are not ordered against each other, so an old row
+    says nothing about the rows below it. See `ats_providers.workday` for the
+    live measurement - the first-old-row rule took Cisco from 336 fresh
+    postings to 18.
+
+    This is the FALLBACK path (`JOB_INGEST_USE_PROVIDERS=0`). It must apply the
+    same rule as `WorkdayProvider.list_jobs` or flipping that flag silently
+    changes how much of every large employer's board reaches the inventory.
     """
     from services.workday_cxs_fetcher import _approx_iso_from_relative
 
@@ -1353,7 +1565,11 @@ def _list_workday(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolic
     url = f"{base}/wday/cxs/{tenant}/{site}/jobs"
     rows: List[Dict[str, Any]] = []
 
-    for page in range(max(1, MAX_LISTING_PAGES)):
+    max_pages = max(1, WORKDAY_MAX_LISTING_PAGES)
+    tolerance = max(0, WORKDAY_STALE_PAGE_TOLERANCE)
+    stale_streak = 0
+    truncated = True   # cleared by whichever branch proves the board is done
+    for page in range(max_pages):
         body = {
             "searchText": "",
             "locations": [],
@@ -1364,11 +1580,15 @@ def _list_workday(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolic
         data = http_get_json(SOURCE_WORKDAY, url, policy, deadline=deadline,
                              stop=stop, method="POST", json_body=body)
         if not isinstance(data, dict):
+            # A failed page part way down a board leaves the rest unread; only
+            # a first-page failure means "nothing here".
+            truncated = page > 0
             break
         postings = data.get("jobPostings") or []
         if not isinstance(postings, list) or not postings:
+            truncated = False
             break
-        crossed_boundary = False
+        page_fresh = 0
         for posting in postings:
             if not isinstance(posting, dict):
                 continue
@@ -1383,8 +1603,8 @@ def _list_workday(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolic
                 # the boundary, since we cannot tell where it sits.
                 continue
             if posted_at < cutoff:
-                crossed_boundary = True
-                break
+                continue
+            page_fresh += 1
             path = (posting.get("externalPath") or "").lstrip("/")
             req_id = (posting.get("bulletFields") or [None])[0] or path
             if not req_id:
@@ -1399,8 +1619,17 @@ def _list_workday(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolic
                 posted_text=posted_text,
                 detail_ref=path,
             ))
-        if crossed_boundary or len(postings) < LISTING_PAGE_SIZE:
+        if len(postings) < LISTING_PAGE_SIZE:
+            truncated = False
             break
+        if page_fresh:
+            stale_streak = 0
+        else:
+            stale_streak += 1
+            if stale_streak > tolerance:
+                truncated = False
+                break
+    member["_listing_truncated"] = truncated
     return rows
 
 
@@ -1414,8 +1643,13 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
     than the cutoff is dropped here, before any detail request is considered.
     That is where the cost is on this source - the listing call is one request
     per company either way, but the detail calls are per JOB.
+
+    One unpaged call also means the result is a COMPLETE census of the board
+    whenever it succeeds, which is what lets `_close_stale_in_shard` act on
+    these members.
     """
     ats, slug = member["ats"], member["slug"]
+    member["_listing_truncated"] = False
     rows: List[Dict[str, Any]] = []
 
     if ats == "greenhouse":
@@ -1666,7 +1900,9 @@ def _provider_fetch_context(member: Dict[str, Any], *, cutoff: datetime,
     from services.ats_providers.http import PacedSession, make_fetchers
 
     source = str(member.get("source") or "")
-    member_deadline = min(deadline, _time.monotonic() + MEMBER_BUDGET_SECONDS)
+    member_deadline = min(
+        deadline,
+        _time.monotonic() + member_budget_seconds(_vendor_of(member)))
 
     def guard(_vendor: str, url: str) -> str:
         return assert_outbound_url(source, url)
@@ -1705,6 +1941,7 @@ def _raw_job_to_listing(member: Dict[str, Any], job: Any, *,
         posted_text=str(getattr(job, "raw_posted_text", "") or ""),
         detail_ref=detail or rid,
         compensation=getattr(job, "compensation", None),
+        seniority=str((getattr(job, "extra", None) or {}).get("seniority") or ""),
     )
 
 
@@ -1732,6 +1969,10 @@ def _list_via_provider(member: Dict[str, Any], *, cutoff: datetime,
     ctx = _provider_fetch_context(member, cutoff=cutoff, deadline=deadline,
                                   stop=stop)
     rows: List[Dict[str, Any]] = []
+    # Assume truncated until the provider's generator RUNS OUT, which is the
+    # only proof the board was read to its end. Breaking out below, or raising,
+    # leaves it True - see `_close_stale_in_shard`.
+    member["_listing_truncated"] = True
     try:
         for job in provider.list_jobs(endpoint, ctx):
             if ctx.should_stop():
@@ -1739,6 +1980,8 @@ def _list_via_provider(member: Dict[str, Any], *, cutoff: datetime,
             row = _raw_job_to_listing(member, job, cutoff=cutoff)
             if row is not None:
                 rows.append(row)
+        else:
+            member["_listing_truncated"] = bool(ctx.listing_truncated)
     except Exception as exc:
         from services.ats_providers.base import ChallengeError
         if isinstance(exc, ChallengeError):
@@ -1790,6 +2033,10 @@ def _detail_via_provider(row: Dict[str, Any], member: Dict[str, Any], *,
 def list_member(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy,
                 deadline: float, stop: Optional[threading.Event] = None,
                 now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    # Every listing path sets this; the default is the SAFE one ("we did not
+    # prove we read the whole board"), so a path that forgets to set it cannot
+    # cause `_close_stale_in_shard` to delete live inventory.
+    member["_listing_truncated"] = True
     vendor = _vendor_of(member)
     if USE_PROVIDERS and vendor not in _LEGACY_LISTING_VENDORS:
         listed = _list_via_provider(member, cutoff=cutoff, deadline=deadline,
@@ -1937,7 +2184,7 @@ def fetch_detail(row: Dict[str, Any], member: Dict[str, Any], *, policy: HostPol
 # The shard run
 # ---------------------------------------------------------------------------
 
-def _close_stale_in_shard(source: str, listed_keys: set, *, cutoff_seen: datetime,
+def _close_stale_in_shard(source: str, censused_keys: set, *, cutoff_seen: datetime,
                           fresh_cutoff: datetime, run_id: str,
                           now: datetime, limit: int = 200) -> int:
     """Close postings this shard is responsible for that the run did not re-see.
@@ -1945,13 +2192,16 @@ def _close_stale_in_shard(source: str, listed_keys: set, *, cutoff_seen: datetim
     Two guards make this safe under the early-stop rule:
 
     * membership - only `source_job_id`s whose member-key prefix belongs to a
-      member we LISTED SUCCESSFULLY this run. A member whose board timed out
-      must not have its jobs closed.
+      member whose listing was a COMPLETE CENSUS this run (`censused_keys`,
+      not merely `listed_keys`). A member whose board timed out must not have
+      its jobs closed - and neither must one the page cap cut short, which is
+      the common case for a large Workday tenant: reading 600 of 1,227 rows is
+      not evidence that the other 627 openings were taken down.
     * age - only postings still inside the freshness window. Listing stops at
       the 7-day boundary, so an 8-day-old posting is legitimately not re-seen
       and closing it here would delete real inventory on every tick.
     """
-    if not listed_keys:
+    if not censused_keys:
         return 0
     candidates = inv.find_stale_for_verification(source, older_than=cutoff_seen,
                                                  limit=limit * 5)
@@ -1961,7 +2211,7 @@ def _close_stale_in_shard(source: str, listed_keys: set, *, cutoff_seen: datetim
             break
         source_job_id = str(candidate.get("source_job_id") or "")
         member_key = source_job_id.split(":", 1)[0]
-        if member_key not in listed_keys:
+        if member_key not in censused_keys:
             continue
         doc = inv.get_posting(source, source_job_id)
         if not doc:
@@ -1977,6 +2227,16 @@ def _close_stale_in_shard(source: str, listed_keys: set, *, cutoff_seen: datetim
     if closed:
         inv.bump_run_counts(run_id, closed=closed)
     return closed
+
+
+def _rotate_members(members: List[Dict[str, Any]], *,
+                    now: datetime) -> List[Dict[str, Any]]:
+    """Same members, rotated start point (see `MEMBER_ROTATION_SECONDS`)."""
+    if len(members) < 2 or MEMBER_ROTATION_SECONDS <= 0:
+        return members
+    tick = int(now.timestamp() // MEMBER_ROTATION_SECONDS)
+    offset = tick % len(members)
+    return members[offset:] + members[:offset]
 
 
 def run_shard(
@@ -2043,7 +2303,7 @@ def run_shard(
         return result
 
     run_id = inv.start_run(src, shard_id, trace_id=owner, now=now)
-    members = shard_members(src, shard_id)
+    members = _rotate_members(shard_members(src, shard_id), now=now)
     policy = HostPolicy()
     stop = threading.Event()
     counts: Dict[str, int] = defaultdict(int)
@@ -2057,12 +2317,27 @@ def run_shard(
             lambda m: list_member(m, cutoff=fresh_cutoff, policy=policy,
                                   deadline=deadline, stop=stop, now=now),
             members, max_workers=listing_workers, deadline=deadline, stop=stop)
+        # Two different sets, and conflating them deletes inventory:
+        #   `listed_keys`   - members that listed successfully. Drives the
+        #                     "did the whole shard fail?" check and the count.
+        #   `censused_keys` - members whose listing was a COMPLETE census of
+        #                     the board. ONLY these may have unseen postings
+        #                     closed. A member cut short by the page cap, the
+        #                     member budget or a mid-board error did not fail,
+        #                     but it also did not prove that the postings it
+        #                     never reached are gone - and Workday's deep
+        #                     boards are truncated routinely by design.
+        censused_keys: set = set()
         for member, member_rows, error in listing:
             if error:
                 counts["errors"] += 1
                 inv.record_run_failure(run_id, error, item=member["member_key"])
                 continue
             listed_keys.add(member["member_key"])
+            if not member.get("_listing_truncated", True):
+                censused_keys.add(member["member_key"])
+            else:
+                counts["truncated_members"] += 1
             for row in member_rows or []:
                 rows.append((member, row))
         counts["fetched"] += len(rows)
@@ -2214,7 +2489,7 @@ def run_shard(
             inv.advance_watermark(src, shard_id, owner, watermark,
                                   checkpoint={"members_listed": len(listed_keys),
                                               "rows": len(rows)}, now=now)
-        closed = _close_stale_in_shard(src, listed_keys, cutoff_seen=now,
+        closed = _close_stale_in_shard(src, censused_keys, cutoff_seen=now,
                                        fresh_cutoff=fresh_cutoff, run_id=run_id,
                                        now=now)
         counts["closed"] += closed
@@ -2233,6 +2508,7 @@ def run_shard(
         result.update({
             "counts": dict(counts),
             "listed_members": len(listed_keys),
+            "censused_members": len(censused_keys),
             "parse_queue": parse_queue,
             "tripped_hosts": sorted(policy.tripped),
             "duration_ms": int((time.monotonic() - started) * 1000),

@@ -93,7 +93,8 @@ def test_catalog_summary_shape():
             assert set(c.keys()) == {"name", "tenant", "ats"}
             assert c["ats"] in ("greenhouse", "lever", "ashby", "smartrecruiters",
                                 "workable", "recruitee", "amazon", "eightfold",
-                                "phenom", "workday", "orc", "uber", "aggregator")
+                                "phenom", "radancy", "workday", "orc", "uber",
+                                "aggregator")
     assert count_sum == summary["total"]
     assert len(seen_keys) == len(set(seen_keys))
 

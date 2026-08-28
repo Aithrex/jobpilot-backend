@@ -267,10 +267,17 @@ def test_host_policy_spaces_repeat_calls_to_one_host():
 # 4. Newest-first early stop at the 7-day boundary
 # ---------------------------------------------------------------------------
 
-def test_workday_listing_stops_at_the_freshness_boundary(monkeypatch):
-    """The board is newest-first, so the first row past the boundary ends BOTH
-    the page and the paging. Anything else re-reads the whole board every tick,
-    which is what made a guest request cost ~7,400 outbound calls."""
+def test_workday_listing_reads_past_stale_rows_and_stops_on_a_stale_run(monkeypatch):
+    """The FALLBACK lister must apply the same rule as `WorkdayProvider`.
+
+    A Workday board is newest-first only WITHIN blocks, so a stale row does not
+    end the page and the first stale page does not end the paging. Measured on
+    the live `cisco.wd5` board: the first-stale-row rule found 18 of 336 fresh
+    postings, because the fresh block sits at offsets 100-459 behind four
+    consecutive all-stale pages. Paging ends on a RUN of all-stale pages
+    instead, so `JOB_INGEST_USE_PROVIDERS=0` does not silently shrink every
+    large employer's board.
+    """
     pages_requested = []
 
     def fake_http(source, url, policy, *, deadline, stop=None, timeout=None,
@@ -278,10 +285,17 @@ def test_workday_listing_stops_at_the_freshness_boundary(monkeypatch):
         offset = (json_body or {}).get("offset", 0)
         pages_requested.append(offset)
         page = offset // 20
+        # Page 0 fresh, then an all-stale run one longer than the tolerance,
+        # with a fresh row buried mid-page on page 1 to prove a stale row does
+        # not end the page.
         postings = []
         for i in range(20):
-            # Page 0: all 1 day old. Page 1: first 5 fresh, then 30 days old.
-            days = 1 if page == 0 else (2 if i < 5 else 30)
+            if page == 0:
+                days = 1
+            elif page == 1 and i == 10:
+                days = 2
+            else:
+                days = 30
             postings.append({
                 "title": f"Engineer {page}-{i}",
                 "postedOn": "Posted Today" if days <= 1 else f"Posted {days} Days Ago",
@@ -298,9 +312,36 @@ def test_workday_listing_stops_at_the_freshness_boundary(monkeypatch):
                            policy=w.HostPolicy(min_interval=0, jitter=0),
                            deadline=time.monotonic() + 30, now=NOW)
 
-    assert pages_requested == [0, 20], "must stop paging at the boundary, not exhaust the board"
-    assert len(rows) == 25, "20 fresh on page 0 + 5 fresh on page 1"
+    tol = w.WORKDAY_STALE_PAGE_TOLERANCE
+    # Pages 0 and 1 both yielded something fresh, so the stale run only starts
+    # at page 2 and trips one page after the tolerance is used up.
+    assert pages_requested == [20 * p for p in range(2 + tol + 1)]
+    assert len(rows) == 21, "20 fresh on page 0 + the one fresh row on page 1"
     assert all(r["posted_at"] >= NOW - timedelta(days=7) for r in rows)
+    assert member["_listing_truncated"] is False
+
+
+def test_workday_listing_flags_truncation_at_the_page_cap(monkeypatch):
+    """A board still fresh at the page cap must not be reported as a census."""
+    def fake_http(source, url, policy, *, deadline, stop=None, timeout=None,
+                  method="GET", json_body=None):
+        offset = (json_body or {}).get("offset", 0)
+        return {"jobPostings": [{
+            "title": f"Engineer {offset}-{i}",
+            "postedOn": "Posted Today",
+            "externalPath": f"/job/req-{offset}-{i}",
+            "bulletFields": [f"REQ-{offset}-{i}"],
+            "locationsText": "Austin, TX",
+            "timeType": "Full time",
+        } for i in range(20)]}
+
+    monkeypatch.setattr(w, "http_get_json", fake_http)
+    member = _fake_members(w.SOURCE_WORKDAY, 1)[0]
+    rows = w._list_workday(member, cutoff=NOW - timedelta(days=7),
+                           policy=w.HostPolicy(min_interval=0, jitter=0),
+                           deadline=time.monotonic() + 30, now=NOW)
+    assert len(rows) == 20 * w.WORKDAY_MAX_LISTING_PAGES
+    assert member["_listing_truncated"] is True
 
 
 def test_career_listing_drops_rows_past_the_boundary(monkeypatch):
@@ -333,6 +374,10 @@ def test_career_listing_drops_rows_past_the_boundary(monkeypatch):
 def _patch_shard_io(monkeypatch, rows_by_member, detail_calls=None):
     """Stub the two IO seams (listing + detail); everything below them is real."""
     def fake_list(member, **kw):
+        # The stub returns the member's WHOLE fake board, so it is a complete
+        # census - which is what lets `_close_stale_in_shard` act on it. The
+        # real `list_member` sets this per listing path.
+        member["_listing_truncated"] = False
         return [dict(r) for r in rows_by_member.get(member["member_key"], [])]
 
     def fake_detail(row, member, **kw):

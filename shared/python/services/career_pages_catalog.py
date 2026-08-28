@@ -9,6 +9,9 @@ from __future__ import annotations
 from typing import Dict, List
 
 CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
+    # Found by `PortalDiscovery.discover("Palantir", domain="palantir.com")` and
+    # re-validated through `LeverProvider.validate` on 2026-08-27.
+    {"display_name": "Palantir Technologies", "ats": "lever", "slug": "palantir", "industry": "tech"},
     {"display_name": "Abridge", "ats": "ashby", "slug": "abridge", "industry": "healthtech"},
     {"display_name": "Alchemy", "ats": "ashby", "slug": "alchemy", "industry": "tech"},
     {"display_name": "Ambience Healthcare", "ats": "ashby", "slug": "ambiencehealthcare", "industry": "healthtech"},
