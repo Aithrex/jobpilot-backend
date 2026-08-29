@@ -56,6 +56,7 @@ def _quota_exceeded_response(usage: dict):
         429,
     )
 from services.resume_versioning import (
+    LIST_VIEW_PROJECTION,
     MAX_VERSIONS_PER_RECORD,
     VersionLimitError,
     canonical_content_hash,
@@ -63,6 +64,7 @@ from services.resume_versioning import (
     find_version,
     latest_version,
     append_version,
+    serialize_list_row,
     serialize_record,
 )
 
@@ -803,9 +805,14 @@ def get_streak_route():
 def list_tailoring_records():
     user_email = get_jwt_identity()
     include_full = request.args.get("include") == "full"
+    # `view=list` is the application tracker's slim path: the projection happens
+    # in Mongo, so the heavy fields are never read rather than read-and-
+    # discarded. Opt-in, because interview prep and the tailored-resumes page
+    # still read the full shape off this same endpoint.
+    list_view = request.args.get("view") == "list"
     # `limit` query param tunable; bumped default from 100 → 1000 so the
-    # kanban can show ALL of a user's records. The 100 cap was causing the
-    # funnel summary (server aggregation) and kanban column counts (local
+    # tracker can show ALL of a user's records. The 100 cap was causing the
+    # funnel summary (server aggregation) and the tracker's own counts (local
     # records) to disagree once a user exceeded 100 total tailoring records.
     try:
         limit = int(request.args.get("limit") or 1000)
@@ -814,6 +821,16 @@ def list_tailoring_records():
     limit = max(50, min(limit, 5000))
     try:
         db = DBConnect().get_db()
+
+        if list_view:
+            rows = db.tailoring_records.aggregate([
+                {"$match": {"user_email": user_email}},
+                {"$sort": {"created_at": -1}},
+                {"$limit": limit},
+                {"$project": LIST_VIEW_PROJECTION},
+            ])
+            return jsonify({"records": [serialize_list_row(r) for r in rows]}), 200
+
         projection = {"_id": 0}
         records = list(
             db.tailoring_records.find({"user_email": user_email}, projection)

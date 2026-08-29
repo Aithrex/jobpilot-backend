@@ -116,11 +116,31 @@ def _classify_role_family(title: str) -> Optional[str]:
     return None
 
 
+# Everything _record_summary and the staleness maths below actually touch.
+# Without it this scan reads whole documents - job description text, every
+# tailored resume body - for every record the user owns, on every poll.
+_STALE_PROJECTION = {
+    "_id": 0,
+    "record_id": 1,
+    "created_at": 1,
+    "updated_at": 1,
+    "jd_analysis.job_title": 1,
+    "jd_analysis.company": 1,
+    "application": 1,
+}
+
+
 def get_stale_applications(user_email: str, stale_days: int = 5) -> Dict[str, Any]:
     now = datetime.now(timezone.utc)
     stale_cutoff = now - timedelta(days=max(1, stale_days))
     rows: List[Dict[str, Any]] = []
-    cursor = _tailoring_collection().find({"user_email": user_email})
+    # The status filter matches what the loop used to do one document at a
+    # time: _application_status defaults to "draft", so a record with no
+    # application subdocument was never a candidate anyway.
+    cursor = _tailoring_collection().find(
+        {"user_email": user_email, "application.status": "applied"},
+        _STALE_PROJECTION,
+    )
     for record in cursor:
         if _application_status(record) != "applied":
             continue
