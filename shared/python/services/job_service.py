@@ -113,6 +113,22 @@ def _find_tracker_records(
     return matched
 
 
+def _applied_day(instant: datetime, user_email: str) -> tuple:
+    """(YYYY-MM-DD, tz) for an application stamped server-side.
+
+    No browser is involved on the Discover pipeline path, so the zone comes
+    from the user's stored preferences. Best-effort: a tz failure must never
+    block the tracker write, so we degrade to a UTC-derived day.
+    """
+    try:
+        from services.user_time import applied_day_for_user
+        return applied_day_for_user(instant, user_email)
+    except Exception as e:
+        logger.warning("tracker stub: applied_date derivation failed: %s", e)
+        aware = instant if instant.tzinfo else instant.replace(tzinfo=timezone.utc)
+        return aware.strftime("%Y-%m-%d"), "UTC"
+
+
 def _upsert_tracker_stub(
     user_email: str,
     job_id: str,
@@ -147,6 +163,7 @@ def _upsert_tracker_stub(
         }
         if tracker_status == "applied":
             app["applied_at"] = now
+            app["applied_date"], app["applied_tz"] = _applied_day(now, user_email)
             app["resume_used"] = resume_used or "base"
         rec = {
             "record_id": rid,
@@ -188,9 +205,16 @@ def _upsert_tracker_stub(
         if not rec.get("jd_analysis"):
             set_fields["jd_analysis"] = jd
         if next_status == "applied":
-            set_fields["application.applied_at"] = (
-                (rec.get("application") or {}).get("applied_at") or now
-            )
+            prior_app = rec.get("application") or {}
+            applied_at = prior_app.get("applied_at") or now
+            set_fields["application.applied_at"] = applied_at
+            # Only label the day if it isn't already labelled — re-touching an
+            # application must not re-derive (and possibly move) a day the user
+            # already has.
+            if not prior_app.get("applied_date"):
+                (set_fields["application.applied_date"],
+                 set_fields["application.applied_tz"]) = _applied_day(
+                    applied_at, user_email)
             if resume_used and not _has_tailored_resume(rec):
                 set_fields["application.resume_used"] = resume_used
             elif _has_tailored_resume(rec):

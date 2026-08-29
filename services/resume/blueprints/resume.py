@@ -1086,14 +1086,20 @@ def update_application(record_id):
 
     updates = {}
     status = data.get("status")
-    # Read existing record once — we need to know if a batch-tailor confirmation
-    # was pending (so we can fire the streak event when the user confirms).
+    # Read existing record once — we need to know if an apply confirmation was
+    # pending (so we can fire the streak event when the user confirms).
     db_pre = DBConnect().get_db()
     existing_app = (db_pre.tailoring_records.find_one(
         {"record_id": record_id, "user_email": user_email},
         {"application": 1, "_id": 0},
     ) or {}).get("application") or {}
-    was_confirmation_pending = bool(existing_app.get("batch_confirmation_pending"))
+    # `confirmation_pending` is the flow-agnostic flag (single tailor, batch,
+    # anywhere else we ask "did you apply?"). `batch_confirmation_pending` is
+    # its original batch-only name, still written by older clients.
+    was_confirmation_pending = bool(
+        existing_app.get("confirmation_pending")
+        or existing_app.get("batch_confirmation_pending")
+    )
     was_status = existing_app.get("status")
 
     if status is not None:
@@ -1104,10 +1110,15 @@ def update_application(record_id):
         if status == "applied":
             updates["application.applied_at"] = updates.get("application.applied_at") or datetime.utcnow()
 
-    # batch_confirmation_pending — accept boolean from frontend (typically
-    # false, set by "I applied" / "Not yet" / "Dismiss" buttons on the board).
-    if "batch_confirmation_pending" in data:
-        updates["application.batch_confirmation_pending"] = bool(data.get("batch_confirmation_pending"))
+    # Apply-confirmation flag — accept a boolean under either key and write
+    # both, so the canonical name and the legacy batch-only name never drift
+    # apart for a record. Typically false, set by the "I applied" / "Not yet" /
+    # "Dismiss" buttons on the board and the post-download tailor prompt.
+    if "confirmation_pending" in data or "batch_confirmation_pending" in data:
+        pending = bool(data.get(
+            "confirmation_pending", data.get("batch_confirmation_pending")))
+        updates["application.confirmation_pending"] = pending
+        updates["application.batch_confirmation_pending"] = pending
 
     for field in ("recruiter_name", "recruiter_email", "recruiter_company",
                   "next_action_note", "notes", "job_url", "resume_used"):
@@ -1130,6 +1141,23 @@ def update_application(record_id):
                     return jsonify({"error": f"Invalid {field}"}), 400
             else:
                 updates[f"application.{field}"] = None
+
+    # Day label for "which day did I apply?" — a civil date, not an instant.
+    # `applied_at` stays UTC and answers "when"; `applied_date` is frozen in the
+    # user's zone at confirmation time so it never shifts when they travel.
+    # MUST run after the parse loop above so an explicitly back-dated
+    # applied_at produces its own day rather than today's.
+    if "application.applied_at" in updates:
+        applied_dt = updates["application.applied_at"]
+        if applied_dt is None:
+            updates["application.applied_date"] = None
+            updates["application.applied_tz"] = None
+        else:
+            from services.user_time import applied_day_for_user
+            day, tz_used = applied_day_for_user(
+                applied_dt, user_email, data.get("tz"))
+            updates["application.applied_date"] = day
+            updates["application.applied_tz"] = tz_used
 
     # Interview dates — array of ISO strings
     if "interview_dates" in data:

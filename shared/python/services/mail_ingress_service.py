@@ -572,7 +572,17 @@ def _apply_tracker_status(user_email: str, record_id: str, tracker_status: str) 
         "application.source": "mail_ingress",
     }
     if tracker_status == "applied":
-        updates.setdefault("application.applied_at", _now())
+        applied_at = updates.setdefault("application.applied_at", _now())
+        # Civil day for the tracker's applied-date filter. Server-side path with
+        # no browser, so the zone comes from stored prefs. Best-effort — a tz
+        # failure must never break mail ingestion.
+        try:
+            from services.user_time import applied_day_for_user
+            (updates["application.applied_date"],
+             updates["application.applied_tz"]) = applied_day_for_user(
+                applied_at, user_email)
+        except Exception as e:
+            logger.warning("[mail-ingress] applied_date derivation failed: %s", e)
     res = db.tailoring_records.update_one(
         {"record_id": record_id, "user_email": user_email},
         {"$set": updates},
