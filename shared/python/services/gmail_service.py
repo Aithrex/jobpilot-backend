@@ -1270,7 +1270,18 @@ def _apply_status(user_email: str, record_id: str, status: str) -> bool:
         "updated_at": datetime.utcnow(),
     }
     if status == "applied":
-        updates.setdefault("application.applied_at", datetime.utcnow())
+        applied_at = updates.setdefault(
+            "application.applied_at", datetime.utcnow())
+        # Label the civil day so Gmail-detected applications are visible to the
+        # tracker's applied-date filter. No browser here, so the zone comes from
+        # the user's stored preferences. Best-effort — never fail a sync on it.
+        try:
+            from services.user_time import applied_day_for_user
+            (updates["application.applied_date"],
+             updates["application.applied_tz"]) = applied_day_for_user(
+                applied_at, user_email)
+        except Exception as e:
+            logger.warning("[gmail-sync] applied_date derivation failed: %s", e)
     res = db.tailoring_records.update_one(
         {"record_id": record_id, "user_email": user_email},
         {"$set": updates},

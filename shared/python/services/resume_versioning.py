@@ -227,3 +227,54 @@ def serialize_record(record: Dict[str, Any], include_full: bool = False) -> Dict
         out.pop("tailored_resume", None)
         out.pop("jd_text", None)
     return out
+
+
+# Mongo $project for the application tracker's list.
+#
+# The tracker renders about eight fields per row. Without this the server reads
+# every whole document - jd_text, each version's tailored_resume body - and
+# throws them away again in serialize_record, which is fine at 20 records and
+# not at 500. Counts and existence flags are computed inside the pipeline so
+# the arrays behind them never leave the database.
+LIST_VIEW_PROJECTION: Dict[str, Any] = {
+    "_id": 0,
+    "record_id": 1,
+    "user_email": 1,
+    "created_at": 1,
+    "updated_at": 1,
+    "source": 1,
+    "source_job_id": 1,
+    "current_version_id": 1,
+    "jd_analysis.job_title": 1,
+    "jd_analysis.company": 1,
+    "ats_scores.overall": 1,
+    "application": 1,
+    "version_count": {"$size": {"$ifNull": ["$versions", []]}},
+    "has_tailored_resume": {"$ne": [{"$ifNull": ["$tailored_resume", None]}, None]},
+}
+
+
+def serialize_list_row(record: Dict[str, Any]) -> Dict[str, Any]:
+    """ISO-ify the datetimes on a LIST_VIEW_PROJECTION row.
+
+    Deliberately not serialize_record: that expects `versions` and would put an
+    empty array back on every row, when the entire point of this path is that
+    versions were never read.
+    """
+    out = dict(record)
+    for key in ("created_at", "updated_at"):
+        if key in out:
+            out[key] = _iso_utc(out.get(key))
+
+    app = out.get("application")
+    if isinstance(app, dict):
+        app = dict(app)
+        for key in ("applied_at", "next_action_date", "updated_at"):
+            if key in app:
+                app[key] = _iso_utc(app.get(key))
+        dates = app.get("interview_dates")
+        if isinstance(dates, list):
+            app["interview_dates"] = [_iso_utc(d) for d in dates]
+        out["application"] = app
+
+    return out

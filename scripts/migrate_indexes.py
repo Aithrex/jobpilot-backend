@@ -412,6 +412,13 @@ INDEX_SPECS = [
     ("tailoring_records", [("user_email", ASCENDING), ("application.status", ASCENDING)],
      {"name": "user_email_app_status"}),
 
+    # === Tracker applied-date filter — application.applied_date is a frozen
+    # "YYYY-MM-DD" civil day, so a range query is a plain string range. The
+    # tracker filters client-side today; this is the index a server-side
+    # applied_from/applied_to filter would use once record counts grow.
+    ("tailoring_records", [("user_email", ASCENDING), ("application.applied_date", ASCENDING)],
+     {"name": "user_email_app_applied_date"}),
+
     # === Signal loop (§6.7) — bandit arms + post performance metrics.
     ("bandit_arms", [("arm_id", ASCENDING)], {"unique": True, "name": "arm_id_unique"}),
     ("post_metrics", [("post_id", ASCENDING), ("recorded_at", DESCENDING)],
