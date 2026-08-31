@@ -90,11 +90,14 @@ def _senior(role_bullet_counts):
 SENIOR = _senior([6, 5, 4, 3])  # 4 roles, 18 bullets, experience-only
 
 
-def test_sparse_resume_scales_up():
+def test_sparse_resume_refuses_the_up_tier():
+    """A resume with roughly half a page of content must NOT up-tier. Bigger
+    type on a page that will still be mostly empty only makes the emptiness
+    louder — the sparse floor drops it back to the professional 10pt base."""
     r = ResumeRenderer()
     body, lh, lh_s, height = r._choose_up_tier(SPARSE)
-    assert body == 11.0, "sparse resume should take the largest presentation tier"
-    assert height <= r._AVAIL_H
+    assert body == 10.0
+    assert height < r._AVAIL_H * r._SPARSE_FILL_FLOOR
 
 
 def test_density_stress_stays_at_base_or_below():
@@ -220,15 +223,31 @@ def test_mid_density_fills_page():
     assert layout["lh"] * layout["stretch"] <= r._MAX_LEADING_MM + 1e-6
 
 
-def test_sparse_resume_stretch_capped_not_padded():
-    """A genuinely thin resume stretches to the leading ceiling and stops —
-    oversized leading would read as padding."""
+def test_sparse_resume_renders_compactly_not_padded():
+    """A genuinely thin resume is laid out at its natural density and simply
+    ends where it ends. Saturating every knob at once — 11pt type, all five
+    gaps at their ceilings, 1.40x leading — still left a blank band, so the
+    page read as padded AND unfinished at the same time."""
     r = ResumeRenderer()
     layout = r._compute_pdf_layout(SPARSE)
-    assert layout["body_size"] == 11.0
-    assert layout["stretch"] == pytest.approx(
-        min(r._STRETCH_CAP, r._MAX_LEADING_MM / layout["lh"]), abs=1e-6
-    )
+    assert layout["body_size"] == 10.0
+    assert layout["stretch"] == 1.0
+    assert layout["section_gap"] == pytest.approx(r._MIN_SECTION_GAP)
+    assert layout["entry_gap"] == pytest.approx(r._MIN_ENTRY_GAP)
+    assert layout["post_header"] == pytest.approx(r._MIN_POST_HEADER)
+    assert layout["header_gap"] == pytest.approx(r._MIN_HEADER_GAP)
+    assert layout["skill_gap"] == pytest.approx(r._MIN_SKILL_GAP)
+    # It does not pretend to fill the page.
+    assert layout["predicted_height"] / r._AVAIL_H < r._FILL_RAMP_LO
+
+
+def test_fill_ramp_leaves_fillable_pages_alone():
+    """The ramp must only bite on pages that CANNOT be filled honestly — the
+    dead-band and senior shapes still reach the bottom."""
+    r = ResumeRenderer()
+    for resume in (MID_DENSITY, SENIOR):
+        layout = r._compute_pdf_layout(resume)
+        assert layout["predicted_height"] / r._AVAIL_H >= 0.95
 
 
 def test_heading_and_job_gaps_stay_tight():
@@ -244,6 +263,10 @@ def test_heading_and_job_gaps_stay_tight():
         assert layout["post_header"] <= 1.6 + 1e-9
         assert layout["entry_gap"] <= 2.2 + 1e-9
         assert layout["section_gap"] <= 2.8 + 1e-9
+        # skill_gap repeats once per category, so its ceiling costs
+        # n_categories x the gap — it is held tighter than the rest.
+        assert layout["skill_gap"] >= r._MIN_SKILL_GAP - 1e-9
+        assert layout["skill_gap"] <= r._MAX_SKILL_GAP + 1e-9
 
 
 def test_dense_resume_never_stretches():
@@ -261,6 +284,56 @@ def test_stretch_still_single_page():
     check = check_pdf_parseability(pdf_bytes, MID_DENSITY, {})
     assert check["checks"]["page_count"] == 1
     assert check["pdf_parseable_score"] >= 85
+
+
+# ---------------------------------------------------------------------------
+# Skills block spacing
+# ---------------------------------------------------------------------------
+
+_MEASURE_KNOBS = dict(
+    section_gap=1.2, entry_gap=0.9, post_header=1.0, header_gap=0.5,
+    body_size=10.0, lh=3.4, lh_s=3.08, measure_only=True,
+)
+
+
+def test_skill_gap_renders_between_categories_only():
+    """skill_gap separates categories, so a one-category block has no gaps at
+    all and the knob must not move the page height. It used to fire after the
+    last category too, stacking a trailing gap onto the next section_gap."""
+    r = ResumeRenderer()
+    one = dict(SPARSE, skills={"Languages": ["Python", "SQL", "Go"]})
+
+    _, tight_h = r._render_pdf(one, skill_gap=0.4, **_MEASURE_KNOBS)
+    _, loose_h = r._render_pdf(one, skill_gap=3.0, **_MEASURE_KNOBS)
+    assert tight_h == pytest.approx(loose_h, abs=1e-6)
+
+    two = dict(SPARSE, skills={
+        "Languages": ["Python", "SQL", "Go"],
+        "Cloud & DevOps": ["AWS", "Docker"],
+    })
+    _, tight_2 = r._render_pdf(two, skill_gap=0.4, **_MEASURE_KNOBS)
+    _, loose_2 = r._render_pdf(two, skill_gap=3.0, **_MEASURE_KNOBS)
+    assert loose_2 - tight_2 == pytest.approx(2.6, abs=1e-6)  # exactly one gap
+
+
+def test_skills_leading_capped_against_the_stretch():
+    """Skills rows are dense comma lists — they must not take the body's full
+    Pass-3 leading, or a sparse page renders them at ~5mm per line.
+
+    Measured by differencing two resumes that vary only in category count, so
+    the delta is purely skills lines.
+    """
+    r = ResumeRenderer()
+    knobs = dict(_MEASURE_KNOBS, skill_gap=0.0, stretch=r._STRETCH_CAP)
+    one = dict(SPARSE, skills={"A": ["Python"]})
+    five = dict(SPARSE, skills={k: ["Python"] for k in "ABCDE"})
+
+    _, h1 = r._render_pdf(one, **knobs)
+    _, h5 = r._render_pdf(five, **knobs)
+
+    per_line = (h5 - h1) / 4
+    # Uncapped this would be lh_s * stretch = 3.08 * 1.40 = 4.31mm.
+    assert per_line == pytest.approx(r._MAX_SKILL_LEADING, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------

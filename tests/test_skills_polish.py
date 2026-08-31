@@ -141,6 +141,49 @@ def test_jd_aligned_first_keeps_all_items():
     assert "Skill09" in kept
 
 
+# ---------------------------------------------------------------------------
+# Base-label preservation
+# ---------------------------------------------------------------------------
+
+def test_recategorize_invents_a_heading_without_base_labels():
+    """Baseline for the test below: unconstrained, moving Python out of a
+    framework category mints a 'Languages' heading the user never wrote."""
+    out = _polish({"Tools": ["Git"], "Backend": ["Python", "Django"]})
+    assert "Languages" in out["skills"]
+
+
+def test_base_labels_pin_categories_to_the_users_own_headings():
+    """With the base resume's subheadings in force, a moved skill goes to an
+    existing heading instead of conjuring a new one — the tailored section
+    keeps the labels the user actually wrote."""
+    out = ResumeTailor._polish_skills(
+        {"skills": {"Tools": ["Git"], "Backend": ["Python", "Django"]}},
+        {},
+        base_labels={"Tools", "Backend"},
+    )
+    assert set(out["skills"]) <= {"Tools", "Backend"}
+    # The skill is kept, just not relabelled.
+    flat = [s for items in out["skills"].values() for s in items]
+    assert "Python" in flat
+    assert "Django" in flat
+    assert "Git" in flat
+
+
+def test_base_labels_still_allow_jd_reordering():
+    """Preserving labels must not freeze their order — the most JD-relevant
+    category still leads."""
+    jd = {"required_skills": ["Excel", "financial modeling"]}
+    out = ResumeTailor._polish_skills(
+        {"skills": {
+            "Languages": ["French", "Spanish"],
+            "Financial Analysis": ["financial modeling", "Microsoft Excel"],
+        }},
+        jd,
+        base_labels={"Languages", "Financial Analysis"},
+    )
+    assert list(out["skills"]) == ["Financial Analysis", "Languages"]
+
+
 def test_categories_reordered_by_jd_relevance():
     jd = {"required_skills": ["Excel", "financial modeling"],
           "keywords": ["variance analysis"]}

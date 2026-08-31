@@ -9,6 +9,7 @@ Phases:
   1: Generate projects (batch: up to 3 total in ONE LLM call)
   2: Expand experience bullets + baked-in impact metrics
   3: Impact injection on existing no-metric bullets
+  3b: Second expansion round against the stretch caps if still well short
   4: Overflow protection (trim if > 95%)
   5: ATS hardening (keyword density + summary alignment in PARALLEL, then weak verbs)
   6: Final overflow check after hardening
@@ -38,6 +39,15 @@ _MAX_TOTAL_EXP_BULLETS = 20
 
 # Per-role bullet caps by recency (index 0 = most recent)
 _ROLE_BULLET_CAPS = [8, 6, 4, 4, 3]  # roles beyond index 4 get cap of 3
+
+# Second expansion round. The caps above are deliberately conservative so a
+# resume that reaches the target on real content stops growing. When the page
+# is STILL well short after impact injection, those caps — not the candidate's
+# material — are what's binding, and the renderer would otherwise be handed a
+# half-empty page to lay out. One more grounded round runs against these.
+_SECOND_ROUND_FILL = 0.75
+_STRETCH_ROLE_BULLET_CAPS = [10, 8, 6, 5, 4]
+_STRETCH_MAX_TOTAL_EXP_BULLETS = 26
 
 
 class ContentAugmenter:
@@ -119,6 +129,13 @@ class ContentAugmenter:
             "final_count": 0,
             "defensive_stripped": [],
             "deep_project_skip": False,
+            # Fill trace — without this, a resume that ships at 55% full looks
+            # identical in the logs to one that legitimately reached target.
+            "fill_target": _TARGET_FILL,
+            "fill_phase0": None,
+            "fill_final": None,
+            "phase_gated": None,
+            "second_round": False,
         }
         tailored["_projects_diagnostic"] = diag
 
@@ -166,6 +183,7 @@ class ContentAugmenter:
 
         # Phase 0: Measure current fill
         fill = self._measure_fill(tailored)
+        diag["fill_phase0"] = round(fill, 4)
         _proj_names = [p.get("name", "?") for p in tailored.get("projects", [])]
         _orig_proj_names = [p.get("name", "?") for p in original.get("projects", [])]
         logger.warning(
@@ -188,6 +206,7 @@ class ContentAugmenter:
                 "page budget goes to experience bullets"
             )
             diag["deep_project_skip"] = True
+            diag["phase_gated"] = "projects_experience_first_policy"
         elif len(projects) < _MAX_PROJECTS:
             t0 = time.time()
             tailored = self._augment_projects(tailored, original, jd_analysis)
@@ -198,6 +217,7 @@ class ContentAugmenter:
             logger.warning("ContentAugmenter Phase 1 SKIPPED: tailor returned %d projects (cap %d) — "
                            "no room for generated projects. This is usually a tailor-prompt issue.",
                            len(projects), _MAX_PROJECTS)
+            diag["phase_gated"] = "projects_at_cap"
 
         # Early exit for remaining phases (bullet expansion, impact) if fill is good
         if fill >= _TARGET_FILL:
@@ -209,6 +229,7 @@ class ContentAugmenter:
             tailored = self._ats_harden(tailored, jd_analysis)
             logger.info("ContentAugmenter Phase 5 (ATS harden): [%.1fs]", time.time() - t0)
             tailored = self._finalize_safe_substitutions(tailored)
+            diag["fill_final"] = round(fill, 4)
             logger.info("ContentAugmenter: total pipeline time = %.1fs", time.time() - pipeline_start)
             return tailored
 
@@ -228,6 +249,23 @@ class ContentAugmenter:
         logger.info("ContentAugmenter Phase 3 (impact): fill = %.1f%% [%.1fs]",
                     fill * 100, time.time() - t0)
 
+        # Phase 3b: second expansion round. Everything above respects the
+        # conservative per-role caps; if the page is still well short, those
+        # caps are the binding constraint rather than the candidate's material.
+        if fill < _SECOND_ROUND_FILL and tailored.get("experience"):
+            t0 = time.time()
+            tailored = self._expand_bullets(
+                tailored, original, jd_analysis, fill,
+                role_caps=_STRETCH_ROLE_BULLET_CAPS,
+                max_total=_STRETCH_MAX_TOTAL_EXP_BULLETS,
+            )
+            fill = self._measure_fill(tailored)
+            diag["second_round"] = True
+            logger.warning(
+                "ContentAugmenter Phase 3b (second expansion): fill = %.1f%% [%.1fs]",
+                fill * 100, time.time() - t0,
+            )
+
         # Phase 4: Overflow protection
         tailored = self._overflow_trim(tailored, fill)
 
@@ -245,8 +283,21 @@ class ContentAugmenter:
         # dashes, missing periods that augmenter LLM calls may have emitted.
         tailored = self._finalize_safe_substitutions(tailored)
 
+        diag["fill_final"] = round(fill, 4)
         logger.info("ContentAugmenter: final fill = %.1f%%, total pipeline time = %.1fs",
                     fill * 100, time.time() - pipeline_start)
+        if fill < _TARGET_FILL:
+            # Not an error — some candidates genuinely have half a page of
+            # material. Worth surfacing, because the renderer will now lay it
+            # out compactly instead of stretching it to look full.
+            logger.warning(
+                "ContentAugmenter: final fill %.1f%% under the %.0f%% target "
+                "(phase_gated=%s, second_round=%s, roles=%d, projects=%d)",
+                fill * 100, _TARGET_FILL * 100,
+                diag.get("phase_gated"), diag.get("second_round"),
+                len(tailored.get("experience", []) or []),
+                len(tailored.get("projects", []) or []),
+            )
         return tailored
 
     # ------------------------------------------------------------------
@@ -618,8 +669,16 @@ class ContentAugmenter:
         original: Dict[str, Any],
         jd_analysis: Dict[str, Any],
         current_fill: float,
+        role_caps: List[int] | None = None,
+        max_total: int | None = None,
     ) -> Dict[str, Any]:
-        """Expand experience bullets to fill the page."""
+        """Expand experience bullets to fill the page.
+
+        `role_caps` / `max_total` default to the conservative first-round
+        limits; the Phase 3b retry passes the stretch caps instead.
+        """
+        role_caps = role_caps or _ROLE_BULLET_CAPS
+        max_total = max_total or _MAX_TOTAL_EXP_BULLETS
         from services.claude_client import claude_json, CLAUDE_FLASH
         from schemas.resume_schemas import build_resume_text
         import json
@@ -630,14 +689,14 @@ class ContentAugmenter:
 
         # Calculate total current bullets
         total_current = sum(len(exp.get("bullets", [])) for exp in experience)
-        if total_current >= _MAX_TOTAL_EXP_BULLETS:
+        if total_current >= max_total:
             return tailored
 
         # Calculate target bullets per role
         expansion_plan = []
         for i, exp in enumerate(experience):
             current = len(exp.get("bullets", []))
-            cap = _ROLE_BULLET_CAPS[i] if i < len(_ROLE_BULLET_CAPS) else 3
+            cap = role_caps[i] if i < len(role_caps) else 3
 
             # Short tenure check: cap internships/short roles lower
             title_lower = exp.get("title", "").lower()
@@ -659,7 +718,7 @@ class ContentAugmenter:
 
         # Enforce total cap
         total_additional = sum(p["additional_needed"] for p in expansion_plan)
-        budget = _MAX_TOTAL_EXP_BULLETS - total_current
+        budget = max_total - total_current
         if total_additional > budget:
             # Scale down proportionally
             scale = budget / total_additional

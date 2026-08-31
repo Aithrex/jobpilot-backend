@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from schemas.resume_schemas import (
     TAILORED_RESUME_SCHEMA,
@@ -223,7 +223,10 @@ class ResumeTailor:
         def _finalize(t: Dict[str, Any]) -> Dict[str, Any]:
             t = self._restore_contact(t, structured_resume)
             t = self._ensure_jd_skills_coverage(t, structured_resume, jd_analysis)
-            t = self._polish_skills(t, jd_analysis)
+            t = self._polish_skills(
+                t, jd_analysis,
+                base_labels=self._base_skill_labels(structured_resume),
+            )
             t = self._allocate_bullets(t, jd_analysis)
             # Coordinated summary refinement (Part A) — runs AFTER bullets/skills
             # are settled so the summary can echo the final document, and BEFORE
@@ -593,7 +596,10 @@ class ResumeTailor:
         # JD adds, bullet allocation, target_role, and the match-gap report.
         corrected = self._restore_contact(corrected, structured_resume)
         corrected = self._ensure_jd_skills_coverage(corrected, structured_resume, jd_analysis)
-        corrected = self._polish_skills(corrected, jd_analysis)
+        corrected = self._polish_skills(
+            corrected, jd_analysis,
+            base_labels=self._base_skill_labels(structured_resume),
+        )
         corrected = self._allocate_bullets(corrected, jd_analysis)
         target_role = (jd_analysis.get("job_title") or "").strip()
         if target_role:
@@ -1009,6 +1015,7 @@ class ResumeTailor:
         cls,
         tailored: Dict[str, Any],
         jd_analysis: Dict[str, Any],
+        base_labels: Optional[set] = None,
     ) -> Dict[str, Any]:
         """Deterministic, industry-agnostic skills polish (absorbs the old
         _cap_skills_per_category). The model decides skills CONTENT (prompt);
@@ -1026,6 +1033,11 @@ class ResumeTailor:
              insertion order flows through to the rendered document)
           5. prune empty categories; normalize skills_section_title against
              _SKILLS_TITLE_WHITELIST
+
+        `base_labels` is the base resume's own set of subheadings. Step 0 is
+        the only step that can introduce a heading the user never wrote, so
+        passing it keeps the tailored section's labels identical to the base
+        while steps 3 and 4 still reorder freely for the job.
         """
         # Title normalization happens even when skills are empty/malformed.
         raw_title = str(tailored.get("skills_section_title") or "").strip()
@@ -1090,7 +1102,7 @@ class ResumeTailor:
             for cat, items in skills.items()
             if isinstance(items, list)
         }
-        cats = cls._recategorize_skills(cats)
+        cats = cls._recategorize_skills(cats, allowed_labels=base_labels)
 
         def category_rank() -> List[str]:
             """Categories ordered most-JD-relevant first; ties keep the
@@ -1224,6 +1236,17 @@ class ResumeTailor:
                 out[str(cat)] = kept
         return out
 
+    @classmethod
+    def _base_skill_labels(cls, original: Dict[str, Any]) -> Optional[set]:
+        """The base resume's own skills subheadings, or None if it has none.
+
+        None means "no constraint": with no base skills section
+        _ensure_jd_skills_coverage keeps the model's categories, so there is
+        nothing of the user's to preserve.
+        """
+        labels = set(cls._copy_skill_cats((original or {}).get("skills")).keys())
+        return labels or None
+
     _SKILL_BUCKET_HINTS = {
         "language": ("language",),
         "database": ("database",),
@@ -1286,14 +1309,31 @@ class ResumeTailor:
 
     @classmethod
     def _category_for_bucket(
-        cls, bucket: str, cats: Dict[str, List[str]]
+        cls,
+        bucket: str,
+        cats: Dict[str, List[str]],
+        allowed: Optional[set] = None,
     ) -> str:
+        """Existing category that owns `bucket`, else the bucket's fallback name.
+
+        `allowed` pins the answer to the base resume's own subheadings. When
+        the fallback would mint a heading the base resume never had, the item
+        goes to the LAST allowed category instead — base skill sections are
+        conventionally ordered specific-to-general, so the tail heading
+        ("Tools & Platforms", "Concepts & Methodologies") is a far better home
+        for an unplaceable item than the head one ("Languages").
+        """
         hints = cls._SKILL_BUCKET_HINTS.get(bucket, ())
         for cat in cats:
             cl = cat.lower()
             if any(h in cl for h in hints):
                 return cat
-        return cls._SKILL_BUCKET_FALLBACK.get(bucket, "Skills")
+        fallback = cls._SKILL_BUCKET_FALLBACK.get(bucket, "Skills")
+        if allowed is not None and fallback not in allowed:
+            tail = [cat for cat in cats if cat in allowed]
+            if tail:
+                return tail[-1]
+        return fallback
 
     @staticmethod
     def _item_echoes_category(item: str, cat: str) -> bool:
@@ -1348,12 +1388,22 @@ class ResumeTailor:
 
     @classmethod
     def _recategorize_skills(
-        cls, cats: Dict[str, List[str]]
+        cls,
+        cats: Dict[str, List[str]],
+        allowed_labels: Optional[set] = None,
     ) -> Dict[str, List[str]]:
-        """Move misfiled skills; drop items that repeat the category heading."""
+        """Move misfiled skills; drop items that repeat the category heading.
+
+        `allowed_labels` is the base resume's own set of subheadings. With it
+        set, an item whose destination bucket has no home among those headings
+        stays in the category it came from rather than causing a brand-new
+        heading to appear on the tailored resume.
+        """
         if not cats:
             return cats
-        parked: Dict[str, List[str]] = {}
+        # bucket -> [(display, origin_category)]. The origin is what lets a
+        # parked item go home when its bucket has no allowed destination.
+        parked: Dict[str, List[Tuple[str, str]]] = {}
         rebuilt: Dict[str, List[str]] = {cat: [] for cat in cats}
 
         for cat, items in cats.items():
@@ -1364,7 +1414,7 @@ class ResumeTailor:
                 dest = cls._bucket_for_skill(s, cat)
                 display = cls._language_display(s) or s
                 if dest and dest != current_bucket:
-                    parked.setdefault(dest, []).append(display)
+                    parked.setdefault(dest, []).append((display, cat))
                 else:
                     rebuilt[cat].append(display)
 
@@ -1372,10 +1422,16 @@ class ResumeTailor:
         for cat, items in rebuilt.items():
             if items:
                 ordered[cat] = items
-        for bucket, items in parked.items():
-            dest_cat = cls._category_for_bucket(bucket, ordered or cats)
+        for bucket, entries in parked.items():
+            dest_cat = cls._category_for_bucket(
+                bucket, ordered or cats, allowed=allowed_labels
+            )
+            if allowed_labels is not None and dest_cat not in allowed_labels:
+                for display, origin in entries:
+                    ordered.setdefault(origin, []).append(display)
+                continue
             ordered.setdefault(dest_cat, [])
-            ordered[dest_cat].extend(items)
+            ordered[dest_cat].extend(display for display, _ in entries)
         return ordered
 
     @staticmethod
@@ -1419,21 +1475,29 @@ class ResumeTailor:
         term: str,
         merged: Dict[str, List[str]],
         model_cats: Dict[str, List[str]],
+        allowed: Optional[set] = None,
     ) -> str:
-        """Place a new evidenced JD skill next to related original items."""
+        """Place a new evidenced JD skill next to related original items.
+
+        `allowed` pins the choice to the base resume's subheadings, including
+        over the model's own category names — otherwise a single added JD skill
+        drags a model-invented heading onto an otherwise base-labelled section.
+        """
         from utils.skill_implications import is_implied
 
         if cls._language_display(term):
-            return cls._category_for_bucket("language", merged)
+            return cls._category_for_bucket("language", merged, allowed=allowed)
         group = taxonomy_group(term)
         if group and group != "programming_languages":
             return cls._category_for_bucket(
-                cls._TAXONOMY_TO_BUCKET.get(group, "tool"), merged
+                cls._TAXONOMY_TO_BUCKET.get(group, "tool"), merged, allowed=allowed
             )
         for cat, items in merged.items():
             if is_implied(term, items):
                 return cat
         for cat, items in model_cats.items():
+            if allowed is not None and cat not in allowed:
+                continue
             if cls._skill_already_listed(term, {cat: items}):
                 return cat
         tl = term.lower()
@@ -1445,7 +1509,7 @@ class ResumeTailor:
             cl = cat.lower()
             if any(tok and tok in cl for tok in tl.split() if len(tok) > 3):
                 return cat
-        return cls._category_for_bucket("tool", merged)
+        return cls._category_for_bucket("tool", merged, allowed=allowed)
 
     @classmethod
     def _ensure_jd_skills_coverage(
@@ -1508,6 +1572,10 @@ class ResumeTailor:
         merged = {cat: list(items) for cat, items in (base or model).items()}
         if not merged:
             return tailored
+        # The base resume's own subheadings are the seed above, so keep the
+        # additions below inside that set rather than letting one new JD skill
+        # introduce a heading the user never wrote.
+        allowed_labels = set(base.keys()) or None
 
         owned = flatten_skills(original or {}) or []
         haystack = build_resume_text(original or {}) or ""
@@ -1537,7 +1605,7 @@ class ResumeTailor:
             if not evidenced:
                 continue
             display = normalize_single(term) or term
-            cat = cls._category_for_new_skill(term, merged, model)
+            cat = cls._category_for_new_skill(term, merged, model, allowed=allowed_labels)
             merged.setdefault(cat, []).append(display)
             added.append(display)
 

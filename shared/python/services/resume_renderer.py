@@ -31,7 +31,7 @@ class ResumeRenderer:
     # changes live here in the renderer, not the content, so without a version
     # tag a cache "hit" would keep serving a PDF rendered by the OLD code.
     # Including this in the cache key forces a re-render after any format fix.
-    RENDER_VERSION = "2026-08-19.4"  # heading gap offset so bullet budget holds
+    RENDER_VERSION = "2026-08-31.1"  # sparse-page fill ramp + tighter skills block
 
     # Allowed headings for the skills section. The tailor may pick one per
     # industry via `skills_section_title` (ResumeTailor normalizes it); this
@@ -205,7 +205,29 @@ class ResumeRenderer:
     _MAX_ENTRY_GAP = 2.2
     _MAX_POST_HEADER = 1.6
     _MAX_HEADER_GAP = 2.0
-    _MAX_SKILL_GAP = 2.2
+    _MAX_SKILL_GAP = 1.4       # fires once PER CATEGORY, so its ceiling costs
+                               # n_categories × the gap. At 2.2 a six-category
+                               # block spent 13mm on inter-row air alone and
+                               # read far airier than the bullets above it.
+
+    # Skills rows are dense comma lists, not prose — they don't need the body's
+    # Pass-3 leading. Without this cap an 11pt sparse page gave them 5.04mm
+    # per line (3.60 × 1.40), which is what made the block look padded.
+    _MAX_SKILL_LEADING = 4.2
+    _DOCX_MAX_SKILL_SPACING = 1.15  # same cap expressed as a DOCX line-spacing
+
+    # Sparse-page guards. A resume with genuinely half a page of content used
+    # to saturate everything at once — 11pt type, all five gaps pinned to their
+    # ceilings, leading stretched the full 1.40× — and STILL left a blank band
+    # at the bottom, so it read as padded and unfinished at the same time.
+    # These make the fill effort proportional to how fillable the page is.
+    #
+    # Measured at minimum gaps: a 2-role / 4-bullet resume is ~55% full at
+    # 11pt, the dead-band shape Pass 3 exists for is ~74%, a 4-role senior
+    # ~93%. The thresholds sit in the gap between the first two.
+    _SPARSE_FILL_FLOOR = 0.62  # refuse an up-tier that still leaves this empty
+    _FILL_RAMP_LO = 0.55       # at or below: minimum gaps, no stretch
+    _FILL_RAMP_HI = 0.68       # at or above: full Pass-2/3 effort, as before
 
     # Pass-3 leading ceiling: body line height may stretch up to this many mm.
     # Paired with a 1.40 stretch cap so 11pt body (lh=4.0) can actually reach
@@ -254,6 +276,11 @@ class ResumeRenderer:
         """
         for body_size, lh, lh_s, max_fill in self._UP_TIERS:
             height = self._measure_min(tailored, body_size, lh, lh_s)
+            # Sparse floor: on a page that will still be mostly empty, a bigger
+            # font only makes the emptiness louder. Skipping the rung drops the
+            # resume to the professional 10pt base instead.
+            if height < self._AVAIL_H * self._SPARSE_FILL_FLOOR:
+                continue
             if height <= self._AVAIL_H * max_fill:
                 return body_size, lh, lh_s, height
         body_size, lh, lh_s = self._BASE_TIER
@@ -595,10 +622,9 @@ class ResumeRenderer:
             # so a category that wraps onto a second line still reads as one
             # cohesive block. Without this, wrapped categories collapse onto
             # the following category and the boundary disappears.
-            lh_skill = max(lh_s, 3.45)
-            for category, skill_list in skills.items():
-                if not skill_list:
-                    continue
+            lh_skill = max(min(lh_s, self._MAX_SKILL_LEADING), 3.45)
+            rows = [(cat, items) for cat, items in skills.items() if items]
+            for i, (category, skill_list) in enumerate(rows):
                 # Bold category + regular skills in one multi_cell via markdown.
                 # multi_cell wraps all lines to the left margin.
                 pdf.set_font(self._FONT_FAMILY, "", body_size)
@@ -606,7 +632,10 @@ class ResumeRenderer:
                 line = f"**{sanitize(category)}:** {sanitize(sk)}"
                 pdf.multi_cell(w, lh_skill, line, markdown=True,
                                new_x="LMARGIN", new_y="NEXT")
-                pdf.ln(skill_gap)
+                # The last category gets no trailing gap — it would stack on
+                # top of the following section_gap and read as a double break.
+                if i < len(rows) - 1:
+                    pdf.ln(skill_gap)
 
         # ── EDUCATION ── (LaTeX: rSection{Education})
         education = tailored.get("education", [])
@@ -793,22 +822,37 @@ class ResumeRenderer:
         # --- Pass 2: distribute remaining whitespace ---
         remaining = max(0, avail - min_height)
 
+        # Fill-aware ramp: how hard Passes 2 and 3 should try to reach the
+        # bottom. A page that CAN be filled honestly keeps the full effort; one
+        # that can't gets minimum gaps and no stretch, so it reads as a short
+        # resume rather than a padded one. Held at 1.0 on the opt-in two-page
+        # path, where `avail` is a two-page budget and the ratio is meaningless.
+        if max_pages > 1:
+            ramp = 1.0
+        else:
+            fill = min_height / avail if avail > 0 else 1.0
+            span = self._FILL_RAMP_HI - self._FILL_RAMP_LO
+            ramp = (fill - self._FILL_RAMP_LO) / span if span > 0 else 1.0
+            ramp = max(0.0, min(1.0, ramp))
+
         # Weight distribution: leftover must not open holes between sections,
         # under headings, or between roles. Pass-3 leading absorbs the rest.
         n_sections = max(slots["sections"], 1)
         n_entry_gaps = max(slots["entry_gaps"], 1)
-        n_skill_rows = max(slots["skill_rows"], 1)
+        # skill_gap renders BETWEEN categories, so a 6-row block has 5 gaps.
+        n_skill_gaps = max(slots["skill_rows"] - 1, 1)
 
         total_slots = (
             n_sections * 0.5    # section_gap — keep SUMMARY→EXPERIENCE tight
             + n_entry_gaps * 0.6  # entry_gap — keep jobs tight
             + n_sections * 0.3  # post_header — keep heading→content tight
             + 1 * 1             # header_gap weight
-            + n_skill_rows * 0.5  # skill_gap weight
+            + n_skill_gaps * 0.3  # skill_gap — the airiest knob per mm, since
+                                  # it repeats once per category
         )
 
         if total_slots > 0 and remaining > 0:
-            unit = remaining / total_slots
+            unit = (remaining / total_slots) * ramp
         else:
             unit = 0
 
@@ -816,7 +860,7 @@ class ResumeRenderer:
         entry_gap = min(self._MIN_ENTRY_GAP + unit * 0.6, self._MAX_ENTRY_GAP)
         post_header = min(self._MIN_POST_HEADER + unit * 0.3, self._MAX_POST_HEADER)
         header_gap = min(self._MIN_HEADER_GAP + unit * 1, self._MAX_HEADER_GAP)
-        skill_gap = min(self._MIN_SKILL_GAP + unit * 0.5, self._MAX_SKILL_GAP)
+        skill_gap = min(self._MIN_SKILL_GAP + unit * 0.3, self._MAX_SKILL_GAP)
 
         # --- Pass 3: continuous leading stretch absorbs what the gap ---
         # --- ceilings couldn't ---
@@ -834,9 +878,11 @@ class ResumeRenderer:
                                  measure_only=True)
         predicted = h1
         # Stretch cap held at _STRETCH_CAP — beyond this, leading reads as
-        # padding (enforced by test_sparse_resume_stretch_capped_not_padded).
-        # Sparse resumes fill via leading stretch, not via section-gap holes.
+        # padding. The ramp then pulls it back toward 1.0 on pages too sparse
+        # to fill honestly, so a half-page resume keeps normal leading instead
+        # of stretching into a full page of air.
         s_max = min(self._STRETCH_CAP, self._MAX_LEADING_MM / lh)
+        s_max = 1.0 + (s_max - 1.0) * ramp
         # Leading stretch fills a single page's dead band. On a 2-page render,
         # a partially-filled last page is expected — don't stretch content
         # across the page break.
@@ -907,11 +953,12 @@ class ResumeRenderer:
         chars_per_line = 95 * scale  # rough but stable
         h = 0.0
 
-        def para(text: str, size: float = None, bullet: bool = False) -> float:
+        def para(text: str, size: float = None, bullet: bool = False,
+                 spacing: float = None) -> float:
             s = size or body_size
             # Body paragraphs honor the line_spacing knob (Pass-3 fill);
             # name/contact/section headers below stay at the fixed 1.15.
-            line_h = s * line_spacing
+            line_h = s * (line_spacing if spacing is None else spacing)
             if not text:
                 return line_h + 2
             length = len(text) + (3 if bullet else 0)
@@ -959,12 +1006,15 @@ class ResumeRenderer:
                     h += entry_gap
 
         skills = tailored.get("skills", {}) or {}
-        skill_rows = [v for v in skills.values() if v]
+        skill_rows = [(cat, v) for cat, v in skills.items() if v]
         if skill_rows:
             h += section("TECHNICAL SKILLS")
-            for sk in skill_rows:
-                text = ", ".join(sk) if isinstance(sk, list) else str(sk)
-                h += para(text) + skill_gap
+            skill_spacing = min(line_spacing, self._DOCX_MAX_SKILL_SPACING)
+            for cat, sk in skill_rows:
+                items = ", ".join(sk) if isinstance(sk, list) else str(sk)
+                # The bold "Category: " prefix is on the same line, so it has
+                # to count toward the wrap estimate.
+                h += para(f"{cat}: {items}", spacing=skill_spacing) + skill_gap
 
         education = tailored.get("education", []) or []
         if education:
@@ -1038,10 +1088,10 @@ class ResumeRenderer:
             c.set(qn("w:val"), color)
             rPr.append(c)
 
-        def tight(p, before=0.0, after=0.0):
+        def tight(p, before=0.0, after=0.0, spacing=None):
             p.paragraph_format.space_before = Pt(before)
             p.paragraph_format.space_after = Pt(after)
-            p.paragraph_format.line_spacing = line_spacing
+            p.paragraph_format.line_spacing = line_spacing if spacing is None else spacing
 
         def add_bottom_border(p, size="6"):
             pPr = p._p.get_or_add_pPr()
@@ -1188,7 +1238,8 @@ class ResumeRenderer:
                 sk = ", ".join(skill_list) if isinstance(skill_list, list) else str(skill_list)
                 r_sk = p.add_run(sk)
                 set_run_font(r_sk, body_size)
-                tight(p, before=skill_gap, after=0)
+                tight(p, before=skill_gap, after=0,
+                      spacing=min(line_spacing, self._DOCX_MAX_SKILL_SPACING))
 
         # ------------------- EDUCATION -------------------
         education = tailored.get("education", []) or []
@@ -1268,7 +1319,7 @@ class ResumeRenderer:
         # Max ceilings so fills don't explode on short resumes
         max_section_gap = 6.0
         max_entry_gap = 6.0
-        max_skill_gap = 4.0
+        max_skill_gap = 2.5   # per-category, same reasoning as _MAX_SKILL_GAP
         max_header_gap = 8.0
 
         # Bidirectional ladder (mirrors the PDF's thresholded up-tiers): a
@@ -1322,13 +1373,13 @@ class ResumeRenderer:
             max(n_sections, 1) * 0.5
             + max(n_entry_gaps, 1) * 0.6
             + 1 * 1            # header gap
-            + max(n_skill_rows, 1) * 0.5
+            + max(n_skill_rows, 1) * 0.3
         )
         unit = (remaining / total_weight) if total_weight > 0 and remaining > 0 else 0
 
         section_gap = min(min_section_gap + unit * 0.5, max_section_gap)
         entry_gap = min(min_entry_gap + unit * 0.6, max_entry_gap)
-        skill_gap = min(min_skill_gap + unit * 0.5, max_skill_gap)
+        skill_gap = min(min_skill_gap + unit * 0.3, max_skill_gap)
         header_gap = min(min_header_gap + unit * 1, max_header_gap)
 
         # Pass 3 (mirrors the PDF's leading stretch): whatever the gap

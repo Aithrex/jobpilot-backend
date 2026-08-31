@@ -976,12 +976,15 @@ def _consume_projects_diagnostic(result: Dict[str, Any]) -> None:
     rejections = diag.get("rejections", []) or []
     logger.warning(
         "PROJECTS DIAGNOSTIC: stage=%s final_count=%d budget=%s "
-        "generator_returned=%d rejections=%d defensive_stripped=%s deep_skip=%s",
+        "generator_returned=%d rejections=%d defensive_stripped=%s deep_skip=%s "
+        "fill=%s->%s (target %s) phase_gated=%s second_round=%s",
         stage, final_count, budget,
         diag.get("generator_returned", 0),
         len(rejections),
         diag.get("defensive_stripped", []),
         diag.get("deep_project_skip", False),
+        diag.get("fill_phase0"), diag.get("fill_final"), diag.get("fill_target"),
+        diag.get("phase_gated"), diag.get("second_round"),
     )
     if rejections:
         for r in rejections[:10]:
