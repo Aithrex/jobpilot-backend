@@ -471,10 +471,33 @@ def draft_outreach_route():
         return jsonify({"error": "Failed to draft outreach message"}), 500
 
 
+@jobs_bp.route("/title-seed", methods=["GET"])
+@jwt_required()
+def get_title_seed():
+    """Union of job titles across ALL parsed resumes. Never calls the LLM.
+
+    Cached by resume-set fingerprint (upload / delete / reparse). Job-search
+    chips hydrate from this so a 3-resume user searches every title, not
+    only the active file.
+    """
+    user_email = get_jwt_identity()
+    try:
+        from services.job_title_seed import public_title_seed
+
+        return jsonify(public_title_seed(user_email)), 200
+    except Exception as e:
+        logger.error(f"title-seed error: {e}")
+        return jsonify({"error": "Failed to load job titles"}), 500
+
+
 @jobs_bp.route("/pipeline/suggest-filters", methods=["GET"])
 @jwt_required()
 def suggest_pipeline_filters():
-    """Return resume-aware filter suggestions for the daily pipeline."""
+    """Return resume-aware filter suggestions for the daily pipeline.
+
+    LLM runs only when the parsed-resume set fingerprint has changed (or
+    there is no stored synth). Repeat visits return the cached bundle.
+    """
     client_ip = get_client_ip(request)
     limiter = get_rate_limiter()
     if limiter.is_rate_limited(f"jobs_suggest:{client_ip}", max_requests=15, window_seconds=300):
@@ -482,15 +505,13 @@ def suggest_pipeline_filters():
 
     user_email = get_jwt_identity()
     try:
-        from services.resume_service import get_resume_service
         from services.filter_suggester_service import suggest_filters
+        from services.job_title_seed import suggest_filters_cached
 
-        svc = get_resume_service()
-        resume = svc.parser.ensure_structured_resume(user_email=user_email)
-        if not resume or not resume.get("structured"):
-            return jsonify({"error": "No resume found. Upload a resume to enable smart filters."}), 404
-        suggestions = suggest_filters(resume["structured"])
-        return jsonify({"suggestions": suggestions}), 200
+        suggestions, cached = suggest_filters_cached(
+            user_email, synthesizer=suggest_filters,
+        )
+        return jsonify({"suggestions": suggestions, "cached": cached}), 200
     except ValueError as e:
         return jsonify({"error": str(e)}), 404
     except Exception as e:
@@ -997,6 +1018,16 @@ def get_resume():
             return jsonify({"error": "No resume uploaded yet"}), 404
         if hasattr(resume.get('parsed_at'), 'isoformat'):
             resume['parsed_at'] = resume['parsed_at'].isoformat()
+        # Additive: union across every parsed resume so older clients that
+        # still read GET /jobs/resume can seed search from all files.
+        try:
+            from services.job_title_seed import union_titles_from_assets
+            from services import resume_access
+            resume["job_titles_all"] = union_titles_from_assets(
+                resume_access.list_parsed_assets(user_email),
+            )
+        except Exception:
+            logger.exception("job_titles_all union failed")
         return jsonify({"resume": resume}), 200
     except Exception as e:
         logger.error(f"Get resume error: {e}")
