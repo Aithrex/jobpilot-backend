@@ -637,6 +637,114 @@ def _finalize_tailored_result(
     return result
 
 
+def _jd_text_for_scoring(jd_text: str, jd_analysis: Optional[Dict[str, Any]]) -> str:
+    text = (jd_text or "").strip()
+    if text:
+        return text
+    ja = jd_analysis or {}
+    parts = [
+        ja.get("job_title") or "",
+        ja.get("company") or "",
+        " ".join(ja.get("required_skills") or []),
+        " ".join(ja.get("keywords") or []),
+        ja.get("location") or "",
+    ]
+    return " ".join(p for p in parts if p)
+
+
+def _base_persist_fields(
+    resume: Optional[Dict[str, Any]],
+    selection: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    fields: Dict[str, Any] = {
+        "base_resume_filename": (resume or {}).get("filename")
+        or (selection or {}).get("filename")
+        or "",
+        "base_resume_s3_key": (resume or {}).get("s3_key") or "",
+    }
+    if selection:
+        fields["base_resume_id"] = selection.get("resume_id") or ""
+        fields["base_selection"] = selection
+    return fields
+
+
+def _resolve_tailor_base(
+    svc: "ResumeService",
+    job_id: str,
+    user_email: str,
+    payload: Dict[str, Any],
+    jd_text: str,
+    jd_analysis: Optional[Dict[str, Any]],
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Pick the base asset for this job. Never mutates active_resume_id.
+
+    Returns ``(resume_doc, public_selection)``. On failure the job is already
+    marked failed and both values are None.
+    """
+    from services import resume_access
+    from services.base_resume_selector import select_base_resume
+
+    pinned = (payload.get("resume_id") or "").strip()
+    mode = (payload.get("selection_mode") or "auto").strip().lower() or "auto"
+    if mode not in ("auto", "active"):
+        mode = "auto"
+
+    parsed = resume_access.list_parsed_assets(user_email)
+    if len(parsed) >= 2 and not pinned and mode != "active":
+        svc.update_job_progress(job_id, "selecting_base", 15)
+
+    picked = select_base_resume(
+        user_email,
+        jd_text=_jd_text_for_scoring(jd_text, jd_analysis),
+        jd_analysis=jd_analysis,
+        resume_id=pinned or None,
+        selection_mode=mode,
+    )
+    if picked.error == "not_found":
+        svc.fail_job(
+            job_id,
+            "Resume not found. Pick another from My Resumes and try again.",
+        )
+        return None, None
+    if picked.error == "not_parsed":
+        svc.fail_job(
+            job_id,
+            "That resume has not finished parsing yet. Wait a moment or pick another.",
+        )
+        return None, None
+
+    resume = None
+    if picked.resume_id:
+        resume = svc.parser.ensure_structured_resume(
+            user_email=user_email, resume_id=picked.resume_id
+        )
+    # Retrofit: one-resume / legacy fixtures still resolve through the
+    # active-pointer ensure path (re-parse from S3 if needed).
+    if not resume or not resume.get("structured"):
+        resume = svc.parser.ensure_structured_resume(user_email=user_email)
+    if not resume or not resume.get("structured"):
+        svc.fail_job(
+            job_id,
+            "No parsed resume found. Please re-upload your resume on the "
+            "My Resumes tab and try again.",
+        )
+        return None, None
+
+    selection = picked.public_dict() if picked.asset else {
+        "resume_id": resume.get("resume_id") or "",
+        "filename": resume.get("filename") or "",
+        "mode": "single",
+        "reason": (
+            f"Using {resume.get('filename') or 'your resume'}."
+        ),
+    }
+    if not selection.get("resume_id"):
+        selection["resume_id"] = resume.get("resume_id") or ""
+    if not selection.get("filename"):
+        selection["filename"] = resume.get("filename") or ""
+    return resume, selection
+
+
 def _persist_tailoring_record(
     user_email: str,
     resume: Dict[str, Any],
@@ -645,6 +753,7 @@ def _persist_tailoring_record(
     result: Dict[str, Any],
     source: str,
     source_job_id: Optional[str] = None,
+    base_selection: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Worker-side canonical tailoring_records persistence (spec 1.5).
 
@@ -694,10 +803,7 @@ def _persist_tailoring_record(
                     "application.resume_used": "tailored",
                     "application.updated_at": now,
                     "updated_at": now,
-                    "base_resume_filename": (resume or {}).get("filename")
-                    or existing.get("base_resume_filename") or "",
-                    "base_resume_s3_key": (resume or {}).get("s3_key")
-                    or existing.get("base_resume_s3_key") or "",
+                    **_base_persist_fields(resume, base_selection),
                 }},
             )
             logger.info(
@@ -709,8 +815,7 @@ def _persist_tailoring_record(
         col.insert_one({
             "record_id": rid,
             "user_email": user_email,
-            "base_resume_filename": (resume or {}).get("filename") or "",
-            "base_resume_s3_key": (resume or {}).get("s3_key") or "",
+            **_base_persist_fields(resume, base_selection),
             "jd_text": (jd_text or "")[:15000],
             "jd_analysis": jd_analysis,
             "tailored_resume": result,
@@ -1460,12 +1565,15 @@ def _process_job(job_id: str, job_type: str, payload: dict):
 
         elif job_type == "tailor":
             user_email = payload.get("user_email", "")
-            resume = svc.parser.ensure_structured_resume(user_email=user_email)
+            resume, base_selection = _resolve_tailor_base(
+                svc,
+                job_id,
+                user_email,
+                payload,
+                "",
+                payload.get("jd_analysis") or {},
+            )
             if not resume:
-                svc.fail_job(
-                    job_id,
-                    "No parsed resume found. Please re-upload your resume on the My Resumes tab and try again.",
-                )
                 return
 
             # ensure_structured_resume guarantees resume has a populated
@@ -1518,14 +1626,19 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             record_id = _persist_tailoring_record(
                 user_email, resume, "", payload["jd_analysis"], result, "tailor",
                 source_job_id=(payload.get("source_job_id") or "").strip() or None,
+                base_selection=base_selection,
             )
-            svc.complete_job(
-                job_id, {"tailored_resume": result, "record_id": record_id}
-            )
+            out: Dict[str, Any] = {"tailored_resume": result, "record_id": record_id}
+            if base_selection:
+                out["base_selection"] = base_selection
+            svc.complete_job(job_id, out)
 
         elif job_type == "regenerate":
             user_email = payload.get("user_email", "")
-            resume = svc.parser.ensure_structured_resume(user_email=user_email)
+            resume = svc.parser.ensure_structured_resume(
+                user_email=user_email,
+                resume_id=(payload.get("resume_id") or ""),
+            )
             if not resume:
                 svc.fail_job(
                     job_id, "No parsed resume found. Please re-upload your resume and try again."
@@ -1562,7 +1675,10 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             # user-edited) tailored resume — the "re-check facts" action.
             # No tailoring, no augmentation: one FLASH verifier call.
             user_email = payload.get("user_email", "")
-            resume = svc.parser.ensure_structured_resume(user_email=user_email)
+            resume = svc.parser.ensure_structured_resume(
+                user_email=user_email,
+                resume_id=(payload.get("resume_id") or ""),
+            )
             if not resume or not resume.get("structured"):
                 svc.fail_job(job_id, "No parsed resume found to verify against.")
                 return
@@ -1680,14 +1796,13 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             svc.update_job_progress(job_id, "extracting_jd", 5)
             jd_analysis = svc.extract_jd(jd_text)
 
-            # Step 2: Load the user's structured resume (re-parsing from S3 if needed)
-            resume = svc.parser.ensure_structured_resume(user_email=user_email)
-            if not resume or not resume.get("structured"):
-                svc.fail_job(
-                    job_id,
-                    "No parsed resume found. Please re-upload your resume on the "
-                    "My Resumes tab and try again.",
-                )
+            # Step 2: Pick the best parsed base resume for this JD (or the
+            # pinned/active one). One-resume users short-circuit; never
+            # mutates users.active_resume_id.
+            resume, base_selection = _resolve_tailor_base(
+                svc, job_id, user_email, payload, jd_text, jd_analysis
+            )
+            if not resume:
                 return
 
             structured = resume["structured"]
@@ -1833,19 +1948,20 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 user_email, resume, jd_text, jd_analysis, result,
                 "extract_and_tailor",
                 source_job_id=(payload.get("source_job_id") or "").strip() or None,
+                base_selection=base_selection,
             )
-            svc.complete_job(
-                job_id,
-                {
-                    "tailored_resume": result,
-                    "jd_analysis": jd_analysis,
-                    "record_id": record_id,
-                    # Post-backfill base resume — lets the client diff the
-                    # tailored output against what the user actually has,
-                    # without a second round-trip.
-                    "base_resume": structured,
-                },
-            )
+            complete_payload: Dict[str, Any] = {
+                "tailored_resume": result,
+                "jd_analysis": jd_analysis,
+                "record_id": record_id,
+                # Post-backfill base resume — lets the client diff the
+                # tailored output against what the user actually has,
+                # without a second round-trip.
+                "base_resume": structured,
+            }
+            if base_selection:
+                complete_payload["base_selection"] = base_selection
+            svc.complete_job(job_id, complete_payload)
 
         elif job_type == "batch_tailor_item":
             # Combined: extract JD → tailor resume (single job for batch efficiency)
@@ -1856,12 +1972,11 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             # Step 1: Extract JD
             jd_analysis = svc.extract_jd(jd_text)
 
-            # Step 2: Get structured resume
-            resume = svc.parser.ensure_structured_resume(user_email=user_email)
+            # Step 2: Pick the best parsed base resume for this JD.
+            resume, base_selection = _resolve_tailor_base(
+                svc, job_id, user_email, payload, jd_text, jd_analysis
+            )
             if not resume or not resume.get("structured"):
-                svc.fail_job(
-                    job_id, "No parsed resume found. Please re-upload your resume and try again."
-                )
                 return
             structured = resume["structured"]
 
@@ -1903,8 +2018,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 record_doc = {
                     "record_id": rid,
                     "user_email": user_email,
-                    "base_resume_filename": resume.get("filename") or "",
-                    "base_resume_s3_key": resume.get("s3_key") or "",
+                    **_base_persist_fields(resume, base_selection),
                     "jd_text": (jd_text or "")[:15000],
                     "jd_analysis": jd_analysis,
                     "tailored_resume": result,
@@ -1948,6 +2062,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                     "jd_analysis": jd_analysis,
                     "record_id": record_id_for_response,
                     "source_job_id": source_job_id,
+                    **({"base_selection": base_selection} if base_selection else {}),
                 },
             )
 

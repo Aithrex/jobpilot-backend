@@ -1262,13 +1262,40 @@ class ResumeParser:
 
         return resume_access.get_active_structured(user_email=user_email)
 
-    def ensure_structured_resume(self, user_email: str = "") -> Optional[Dict[str, Any]]:
-        """Return a structured resume, re-parsing the ACTIVE asset's original
-        file from S3 if its parse never completed (or failed).
+    def ensure_structured_resume(
+        self, user_email: str = "", resume_id: str = ""
+    ) -> Optional[Dict[str, Any]]:
+        """Return a structured resume, re-parsing from S3 if needed.
 
-        Only the active asset is ever re-parsed — a stale sibling upload can
-        never resurrect itself through this path (spec 1.2).
+        When ``resume_id`` is set, that *owned* asset is loaded (and re-parsed
+        if structured is missing). The active pointer is never rewritten —
+        ``adopt_active_if_unset`` only fills an empty pointer.
+
+        When ``resume_id`` is omitted, behaviour is unchanged: the active
+        asset (spec 1.2). A stale sibling upload still cannot resurrect
+        itself through the no-id path.
         """
+        from services import resume_access
+
+        rid = (resume_id or "").strip()
+        if rid:
+            asset = resume_access.get_owned_asset(user_email, rid)
+            if asset and asset.get("structured"):
+                return resume_access.shape_asset(asset)
+            if not user_email:
+                logger.warning(
+                    "ensure_structured_resume: no user_email provided, cannot look up resume"
+                )
+                return None
+            if not asset or not asset.get("object_key"):
+                logger.warning(
+                    "ensure_structured_resume: no re-parsable owned asset %s for %s",
+                    rid,
+                    user_email,
+                )
+                return None
+            return self._reparse_asset(user_email, asset)
+
         resume = self.get_structured_resume(user_email=user_email)
         if resume and resume.get("structured"):
             return resume
@@ -1279,8 +1306,6 @@ class ResumeParser:
             )
             return None
 
-        from services import resume_access
-
         asset = resume_access.get_active_asset(user_email)
         if not asset or not asset.get("object_key"):
             logger.warning(
@@ -1289,6 +1314,10 @@ class ResumeParser:
                 bool(asset),
             )
             return None
+        return self._reparse_asset(user_email, asset)
+
+    def _reparse_asset(self, user_email: str, asset: dict) -> Optional[Dict[str, Any]]:
+        from services import resume_access
 
         resume_id = asset["resume_id"]
         logger.info(
@@ -1296,7 +1325,6 @@ class ResumeParser:
             resume_id,
             user_email,
         )
-
         try:
             from services.s3_service import get_storage_service
             import base64 as _b64

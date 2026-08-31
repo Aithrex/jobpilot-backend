@@ -78,6 +78,32 @@ resume_bp = Blueprint("resume", __name__)
 logger = logging.getLogger(__name__)
 
 
+def _parse_tailor_base_args(data: dict, user_email: str):
+    """Validate optional resume_id / selection_mode BEFORE quota reserve.
+
+    A bad pin must never consume a tailor slot. Returns
+    ``(resume_id_or_None, selection_mode, error_response_or_None)``.
+    """
+    from services import resume_access
+
+    raw_id = InputSanitizer.sanitize_string(
+        str(data.get("resume_id") or ""), max_length=64
+    )
+    mode = InputSanitizer.sanitize_string(
+        str(data.get("selection_mode") or "auto"), max_length=16
+    ).lower()
+    if mode not in ("auto", "active"):
+        mode = "auto"
+    if not raw_id:
+        return None, mode, None
+    asset = resume_access.get_owned_asset(user_email, raw_id)
+    if not asset:
+        return None, mode, (jsonify({"error": "resume_not_found"}), 404)
+    if asset.get("parse_status") != "parsed" or not asset.get("structured"):
+        return None, mode, (jsonify({"error": "resume_not_parsed"}), 409)
+    return raw_id, mode, None
+
+
 # ------------------------------------------------------------------
 # POST /api/resume/extract-jd — Submit JD extraction job
 # ------------------------------------------------------------------
@@ -144,6 +170,9 @@ def tailor():
 
     try:
         user_email = get_jwt_identity()
+        resume_id, selection_mode, base_err = _parse_tailor_base_args(data, user_email)
+        if base_err:
+            return base_err
         # Atomic RESERVE before dispatch (spec 1.6) — no check-then-increment.
         allowed, entry_ids, usage = _quota_ledger.reserve_tailor(
             user_email,
@@ -159,7 +188,10 @@ def tailor():
             "jd_analysis": jd_analysis,
             "user_email": user_email,
             "quota_entry_id": entry_ids[0],
+            "selection_mode": selection_mode,
         }
+        if resume_id:
+            payload["resume_id"] = resume_id
         try:
             job_id = svc.create_job("tailor", payload, user_email=user_email)
             _quota_ledger.attach_job(entry_ids[0], job_id)
@@ -206,6 +238,9 @@ def tailor_with_jd():
 
     try:
         user_email = get_jwt_identity()
+        resume_id, selection_mode, base_err = _parse_tailor_base_args(data, user_email)
+        if base_err:
+            return base_err
         # Atomic RESERVE before dispatch (spec 1.6) — no check-then-increment.
         allowed, entry_ids, usage = _quota_ledger.reserve_tailor(
             user_email,
@@ -221,7 +256,10 @@ def tailor_with_jd():
             "job_description": jd_text,
             "user_email": user_email,
             "quota_entry_id": entry_ids[0],
+            "selection_mode": selection_mode,
         }
+        if resume_id:
+            payload["resume_id"] = resume_id
         source_job_id = InputSanitizer.sanitize_string(
             str(data.get("source_job_id") or ""), max_length=256
         )
@@ -279,10 +317,11 @@ def regenerate():
         record_id = InputSanitizer.sanitize_string(
             str(data.get("record_id") or ""), max_length=64
         )
+        rec = None
         if record_id:
             rec = DBConnect().get_db().tailoring_records.find_one(
                 {"record_id": record_id, "user_email": user_email},
-                {"versions": 1},
+                {"versions": 1, "base_resume_id": 1},
             )
             if rec and len(rec.get("versions") or []) >= MAX_VERSIONS_PER_RECORD:
                 return _version_limit_response()
@@ -296,6 +335,14 @@ def regenerate():
             "user_feedback": user_feedback,
             "user_email": user_email,
         }
+        # Ground regenerate in the SAME base that was tailored, not the
+        # global active pointer (which may be a different uploaded file).
+        base_rid = InputSanitizer.sanitize_string(
+            str(data.get("resume_id") or (rec or {}).get("base_resume_id") or ""),
+            max_length=64,
+        )
+        if base_rid:
+            payload["resume_id"] = base_rid
         job_id = svc.create_job("regenerate", payload, user_email=user_email)
         ResumeService.invoke_async(job_id, "regenerate", payload)
         return jsonify({"job_id": job_id}), 202
@@ -436,6 +483,21 @@ def verify_resume():
             "jd_analysis": data.get("jd_analysis") or {},
             "user_email": user_email,
         }
+        rec_id = InputSanitizer.sanitize_string(
+            str(data.get("record_id") or ""), max_length=64
+        )
+        rec = None
+        if rec_id:
+            rec = DBConnect().get_db().tailoring_records.find_one(
+                {"record_id": rec_id, "user_email": user_email},
+                {"base_resume_id": 1},
+            )
+        base_rid = InputSanitizer.sanitize_string(
+            str(data.get("resume_id") or (rec or {}).get("base_resume_id") or ""),
+            max_length=64,
+        )
+        if base_rid:
+            payload["resume_id"] = base_rid
         job_id = svc.create_job("verify_resume", payload, user_email=user_email)
         ResumeService.invoke_async(job_id, "verify_resume", payload)
         return jsonify({"job_id": job_id}), 202
@@ -718,6 +780,7 @@ def batch_tailor():
                     # Without this the tailored result never updates the kanban
                     # nor increments the streak — it just lives in the jobs table.
                     "source_job_id": (jd.get("source_job_id") or "").strip() or None,
+                    "selection_mode": "auto",
                 }
                 job_id = svc.create_job("batch_tailor_item", payload, user_email=user_email)
                 _quota_ledger.attach_job(entry_id, job_id)

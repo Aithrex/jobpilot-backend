@@ -333,6 +333,39 @@ def get_owned_asset(user_email: str, resume_id: str) -> Optional[Dict[str, Any]]
     return _assets().find_one({"resume_id": rid, "user_email": email})
 
 
+def list_parsed_assets(user_email: str) -> list:
+    """Owner-scoped parsed assets with structured JSON, newest-parsed first.
+
+    Pending/failed/empty parses are excluded — they cannot be tailored or
+    ranked against a JD. Never returns another user's assets.
+    """
+    email = _safe_email(user_email)
+    if not email:
+        return []
+    cursor = _assets().find(
+        {
+            "user_email": email,
+            "parse_status": "parsed",
+            "structured": {"$ne": None},
+        },
+    ).sort("parsed_at", -1)
+    shaped = []
+    for asset in cursor:
+        doc = shape_asset(asset)
+        if doc:
+            shaped.append(doc)
+    return shaped
+
+
+def get_active_resume_id(user_email: str) -> str:
+    """Return users.active_resume_id or '' — never infers a fallback."""
+    email = _safe_email(user_email)
+    if not email:
+        return ""
+    user = _db().users.find_one({"email": email}, {"active_resume_id": 1}) or {}
+    return str(user.get("active_resume_id") or "")
+
+
 def get_active_asset(user_email: str) -> Optional[Dict[str, Any]]:
     """Resolve users.active_resume_id -> asset doc; falls back to the user's
     newest asset (any parse state) so a failed-parse upload can be re-parsed."""
