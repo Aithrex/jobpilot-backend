@@ -170,6 +170,17 @@ resource "aws_lambda_function" "service" {
       AUTO_APPLY_MODES              = "true"
       AUTO_APPLY_RESERVE            = "true"
       AUTO_APPLY_APPROVAL_FOLD      = "true"
+
+      # Skill-heading placement (resume_tailor). A JD skill the base résumé
+      # doesn't already list has to be filed under one of the user's OWN
+      # subheadings, and the deterministic route for that reads a TOPIC
+      # taxonomy — the one `ai_ml` group holds PyTorch, Pinecone, Prompt
+      # Engineering and Claude API, so one bucket serves all four and hosted
+      # APIs end up under "Frameworks & Libraries". This FLASH pass sees the
+      # résumé's real headings instead. `_flag_enabled` defaults OFF outside
+      # development, so this var is what turns it on in prod. Fail-open: any
+      # error falls straight back to the taxonomy chain.
+      SKILLS_CATEGORIZER = "true"
     }
   }
 

@@ -261,6 +261,10 @@ def offline_tailor(monkeypatch):
     monkeypatch.setattr(rt, "SECTION_REFINE_SUMMARY", False, raising=False)
     monkeypatch.setattr(rt, "USE_ATS_MARKET_SIGNALS", False, raising=False)
     monkeypatch.setattr(rt, "QUALITY_REFLECTION_GATE", False, raising=False)
+    # Skill-heading placement is a second FLASH call the handler above would
+    # answer with a whole résumé; with it off, JD adds go through the
+    # deterministic taxonomy chain, which is what these cases measure.
+    monkeypatch.setattr(rt, "SKILLS_CATEGORIZER", False, raising=False)
     return state
 
 

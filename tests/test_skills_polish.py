@@ -169,6 +169,22 @@ def test_base_labels_pin_categories_to_the_users_own_headings():
     assert "Git" in flat
 
 
+def test_admitted_heading_survives_when_base_labels_are_widened():
+    """A heading the placement pass earned must be passed into polish via
+    _labels_with_admitted, or _recategorize_skills treats it as foreign and
+    evicts its members back to where they came from."""
+    skills = {"Languages": ["Python"], "AI & ML": ["Claude API", "LangChain"]}
+
+    evicted = ResumeTailor._polish_skills(
+        {"skills": copy.deepcopy(skills)}, {}, base_labels={"Languages"},
+    )
+    kept = ResumeTailor._polish_skills(
+        {"skills": copy.deepcopy(skills)}, {}, base_labels={"Languages", "AI & ML"},
+    )
+    assert kept["skills"]["AI & ML"] == ["Claude API", "LangChain"]
+    assert "AI & ML" in evicted["skills"]  # untouched: polish only moves language junk
+
+
 def test_base_labels_still_allow_jd_reordering():
     """Preserving labels must not freeze their order — the most JD-relevant
     category still leads."""
