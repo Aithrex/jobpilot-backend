@@ -6,14 +6,33 @@ Pure dicts, no LLM, no DB.
 """
 import copy
 
+import pytest
+
+from services import resume_tailor as rt
 from services.resume_tailor import ResumeTailor
 
 
-def _polish(skills, jd=None, title=None):
+def _polish(skills, jd=None, title=None, *, base_skills=None,
+            category_order=None, base_labels=None):
     tailored = {"skills": copy.deepcopy(skills)}
     if title is not None:
         tailored["skills_section_title"] = title
-    return ResumeTailor._polish_skills(tailored, jd or {})
+    return ResumeTailor._polish_skills(
+        tailored, jd or {},
+        base_labels=base_labels,
+        category_order=category_order,
+        base_skills=base_skills,
+    )
+
+
+@pytest.fixture()
+def layout_off(monkeypatch):
+    monkeypatch.setattr(rt, "SKILLS_PRESERVE_LAYOUT", False, raising=False)
+
+
+@pytest.fixture()
+def layout_on(monkeypatch):
+    monkeypatch.setattr(rt, "SKILLS_PRESERVE_LAYOUT", True, raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +149,7 @@ def test_alias_dedup_across_categories():
     assert len([s for s in all_items if "ostgre" in s]) == 1
 
 
-def test_jd_aligned_first_keeps_all_items():
+def test_jd_aligned_first_keeps_all_items(layout_off):
     """JD-aligned skills lead the category; extra original items are kept."""
     jd = {"required_skills": ["Go", "Rust"]}
     items = ["Skill%02d" % i for i in range(10)] + ["Go", "Rust"]
@@ -185,9 +204,8 @@ def test_admitted_heading_survives_when_base_labels_are_widened():
     assert "AI & ML" in evicted["skills"]  # untouched: polish only moves language junk
 
 
-def test_base_labels_still_allow_jd_reordering():
-    """Preserving labels must not freeze their order — the most JD-relevant
-    category still leads."""
+def test_base_labels_still_allow_jd_reordering(layout_off):
+    """When layout preservation is off, the most JD-relevant category leads."""
     jd = {"required_skills": ["Excel", "financial modeling"]}
     out = ResumeTailor._polish_skills(
         {"skills": {
@@ -196,11 +214,16 @@ def test_base_labels_still_allow_jd_reordering():
         }},
         jd,
         base_labels={"Languages", "Financial Analysis"},
+        category_order=["Languages", "Financial Analysis"],
+        base_skills={
+            "Languages": ["French", "Spanish"],
+            "Financial Analysis": ["financial modeling", "Microsoft Excel"],
+        },
     )
     assert list(out["skills"]) == ["Financial Analysis", "Languages"]
 
 
-def test_categories_reordered_by_jd_relevance():
+def test_categories_reordered_by_jd_relevance(layout_off):
     jd = {"required_skills": ["Excel", "financial modeling"],
           "keywords": ["variance analysis"]}
     out = _polish({
@@ -209,6 +232,46 @@ def test_categories_reordered_by_jd_relevance():
                                "Microsoft Excel"],
     }, jd)
     assert list(out["skills"]) == ["Financial Analysis", "Languages"]
+
+
+def test_layout_preserves_category_order(layout_on):
+    jd = {"required_skills": ["Excel", "financial modeling"]}
+    base = {
+        "Languages": ["French", "Spanish"],
+        "Financial Analysis": ["financial modeling", "Microsoft Excel"],
+    }
+    out = ResumeTailor._polish_skills(
+        {"skills": copy.deepcopy(base)},
+        jd,
+        base_labels=set(base),
+        category_order=list(base),
+        base_skills=base,
+    )
+    assert list(out["skills"]) == ["Languages", "Financial Analysis"]
+
+
+def test_layout_preserves_within_category_order(layout_on):
+    jd = {"required_skills": ["Go"]}
+    base = {"Languages": ["Python", "SQL", "Go"]}
+    out = ResumeTailor._polish_skills(
+        {"skills": copy.deepcopy(base)},
+        jd,
+        category_order=list(base),
+        base_skills=base,
+    )
+    assert out["skills"]["Languages"] == ["Python", "SQL", "Go"]
+
+
+def test_aws_bedrock_collapses_into_aws_umbrella():
+    out = _polish({
+        "Cloud & DevOps": [
+            "AWS (EKS, EC2, S3, RDS)", "AWS Bedrock", "Docker",
+        ],
+    })
+    cloud = out["skills"]["Cloud & DevOps"]
+    assert cloud[0].startswith("AWS (")
+    assert "Bedrock" in cloud[0]
+    assert "AWS Bedrock" not in cloud
 
 
 # ---------------------------------------------------------------------------
@@ -277,10 +340,21 @@ def test_collapsed_skills_survive_pdf_extraction():
 # Base-skill restore + evidenced JD adds (_ensure_jd_skills_coverage)
 # ---------------------------------------------------------------------------
 
-def _merge(original, tailored_skills, jd):
+def _merge(original, tailored_skills, jd, monkeypatch=None):
+    if monkeypatch is not None:
+        monkeypatch.setattr(rt, "SKILLS_PRESERVE_LAYOUT", True, raising=False)
     t = {"skills": copy.deepcopy(tailored_skills)}
-    t = ResumeTailor._ensure_jd_skills_coverage(t, original, jd)
-    return ResumeTailor._polish_skills(t, jd)
+    headings = ResumeTailor._build_skill_headings(original, jd)
+    base_skills = ResumeTailor._copy_skill_cats(original.get("skills"))
+    t = ResumeTailor._ensure_jd_skills_coverage(
+        t, original, jd, headings=headings,
+    )
+    return ResumeTailor._polish_skills(
+        t, jd,
+        base_labels=ResumeTailor._labels_with_admitted(original, headings),
+        category_order=headings.order if headings else list(base_skills),
+        base_skills=base_skills or None,
+    )
 
 
 def test_restore_keeps_all_base_skills_when_model_drops_them():
@@ -303,7 +377,7 @@ def test_restore_keeps_all_base_skills_when_model_drops_them():
         assert skill in flat, skill
 
 
-def test_jd_skills_lead_each_restored_category():
+def test_jd_skills_append_after_base_order(layout_on):
     original = {
         "skills": {"Languages": ["Python", "SQL", "Go"]},
         "summary": "",
@@ -311,9 +385,10 @@ def test_jd_skills_lead_each_restored_category():
         "projects": [],
     }
     out = _merge(original, {"Languages": ["Python"]}, {"required_skills": ["Go"]})
-    assert out["skills"]["Languages"][0] == "Go"
-    assert "Python" in out["skills"]["Languages"]
-    assert "SQL" in out["skills"]["Languages"]
+    langs = out["skills"]["Languages"]
+    assert langs.index("Python") < langs.index("Go")
+    assert langs.index("SQL") < langs.index("Go")
+    assert langs[-1] == "Go"
 
 
 def test_adds_jd_skill_mentioned_in_a_bullet():
@@ -336,7 +411,7 @@ def test_adds_jd_skill_mentioned_in_a_bullet():
     assert "Python" in flat
 
 
-def test_adds_implied_jd_skill_next_to_parent():
+def test_adds_implied_jd_skill_next_to_parent(layout_on):
     original = {
         "skills": {"Frontend": ["React", "TypeScript"]},
         "summary": "",
@@ -349,11 +424,10 @@ def test_adds_implied_jd_skill_next_to_parent():
         {"required_skills": ["HTML"]},
     )
     assert "HTML" in out["skills"]["Frontend"]
-    assert out["skills"]["Frontend"][0] == "HTML"
+    assert out["skills"]["Frontend"].index("React") < out["skills"]["Frontend"].index("HTML")
     assert "React" in out["skills"]["Frontend"]
-    # TypeScript is a programming language even when the original listed it
-    # under Frontend.
-    assert "TypeScript" in out["skills"]["Languages"]
+    # With base labels pinned to Frontend only, TypeScript stays put.
+    assert "TypeScript" in out["skills"]["Frontend"]
 
 
 def test_does_not_add_unevidenced_jd_skill():
@@ -396,6 +470,7 @@ def test_caps_new_jd_adds():
     tools = [
         "Kafka", "Redis", "GraphQL", "Terraform", "Ansible",
         "Grafana", "Prometheus", "Snowflake", "Airflow", "Spark",
+        "Pulsar", "Flink",
     ]
     original = {
         "skills": {"Languages": ["Python"]},
@@ -409,11 +484,14 @@ def test_caps_new_jd_adds():
     out = _merge(
         original,
         {"Languages": ["Python"]},
-        {"required_skills": tools},
+        {"required_skills": tools[:8], "keywords": tools[8:]},
     )
     flat = [s for items in out["skills"].values() for s in items]
     added = [s for s in flat if s != "Python"]
-    assert len(added) == ResumeTailor._MAX_NEW_JD_SKILLS
+    assert len(added) == (
+        ResumeTailor._MAX_NEW_JD_REQUIRED_SKILLS
+        + ResumeTailor._MAX_NEW_JD_KEYWORD_SKILLS
+    )
     assert "Python" in flat
 
 
@@ -462,6 +540,35 @@ def test_java_programming_collapses_into_languages():
     frameworks = " ".join(out["skills"]["Frameworks & Libraries"])
     assert "Java programming" not in frameworks
     assert "FastAPI" in frameworks and "React" in frameworks
+
+
+def test_clinical_terms_stay_for_non_health_jd(layout_on):
+    original = {
+        "skills": {
+            "Concepts & Methodologies": [
+                "Microservices", "FHIR R4", "HIPAA compliance", "DICOM",
+            ],
+            "Languages": ["Python"],
+        },
+        "summary": "",
+        "experience": [{
+            "title": "Engineer", "company": "Acme",
+            "bullets": ["Built APIs with FastAPI and Kubernetes."],
+        }],
+        "projects": [],
+    }
+    jd = {
+        "industry": "fintech",
+        "required_skills": ["Kubernetes", "FastAPI"],
+        "keywords": [],
+    }
+    out = _merge(original, original["skills"], jd)
+    concepts = out["skills"]["Concepts & Methodologies"]
+    assert "FHIR R4" in concepts
+    assert "HIPAA compliance" in concepts
+    assert "DICOM" in concepts
+    flat = [s for items in out["skills"].values() for s in items]
+    assert "Kubernetes" in flat
 
 
 def test_new_jd_skill_does_not_dump_into_languages():

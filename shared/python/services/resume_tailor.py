@@ -93,6 +93,11 @@ QUALITY_REFLECTION_GATE = _flag_enabled("QUALITY_REFLECTION_GATE")
 # Fail-open: any error and the taxonomy chain runs exactly as before.
 SKILLS_CATEGORIZER = _flag_enabled("SKILLS_CATEGORIZER")
 
+# Preserve the base resume's skills layout: category order and within-category
+# order for original skills. JD additions are appended (required skills first)
+# instead of reordering the candidate's curated list for keyword density.
+SKILLS_PRESERVE_LAYOUT = _flag_enabled("SKILLS_PRESERVE_LAYOUT")
+
 # Overall quality score (0-100) at or above which no regeneration is attempted.
 _QUALITY_THRESHOLD = 70
 
@@ -249,12 +254,17 @@ class ResumeTailor:
         def _finalize(t: Dict[str, Any]) -> Dict[str, Any]:
             t = self._restore_contact(t, structured_resume)
             headings = self._build_skill_headings(structured_resume, jd_analysis)
+            base_skills = self._copy_skill_cats(
+                (structured_resume or {}).get("skills")
+            )
             t = self._ensure_jd_skills_coverage(
                 t, structured_resume, jd_analysis, headings=headings
             )
             t = self._polish_skills(
                 t, jd_analysis,
                 base_labels=self._labels_with_admitted(structured_resume, headings),
+                category_order=(headings.order if headings else list(base_skills)),
+                base_skills=base_skills or None,
             )
             t = self._stamp_skill_headings(t, headings)
             t = self._allocate_bullets(t, jd_analysis)
@@ -626,12 +636,17 @@ class ResumeTailor:
         # JD adds, bullet allocation, target_role, and the match-gap report.
         corrected = self._restore_contact(corrected, structured_resume)
         headings = self._build_skill_headings(structured_resume, jd_analysis)
+        base_skills = self._copy_skill_cats(
+            (structured_resume or {}).get("skills")
+        )
         corrected = self._ensure_jd_skills_coverage(
             corrected, structured_resume, jd_analysis, headings=headings
         )
         corrected = self._polish_skills(
             corrected, jd_analysis,
             base_labels=self._labels_with_admitted(structured_resume, headings),
+            category_order=(headings.order if headings else list(base_skills)),
+            base_skills=base_skills or None,
         )
         corrected = self._stamp_skill_headings(corrected, headings)
         corrected = self._allocate_bullets(corrected, jd_analysis)
@@ -701,10 +716,13 @@ class ResumeTailor:
     # forbidden by the prompt and surfaced to the user by the match-gap reporter.
 
     # New JD skills that are evidenced (already on the base resume, in a
-    # bullet/project, or SOLID-implied) may be prepended — at most this many
-    # across the whole section. Original skills are never capped; a recruiter
-    # should still see the candidate's full list, not a JD-trimmed subset.
-    _MAX_NEW_JD_SKILLS = 6
+    # bullet/project, or SOLID-implied) are appended — capped separately so
+    # required_skills are not crowded out by keyword noise. Original skills are
+    # never capped; a recruiter should still see the candidate's full list.
+    _MAX_NEW_JD_REQUIRED_SKILLS = 8
+    _MAX_NEW_JD_KEYWORD_SKILLS = 4
+    # Back-compat alias for tests that referenced the old single cap.
+    _MAX_NEW_JD_SKILLS = _MAX_NEW_JD_REQUIRED_SKILLS
 
     # Umbrella entry: at most this many sub-services in the parenthetical —
     # "AWS (EC2, S3, EKS, RDS)" — JD-matched members are never dropped.
@@ -751,6 +769,9 @@ class ResumeTailor:
                 "amazon elasticache": "ElastiCache",
                 "dynamodb": "DynamoDB",
                 "amazon dynamodb": "DynamoDB",
+                "amazon bedrock": "Bedrock",
+                "aws bedrock": "Bedrock",
+                "bedrock": "Bedrock",
             },
         },
         {
@@ -1050,6 +1071,8 @@ class ResumeTailor:
         tailored: Dict[str, Any],
         jd_analysis: Dict[str, Any],
         base_labels: Optional[set] = None,
+        category_order: Optional[List[str]] = None,
+        base_skills: Optional[Dict[str, List[str]]] = None,
     ) -> Dict[str, Any]:
         """Deterministic, industry-agnostic skills polish (absorbs the old
         _cap_skills_per_category). The model decides skills CONTENT (prompt);
@@ -1061,17 +1084,19 @@ class ResumeTailor:
              the most JD-relevant one)
           2. umbrella collapse — platform + sub-services become ONE entry:
              "AWS (EC2, S3, EKS, RDS)" (curated _UMBRELLA_GROUPS map)
-          3. per-category ordering (JD-aligned first, stable). Original skills
-             are not capped; new JD adds are capped upstream.
-          4. category reorder by JD relevance (most relevant first — dict
-             insertion order flows through to the rendered document)
+          3. per-category ordering — when SKILLS_PRESERVE_LAYOUT and a base
+             skills section exist, original skills keep their order and JD
+             adds trail the category; otherwise JD-aligned skills lead.
+          4. category order — preserved from the base resume when layout
+             preservation is on; otherwise reorder by JD relevance.
           5. prune empty categories; normalize skills_section_title against
              _SKILLS_TITLE_WHITELIST
 
         `base_labels` is the base resume's own set of subheadings. Step 0 is
         the only step that can introduce a heading the user never wrote, so
         passing it keeps the tailored section's labels identical to the base
-        while steps 3 and 4 still reorder freely for the job.
+        while steps 3 and 4 still reorder freely for the job when layout
+        preservation is off.
         """
         # Title normalization happens even when skills are empty/malformed.
         raw_title = str(tailored.get("skills_section_title") or "").strip()
@@ -1148,6 +1173,28 @@ class ResumeTailor:
                     return 0.0
                 return (sum(scores) / len(scores)) + 0.001 * sum(scores)
             return sorted(cats, key=lambda c: (-score(c), original_pos[c]))
+
+        preserve_layout = (
+            SKILLS_PRESERVE_LAYOUT
+            and base_skills
+            and category_order
+        )
+        tailored.pop("_jd_added_skills", None)
+
+        def ordered_categories() -> List[str]:
+            if not preserve_layout:
+                return category_rank()
+            seen: set = set()
+            out: List[str] = []
+            for cat in category_order or []:
+                if cat in cats and cat not in seen:
+                    out.append(cat)
+                    seen.add(cat)
+            for cat in category_rank():
+                if cat not in seen:
+                    out.append(cat)
+                    seen.add(cat)
+            return out
 
         # --- 1. Cross-category dedup (most-relevant category wins) ---
         seen: Dict[str, str] = {}  # canonical key -> owning category
@@ -1226,16 +1273,32 @@ class ResumeTailor:
                 cats[cat] = new_items
             collapsed.append(entry)
 
-        # --- 3. Per-category ordering (JD-aligned first, stable) ---
-        # Original skills are kept in full. New JD adds were already capped
-        # in _ensure_jd_skills_coverage.
+        # --- 3. Per-category ordering ---
         for cat, items in cats.items():
-            jd_aligned = [s for s in items if item_score(s) > 0]
-            rest = [s for s in items if item_score(s) == 0]
-            cats[cat] = jd_aligned + rest
+            if preserve_layout and base_skills and cat in base_skills:
+                remaining = list(items)
+                ordered_base: List[str] = []
+                for base_skill in base_skills.get(cat) or []:
+                    base_key = canon(base_skill)
+                    for i, cur in enumerate(remaining):
+                        if canon(cur) == base_key:
+                            ordered_base.append(remaining.pop(i))
+                            break
+                jd_required = [s for s in remaining if item_score(s) >= 2]
+                jd_other = [s for s in remaining if item_score(s) < 2]
+                cats[cat] = ordered_base + jd_required + jd_other
+            elif preserve_layout:
+                jd_required = [s for s in items if item_score(s) >= 2]
+                jd_other = [s for s in items if item_score(s) < 2]
+                base_part = [s for s in items if s not in jd_required and s not in jd_other]
+                cats[cat] = base_part + jd_required + jd_other
+            else:
+                jd_aligned = [s for s in items if item_score(s) > 0]
+                rest = [s for s in items if item_score(s) == 0]
+                cats[cat] = jd_aligned + rest
 
-        # --- 4. Category reorder + 5. prune empties ---
-        polished = {cat: cats[cat] for cat in category_rank() if cats[cat]}
+        # --- 4. Category order + 5. prune empties ---
+        polished = {cat: cats[cat] for cat in ordered_categories() if cats[cat]}
 
         # Preserve any non-list category values verbatim (defensive).
         for cat, items in skills.items():
@@ -1326,6 +1389,61 @@ class ResumeTailor:
         "it_support": "tool",
         "analytics": "tool",
     }
+    # Kind-of-thing hints for JD skills the taxonomy misfiles (APIs as
+    # frameworks, messaging stacks as concepts). Matched before taxonomy_group
+    # in _category_for_new_skill; headings.map still wins when set.
+    _SKILL_KIND_API_SDK_RE = re.compile(r"\b(api|sdk)\b", re.IGNORECASE)
+    _SKILL_KIND_CLOUD_RE = re.compile(
+        r"\b(bedrock|vertex\s*ai|azure\s*openai|sagemaker|azure\s*ml)\b",
+        re.IGNORECASE,
+    )
+    _SKILL_KIND_TOOL_TERMS = frozenset({
+        "apache kafka", "kafka", "rabbitmq", "redis", "celery", "postman",
+        "pytest", "jest", "mocha", "junit", "selenium", "cypress",
+        "prometheus", "grafana", "datadog", "datadog apm", "elk stack",
+        "opentelemetry", "splunk", "new relic", "pagerduty",
+    })
+    _SKILL_KIND_FRAMEWORK_TERMS = frozenset({
+        "langchain", "llamaindex", "llama index", "haystack",
+    })
+
+    @classmethod
+    def _jd_skill_display(cls, term: str) -> str:
+        """Display string for an evidenced JD add.
+
+        normalize_single collapses vendor+product labels ('Claude API' ->
+        'Anthropic') which hurts ATS literal matching. Keep the JD surface form
+        when the normalizer would materially shorten a multi-token product name.
+        """
+        raw = str(term or "").strip()
+        if not raw:
+            return raw
+        canonical = normalize_single(raw) or raw
+        if canonical.lower() == raw.lower():
+            return canonical
+        if cls._SKILL_KIND_API_SDK_RE.search(raw):
+            return raw
+        if len(raw.split()) >= 2 and len(canonical.split()) == 1:
+            return raw
+        return canonical
+
+    @classmethod
+    def _kind_bucket_for_term(cls, term: str) -> Optional[str]:
+        """Best-effort kind bucket when taxonomy/topic routing is wrong."""
+        raw = str(term or "").strip()
+        if not raw:
+            return None
+        key = (normalize_single(raw) or raw).lower()
+        if cls._SKILL_KIND_API_SDK_RE.search(raw):
+            return "tool"
+        if cls._SKILL_KIND_CLOUD_RE.search(raw):
+            return "cloud"
+        if key in cls._SKILL_KIND_TOOL_TERMS:
+            return "tool"
+        if key in cls._SKILL_KIND_FRAMEWORK_TERMS:
+            return "framework"
+        return None
+
     _CONCEPT_IN_LANGUAGE_RE = re.compile(
         r"throughput|telemetry|observability|optimization|"
         r"architecture|compliance|pipeline|workflow|methodology|"
@@ -1803,6 +1921,10 @@ class ResumeTailor:
                 if hit and (allowed is None or hit in allowed):
                     return hit
 
+        kind = cls._kind_bucket_for_term(term)
+        if kind:
+            return cls._category_for_bucket(kind, merged, allowed=allowed)
+
         if cls._language_display(term):
             return cls._category_for_bucket("language", merged, allowed=allowed)
         group = taxonomy_group(term)
@@ -1843,8 +1965,8 @@ class ResumeTailor:
         A JD term is added only when it is already on the original skills list
         (then it is just kept), mentioned in original bullets/projects, or
         SOLID-implied by an owned skill. Soft traits, job titles, and company
-        names are still stripped. New JD adds are capped at _MAX_NEW_JD_SKILLS;
-        original skills are never trimmed here.
+        names are still stripped. New JD adds are capped separately for
+        required_skills vs keywords; original skills are never trimmed here.
         """
         from services.fabrication_filter import is_nonskill_soft_trait
         from utils.skill_implications import is_implied
@@ -1904,22 +2026,36 @@ class ResumeTailor:
         haystack = build_resume_text(original or {}) or ""
 
         seen_jd = set()
-        jd_terms: List[str] = []
-        for raw in list(jd_analysis.get("required_skills") or []) + list(
-            jd_analysis.get("keywords") or []
-        ):
+        required_terms: List[str] = []
+        keyword_terms: List[str] = []
+        for raw in jd_analysis.get("required_skills") or []:
             if _reject_term(raw):
                 continue
             key = (normalize_single(raw) or raw).strip().lower()
             if not key or key in seen_jd:
                 continue
             seen_jd.add(key)
-            jd_terms.append(raw.strip())
+            required_terms.append(raw.strip())
+        for raw in jd_analysis.get("keywords") or []:
+            if _reject_term(raw):
+                continue
+            key = (normalize_single(raw) or raw).strip().lower()
+            if not key or key in seen_jd:
+                continue
+            seen_jd.add(key)
+            keyword_terms.append(raw.strip())
 
         added: List[str] = []
-        for term in jd_terms:
-            if len(added) >= cls._MAX_NEW_JD_SKILLS:
-                break
+        added_required = 0
+        added_keywords = 0
+        for term, is_required in (
+            [(t, True) for t in required_terms] + [(t, False) for t in keyword_terms]
+        ):
+            if is_required:
+                if added_required >= cls._MAX_NEW_JD_REQUIRED_SKILLS:
+                    continue
+            elif added_keywords >= cls._MAX_NEW_JD_KEYWORD_SKILLS:
+                continue
             if cls._skill_already_listed(term, merged):
                 continue
             evidenced = cls._term_in_resume_text(term, haystack) or is_implied(
@@ -1927,12 +2063,16 @@ class ResumeTailor:
             )
             if not evidenced:
                 continue
-            display = normalize_single(term) or term
+            display = cls._jd_skill_display(term)
             cat = cls._category_for_new_skill(
                 term, merged, model, allowed=allowed_labels, headings=headings
             )
             merged.setdefault(cat, []).append(display)
             added.append(display)
+            if is_required:
+                added_required += 1
+            else:
+                added_keywords += 1
 
         removed: List[str] = []
         for cat, items in list(merged.items()):
@@ -1957,6 +2097,8 @@ class ResumeTailor:
                 "Tailor: stripped %d non-skill terms from skills section: %s",
                 len(removed), removed,
             )
+        if added:
+            tailored["_jd_added_skills"] = added
         tailored["skills"] = merged
         return tailored
 
@@ -2266,12 +2408,16 @@ class ResumeTailor:
             "   write an honest summary around their real strengths), and do NOT turn the summary\n"
             "   into a keyword list — it must read like a human wrote it.\n\n"
 
-            "2. Skills: keep EVERY original-resume skill; add a JD skill only if the candidate already\n"
-            "   has it (skills list, a bullet/project, or a direct implication). Most JD-relevant\n"
-            "   category FIRST, and within each category list the most JD-relevant skills first. The\n"
-            "   skills section is read TWICE: by the ATS (which wants real keyword overlap) and then by a\n"
-            "   HUMAN recruiter (who rejects keyword soup). Both must pass. Rules for a HIGH-QUALITY\n"
-            "   skills section:\n"
+            "2. Skills: if the original resume already has a skills section, you may omit\n"
+            "   the skills field or echo it unchanged — a deterministic post-pass restores\n"
+            "   every original skill, adds evidenced JD required_skills/keywords, and preserves\n"
+            "   the candidate's category headings and layout. Do NOT invent new categories or\n"
+            "   aggressively reorder the candidate's curated list for keyword density. When the\n"
+            "   original resume has no skills section, build one using the rules below.\n"
+            "   Most JD-relevant category FIRST applies only when there is no base layout to\n"
+            "   preserve. The skills section is read TWICE: by the ATS (which wants real keyword\n"
+            "   overlap) and then by a HUMAN recruiter (who rejects keyword soup). Both must pass.\n"
+            "   Rules for a HIGH-QUALITY skills section:\n"
             "   - THE LITMUS TEST — before listing any entry, ask: 'Is this a NAMED, teachable\n"
             "     capability that a recruiter would recognize as a hard or methodological skill, and\n"
             "     that I could be tested on?' If not, it does NOT belong in skills. Specifically, NEVER\n"

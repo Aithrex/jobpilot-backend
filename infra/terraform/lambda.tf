@@ -181,6 +181,7 @@ resource "aws_lambda_function" "service" {
       # development, so this var is what turns it on in prod. Fail-open: any
       # error falls straight back to the taxonomy chain.
       SKILLS_CATEGORIZER = "true"
+      SKILLS_PRESERVE_LAYOUT = "true"
     }
   }
 

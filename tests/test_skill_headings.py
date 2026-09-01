@@ -229,7 +229,20 @@ def test_category_for_new_skill_prefers_the_map():
         headings=SkillHeadings({"claude api": "Frameworks & Libraries"}, [], None),
     )
     assert mapped == "Frameworks & Libraries"
-    assert plain != mapped
+    assert plain == "Tools & Platforms"
+
+
+def test_kind_bucket_routes_api_to_tools_without_map():
+    merged = {k: list(v) for k, v in BASE["skills"].items()}
+    cat = ResumeTailor._category_for_new_skill(
+        "Gemini API", merged, {}, allowed=set(merged),
+    )
+    assert cat == "Tools & Platforms"
+
+
+def test_jd_skill_display_preserves_api_label():
+    assert ResumeTailor._jd_skill_display("Claude API") == "Claude API"
+    assert ResumeTailor._jd_skill_display("PostgreSQL") == "PostgreSQL"
 
 
 def test_map_entry_outside_allowed_is_ignored():
@@ -274,6 +287,7 @@ def _resume_mentioning(text):
 
 
 def test_evidenced_jd_skill_lands_where_the_map_says(flag_on, monkeypatch):
+    monkeypatch.setattr(rt, "SKILLS_PRESERVE_LAYOUT", True, raising=False)
     original = _resume_mentioning("Shipped a chat feature on the Claude API.")
     stub_placements(monkeypatch, [
         {"skill": "Claude API", "heading": "Tools & Platforms"},
@@ -282,11 +296,8 @@ def test_evidenced_jd_skill_lands_where_the_map_says(flag_on, monkeypatch):
     out = ResumeTailor._ensure_jd_skills_coverage(
         {"skills": {}}, original, JD, headings=headings,
     )
-    # The added term wears its canonical display name ("Anthropic"), which is
-    # normalize_single's doing and predates this map — what matters here is the
-    # heading it was filed under.
     added = set(out["skills"]["Tools & Platforms"]) - {"Docker", "Git"}
-    assert added, out["skills"]
+    assert added == {"Claude API"}, out["skills"]
     assert not (set(out["skills"]["Frameworks & Libraries"]) - {"React", "Flask"})
 
 
