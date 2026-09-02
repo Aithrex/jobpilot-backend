@@ -95,3 +95,34 @@ so a version bump is backfillable without `--all`.
 | the taxonomy backfill | `scripts/backfill_tech_taxonomy.py --rollback` (`$unset tech` + the identity fields it wrote) |
 | the tech feed | the frontend flag: `localStorage['aspirely.techFeed.enabled'] = 'false'`, or `?techfeed=0`, or `VITE_TECH_FEED=0` at build time |
 | the feedback endpoint | `db.tech_feed_feedback.drop()`; suppression degrades to "nothing suppressed" |
+
+## Explain-plan evidence for the finalized query paths
+
+```bash
+PYTHONPATH=shared/python python scripts/explain_job_inventory.py --no-scratch
+```
+
+Read-only; also seeds and deletes a scratch corpus unless `--no-scratch`.
+Measured against live `job_postings` on 2026-09-02:
+
+| path | index | keys examined | returned | ms |
+|---|---|---:|---:|---:|
+| tech-feed retrieve (default scope) | `active_tech_scope_keyset` | 2,000 | 2,000 | 15 |
+| tech-feed retrieve (family filter) | `active_tech_family_keyset` | 2,000 | 2,000 | 15 |
+| tech-feed retrieve (specialty filter) | `active_tech_specialty_keyset` | 123 | 123 | 9 |
+| keyset continuation | `active_keyset_posted_job` | 250 | 250 | **24** |
+| keyset continuation, WITHOUT the range bound | `active_keyset_posted_job` | 71,333 | 250 | **13,540** |
+| keyset continuation (undated tail) | `active_keyset_posted_job` | 250 | 250 | 13 |
+| country filter | `active_country_posted_at` | 1,086 | 1,086 | 9 |
+
+No blocking sort on any of them. The last-but-one row is kept in the harness on
+purpose: it is the SAME query without `{"posted_at": {"$lte": <cursor>}}`, and
+it is 565x slower. An `$or` alone cannot bound an index range, so Mongo used
+only the base freshness bound and evaluated the tie-break as a residual over
+everything after it. If that clause is ever removed, this line moves and the
+harness says so.
+
+The two `*_keyset` index families exist because the scope/family/specialty
+indexes end at `posted_at`, and a retrieval sorted `(posted_at DESC, job_id
+ASC)` — which it must be, or the keyset order is not total — fell back to a
+blocking sort over the whole matched set before the limit.

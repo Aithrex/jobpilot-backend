@@ -195,8 +195,23 @@ class TestKeysetPredicate:
         from datetime import datetime, timezone
         posted = datetime(2026, 8, 30, tzinfo=timezone.utc)
         pred = tfs.keyset_predicate({"p": posted, "j": "j5"})
-        assert pred["$or"][0] == {"posted_at": {"$lt": posted}}
-        assert pred["$or"][1] == {"posted_at": posted, "job_id": {"$gt": "j5"}}
+        bound, tie = pred["$and"]
+        assert tie["$or"][0] == {"posted_at": {"$lt": posted}}
+        assert tie["$or"][1] == {"posted_at": posted, "job_id": {"$gt": "j5"}}
+        # The upper bound is not redundant with the `$or` - it is what lets
+        # Mongo bound the index range. Measured on live `job_postings`:
+        # 71,333 keys examined and 13.6s WITHOUT it, 250 keys and 24ms with.
+        assert bound == {"posted_at": {"$lte": posted}}
+
+    def test_the_range_bound_shrinks_as_paging_advances(self):
+        """Later pages get CHEAPER, not more expensive: each page lowers the
+        upper bound, so the scanned range closes toward the freshness cutoff."""
+        from datetime import datetime, timedelta, timezone
+        first = datetime(2026, 8, 30, tzinfo=timezone.utc)
+        later = first - timedelta(days=5)
+        a = tfs.keyset_predicate({"p": first, "j": "j1"})["$and"][0]
+        b = tfs.keyset_predicate({"p": later, "j": "j9"})["$and"][0]
+        assert b["posted_at"]["$lte"] < a["posted_at"]["$lte"]
 
     def test_the_undated_tail_orders_by_job_id_alone(self):
         assert tfs.keyset_predicate({"p": None, "j": "j5"}) == {

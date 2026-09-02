@@ -935,6 +935,21 @@ INDEX_SPECS = [
     ("job_postings", [("status", ASCENDING), ("locations.country_code", ASCENDING),
                       ("posted_at", DESCENDING)],
      {"name": "active_country_posted_at"}),
+    # The scope/family/specialty indexes end at `posted_at`, so a retrieval
+    # sorted `(posted_at DESC, job_id ASC)` - which it must be, or the keyset
+    # order is not total - fell back to a BLOCKING SORT over the whole matched
+    # set before the limit. Measured on the explain harness: `+SORT(blocking)`
+    # on both the family and the specialty path. Carrying `job_id` as the
+    # trailing key covers the sort.
+    ("job_postings", [("status", ASCENDING), ("tech.tech_scope", ASCENDING),
+                      ("posted_at", DESCENDING), ("job_id", ASCENDING)],
+     {"name": "active_tech_scope_keyset"}),
+    ("job_postings", [("status", ASCENDING), ("tech.role_families", ASCENDING),
+                      ("posted_at", DESCENDING), ("job_id", ASCENDING)],
+     {"name": "active_tech_family_keyset"}),
+    ("job_postings", [("status", ASCENDING), ("tech.role_specialties", ASCENDING),
+                      ("posted_at", DESCENDING), ("job_id", ASCENDING)],
+     {"name": "active_tech_specialty_keyset"}),
 
     # === canonical employer registry ======================================
     # `employer_registry.resolve_employer` reads domain first, then a join

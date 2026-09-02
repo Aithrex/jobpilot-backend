@@ -73,6 +73,29 @@ SCRATCH_POSTING_INDEXES = [
      {"name": "purge_at_retention",
       "partialFilterExpression": {"purge_at": {"$exists": True}}}),
     ([("employer_id", ASCENDING), ("status", ASCENDING)], {"name": "employer_id_status"}),
+    # The tech-feed paths. `tech.*` is multikey; the keyset index is what makes
+    # paging PAST the ranked window an IXSCAN instead of a blocking sort, and
+    # `locations.country_code` is what keeps the (previously broken) country
+    # filter off a COLLSCAN.
+    ([("status", ASCENDING), ("tech.tech_scope", ASCENDING),
+      ("posted_at", DESCENDING)], {"name": "active_tech_scope_posted_at"}),
+    ([("status", ASCENDING), ("tech.role_families", ASCENDING),
+      ("posted_at", DESCENDING)], {"name": "active_tech_family_posted_at"}),
+    ([("status", ASCENDING), ("tech.role_specialties", ASCENDING),
+      ("posted_at", DESCENDING)], {"name": "active_tech_specialty_posted_at"}),
+    ([("status", ASCENDING), ("posted_at", DESCENDING), ("job_id", ASCENDING)],
+     {"name": "active_keyset_posted_job"}),
+    ([("status", ASCENDING), ("locations.country_code", ASCENDING),
+      ("posted_at", DESCENDING)], {"name": "active_country_posted_at"}),
+    ([("status", ASCENDING), ("tech.tech_scope", ASCENDING),
+      ("posted_at", DESCENDING), ("job_id", ASCENDING)],
+     {"name": "active_tech_scope_keyset"}),
+    ([("status", ASCENDING), ("tech.role_families", ASCENDING),
+      ("posted_at", DESCENDING), ("job_id", ASCENDING)],
+     {"name": "active_tech_family_keyset"}),
+    ([("status", ASCENDING), ("tech.role_specialties", ASCENDING),
+      ("posted_at", DESCENDING), ("job_id", ASCENDING)],
+     {"name": "active_tech_specialty_keyset"}),
 ]
 
 SCRATCH_STATE_INDEXES = [
@@ -125,6 +148,47 @@ def posting_paths(content_hash):
           "last_seen_at": {"$lt": NOW - timedelta(days=1)}}, None, 5000),
         ("employer roll-up",
          {"employer_id": "employer-7", "status": "active"}, None, 0),
+
+        # --- tech-feed retrieval, the finalized paths ----------------------
+        ("tech-feed retrieve (default scope, ranked window)",
+         {"status": "active", "tech.tech_scope": {"$in": ["core"]},
+          "posted_at": {"$gte": cutoff}},
+         [("posted_at", DESCENDING), ("job_id", ASCENDING)], 2000),
+        ("tech-feed retrieve (family filter)  [multikey]",
+         {"status": "active", "tech.role_families": {"$in": ["software_engineering"]},
+          "posted_at": {"$gte": cutoff}},
+         [("posted_at", DESCENDING), ("job_id", ASCENDING)], 2000),
+        ("tech-feed retrieve (specialty filter)  [multikey]",
+         {"status": "active", "tech.role_specialties": {"$in": ["backend"]},
+          "posted_at": {"$gte": cutoff}},
+         [("posted_at", DESCENDING), ("job_id", ASCENDING)], 2000),
+        # THE path that removed the 2,000-result ceiling. A blocking sort here
+        # would mean the keyset phase re-sorts the whole match set per page,
+        # which is the opposite of what a keyset cursor is for.
+        ("tech-feed keyset continuation (past the ranked window)",
+         {"$and": [{"status": "active", "posted_at": {"$gte": cutoff}},
+                   {"$and": [
+                       {"posted_at": {"$lte": NOW - timedelta(days=3)}},
+                       {"$or": [{"posted_at": {"$lt": NOW - timedelta(days=3)}},
+                                {"posted_at": NOW - timedelta(days=3),
+                                 "job_id": {"$gt": "0" * 32}}]}]}]},
+         [("posted_at", DESCENDING), ("job_id", ASCENDING)], 250),
+        ("tech-feed keyset continuation WITHOUT the range bound (regression)",
+         {"$and": [{"status": "active", "posted_at": {"$gte": cutoff}},
+                   {"$or": [{"posted_at": {"$lt": NOW - timedelta(days=3)}},
+                            {"posted_at": NOW - timedelta(days=3),
+                             "job_id": {"$gt": "0" * 32}}]}]},
+         [("posted_at", DESCENDING), ("job_id", ASCENDING)], 250),
+        ("tech-feed keyset continuation (undated tail)",
+         {"$and": [{"status": "active"},
+                   {"posted_at": None, "job_id": {"$gt": "0" * 32}}]},
+         [("posted_at", DESCENDING), ("job_id", ASCENDING)], 250),
+        ("tech-feed country filter (normalised ISO code)",
+         {"status": "active", "locations.country_code": {"$in": ["US"]},
+          "posted_at": {"$gte": cutoff}},
+         [("posted_at", DESCENDING)], 2000),
+        ("tech-feed page fetch by id (cursor page)",
+         {"job_id": {"$in": ["0" * 32, "1" * 32, "2" * 32]}}, None, 25),
     ]
 
 
@@ -217,9 +281,15 @@ def seed_scratch(db, n):
         # corpus where the filters collapse to zero rows proves nothing).
         posted = NOW - timedelta(days=i % 12, hours=i % 23)
         closed = (i % 17 == 0)
-        locs = [{"raw": "Austin, TX, USA", "key": LOCATION_KEYS[i % len(LOCATION_KEYS)]}]
+        # `country_code` is the field the country filter reads. Vary it so the
+        # explain is against a corpus where the filter selects rather than
+        # matching everything - a selective-looking plan over a corpus with one
+        # value proves nothing.
+        country = ("US", "US", "IN", "DE", "CA")[i % 5]
+        locs = [{"raw": "Austin, TX, USA", "country_code": country,
+                 "key": LOCATION_KEYS[i % len(LOCATION_KEYS)]}]
         if i % 3 == 0:  # genuinely multikey: some postings list several offices
-            locs.append({"raw": "Remote, USA",
+            locs.append({"raw": "Remote, USA", "country_code": "US",
                          "key": LOCATION_KEYS[(i + 1) % len(LOCATION_KEYS)]})
         doc = {
             "_id": f"scratch-{i}",
@@ -231,6 +301,16 @@ def seed_scratch(db, n):
             "title_raw": "Senior Backend Engineer",
             "title_normalized": "senior backend engineer",
             "role_family": ROLE_FAMILIES[i % len(ROLE_FAMILIES)],
+            # The tech-feed reads `tech.*`, not the legacy `role_family`.
+            "tech": {
+                "tech_scope": ("core", "core", "adjacent", "non_tech",
+                               "unknown")[i % 5],
+                "role_families": [("software_engineering", "cloud_platform",
+                                   "data", "ai_ml", "security")[i % 5]],
+                "role_specialties": [("backend", "sre", "data_engineering",
+                                      "ml_engineering", "secops")[i % 5]],
+                "taxonomy_version": "tech-tax-1.1.0",
+            },
             "seniority": ("senior", "mid", "entry")[i % 3],
             "locations": locs,
             "work_mode": ("remote", "hybrid", "onsite")[i % 3],
