@@ -495,3 +495,50 @@ class TestMigrationDetection:
                         "chain": [url], "final_url": url, "error": ""}
 
         assert cso.detect_migration(_F(), "https://old.example/jobs")[0] is False
+
+
+class TestAProbeFailureDoesNotEraseALiveBoard:
+    """A 403 or a bot challenge is a fact about OUR request, not about the
+    board. When the live inventory holds fresh postings from the same
+    `(vendor, tenant)`, the endpoint is demonstrably serving jobs.
+
+    Measured: one content pass running beside two others turned 830 sources
+    `blocked` in a single sweep — boards the crawler had read that morning.
+    Acting on that verdict erased a third of the coverage the same session had
+    just earned.
+    """
+
+    def test_record_note_leaves_the_state_alone(self, sources_db):
+        src = css.build_source(
+            employer_id="emp_live", ats_vendor="workday", tenant="ngc",
+            ownership_evidence=[
+                css.evidence(css.SIGNAL_PROVIDER_OWNER, value="Northrop Grumman"),
+                css.evidence(css.SIGNAL_CURATED_ROW, value="Northrop Grumman"),
+            ],
+            content_validation_evidence=[css.evidence("content_fetch", value="968")],
+            job_count_last=968)
+        css.upsert_source(src)
+        assert css.record_note(src["source_id"], "probe 403; 968 fresh postings") \
+            == css.STATE_VALIDATED
+        row = sources_db.career_sources.find_one({"source_id": src["source_id"]})
+        assert row["state"] == css.STATE_VALIDATED
+        assert "968 fresh postings" in row["last_note"]
+        assert row["last_checked_at"] is not None, "the check still happened"
+
+    def test_record_failure_would_have_demoted_it(self, sources_db):
+        """The contrast that makes the guard necessary."""
+        src = css.build_source(
+            employer_id="emp_live2", ats_vendor="workday", tenant="wf",
+            ownership_evidence=[
+                css.evidence(css.SIGNAL_PROVIDER_OWNER, value="Wells Fargo"),
+                css.evidence(css.SIGNAL_CURATED_ROW, value="Wells Fargo"),
+            ],
+            content_validation_evidence=[css.evidence("content_fetch", value="1443")],
+            job_count_last=1443)
+        css.upsert_source(src)
+        assert css.record_failure(src["source_id"],
+                                  failure_code=css.FAIL_HTTP_403,
+                                  detail="bot wall") != css.STATE_VALIDATED
+
+    def test_a_note_on_a_missing_source_is_not_an_error(self, sources_db):
+        assert css.record_note("cs_does_not_exist", "anything") == ""

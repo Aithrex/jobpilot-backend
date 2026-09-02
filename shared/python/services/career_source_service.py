@@ -628,6 +628,30 @@ def record_failure(source_id: str, *, failure_code: str, detail: str = "") -> st
     return state
 
 
+def record_note(source_id: str, detail: Any) -> str:
+    """Record an observation WITHOUT touching the state.
+
+    For a check that ran and whose verdict we are declining to act on, which
+    is a real and important case: a 403 to our prober is a fact about our
+    request, not about the board, and when the live inventory holds fresh
+    postings from that exact endpoint the board is plainly serving jobs. The
+    note keeps the audit trail — the check happened, and here is why nothing
+    moved — instead of silently skipping.
+    """
+    col = _col()
+    now = _now()
+    row = col.find_one({"source_id": source_id}, {"state": 1})
+    if not row:
+        return ""
+    col.update_one({"source_id": source_id}, {
+        "$set": {"last_checked_at": now,
+                 "next_check_at": next_check_after(str(row.get("state") or "")),
+                 "last_note": str(detail or "")[:400],
+                 "updated_at": now},
+    })
+    return str(row.get("state") or "")
+
+
 def record_success(source_id: str, *, job_count: int, sample_title: str = "") -> str:
     """A successful content fetch. Promotes only if ownership already holds."""
     col = _col()

@@ -35,7 +35,7 @@ PYTHONPATH=shared/python python scripts/employer_coverage_report.py --markdown
 | Remove or adapt the duplicate `ROLE_FAMILIES` | ADAPTED, not removed: it is the legacy bridge for `job_postings.role_family`, which three production indexes key on. `_legacy_role_tier` uses it only when the canonical tree is silent, and the reason is in the code | **met** |
 | Persist `taxonomy_version`, `role_families[]`, `role_specialties[]` on jobs and résumé profiles | jobs: `job_postings.tech.*`, backfilled to `tech-tax-1.1.0` across 405,133 rows. résumés: `build_resume_profile()["tech"]`, surfaced as `resume_taxonomy` on the verdict | **met** |
 | Five-rung role alignment | `ALIGNMENT_TIERS` = exact_specialty / adjacent_specialty / same_family / adjacent_family / unrelated | **met** |
-| Versioned specialty-adjacency matrix | `ADJACENCY_VERSION = "tech-adjacency-1.0.0"`, 184 declared pairs, every one of 102 specialties has at least one neighbour | **met** |
+| Versioned specialty-adjacency matrix | `ADJACENCY_VERSION = "tech-adjacency-1.1.0"`, 218 declared pairs, every one of 102 specialties has at least one neighbour. 1.1.0 added the 34 edges leadership and security are STAFFED FROM — without them a backend engineer was `unrelated` to "Staff Engineer" | **met** |
 | Confident cross-domain veto; ineligible / not_scored; no second overall score | `fit_score.ELIGIBLE / INELIGIBLE / NOT_SCORED` + `_eligibility`. `eligibility` answers a different question from `score`; it is not a number and does not compete with one | **met** |
 | Hard constraints separated from ranking | a hard requirement we cannot evaluate is `status: unknown` + `hard_requirement: True`, surfaced and NOT priced; only a KNOWN mismatch gates | **met** |
 | Unknown never penalised (salary, sponsorship, seniority, work mode, employment type) | `_normalized_score` drops an unmeasurable component from numerator AND denominator; `tests/test_fit_score_v2.py::TestUnknownDoesNotAutoFail` | **met** |
@@ -84,6 +84,16 @@ PYTHONPATH=shared/python python scripts/employer_coverage_report.py --markdown
 | `retrieve(limit=CANDIDATE_LIMIT)` bound at import | the constant could not be changed at runtime |
 | keyset `$or` with no range bound | 71,333 keys examined for 250 rows, **13.6 s**; 250 keys and 24 ms with the bound |
 | `RAMP HOLDINGS INC` in Ramp's own `wrong_names` | `name_key` strips `holdings`/`inc`, so **Ramp blacklisted Ramp** |
+| `build_query` ended with `q["$and"] = _and`, an assignment, while `countries` and `employment_types` appended to `q.setdefault("$and", [])` | both clauses were built, put on the query and **deleted one line later**. `countries: ["india"]` returned the same 17,683 postings as no filter at all |
+| `query` — the search box — was read only as a fallback when `titles` was also set | with no title list, the normal case, typing "kubernetes" **narrowed nothing** |
+| `min_years` compared against `tech.required_years_max` | populated only when a JD spells out a range; set on **0 of 224,389** live postings, so the filter could never fire |
+| `role_alignment` set `cross_domain` on ANY two unrelated technology families, and `_eligibility` turns that into a hard INELIGIBLE | **522 of 2,500** core-tech postings were removed from one live account's feed — 317 staff/architect roles, 161 security roles. None was a change of occupational domain |
+| `technical_leadership` had no adjacency edge to the IC specialties it is staffed from | a backend engineer read as `unrelated` (0.08) to "Staff Engineer" — the most common promotion in the industry |
+| `board_kind` was declared in the catalogs, read by two surfaces, and written by no ingest path | absent on all 225,095 active postings, so `apply_mode: direct_apply` matched **every posting in the inventory**, marketplace reposts included |
+| `_diversify_employers`' first key was the posting's `employer_id` slug | JPMorgan's Oracle instance stamps three legal-entity names on one tenant, so the page cap saw three companies and **nine of the first twenty-five cards** were one employer |
+| `resolve_employer` queried `registry_refs.tenant_keys`; the backfill wrote `registry_refs.tenant` | 4,156 employers carry the written spelling, **0** carry the read one — the strongest join key available was dead |
+| `coverage_block` reported `companies.estimated_document_count()` as `known_employers` | the banner read "across N employers" where N was **every company ever harvested**, ~80,000 |
+| `normalize_posting` never ran again after ingest | 3 v4 normalisations existed in code and on **no row**; 10,721 postings stated "minimum N years" and still read `seniority: unknown`, invisible to anyone filtering by level |
 
 ## The coverage number
 

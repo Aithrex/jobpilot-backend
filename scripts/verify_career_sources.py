@@ -45,7 +45,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -158,6 +158,31 @@ def verify_employer(employer: Dict[str, Any], ctx: Any,
         candidate_endpoints=existing_endpoints,
         official_url=(hit or {}).get("career_landing_url") or "",
     )
+
+
+def _vendor_key(value: Any) -> str:
+    """`oracle-orc` on a posting, `oracle_orc` in the registry."""
+    return str(value or "").strip().lower().replace("-", "_")
+
+
+def _boards_with_fresh_postings(db, *, hours: int = 48) -> Dict[Tuple[str, str], int]:
+    """`(vendor, tenant) -> live posting count` for boards the crawler read
+    recently. This is the ground truth a probe result has to argue with."""
+    since = datetime.now(timezone.utc) - timedelta(hours=max(1, int(hours)))
+    out: Dict[Tuple[str, str], int] = {}
+    try:
+        cur = db.job_postings.aggregate([
+            {"$match": {"status": "active", "last_seen_at": {"$gte": since}}},
+            {"$group": {"_id": {"a": "$ats", "t": "$tenant"}, "n": {"$sum": 1}}},
+        ])
+        for r in cur:
+            ten = str((r["_id"] or {}).get("t") or "").strip().lower()
+            if ten:
+                out[(_vendor_key((r["_id"] or {}).get("a")), ten)] = int(r["n"])
+    except Exception as exc:      # pragma: no cover - a missing index must not
+        print(f"  live-board check unavailable ({type(exc).__name__}); "
+              f"probe results will be applied as-is")
+    return out
 
 
 def _tech_yield_order(db, employers_col, eq: Dict[str, Any],
@@ -500,8 +525,31 @@ def main() -> int:
                               f"{time.time() - t0:.0f}s")
 
         if args.apply:
+            # Boards we are DEMONSTRABLY ingesting from right now. A 403 or a
+            # bot challenge is a fact about our request, not about the board:
+            # when the live inventory holds fresh postings from this exact
+            # (vendor, tenant), the endpoint is plainly serving jobs and
+            # demoting the source would erase proven coverage because our own
+            # prober got rate-limited. Measured: one content pass run beside
+            # two others turned 830 sources `blocked` in a single sweep, all
+            # of them boards the crawler had read that morning.
+            live_boards = _boards_with_fresh_postings(db, hours=48)
+            protected = 0
             promoted = 0
             for res in got3:
+                if res["status"] in ("blocked", "empty"):
+                    row = sources_col.find_one({"source_id": res["source_id"]},
+                                               {"ats_vendor": 1, "tenant": 1})
+                    key = (_vendor_key((row or {}).get("ats_vendor")),
+                           str((row or {}).get("tenant") or "").strip().lower())
+                    if key in live_boards:
+                        css.record_note(
+                            res["source_id"],
+                            f"probe returned {res['status']} but the inventory "
+                            f"holds {live_boards[key]:,} fresh postings from "
+                            f"this board; state unchanged")
+                        protected += 1
+                        continue
                 if res["status"] == "validated":
                     state = css.record_success(res["source_id"],
                                                job_count=res["count"],
@@ -518,7 +566,9 @@ def main() -> int:
                                                detail=res["detail"])
                 if state in css.COVERED_STATES:
                     promoted += 1
-            print(f"    wrote {len(got3):,} sources ({promoted:,} now covered)")
+            print(f"    wrote {len(got3) - protected:,} sources "
+                  f"({promoted:,} now covered, {protected:,} kept because the "
+                  f"inventory shows the board is live)")
 
     print("\n--- results ---")
     for k, v in sorted(stats.items()):
