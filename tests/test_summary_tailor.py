@@ -286,6 +286,30 @@ def test_accepted_candidate_ships_when_it_beats_base(stub_grounding, monkeypatch
         assert not out["summary"].lower().startswith("full-stack")
 
 
+def test_years_phrase_rounds_three_point_nine_to_four(monkeypatch):
+    """47 months is 3.9 years. Flooring to 3 printed 'nearly 3' on a 4-year resume."""
+    from services.resume_parser import ResumeParser
+
+    monkeypatch.setattr(
+        ResumeParser, "_experience_intervals_months", staticmethod(lambda _s: 47),
+    )
+    phrase = summary_tailor._years_phrase({"experience": [{}]}, {})
+    assert "4" in phrase
+    assert "3" not in phrase
+
+
+def test_years_phrase_omits_when_below_jd_ask(monkeypatch):
+    from services.resume_parser import ResumeParser
+
+    monkeypatch.setattr(
+        ResumeParser, "_experience_intervals_months", staticmethod(lambda _s: 47),
+    )
+    phrase = summary_tailor._years_phrase(
+        {"experience": [{}]}, {"experience_years": 5},
+    )
+    assert phrase == ""
+
+
 def test_assert_summary_preserved_raises_when_writer_drops_field():
     from services.resume_tailor import ResumeTailor
     with pytest.raises(ValueError):

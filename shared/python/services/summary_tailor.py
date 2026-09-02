@@ -474,15 +474,23 @@ def _strip_seniority(title: str) -> str:
 
 
 def _years_phrase(structured: Dict[str, Any], jd_analysis: Dict[str, Any]) -> str:
+    """Honest years for the summary opener.
+
+    ``_estimate_experience_years`` floors months/12, so 3.9 years became
+    "nearly 3". Round to the nearest year (3.5+ → 4) and only cite a number
+    when it does not spotlight a gap versus the JD ask.
+    """
     try:
         from services.resume_parser import ResumeParser
-        years = ResumeParser._estimate_experience_years(structured)
+        months = ResumeParser._experience_intervals_months(structured)
     except Exception:
-        years = 0
-    if years <= 0:
+        months = 0
+    if months <= 0:
         return ""
+    frac = months / 12.0
+    years = max(1, int(round(frac)))
     jd_years = _jd_required_years(jd_analysis)
-    if jd_years and years < jd_years:
+    if jd_years and frac < jd_years:
         return ""
     if years == 1:
         return "with 1 year"

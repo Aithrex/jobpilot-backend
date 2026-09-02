@@ -316,8 +316,16 @@ def test_skills_leading_capped_against_the_stretch():
     """
     r = ResumeRenderer()
     knobs = dict(_MEASURE_KNOBS, skill_gap=0.0, stretch=r._STRETCH_CAP)
-    one = dict(SPARSE, skills={"A": ["Python"]})
-    five = dict(SPARSE, skills={k: ["Python"] for k in "ABCDE"})
+    # Isolate the skills block so a stretched full resume cannot page-break
+    # and hide the per-line delta (education keep-together starts page 2
+    # at the top margin, which zeros overflow from extra skill rows).
+    bare = {
+        "contact": {"name": "Alex Rivera", "email": "a@example.com"},
+        "summary": "", "experience": [], "education": [],
+        "projects": [], "certifications": [],
+    }
+    one = dict(bare, skills={"A": ["Python"]})
+    five = dict(bare, skills={k: ["Python"] for k in "ABCDE"})
 
     _, h1 = r._render_pdf(one, **knobs)
     _, h5 = r._render_pdf(five, **knobs)

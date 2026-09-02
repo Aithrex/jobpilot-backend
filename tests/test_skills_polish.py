@@ -527,6 +527,33 @@ def test_drops_item_that_repeats_category_heading():
     assert "postgresql" in items and "mysql" in items
 
 
+def test_java_version_moves_from_concepts_to_languages():
+    out = _polish({
+        "Languages": ["Python", "SQL"],
+        "Concepts & Methodologies": ["Microservices", "Java 17", "Full-Stack"],
+    })
+    langs = [s.lower() for s in out["skills"]["Languages"]]
+    assert "java" in langs
+    concepts = [s.lower() for s in out["skills"].get("Concepts & Methodologies", [])]
+    assert "java 17" not in concepts
+    assert "java" not in concepts
+    assert "full-stack" not in concepts
+    assert "fullstack" not in concepts
+
+
+def test_bare_role_labels_are_stripped_from_skills():
+    out = _polish({
+        "Languages": ["Python"],
+        "Concepts & Methodologies": ["Backend", "Full-Stack", "Microservices"],
+    })
+    flat = [s.lower() for items in out["skills"].values() for s in items]
+    assert "backend" not in flat
+    assert "full-stack" not in flat
+    assert "fullstack" not in flat
+    assert "microservices" in flat
+    assert "python" in flat
+
+
 def test_java_programming_collapses_into_languages():
     out = _polish({
         "Languages": ["Java", "Python"],

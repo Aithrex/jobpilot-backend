@@ -420,6 +420,21 @@ def test_section_gap_exceeds_post_header_at_every_density():
     assert r.spec.min_section_gap > r.spec.max_post_header
 
 
+def test_heading_chrome_is_frozen_across_densities():
+    """Leftover whitespace may open between sections, never under a heading."""
+    r = ResumeRenderer()
+    posts = []
+    for key in FIXTURES:
+        _w, res = r._compute_pdf_layout(FIXTURES[key])
+        posts.append(res.gaps.post_header)
+        assert res.gaps.post_header == pytest.approx(r.spec.min_post_header)
+    assert max(posts) - min(posts) < 1e-9
+    assert r.spec.min_post_header == r.spec.max_post_header
+    assert r.spec.contact_section_gap_mm == r.spec.min_section_gap
+    # Rule sits in the middle of the heading chrome, not glued to the text.
+    assert abs(r.spec.heading_rule_gap_mm - r.spec.min_post_header) <= 0.40
+
+
 def test_charis_embedded_and_tinos_fallback(monkeypatch):
     r = ResumeRenderer()
     pdf, _ = r.generate_pdf(_resume(1, 2))
@@ -484,6 +499,40 @@ def test_sixty_char_company_keeps_location_date_space():
     text, _ = extract_pdf_text(pdf)
     collapsed = re.sub(r"\s+", " ", text)
     assert re.search(r"AZ\s+January 2020", collapsed), collapsed
+
+
+def test_skills_markdown_does_not_print_unknown():
+    r = ResumeRenderer()
+    resume = _resume(n_roles=1, bullets_per_role=2, n_projects=1, bullets_per_project=2)
+    resume["skills"] = {
+        "": ["Backend"],
+        "Concepts & Methodologies": ["Microservices", "Full-Stack", "Java 17"],
+        "Languages": ["Python", "SQL"],
+    }
+    resume["projects"][0]["name"] = "Document Intelligence RAG Platform"
+    resume["projects"][0]["tech"] = "ZZZUNIQUE_TECH_TOKEN, pgvector"
+    resume["education"][0] = {
+        "degree": "Master of Science, Information Technology",
+        "institution": "Arizona State University",
+        "location": "Tempe, AZ",
+        "dates": "January 2024 - December 2025",
+        "gpa": "",
+        "coursework": "",
+    }
+    pdf, _ = r.generate_pdf(resume)
+    text, _ = extract_pdf_text(pdf)
+    collapsed = re.sub(r"\s+", " ", text)
+    assert "UNKNOWN" not in text
+    assert "< UNKNOWN >" not in collapsed
+    assert "ZZZUNIQUE_TECH_TOKEN" not in text
+    assert "Java" in collapsed
+    assert "Python" in collapsed
+    assert "Microservices" in collapsed
+    assert "Arizona State University" in collapsed
+    assert "Master of Science" in collapsed
+    # Role labels must not appear as skill items.
+    assert not re.search(r":\s*Backend\b", collapsed)
+    assert "Full-Stack" not in collapsed
 
 
 def test_visual_snapshots():

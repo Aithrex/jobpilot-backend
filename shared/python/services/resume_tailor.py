@@ -1226,6 +1226,23 @@ class ResumeTailor:
         labels = set(cls._copy_skill_cats((original or {}).get("skills")).keys())
         return labels or None
 
+    # Bare role / discipline labels. Single-token, so they slip past
+    # is_nonskill_soft_trait (which requires two words). They are not
+    # teachable skills — they belong in the summary, never the list.
+    _ROLE_LABEL_SKILLS = frozenset({
+        "backend", "frontend", "fullstack", "full-stack", "full stack",
+        "back-end", "front-end", "full-stack development",
+        "fullstack development", "full stack development",
+        "backend development", "frontend development",
+        "software engineering", "software development",
+        "full-stack developer", "fullstack developer", "full stack developer",
+    })
+
+    @classmethod
+    def _is_role_label_skill(cls, term: str) -> bool:
+        t = re.sub(r"\s+", " ", str(term or "").strip().lower())
+        return t in cls._ROLE_LABEL_SKILLS
+
     _SKILL_BUCKET_HINTS = {
         "language": ("language",),
         "database": ("database",),
@@ -1383,8 +1400,12 @@ class ResumeTailor:
             raw,
             flags=re.IGNORECASE,
         ).strip()
-        if is_programming_language(raw) or is_programming_language(stripped):
-            return normalize_single(stripped or raw) or (stripped or raw)
+        # "Java 17" / "Python 3.11" / "Node 20" — version is not a skill bucket.
+        versionless = re.sub(r"\s+v?\d+(?:\.\d+)*\s*$", "", stripped or raw, flags=re.I).strip()
+        candidates = (raw, stripped, versionless)
+        for cand in candidates:
+            if cand and (is_programming_language(cand)):
+                return normalize_single(versionless or stripped or raw) or cand
         return None
 
     @classmethod
@@ -1416,7 +1437,9 @@ class ResumeTailor:
                 return "concept"
             return "language"
 
-        if lang_disp and (has_lang_suffix or current == "framework"):
+        if lang_disp and current in ("framework", "concept", "tool", None):
+            return "language"
+        if lang_disp and has_lang_suffix:
             return "language"
         return None
 
@@ -1444,6 +1467,8 @@ class ResumeTailor:
             current_bucket = cls._skill_bucket_of_category(cat)
             for s in items:
                 if cls._item_echoes_category(s, cat):
+                    continue
+                if cls._is_role_label_skill(s):
                     continue
                 dest = cls._bucket_for_skill(s, cat)
                 display = cls._language_display(s) or s
@@ -1866,6 +1891,7 @@ class ResumeTailor:
             "frontend engineer",
             "full stack engineer",
             "fullstack engineer",
+            "full-stack engineer",
             "backend services",
             "hr tech",
             " team",
@@ -1877,7 +1903,7 @@ class ResumeTailor:
 
         def _is_noise(term: str) -> bool:
             t = term.lower().strip()
-            if not t or t in BLACKLIST_EXACT:
+            if not t or t in BLACKLIST_EXACT or cls._is_role_label_skill(t):
                 return True
             return any(p.search(t) for p in noise_patterns)
 

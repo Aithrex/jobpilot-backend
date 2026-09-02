@@ -89,12 +89,16 @@ class LayoutSpec:
     )
 
     # Tight inside a section, wider between sections. Dense = reference.
+    # Heading chrome (cell, rule gap, post_header) is FROZEN — the density
+    # ramp may open space between sections and between jobs, never under a
+    # heading. Otherwise SUMMARY looks glued to its rule on a dense page
+    # and EXPERIENCE looks loose on a sparse one.
     min_section_gap: float = 1.82   # before heading
     max_section_gap: float = 3.20
     min_entry_gap: float = 1.13
     max_entry_gap: float = 2.00
-    min_post_header: float = 0.33   # after rule → first content
-    max_post_header: float = 0.50
+    min_post_header: float = 0.80   # after rule → first content (frozen)
+    max_post_header: float = 0.80
     min_header_gap: float = 0.33    # company → role title
     max_header_gap: float = 0.50
     min_skill_gap: float = 0.0
@@ -106,17 +110,18 @@ class LayoutSpec:
     edu_entry_gap: float = 1.13
     name_contact_gap_mm: float = 1.20
     contact_line_gap_mm: float = 0.42
-    contact_section_gap_mm: float = 0.88
-    heading_rule_gap_mm: float = 1.72
+    contact_section_gap_mm: float = 1.82  # same as min_section_gap
+    heading_rule_gap_mm: float = 1.10
     bullet_indent_mm: float = 3.48   # text indent from left margin
     bullet_text_gap_mm: float = 1.39  # marker → text
     bullet_glyph: str = "\u2022"
     bullet_glyph_fallback: str = "-"
     split_row_gap_mm: float = 2.0
     section_hr_width: float = 0.25
-    heading_cell_h: float = 4.06     # 11.5 pt
+    heading_cell_h: float = 4.70     # 11.5 pt + Charis descender (SUMMARY Y)
     name_cell_h: float = 6.70        # 19.0 pt
     job_title_cell_h: float = 3.77
+    entry_row_h: float = 4.50        # company / project / school first line
     max_skill_leading: float = 3.77
     docx_max_skill_spacing: float = 1.137
     # Fallback if Charis cannot be measured. Re-derived at 10pt / 0.42in sides.
@@ -302,7 +307,7 @@ _FLOOR_OTHER = 2
 class ResumeRenderer:
     """Generates PDF and DOCX from a structured (tailored) resume dict."""
 
-    RENDER_VERSION = "2026-09-02.3"  # reference type scale, glyph bullets, left align
+    RENDER_VERSION = "2026-09-02.5"  # frozen heading chrome; skills/projects cleanup
 
     SKILLS_TITLES = (
         "Technical Skills",
@@ -396,6 +401,107 @@ class ResumeRenderer:
     def _skills_title(cls, tailored: Dict[str, Any]) -> str:
         title = str(tailored.get("skills_section_title") or "").strip()
         return title if title in cls.SKILLS_TITLES else "Technical Skills"
+
+    _BAD_SKILL_CATEGORIES = frozenset({
+        "", "unknown", "< unknown >", "<unknown>", "none", "n/a",
+    })
+    _ROLE_LABEL_SKILLS = frozenset({
+        "backend", "frontend", "fullstack", "full-stack", "full stack",
+        "back-end", "front-end", "full-stack development",
+        "fullstack development", "full stack development",
+        "backend development", "frontend development",
+        "software engineering", "software development",
+        "full-stack developer", "fullstack developer", "full stack developer",
+    })
+
+    @classmethod
+    def _language_item_display(cls, term: str) -> Optional[str]:
+        """Canonical language if `term` is a language, including 'Java 17'."""
+        raw = re.sub(r"\s*\([^)]*\)\s*$", "", str(term or "")).strip()
+        if not raw:
+            return None
+        versionless = re.sub(r"\s+v?\d+(?:\.\d+)*\s*$", "", raw, flags=re.I).strip()
+        try:
+            from utils.keyword_normalizer import is_programming_language, normalize_single
+        except Exception:
+            return None
+        for cand in (raw, versionless):
+            if cand and is_programming_language(cand):
+                return normalize_single(versionless or raw) or (versionless or raw)
+        return None
+
+    @classmethod
+    def _prepare_skill_rows(
+        cls, skills: Dict[str, Any],
+    ) -> List[Tuple[str, List[str]]]:
+        """Drop broken headings / role labels; file versioned languages."""
+        rows: List[Tuple[str, List[str]]] = []
+        langs_extra: List[str] = []
+        orphans: List[str] = []
+        seen_lang = set()
+
+        def _keep_lang(name: str) -> None:
+            key = name.lower()
+            if key in seen_lang:
+                return
+            seen_lang.add(key)
+            langs_extra.append(name)
+
+        for cat, items in (skills or {}).items():
+            if not items:
+                continue
+            name = str(cat or "").strip()
+            raw_items = items if isinstance(items, list) else [items]
+            cleaned: List[str] = []
+            is_lang_cat = "language" in name.lower()
+            is_concept = "concept" in name.lower() or "methodolog" in name.lower()
+            for raw in raw_items:
+                item = str(raw).strip()
+                if not item:
+                    continue
+                low = re.sub(r"\s+", " ", item.lower())
+                if low in cls._ROLE_LABEL_SKILLS or low.strip("<> ") == "unknown":
+                    continue
+                lang = cls._language_item_display(item)
+                has_version = bool(re.search(r"\s+v?\d+(?:\.\d+)*\s*$", item, flags=re.I))
+                # Only relocate misfiled languages (Java 17 under Concepts).
+                # Do not steal "Python" out of a custom heading — that
+                # collapsed every category into Languages and zeroed height.
+                if lang and not is_lang_cat and (is_concept or has_version):
+                    _keep_lang(lang)
+                    continue
+                if lang and is_lang_cat:
+                    item = lang
+                cleaned.append(item)
+            if not cleaned:
+                continue
+            if name.lower() in cls._BAD_SKILL_CATEGORIES or name.startswith("<"):
+                orphans.extend(cleaned)
+                continue
+            rows.append((name, cleaned))
+
+        if langs_extra:
+            placed = False
+            for i, (cat, items) in enumerate(rows):
+                if "language" in cat.lower():
+                    merged = list(items)
+                    have = {s.lower() for s in merged}
+                    for lang in langs_extra:
+                        if lang.lower() not in have:
+                            merged.append(lang)
+                            have.add(lang.lower())
+                    rows[i] = (cat, merged)
+                    placed = True
+                    break
+            if not placed:
+                rows.append(("Languages", list(langs_extra)))
+        if orphans:
+            if rows:
+                last_cat, last_items = rows[-1]
+                rows[-1] = (last_cat, list(last_items) + orphans)
+            else:
+                rows.append(("Skills", orphans))
+        return [(c, v) for c, v in rows if v]
 
     @staticmethod
     def _contact_display(key: str, value: str) -> tuple:
@@ -625,7 +731,7 @@ class ResumeRenderer:
         return GapPlan(
             min(s.min_section_gap + unit * 0.5, s.max_section_gap),
             min(s.min_entry_gap + unit * 0.6, s.max_entry_gap),
-            min(s.min_post_header + unit * 0.3, s.max_post_header),
+            s.min_post_header,  # frozen — same heading → rule → content on every page
             min(s.min_header_gap + unit * 1, s.max_header_gap),
             min(s.min_skill_gap + unit * 0.3, s.max_skill_gap),
             max(self._lerp(s.margin_lr_mm, s.margin_lr_wide_mm, ramp), s.margin_lr_mm),
@@ -874,11 +980,51 @@ class ResumeRenderer:
     # PDF drawing
     # ------------------------------------------------------------------
 
+    def _reset_pdf_paint(self, pdf) -> None:
+        """fpdf2 markdown can leave fill/draw/text in a dirty state."""
+        pdf.set_fill_color(255, 255, 255)
+        pdf.set_draw_color(0, 0, 0)
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_line_width(self.spec.section_hr_width)
+
+    def _draw_skill_row(
+        self, pdf, category: str, items, *,
+        lh: float, w: float, ml: float, body_size: float,
+    ) -> None:
+        """Bold category + regular items. Never markdown — `**cat:**` prints
+        `<UNKNOWN>` when fpdf2 cannot resolve the style token.
+
+        Height must stay a multiple of `lh` (the density tests difference
+        two category counts). `write()` does not advance Y reliably after
+        a section rule, so this uses cell / multi_cell only.
+        """
+        sanitize = self._sanitize_text
+        align = self.spec.text_align
+        sk = ", ".join(items) if isinstance(items, list) else str(items)
+        label = f"{sanitize(category)}: "
+        body = sanitize(sk)
+        self._assert_renderable(label + body, "skills")
+        self._reset_pdf_paint(pdf)
+        pdf.set_x(ml)
+        self._set_font(pdf, "B", body_size, label)
+        lw = pdf.get_string_width(label)
+        self._set_font(pdf, "", body_size, body)
+        if lw < w * 0.55 and pdf.get_string_width(body) <= (w - lw):
+            self._set_font(pdf, "B", body_size, label)
+            pdf.cell(lw, lh, label)
+            self._set_font(pdf, "", body_size, body)
+            pdf.cell(w - lw, lh, body, new_x="LMARGIN", new_y="NEXT")
+            return
+        self._set_font(pdf, "", body_size, label + body)
+        pdf.multi_cell(w, lh, label + body, align=align,
+                       new_x="LMARGIN", new_y="NEXT")
+
     def _draw_split_row(self, pdf, left: str, right: str, *,
                         left_size: float, right_size: float, left_style: str,
                         row_h: float, w: float, ml: float,
                         right_style: str = "B") -> None:
         """Left + right-aligned dates with a reserved gap. Never overruns."""
+        self._reset_pdf_paint(pdf)
         s = self.spec
         gap = s.split_row_gap_mm
         align = s.text_align
@@ -1031,6 +1177,7 @@ class ResumeRenderer:
 
         def section_header(title: str):
             nonlocal first_section
+            self._reset_pdf_paint(pdf)
             if first_section:
                 first_section = False
             else:
@@ -1090,6 +1237,7 @@ class ResumeRenderer:
                 rest = safe_summary[len(lead):]
                 pdf.multi_cell(w, lh, f"**{lead}**{rest}", markdown=True,
                                align=align, new_x="LMARGIN", new_y="NEXT")
+                self._reset_pdf_paint(pdf)
             else:
                 pdf.multi_cell(w, lh, safe_summary, align=align,
                                new_x="LMARGIN", new_y="NEXT")
@@ -1106,7 +1254,7 @@ class ResumeRenderer:
                 self._draw_split_row(
                     pdf, company_line, dates,
                     left_size=s.entry_pt, right_size=body_size, left_style="B",
-                    row_h=4.5, w=w, ml=ml,
+                    row_h=s.entry_row_h, w=w, ml=ml,
                 )
                 title = sanitize(exp.get("title", ""))
                 role_type = sanitize(exp.get("type", "")).strip()
@@ -1132,13 +1280,8 @@ class ResumeRenderer:
                 self._draw_split_row(
                     pdf, proj_name, proj_dates,
                     left_size=s.entry_pt, right_size=body_size, left_style="B",
-                    row_h=4.5, w=w, ml=ml,
+                    row_h=s.entry_row_h, w=w, ml=ml,
                 )
-                tech = sanitize(proj.get("tech", "")).strip()
-                if tech:
-                    pdf.ln(header_gap)
-                    self._set_font(pdf, "I", body_size, tech)
-                    pdf.cell(w, job_title_h, tech, new_x="LMARGIN", new_y="NEXT")
                 proj_bullets = proj.get("bullets") or []
                 for bi, b in enumerate(proj_bullets):
                     bullet(b, is_first=(bi == 0))
@@ -1146,21 +1289,19 @@ class ResumeRenderer:
                     pdf.ln(entry_gap)
 
         # SKILLS
-        skills = tailored.get("skills") or {}
-        if skills:
+        skill_rows = self._prepare_skill_rows(tailored.get("skills") or {})
+        if skill_rows:
             skills_heading = self._skills_title(tailored)
             section_header(skills_heading)
             lh_skill = max(min(lh_s, s.max_skill_leading), 3.45)
-            rows = [(cat, items) for cat, items in skills.items() if items]
-            for i, (category, skill_list) in enumerate(rows):
-                sk = ", ".join(skill_list) if isinstance(skill_list, list) else str(skill_list)
-                line = f"**{sanitize(category)}:** {sanitize(sk)}"
-                self._assert_renderable(sanitize(category) + sanitize(sk), "skills")
-                self._set_font(pdf, "", body_size, line)
-                pdf.multi_cell(w, lh_skill, line, markdown=True, align=align,
-                               new_x="LMARGIN", new_y="NEXT")
-                if i < len(rows) - 1:
+            for i, (category, skill_list) in enumerate(skill_rows):
+                self._draw_skill_row(
+                    pdf, category, skill_list,
+                    lh=lh_skill, w=w, ml=ml, body_size=body_size,
+                )
+                if i < len(skill_rows) - 1:
                     pdf.ln(skill_gap)
+            self._reset_pdf_paint(pdf)
 
         # EDUCATION
         education = tailored.get("education") or []
@@ -1187,6 +1328,7 @@ class ResumeRenderer:
                     degree = sanitize(edu.get("degree", ""))
                     dates = sanitize(edu.get("dates", ""))
                     gpa = sanitize(edu.get("gpa", ""))
+                    coursework = sanitize(edu.get("coursework", "")).strip()
                     if degree and re.search(
                         r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}\b",
                         degree, re.IGNORECASE,
@@ -1206,10 +1348,21 @@ class ResumeRenderer:
                     if gpa:
                         left_bits.append(f"GPA: {gpa}")
                     left_text = " | ".join(left_bits)
+                    need = s.entry_row_h
+                    if degree:
+                        need += header_gap + lh
+                    if coursework:
+                        need += lh_s
+                    if (
+                        not measure_only
+                        and (pdf.page_break_trigger - pdf.get_y()) < (need + 1.0)
+                    ):
+                        pdf.add_page()
+                        pdf.set_y(mt)
                     self._draw_split_row(
                         pdf, left_text, dates,
                         left_size=s.entry_pt, right_size=body_size, left_style="B",
-                        row_h=lh, w=w, ml=ml,
+                        row_h=s.entry_row_h, w=w, ml=ml,
                     )
                     if degree:
                         pdf.ln(header_gap)
@@ -1217,7 +1370,6 @@ class ResumeRenderer:
                         self._set_font(pdf, "I", body_size, degree)
                         pdf.multi_cell(w, lh, degree, align=align,
                                        new_x="LMARGIN", new_y="NEXT")
-                    coursework = sanitize(edu.get("coursework", "")).strip()
                     if coursework:
                         self._set_font(pdf, "", body_size, coursework)
                         pdf.multi_cell(w, lh_s, coursework, align=align,
@@ -1360,14 +1512,11 @@ class ResumeRenderer:
             h += section("PROJECTS")
             for i, proj in enumerate(projects):
                 h += max(s.entry_pt * 1.15, body_size * 1.15)
-                if proj.get("tech"):
-                    h += header_gap * mm_pt + body_size * line_spacing
                 for b in proj.get("bullets") or []:
                     h += para(b, bullet=True)
                 if i < len(projects) - 1:
                     h += entry_gap * mm_pt
-        skills = tailored.get("skills") or {}
-        skill_rows = [(c, v) for c, v in skills.items() if v]
+        skill_rows = self._prepare_skill_rows(tailored.get("skills") or {})
         if skill_rows:
             h += section("SKILLS")
             skill_spacing = min(line_spacing, s.docx_max_skill_spacing)
@@ -1571,25 +1720,16 @@ class ResumeRenderer:
             add_section_header(s.heading("projects"))
             for i, proj in enumerate(projects):
                 header_line(proj.get("name", ""), proj.get("dates", ""))
-                tech = (proj.get("tech") or "").strip()
-                if tech:
-                    p2 = doc.add_paragraph()
-                    p2.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                    r = p2.add_run(tech)
-                    set_run_font(r, body_size, italic=True)
-                    tight(p2, before=header_gap * 72 / 25.4, after=0)
                 for bi, b in enumerate(proj.get("bullets") or []):
                     add_bullet(b, is_first=(bi == 0))
                 if i < len(projects) - 1:
                     spacer = doc.add_paragraph()
                     tight(spacer, before=entry_gap, after=0)
 
-        skills = tailored.get("skills") or {}
-        if any(v for v in skills.values()):
+        skill_rows = self._prepare_skill_rows(tailored.get("skills") or {})
+        if skill_rows:
             add_section_header(self._skills_title(tailored))
-            for category, skill_list in skills.items():
-                if not skill_list:
-                    continue
+            for category, skill_list in skill_rows:
                 p = doc.add_paragraph()
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 r_cat = p.add_run(f"{category}: ")
