@@ -192,8 +192,10 @@ class ResumeService:
         """
         entry_id = self._job_quota_entry_id(job_id)
         now = datetime.now(timezone.utc)
-        self.resume_jobs.update_one(
-            {"job_id": job_id},
+        # Compare-and-set: a cancel that already won must not flip the row
+        # to completed or consume the (already refunded) reservation.
+        updated = self.resume_jobs.update_one(
+            {"job_id": job_id, "status": "processing"},
             {
                 "$set": {
                     "status": "completed",
@@ -205,6 +207,9 @@ class ResumeService:
                 "$unset": {"payload": ""},
             },
         )
+        if updated.matched_count == 0:
+            logger.info("complete_job skipped %s — no longer processing", job_id)
+            return
         if entry_id:
             try:
                 from services import quota_ledger_service
@@ -278,15 +283,64 @@ class ResumeService:
         }
         if error_code:
             update["error_code"] = error_code
-        self.resume_jobs.update_one(
-            {"job_id": job_id}, {"$set": update, "$unset": {"payload": ""}}
+        updated = self.resume_jobs.update_one(
+            {"job_id": job_id, "status": "processing"},
+            {"$set": update, "$unset": {"payload": ""}},
         )
+        if updated.matched_count == 0:
+            logger.info("fail_job skipped %s — no longer processing", job_id)
+            return
         if entry_id:
             try:
                 from services import quota_ledger_service
                 quota_ledger_service.refund_entry(entry_id)
             except Exception as e:  # pragma: no cover - never fail the fail path
                 logger.warning("quota refund failed for %s: %s", job_id, e)
+
+    def cancel_job(self, job_id: str, user_email: str = "") -> Optional[Dict[str, Any]]:
+        """User-initiated stop: refund the reservation and ask the worker to halt.
+
+        Cooperative: the Lambda / thread cannot be killed, so this marks the
+        row ``cancelled`` + ``cancel_requested`` and refunds immediately. The
+        worker notices at the next ``check_cancelled`` checkpoint and exits
+        without persisting a tracker row.
+
+        Already-terminal jobs are a no-op that returns the current status —
+        never an error — so a late click after completion is harmless.
+        """
+        existing = self.get_job(job_id, user_email=user_email)
+        if not existing:
+            return None
+        if existing.get("status") != "processing":
+            return existing
+
+        entry_id = self._job_quota_entry_id(job_id)
+        now = datetime.now(timezone.utc)
+        query: Dict[str, Any] = {"job_id": job_id, "status": "processing"}
+        if user_email:
+            query["user_email"] = user_email
+        updated = self.resume_jobs.update_one(
+            query,
+            {
+                "$set": {
+                    "status": "cancelled",
+                    "cancel_requested": True,
+                    "error": "cancelled_by_user",
+                    "completed_at": now,
+                    "expire_at": now + timedelta(days=7),
+                },
+                "$unset": {"payload": ""},
+            },
+        )
+        if updated.matched_count and entry_id:
+            try:
+                from services import quota_ledger_service
+                quota_ledger_service.refund_entry(
+                    entry_id, user_email=user_email or None,
+                )
+            except Exception as e:  # pragma: no cover - never fail the cancel path
+                logger.warning("quota refund failed for cancel %s: %s", job_id, e)
+        return self.get_job(job_id, user_email=user_email)
 
     @staticmethod
     def invoke_async(job_id: str, job_type: str, payload: dict):
@@ -368,35 +422,54 @@ class ResumeService:
         and ATS-critical keywords.
 
         All skill and keyword lists are normalized to canonical forms.
+        The FULL JD is scanned for licenses / clearance / work-auth; the LLM
+        sees a head+tail window so a requirement in the last paragraph is
+        not dropped. Logistics terms never become resume keywords.
 
         Args:
-            jd_text: Raw job description text (max 5000 chars sent to AI).
+            jd_text: Raw job description text (complete posting).
 
         Returns:
-            Validated dict conforming to JD_ANALYSIS_SCHEMA.
+            Validated dict conforming to JD_ANALYSIS_SCHEMA, plus a
+            ``requirements`` sidecar (not in the schema, attached after coerce).
         """
         from services.claude_client import claude_json, CLAUDE_PRO
         from schemas.resume_schemas import JD_ANALYSIS_SCHEMA, validate_and_coerce
+        from services.jd_analyzer import enrich, llm_window
+        from utils.feature_flags import enabled
         from utils.llm_safety import redact_pii_for_model, wrap_untrusted, guarded_system
 
         instructions = (
             "You are an expert recruiter and ATS specialist.\n"
             "Extract structured information from the following job description.\n"
+            "The text may include a middle-omitted marker — still extract every "
+            "license, certification, clearance, degree, and skill you can see, "
+            "including requirements that appear only at the end.\n"
+            "Do NOT put work authorization, visa sponsorship, citizenship, "
+            "clearance, travel, or remote/hybrid into required_skills, "
+            "preferred_skills, or keywords. Those are application logistics.\n"
             "Return a JSON object with EXACTLY these keys:\n"
             '- "job_title": string (the specific role title)\n'
             '- "company": string (company name, or "Not specified")\n'
             '- "location": string (location or "Not specified")\n'
             '- "employment_type": string (Full-time/Part-time/Contract/Intern)\n'
-            '- "required_skills": list of strings (must-have technical skills)\n'
+            '- "required_skills": list of strings (must-have skills only)\n'
             '- "preferred_skills": list of strings (nice-to-have skills)\n'
             '- "responsibilities": list of strings (key job duties, max 8)\n'
             '- "qualifications": list of strings (degree, years of experience, etc.)\n'
             '- "experience_years": string (e.g. "3-5 years" or "Entry level")\n'
-            '- "industry": string (e.g. "Cloud Computing", "FinTech")\n'
+            '- "industry": string (e.g. "Healthcare", "Construction", "FinTech")\n'
             '- "keywords": list of strings (ATS-critical keywords from the JD)\n'
         )
-        # JD text is fully attacker-influenced: tag as untrusted data + redact PII.
-        prompt = wrap_untrusted("job_description", redact_pii_for_model(jd_text[:5000]))
+        from services.analysis_wave import cache_jd_analysis, cached_jd_analysis
+
+        cached = cached_jd_analysis(jd_text)
+        if cached:
+            return cached
+
+        # Full-text analysis is deterministic; the model only gets a window.
+        window = llm_window(jd_text) if enabled("JD_ANALYZER_V2") else jd_text[:5000]
+        prompt = wrap_untrusted("job_description", redact_pii_for_model(window))
 
         result = claude_json(
             prompt,
@@ -414,7 +487,11 @@ class ResumeService:
         validated["preferred_skills"] = normalize_keywords(validated.get("preferred_skills", []))
         validated["keywords"] = normalize_keywords(validated.get("keywords", []))
 
-        return validated
+        # Always attach requirement records from the COMPLETE JD, even if the
+        # flag is off for the LLM window — missing a license is a product bug.
+        enriched = enrich(validated, jd_text)
+        cache_jd_analysis(jd_text, enriched)
+        return enriched
 
 
 # ---------------------------------------------------------------------------
@@ -509,39 +586,14 @@ def _attach_verification(
     user_email: str = "",
     fact_store: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Claim-guard audit + LLM entailment pass on the FINAL tailored text.
+    """Claim-guard audit + entailment pass. Delegates to resume_finalizer.
 
-    Runs after the augmenter and normalizers so it catches invented metrics
-    regardless of which LLM pass introduced them. Returns the verification
-    sidecar; ADVISORY — any failure degrades to `status: "skipped"` and
-    never breaks the tailor job (fails open, unlike the deterministic
-    guards, which are the enforcement floor and always run upstream).
+    Kept as a thin seam because the `verify_resume` job re-checks an already
+    finalized (possibly user-edited) resume and needs this step alone, without
+    augmentation or integrity re-enforcement.
     """
-    try:
-        from services.claim_guard import audit_resume
-        from services.profile_facts import build_fact_store, grounding_texts
-        from services.tailor_verifier import verify
-
-        if fact_store is None:
-            fact_store = build_fact_store(
-                user_email=user_email, structured_resume=structured
-            )
-        _, audit = audit_resume(
-            result,
-            structured,
-            jd_analysis,
-            extra_grounding_texts=grounding_texts(fact_store),
-        )
-        return verify(result, fact_store, claim_audit=audit)
-    except Exception as e:
-        logger.warning("Verification pass failed (fails open): %s", e)
-        return {
-            "status": "skipped",
-            "reason": str(e),
-            "model": "flash",
-            "counts": {"supported": 0, "partial": 0, "unsupported": 0, "unverified": 0},
-            "items": {},
-        }
+    from services.resume_finalizer import _attach_verification as _impl
+    return _impl(result, structured, jd_analysis, user_email, fact_store=fact_store)
 
 
 def _project_policy(
@@ -595,46 +647,20 @@ def _finalize_tailored_result(
     preserve_project_names: set | None = None,
     allow_project_generation: bool = True,
 ) -> Dict[str, Any]:
-    """Shared post-tailor pipeline for tailor / regenerate / extract_and_tailor.
+    """Delegates to the canonical finalizer.
 
-    contact normalization → augment → date/title normalization → claim-guard
-    + entailment verification → keyword audit. Progress markers are emitted
-    at each real stage when a job_id is provided.
+    Retained so existing callers and tests keep their import path; all
+    behavior lives in `resume_finalizer.finalize`, which every tailored-resume
+    producer now shares (single, batch, guest, regenerate, auto-apply).
     """
-    result_contact = result.get("contact", {})
-    if result_contact.get("name"):
-        from services.resume_parser import ResumeParser as _RP
-        result_contact["name"] = _RP._normalize_name(
-            " ".join(result_contact["name"].split())
-        )
-    if result_contact.get("phone"):
-        result_contact["phone"] = " ".join(result_contact["phone"].split())
+    from services.resume_finalizer import finalize
 
-    if job_id:
-        svc.update_job_progress(job_id, "augmenting", 60)
-    result = svc.augmenter.augment(
-        result, structured, jd_analysis,
+    return finalize(
+        svc, job_id, result, structured, jd_analysis, user_email,
+        fact_store=fact_store,
         preserve_project_names=preserve_project_names,
         allow_project_generation=allow_project_generation,
     )
-    _consume_projects_diagnostic(result)
-
-    from services.date_normalizer import normalize_dates
-    from services.title_normalizer import normalize_titles
-
-    result = normalize_dates(result)
-    result = normalize_titles(result)
-
-    if job_id:
-        svc.update_job_progress(job_id, "verifying", 80)
-    result["verification"] = _attach_verification(
-        result, structured, jd_analysis, user_email, fact_store=fact_store
-    )
-
-    if job_id:
-        svc.update_job_progress(job_id, "finalizing", 95)
-    _attach_ats_keyword_audit(result, jd_analysis)
-    return result
 
 
 def _jd_text_for_scoring(jd_text: str, jd_analysis: Optional[Dict[str, Any]]) -> str:
@@ -902,12 +928,16 @@ def prepare_tailored_artifact(user_email: str, jd_text: str) -> Dict[str, Any]:
     under the immutable v3 S3 key. Returns ``{record_id, version_id, s3_key}``.
 
     The ONE reusable "tailor for a JD and pin it" path the auto-apply prepare
-    phase (defect D) drives. It reuses the SAME tailor / persist / render
-    building blocks the ``tailor`` job branch uses — nothing about tailoring is
-    reimplemented here. Raises on ANY failure so the caller (auto_apply.prepare)
-    can refund the reserved tailor slot and route the row to ``needs_input``
-    (never ``ready``). Never fabricates résumé facts (the tailor's IntegrityGuard
-    still governs the content).
+    phase (defect D) drives. It reuses the SAME tailor / finalize / persist /
+    render building blocks the ``tailor`` job branch uses — nothing about
+    tailoring is reimplemented here. Raises on ANY failure so the caller
+    (auto_apply.prepare) can refund the reserved tailor slot and route the row
+    to ``needs_input`` (never ``ready``).
+
+    This path pins a PDF that gets SUBMITTED to an employer with no human
+    review in between, so it is the last place that should run a reduced
+    pipeline — it previously skipped augmentation, claim auditing and
+    verification altogether. It now shares the canonical finalizer.
     """
     svc = get_resume_service()
     resume = svc.parser.ensure_structured_resume(user_email=user_email)
@@ -916,7 +946,20 @@ def prepare_tailored_artifact(user_email: str, jd_text: str) -> Dict[str, Any]:
     structured = resume["structured"]
 
     jd_analysis = svc.extract_jd(jd_text or "")
-    result = svc.tailor.tailor(structured, jd_analysis)
+
+    from services.profile_facts import build_fact_store
+    fact_store = build_fact_store(
+        user_email=user_email, structured_resume=structured
+    )
+    gen_policy = _project_policy(structured, fact_store, jd_analysis)
+    result = svc.tailor.tailor(structured, jd_analysis, fact_store=fact_store)
+    result = _finalize_tailored_result(
+        svc, "", result, structured, jd_analysis, user_email,
+        fact_store=fact_store,
+        allow_project_generation=(
+            gen_policy["allow"] and not gen_policy["evidence_only"]
+        ),
+    )
 
     record_id = _persist_tailoring_record(
         user_email, resume, jd_text or "", jd_analysis, result, "auto_apply_prepare"
@@ -928,68 +971,16 @@ def prepare_tailored_artifact(user_email: str, jd_text: str) -> Dict[str, Any]:
     return {"record_id": record_id, "version_id": version_id, "s3_key": s3_key}
 
 
+# Both helpers moved to resume_finalizer so every producer shares one copy.
+# Re-exported here for existing import sites.
 def _attach_ats_keyword_audit(result: Dict[str, Any], jd_analysis: Dict[str, Any]) -> None:
-    """Re-run the deterministic keyword gap engine on the FINAL tailored
-    resume so the UI can warn about JD keywords that didn't make it in.
-
-    The LLM occasionally paraphrases tokens (e.g. "Amazon Web Services" in
-    place of the literal "AWS" the JD asked for); enterprise ATS screeners
-    match exact strings. We attach the result as `ats_keyword_audit` so the
-    tailor modal can show a "X keywords missed" badge — passive, not
-    blocking. Failure here must not break the tailor pipeline.
-    """
-    try:
-        from services.keyword_gap_engine import KeywordGapEngine
-        audit = KeywordGapEngine().analyze(result, jd_analysis or {})
-        result["ats_keyword_audit"] = {
-            "matched": audit.get("matched_keywords", []),
-            "missing": audit.get("missing_keywords", []),
-            "partial": audit.get("partial_matches", []),
-            "coverage_percentage": audit.get("coverage_percentage", 0),
-            "required_missing": audit.get("required_missing", []),
-            "required_coverage": audit.get("required_coverage", 0),
-        }
-        missed = result["ats_keyword_audit"]["required_missing"]
-        if missed:
-            logger.warning(
-                "ATS audit: %d required JD keyword(s) NOT in tailored resume — %s",
-                len(missed), missed[:8],
-            )
-    except Exception as e:
-        logger.warning("ATS audit skipped: %s", e)
+    from services.resume_finalizer import attach_ats_keyword_audit
+    attach_ats_keyword_audit(result, jd_analysis)
 
 
 def _consume_projects_diagnostic(result: Dict[str, Any]) -> None:
-    """Pop the augmenter's internal diagnostic, log a structured summary,
-    and attach it under `result["_diagnostics"]["projects"]` so the job
-    status response can surface why a Projects section ended up empty.
-
-    The diagnostic dict is removed from the top-level tailored payload so
-    the renderer never sees it.
-    """
-    diag = result.pop("_projects_diagnostic", None)
-    if not diag:
-        return
-    final_count = diag.get("final_count", 0)
-    stage = diag.get("stage_reached", "unknown")
-    budget = diag.get("budget_shape")
-    rejections = diag.get("rejections", []) or []
-    logger.warning(
-        "PROJECTS DIAGNOSTIC: stage=%s final_count=%d budget=%s "
-        "generator_returned=%d rejections=%d defensive_stripped=%s deep_skip=%s "
-        "fill=%s->%s (target %s) phase_gated=%s second_round=%s",
-        stage, final_count, budget,
-        diag.get("generator_returned", 0),
-        len(rejections),
-        diag.get("defensive_stripped", []),
-        diag.get("deep_project_skip", False),
-        diag.get("fill_phase0"), diag.get("fill_final"), diag.get("fill_target"),
-        diag.get("phase_gated"), diag.get("second_round"),
-    )
-    if rejections:
-        for r in rejections[:10]:
-            logger.warning("  rejection: %s -> %s", r.get("name"), r.get("reason"))
-    result.setdefault("_diagnostics", {})["projects"] = diag
+    from services.resume_finalizer import consume_projects_diagnostic
+    consume_projects_diagnostic(result)
 
 
 def _feed_from_inventory(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1463,6 +1454,9 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                     ),
                 )
 
+                from services.resume_finalizer import check_cancelled
+                check_cancelled(job_id)
+
                 # Guest-owned tailoring record: user_email stays None until
                 # /guest/claim flips ownership to the signed-up account.
                 record_id = None
@@ -1626,6 +1620,9 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             )
             # Worker-persisted canonical record (spec 1.5) — record_id rides
             # the job result; /save-record attaches ATS scores idempotently.
+            # Cancel here so a cancelled job never becomes a tracker draft.
+            from services.resume_finalizer import check_cancelled
+            check_cancelled(job_id)
             record_id = _persist_tailoring_record(
                 user_email, resume, "", payload["jd_analysis"], result, "tailor",
                 source_job_id=(payload.get("source_job_id") or "").strip() or None,
@@ -1795,7 +1792,8 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 svc.fail_job(job_id, "job_description is required")
                 return
 
-            # Step 1: Extract JD analysis (sequential — required input for tailor)
+            # Step 1: Extract JD analysis over the COMPLETE posting (head+tail
+            # LLM window + deterministic spans). Required input for tailor.
             svc.update_job_progress(job_id, "extracting_jd", 5)
             jd_analysis = svc.extract_jd(jd_text)
 
@@ -1837,11 +1835,10 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             existing_project_count = len(structured.get("projects", []))
             projects_needed = max(0, _PROJECT_CAP - existing_project_count)
 
-            # Fact store (resume + confirmed LinkedIn/GitHub facts) — built
-            # once, feeds both the tailor prompt and the verification pass.
-            from services.profile_facts import build_fact_store
-            fact_store = build_fact_store(
-                user_email=user_email, structured_resume=structured
+            # Wave A: evidence store + JD requirement evidence, in parallel.
+            from services.analysis_wave import run_wave_a
+            fact_store, jd_analysis = run_wave_a(
+                user_email, structured, jd_text, jd_analysis
             )
 
             # Experience-first policy: experienced candidates get generated
@@ -1947,6 +1944,9 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 ),
             )
             # Worker-persisted canonical record (spec 1.5).
+            # Cancel here so a cancelled job never becomes a tracker draft.
+            from services.resume_finalizer import check_cancelled
+            check_cancelled(job_id)
             record_id = _persist_tailoring_record(
                 user_email, resume, jd_text, jd_analysis, result,
                 "extract_and_tailor",
@@ -1983,21 +1983,28 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 return
             structured = resume["structured"]
 
-            # Step 3: Tailor
-            result = svc.tailor.tailor(structured, jd_analysis)
+            # Step 3: Tailor. Batch used to hand-roll a shorter finalize that
+            # skipped claim auditing and entailment verification entirely, so a
+            # batch-tailored resume had a weaker integrity floor than a single
+            # one. It now shares the canonical pipeline.
+            from services.profile_facts import build_fact_store
+            fact_store = build_fact_store(
+                user_email=user_email, structured_resume=structured
+            )
+            gen_policy = _project_policy(structured, fact_store, jd_analysis)
+            result = svc.tailor.tailor(
+                structured, jd_analysis, fact_store=fact_store,
+            )
+            result = _finalize_tailored_result(
+                svc, job_id, result, structured, jd_analysis, user_email,
+                fact_store=fact_store,
+                allow_project_generation=(
+                    gen_policy["allow"] and not gen_policy["evidence_only"]
+                ),
+            )
 
-            # Step 4: Augment
-            result = svc.augmenter.augment(result, structured, jd_analysis)
-            _consume_projects_diagnostic(result)
-
-            # Step 5: Date + title normalization
-            from services.date_normalizer import normalize_dates
-            from services.title_normalizer import normalize_titles
-
-            result = normalize_dates(result)
-            result = normalize_titles(result)
-
-            _attach_ats_keyword_audit(result, jd_analysis)
+            from services.resume_finalizer import check_cancelled
+            check_cancelled(job_id)
 
             # ── Wire the batch result into the same lifecycle as a single-row
             # tailor — create a tailoring_record (so it surfaces in My Resumes /
@@ -2088,6 +2095,14 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 pdf_bytes=pdf_bytes,
                 render_error=render_error,
             )
+            try:
+                docx_bytes = svc.renderer.generate_docx(payload["tailored_resume"])
+                from services.pdf_ats_check import check_docx_parseability
+                result["docx_parseable"] = check_docx_parseability(
+                    docx_bytes, payload["tailored_resume"]
+                )
+            except Exception as e:
+                logger.warning("ATS scoring: DOCX parse check skipped: %s", e)
             svc.complete_job(job_id, {"ats_scores": result})
 
         elif job_type == "job_search":
@@ -2440,6 +2455,10 @@ def _process_job(job_id: str, job_type: str, payload: dict):
         logger.info(f"Job {job_id} ({job_type}) completed successfully")
 
     except Exception as e:
+        from services.resume_finalizer import JobCancelled
+        if isinstance(e, JobCancelled):
+            logger.info("Job %s (%s) cancelled — stopping without fail_job", job_id, job_type)
+            return
         from services.claude_client import LLMRetriesExhaustedError
         logger.error(f"Job {job_id} ({job_type}) failed: {e}")
         code = getattr(e, "code", None) if isinstance(e, LLMRetriesExhaustedError) else None

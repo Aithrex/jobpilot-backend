@@ -2518,6 +2518,26 @@ def verify_download_token(token: str) -> Dict[str, str]:
     return {"record_id": rid, "guest_id": gid, "format": fmt}
 
 
+def cached_file_is_current(
+    cached: Dict[str, Any],
+    render_version: str,
+    content_hash: str,
+) -> bool:
+    """True only when the cached file matches this renderer AND this resume.
+
+    Old guest rows stored render_version without content_hash. Those are
+    treated as stale so an edit cannot keep serving the pre-edit PDF.
+    """
+    if not cached or not cached.get("s3_key"):
+        return False
+    if cached.get("render_version") != render_version:
+        return False
+    stored = cached.get("content_hash") or ""
+    if not stored or not content_hash:
+        return False
+    return stored == content_hash
+
+
 def render_record_file(record: Dict[str, Any], fmt: str) -> Tuple[bytes, str]:
     """Render (or serve the version-cached file for) a tailoring record via
     the EXISTING shared resume_renderer — the same polished output as the
@@ -2538,9 +2558,13 @@ def render_record_file(record: Dict[str, Any], fmt: str) -> Tuple[bytes, str]:
     jd_analysis = record.get("jd_analysis") or {}
     filename = svc.renderer.build_filename(tailored, jd_analysis, fmt)
 
-    # Versioned dedup: an already-rendered current-format file is served as-is.
+    # Versioned dedup: serve cache only when BOTH the renderer and the
+    # resume content match. Matching render_version alone served a stale
+    # PDF after the guest edited the resume.
+    from services.resume_versioning import canonical_content_hash
+    content_hash = canonical_content_hash(tailored)
     cached = ((target or {}).get("files") or {}).get(fmt) or {}
-    if cached.get("s3_key") and cached.get("render_version") == svc.renderer.RENDER_VERSION:
+    if cached_file_is_current(cached, svc.renderer.RENDER_VERSION, content_hash):
         try:
             from services.s3_service import get_storage_service
             data = get_storage_service().get_resume(cached["s3_key"])

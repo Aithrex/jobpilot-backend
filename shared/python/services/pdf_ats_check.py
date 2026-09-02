@@ -37,6 +37,17 @@ logger = logging.getLogger(__name__)
 # case-insensitive matching, but our renderer is consistent so we can
 # look for the exact strings.
 _EXPECTED_SECTIONS = ("SUMMARY", "EXPERIENCE", "SKILLS", "EDUCATION")
+_OPTIONAL_SECTIONS = ("LICENSES", "CERTIFICATIONS")
+
+
+def _expected_sections_for(tailored: Dict[str, Any]) -> Tuple[str, ...]:
+    """Core ATS sections plus credential headers the renderer actually emitted."""
+    extra = []
+    if tailored.get("licenses"):
+        extra.append("LICENSES")
+    if tailored.get("certifications"):
+        extra.append("CERTIFICATIONS")
+    return _EXPECTED_SECTIONS + tuple(extra)
 
 # A simple but well-tested set of patterns that any production ATS parser
 # will use to recognize contact fields.
@@ -124,7 +135,7 @@ def check_pdf_parseability(
                 "contact_email_found": False,
                 "contact_phone_found": False,
                 "sections_found": [],
-                "sections_missing": list(_EXPECTED_SECTIONS),
+                "sections_missing": list(_expected_sections_for(tailored)),
                 "sections_in_order": False,
                 "skills_keywords_found": 0,
                 "skills_keywords_total": 0,
@@ -140,6 +151,7 @@ def check_pdf_parseability(
         }
 
     text_upper = text.upper()
+    expected_sections = _expected_sections_for(tailored)
 
     # --- Contact checks ---
     contact = (tailored.get("contact") or {})
@@ -156,14 +168,14 @@ def check_pdf_parseability(
     )
 
     # --- Section header presence + ORDER ---
-    sections_found = [s for s in _EXPECTED_SECTIONS if s in text_upper]
-    sections_missing = [s for s in _EXPECTED_SECTIONS if s not in text_upper]
+    sections_found = [s for s in expected_sections if s in text_upper]
+    sections_missing = [s for s in expected_sections if s not in text_upper]
     # ATSes route fields by section position. If EXPERIENCE appears before
     # SUMMARY in the extracted text, parsers misclassify the summary as
     # experience bullets. Verify monotonic positions match expected order.
     positions = [(s, text_upper.find(s)) for s in sections_found]
     positions_sorted = sorted(positions, key=lambda p: p[1])
-    expected_seq = [s for s in _EXPECTED_SECTIONS if s in sections_found]
+    expected_seq = [s for s in expected_sections if s in sections_found]
     sections_in_order = (
         [p[0] for p in positions_sorted] == expected_seq
     )
@@ -368,6 +380,77 @@ def check_pdf_parseability(
             "word_join_issues": word_join_issues,
             "page_count": page_count,
             "single_page": single_page,
+            "licenses_found": (
+                not tailored.get("licenses")
+                or all(
+                    str(c).lower()[:12] in text_low
+                    for c in tailored.get("licenses") or []
+                    if isinstance(c, str) and c.strip()
+                )
+            ),
+            "certifications_found": (
+                not tailored.get("certifications")
+                or all(
+                    str(c).lower()[:12] in text_low
+                    for c in tailored.get("certifications") or []
+                    if isinstance(c, str) and c.strip()
+                )
+            ),
         },
         "warnings": warnings,
+    }
+
+
+def extract_docx_text(docx_bytes: bytes) -> str:
+    """Plain text from a DOCX (document.xml). Empty string on failure."""
+    if not docx_bytes:
+        return ""
+    try:
+        import zipfile
+        from xml.etree import ElementTree as ET
+
+        with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
+            xml = zf.read("word/document.xml")
+        root = ET.fromstring(xml)
+        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        texts = [t.text or "" for t in root.findall(".//w:t", ns)]
+        return " ".join(t for t in texts if t)
+    except Exception as e:
+        logger.warning("DOCX text extraction failed: %s", e)
+        return ""
+
+
+def check_docx_parseability(
+    docx_bytes: bytes,
+    tailored: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Mirror the PDF section/contact checks against a Word file."""
+    text = extract_docx_text(docx_bytes)
+    text_upper = text.upper()
+    text_low = re.sub(r"\s+", " ", text.lower())
+    expected = _expected_sections_for(tailored)
+    contact = tailored.get("contact") or {}
+    name = (contact.get("name") or "").strip()
+    name_first_last = " ".join(name.split()[:2])
+    sections_found = [s for s in expected if s in text_upper]
+    return {
+        "docx_parseable_score": 100 if text.strip() else 0,
+        "checks": {
+            "extraction_ok": bool(text.strip()),
+            "contact_name_found": bool(name_first_last and name_first_last.upper() in text_upper),
+            "contact_email_found": bool(
+                not contact.get("email") or contact["email"].lower() in text_low
+            ),
+            "sections_found": sections_found,
+            "sections_missing": [s for s in expected if s not in text_upper],
+            "licenses_found": (
+                not tailored.get("licenses")
+                or any(str(c).lower()[:8] in text_low for c in (tailored.get("licenses") or []) if isinstance(c, str))
+            ),
+            "certifications_found": (
+                not tailored.get("certifications")
+                or any(str(c).lower()[:8] in text_low for c in (tailored.get("certifications") or []) if isinstance(c, str))
+            ),
+        },
+        "warnings": [] if text.strip() else ["Word file produced no extractable text."],
     }

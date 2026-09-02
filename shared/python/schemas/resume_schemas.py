@@ -60,6 +60,21 @@ PARSED_RESUME_SCHEMA = {
     # this list instead of forcing it empty — IntegrityGuard mirrors
     # original.certifications onto tailored.certifications.
     "certifications": [str],
+    # Professional licenses (RN, CPA, PE, bar admission, …). Distinct from
+    # certifications so a recruiter can find them; empty on older documents.
+    "licenses": [str],
+    # Optional recruiter-visible extras. Empty on older documents; omitted
+    # from render when empty so historical PDFs stay byte-identical aside
+    # from the certifications fix.
+    "headline": str,
+    "languages": [str],
+    "awards": [str],
+    "publications": [str],
+    "patents": [str],
+    "leadership": [str],
+    "volunteering": [str],
+    "associations": [str],
+    "clearance": [str],
 }
 
 # TailoredFullResume mirrors the parsed schema 1:1...
@@ -321,5 +336,22 @@ def build_resume_text(structured: dict) -> str:
         parts.append(edu.get("degree", ""))
         parts.append(edu.get("institution", ""))
         parts.append(edu.get("coursework", ""))
+
+    for cert in structured.get("certifications") or []:
+        if isinstance(cert, str) and cert.strip():
+            parts.append(cert)
+    for lic in structured.get("licenses") or []:
+        if isinstance(lic, str) and lic.strip():
+            parts.append(lic)
+    headline = (structured.get("headline") or "").strip()
+    if headline:
+        parts.append(headline)
+    for key in (
+        "languages", "awards", "publications", "patents",
+        "leadership", "volunteering", "associations", "clearance",
+    ):
+        for item in structured.get(key) or []:
+            if isinstance(item, str) and item.strip():
+                parts.append(item)
 
     return "\n".join(p for p in parts if p)

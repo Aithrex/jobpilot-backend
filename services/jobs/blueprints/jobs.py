@@ -1085,6 +1085,10 @@ def tailor_resume():
             structured, _ = svc.parser.parse_to_structured(raw_text)
 
         tailored = svc.tailor.tailor(structured, jd_analysis)
+        from services.resume_finalizer import finalize
+        tailored = finalize(
+            svc, "", tailored, structured, jd_analysis, user_email=user_email
+        )
 
         # Map to the simpler format expected by the job search UI
         from schemas.resume_schemas import flatten_skills
@@ -1096,6 +1100,8 @@ def tailor_resume():
                 for b in exp.get("bullets", [])
             ],
             "keywords_to_add": jd_analysis.get("keywords", []),
+            "readiness": tailored.get("readiness"),
+            "content_plan": tailored.get("content_plan"),
         }
         return jsonify({"tailored": result}), 200
     except ValueError as e:

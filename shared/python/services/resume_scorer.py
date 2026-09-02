@@ -190,6 +190,12 @@ class ResumeScorer:
                 f"it in this state. ({render_error})"
             ]
 
+        try:
+            from services.readiness_service import analyze as analyze_readiness
+            combined["readiness"] = analyze_readiness(tailored, jd_analysis)
+        except Exception as e:
+            logger.warning("readiness attach skipped: %s", e)
+
         return combined
 
     # ------------------------------------------------------------------

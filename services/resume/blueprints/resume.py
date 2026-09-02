@@ -535,8 +535,11 @@ def profile_facts_confirm():
     if not isinstance(decisions, list) or not decisions:
         return jsonify({"error": "decisions list is required"}), 400
     try:
-        from services.profile_facts import record_decisions
+        from services.profile_facts import record_decisions, confirm_review_skills
         updated = record_decisions(get_jwt_identity(), decisions)
+        review = data.get("review_skills") or data.get("adjacent_skills") or []
+        if isinstance(review, list) and review:
+            updated += confirm_review_skills(get_jwt_identity(), review)
         return jsonify({
             "updated": updated,
             "note": (
@@ -2105,6 +2108,90 @@ def get_job(job_id):
 
 
 # ------------------------------------------------------------------
+# POST /api/resume/job/<job_id>/cancel — Stop an in-flight tailor
+# ------------------------------------------------------------------
+@resume_bp.route("/job/<job_id>/cancel", methods=["POST"])
+@jwt_required()
+def cancel_job(job_id):
+    """Refund the tailor credit and ask the worker to stop.
+
+    Already-terminal jobs return the current status (200), never an error,
+    so a late click after completion is harmless. Missing/foreign jobs 404.
+    """
+    try:
+        from services.resume_service import get_resume_service
+
+        user_email = get_jwt_identity()
+        safe_id = InputSanitizer.sanitize_string(str(job_id or ""), max_length=64)
+        if not safe_id:
+            return jsonify({"error": "Job not found"}), 404
+        job = get_resume_service().cancel_job(safe_id, user_email=user_email)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        for key in ("created_at", "completed_at"):
+            if hasattr(job.get(key), "isoformat"):
+                job[key] = job[key].isoformat()
+        return jsonify(job), 200
+    except Exception as e:
+        logger.error(f"Job cancel error: {e}")
+        return jsonify({"error": "Failed to cancel job"}), 500
+
+
+# ------------------------------------------------------------------
+# POST /api/resume/add-skill — Grounded one-click keyword insert
+# ------------------------------------------------------------------
+@resume_bp.route("/add-skill", methods=["POST"])
+@jwt_required()
+def add_skill():
+    """Add a JD keyword only when the candidate's evidence already supports it.
+
+    The Tailor UI used to mutate skills client-side with no grounding check,
+    which let unsupported tools land on a downloadable resume. This route is
+    the only mutation path: it accepts the keyword when it already appears
+    (or is implied) on the base or tailored resume, and 409s otherwise.
+    """
+    data = request.get_json(force=True) or {}
+    keyword = InputSanitizer.sanitize_string(str(data.get("keyword") or ""), max_length=80)
+    tailored = data.get("tailored_resume")
+    base = data.get("base_resume") or {}
+    if not keyword:
+        return jsonify({"error": "keyword is required"}), 400
+    if not isinstance(tailored, dict):
+        return jsonify({"error": "tailored_resume is required"}), 400
+    try:
+        from schemas.resume_schemas import build_resume_text
+        from services.resume_tailor import ResumeTailor
+        from utils.skill_implications import is_implied
+
+        haystack = "\n".join([
+            build_resume_text(base if isinstance(base, dict) else {}),
+            build_resume_text(tailored),
+        ])
+        owned = []
+        for src in (base, tailored):
+            skills = (src or {}).get("skills") or {}
+            if isinstance(skills, dict):
+                for vals in skills.values():
+                    owned.extend(v for v in (vals or []) if isinstance(v, str))
+        grounded = (
+            ResumeTailor._term_in_resume_text(keyword, haystack)
+            or is_implied(keyword, owned)
+        )
+        if not grounded:
+            return jsonify({
+                "error": "ungrounded_skill",
+                "message": (
+                    f'"{keyword}" is not evidenced on your resume. '
+                    "Only add skills you can defend in an interview."
+                ),
+            }), 409
+        return jsonify({"ok": True, "keyword": keyword}), 200
+    except Exception as e:
+        logger.error(f"add-skill error: {e}")
+        return jsonify({"error": "Failed to validate skill"}), 500
+
+
+# ------------------------------------------------------------------
 # POST /api/resume/six-seconds — Recruiter's Six Seconds (§6.11.2)
 # ------------------------------------------------------------------
 @resume_bp.route("/six-seconds", methods=["POST"])
@@ -2416,6 +2503,18 @@ def download():
         return jsonify({"error": "tailored_resume is required"}), 400
     if fmt not in ("pdf", "docx"):
         return jsonify({"error": "format must be 'pdf' or 'docx'"}), 400
+
+    from services.resume_finalizer import blocking_claims
+    blocked = blocking_claims(tailored)
+    if blocked:
+        return jsonify({
+            "error": "unresolved_claims",
+            "message": (
+                "This resume still has numbers that are not backed by your "
+                "source resume. Resolve them in Review before downloading."
+            ),
+            "blocking_claims": blocked,
+        }), 409
 
     mimetype = (
         "application/pdf" if fmt == "pdf"

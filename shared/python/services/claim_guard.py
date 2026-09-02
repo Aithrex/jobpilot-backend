@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
 
 
 def guard_mode() -> str:
-    mode = os.getenv("CLAIM_GUARD_MODE", "flag").strip().lower()
-    return mode if mode in ("flag", "strict") else "flag"
+    mode = os.getenv("CLAIM_GUARD_MODE", "strict").strip().lower()
+    return mode if mode in ("flag", "strict") else "strict"
 
 
 # ---------------------------------------------------------------------------
