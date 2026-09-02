@@ -9,6 +9,19 @@
 # - bandit_nightly: nightly signal-bandit posterior update.
 # - learning_due  : sweep due scheduled LinkedIn posts every 10 minutes.
 
+# CUT OVER TO EC2 2026-09-02. All four ingest ticks and discovery now run in
+# the `ingest-runner` systemd unit on i-06bf0e03e60d9d409, on the same minute
+# offsets these rules used. They are declared DISABLED rather than only
+# clicked off because `state` is looked up with an ENABLED default, so an
+# undeclared rule silently re-enables itself on the next apply and both planes
+# crawl (the Mongo lease keeps that merely wasteful, not incorrect).
+#
+# `ingest_maintenance` deliberately STAYS on Lambda: it is a daily retention
+# purge that archives pinned postings to S3 before deleting them, which is a
+# different risk profile from a crawl and is not worth moving for cost.
+#
+# Roll back a source: drop it from INGEST_SOURCES on the box, restart, THEN
+# re-enable that rule here — that order, so the crawl is never owned by neither.
 locals {
   scheduled_jobs = {
     digest_hourly  = { expression = "rate(1 hour)", desc = "Hourly digest fan-out (per-user local 7am/7pm)" }
@@ -86,8 +99,8 @@ locals {
     # (64) in ~1h, Oracle (48) in ~45m and iCIMS (96) in ~1h30m - all well
     # inside the 7-day guest freshness window (ADR-001). iCIMS is the slowest
     # by construction: one connection at ~2.5s spacing, vendor-wide.
-    ingest_workday      = { expression = "cron(0/15 * * * ? *)", desc = "Workday shard ingestion tick (48 shards, <=16/tick)" }
-    ingest_career_pages = { expression = "cron(7/15 * * * ? *)", desc = "Career-page shard ingestion tick (64 shards, <=16/tick)" }
+    ingest_workday      = { expression = "cron(0/15 * * * ? *)", desc = "Workday shard ingestion tick (48 shards, <=16/tick)", state = "DISABLED" }
+    ingest_career_pages = { expression = "cron(7/15 * * * ? *)", desc = "Career-page shard ingestion tick (64 shards, <=16/tick)", state = "DISABLED" }
     # ADR-004 gave Oracle ORC and iCIMS their own sources, with their own shard
     # counts, precisely because they cost far more per member than a board API
     # does. What it did not do was give them a RULE, so `job_ingest_worker`
@@ -98,7 +111,7 @@ locals {
     #
     # Offsets continue the existing 7-minute stagger so four fan-outs never
     # overlap: :00 workday, :07 career-pages, :11 oracle, :04 icims.
-    ingest_oracle = { expression = "cron(11/15 * * * ? *)", desc = "Oracle ORC shard ingestion tick (48 shards, <=16/tick)" }
+    ingest_oracle = { expression = "cron(11/15 * * * ? *)", desc = "Oracle ORC shard ingestion tick (48 shards, <=16/tick)", state = "DISABLED" }
     ingest_icims  = { expression = "cron(4/15 * * * ? *)", desc = "iCIMS shard ingestion tick (96 shards, <=16/tick)", state = "DISABLED" }
     # CUT OVER TO EC2 2026-09-02 (stage 1). The crawl now runs in the
     # `ingest-runner` systemd unit on i-06bf0e03e60d9d409, which schedules
@@ -121,7 +134,7 @@ locals {
     # Offset to :02 so it does not fan out in the same minute as any ingest
     # tick; discovery and ingestion both self-invoke Lambdas and share the
     # account's concurrency.
-    discover_companies = { expression = "cron(2/15 * * * ? *)", desc = "Career-portal discovery fan-out (16 workers x 40 companies)" }
+    discover_companies = { expression = "cron(2/15 * * * ? *)", desc = "Career-portal discovery fan-out (16 workers x 40 companies)", state = "DISABLED" }
     # Retention sweep: deletes only postings that are BOTH closed and past
     # purge_at. purge_at is stamped exclusively by close_posting, so a live
     # posting is unreachable from this job (see job_inventory_service:645).

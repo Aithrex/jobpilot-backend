@@ -70,13 +70,28 @@ Environment=MONGO_MAX_POOL_SIZE=60
 # it in NEITHER place silently stops that crawl — so always start the box first
 # and disable the rule second.
 #
-#   stage 1  INGEST_SOURCES=icims                                --no-discovery
-#   stage 2  INGEST_SOURCES=icims,oracle                         --no-discovery
-#   stage 3  INGEST_SOURCES=icims,oracle,career-pages            --no-discovery
-#   stage 4  INGEST_SOURCES=icims,oracle,career-pages,workday    --no-discovery
-#   stage 5  INGEST_SOURCES=icims,oracle,career-pages,workday    (drop the flag)
-Environment=INGEST_SOURCES=icims
-Environment=INGEST_EXTRA_FLAGS=--no-discovery
+# CUT OVER 2026-09-02: all four sources plus discovery run here; every
+# matching EventBridge rule is DISABLED. Measured on the t3.small under load —
+# peak 421 MB of a 1200 MB cap, swap untouched, zero OOM — so the box is
+# adequately sized and no resize was needed.
+# To roll a source BACK: drop it from INGEST_SOURCES, restart, then re-enable
+# that rule (that order, so the crawl is never owned by neither side).
+Environment=INGEST_SOURCES=icims,oracle,career-pages,workday
+# NEVER leave this empty. systemd word-splits ${VAR}, and an EMPTY variable
+# expands to an empty argv entry, which argparse rejects with
+# "unrecognized arguments:" — the unit then crash-loops under Restart=always
+# while every EventBridge rule is already disabled, i.e. nothing crawls at all.
+# Measured the hard way 2026-09-02 (65s outage). Use `--no-discovery` to turn
+# discovery off, and the harmless `--log-level=INFO` to turn it on.
+Environment=INGEST_EXTRA_FLAGS=--log-level=INFO
+
+# Discovery runs in its OWN thread pool (see DISCOVERY_WORKERS in runner.py):
+# a discovery worker loops for DISCOVERY_BUDGET_SECONDS (240) whereas an ingest
+# shard returns in tens of seconds, so sharing one pool let a single discovery
+# tick starve every queued shard for four minutes. Dispatch is matched to the
+# pool so ticks cannot pile up faster than they drain.
+Environment=INGEST_RUNNER_DISCOVERY_WORKERS=4
+Environment=DISCOVERY_WORKERS_PER_TICK=4
 
 # `ingest_maintenance` is a DAILY retention purge, not a 15-minute crawl, and it
 # archives pinned postings to S3 before deleting them. It stays on Lambda until

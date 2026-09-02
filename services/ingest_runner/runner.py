@@ -93,6 +93,22 @@ def _env_float(name: str, default: float) -> float:
 #: it is bounded by memory and by the per-vendor pacing, not by CPU.
 WORKERS = _env_int("INGEST_RUNNER_WORKERS", 24)
 
+#: Discovery gets its OWN pool, and this is not a tuning preference.
+#:
+#: An ingest shard is bounded work that returns in tens of seconds. A discovery
+#: worker is the opposite shape: `run_discovery_worker` LOOPS claiming batches
+#: until `DISCOVERY_BUDGET_SECONDS` (240) is spent, and one tick dispatches
+#: `DISCOVERY_WORKERS_PER_TICK` (16) of them. Sharing one pool would therefore
+#: let a single discovery tick occupy every worker for four minutes and starve
+#: the ingest shards queued behind it — on Lambda they were separate
+#: invocations and could not contend at all, so this contention is created by
+#: the move and has to be answered by the move.
+#:
+#: Sized small on purpose: each worker ALSO fans out `DISCOVERY_CONCURRENCY`
+#: (16) threads internally, so 4 here is already up to 64 in-flight requests on
+#: a 2-vCPU box.
+DISCOVERY_WORKERS = _env_int("INGEST_RUNNER_DISCOVERY_WORKERS", 4)
+
 #: Seconds between scheduler wake-ups. Small enough that a minute-aligned slot
 #: is never missed, large enough to be free.
 TICK_SECONDS = _env_float("INGEST_RUNNER_TICK", 20.0)
@@ -131,16 +147,23 @@ class Runner:
         self.stop = threading.Event()
         self.pool = ThreadPoolExecutor(max_workers=WORKERS,
                                        thread_name_prefix="ingest")
+        # Separate pool: see DISCOVERY_WORKERS. Created even when discovery is
+        # off so shutdown paths stay uniform.
+        self.discovery_pool = ThreadPoolExecutor(
+            max_workers=max(1, DISCOVERY_WORKERS),
+            thread_name_prefix="discovery")
         self._inflight: Dict[Future, str] = {}
         self._lock = threading.Lock()
         self._fired: Dict[str, str] = {}   # job name -> slot already fired
         self.counts: Dict[str, int] = {}
 
     # -- bookkeeping -------------------------------------------------------
-    def _submit(self, label: str, fn: Callable[..., Any], *args, **kwargs) -> str:
+    def _submit(self, label: str, fn: Callable[..., Any], *args,
+                pool: Optional[ThreadPoolExecutor] = None, **kwargs) -> str:
         if self.stop.is_set():
             return ""
-        future = self.pool.submit(self._guard, label, fn, *args, **kwargs)
+        target = pool if pool is not None else self.pool
+        future = target.submit(self._guard, label, fn, *args, **kwargs)
         with self._lock:
             self._inflight[future] = label
         future.add_done_callback(self._done)
@@ -223,6 +246,7 @@ class Runner:
             return self._submit(
                 f"discovery w{payload.get('worker')}",
                 disc.run_discovery_worker,
+                pool=self.discovery_pool,
                 batch=payload.get("batch"), budget=payload.get("budget")) or ""
 
         try:
@@ -326,6 +350,7 @@ class Runner:
         deadline = time.monotonic() + DRAIN_SECONDS
         while self.inflight() and time.monotonic() < deadline:
             time.sleep(1.0)
+        self.discovery_pool.shutdown(wait=False)
         remaining = self.inflight()
         if remaining:
             # Leases expire on their own (`acquire_lease` TTL), so an abandoned
