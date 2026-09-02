@@ -70,6 +70,56 @@ def _db():
 from services import career_source_service as css      # noqa: E402
 from services import employer_registry as er           # noqa: E402
 
+#: How much a state is worth, so a refresh can refuse to write a WEAKER one.
+#: `upsert_source` puts `state` and `ownership_verified` in `_MUTABLE`, so an
+#: unguarded re-run would demote a source that live verification had already
+#: proved — this pass only ever knows about two evidence classes, and a domain
+#: walk knows more.
+STATE_RANK: Dict[str, int] = {
+    css.STATE_DEAD: 0, css.STATE_BLOCKED: 1, css.STATE_MOVED: 1,
+    css.STATE_MANUAL_REVIEW: 1, css.STATE_CANDIDATE: 2,
+    css.STATE_CONTENT_VALIDATED: 3, css.STATE_OWNERSHIP_VERIFIED: 4,
+    css.STATE_EMPTY: 5, css.STATE_VALIDATED: 6,
+}
+
+
+def curated_rows() -> Dict[Tuple[str, str], str]:
+    """`(vendor, tenant) -> display_name` from the human-maintained catalogs.
+
+    These are registries a person wrote and reviewed, which is what
+    `SIGNAL_CURATED_ROW` means and why it counts as its own evidence class.
+    They are independent of what the board prints: one is our record, the
+    other is the provider's.
+    """
+    out: Dict[Tuple[str, str], str] = {}
+    try:
+        from services.workday_tenant_catalog import WORKDAY_TENANT_CATALOG
+        for r in WORKDAY_TENANT_CATALOG:
+            t = str(r.get("tenant") or "").strip().lower()
+            if t and r.get("display_name"):
+                out.setdefault(("workday", t), str(r["display_name"]))
+    except Exception:
+        pass
+    try:
+        from services.career_pages_catalog import CAREER_PAGES_CATALOG
+        for r in CAREER_PAGES_CATALOG:
+            t = str(r.get("slug") or "").strip().lower()
+            v = vendor_key(r.get("ats"))
+            if t and v and r.get("display_name"):
+                out.setdefault((v, t), str(r["display_name"]))
+    except Exception:
+        pass
+    try:
+        from services.mnc_catalog import MNC_CATALOG
+        for r in MNC_CATALOG:
+            t = str(r.get("slug") or "").strip().lower()
+            v = vendor_key(r.get("fetcher") or r.get("engine"))
+            if t and r.get("display_name"):
+                out.setdefault((v or t, t), str(r["display_name"]))
+    except Exception:
+        pass
+    return out
+
 
 def vendor_key(value: Any) -> str:
     """`oracle-orc` on a posting and `oracle_orc` in the registry are the same
@@ -100,6 +150,12 @@ def main() -> int:
                          "employer before the provider counts as naming it")
     ap.add_argument("--min-postings", type=int, default=3)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--refresh", action="store_true",
+                    help=("re-evaluate boards that ALREADY have a source row, "
+                          "not just unregistered ones. Use after adding an "
+                          "evidence class - a curated catalog row is a second, "
+                          "independent class and rows written before it was "
+                          "read are one signal short of validated."))
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
 
@@ -109,9 +165,13 @@ def main() -> int:
           f"postings, minimum {args.min_postings}")
 
     known = set()
-    for d in db[css.CAREER_SOURCES].find({}, {"ats_vendor": 1, "tenant": 1}):
-        known.add((vendor_key(d.get("ats_vendor")),
-                   str(d.get("tenant") or "").strip().lower()))
+    existing: Dict[Tuple[str, str], str] = {}
+    for d in db[css.CAREER_SOURCES].find(
+            {}, {"ats_vendor": 1, "tenant": 1, "state": 1, "ownership_verified": 1}):
+        k = (vendor_key(d.get("ats_vendor")),
+             str(d.get("tenant") or "").strip().lower())
+        known.add(k)
+        existing[k] = str(d.get("state") or "")
     print(f"career_sources already registered: {len(known):,}")
 
     boards: Dict[Tuple[str, str], collections.Counter] = collections.defaultdict(
@@ -129,13 +189,19 @@ def main() -> int:
         urls.setdefault(key, str(doc.get("canonical_url") or ""))
     print(f"boards we are actively ingesting: {len(boards):,}")
 
-    missing = {k: v for k, v in boards.items() if k not in known}
-    print(f"of those, unregistered: {len(missing):,} "
+    missing = ({k: v for k, v in boards.items()} if args.refresh
+               else {k: v for k, v in boards.items() if k not in known})
+    label = "to re-evaluate" if args.refresh else "unregistered"
+    print(f"of those, {label}: {len(missing):,} "
           f"({sum(sum(c.values()) for c in missing.values()):,} active postings)")
+
+    curated = curated_rows()
+    print(f"curated catalog rows naming an exact endpoint: {len(curated):,}")
 
     stats = collections.Counter()
     records: List[Dict[str, Any]] = []
     multi: List[Tuple[int, str, str]] = []
+    conflicts: List[Tuple[int, str, str]] = []
     for (vendor, tenant), names in sorted(
             missing.items(), key=lambda kv: -sum(kv[1].values())):
         if args.limit and len(records) >= args.limit:
@@ -180,17 +246,41 @@ def main() -> int:
             own_ev.append(css.evidence(
                 css.SIGNAL_PROVIDER_OWNER, source=f"{vendor}:postings",
                 value=f"{owner} names {share:.0%} of {total} postings"))
+        # A curated row naming this EXACT endpoint is a second, independent
+        # class (rule 4b): our reviewed record versus the provider's own
+        # statement. It only counts when the two AGREE — if the catalog names
+        # a different company than the board prints, that is a conflict, and
+        # answering it either way would be the coin flip the design refuses.
+        cur_name = curated.get((vendor, tenant))
+        if cur_name:
+            if owner and er.name_key(cur_name) != er.name_key(owner):
+                stats["curated_conflicts_with_provider"] += 1
+                conflicts.append((total, f"{vendor}:{tenant}",
+                                  f"catalog says {cur_name!r}, board says {owner!r}"))
+            else:
+                stats["curated_row_agrees"] += 1
+                own_ev.append(css.evidence(
+                    css.SIGNAL_CURATED_ROW, source="python_catalog",
+                    value=f"{cur_name} at {vendor}:{tenant}"))
         con_ev = [css.evidence(
             "content_fetch", source="job_inventory",
             value=f"{total} active postings ingested from this board")]
-        records.append(css.build_source(
+        record = css.build_source(
             employer_id=employer_id, ats_vendor=vendor, tenant=tenant,
             career_landing_url=urls.get((vendor, tenant), ""),
             discovery_method=css.METHOD_PROVIDER_METADATA if owner
             else css.METHOD_TENANT_ARCHIVE,
             ownership_evidence=own_ev, content_validation_evidence=con_ev,
-            member_key=f"{vendor}-{tenant}", job_count_last=total))
-        stats[f"state:{records[-1]['state']}"] += 1
+            member_key=f"{vendor}-{tenant}", job_count_last=total)
+        was = existing.get((vendor, tenant))
+        if was and STATE_RANK.get(record["state"], 0) <= STATE_RANK.get(was, 0):
+            # Never write a weaker verdict than the row already holds. A live
+            # domain walk proves more than this pass can, and clobbering it
+            # would turn a re-run into a regression.
+            stats[f"skipped_not_an_improvement:{was}"] += 1
+            continue
+        records.append(record)
+        stats[f"state:{record['state']}"] += 1
 
     print(f"\nprepared {len(records):,} sources")
     for k, n in sorted(stats.items()):
@@ -199,6 +289,12 @@ def main() -> int:
         print(f"\nboards naming MANY employers (no ownership signal, likely "
               f"marketplaces or shared tenants) - top 10 of {len(multi):,}:")
         for total, key, detail in sorted(multi, reverse=True)[:10]:
+            print(f"  {total:>7,}  {key:<34} {detail}")
+
+    if conflicts:
+        print(f"\ncatalog and board DISAGREE about the owner - no ownership "
+              f"claimed, review these ({len(conflicts):,}):")
+        for total, key, detail in sorted(conflicts, reverse=True)[:10]:
             print(f"  {total:>7,}  {key:<34} {detail}")
 
     written: Any = 0

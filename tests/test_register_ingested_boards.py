@@ -85,3 +85,51 @@ class TestOneSignalClassIsNeverEnough:
         """A slug that looks similar is `heuristic` and never counts. The
         board's own postings naming the employer is the provider speaking."""
         assert css.SIGNAL_CLASSES[css.SIGNAL_PROVIDER_OWNER] == css.CLASS_ATS_PROVIDER
+
+
+class TestARefreshNeverWritesAWeakerVerdict:
+    """`upsert_source` puts `state` and `ownership_verified` in `_MUTABLE`, so
+    an unguarded re-run overwrites them. This pass knows about two evidence
+    classes; a live domain walk knows more, and clobbering its verdict would
+    turn a re-run into a regression."""
+
+    def test_validated_outranks_everything_this_pass_can_produce(self):
+        assert rib.STATE_RANK[css.STATE_VALIDATED] > \
+            rib.STATE_RANK[css.STATE_CONTENT_VALIDATED]
+        assert rib.STATE_RANK[css.STATE_OWNERSHIP_VERIFIED] > \
+            rib.STATE_RANK[css.STATE_CONTENT_VALIDATED]
+
+    def test_candidate_is_worth_less_than_content_validated(self):
+        assert rib.STATE_RANK[css.STATE_CANDIDATE] < \
+            rib.STATE_RANK[css.STATE_CONTENT_VALIDATED]
+
+    def test_a_dead_source_ranks_lowest_so_a_live_board_can_replace_it(self):
+        assert rib.STATE_RANK[css.STATE_DEAD] == min(rib.STATE_RANK.values())
+
+    def test_every_state_the_service_defines_has_a_rank(self):
+        """A state with no rank would compare as 0 and let any refresh
+        overwrite it."""
+        assert set(css.STATES) <= set(rib.STATE_RANK)
+
+
+class TestTwoIndependentClassesReachValidated:
+    def test_provider_plus_an_agreeing_catalog_row_is_enough(self):
+        src = css.build_source(
+            employer_id="emp_x", ats_vendor="workday", tenant="ngc",
+            ownership_evidence=[
+                css.evidence(css.SIGNAL_PROVIDER_OWNER, source="workday:postings",
+                             value="Northrop Grumman names 100% of 968 postings"),
+                css.evidence(css.SIGNAL_CURATED_ROW, source="python_catalog",
+                             value="Northrop Grumman at workday:ngc"),
+            ],
+            content_validation_evidence=[css.evidence(
+                "content_fetch", source="job_inventory", value="968 postings")],
+            job_count_last=968)
+        assert src["ownership_verified"] is True
+        assert src["state"] == css.STATE_VALIDATED
+
+    def test_the_catalog_rows_name_exact_endpoints(self):
+        rows = rib.curated_rows()
+        assert len(rows) > 1000
+        assert all(isinstance(k, tuple) and len(k) == 2 for k in rows)
+        assert all(v and isinstance(v, str) for v in rows.values())
