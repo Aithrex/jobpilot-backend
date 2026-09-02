@@ -80,6 +80,39 @@ crawler reads exactly the rows it read before.
   `SIGNAL_SLUG_SIMILARITY` and `SIGNAL_ENDPOINT_RESPONDS` are recorded and
   **never counted** — that is the whole fix.
 
+> **Registration answers ONE of the two questions.** `upsert_source` had
+> `state` in `_MUTABLE` and `$set` it unconditionally, so re-registering a
+> board that was already `validated` rewrote it to `ownership_verified` — a
+> write that PROVED something good removed the employer from coverage. One
+> `verify_official_career_urls.py --apply --register` run moved Intel, Adobe,
+> Accenture, Palantir, Splunk, DeepL, d-Matrix, Aikido and Lakera out of the
+> covered set, and Tier-A coverage read 24/94 instead of 30/94. Registration
+> now never overwrites a state that carries a CONTENT verdict (`validated`,
+> `empty`, `content_validated`); everything else it learned still lands, and
+> demotion stays where the evidence for it is — `record_failure`. The one
+> state a registration DOES move is `content_validated` + newly proven
+> ownership, which is exactly `validated`: the board was already read and held
+> postings, and the only thing it lacked has just arrived.
+
+> **A vendor's CDN is not an employer's board.** Fingerprints run over every
+> url a careers page mentions, and every Phenom customer's page loads the same
+> four `*.phenompeople.com` asset hosts — so Adobe, Cisco and Splunk each
+> registered `phenom:assets`, `phenom:pp-cdn`, `phenom:content-us` and
+> `phenom:cdn-prod-static` as owner-verified career sources. The fix is the
+> URL, not the name: `endpoints_from_page` drops asset references by
+> EXTENSION before fingerprinting, which has no false positives because no ATS
+> serves a board at a `.js` path. A name test does have them — an earlier
+> draft refused `greenhouse:css` (CloudKitchens, née City Storage Systems) and
+> `greenhouse:manifest` (Manifest Cyber), both live boards.
+> `AtsProvider.is_reserved_tenant` is what is left: nine tokens no company is
+> named after, plus compound infrastructure like `pp-cdn`.
+> Anything the shared list is too blunt for goes on the vendor, as
+> `AtsProvider.reserved_tenants` — `assets` is allowed for Greenhouse and
+> refused for Phenom, because `assets.phenompeople.com` is the host every
+> Phenom customer's page loads. `scripts/purge_infrastructure_sources.py`
+> removed the 222 already written and refuses to delete any row the crawler is
+> reading postings from.
+
 > **A 403 to our prober is not evidence a board is gone.** The content pass
 > checks a `blocked`/`empty` verdict against `_boards_with_fresh_postings`
 > (active postings by `(ats, tenant)` in the last 48h) and records a NOTE
@@ -94,6 +127,77 @@ crawler reads exactly the rows it read before.
 > 43.0%. Coverage now comes from `career_sources`. Both are printed side by
 > side by the report so the gap is visible.
 
+### Canonical employer id ON THE POSTING (`canonical-employer-1.0.0`)
+
+`shared/python/services/canonical_employer.py` is the join `job_postings` did
+not have. A posting gets `canonical_employer_id` ONLY when the board it came
+from carries owner-verified evidence naming exactly one employer:
+
+  * `career_sources.ownership_verified` is the gate — a guessed slug that
+    returns jobs never reaches it, and neither does a name that merely matches;
+  * `parent_employer_id` is FOLLOWED first, so Slack and Salesforce on one
+    board is one employer, not a conflict;
+  * two employers that survive the parent walk are QUARANTINED to
+    `employer_board_conflicts` — **except** when exactly one of them holds a
+    verified-domain chain (`SUFFICIENT_SIGNALS`), which outranks two
+    corroborating signals for the same reason `adjudicate_ownership` makes 4a
+    sufficient alone. That basis is recorded as `domain_chain_precedence` and
+    the board is STILL filed for review, because attribution and identity are
+    two questions.
+
+`employer_id` is never read, rewritten or deleted — it is the key three
+production indexes use — so the field is additive and
+`scripts/backfill_canonical_employer_id.py --apply --unstamp` is the rollback.
+The ingest path stamps it in `job_inventory_service.upsert_posting` and
+**clears it when a board becomes contested**: a stale wrong id is worse than
+none.
+
+Everything employer-shaped now PREFERS it — company filters, facets, dedupe
+(`_canonical_variant_key_of`), employer diversity, `employer_scope=tech_only`
+— falling back to `(ats, tenant)` and only then to a name
+(`tech_feed_service.employer_key_of`). Legacy `company_ids` values (a name
+slug or a bare tenant) are still accepted, deliberately and temporarily.
+
+`GET /api/jobs/tech-feed/companies` is the autocomplete
+(`employer_directory.py`): names in, canonical ids out, and **nothing from
+`career_sources`** beyond a `career_source_verified` boolean — ownership
+evidence names the endpoints we fetch and the domains we probe, which is
+operational detail about our crawl and not information about the employer.
+
+> **A partial index's filter must be PROVABLE from the query.** Both canonical
+> posting indexes were declared `partialFilterExpression: {canonical_employer_id:
+> {"$type": "string"}}`. They indexed the right rows and the planner never
+> chose either one — a partial index serves only a query it can prove is a
+> subset of its filter, and an equality on a string does not prove
+> `$type: "string"`. Measured on live inventory: the employer posting-count
+> aggregation ran **1,544 ms** on an unrelated fallback plan and **17 ms** once
+> the same index was declared `$exists: true`, which an equality (and an `$in`
+> of equalities) does prove. `scripts/explain_job_inventory.py` reported both
+> shapes as a green `IXSCAN` throughout, because it asserted the STAGE and only
+> PRINTED the index name; it now declares the expected index per shape and
+> fails when a different one answers.
+
+> **`canonical_employer_status` exists for the `$or`, not for the filter.** A
+> company filter carrying BOTH spellings — an old saved search plus a fresh
+> autocomplete pick — is a `$or`, Mongo subplans exactly ONE rooted `$or`, and
+> the freshness window is already it. So every branch of the company `$or` has
+> to be independently indexable, and a branch that does not carry `status`
+> cannot use either `status`-prefixed index. The legacy branches always could,
+> through `employer_id_status`; this is that index's canonical twin. Measured
+> live: **7,660 ms / 36,964 documents examined -> 18 ms / 87.**
+
+> **The autocomplete queries a PREFIX before it scans.** A case-insensitive
+> contains regex cannot use an index, so every keystroke examined all 23,782
+> employers. `employer_directory.search` now runs an anchored, case-sensitive
+> prefix query on `name_key` first (22 keys examined) and falls back to the
+> contains scan only when that did not fill the page. `name_key` ALONE, and
+> that is what makes it exact rather than merely fast: it is the only field
+> written through `employer_registry.name_key`, so it is the only one a
+> case-sensitive anchor can be trusted against — `aliases` keep their original
+> capitalisation. Every row the fast query returns scores `prefix = 0` in
+> `_rank_key` and every row the scan could add scores 1, so a full page of
+> them is already the answer.
+
 Scripts, all **dry-run by default**:
 - `scripts/backfill_employer_registry.py [--apply]` — builds `employers` +
   `career_sources` from all five registries.
@@ -107,21 +211,95 @@ Scripts, all **dry-run by default**:
   A curated catalog row naming the same endpoint is the second, independent
   class (`curated_registry`) — and only counts when the two AGREE.
   `--refresh` never writes a weaker verdict than a row already holds.
-- `scripts/verify_career_sources.py [--apply] --mode endpoints|employers|both`
-  — pass 1 asks the ATS who owns the board (cheap); pass 2 verifies the
-  employer's domain and walks from it to the board (decisive, and the only
-  path that reaches Workday/iCIMS/Oracle, which name no owner).
-- `scripts/employer_coverage_report.py [--markdown]` — THE accountability
-  artifact. Read-only. Generates `docs/coverage/tech-employer-coverage.md`
-  stamped with the source revision and the inventory watermark.
+- `scripts/verify_career_sources.py [--apply] --mode
+  endpoints|employers|content|backlink|both` — pass 1 asks the ATS who owns
+  the board (cheap); pass 2 verifies the employer's domain and walks from it
+  to the board (decisive, and the only path that reaches Workday/iCIMS/Oracle,
+  which name no owner); pass 3 validates content; **pass 4 (`backlink`) is the
+  cheap middle and the highest-yield pass on live data** — for sources holding
+  exactly ONE confirmed evidence class, it derives the employer's domain FROM
+  THE BOARD and verifies it names them. 742 sources sit in that state, and the
+  `employer_domain` class they are missing was unobtainable for every
+  suffix-host vendor until `AtsProvider.board_url` landed.
+
+> **Run ONE network pass at a time.** Not politeness advice — a measured
+> failure: one content pass beside two others turned 830 sources `blocked` in
+> a single sweep and cut validated coverage by a third.
+
+> **The content pass must ask the board's REAL address.** Pass 3 rebuilt each
+> endpoint as `Endpoint(vendor, tenant)` and discarded the pod and site path
+> the source had already recorded. For Greenhouse and Lever a tenant IS the
+> address; for the three vendors carrying most enterprise inventory it is not
+> — Adobe is `adobe.wd5.myworkdayjobs.com/external_experienced`, Accenture is
+> `wd103`, Snap is `wd1.myworkdaysite.com/recruiting/snapchat/snap`. All three
+> came back `unparseable_response`, which reads as "their board is broken" and
+> meant "we asked the wrong URL"; hydrating the endpoint turned them
+> `validated` with 738, 2,000 and 182 live postings. `hydrate_endpoint` reads
+> `company_ats_endpoints` first and the source's own `canonical_endpoint`
+> second — the second matters because a source the ownership walk discovered
+> has no catalog row yet, and that is exactly this pass's population.
+
+> **`scripts/repair_canonical_endpoints.py` un-freezes the same bug from the
+> data.** `https://icims.com/<tenant>` was written onto 631 sources before
+> `AtsProvider.board_url` existed, and everything downstream reads the stored
+> field — including the demotions to `dead` and `blocked` that those fetches
+> caused. It repairs 333 of them with NO network requests (endpoint catalog ->
+> redirect chain -> an active posting's apply URL, in that order of authority)
+> and leaves 298 alone, because guessing a hostname is what caused this.
+
+> **Pass 3 spends its budget where the number can move.** `ownership_verified`
+> + content = `validated`; `content_validated` + content = `content_validated`
+> again, since what it lacks is ownership this pass cannot supply. There are
+> 1,197 of the second and 79 of the first, so an unordered `.limit()` drew 396
+> of 400 rows that could not move and shifted coverage by zero. The selection
+> is now two queries, movable first.
+- `scripts/employer_coverage_report.py [--markdown] [--persist]` — THE
+  accountability artifact. Read-only apart from `--persist`, which stores the
+  measurement in `coverage_snapshots` so the PRODUCT reads the same numbers
+  this report prints (`tech_feed_service.coverage_block` serves them with
+  `measured_at`, `age_hours` and `stale`). Generates
+  `docs/coverage/tech-employer-coverage.md` stamped with the source revision,
+  the inventory watermark and every version that produced it.
+- `scripts/coverage_work_queue.py` — read-only. What is uncovered, WHY, and
+  what fixing it buys. Four buckets in the order they are worth doing
+  (`content_pending`, `endpoint_unproven`, `source_no_endpoint`, `no_source`),
+  each weighted by the postings behind it, Tier-A first. "1,749 employers are
+  uncovered" is not a work queue; 1,365 of them hold 219 postings between them.
+- `scripts/backfill_canonical_employer_id.py [--apply] [--unstamp]` — stamps
+  `canonical_employer_id`, quarantines every board it refuses, and reverses
+  itself.
+- `scripts/verify_official_career_urls.py [--apply] [--register]` — the script
+  `official_career_registry`'s docstring has always named. `verified_at` was
+  hard-coded `None` and nothing could ever have written another value; it is
+  now READ from `official_career_url_checks`, one row per domain, written only
+  from an actual fetch. `verified_at` moves on `verified` alone: a 403 is
+  recorded as `blocked` with its own timestamp and does not clear an earlier
+  verification.
+- `scripts/repair_employer_metadata.py [--apply]` — drops `other` where a
+  specific category survives, records `category_evidence` (what each source
+  DECLARED, including the terms that resolved to `other`), derives categories
+  from the registrant's filed SIC code, and splits geography into
+  `headquarters_country` (documentary only), `hiring_countries` (observed) and
+  `remote_eligible`. An employer hiring in Poland is not a Polish company.
+- `scripts/purge_infrastructure_sources.py [--apply]` — removes
+  `career_sources` and `company_ats_endpoints` rows whose tenant names a
+  VENDOR'S OWN infrastructure. It never deletes a row the crawler is reading
+  postings from, which is the check that saved `greenhouse:css`
+  (CloudKitchens) and `greenhouse:manifest` (Manifest Cyber) from a first
+  draft that judged the name instead of the URL.
+- `scripts/prioritize_reviews.py [--apply]` — orders `employer_merge_reviews`
+  and `employer_board_conflicts` by CONSEQUENCE (core-tech postings ×3, active
+  postings, Tier-A membership, evidence already gathered) instead of by
+  arrival. A queue of 1,443 rows sorted by `created_at` is a queue nobody
+  finishes.
 
 ## Job sourcing
 Jobs come from JSearch **plus direct employer ATS portals** — the differentiator. Catalogs + engines live in the shared layer: `workday_tenant_catalog.py` / `workday_jobs_service.py` / `workday_cxs_fetcher.py` (Workday CXS) · `career_pages_catalog.py` / `career_pages_service.py` (**`FETCHERS`** greenhouse/lever/ashby/smartrecruiters/workable/recruitee; **`ENTERPRISE_FETCHERS`** amazon/eightfold/phenom/orc/uber) · `mnc_catalog.py` / `mnc_jobs_service.py`. Routes in `services/jobs/blueprints/jobs.py` (`/workday/*`, `/career-pages/*`, `/mnc/*`). Adding companies = catalog rows, validated live via `scripts/discover_workday_tenants.py` / `scripts/discover_career_pages.py`; a new ATS = a `_fetch_<ats>()` registered in `FETCHERS`. **Apify is disabled** (reversible — every edit tagged `APIFY DISABLED (temporary)`).
 
-## Occupation taxonomy and match scoring (`tech-tax-1.1.0`, `fit-v2.1`)
+## Occupation taxonomy and match scoring (`tech-tax-1.2.0`, `fit-v2.1`)
 
 `shared/python/services/tech_taxonomy.py` is the **canonical occupation
-ontology** — 14 families / 102 specialties — and it is now what ingestion,
+ontology** — 14 families / 106 specialties — and it is now what ingestion,
 résumé parsing, search AND `fit_score` all score against. `fit_score.
 ROLE_FAMILIES` (32 coarse keys) survives only as the LEGACY BRIDGE for
 `job_postings.role_family`, which three production indexes key on; nothing in
@@ -170,6 +348,67 @@ the scoring path reads it for role alignment any more.
   The feed accepted it as a filter and `job_postings.seniority` could never
   hold it.
 
+### What `tech-tax-1.2.0` changed, and the evidence for each
+
+Every one of these was measured on live `job_postings` first, and every one is
+covered by `evals/eval_live_titles.py` (559 reviewed titles) or
+`evals/eval_fit_score_domains.py` (115 labelled scenarios).
+
+- **Four QUANTUM specialties**, on 71 distinct live titles / 77 postings:
+  `quantum_software` (software family — a compiler engineer is a software
+  engineer), `quantum_hardware`, `quantum_control` and `cryogenic_systems`
+  (semiconductor family), plus 17 declared adjacency edges. Before them,
+  "Quantum Software Engineer (Compiler)" read `general_software`, "Senior
+  Cryogenic Systems Engineer" read cloud `infrastructure`, and "Sr. Quantum 3D
+  Integration and Packaging Engineer" read **non_tech**.
+- **An O*NET title alone is no longer sufficient.** It admitted "Field Service
+  Engineer" (81 live postings) to `core` on the title alone, along with
+  "Distribution Engineer", "Transmission Engineer" and "Intelligence Analyst".
+  The fix is POSITIVE EVIDENCE, not a blocklist: `_TITLE_TECH_TOKEN_RE` asks
+  whether the title itself names a technical domain, so "IT Business Analyst"
+  keeps its reading and "Field Service Engineer" needs the posting to say
+  something technical — which "…, Semiconductor Capital Equipment" does and
+  "…, Elevators" never will.
+- **`_DOMAIN_QUALIFIERS`** generalises the physical-engineering veto: a
+  declared qualifier vetoes a technical role noun for the FAMILIES it covers.
+  Eight live titles were `core` at high confidence and are not: Space Systems
+  Engineer, GNC Analyst, an air-cooled chiller Product Engineer, a hotel's
+  Assistant Director of Engineering, an FP&A analyst, a Corporate Counsel for
+  Product Security, an adjunct faculty post and Energetics Manufacturing.
+- **Hardware context now beats the physical veto**, and `_PHYSICAL_TO_
+  SEMICONDUCTOR` maps the role noun into the fab specialty it becomes. A bare
+  "Process Engineer" optimising a polymerization line stays non-technical.
+- **`_norm` folds diacritics** instead of deleting them. "Préposé à
+  l'entretien ménager" arrived as "pr pos e l entretien m nager", a string no
+  rule can match; live inventory carries French, German, Spanish and
+  Portuguese titles and every one was being shredded before any rule saw it.
+- **~130 non-technical phrases** added from the live sample, which moved 114
+  reviewed titles from `unknown` to `non_tech`. `unknown` and `non_tech` are
+  both outside the default search, so this changes no retrieval — but
+  `fit_score._eligibility` fires a confident cross-domain verdict only on
+  `non_tech`, and `employer_tech_classifier`'s posting mix needs a
+  non-technical denominator to place a private employer.
+
+> **`fit_score`'s SKILL LEXICON had zero coverage of five core families.**
+> Not one word of semiconductor, embedded, robotics, gaming or quantum
+> vocabulary — no Verilog, RTL, UVM, RTOS, ROS, SLAM, Unreal, Qiskit. A senior
+> ASIC designer's résumé yielded no readable skills at all, tripped
+> `insufficient_resume_evidence`, and scored **20 against every job including
+> their own discipline**. `semiconductor_hardware` is a CORE family; the
+> default search returns those jobs and the scorer could not read the people
+> who do them. Fixing it moved P@5 from 0.581 to 0.993 on
+> `eval_fit_score_domains.py`. `_alias_lookup` was also silently discarding
+> any alias written with `\b` — it matched, then failed the reverse lookup —
+> which is now repaired and commented.
+
+> **`_EXPERIENCE_RELEVANCE`: experience means RELEVANT experience.** The
+> component measured calendar time, so seven years of backend scored full
+> marks against a senior semiconductor requisition. Measured over 115
+> scenarios, grade-3 pairs averaged 19.91/20 and grade-0 pairs 16.29 — 3.6
+> points of separation. Scaling the component by role-alignment tier
+> (`unknown` = 1.00, so not knowing still costs nothing) took separation to
+> **7.95** with ranking unchanged. **No COMPONENT_MAX weight was changed.**
+
 Backfills: `scripts/backfill_tech_taxonomy.py --apply` (version-aware — it
 selects rows whose `tech.taxonomy_version` is not current, so a bump is
 backfillable without `--all`) and `scripts/backfill_posting_normalization.py
@@ -182,11 +421,39 @@ when JD bodies were actually read** (`--with-bodies`, from our own S3):
 `job_ingest_worker._listing_implies_same_content` treats the stamp as "needs
 no re-fetch", so stamping a half-upgraded row would freeze it there.
 
-Evals: `evals/eval_tech_taxonomy.py` (per-family AND per-stratum precision/
-recall; stratum **H** is titles taken verbatim from live `job_postings`) and
-`evals/eval_tech_feed_retrieval.py` + `evals/test_tech_feed_retrieval.py`
-(retrieval by source / family / specialty / cohort / ambiguous title /
-geography / seniority, plus the traversal-ceiling regression).
+Evals — all offline, deterministic and checked in:
+
+| runner | what it measures |
+| --- | --- |
+| `evals/eval_tech_taxonomy.py` | 143 hand-written rows, per-family AND per-stratum precision/recall. Now 1.000/1.000 with stratum H at 44/44. |
+| `evals/eval_live_titles.py` | **559 live titles, each reviewed by a human**, weighted the way the market is (334 non-technical). Reports scope accuracy, POSTING-weighted accuracy, non-tech leakage and — separately — accuracy on the 153 rows where the reviewer DISAGREED with the classifier. Those are the known defects; a change that improves the headline while regressing them has traded a measured bug for an unmeasured one. |
+| `evals/eval_fit_score_domains.py` | **115 labelled scenarios across 14 domains** (backend, frontend, full stack, mobile, DevOps/SRE, cloud, security, data, AI/ML, embedded, semiconductor, robotics, gaming, quantum) over synthetic anonymised résumés. Eligibility accuracy split into false-INELIGIBLE (held at zero — it removes a reachable job) and false-eligible; P@5 and NDCG@5 per résumé; calibration (mean score must be monotone in the human grade); and EVERY component's grade-3-vs-grade-0 separation with its `known` rate, so a component that is flat because it is never known is distinguishable from one that is known and useless. |
+| `evals/test_expanded_evals.py` | the CI gates for the two above. |
+| `evals/eval_tech_feed_retrieval.py` + `evals/test_tech_feed_retrieval.py` | retrieval by source / family / specialty / cohort / ambiguous title / geography / seniority, plus the traversal-ceiling regression. |
+
+## The tech-feed API surface added on 2026-09-02
+
+All under the EXISTING `/api/jobs/tech-feed` subpath, so no new top-level
+prefix and no Terraform edge route (invariant 6).
+
+| route | what it is |
+|---|---|
+| `GET /tech-feed/companies?q=` | company autocomplete over the canonical registry. `?ids=a,b` resolves ids back to names and follows an acquisition. **Nothing from `career_sources`** beyond a `career_source_verified` boolean |
+| `GET /tech-feed/company-categories` | the canonical employer-category facet with counts. `other` is reported LAST and labelled, not hidden |
+| `GET/POST/DELETE /tech-feed/saved-searches` + `POST .../reconcile` | server-owned saved searches, keyed on the CLIENT's own id so a retried write is one row. Reconcile pushes up and NEVER deletes |
+| `POST /tech-feed/telemetry` | non-PII product events. Salted one-way account pseudonym, closed dimension allowlist, filter KEYS only, bucketed counts. Returns 204 on a dropped batch — telemetry must never fail a user action |
+
+New collections, all additive and all droppable without touching the crawl:
+`employer_board_conflicts`, `coverage_snapshots`, `official_career_url_checks`,
+`tech_feed_saved_searches`, `tech_feed_events` (TTL 90 days).
+
+> **ONE set of coverage numbers.** `scripts/employer_coverage_report.py
+> --persist` writes `coverage_snapshots`; `tech_feed_service.coverage_block`
+> reads it and serves `measured_at`, `age_hours` and `stale` alongside every
+> figure. The banner used to show a DIFFERENT, cheaper set of numbers because
+> the real ones take two minutes to compute, and the two disagreed — one of
+> them said 43%. `available: false` is a real answer and renders as "unknown",
+> which is not zero.
 
 ## Retrieval: no 2,000-result ceiling
 

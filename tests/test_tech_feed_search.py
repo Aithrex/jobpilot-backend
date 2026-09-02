@@ -378,13 +378,38 @@ class TestEmployerScope:
         names = {j["employer_name"] for j in search()["jobs"]}
         assert names == {"Cadence Design Systems", "Big Retail Bank"}
 
-    def test_an_unclassifiable_employer_is_kept_not_dropped(self, db):
-        """Unknown must never silently narrow the market."""
+    def test_an_unclassifiable_employer_is_hidden_and_COUNTED(self, db):
+        """`tech_only` is a POSITIVE filter, and the cost is reported.
+
+        It used to drop only employers positively classified `non_tech`, which
+        on live data is almost none of them — a toggle the user could see and
+        could not feel. It now keeps the employers there is technology
+        evidence FOR, which necessarily hides the ones there is no evidence
+        about; the honest part is that the two reasons a row left are counted
+        separately, and the unclassified count is offered back to the user as
+        a one-click way to include them.
+
+        Unknown must never SILENTLY narrow the market. It may narrow it out
+        loud.
+        """
         seed(sjid="u1", title="Backend Engineer", company="Nobody Ever Heard Of",
              tenant="nobody")
         res = search(employer_scope="tech_only")
+        assert res["jobs"] == []
+        assert res["diagnostics"]["employer_scope_dropped_unclassified"] == 1
+        assert res["diagnostics"]["employer_scope_dropped_non_tech"] == 0
+        offers = [s for s in res.get("broadening_suggestions") or []
+                  if "not yet classified" in s["label"]]
+        assert offers, "the user must be told what the toggle cost them"
+        assert offers[0]["patch"]["employer_scope"] == "any"
+
+    def test_the_default_scope_still_keeps_an_unclassifiable_employer(self, db):
+        """The DEFAULT is unchanged: technical roles at every employer."""
+        seed(sjid="u2", title="Backend Engineer", company="Nobody Ever Heard Of",
+             tenant="nobody")
+        res = search()
         assert len(res["jobs"]) == 1
-        assert res["jobs"][0]["employer_tech_classification"] == "unknown"
+        assert res["jobs"][0]["employer_tech_classification"] in (None, "unknown")
 
     def test_the_card_carries_the_employer_evidence(self, db):
         self._seed_two_employers(db)

@@ -57,12 +57,13 @@ from __future__ import annotations
 import functools
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
-TAXONOMY_VERSION = "tech-tax-1.1.0"
+TAXONOMY_VERSION = "tech-tax-1.2.0"
 
 # ---------------------------------------------------------------------------
 # Scopes
@@ -359,6 +360,7 @@ _SPEC_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
         "database architect",
     )),
     (F_DATA, "data_governance", (
+        "data stewardship", "data steward",
         "data governance engineer", "data governance analyst",
         "data quality engineer", "master data management",
         "data steward", "metadata engineer",
@@ -580,6 +582,7 @@ _SPEC_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
         "user experience designer", "interaction designer", "ux researcher",
     )),
     (F_IT_SUPPORT, "it_support", (
+        "it service management", "itsm", "service management specialist",
         "it support", "help desk", "helpdesk", "service desk",
         "desktop support", "it technician", "it specialist",
         "technical support specialist", "it analyst", "end user support",
@@ -774,6 +777,82 @@ _SPEC_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
         "photonic integrated circuit engineer", "optical design engineer",
         "optical systems engineer", "electro optic engineer",
         "fiber optic engineer", "laser engineer", "optomechanical engineer",
+        # The specialty existed and the phrases did not reach the market's own
+        # spellings. Measured on live `job_postings`: "Photonics Technology
+        # Engineer" (6 postings), "Photonics Scientist", "Photonic Design
+        # Engineer", "Integrated Photonic Test Engineer", "Silicon Photonics
+        # Technology Development & Integration Engineer" — every one read
+        # `unknown` while `photonics` sat in the taxonomy unmatched.
+        "photonics technology engineer", "photonics scientist",
+        "photonic design engineer", "photonic design manager",
+        "photonics technologist", "integrated photonics engineer",
+        "integrated photonic test engineer", "photonic test engineer",
+        "photonics integration engineer", "silicon photonics",
+        "integrated photonics", "photonics engineering",
+    )),
+
+    # ---- quantum ---------------------------------------------------------
+    # Added in tech-tax-1.2.0 on live evidence, not on a hunch: 71 distinct
+    # active titles / 77 postings match quantum, qubit, cryogenic or
+    # superconducting, and the classifier read them badly. "Quantum Software
+    # Engineer (Compiler)" landed in `general_software`, "Senior Cryogenic
+    # Systems Engineer" in cloud `infrastructure`, "Sr. Quantum 3D Integration
+    # and Packaging Engineer" and "Lithography Process Engineer - Quantum
+    # Program" in **non_tech**, and the rest in `unknown`.
+    #
+    # Four specialties, because the market hires for four different jobs and a
+    # single `quantum` bucket would put a compiler engineer and a dilution-
+    # refrigerator engineer in the same ranked list:
+    #
+    #   quantum_software      SDKs, compilers, simulators, error-correction
+    #                         software. A software job; lives in the software
+    #                         family, which is why a backend engineer reads as
+    #                         same-family rather than unrelated.
+    #   quantum_hardware      the device itself: qubit design, superconducting
+    #                         and trapped-ion processors, quantum packaging.
+    #   quantum_control       the electronics that drive it — pulse and AWG
+    #                         stacks, cryo-CMOS, FPGA control planes. The
+    #                         nearest existing neighbours are FPGA/RTL and
+    #                         analog, and the adjacency matrix says so.
+    #   cryogenic_systems     cryostats, dilution refrigerators, vacuum and
+    #                         cryogenic engineering. Not `infrastructure`:
+    #                         cloud infrastructure and a dilution refrigerator
+    #                         share a word and nothing else.
+    (F_SOFTWARE, "quantum_software", (
+        "quantum software engineer", "quantum software developer",
+        "quantum software manager", "quantum compiler engineer",
+        "quantum algorithm engineer", "quantum algorithm scientist",
+        "quantum algorithms researcher", "quantum error correction software",
+        "quantum error correction engineer", "quantum error correction",
+        "quantum computing software", "quantum sdk", "quantum simulator",
+        "quantum applications engineer", "quantum integrations engineer",
+        "quantum integration engineer", "quantum systems software",
+        "qiskit", "cirq", "pennylane",
+    )),
+    (F_SEMICONDUCTOR, "quantum_hardware", (
+        "quantum hardware engineer", "qubit engineer", "qubit design",
+        "quantum processor", "quantum device engineer",
+        "quantum device physicist", "superconducting qubit",
+        "superconducting circuit designer", "superconducting ic designer",
+        "trapped ion engineer", "ion trap engineer",
+        "quantum packaging engineer", "quantum integration and packaging",
+        "quantum 3d integration", "quantum integration", "quantum packaging",
+        "quantum chip", "quantum fabrication", "quantum photonics",
+        "quantum engineer", "quantum physicist", "quantum scientist",
+        "quantum research scientist", "quantum researcher",
+    )),
+    (F_SEMICONDUCTOR, "quantum_control", (
+        "quantum control engineer", "qubit control", "quantum control systems",
+        "quantum control electronics", "cryo cmos", "cryogenic cmos",
+        "quantum controller", "pulse sequencing engineer",
+        "quantum measurement engineer", "quantum test and measurement",
+        "quantum characterization engineer",
+    )),
+    (F_SEMICONDUCTOR, "cryogenic_systems", (
+        "cryogenic engineer", "cryogenics engineer", "cryogenic systems engineer",
+        "cryogenic system engineer", "cryogenic rf engineer",
+        "dilution refrigerator", "cryostat engineer", "cryogenic technician",
+        "vacuum and cryogenic", "cryogenic and vacuum", "cryogenic hardware",
     )),
 )
 
@@ -852,6 +931,10 @@ SPECIALTY_LABELS: Dict[str, str] = {
     "product_test": "Product & Test Engineering",
     "packaging": "Advanced Packaging",
     "photonics": "Photonics & Optics",
+    "quantum_software": "Quantum Software",
+    "quantum_hardware": "Quantum Hardware",
+    "quantum_control": "Quantum Control Systems",
+    "cryogenic_systems": "Cryogenic Systems",
 }
 
 #: Phrases that genuinely belong to TWO families at once.
@@ -989,6 +1072,15 @@ SPECIALTY_OCCUPATION_CODES: Dict[str, Tuple[str, ...]] = {
 
 _NON_TECH_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("clinical", (
+        # Live-sample additions; see the note in `sales_marketing_support`.
+        "medication technician", "medication assistant",
+        "patient service representative", "patient care administration",
+        "house supervisor", "clinical specialist", "clinical account",
+        "hospice", "counseling services", "counselor", "irb coordinator",
+        "research study coordinator", "environmental services associate",
+        "\\bpodiatrist\\b", "biometrics", "ip coding", "transporter",
+        "sample and receiving technician", "\\bpharmacy\\b",
+        "\\ber tech\\b", "revenue cycle",
         "registered nurse", "nurse practitioner", "licensed practical nurse",
         "\\brn\\b", "\\blpn\\b", "\\bcna\\b", "physician", "surgeon",
         "nursing assistant", "medical assistant", "phlebotomist",
@@ -1017,6 +1109,19 @@ _NON_TECH_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "patient access representative", "unit secretary", "sterile processing",
     )),
     ("retail_food_hospitality", (
+        # Live-sample additions; see the note in `sales_marketing_support`.
+        "teammate", "retail sales and store support", "store support",
+        "merchandising assistant manager", "retail key holder",
+        "temporary associate", "seasonal full time", "seasonal part time",
+        "\\bchecker\\b", "grille clerk", "deli assistant manager",
+        "stewarding", "room attendant", "hotel valet",
+        "restaurant and operations manager", "restaurant & operations manager",
+        # Non-English titles in the live inventory. Enumerated rather than
+        # translated: the classifier reads the string the board printed.
+        "gerente de turno", "miembro del equipo", "cajero",
+        "ausbildung", "verkaufer", "kaufmann", "einzelhandel",
+        "prepose", "entretien menager", "gerente de saude",
+        "auditor trainee", "praktikum",
         "store manager", "assistant store manager", "shift supervisor",
         "sales associate", "retail associate", "cashier", "stocker",
         "merchandiser", "barista", "cook", "line cook", "chef", "server",
@@ -1043,6 +1148,20 @@ _NON_TECH_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "overnight stocker", "cart attendant", "food service worker",
     )),
     ("trades_logistics", (
+        # Live-sample additions; see the note in `sales_marketing_support`.
+        "\\bdriver\\b", "store driver", "transfer driver", "medical courier",
+        "warehouse order selector", "order selector", "warehouse labor",
+        "warehouse laborer", "general warehouse", "piece rate",
+        "fuel station attendant", "valet attendant", "cart attendant",
+        "auto body technician", "fleet maintenance", "fueler",
+        "hvac maintenance", "maintenance mechanic", "maintenance supervisor",
+        "maintenance director", "equipment maintenance", "equipment associate",
+        "logistics team leader", "area dispatcher", "dispatcher",
+        "highway maintenance", "floor person", "comber",
+        "associate operator", "machine operator", "\\bcleaner\\b",
+        "chiller technician", "equipment maint", "engineer, manufacturing",
+        "manufacturing engineering", "dispersion chemist", "\\bchemist\\b",
+        "building automation", "\\bbas/bms\\b", "process control systems",
         "truck driver", "cdl driver", "forklift operator", "warehouse associate",
         "warehouse worker", "material handler", "picker packer", "loader",
         "electrician", "plumber", "hvac technician", "welder", "machinist",
@@ -1070,10 +1189,53 @@ _NON_TECH_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "receptionist", "office coordinator", "data entry clerk",
         "procurement specialist", "buyer", "sourcing manager",
         "supply chain analyst", "logistics coordinator",
+        # See the note in `sales_marketing_support` above: these are the
+        # business-administration titles the live sample showed reading
+        # `unknown`.
+        "actuarial analyst", "actuarial", "tax operations", "tax analyst",
+        "internal auditor", "internal audit", "internal control manager",
+        "compliance product", "counterparty credit", "credit underwriting",
+        "fee analyst", "reference data services", "revenue cycle",
+        "procurement", "team assistant", "workplace specialist",
+        "intelligence analyst", "all-source",
+        "conference services", "event services", "admissions counselor",
+        "director pricing", "director of pricing",
+        # `district manager` is retail-specific enough to enumerate.
+        # `general manager`, `account manager`, `operations supervisor`,
+        # `regional manager` and `business manager` are NOT here on purpose:
+        # they are genuinely ambiguous from the title alone, the live sample
+        # labels them `unknown`, and enumerating them would trade 114 honest
+        # `unknown`s for four confident wrong answers. Not knowing must stay
+        # cheaper than being wrong.
+        "district manager",
         "paralegal", "attorney", "legal counsel", "compliance officer",
         "contracts manager", "legal assistant",
     )),
     ("sales_marketing_support", (
+        # Added from `evals/data/tech_taxonomy_live_titles.py`, where 114 of
+        # 334 reviewed non-technical titles read `unknown` rather than
+        # `non_tech`. `unknown` is not a wrong ANSWER — neither state reaches
+        # the default core search — but it is a wrong FACT, and two things
+        # read it: `fit_score._eligibility` fires a confident cross-domain
+        # verdict only on `non_tech`, and `employer_tech_classifier`'s posting
+        # mix needs a non-technical denominator to place a private employer.
+        # 132,543 active postings sit at `unknown` scope, and every one of
+        # them is a row neither can use.
+        "customer service associate", "customer service specialist",
+        "customer service - self storage", "customer experience specialist",
+        "client service associate", "client services project manager",
+        "sales consultant", "sales supervisor", "sales lead",
+        "sales and operations management trainee", "loan sales",
+        "business development manager", "field sales", "direct sales",
+        "channel sales", "territory sales", "regional sales manager",
+        "director of sales", "senior director, pricing", "strategic partnerships",
+        "product marketing", "marketing assistant", "marketing & communications",
+        "marketing and communications", "internal communications",
+        "campus ambassador", "account coordinator", "sales specialist",
+        "sales professional", "management and sales", "technical sales intern",
+        "relationship banker", "private client banker",
+        "personal banker", "wealth management", "financial advisor",
+        "\\bteller\\b",
         "account executive", "sales representative", "sales manager",
         "business development representative", "\\bbdr\\b", "\\bsdr\\b",
         "sales development representative", "inside sales", "outside sales",
@@ -1133,6 +1295,31 @@ _NON_TECH_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "plant maintenance engineer", "utilities engineer",
     )),
 )
+
+#: The physical-engineering role nouns that ARE a semiconductor specialty once
+#: fab, photonic or quantum context is present, and which one.
+#:
+#: Declared, not inferred. "Process Engineer" optimising a polymerization line
+#: and "Process Engineer" running wafer lithography are the same two words and
+#: different occupations, and the only thing that separates them is the
+#: context — so the mapping from one to the other has to be written down where
+#: a human can disagree with it.
+#:
+#: Deliberately short. A phrase is here only when the fab reading is the ONLY
+#: reading once hardware context is established; "facilities engineer" is
+#: absent because a fab's facilities engineer is still a facilities engineer.
+_PHYSICAL_TO_SEMICONDUCTOR: Dict[str, str] = {
+    "process engineer": "process_yield",
+    "manufacturing engineer": "process_yield",
+    "materials engineer": "process_yield",
+    "metallurgical engineer": "process_yield",
+    "chemical engineer": "process_yield",
+    "packaging engineer": "packaging",
+    "mechanical engineer": "hardware_engineering",
+    "mechanical design engineer": "hardware_engineering",
+    "tooling engineer": "product_test",
+    "quality engineer manufacturing": "product_test",
+}
 
 _NON_TECH_CATEGORY: Dict[str, str] = {}
 for _cat, _phrases in _NON_TECH_RULES:
@@ -1448,6 +1635,267 @@ def _is_bare_ambiguous(folded_title: str) -> bool:
     # sits between 0.39 and 0.44.
     return (m.end() - m.start()) >= 0.4 * len(folded_title)
 
+#: A token in the TITLE ITSELF that makes a technical reading positive rather
+#: than merely permitted.
+#:
+#: The defect this fixes
+#: ---------------------
+#: An exact O*NET alternate title mapped to one of our computer SOC codes was
+#: sufficient evidence on its own — no body, no skills, no department. For most
+#: titles that is right and it is the only signal that reaches a title our
+#: phrase rules do not name. For a handful it is badly wrong, because O*NET is
+#: a survey of OCCUPATIONS and a job board is a market of INDUSTRIES:
+#:
+#:     Field Service Engineer      81 live postings, classified `core` with no
+#:                                 family, on the title alone. The same title
+#:                                 is used for medical imaging, HVAC,
+#:                                 semiconductor capital equipment, elevators
+#:                                 and photocopiers.
+#:     Distribution Engineer       power distribution
+#:     Transmission Engineer       power transmission
+#:     Utilization Review Coord.   clinical
+#:     Intelligence Analyst        not a data analyst
+#:
+#: The fix is POSITIVE EVIDENCE, not a blocklist. A blocklist of titles would
+#: have to be maintained against a market that invents new ones, and would say
+#: nothing about why. This asks the opposite question: does the title itself
+#: name a technical domain? "IT Business Analyst", "Data Analytics Manager",
+#: "Computer Support Specialist" and "Clinical Informatics Specialist" all do,
+#: and all keep their `core` reading with no body at all. "Field Service
+#: Engineer" does not, so it needs the posting to say something technical —
+#: which "Field Service Engineer, Semiconductor Capital Equipment" does, and
+#: which "Field Service Engineer, Elevators" never will.
+#:
+#: Measured on the live inventory: 35 distinct titles / 207 active postings
+#: reached `core` on an O*NET match with no other evidence.
+_TITLE_TECH_TOKEN_RE = _compile_alternation((
+    "software", "developer", "programmer", "engineer(ing)? manager",
+    "\\bit\\b", "information technology", "computer", "comput(ing|ational)",
+    "data", "database", "analytics", "\\bbi\\b", "business intelligence",
+    "network(ing)?", "systems? admin", "sysadmin", "infrastructure",
+    "cloud", "devops", "sre", "site reliability", "platform",
+    "security", "cyber", "infosec", "appsec", "vulnerability", "penetration",
+    "informatics", "machine learning", "\\bml\\b", "\\bai\\b",
+    "artificial intelligence", "\\bnlp\\b", "data science", "scientist",
+    "web", "frontend", "front-end", "backend", "back-end", "full[- ]?stack",
+    "mobile", "ios", "android", "embedded", "firmware", "silicon", "asic",
+    "\\brtl\\b", "fpga", "semiconductor", "verification", "\\bqa\\b",
+    "quality engineering", "test automation", "\\bsdet\\b",
+    "technical support", "help ?desk", "service desk", "desktop support",
+    "salesforce", "sap", "oracle", "workday", "erp", "crm",
+    # `applications? <role noun>` for a NARROW set of nouns, never bare
+    # "application". "Application Analyst" is an O*NET computer-SOC title and
+    # must be rescued; "Application Manager" is as often a loan-application
+    # manager; "Application Engineer" is, per the golden set, "often pre-sales
+    # at an instrument vendor" and is deliberately left `unknown`. The `\b`
+    # is load-bearing — `_compile_alternation` escapes any phrase that does
+    # not contain one, so a phrase written as a regex without it becomes a
+    # literal that matches nothing.
+    r"\bapplications?[\s\-]+(?:systems?[\s\-]+)?(?:analyst|developer|"
+    r"programmer|administrator|architect|dba)\b",
+    "digital", "technology", "technical", "architect", "api", "\\bui\\b",
+    "\\bux\\b", "\\bsql\\b", "python", "java", "\\bqubit\\b",
+    "quantum",
+))
+
+#: A qualifier that vetoes a TECHNICAL reading of a title whose role noun the
+#: phrase rules matched. Each entry declares WHICH families it vetoes, because
+#: a qualifier is domain-specific: "spacecraft" vetoes a cloud-infrastructure
+#: reading of "Systems Engineer" and says nothing about a security role.
+#:
+#: The physical-engineering veto already worked this way and had exactly one
+#: qualifier set covering exactly one family group. Generalising it is what
+#: these eight measured live titles needed — every one of them was classified
+#: `core` with high confidence:
+#:
+#:     Space Systems Engineer                       -> cloud infrastructure
+#:     Principal Systems Engineer (GNC Analyst)     -> cloud infrastructure
+#:     Product Engineer - Air/Water Cooled Chiller  -> general software
+#:     Principal/Engineer Energetics Manufacturing  -> principal/staff IC
+#:     Assistant Director of Engineering, <hotel>   -> engineering management
+#:     Forecasting, Budgeting & Reporting Analyst   -> business intelligence
+#:     Principal Corporate Counsel: Product Security-> product security
+#:     M365 Endpoint Admin, Dept of Cybersecurity,
+#:       Adjunct Faculty                            -> secops
+#:
+#: `non_tech` is the one verdict the feed acts on rather than reports, so a
+#: false `core` here is the expensive direction: it puts a hotel's engineering
+#: director in front of a backend engineer.
+_TECHNICAL_FAMILIES = frozenset({
+    F_SOFTWARE, F_CLOUD, F_DATA, F_AI_ML, F_SECURITY, F_QUALITY,
+    F_TECH_LEADERSHIP, F_UX_DESIGN_SYSTEMS, F_SEMICONDUCTOR,
+    F_TECHNICAL_PRODUCT, F_SOLUTIONS_ENG, F_IT_SUPPORT,
+})
+
+_DOMAIN_QUALIFIERS: Tuple[Tuple[re.Pattern, frozenset, str], ...] = (
+    # Aerospace / spacecraft. "Systems Engineer" is one of the most
+    # overloaded titles in the market and cloud `infrastructure` is the
+    # reading it falls into.
+    (_compile_alternation((
+        "spacecraft", "space systems", "satellite", "launch vehicle",
+        "avionics", "propulsion", "\\bgnc\\b", "guidance navigation",
+        "flight systems", "flight test", "aerodynamics", "airframe",
+        "energetics", "munitions", "ordnance",
+    )), _TECHNICAL_FAMILIES - {F_SEMICONDUCTOR}, "aerospace/defence hardware"),
+    # Building services, HVAC and hospitality plant.
+    (_compile_alternation((
+        "chiller", "air cooled", "water cooled", "\\bhvac\\b", "boiler",
+        "refrigeration", "plumbing", "elevator", "escalator",
+        "hotel", "resort", "\\binn\\b", "suites", "lodge", "hospitality",
+        "housekeeping", "banquet", "guest services",
+    )), _TECHNICAL_FAMILIES, "building services or hospitality"),
+    # Finance and accounting. Vetoes a DATA reading only — a security
+    # engineer at a bank is still a security engineer.
+    (_compile_alternation((
+        "budgeting", "forecasting, budgeting", "\\bfp&a\\b",
+        "financial planning and analysis", "general ledger", "accounts payable",
+        "accounts receivable", "treasury", "underwriting", "actuarial",
+    )), frozenset({F_DATA}), "finance and accounting"),
+    # Legal.
+    (_compile_alternation((
+        "corporate counsel", "general counsel", "\\bcounsel\\b", "attorney",
+        "paralegal", "solicitor", "barrister",
+    )), _TECHNICAL_FAMILIES, "legal"),
+    # Teaching. The SUBJECT of a course is not the occupation.
+    (_compile_alternation((
+        "adjunct faculty", "adjunct professor", "professor", "lecturer",
+        "instructor", "teaching assistant", "curriculum", "\\bfaculty\\b",
+    )), _TECHNICAL_FAMILIES, "teaching"),
+    # Heavy industry sales engineering. `solutions_engineering` is a real
+    # adjacent occupation; "Drilling Solutions Engineer" is not it.
+    (_compile_alternation((
+        "drilling", "oilfield", "downhole", "wellbore", "marine and offshore",
+        "offshore", "mining", "\\bdredging\\b",
+    )), frozenset({F_SOLUTIONS_ENG, F_CLOUD, F_SOFTWARE}), "heavy industry"),
+)
+
+
+#: Role nouns whose MEANING COMES FROM THE QUALIFIER. These are the only
+#: phrases a domain qualifier is allowed to veto.
+#:
+#: "Systems Engineer" is a spacecraft job or a Linux job depending entirely on
+#: the words beside it; "Backend Engineer" is a backend job beside any words
+#: at all. Without this distinction the veto over-fires on exactly the titles
+#: it must never touch — measured on this file's own sanity sweep, "Backend
+#: Engineer, Satellite Ground Software" and "Data Scientist, Actuarial
+#: Modeling" both came back `non_tech`, which is a worse error than the one
+#: the veto was added to fix: `non_tech` is the one verdict the feed ACTS on.
+#:
+#: A generic noun plus a domain word is a job in that domain. A named
+#: discipline plus a domain word is that discipline, working in that domain,
+#: and that is most of the technical market.
+_GENERIC_ROLE_PHRASES: Tuple[str, ...] = (
+    "systems engineer", "system engineer", "product engineer",
+    "principal engineer", "principal/engineer", "staff engineer",
+    "senior engineer", "lead engineer", "engineer",
+    "engineering manager", "director of engineering", "head of engineering",
+    "vp of engineering", "engineering director",
+    "reporting analyst", "business intelligence analyst", "analyst",
+    "architect", "solutions engineer", "solution engineer", "sales engineer",
+    "product security", "cybersecurity", "security", "technical lead",
+    "project engineer", "test engineer", "application engineer",
+)
+_GENERIC_ROLE_SET = frozenset(_GENERIC_ROLE_PHRASES)
+
+#: A role noun that NAMES ITS DISCIPLINE: a discipline word immediately
+#: followed by a role noun. "backend engineer", "data scientist", "firmware
+#: engineer".
+#:
+#: Deliberately narrower than "anything not in `_GENERIC_ROLE_SET`". That
+#: looser test cleared the non-tech veto for "Executive Assistant to the CTO"
+#: — `cto` is not a generic role phrase, but it is a SENIORITY marker and not
+#: a discipline, and the golden set's whole B stratum exists to keep that row
+#: non-technical. A rule about disciplines has to be written in terms of
+#: disciplines.
+_DISCIPLINE_NOUN_RE = re.compile(
+    r"(?<![a-z0-9])(?:backend|back[\s-]?end|frontend|front[\s-]?end|"
+    r"full[\s-]?stack|mobile|ios|android|embedded|firmware|data|"
+    r"machine[\s-]learning|deep[\s-]learning|devops|sre|site[\s-]reliability|"
+    r"cloud|platform|infrastructure|network|application|qa|quality|game|"
+    r"graphics|robotics|perception|quantum|asic|soc|rtl|fpga|silicon|"
+    r"verification|compiler|database|web|systems?[\s-]programming|"
+    r"distributed[\s-]systems)"
+    r"[\s\-/]+"
+    r"(?:software[\s\-]+)?"
+    r"(?:engineer|developer|programmer|scientist|architect|analyst|"
+    r"administrator|dba)(?![a-z0-9])",
+    re.IGNORECASE)
+
+
+def names_its_discipline(phrase: Any) -> bool:
+    """Does this matched role noun name the discipline itself?"""
+    return bool(_DISCIPLINE_NOUN_RE.search(str(phrase or "")))
+
+
+def domain_veto(title_blob: str, families: Iterable[str],
+                matched_phrases: Iterable[str] = ()) -> Optional[Tuple[str, str]]:
+    """`(qualifier, label)` when a declared qualifier vetoes these families.
+
+    `matched_phrases` is the role noun (or nouns) the title actually matched.
+    When ANY of them names a discipline outright — `backend engineer`,
+    `data scientist`, `machine learning engineer` — no qualifier applies: a
+    backend engineer at a satellite company is a backend engineer. The veto
+    is for GENERIC nouns only; see `_GENERIC_ROLE_PHRASES`.
+
+    Passing no phrases keeps the old behaviour, which is what the
+    `token_role` guard in `classify` wants: there is no role noun there to
+    judge, only a token.
+    """
+    phrases = [str(p or "").strip().lower() for p in (matched_phrases or ())]
+    if any(names_its_discipline(p) for p in phrases):
+        return None
+    fams = {str(f) for f in families}
+    for pattern, vetoed, label in _DOMAIN_QUALIFIERS:
+        if not (fams & vetoed):
+            continue
+        m = pattern.search(title_blob)
+        if m:
+            return m.group(0), label
+    return None
+
+
+#: A generic role noun. Paired with `_TITLE_TECH_TOKEN_RE` it is positive
+#: evidence FROM THE TITLE that a posting is technical, without the title
+#: naming a specialty the phrase rules know.
+#:
+#: The two together, and never either alone. A tech token alone reads
+#: "Retail Display Installer - Technology" as technical; a role noun alone
+#: reads every manager in the market as technical. Together they reach the
+#: titles the live sample showed the classifier declining: "IT CSV Engineer",
+#: "Lead Data & Cloud Solutions Senior Engineer", "Senior Quantitative Model
+#: Solutions Specialist - Python/R or SAS", "University Laboratory School
+#: Database and Student Information System Manager".
+#:
+#: It is reached only AFTER the non-tech title veto and the domain-qualifier
+#: veto have both declined to fire, which is what keeps "Digital Marketing
+#: Specialist" and "Technical Sales Intern" out.
+_GENERIC_ROLE_NOUN_RE = _compile_alternation((
+    "engineer", "developer", "programmer", "analyst", "architect",
+    "administrator", "scientist", "specialist", "manager", "consultant",
+    "\\blead\\b", "\\bdba\\b",
+))
+
+#: An explicitly IT/computing role phrase. Suppresses a DOMAIN qualifier veto,
+#: because an IT job at an aerospace company is an IT job: "IT Systems
+#: Engineer - Millennium Space Systems" was vetoed by `space systems` in the
+#: EMPLOYER's name and read as non-technical.
+_EXPLICIT_IT_ROLE_RE = _compile_alternation((
+    "it systems engineer", "it engineer", "it manager", "it analyst",
+    "it specialist", "it support", "it administrator", "it architect",
+    "software engineer", "software developer", "network engineer",
+    "systems administrator", "cloud engineer", "data engineer",
+    "security engineer", "devops engineer", "site reliability engineer",
+))
+
+#: Pre-sales is an adjacent occupation, not core architecture. The title says
+#: so and the classifier read past it: "Pre-Sales Solutions Architect" and
+#: "Senior Solution Architect (pre-sales)" both landed in
+#: `technical_leadership/architecture`, which is the IC role they are not.
+_PRESALES_RE = _compile_alternation((
+    "pre sales", "presales", "pre-sales", "sales engineer", "sales engineering",
+    "solution sales", "solutions sales",
+))
+
 # Departments that make a technical reading of an ambiguous title credible.
 _TECH_DEPARTMENT_RE = _compile_alternation((
     "engineering", "software", "technology", "information technology",
@@ -1494,6 +1942,16 @@ _HARDWARE_CONTEXT_RE = _compile_alternation((
     "semiconductor", "wafer", "silicon", "chip", "\\basic\\b", "\\bfpga\\b",
     "\\brtl\\b", "verilog", "vhdl", "tape out", "tapeout", "\\bpcb\\b",
     "signal integrity", "analog", "mixed signal", "\\brf\\b",
+    # Quantum, photonic and fab context. Measured live: "Lithography Process
+    # Engineer - Quantum Program" and "Sr. Quantum 3D Integration and
+    # Packaging Engineer" were classified **non_tech** — vetoed by
+    # `process engineer` and `packaging engineer`, which are correctly
+    # non-technical in a plant and are exactly the semiconductor_hardware
+    # family in a fab. Hardware context is what separates the two, and it
+    # already existed; it simply did not know these words.
+    "quantum", "qubit", "cryogen", "photonic", "photonics", "lithograph",
+    "cleanroom", "clean room", "\\bfab\\b", "superconduct", "\\bmems\\b",
+    "epitax", "\\bcmos\\b", "die attach", "wire bond",
 ))
 
 # Seniority. Title-first, then explicit year requirements from the body.
@@ -1565,9 +2023,21 @@ class TechClassification:
 
 
 def _norm(text: Any) -> str:
-    """Lowercase, punctuation-flattened, single-spaced."""
-    s = str(text or "").lower()
-    s = s.replace("&", " and ")
+    """Lowercase, diacritics FOLDED, punctuation-flattened, single-spaced.
+
+    Folding rather than deleting matters on a job board that is not only in
+    English. The class `[^a-z0-9...]` turned every accented letter into a
+    space, so "Préposé à l'entretien ménager" arrived as "pr pos e l entretien
+    m nager" — a string no rule can match and no human would write. Live
+    inventory carries French, German, Spanish and Portuguese titles, and every
+    one of them was being shredded before any rule saw it.
+
+    NFKD + dropping the combining marks is the standard fold and it is what
+    `normalize_country` already does for the same reason.
+    """
+    s = unicodedata.normalize("NFKD", str(text or "").lower())
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.replace("&", " and ").replace("\u00df", "ss")
     s = re.sub(r"[‐-―]", "-", s)
     s = re.sub(r"[^a-z0-9+#./\-\s]", " ", s)
     return re.sub(r"\s+", " ", s).strip()
@@ -1772,14 +2242,50 @@ def classify(
                         or _HARDWARE_CONTEXT_RE.search(body_blob[:4000]))
 
     # ---- 2. non-tech veto on the TITLE -------------------------------------
+    #
+    # `hardware_ctx` is consulted HERE as well as at step 1. It was only ever
+    # read at step 1, so a title carrying both a non-technical role noun AND
+    # unmistakable fab/quantum context was vetoed before the context could be
+    # heard: "Lithography Process Engineer - Quantum Program" matched
+    # `process engineer` and returned `non_tech` at confidence 0.93, and
+    # "Sr. Quantum 3D Integration and Packaging Engineer" matched
+    # `packaging engineer` and did the same. Both are semiconductor_hardware
+    # roles, and both were reported with high confidence as not technical at
+    # all — the most expensive kind of wrong, because `non_tech` is the one
+    # verdict the feed acts on rather than reports.
+    #
+    # The veto still fires for every title WITHOUT that context: a bare
+    # "Process Engineer" optimising a polymerization line stays non-technical,
+    # which is the case the veto was written for.
     nt = _NON_TECH_RE.search(title_blob)
     if nt and not title_hits:
-        phrase = nt.group(0)
-        result.tech_scope = SCOPE_NON_TECH
-        result.classification_confidence = 0.93
-        result.classification_evidence = [
-            _ev("non_tech_title", "title", phrase)]
-        return result
+        if not (hardware_ctx and _NON_TECH_CATEGORY.get(nt.group(0).lower())
+                == "physical_engineering"):
+            phrase = nt.group(0)
+            result.tech_scope = SCOPE_NON_TECH
+            result.classification_confidence = 0.93
+            result.classification_evidence = [
+                _ev("non_tech_title", "title", phrase)]
+            return result
+        ctx_hit = _HARDWARE_CONTEXT_RE.search(title_blob + " " + body_blob[:4000])
+        evidence.append(_ev("hardware_context_overrides_physical_veto", "title",
+                            ctx_hit.group(0) if ctx_hit else "hardware context"))
+        semi_spec = _PHYSICAL_TO_SEMICONDUCTOR.get(nt.group(0).lower())
+        if semi_spec:
+            evidence.append(_ev("physical_role_in_hardware_context", "title",
+                                f"{nt.group(0)} -> {semi_spec}"))
+            result.tech_scope = SCOPE_CORE
+            result.role_family = F_SEMICONDUCTOR
+            result.role_families = [F_SEMICONDUCTOR]
+            result.role_specialties = [semi_spec]
+            result.occupation_codes = list(
+                SPECIALTY_OCCUPATION_CODES.get(semi_spec, ()))
+            # Lower than a direct title match (0.88-0.95): this is a role noun
+            # plus a context word, which is weaker than a phrase that names
+            # the specialty outright, and the confidence has to say so.
+            result.classification_confidence = 0.72
+            result.classification_evidence = evidence[:8]
+            return result
 
     if title_hits:
         # A physical qualifier beats a software role noun. "Staff Hardware
@@ -1802,6 +2308,32 @@ def classify(
             ]
             return result
 
+        # The same veto, generalised: a DECLARED domain qualifier beats a
+        # technical role noun for the families that qualifier covers. See
+        # `_DOMAIN_QUALIFIERS` for the eight live titles this exists for.
+        vetoed = domain_veto(title_blob, (f for f, _s, _p in title_hits),
+                             (p for _f, _s, p in title_hits))
+        if vetoed and not hardware_ctx and not _EXPLICIT_IT_ROLE_RE.search(title_blob):
+            qualifier, label = vetoed
+            result.tech_scope = SCOPE_NON_TECH
+            result.classification_confidence = 0.8
+            result.classification_evidence = [
+                _ev("domain_qualifier_veto", "title", f"{qualifier} ({label})"),
+                _ev("role_noun", "title", title_hits[0][2]),
+            ]
+            return result
+
+        # Pre-sales architecture is `solutions_engineering`, which is adjacent,
+        # not `architecture`, which is core. The title says which; re-file it
+        # rather than dropping it, because the role is real and selectable.
+        if _PRESALES_RE.search(title_blob) and any(
+                sp == "architecture" for _f, sp, _p in title_hits):
+            evidence.append(_ev("presales_qualifier", "title",
+                                _PRESALES_RE.search(title_blob).group(0)))
+            title_hits = [(F_SOLUTIONS_ENG, "solutions_engineering",
+                           _PRESALES_RE.search(title_blob).group(0))] + [
+                h for h in title_hits if h[1] != "architecture"]
+
         # Ambiguity guard: a title whose ONLY hit came from a broad phrase and
         # which also reads as a non-tech occupation needs body evidence.
         #
@@ -1813,6 +2345,36 @@ def classify(
         # of the same words, not a second, conflicting reading of them.
         if nt and any(start <= nt.start() and nt.end() <= end
                       for _f, _s, _p, start, end in spanned):
+            nt = None
+        # Nor is it a conflict when the "non-tech" noun IS the hardware job.
+        # "Sr. Quantum 3D Integration and Packaging Engineer" matched
+        # `quantum_hardware` on its first half and `packaging engineer` on its
+        # second, and the two do not overlap — so the guard above could not
+        # see that they are the same role described twice. A semiconductor
+        # title plus a physical-engineering noun that `_PHYSICAL_TO_
+        # SEMICONDUCTOR` already maps into the SAME family is not two readings
+        # in conflict; it is one reading with two names, and the second name
+        # adds a specialty rather than removing the first.
+        if nt and any(f == F_SEMICONDUCTOR for f, _s, _p in title_hits):
+            mapped = _PHYSICAL_TO_SEMICONDUCTOR.get(nt.group(0).lower())
+            if mapped:
+                evidence.append(_ev("physical_role_in_hardware_context", "title",
+                                    f"{nt.group(0)} -> {mapped}"))
+                if not any(sp == mapped for _f, sp, _p in title_hits):
+                    title_hits = list(title_hits) + [
+                        (F_SEMICONDUCTOR, mapped, nt.group(0))]
+                nt = None
+        # A NAMED DISCIPLINE is not in conflict with a domain word. "Data
+        # Scientist, Actuarial Modeling" matched `data scientist` and
+        # `actuarial`, and read `unknown` for want of a body — but a data
+        # scientist doing actuarial modelling is a data scientist. Same rule
+        # as `domain_veto`: only a GENERIC role noun takes its meaning from
+        # the words beside it. "Physical Security Officer" is unaffected,
+        # because `security` IS generic.
+        if nt and title_hits and any(
+                names_its_discipline(p) for _f, _s, p in title_hits):
+            evidence.append(_ev("named_discipline_over_domain_word", "title",
+                                f"{title_hits[0][2]} vs {nt.group(0)}"))
             nt = None
         if nt:
             has_body = bool(_TECH_EVIDENCE_RE.search(body_blob)
@@ -1866,17 +2428,45 @@ def classify(
     # filtered to OUR SOC codes at import, which is what keeps "Informatics
     # Nurse Specialist" (a clinical SOC) out while letting "Applications
     # Systems Analyst" (a computer SOC) in.
+    # An O*NET alternate title counts ON ITS OWN only when the title itself
+    # names a technical domain. Without that token it is a title that CAN be a
+    # computer occupation, which is not the same as a posting that IS one, and
+    # the posting still has to say something technical. See
+    # `_TITLE_TECH_TOKEN_RE`.
     onet_title = title_blob in onet_titles()
+    title_token = _TITLE_TECH_TOKEN_RE.search(title_blob)
+    onet_token = bool(title_token)
+    onet_sufficient = onet_title and onet_token
+    # A technical DOMAIN token plus a role noun, both in the title, and no
+    # veto has fired. See `_GENERIC_ROLE_NOUN_RE`.
+    token_role = bool(title_token and _GENERIC_ROLE_NOUN_RE.search(title_blob)
+                      and not domain_veto(title_blob, _TECHNICAL_FAMILIES)
+                      # "Technology Analyst" is a technical token and a role
+                      # noun and is still ambiguous — `_is_bare_ambiguous`
+                      # measured that the ambiguous phrase IS the whole title.
+                      # This rule must not undo the one that exists to catch it.
+                      and not _is_bare_ambiguous(title_blob))
     strong_enough = (
         bool(body_hits)
         or len(tech_terms) >= 3
-        or onet_title
+        or onet_sufficient
+        or token_role
+        # An O*NET title WITHOUT a technical token still corroborates: paired
+        # with a technical department or two technical skill terms it clears
+        # the same bar an ambiguous title does. What it may no longer do is
+        # clear it alone.
+        or (onet_title and (bool(dept_hit) or len(tech_terms) >= 2))
         or (ambiguous and (bool(dept_hit) or len(tech_terms) >= 2))
     )
     if not strong_enough:
         result.tech_scope = SCOPE_UNKNOWN
-        result.classification_confidence = 0.25 if ambiguous else 0.1
-        if tech_terms:
+        result.classification_confidence = 0.25 if (ambiguous or onet_title) else 0.1
+        if onet_title and not onet_token:
+            result.classification_evidence = [
+                _ev("onet_title_without_technical_token", "title",
+                    "an O*NET computer-occupation title that names no technical "
+                    "domain; the posting itself must say something technical")]
+        elif tech_terms:
             result.classification_evidence = [
                 _ev("weak_body_signal", "description", ", ".join(tech_terms))]
         return result
@@ -1907,6 +2497,11 @@ def classify(
         result.tech_scope = SCOPE_CORE
         result.role_family = None
         result.classification_confidence = 0.62
+        if not evidence and (onet_sufficient or token_role):
+            evidence.append(_ev(
+                "onet_title_with_technical_token" if onet_sufficient
+                else "technical_token_and_role_noun", "title",
+                title_token.group(0) if title_token else "technical token"))
         result.classification_evidence = evidence
         return result
 
@@ -2130,7 +2725,7 @@ LEGACY_TECH_CANDIDATE_FAMILIES: Tuple[str, ...] = (
 # Declaring it means it is reviewable and versioned; deriving it would mean
 # it silently changes whenever a phrase list does.
 
-ADJACENCY_VERSION = "tech-adjacency-1.1.0"
+ADJACENCY_VERSION = "tech-adjacency-1.2.0"
 
 #: Declared once, applied symmetrically. Each pair is "a team hiring for A
 #: would seriously consider a strong B", which is a narrower claim than
@@ -2334,6 +2929,31 @@ _ADJACENT_PAIRS: Tuple[Tuple[str, str], ...] = (
     ("rf_engineering", "photonics"),
     ("process_yield", "product_test"), ("process_yield", "packaging"),
     ("packaging", "photonics"),
+
+    # --- quantum ---------------------------------------------------------
+    # Declared edges, like every other pair here. The quantum cluster is
+    # internally connected (a control engineer and a hardware engineer are one
+    # step apart) and reaches the rest of the taxonomy through the specialties
+    # people actually move between: quantum software <-> systems programming
+    # and research engineering; quantum control <-> FPGA/RTL and analog;
+    # cryogenic systems <-> hardware engineering and RF.
+    ("quantum_software", "quantum_hardware"),
+    ("quantum_software", "quantum_control"),
+    ("quantum_hardware", "quantum_control"),
+    ("quantum_hardware", "cryogenic_systems"),
+    ("quantum_control", "cryogenic_systems"),
+    ("quantum_software", "systems_programming"),
+    ("quantum_software", "research_engineering"),
+    ("quantum_software", "hpc"),
+    ("quantum_hardware", "asic_soc_design"),
+    ("quantum_hardware", "photonics"),
+    ("quantum_hardware", "process_yield"),
+    ("quantum_hardware", "packaging"),
+    ("quantum_control", "fpga_rtl"),
+    ("quantum_control", "analog_mixed_signal"),
+    ("quantum_control", "embedded"),
+    ("cryogenic_systems", "hardware_engineering"),
+    ("cryogenic_systems", "rf_engineering"),
 )
 
 

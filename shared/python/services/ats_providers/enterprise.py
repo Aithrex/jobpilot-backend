@@ -110,6 +110,20 @@ class PhenomProvider(AtsProvider):
     )
     portal_hosts = api_hosts
 
+    #: Phenom's own hostnames under the shared domain. EVERY customer's
+    #: careers page loads these, so a page-wide fingerprint yields them for
+    #: every employer on the platform — Adobe, Cisco and Splunk each had all
+    #: four registered as their own owner-verified career source.
+    #:
+    #: Declared per-vendor rather than in the shared `_RESERVED_TENANTS`
+    #: because the shared list has to stay short enough to be safe for every
+    #: vendor: `greenhouse:css` is CloudKitchens (City Storage Systems) and
+    #: `greenhouse:manifest` is Manifest Cyber. No Phenom customer's tenant is
+    #: `assets`.
+    reserved_tenants = ("assets", "cdn", "cdn-bot", "pp-cdn",
+                        "cdn-prod-static", "content-us", "content-ca",
+                        "content-ir", "content-eu", "content-apac", "static")
+
     fingerprints = (
         # Shared Phenom host only. Custom career domains (careers.usbank.com)
         # are seeded from ENTERPRISE_CATALOG — a generic `/widgets` or
@@ -127,6 +141,13 @@ class PhenomProvider(AtsProvider):
         if not tenant or not host:
             return None
         if host in {"www.phenompeople.com", "cdn.phenompeople.com"}:
+            return None
+        # Every Phenom customer's careers page loads the SAME four asset
+        # hosts, so fingerprinting a page's urls yields `assets`, `pp-cdn`,
+        # `content-us` and `cdn-prod-static` for every one of them. Adobe,
+        # Cisco and Splunk each registered all four as owner-verified career
+        # sources before this check existed.
+        if self.is_reserved_tenant(tenant):
             return None
         return Endpoint(vendor=self.vendor, tenant=tenant, host=host)
 

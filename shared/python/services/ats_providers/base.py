@@ -394,6 +394,65 @@ class FetchContext:
 # The provider interface
 # ---------------------------------------------------------------------------
 
+#: A url ending in one of these is a FILE the page loaded, not a board it
+#: linked to. This is the precise version of the question a tenant denylist
+#: answers badly: every Phenom customer's careers page loads the same four
+#: `*.phenompeople.com` asset hosts, so fingerprinting a page's urls gave
+#: Adobe, Cisco and Splunk `phenom:assets`, `phenom:pp-cdn`,
+#: `phenom:content-us` and `phenom:cdn-prod-static` — each registered as an
+#: owner-verified career source for that employer.
+#:
+#: An extension test has no false positives on a real board: no ATS serves a
+#: job board at a `.js` or `.png` path. A NAME test does — `greenhouse:css` is
+#: CloudKitchens (City Storage Systems) and `greenhouse:manifest` is Manifest
+#: Cyber, and an earlier draft of the guard below refused both.
+ASSET_SUFFIXES = (
+    ".js", ".mjs", ".css", ".map", ".json", ".xml", ".txt",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".avif",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ".mp4", ".webm", ".mp3", ".wav", ".pdf", ".zip", ".gz",
+)
+
+
+def is_asset_url(url: Any) -> bool:
+    """Does this url point at a static file rather than a page?"""
+    from urllib.parse import urlparse
+    try:
+        path = urlparse(str(url or "")).path.lower()
+    except ValueError:
+        return False
+    return path.endswith(ASSET_SUFFIXES)
+
+
+#: Tokens that are never an employer's board, whatever vendor they appear
+#: under. Kept DELIBERATELY SHORT, twice over.
+#:
+#: The first draft also refused `support`, `help`, `public` and `jobs`. Four
+#: of those were real boards on the live registry. The second draft refused
+#: `css` and `manifest` — which are CloudKitchens (City Storage Systems) and
+#: Manifest Cyber, both returning real postings. A slug a company could
+#: plausibly own is not this list's business: refusing one silently loses an
+#: employer, which is the failure this whole coverage effort exists to fix.
+#:
+#: The precise signal is not the WORD, it is the URL — an asset reference is
+#: not a link to a board — and that lives in
+#: `career_source_ownership.endpoints_from_page`. What is left here is the
+#: handful of tokens no company is named after.
+_RESERVED_TENANTS = frozenset({
+    "www", "cdn", "cdn-bot", "__assets__",
+    "noindex", "nofollow", "robots", "sitemap", "favicon",
+})
+
+#: Infrastructure spelled as a COMPOUND: `pp-cdn`, `cdn-prod-static`,
+#: `content-us`, `cookie-policy-scripts`. A real separator is required on at
+#: least one side, which is what distinguishes these from the bare `css`,
+#: `content` and `manifest` that real employers own.
+_INFRA_WORDS = (r"cdn|static|assets?|scripts?|styles?|images?|content|cookie")
+_INFRA_TENANT_RE = re.compile(
+    rf"(?:[-_.](?:{_INFRA_WORDS})(?:$|[-_.])"
+    rf"|(?:^|[-_.])(?:{_INFRA_WORDS})[-_.])")
+
+
 class AtsProvider:
     """Base class for every ATS vendor plugin.
 
@@ -425,6 +484,27 @@ class AtsProvider:
     #: False parks a provider without deleting it (kept out of crawl + discovery).
     enabled: bool = True
 
+    # --- readiness declarations -------------------------------------------
+    #: Does this vendor need an operator-supplied credential before it can
+    #: list anything? USAJOBS does (a free API key); nobody else currently
+    #: does. A missing credential is an OPERATIONS gap, not a capability gap,
+    #: and reporting the two as one thing is how "usajobs: not supported"
+    #: outlived the provider that supports it.
+    requires_credential: bool = False
+    #: Tokens THIS vendor uses for its own plumbing, on top of the shared
+    #: `_RESERVED_TENANTS`. Declared here so a provider adds one by naming it
+    #: rather than by overriding `is_reserved_tenant` and forgetting the
+    #: shared half.
+    reserved_tenants: Tuple[str, ...] = ()
+    #: The config key an operator sets to supply it. Named so the readiness
+    #: report can tell someone WHAT to set rather than only that something is
+    #: missing.
+    credential_setting: str = ""
+    #: One sentence on the vendor's remaining limitation, if it has one that
+    #: an operator should know about. Not a blocker — a caveat. A vendor with
+    #: no caveat leaves this empty.
+    readiness_note: str = ""
+
     #: May discovery FALL BACK to guessing a tenant slug for this vendor?
     #:
     #: Only true for vendors exposing one shared API host where a slug guess is
@@ -440,6 +520,61 @@ class AtsProvider:
     #: Those three are reachable ONLY by fingerprinting, which is the whole
     #: reason fingerprinting is the primary strategy rather than this.
     slug_probe: bool = False
+
+    def board_url(self, endpoint: "Endpoint") -> str:
+        """The PUBLIC board page for this endpoint, or "" when it is not
+        derivable without a job.
+
+        Distinct from `canonical_url`, which describes one POSTING and needs a
+        `RawJob`. This describes the board, and it is what
+        `career_source_ownership` fetches when it wants to know which employer
+        domain a board links back to — the `employer_domain` evidence class.
+
+        The default handles the two shapes `portal_hosts` actually takes:
+
+            "jobs.lever.co"   a real hostname   -> https://jobs.lever.co/<tenant>
+            ".icims.com"      a SUFFIX          -> https://<tenant>.icims.com
+
+        Getting that wrong is not a cosmetic bug. `career_source_ownership`
+        built the URL by `hosts[0].lstrip(".")`, which turned `.icims.com`
+        into `icims.com` and produced `https://icims.com/careers-rivian` — a
+        page that is nobody's board. Every suffix-host vendor (iCIMS,
+        BambooHR, Cornerstone, Taleo, Recruitee, Workday, Oracle) therefore
+        had NO route to the `employer_domain` evidence class, and those are
+        the four biggest vendors in the uncovered queue. Measured: iCIMS 240
+        sources checked and 0 ownerships proven, BambooHR 95 and 0.
+
+        `endpoint.host` wins when it is set, because a discovered endpoint
+        already knows its real hostname and a derived one is a guess.
+        """
+        host = str(getattr(endpoint, "host", "") or "").strip().lower()
+        tenant = str(getattr(endpoint, "tenant", "") or "").strip()
+        if host and not host.startswith("."):
+            return f"https://{host}"
+        # No tenant, no board. `https://boards.greenhouse.io` is Greenhouse's
+        # own site, and fetching it as "this employer's board" would offer the
+        # VENDOR's page as evidence about the employer.
+        if not tenant:
+            return ""
+        for candidate in (self.portal_hosts or ()):
+            candidate = str(candidate or "").strip().lower()
+            if not candidate:
+                continue
+            if candidate.startswith("."):
+                return f"https://{tenant}{candidate}"
+            return f"https://{candidate}/{tenant}"
+        return ""
+
+    def credential_available(self) -> bool:
+        """Is the credential this vendor needs actually configured, right now?
+
+        Asked rather than assumed. `enabled` is re-flagged lazily by providers
+        that read a credential at call time, so a readiness report that only
+        looked at `enabled` would report a key-less vendor as ready until the
+        first crawl failed. Default True, because a vendor that needs no
+        credential always has the one it needs.
+        """
+        return True
 
     def slug_candidates(self, name: str, domain: str = "") -> Sequence[str]:
         """Tenant slugs worth trying for this vendor. Override for vendor
@@ -508,12 +643,35 @@ class AtsProvider:
     def canonical_url(self, endpoint: Endpoint, job: RawJob) -> str:
         return job.apply_url
 
+    def is_reserved_tenant(self, tenant: str) -> bool:
+        """Is this "tenant" plainly a piece of the vendor's own plumbing?
+
+        Fingerprints run over EVERY url a careers page mentions, and a careers
+        page mentions its vendor's CDN far more often than it mentions its own
+        board. Adobe's page yielded `phenom:assets`, `phenom:pp-cdn`,
+        `phenom:content-us` and `phenom:cdn-prod-static`; Cisco's and Splunk's
+        yielded the same four; Deno's yielded `ashby:noindex`. Every one was
+        registered as an owner-verified career source for that employer, and
+        every one is a static-asset host.
+
+        This is a DISCOVERY guard. A board already in the catalog is crawled
+        by its endpoint and never passes through here, so a false positive
+        costs a discovery candidate and never an employer's real board.
+        """
+        key = str(tenant or "").strip().lower()
+        if not key:
+            return True
+        if key in _RESERVED_TENANTS or key in {
+                str(t).lower() for t in getattr(self, "reserved_tenants", ())}:
+            return True
+        return bool(_INFRA_TENANT_RE.search(key))
+
     def endpoint_from_match(self, fields: Dict[str, str],
                             url: str) -> Optional[Endpoint]:
         """Build an Endpoint from a fingerprint match. Override when a vendor
         needs derivation beyond the captured groups (see Workday's wd_host)."""
         tenant = (fields.get("tenant") or "").strip()
-        if not tenant:
+        if not tenant or self.is_reserved_tenant(tenant):
             return None
         return Endpoint(vendor=self.vendor, tenant=tenant,
                         site=(fields.get("site") or "").strip(),

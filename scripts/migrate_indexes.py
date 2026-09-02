@@ -986,6 +986,15 @@ INDEX_SPECS = [
      {"sparse": True, "name": "parent_idx"}),
     ("employers", [("registry_refs.company_ids", ASCENDING)], {"name": "ref_company_idx"}),
     ("employers", [("registry_refs.tenant_keys", ASCENDING)], {"name": "ref_tenant_idx"}),
+    # BOTH spellings of each join key are written and read. Indexing only the
+    # canonical one leaves the query that actually runs on a COLLSCAN.
+    ("employers", [("registry_refs.company", ASCENDING)],
+     {"name": "ref_company_legacy_idx"}),
+    ("employers", [("registry_refs.tenant", ASCENDING)],
+     {"name": "ref_tenant_legacy_idx"}),
+    # `employer_directory.search` — company autocomplete — matches on
+    # `name_key` (indexed above) and on `aliases`.
+    ("employers", [("aliases", ASCENDING)], {"name": "aliases_idx"}),
     ("employer_merge_reviews", [("review_key", ASCENDING)],
      {"unique": True, "name": "review_key_unique"}),
     ("employer_merge_reviews", [("resolved", ASCENDING), ("created_at", DESCENDING)],
@@ -1009,6 +1018,78 @@ INDEX_SPECS = [
      {"name": "state_vendor_idx"}),
     ("career_sources", [("verified_domain", ASCENDING)],
      {"sparse": True, "name": "verified_domain_idx"}),
+    # `canonical_employer.build_board_ownership` reads every owner-verified
+    # source on every ingest-cache refresh and on every backfill pass.
+    ("career_sources", [("ownership_verified", ASCENDING),
+                        ("ats_vendor", ASCENDING), ("tenant", ASCENDING)],
+     {"name": "ownership_board_idx"}),
+
+    # === canonical employer attribution on postings =======================
+    # Same two-index shape `tenant` already has, because the canonical filter
+    # runs the same two queries: a ranked first page (`posted_at DESC`) and a
+    # keyset continuation (`posted_at DESC, job_id ASC`). PARTIAL on the field
+    # existing — most postings do not carry one and never will, and a partial
+    # index over the attributed third is a third of the size.
+    #
+    # `$exists`, NOT `$type: "string"`. A partial index is eligible only for a
+    # query the planner can prove is a subset of its filter, and an equality on
+    # a string does not prove `$type: "string"` — the subset check does not
+    # reason about types. Declared that way, both of these indexed the right
+    # rows and were never CHOSEN: 1,544 ms on a fallback plan vs 17 ms here,
+    # measured on live inventory.
+    ("job_postings", [("status", ASCENDING), ("canonical_employer_id", ASCENDING),
+                      ("posted_at", DESCENDING)],
+     {"name": "active_canonical_employer_posted_at",
+      "partialFilterExpression": {"canonical_employer_id": {"$exists": True}}}),
+    ("job_postings", [("status", ASCENDING), ("canonical_employer_id", ASCENDING),
+                      ("posted_at", DESCENDING), ("job_id", ASCENDING)],
+     {"name": "active_canonical_employer_keyset",
+      "partialFilterExpression": {"canonical_employer_id": {"$exists": True}}}),
+    # The canonical twin of `employer_id_status`. A company filter carrying
+    # BOTH spellings (an old saved search plus a fresh autocomplete pick) is a
+    # `$or`, Mongo subplans only ONE rooted `$or` and the freshness window is
+    # already it — so every branch of the company `$or` must be independently
+    # indexable, and neither `status`-prefixed index above can serve a branch
+    # that does not carry `status`. Measured live: 8,033 ms / 36,964 docs
+    # examined without this index, 467 ms / 678 with it.
+    ("job_postings", [("canonical_employer_id", ASCENDING), ("status", ASCENDING)],
+     {"name": "canonical_employer_status",
+      "partialFilterExpression": {"canonical_employer_id": {"$exists": True}}}),
+    ("employer_board_conflicts", [("review_key", ASCENDING)],
+     {"unique": True, "name": "board_conflict_key_unique"}),
+    ("employer_board_conflicts", [("resolved", ASCENDING),
+                                  ("active_postings", DESCENDING)],
+     {"name": "board_conflict_queue"}),
+
+    # === tech-feed saved searches =========================================
+    # Mirrors `tech_feed_saved_searches.ensure_indexes()`. The unique key is
+    # `(user_email, client_id)`, which is what makes a retried save one row.
+    ("tech_feed_saved_searches", [("user_email", ASCENDING),
+                                  ("client_id", ASCENDING)],
+     {"unique": True, "name": "user_client_search_unique"}),
+    ("tech_feed_saved_searches", [("user_email", ASCENDING),
+                                  ("updated_at", DESCENDING)],
+     {"name": "user_recent_searches"}),
+
+    # === tech-feed telemetry ==============================================
+    # Non-PII event stream, TTL 90 days. Mirrors
+    # `tech_feed_telemetry.ensure_indexes()`.
+    ("tech_feed_events", [("at", DESCENDING)], {"name": "event_recent"}),
+    ("tech_feed_events", [("event", ASCENDING), ("at", DESCENDING)],
+     {"name": "event_type_recent"}),
+    ("tech_feed_events", [("expires_at", ASCENDING)],
+     {"expireAfterSeconds": 0, "name": "event_ttl"}),
+
+    # === coverage snapshots ===============================================
+    ("coverage_snapshots", [("measured_at", DESCENDING)],
+     {"name": "coverage_snapshot_recent"}),
+
+    # === official career-URL verification events ==========================
+    ("official_career_url_checks", [("domain", ASCENDING)],
+     {"unique": True, "name": "url_check_domain_unique"}),
+    ("official_career_url_checks", [("outcome", ASCENDING),
+                                    ("checked_at", DESCENDING)],
+     {"name": "url_check_outcome_idx"}),
 
 ]
 

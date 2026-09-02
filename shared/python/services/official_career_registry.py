@@ -22,6 +22,16 @@ is written by `scripts/verify_official_career_urls.py`, never by hand. A row
 whose `verified_at` is absent has never been confirmed and is treated as a
 lead, not as evidence.
 
+That sentence was aspirational until now. The script it names did not exist,
+`_row` hard-coded `verified_at: None`, and nothing could ever have written a
+different value — the field asserted a verification workflow that was not
+there. It is now READ from `official_career_url_checks`, one row per domain,
+written only by that script and only from an actual fetch. A constant cannot
+record an event, so the event lives in the database and the constant is joined
+to it: `verified_rows()` returns the registry with real verification stamps,
+and `OFFICIAL_CAREER_URLS` keeps returning `None` for a domain nothing has
+ever checked, which is the truthful answer.
+
 Config-driven custom boards
 ---------------------------
 Several large employers run their own board with a public JSON/XHR API and no
@@ -40,13 +50,26 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 REGISTRY_VERSION = "official-career-registry-1.0.0"
 
 
+#: The 94 employers the coverage target was set against. Rows added later
+#: carry their own batch key, so "75 of 94" stays a checkable claim rather
+#: than a number whose denominator quietly grew.
+BATCH_BASELINE = "baseline"
+BATCH_AUDIT_2026_09_02 = "audit-2026-09-02"
+
+
 def _row(display_name: str, domain: str, career_url: str, *,
          cohorts: Sequence[str] = (), categories: Sequence[str] = (),
-         notes: str = "") -> Dict[str, Any]:
+         notes: str = "", batch: str = BATCH_BASELINE) -> Dict[str, Any]:
     return {"display_name": display_name, "domain": domain,
             "career_landing_url": career_url,
             "cohorts": list(cohorts), "categories": list(categories),
-            "notes": notes, "verified_at": None}
+            "notes": notes, "batch": batch, "verified_at": None}
+
+
+def rows_in_batch(batch: str = BATCH_BASELINE) -> List[Dict[str, Any]]:
+    """The registry rows belonging to one accountability batch."""
+    return [dict(r) for r in OFFICIAL_CAREER_URLS
+            if str(r.get("batch") or BATCH_BASELINE) == batch]
 
 
 #: The URL registry supplied with the coverage brief, plus the employers whose
@@ -284,7 +307,194 @@ OFFICIAL_CAREER_URLS: Tuple[Dict[str, Any], ...] = (
          cohorts=("niche_startup",), categories=("semiconductor", "hardware"),
          notes="audit candidate. Probed 2026-09-02: domain confirmed, careers "
                "URL 404 - the path has moved; re-fingerprint from the domain."),
+
+    # --- The 2026-09-02 audit list -------------------------------------------
+    # Every row below was fetched by `scripts/verify_official_career_urls.py`
+    # on 2026-09-02 and carries the outcome VERBATIM. Three states appear, and
+    # the distinction between them is the whole point of recording them:
+    #
+    #   verified  the domain resolves, the page names the employer, and where
+    #             an ATS was linked it is named here.
+    #   blocked   the employer's own careers URL returned 403/429 TO US. That
+    #             is a fact about our request and NOT about the employer; we
+    #             do not attempt to bypass it, and the row stays a lead.
+    #   error     a network failure on our side, retried and unresolved.
+    #
+    # None of them is marked covered here. A registry row is a starting point
+    # for ownership verification; `career_sources` decides coverage, and it
+    # still needs the state machine to pass.
+    _row("xAI", "x.ai", "https://x.ai/careers",
+         cohorts=("private_growth",), categories=("ai_ml",),
+         batch=BATCH_AUDIT_2026_09_02,
+         notes="2026-09-02: careers URL 403 to our prober (bot wall). BLOCKED, "
+               "not empty and not gone. We do not bypass bot protection."),
+    _row("World Labs", "worldlabs.ai", "https://www.worldlabs.ai/careers",
+         cohorts=("niche_startup",), categories=("ai_ml",),
+         batch=BATCH_AUDIT_2026_09_02,
+         notes="2026-09-02 VERIFIED: domain confirmed, careers URL 200, page "
+               "names the employer, links greenhouse:worldlabs."),
+    _row("Cognition", "cognition.com", "https://cognition.com/careers",
+         cohorts=("private_growth",), categories=("ai_ml", "devtools"),
+         batch=BATCH_AUDIT_2026_09_02,
+         notes="2026-09-02 VERIFIED: domain confirmed, careers URL 200, links "
+               "ashby:cognition."),
+    _row("MotherDuck", "motherduck.com", "https://motherduck.com/careers/",
+         cohorts=("niche_startup",), categories=("cloud_data", "devtools"),
+         batch=BATCH_AUDIT_2026_09_02,
+         notes="2026-09-02 VERIFIED: domain confirmed, careers URL 200, links "
+               "ashby:MotherDuck (tenant is case-sensitive at the vendor)."),
+    _row("Axonius", "axonius.com",
+         "https://www.axonius.com/company/careers/open-jobs",
+         cohorts=("private_growth",), categories=("security",),
+         batch=BATCH_AUDIT_2026_09_02,
+         notes="2026-09-02: careers URL 429 to our prober, twice, including at "
+               "0.4 req/s. BLOCKED, with a retry, not dead."),
+    _row("Tines", "tines.com", "https://www.tines.com/careers/",
+         cohorts=("private_growth",), categories=("security", "devtools"),
+         batch=BATCH_AUDIT_2026_09_02,
+         notes="2026-09-02 VERIFIED: domain confirmed, careers URL 200. The "
+               "board is proxied under tines.com and links no ATS, but the "
+               "job paths carry Greenhouse requisition ids and "
+               "boards-api.greenhouse.io/v1/boards/tines answers 200 - so the "
+               "generic provider reaches it and no custom adapter is needed."),
+    _row("Cato Networks", "catonetworks.com", "https://www.catonetworks.com/careers/",
+         cohorts=("private_growth",), categories=("security", "telecom"),
+         batch=BATCH_AUDIT_2026_09_02,
+         notes="2026-09-02 VERIFIED: domain confirmed, careers URL 200, links "
+               "greenhouse:catonetworks."),
+    _row("IonQ", "ionq.com", "https://www.ionq.com/careers",
+         cohorts=("public_tech",), categories=("hardware", "research"),
+         batch=BATCH_AUDIT_2026_09_02,
+         notes="2026-09-02 VERIFIED: domain confirmed, careers URL 200, links "
+               "greenhouse:ionq. Quantum hardware."),
+    _row("Rigetti Computing", "rigetti.com", "https://www.rigetti.com/careers",
+         cohorts=("public_tech",), categories=("hardware", "research"),
+         batch=BATCH_AUDIT_2026_09_02,
+         notes="2026-09-02: read timeout, twice, including at 0.4 req/s. "
+               "Recorded as an error on OUR side; not blocked, not gone."),
+    _row("Quantinuum", "quantinuum.com", "https://www.quantinuum.com/company/careers",
+         cohorts=("private_growth",), categories=("hardware", "research"),
+         batch=BATCH_AUDIT_2026_09_02,
+         notes="2026-09-02 VERIFIED: domain confirmed, careers URL 200, links "
+               "https://jobs.eu.lever.co/quantinuum - Lever's EU region, which "
+               "no fingerprint matched and no host allowlist admitted until "
+               "this audit. `api.lever.co/v0/postings/quantinuum` 404s; the EU "
+               "host returns the board. Owner named by the provider as "
+               "'Quantinuum'."),
+    _row("Citadel", "citadel.com", "https://www.citadel.com/careers/",
+         cohorts=("private_growth",), categories=("fintech",),
+         batch=BATCH_AUDIT_2026_09_02,
+         notes="2026-09-02: careers URL 403 to our prober (bot wall). BLOCKED. "
+               "Citadel Securities is a SEPARATE legal entity and is not "
+               "merged with this row on the strength of a shared name."),
 )
+
+
+#: Where a verification EVENT is recorded. One row per domain, upserted by
+#: `scripts/verify_official_career_urls.py`. Additive: dropping it loses the
+#: stamps and nothing else, and every row goes back to `verified_at: None`,
+#: which is exactly what "never confirmed" should look like.
+URL_CHECKS = "official_career_url_checks"
+
+#: A check outcome. `verified` is the ONLY one that sets `verified_at`.
+CHECK_VERIFIED = "verified"        # fetched, 200, and the page names the employer
+CHECK_REACHABLE = "reachable"      # fetched, 200, but the page does not name them
+CHECK_MOVED = "moved"              # redirected off the registered host
+CHECK_BLOCKED = "blocked"          # 403 / 429 / robots — a fact about US
+CHECK_MISSING = "missing"          # 404 / DNS — the URL is wrong or gone
+CHECK_ERROR = "error"              # timeout, TLS, unreadable
+
+CHECK_OUTCOMES: Tuple[str, ...] = (CHECK_VERIFIED, CHECK_REACHABLE, CHECK_MOVED,
+                                   CHECK_BLOCKED, CHECK_MISSING, CHECK_ERROR)
+
+
+def _db():
+    from utils.db_connect import DBConnect
+    return DBConnect().get_db()
+
+
+def checks_for(domains: Sequence[str] = (), *, db=None) -> Dict[str, Dict[str, Any]]:
+    """`{domain: check row}` — the recorded verification events."""
+    db = db if db is not None else _db()
+    query: Dict[str, Any] = {}
+    if domains:
+        query = {"domain": {"$in": [str(d).strip().lower() for d in domains]}}
+    try:
+        return {str(r.get("domain")): r for r in
+                db[URL_CHECKS].find(query, {"_id": 0})}
+    except Exception:      # pragma: no cover - a missing collection is "none checked"
+        return {}
+
+
+def verified_rows(*, db=None) -> List[Dict[str, Any]]:
+    """`OFFICIAL_CAREER_URLS` with `verified_at` filled in from real events.
+
+    The registry constant is the CLAIM; this is the claim joined to whether
+    anybody has checked it. Callers that report coverage must use this one —
+    `OFFICIAL_CAREER_URLS` alone cannot distinguish "confirmed last week" from
+    "typed in from a brief and never fetched".
+    """
+    checks = checks_for(db=db)
+    out: List[Dict[str, Any]] = []
+    for row in OFFICIAL_CAREER_URLS:
+        row = dict(row)
+        chk = checks.get(str(row.get("domain") or "").lower())
+        if chk:
+            row["verified_at"] = chk.get("verified_at")
+            row["last_checked_at"] = chk.get("checked_at")
+            row["check_outcome"] = chk.get("outcome")
+            row["check_detail"] = chk.get("detail")
+            row["final_url"] = chk.get("final_url")
+        out.append(row)
+    return out
+
+
+def record_check(db, *, domain: Any, display_name: Any, career_landing_url: Any,
+                 outcome: str, detail: Any = "", http_status: Any = None,
+                 final_url: Any = "", redirect_chain: Sequence[str] = (),
+                 endpoints: Sequence[str] = (), now=None) -> str:
+    """Write one verification EVENT. `verified_at` moves only on `verified`.
+
+    A 403 does not clear a previous verification and does not set a new one:
+    it is a fact about our request, recorded as its own outcome with its own
+    timestamp. That is the same rule `career_source_service.record_failure`
+    learned the hard way, when one blocked sweep turned 830 sources `blocked`
+    and cut validated coverage by a third.
+    """
+    from datetime import datetime, timezone
+    now = now or datetime.now(timezone.utc)
+    dom = str(domain or "").strip().lower()
+    if outcome not in CHECK_OUTCOMES:
+        outcome = CHECK_ERROR
+    update: Dict[str, Any] = {
+        "domain": dom, "display_name": str(display_name or "")[:200],
+        "career_landing_url": str(career_landing_url or "")[:500],
+        "outcome": outcome, "detail": str(detail or "")[:400],
+        "http_status": http_status,
+        "final_url": str(final_url or "")[:500],
+        "redirect_chain": [str(u)[:500] for u in (redirect_chain or ())][:10],
+        "ats_endpoints": [str(e)[:200] for e in (endpoints or ())][:8],
+        "checked_at": now,
+        "registry_version": REGISTRY_VERSION,
+    }
+    if outcome == CHECK_VERIFIED:
+        update["verified_at"] = now
+    db[URL_CHECKS].update_one({"domain": dom},
+                              {"$set": update,
+                               "$setOnInsert": {"first_checked_at": now}},
+                              upsert=True)
+    return dom
+
+
+def ensure_indexes(*, db=None) -> List[str]:
+    db = db if db is not None else _db()
+    try:
+        return [db[URL_CHECKS].create_index("domain", unique=True,
+                                            name="url_check_domain_unique"),
+                db[URL_CHECKS].create_index([("outcome", 1), ("checked_at", -1)],
+                                            name="url_check_outcome_idx")]
+    except Exception:      # pragma: no cover
+        return []
 
 
 def by_domain() -> Dict[str, Dict[str, Any]]:

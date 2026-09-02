@@ -335,15 +335,49 @@ class LeverProvider(_BoardProvider):
 
     has_detail = False
 
-    api_hosts = ("api.lever.co",)
-    portal_hosts = ("jobs.lever.co",)
+    #: Lever runs a SECOND region on `eu.lever.co`, and a tenant lives in one
+    #: region or the other — `api.lever.co/v0/postings/quantinuum` 404s while
+    #: `api.eu.lever.co/v0/postings/quantinuum` returns the board. Both hosts
+    #: were absent from `api_hosts`, `portal_hosts` and every fingerprint, so
+    #: an EU-hosted employer could not be discovered, could not be matched off
+    #: their own careers page, and could not be crawled if somebody had typed
+    #: the tenant in by hand. The request was never attempted.
+    #:
+    #: This is the same defect as the Workday one already recorded in
+    #: CLAUDE.md ("both Workday fetchers hardcoded `myworkdayjobs.com`, so
+    #: every board on `myworkdaysite.com` was unreachable"), on a different
+    #: vendor, and it is invisible in exactly the same way: nothing fails,
+    #: there is simply no row.
+    REGION_HOSTS = {"": ("api.lever.co", "jobs.lever.co"),
+                    "eu": ("api.eu.lever.co", "jobs.eu.lever.co")}
+
+    api_hosts = ("api.lever.co", "api.eu.lever.co")
+    portal_hosts = ("jobs.lever.co", "jobs.eu.lever.co")
 
     fingerprints = (
+        # Region-bearing patterns FIRST and at higher confidence, so a URL
+        # that names a region is not captured by the region-less pattern with
+        # `eu` swallowed into the tenant.
+        fp(r"https?://api\.(?P<site>eu)\.lever\.co/v\d+/postings/(?P<tenant>[A-Za-z0-9_\-]+)",
+           confidence=97),
+        fp(r"https?://jobs\.(?P<site>eu)\.lever\.co/(?P<tenant>[A-Za-z0-9_\-]+)",
+           confidence=96),
         fp(r"https?://api\.lever\.co/v\d+/postings/(?P<tenant>[A-Za-z0-9_\-]+)",
            confidence=95),
         fp(r"https?://jobs\.lever\.co/(?P<tenant>[A-Za-z0-9_\-]+)",
            confidence=90),
     )
+
+    def _hosts(self, endpoint: Endpoint) -> Tuple[str, str]:
+        """`(api host, portal host)` for this endpoint's region.
+
+        An unknown `site` falls back to the US pair rather than raising: a
+        region we have not heard of is a board we cannot reach, and the
+        fallback makes that a 404 we record instead of a crash that stops a
+        shard.
+        """
+        return self.REGION_HOSTS.get(
+            str(endpoint.site or "").strip().lower(), self.REGION_HOSTS[""])
 
     def board_owner(self, endpoint: Endpoint,
                     ctx: FetchContext) -> Optional[str]:
@@ -352,13 +386,21 @@ class LeverProvider(_BoardProvider):
         was one of the two vendors where `slug_is_trustworthy` was the only
         thing standing between a guess and `validated` - and it cannot tell
         Archer Aviation from Archer Daniels Midland."""
+        _api, portal = self._hosts(endpoint)
         return self._owner_from_portal_title(
-            f"https://jobs.lever.co/{endpoint.tenant}", ctx)
+            f"https://{portal}/{endpoint.tenant}", ctx)
+
+    def canonical_url(self, endpoint: Endpoint, job: Optional[RawJob]) -> str:
+        if job is not None and getattr(job, "apply_url", ""):
+            return str(job.apply_url)
+        _api, portal = self._hosts(endpoint)
+        return f"https://{portal}/{endpoint.tenant}"
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
+        api, _portal = self._hosts(endpoint)
         payload = self._get_json(
-            ctx, f"https://api.lever.co/v0/postings/{endpoint.tenant}",
+            ctx, f"https://{api}/v0/postings/{endpoint.tenant}",
             {"mode": "json"})
         # Lever answers with a bare LIST, not an object.
         if not isinstance(payload, list):
@@ -1016,6 +1058,8 @@ class JobviteProvider(_BoardProvider):
     vendor = "jobvite"
     label = "Jobvite"
     has_detail = True
+    #: Jobvite's own asset path segment. It is not a company.
+    reserved_tenants = ("__assets__", "assets", "static", "cdn")
     #: NOT slug-probeable, unlike the JSON boards this class sits with.
     #:
     #: `slug_probe` is documented as safe where "a slug guess is a single

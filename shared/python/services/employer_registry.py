@@ -74,7 +74,7 @@ import hashlib
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -173,14 +173,45 @@ _CATEGORY_ALIASES: Dict[str, str] = {
 }
 
 
+#: The category that means "we could not place this employer". It is a real
+#: answer and must stay reachable — but it is an ABSENCE, and an absence
+#: alongside a presence is noise.
+CATEGORY_OTHER = "other"
+
+
 def canonical_category(value: Any) -> str:
     """Any registry's category string -> one of `CATEGORIES` ("other" if new)."""
     key = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
     if not key:
-        return "other"
+        return CATEGORY_OTHER
     if key in CATEGORIES:
         return key
-    return _CATEGORY_ALIASES.get(key, _CATEGORY_ALIASES.get(key.replace("_", "-"), "other"))
+    return _CATEGORY_ALIASES.get(key, _CATEGORY_ALIASES.get(key.replace("_", "-"),
+                                                            CATEGORY_OTHER))
+
+
+def resolve_categories(values: Sequence[Any]) -> List[str]:
+    """Canonicalise, dedupe, and DROP `other` when anything specific survives.
+
+    `other` is what an unmapped vocabulary term becomes, so an employer that
+    carried one recognised category and one unrecognised one ended up with
+    `["fintech", "other"]`. Measured live: `other` appeared on 2,475 of the
+    2,624 technology employers, which made the category facet useless — the
+    biggest row in it was the row that means "unknown", and it was bigger than
+    the real categories because it sat BESIDE them rather than instead of
+    them.
+
+    `other` alone is still `["other"]`. An employer we cannot place is a real
+    and countable state; the facet reports it last and labels it, rather than
+    hiding it and making the counts stop adding up.
+    """
+    out: List[str] = []
+    for value in values or ():
+        cc = canonical_category(value)
+        if cc not in out:
+            out.append(cc)
+    specific = [c for c in out if c != CATEGORY_OTHER]
+    return specific or ([CATEGORY_OTHER] if out else [])
 
 
 # --------------------------------------------------------------------------
@@ -242,6 +273,31 @@ def normalize_domain(value: Any) -> str:
     tail2 = ".".join(labels[-2:])
     keep = 3 if (tail2 in _MULTI_LABEL_TLDS and len(labels) >= 3) else 2
     return ".".join(labels[-keep:])
+
+
+def _country_code(value: Any) -> Optional[str]:
+    """ISO 3166-1 alpha-2, or `None`. Never a guess and never a partial answer.
+
+    Anything that is not already a two-letter code is handed to
+    `services.us_geo`/`job_inventory_service.normalize_country` if available,
+    and returns `None` when neither can place it. Returning the input
+    unchanged would put "Remote", "EMEA" and "2 Locations" into a field whose
+    whole value is that it holds country codes.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if re.fullmatch(r"[A-Za-z]{2}", raw):
+        return raw.upper()
+    try:
+        from services.job_inventory_service import normalize_country
+        code = normalize_country(raw)
+    except Exception:      # pragma: no cover - geography is optional metadata
+        return None
+    if isinstance(code, dict):
+        code = code.get("country_code")
+    code = str(code or "").strip()
+    return code.upper() if re.fullmatch(r"[A-Za-z]{2}", code) else None
 
 
 def _sha(prefix: str, value: str) -> str:
@@ -456,8 +512,13 @@ def build_employer(
     parent_employer_id: Any = None,
     operating_status: str = STATUS_ACTIVE,
     employer_categories: Sequence[Any] = (),
+    category_source: Any = "",
     cohorts: Sequence[Any] = (),
     countries: Sequence[Any] = (),
+    headquarters_country: Any = None,
+    headquarters_evidence: Any = "",
+    hiring_countries: Sequence[Any] = (),
+    remote_eligible: Optional[bool] = None,
     evidence: Sequence[Dict[str, Any]] = (),
     first_seen_at: Optional[datetime] = None,
 ) -> Dict[str, Any]:
@@ -515,11 +576,25 @@ def build_employer(
             seen_d.add(nd)
             verified.append(nd)
 
-    cats: List[str] = []
-    for c in employer_categories or ():
-        cc = canonical_category(c)
-        if cc not in cats:
-            cats.append(cc)
+    # Provenance BEFORE resolution, so a dropped `other` leaves a trace of
+    # what the source actually said. A category with no recorded origin is
+    # indistinguishable from one somebody typed in.
+    cat_evidence: List[Dict[str, str]] = []
+    seen_cat_ev: Set[Tuple[str, str]] = set()
+    for raw in employer_categories or ():
+        if isinstance(raw, dict):
+            value, src = raw.get("category"), str(raw.get("source") or "")
+        else:
+            value, src = raw, str(category_source or "")
+        cc = canonical_category(value)
+        key = (cc, src)
+        if key in seen_cat_ev:
+            continue
+        seen_cat_ev.add(key)
+        cat_evidence.append({"category": cc, "declared_as": str(value or "")[:60],
+                             "source": src[:80] or "unattributed"})
+    cats = resolve_categories(
+        [e["declared_as"] for e in cat_evidence] or list(employer_categories or ()))
 
     coh: List[str] = []
     for c in cohorts or ():
@@ -543,9 +618,30 @@ def build_employer(
         "operating_status": status,
         "canonical_domain": dom or None,
         "verified_domains": verified,
-        "employer_categories": cats or ["other"],
+        "employer_categories": cats or [CATEGORY_OTHER],
+        "category_evidence": cat_evidence[:20],
         "cohorts": coh,
+        # --- geography, four separate questions -------------------------
+        # `countries` conflated all of them and was written from whatever the
+        # caller happened to hold. Each of these answers a different question
+        # and NONE of them is inferred from another:
+        #
+        #   headquarters_country  where the employer IS. Documentary only.
+        #   hiring_countries      where they have been OBSERVED hiring.
+        #   countries             the legacy union, kept so no reader breaks.
+        #   remote_eligible       whether any posting states remote eligibility.
+        #
+        # A missing headquarters is `None`, never the first country we saw a
+        # posting in: an employer hiring in Poland is not a Polish company,
+        # and a guessed headquarters is the kind of fact that gets quoted.
         "countries": _clean(countries, limit=30),
+        "headquarters_country": _country_code(headquarters_country),
+        "headquarters_evidence": str(headquarters_evidence or "")[:120] or None,
+        "hiring_countries": [c for c in
+                             (_country_code(c) for c in (hiring_countries or ()))
+                             if c][:40],
+        "remote_eligible": remote_eligible if isinstance(remote_eligible, bool)
+        else None,
         "evidence": ev[:40],
         "first_seen_at": first_seen_at or now,
         "last_verified_at": now if (dom or curated_key) else None,
@@ -654,6 +750,18 @@ def ensure_indexes() -> List[str]:
                                         name="ref_company_idx"))
         created.append(emp.create_index("registry_refs.tenant_keys",
                                         name="ref_tenant_idx"))
+        # Both spellings are WRITTEN by the backfill and READ by the resolver,
+        # the coverage report and the feed's category join. Indexing only the
+        # canonical one leaves the query that actually runs on a COLLSCAN
+        # against 23,782 rows.
+        created.append(emp.create_index("registry_refs.company",
+                                        name="ref_company_legacy_idx"))
+        created.append(emp.create_index("registry_refs.tenant",
+                                        name="ref_tenant_legacy_idx"))
+        # `employer_directory.search` matches a name PREFIX on `name_key` and
+        # on `aliases`; `name_key_idx` above serves the first, this serves the
+        # second. Without it every keystroke scans the registry.
+        created.append(emp.create_index("aliases", name="aliases_idx"))
         rev = _col(MERGE_REVIEWS)
         created.append(rev.create_index("review_key", unique=True,
                                         name="review_key_unique"))
@@ -811,10 +919,19 @@ def _merge_update(record: Dict[str, Any]) -> Dict[str, Any]:
     now = _now()
     add_to_set: Dict[str, Any] = {}
     for field in ("legal_names", "aliases", "brands", "verified_domains",
-                  "employer_categories", "cohorts", "countries"):
+                  "cohorts", "countries", "hiring_countries",
+                  "category_evidence"):
         vals = [v for v in (record.get(field) or []) if v]
         if vals:
             add_to_set[field] = {"$each": vals}
+    # `employer_categories` is NOT additive. `$addToSet` would re-add `other`
+    # the moment any source contributed an unmapped term, which is exactly how
+    # 2,475 of 2,624 technology employers came to carry `other` beside a real
+    # category. The list is RESOLVED from the union of what every source has
+    # said — `category_evidence`, which IS additive — so the resolved answer
+    # is recomputed rather than accumulated. `_categories_from_evidence` does
+    # that on read; the write puts the best answer this source knows.
+    cats = [c for c in (record.get("employer_categories") or []) if c]
     ev = [e for e in (record.get("evidence") or []) if isinstance(e, dict)]
     if ev:
         add_to_set["evidence"] = {"$each": ev}   # see `upsert_employer`: no $slice
@@ -837,13 +954,48 @@ def _merge_update(record: Dict[str, Any]) -> Dict[str, Any]:
         "last_verified_at": record.get("last_verified_at"),
         "next_verification_at": record.get("next_verification_at"),
     }
+    set_fields: Dict[str, Any] = {"updated_at": now,
+                                  "registry_version": REGISTRY_VERSION}
+    if cats and cats != [CATEGORY_OTHER]:
+        # Only a SPECIFIC answer overwrites. A source that knows nothing but
+        # `other` must not erase a category another source established, and
+        # `$setOnInsert` below still seeds the field on a brand-new row.
+        set_fields["employer_categories"] = cats
+    # Geography: written only when this source actually knows. `None` means
+    # "this source cannot say", and setting it would erase a documented answer
+    # with an absence.
+    for field in ("headquarters_country", "headquarters_evidence",
+                  "remote_eligible"):
+        value = record.get(field)
+        if value is not None:
+            set_fields[field] = value
+    on_insert.setdefault("employer_categories", cats or [CATEGORY_OTHER])
     update: Dict[str, Any] = {
-        "$set": {"updated_at": now, "registry_version": REGISTRY_VERSION},
-        "$setOnInsert": on_insert,
+        "$set": set_fields,
+        "$setOnInsert": {k: v for k, v in on_insert.items()
+                         if k not in set_fields},
     }
     if add_to_set:
         update["$addToSet"] = add_to_set
     return update
+
+
+def categories_from_evidence(row: Dict[str, Any]) -> List[str]:
+    """The resolved category list from everything every source has declared.
+
+    Read-side twin of `resolve_categories`, over the accumulated
+    `category_evidence`. Used by the repair pass, and by anything that wants
+    the answer the CURRENT rule gives rather than the answer that happened to
+    be stored when the row was written.
+    """
+    declared = [str(e.get("declared_as") or e.get("category") or "")
+                for e in (row.get("category_evidence") or [])
+                if isinstance(e, dict)]
+    if declared:
+        resolved = resolve_categories(declared)
+        if resolved:
+            return resolved
+    return resolve_categories(row.get("employer_categories") or [])
 
 
 #: `{kind: registry_refs field}`. ONE map, used by both the single-row
@@ -911,6 +1063,68 @@ def quarantine_merge(
                   "registry_version": REGISTRY_VERSION}},
         upsert=True)
     return key
+
+
+# --------------------------------------------------------------------------
+# Review prioritisation
+# --------------------------------------------------------------------------
+#: What a review is worth working, in the order the weights say. The point is
+#: not the exact numbers — it is that the queue is ordered by CONSEQUENCE
+#: rather than by arrival, because 1,443 open reviews sorted by `created_at`
+#: is a list nobody finishes and a list where the JPMorgan row is at position
+#: 900.
+REVIEW_WEIGHT_CORE_POSTING = 3.0
+REVIEW_WEIGHT_ACTIVE_POSTING = 1.0
+REVIEW_WEIGHT_TIER_A = 5000.0
+#: Evidence strength moves a review UP: a pair one signal away from a decision
+#: is worth a human minute in a way that a pair with nothing behind it is not.
+REVIEW_WEIGHT_PER_EVIDENCE_CLASS = 250.0
+#: A domain-derived identity on BOTH sides means two verified domains, which
+#: `merge_decision` already calls `distinct`. Such a review is usually a
+#: confirmation, not a decision, so it sinks.
+REVIEW_PENALTY_BOTH_DOMAIN_KEYED = -800.0
+
+
+def score_review(*, active_postings: int = 0, core_tech_postings: int = 0,
+                 tier_a: bool = False, evidence_classes: int = 0,
+                 both_domain_keyed: bool = False) -> Tuple[float, List[str]]:
+    """`(priority, reasons)` for one review. Pure, so it is testable and
+    identical for a merge review and a board conflict.
+
+    Reasons are returned alongside the number because a priority with no
+    explanation is a number a reviewer has to take on trust, and the first
+    thing anyone asks of a sorted queue is why the top row is on top.
+    """
+    score = 0.0
+    reasons: List[str] = []
+    if tier_a:
+        score += REVIEW_WEIGHT_TIER_A
+        reasons.append("strategic Tier-A employer")
+    if core_tech_postings:
+        score += REVIEW_WEIGHT_CORE_POSTING * core_tech_postings
+        reasons.append(f"{core_tech_postings:,} core-tech postings")
+    if active_postings:
+        score += REVIEW_WEIGHT_ACTIVE_POSTING * active_postings
+        reasons.append(f"{active_postings:,} active postings")
+    if evidence_classes:
+        score += REVIEW_WEIGHT_PER_EVIDENCE_CLASS * evidence_classes
+        reasons.append(f"{evidence_classes} independent evidence class(es) "
+                       f"already gathered")
+    positive = bool(reasons)
+    if both_domain_keyed:
+        score += REVIEW_PENALTY_BOTH_DOMAIN_KEYED
+        reasons.append("both sides are domain-keyed - two verified domains are "
+                       "already a `distinct` verdict")
+    if not reasons:
+        reasons.append("no postings, no evidence, not strategic")
+    # The penalty DEMOTES; it does not delete. A review with 400 active
+    # postings behind it that is probably `distinct` still deserves a human
+    # before one with no postings, no evidence and no strategic claim — and
+    # without this floor the -800 pushed it below zero and therefore below
+    # exactly that. A demotion that can invert the order is not a demotion.
+    if positive:
+        score = max(score, 1.0)
+    return round(score, 2), reasons
 
 
 def get_employer(employer_id: str) -> Optional[Dict[str, Any]]:

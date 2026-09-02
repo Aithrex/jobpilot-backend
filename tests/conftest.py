@@ -21,6 +21,27 @@ from _vg_support import current_db  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _reset_process_caches():
+    """Process-global caches that outlive a test's database.
+
+    The suite shares ONE mongomock database and clears DOCUMENTS between
+    tests. Anything cached in a module global survives that, so a test that
+    warms a cache pins the answer for every later test whose database looks
+    nothing like it. `tech_feed_service`'s coverage block and
+    `canonical_employer`'s board map are both TTL-cached for exactly the right
+    reason in production and exactly the wrong one here.
+    """
+    for module, fn in (("services.tech_feed_service", "reset_coverage_cache"),
+                       ("services.canonical_employer", "reset_cache")):
+        try:
+            import importlib
+            getattr(importlib.import_module(module), fn)()
+        except Exception:
+            pass
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_mongomock_indexes():
     """Test isolation for the shared mongomock singleton.
 

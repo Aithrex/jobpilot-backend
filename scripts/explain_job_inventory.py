@@ -24,6 +24,7 @@ Usage:
     python scripts/explain_job_inventory.py --seed 2000  # bigger scratch corpus
 """
 import sys
+from typing import List
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -73,6 +74,21 @@ SCRATCH_POSTING_INDEXES = [
      {"name": "purge_at_retention",
       "partialFilterExpression": {"purge_at": {"$exists": True}}}),
     ([("employer_id", ASCENDING), ("status", ASCENDING)], {"name": "employer_id_status"}),
+    # The CANONICAL company filter, PARTIAL on the field existing. Most
+    # postings do not carry one and never will (a marketplace board, a board
+    # whose ownership is unproven), so a full index over the whole collection
+    # would be two thirds empty entries.
+    ([("canonical_employer_id", ASCENDING), ("status", ASCENDING)],
+     {"name": "canonical_employer_status",
+      "partialFilterExpression": {"canonical_employer_id": {"$exists": True}}}),
+    ([("status", ASCENDING), ("canonical_employer_id", ASCENDING),
+      ("posted_at", DESCENDING)],
+     {"name": "active_canonical_employer_posted_at",
+      "partialFilterExpression": {"canonical_employer_id": {"$exists": True}}}),
+    ([("status", ASCENDING), ("canonical_employer_id", ASCENDING),
+      ("posted_at", DESCENDING), ("job_id", ASCENDING)],
+     {"name": "active_canonical_employer_keyset",
+      "partialFilterExpression": {"canonical_employer_id": {"$exists": True}}}),
     # The tech-feed paths. `tech.*` is multikey; the keyset index is what makes
     # paging PAST the ranked window an IXSCAN instead of a blocking sort, and
     # `locations.country_code` is what keeps the (previously broken) country
@@ -162,6 +178,40 @@ def posting_paths(content_hash):
          {"status": "active", "tech.role_specialties": {"$in": ["backend"]},
           "posted_at": {"$gte": cutoff}},
          [("posted_at", DESCENDING), ("job_id", ASCENDING)], 2000),
+        # The CANONICAL company filter. `company_ids` used to mean "match
+        # `employer_id` OR `tenant`", and `employer_id` is a slug of whatever
+        # name the board printed — so the same employer under three legal-
+        # entity names needed three values and still missed rows. The
+        # canonical field is a single equality on a PARTIAL index (most
+        # postings do not carry one and never will), and the keyset variant
+        # continues it past the ranked window.
+        ("tech-feed canonical company filter",
+         {"status": "active",
+          "canonical_employer_id": {"$in": ["emp_fd96667721fe", "emp_000000000005"]},
+          "posted_at": {"$gte": cutoff}},
+         [("posted_at", DESCENDING)], 2000,
+         "active_canonical_employer_posted_at"),
+        ("tech-feed canonical company filter (keyset continuation)",
+         {"status": "active",
+          "canonical_employer_id": {"$in": ["emp_fd96667721fe", "emp_000000000005"]},
+          "$or": [{"posted_at": {"$lt": cutoff}},
+                  {"posted_at": cutoff, "job_id": {"$gt": "0"}}],
+          "posted_at": {"$lte": cutoff}},
+         [("posted_at", DESCENDING), ("job_id", ASCENDING)], 250,
+         "active_canonical_employer_keyset"),
+        # BOTH spellings at once - an old saved search plus a fresh
+        # autocomplete pick. Two rooted `$or`s (this one and the freshness
+        # window) and Mongo subplans only one, so every branch here has to be
+        # independently indexable. Without `canonical_employer_status` this
+        # shape walked `posted_at` for 36,964 documents to return 50.
+        ("tech-feed company filter, canonical AND legacy together",
+         {"status": "active",
+          "$or": [{"canonical_employer_id": {"$in": ["emp_fd96667721fe", "emp_000000000005"]}},
+                  {"employer_id": {"$in": ["acme-corp"]}},
+                  {"tenant": {"$in": ["acme"]}}],
+          "posted_at": {"$gte": cutoff}},
+         [("posted_at", DESCENDING)], 2000,
+         "canonical_employer_status"),
         # THE path that removed the 2,000-result ceiling. A blocking sort here
         # would mean the keyset phase re-sorts the whole match set per page,
         # which is the opposite of what a keyset cursor is for.
@@ -248,7 +298,7 @@ def _winning_stages(stage, out=None):
     return out
 
 
-def explain_one(coll, label, query, sort, limit):
+def explain_one(coll, label, query, sort, limit, expect=None):
     try:
         cursor = coll.find(query)
         if sort:
@@ -258,7 +308,7 @@ def explain_one(coll, label, query, sort, limit):
         plan = cursor.explain()
     except PyMongoError as e:
         print(f"  {label:<52} EXPLAIN FAILED: {e}")
-        return
+        return True
 
     ex = plan.get("executionStats", {}) or {}
     winning = (plan.get("queryPlanner", {}) or {}).get("winningPlan", {}) or {}
@@ -266,13 +316,25 @@ def explain_one(coll, label, query, sort, limit):
     stages = _winning_stages(winning.get("queryPlan") or winning)
     scan = "IXSCAN" if "IXSCAN" in stages else ("COLLSCAN" if "COLLSCAN" in stages
                                                 else stages[-1] if stages else "?")
-    index_name = None
-    node = winning.get("queryPlan") or winning
-    while isinstance(node, dict):
-        if node.get("stage") == "IXSCAN":
-            index_name = node.get("indexName")
-            break
-        node = node.get("inputStage")
+    # Collect EVERY index in the plan, not the first one down the
+    # `inputStage` spine. An index-OR fans out through `inputStages`, and
+    # walking one child reported `None` for a plan that was using three
+    # indexes perfectly well.
+    used: List[str] = []
+
+    def _indexes(node):
+        if isinstance(node, dict):
+            if node.get("indexName"):
+                used.append(str(node["indexName"]))
+            for value in node.values():
+                _indexes(value)
+        elif isinstance(node, list):
+            for value in node:
+                _indexes(value)
+
+    _indexes(winning.get("queryPlan") or winning)
+    seen_order = list(dict.fromkeys(used))
+    index_name = ", ".join(seen_order) if seen_order else None
 
     blocking = " +SORT(blocking)" if "SORT" in stages else ""
     print(f"  {label:<52} {scan:<9} idx={str(index_name):<30} "
@@ -280,14 +342,50 @@ def explain_one(coll, label, query, sort, limit):
           f"docs={ex.get('totalDocsExamined')} ms={ex.get('executionTimeMillis')}"
           f"{blocking}")
     print(f"      stages: {' <- '.join(stages) or 'n/a'}")
+    # "IXSCAN" alone is not the check. On a collection carrying thirty
+    # indexes SOMETHING will always be scanned, and the wrong index answering
+    # a query reads exactly like the right one here. Both canonical-employer
+    # indexes existed, were IXSCAN-green on this very report, and were never
+    # chosen — a `$type` partial filter made them ineligible and the planner
+    # quietly used `active_cost_first_seen_at` with a FETCH filter instead.
+    if expect and expect not in seen_order:
+        print(f"      !! EXPECTED {expect} - this shape is NOT being served by "
+              f"the index built for it")
+        return True
+    return False
 
 
-def explain_collection(db, name, paths, header):
+def _verdict(misses):
+    """A shape served by the wrong index is the failure this report exists to
+    catch, so say it once at the end where nobody can scroll past it."""
+    if misses:
+        print(f"\n!! {misses} shape(s) were NOT served by the index built for "
+              f"them. An IXSCAN on the wrong index is a full scan wearing a "
+              f"green label.")
+    else:
+        print("\nEvery shape with a declared index was served by that index.")
+    return misses
+
+
+def explain_collection(db, name, paths, header, *, judge_plans=True):
+    """`judge_plans=False` on the seeded corpus, and that is not a loophole.
+
+    A plan is chosen on CARDINALITY. At a thousand documents, walking one
+    index and filtering genuinely beats a three-way index-OR plus a blocking
+    sort, and the planner is right to say so — the same query on live
+    inventory examines 36,964 documents that way. The scratch pass exists to
+    prove the indexes are creatable and the shapes run; only the live pass can
+    say which index SHOULD win.
+    """
     print(f"\n== {header} ({db.name}.{name}, {db[name].estimated_document_count()} docs) ==")
     idx = sorted(db[name].index_information().keys())
     print(f"   indexes present: {', '.join(idx) if idx else 'NONE'}")
-    for label, query, sort, limit in paths:
-        explain_one(db[name], label, query, sort, limit)
+    misses = 0
+    for path in paths:
+        label, query, sort, limit = path[:4]
+        expect = (path[4] if len(path) > 4 else None) if judge_plans else None
+        misses += 1 if explain_one(db[name], label, query, sort, limit, expect) else 0
+    return misses
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +418,12 @@ def seed_scratch(db, n):
             "source_job_id": f"REQ-{i:06d}",
             "employer_id": f"employer-{i % 250}",
             "employer_name": f"Employer {i % 250}",
+            # The canonical employer, on the two thirds of rows that would
+            # carry one live. Left ABSENT on the rest, deliberately: the
+            # indexes are PARTIAL on the field existing, and a corpus where
+            # every row has it would not exercise that.
+            **({"canonical_employer_id": f"emp_{i % 120:012x}"}
+               if i % 3 else {}),
             "title_raw": "Senior Backend Engineer",
             "title_normalized": "senior backend engineer",
             "role_family": ROLE_FAMILIES[i % len(ROLE_FAMILIES)],
@@ -331,7 +435,7 @@ def seed_scratch(db, n):
                                    "data", "ai_ml", "security")[i % 5]],
                 "role_specialties": [("backend", "sre", "data_engineering",
                                       "ml_engineering", "secops")[i % 5]],
-                "taxonomy_version": "tech-tax-1.1.0",
+                "taxonomy_version": "tech-tax-1.2.0",
             },
             "seniority": ("senior", "mid", "entry")[i % 3],
             "locations": locs,
@@ -401,23 +505,27 @@ def main():
     if sample and sample.get("content_hash"):
         live_hash = sample["content_hash"]
 
-    explain_collection(db, "job_postings", posting_paths(live_hash),
-                       "LIVE job_postings (no writes)")
-    explain_collection(db, "job_source_state", STATE_PATHS,
-                       "LIVE job_source_state (no writes)")
+    misses = explain_collection(db, "job_postings", posting_paths(live_hash),
+                                "LIVE job_postings (no writes)")
+    misses += explain_collection(db, "job_source_state", STATE_PATHS,
+                                 "LIVE job_source_state (no writes)")
 
     if no_scratch:
         print("\n(--no-scratch: skipped seeded verification)")
+        _verdict(misses)
         return
 
     posting_ids = state_ids = []
     try:
         print(f"\n-- seeding {seed_n} scratch postings + 64 scratch shard states --")
         posting_ids, state_ids, content_hash = seed_scratch(db, seed_n)
-        explain_collection(db, SCRATCH_POSTINGS, posting_paths(content_hash),
-                           "SCRATCH job_postings (seeded)")
-        explain_collection(db, SCRATCH_STATE, STATE_PATHS,
-                           "SCRATCH job_source_state (seeded)")
+        misses += explain_collection(db, SCRATCH_POSTINGS,
+                                     posting_paths(content_hash),
+                                     "SCRATCH job_postings (seeded)",
+                                     judge_plans=False)
+        misses += explain_collection(db, SCRATCH_STATE, STATE_PATHS,
+                                     "SCRATCH job_source_state (seeded)",
+                                     judge_plans=False)
     finally:
         # Delete EXACTLY what was inserted, by _id. Collections are not dropped.
         d1 = db[SCRATCH_POSTINGS].delete_many({"_id": {"$in": list(posting_ids)}})
@@ -427,6 +535,7 @@ def main():
               f"(remaining: {db[SCRATCH_POSTINGS].estimated_document_count()}, "
               f"{db[SCRATCH_STATE].estimated_document_count()}) --")
         print("   scratch collections left in place (empty) - not dropped by design.")
+    _verdict(misses)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,11 @@
 # US state business registries — what is actually harvestable
 
+> **HISTORICAL, 2026-09-02.** Measured 2026-08-18 and unchanged since. State
+> registries are an EMPLOYER-DISCOVERY source, not a job source, and nothing
+> in the 2026-09-02 coverage work touched them — so the findings below still
+> stand, but they have not been re-measured and the dates in them are the
+> dates that matter.
+
 **Systematically re-measured 2026-08-18.** Method and raw results in §2.
 
 ## 1. The short answer

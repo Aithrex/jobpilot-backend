@@ -254,6 +254,114 @@ SKILL_LEXICON: Dict[str, List[str]] = {
     "a/b testing": ["a/b testing", "ab testing", "experimentation"],
     "data visualization": ["data visualization", "data visualisation", "tableau",
                            "power bi", "powerbi", "looker"],
+    # --- semiconductor / hardware ----------------------------------------
+    #
+    # `semiconductor_hardware` is a CORE family in `tech_taxonomy` — the
+    # default search returns every ASIC, RTL, verification, firmware, analog,
+    # RF, EDA and photonics role — and this lexicon contained NOT ONE of its
+    # words. Measured on the domain eval: a senior ASIC designer's résumé
+    # yielded zero readable skills, tripped `insufficient_resume_evidence`,
+    # and scored 20 against EVERY job including their own discipline. The
+    # engine was not ranking those candidates badly; it could not read them at
+    # all, and the cap it applied was the honest answer to a question it
+    # should never have had to ask.
+    "verilog": ["verilog", "systemverilog", "system verilog"],
+    "vhdl": ["vhdl"],
+    # Multi-word forms only. A bare "rtl" collides with the FRONTEND meaning
+    # (right-to-left), and a React posting that mentions "RTL support" would
+    # otherwise acquire a silicon-design requirement its candidates cannot
+    # cover.
+    "rtl design": ["rtl design", "rtl coding", "rtl development",
+                   "rtl verification", "rtl engineer", "rtl to gdsii",
+                   "register transfer level", "synthesizable rtl"],
+    "uvm": ["uvm", "universal verification methodology", "constrained random"],
+    "design verification": ["design verification", "functional coverage",
+                            "formal verification", "assertion based verification"],
+    "synthesis": ["logic synthesis", "design compiler", "genus", "synthesis"],
+    "timing closure": ["timing closure", "static timing analysis",
+                       "physical design", "place and route"],
+    "asic": ["asic", "soc design", "tapeout", "tape out"],
+    "fpga": ["fpga", "xilinx", "altera", "vivado", "quartus"],
+    "analog design": ["analog design", "mixed signal", "mixed-signal",
+                      "analog layout", "spice simulation"],
+    "rf engineering": ["rf design", "rf engineering", "radio frequency",
+                       "antenna design", "microwave"],
+    "semiconductor process": ["photolithography", "wafer fab", "etch process",
+                              "thin film deposition", "yield analysis"],
+    "signal integrity": ["signal integrity", "power integrity"],
+    "pcb design": ["pcb design", "schematic capture", "altium", "cadence allegro"],
+    # --- embedded ---------------------------------------------------------
+    "embedded c": ["embedded c", "bare metal", "baremetal"],
+    "rtos": ["rtos", "freertos", "zephyr", "real time operating system"],
+    "firmware": ["firmware", "bootloader", "board bring-up", "board bringup"],
+    "device drivers": ["device driver", "device drivers", "kernel driver"],
+    "embedded protocols": ["i2c", "spi", "uart", "can bus", "modbus", "mqtt"],
+    "hardware debug": ["oscilloscope", "logic analyzer", "logic analyser",
+                       "jtag", "in-circuit"],
+    # --- robotics ---------------------------------------------------------
+    "ros": ["ros", "ros2", "robot operating system"],
+    "slam": ["slam", "simultaneous localization", "localization and mapping"],
+    "motion planning": ["motion planning", "path planning", "trajectory optimization",
+                        "trajectory planning"],
+    "sensor fusion": ["sensor fusion", "kalman filter", "extended kalman",
+                      "state estimation"],
+    "computer vision": ["computer vision", "opencv", "image processing",
+                        "object detection", "point cloud"],
+    "control systems": ["control systems", "pid control", "model predictive control",
+                        "closed loop control"],
+    "lidar": ["lidar", "radar", "imu", "depth camera"],
+    # --- gaming -----------------------------------------------------------
+    "game engine": ["game engine", "unreal engine", "unreal", "unity3d", "unity engine",
+                    "godot", "cryengine"],
+    "graphics programming": ["graphics programming", "rendering pipeline",
+                             "shader", "shaders", "hlsl", "glsl", "directx",
+                             "vulkan", "opengl"],
+    "gameplay programming": ["gameplay programming", "gameplay systems",
+                             "animation system", "game physics"],
+    "performance profiling": ["performance profiling", "frame budget",
+                              "cpu profiling", "gpu profiling", "renderdoc",
+                              "profiling", "flame graph"],
+    # --- quantum ----------------------------------------------------------
+    #
+    # Added with `tech-tax-1.2.0`, which introduced `quantum_software`,
+    # `quantum_hardware`, `quantum_control` and `cryogenic_systems` on live
+    # evidence. A taxonomy that can classify a quantum posting and a scorer
+    # that cannot read a quantum résumé is half a feature.
+    "quantum computing": ["quantum computing", "quantum information",
+                          "quantum algorithms", "qubit", "qubits"],
+    "quantum sdk": ["qiskit", "cirq", "pennylane", "braket", "quantum sdk"],
+    "quantum error correction": ["quantum error correction", "surface code",
+                                 "logical qubit", "\bqec\b"],
+    "quantum control": ["pulse level", "pulse-level", "qubit control",
+                        "quantum control", "cryo cmos"],
+    "cryogenics": ["cryogenic", "cryogenics", "dilution refrigerator",
+                   "cryostat", "superconducting circuit"],
+    # --- compilers / systems ---------------------------------------------
+    "compilers": ["compiler", "compilers", "llvm", "code generation",
+                  "transpiler", "intermediate representation"],
+    "distributed systems": ["distributed systems", "consensus", "raft protocol",
+                            "sharding", "replication"],
+    # --- ml platform ------------------------------------------------------
+    "mlops": ["mlops", "llmops", "model serving", "feature store",
+              "model registry", "model monitoring"],
+    "llm": ["llm", "large language model", "large language models",
+            "transformers", "fine tuning", "fine-tuning", "rag",
+            "retrieval augmented"],
+    # --- security engineering --------------------------------------------
+    "threat modeling": ["threat modeling", "threat modelling", "attack surface",
+                        "security design review", "secure design review"],
+    "owasp": ["owasp", "sast", "dast", "static analysis security",
+              "dependency scanning", "secure code review"],
+    "cryptography": ["cryptography", "cryptographic", "key management",
+                     "pki", "tls", "encryption at rest"],
+    "iam": ["identity and access management", "\biam\b", "oauth", "saml",
+            "single sign on", "sso"],
+    # --- mobile -----------------------------------------------------------
+    "ios": ["ios development", "swiftui", "uikit", "xcode"],
+    "android": ["android development", "jetpack compose", "android sdk"],
+    # --- accessibility / frontend quality ---------------------------------
+    "accessibility": ["accessibility", "wcag", "aria", "screen reader",
+                      "a11y"],
     # --- qa / security ----------------------------------------------------
     "automated testing": ["automated testing", "test automation", "selenium",
                           "cypress", "playwright", "unit testing", "pytest"],
@@ -422,10 +530,26 @@ def _looks_like_regex(alias: str) -> bool:
 
 def _alias_lookup(alias_to_canon: Dict[str, str]) -> Dict[str, str]:
     """Match text -> canonical, with the regex-escaped aliases resolved to the
-    literal string the scanner will actually produce."""
+    literal string the scanner will actually produce.
+
+    `\\b` is stripped BEFORE the backslashes are, and that ordering is the
+    whole correctness of this function. Dropping backslashes alone turns
+    `\\brtl\\b` into the literal `brtlb`, which no scan will ever produce — so
+    the alias compiled into the pattern, matched "rtl" in a résumé, and then
+    failed the reverse lookup and was silently dropped. An alias that matches
+    and is then discarded is worse than one that never matched: it looks
+    present in the lexicon and is absent from every result.
+
+    Zero-width assertions are unnecessary in this lexicon anyway — the
+    compiled pattern already brackets the whole alternation with
+    `(?<![A-Za-z0-9_])` / `(?![A-Za-z0-9_])` — so this is belt and braces for
+    the next person who writes one.
+    """
     out: Dict[str, str] = {}
     for alias, canon in alias_to_canon.items():
-        literal = alias.replace("\\", "") if _looks_like_regex(alias) else alias
+        literal = alias
+        if _looks_like_regex(alias):
+            literal = re.sub(r"\\[bBAZ]", "", literal).replace("\\", "")
         out.setdefault(literal, canon)
     return out
 
@@ -2040,15 +2164,55 @@ def _coverage(reqs_list: Sequence[str], prof: Dict[str, Any]
     return total / max(len(reqs_list), _MIN_COVERAGE_DENOM), covered, missing
 
 
-def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any]
+#: How much of a candidate's elapsed experience counts AS EXPERIENCE FOR THIS
+#: ROLE, by role-alignment tier.
+#:
+#: The defect this fixes
+#: ---------------------
+#: The experience component measured calendar time and nothing else, so seven
+#: years of backend engineering scored FULL MARKS against a senior
+#: semiconductor requisition asking for eight. Measured on
+#: `evals/eval_fit_score_domains.py` across 115 labelled scenarios: grade-3
+#: pairs averaged 19.91 of 20 on this component and grade-0 pairs averaged
+#: 16.29 — a separation of 3.6 points out of 20. A component that gives an
+#: irrelevant match 81% of its maximum is not measuring fit; it is measuring
+#: how long the person has been working, which is the same for every posting
+#: they will ever see.
+#:
+#: Not a second role-alignment penalty. Role alignment answers "is this your
+#: discipline"; this answers "does your experience meet what they ask", and
+#: the honest answer to the second question depends on the first — seven
+#: years of backend is not seven years of ASIC design. The factor is applied
+#: ONLY to this component, only downward, and it is deliberately gentle at
+#: the near rungs: transferable experience IS experience, and an adjacent
+#: specialty keeps 95% of it.
+#:
+#: `unknown` is 1.00, and that is the load-bearing entry. Not knowing which
+#: discipline a posting is in must not cost a candidate their career — the
+#: whole `_normalized_score` design is that unknown is EXCLUDED, never priced,
+#: and a relevance factor below 1.0 for `unknown` would price it here through
+#: the back door on the 43.3% of live postings that state no discipline.
+_EXPERIENCE_RELEVANCE: Dict[str, float] = {
+    "exact_specialty": 1.00,
+    "adjacent_specialty": 0.95,
+    "same_family": 0.90,
+    "adjacent_family": 0.80,
+    "unrelated": 0.55,
+    "unknown": 1.00,
+}
+
+
+def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any],
+                      alignment: Optional[Dict[str, Any]] = None
                       ) -> Tuple[float, str, bool, bool]:
     """(points, detail, severe_gap_flag, known).
 
     Scored primarily off the years gap, then corrected by the resume's title
-    SENIORITY band. Dated-years alone miss the case of someone with several
-    noisy years but only ever junior/associate titles applying to a Staff role
-    - the band comparison catches that, and the symmetric over-qualification
-    case for entry roles.
+    SENIORITY band, then scaled by how much of that experience is RELEVANT to
+    this role (`_EXPERIENCE_RELEVANCE`). Dated-years alone miss the case of
+    someone with several noisy years but only ever junior/associate titles
+    applying to a Staff role - the band comparison catches that, and the
+    symmetric over-qualification case for entry roles.
     """
     mx = COMPONENT_MAX["experience"]
     have = prof.get("years")
@@ -2140,6 +2304,15 @@ def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any]
         pts, detail = mx * 0.7, ("Your seniority is well above what this early "
                                  "career role asks for.")
 
+    # Relevance scaling. Applied last, so every branch above is scaled the
+    # same way and none of them has to know about it. Never applied to an
+    # unscored component (`known=False` returns above), never upward.
+    tier = str((alignment or {}).get("tier") or "unknown")
+    factor = _EXPERIENCE_RELEVANCE.get(tier, 1.0)
+    if factor < 1.0 and pts > 0:
+        pts *= factor
+        detail = (f"{detail} Counted against a {tier.replace('_', ' ')} match to "
+                  f"your background.")
     return pts, detail, severe, True
 
 
@@ -2511,7 +2684,8 @@ def score(resume: Dict[str, Any], job: Dict[str, Any],
     req_pts = (req_cov * COMPONENT_MAX["required_skills"]) if required else 0.0
     pref_cov, pref_covered, pref_missing = _coverage(preferred, prof)
     pref_pts = (pref_cov * COMPONENT_MAX["preferred_skills"]) if preferred else 0.0
-    exp_pts, exp_detail, severe_gap, exp_known = _score_experience(reqs, prof)
+    exp_pts, exp_detail, severe_gap, exp_known = _score_experience(
+        reqs, prof, alignment)
     dom_pts, dom_detail, dom_known = _score_domain(reqs, prof)
     loc_pts, loc_detail, location_bad, loc_known = _score_location(
         reqs, prof, job_location)

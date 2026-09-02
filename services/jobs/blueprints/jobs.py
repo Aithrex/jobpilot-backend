@@ -970,6 +970,198 @@ def tech_feed_coverage():
         return jsonify({"error": "Failed to load coverage"}), 500
 
 
+# --- Tech feed telemetry -------------------------------------------------
+# Non-PII by construction: the account is a salted one-way pseudonym, the
+# dimensions are a closed allowlist of KEYS (never filter values), and result
+# counts are bucketed. See `services/tech_feed_telemetry.py`.
+
+@jobs_bp.route("/tech-feed/telemetry", methods=["POST"])
+@jwt_required()
+def tech_feed_telemetry():
+    """Batch of `{event, count?, dimensions?}`. Returns `{accepted, rejected}`.
+
+    Deliberately fire-and-forget from the client's point of view: telemetry
+    must never be able to fail a user action, so a malformed batch is counted
+    and dropped rather than 400ed.
+    """
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"jobs_tech_feed_telemetry:{client_ip}",
+                               max_requests=120, window_seconds=300):
+        # 204, not 429: a rate-limited telemetry batch is dropped silently by
+        # design. Telling the client to retry would make the busiest sessions
+        # send the most traffic.
+        return ("", 204)
+    data = request.get_json(silent=True) or {}
+    try:
+        from services import tech_feed_telemetry as tft
+        tft.ensure_indexes()
+        return jsonify(tft.record((data or {}).get("events") or [],
+                                  user_email=get_jwt_identity())), 200
+    except Exception as e:
+        logger.warning(f"Tech feed telemetry error: {e}")
+        return ("", 204)
+
+
+# --- Tech feed saved searches -------------------------------------------
+# Server-owned, with the client keeping a local mirror. Same subpath as the
+# rest of the tech feed, so no new edge route is needed.
+
+@jobs_bp.route("/tech-feed/saved-searches", methods=["GET"])
+@jwt_required()
+def tech_feed_saved_searches_list():
+    """`{searches: [{id, name, filters, createdAt, updatedAt, fingerprint}]}`."""
+    try:
+        from services import tech_feed_saved_searches as tfss
+        return jsonify(tfss.list_for(get_jwt_identity())), 200
+    except Exception as e:
+        logger.error(f"Tech feed saved-search list error: {e}")
+        return jsonify({"error": "Failed to load saved searches"}), 500
+
+
+@jobs_bp.route("/tech-feed/saved-searches", methods=["POST"])
+@jwt_required()
+def tech_feed_saved_searches_save():
+    """Upsert one saved search, keyed on the CLIENT's own id.
+
+    Body: `{id, name, filters}`. `id` is the client's opaque key — sending the
+    same one twice updates one row rather than creating two, which is what
+    makes an offline queue safe to drain.
+    """
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    if limiter.is_rate_limited(f"jobs_tech_feed_saved:{client_ip}",
+                               max_requests=60, window_seconds=300):
+        return jsonify({"error": "Rate limit exceeded."}), 429
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Body must be a JSON object"}), 400
+    try:
+        from services import tech_feed_saved_searches as tfss
+        tfss.ensure_indexes()
+        return jsonify(tfss.save(
+            get_jwt_identity(),
+            client_id=data.get("id"),
+            name=InputSanitizer.sanitize_string(data.get("name", ""), max_length=80),
+            filters=data.get("filters"))), 200
+    except ValueError as e:
+        # The per-account cap. A 409 rather than a 400: the request is
+        # well-formed and the account is full, and the client should say so
+        # rather than reporting the user's input as malformed.
+        return jsonify({"error": str(e)}), 409
+    except Exception as e:
+        logger.error(f"Tech feed saved-search save error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to save the search"}), 500
+
+
+@jobs_bp.route("/tech-feed/saved-searches/<search_id>", methods=["DELETE"])
+@jwt_required()
+def tech_feed_saved_searches_delete(search_id):
+    try:
+        from services import tech_feed_saved_searches as tfss
+        return jsonify(tfss.delete(get_jwt_identity(), search_id)), 200
+    except Exception as e:
+        logger.error(f"Tech feed saved-search delete error: {e}")
+        return jsonify({"error": "Failed to delete the search"}), 500
+
+
+@jobs_bp.route("/tech-feed/saved-searches/reconcile", methods=["POST"])
+@jwt_required()
+def tech_feed_saved_searches_reconcile():
+    """Push the client's local list up, then return the server's.
+
+    Called once on mount. Never deletes: a search the client does not have is
+    one saved on another device, not one the user removed.
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        from services import tech_feed_saved_searches as tfss
+        tfss.ensure_indexes()
+        return jsonify(tfss.reconcile(
+            get_jwt_identity(), (data or {}).get("searches"))), 200
+    except Exception as e:
+        logger.error(f"Tech feed saved-search reconcile error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to reconcile saved searches"}), 500
+
+
+# --- Tech feed employer directory ---------------------------------------
+# Same /api/jobs/tech-feed subpath as everything else here, for the same
+# infrastructure reason: a new top-level /api/<prefix> needs a matching entry
+# in var.service_config and 404s in prod until it exists.
+
+@jobs_bp.route("/tech-feed/companies", methods=["GET"])
+@jwt_required()
+def tech_feed_companies():
+    """Company autocomplete over the canonical employer registry.
+
+    `GET /api/jobs/tech-feed/companies?q=stri&limit=10&technology_only=1`
+    -> `{query, companies: [{employer_id, display_name, aliases, categories,
+        cohorts, domain, identity: {basis, confidence, operating_status,
+        redirects_to}, career_source_verified, active_postings,
+        core_tech_postings}], truncated}`
+
+    `?ids=emp_a,emp_b` resolves ids back to names instead, so a saved or
+    bookmarked filter renders as company names rather than as hex.
+
+    The payload is deliberately narrow: nothing from `career_sources` appears
+    beyond the `career_source_verified` boolean. Ownership evidence names the
+    endpoints we fetch and the domains we probe, and that is operational
+    detail about our crawl, not information about the employer.
+    """
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    # Keystroke-driven, so the ceiling is per-minute rather than per-5-minutes,
+    # and it is the reason the handler does at most two bounded queries.
+    if limiter.is_rate_limited(f"jobs_tech_feed_companies:{client_ip}",
+                               max_requests=60, window_seconds=60):
+        return jsonify({"error": "Rate limit exceeded. "
+                                 "Company lookups are limited to 60 / min."}), 429
+    try:
+        from services import employer_directory
+        raw_ids = InputSanitizer.sanitize_string(
+            request.args.get("ids", ""), max_length=1000)
+        if raw_ids:
+            ids = [i.strip() for i in raw_ids.split(",") if i.strip()][:25]
+            return jsonify(employer_directory.lookup(ids)), 200
+
+        query = InputSanitizer.sanitize_string(
+            request.args.get("q", ""), max_length=120)
+        try:
+            limit = int(request.args.get("limit", 10))
+        except (TypeError, ValueError):
+            limit = 10
+        cats = [InputSanitizer.sanitize_string(c, max_length=40)
+                for c in (request.args.get("categories", "").split(","))
+                if c.strip()][:10]
+        cohorts = [InputSanitizer.sanitize_string(c, max_length=40)
+                   for c in (request.args.get("cohorts", "").split(","))
+                   if c.strip()][:8]
+        tech_only = str(request.args.get("technology_only", "")).strip().lower() \
+            in ("1", "true", "yes")
+        return jsonify(employer_directory.search(
+            query, limit=limit, categories=cats, cohorts=cohorts,
+            technology_only=tech_only)), 200
+    except Exception as e:
+        logger.error(f"Tech feed company lookup error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to look up companies"}), 500
+
+
+@jobs_bp.route("/tech-feed/company-categories", methods=["GET"])
+@jwt_required()
+def tech_feed_company_categories():
+    """The canonical employer-category facet, with counts.
+
+    Replaces free-form category entry, which accepted any string and silently
+    matched nothing when the string was not one of ours.
+    """
+    try:
+        from services import employer_directory
+        return jsonify(employer_directory.categories()), 200
+    except Exception as e:
+        logger.error(f"Tech feed company categories error: {e}")
+        return jsonify({"error": "Failed to load company categories"}), 500
+
+
 # --- Tech feed feedback -------------------------------------------------
 # Mounted under the SAME /api/jobs/tech-feed subpath as the routes above, for
 # the same infrastructure reason: a new top-level /api/<prefix> would need a

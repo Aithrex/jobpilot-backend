@@ -485,6 +485,54 @@ _MUTABLE = (
 )
 
 
+#: States that mean CONTENT HAS BEEN SEEN. `validated` and `empty` are the two
+#: covered states; `content_validated` is content without ownership.
+_CONTENT_STATES = (STATE_VALIDATED, STATE_EMPTY, STATE_CONTENT_VALIDATED)
+
+
+def _registration_state(stored: str, incoming: str, *, owned: bool) -> str:
+    """The state a REGISTRATION may write over `stored`.
+
+    Registration answers one of the state machine's two questions — who owns
+    this board — and says nothing about whether it serves jobs. So:
+
+      * a stored state carrying a CONTENT verdict is never overwritten by one
+        that does not (`validated` -> `ownership_verified` was removing
+        employers from coverage on a pass that had just PROVEN their boards);
+      * except that `content_validated` PLUS newly proven ownership is exactly
+        `validated` — content was already read and found postings, and the
+        only thing it was missing has just arrived. Leaving it at
+        `content_validated` would be the same bug facing the other way.
+    """
+    if not stored or stored == incoming:
+        return incoming
+    if stored == STATE_CONTENT_VALIDATED and owned:
+        return STATE_VALIDATED
+    if _demotes_content(stored, incoming):
+        return stored
+    return incoming
+
+
+def _demotes_content(stored: str, incoming: str) -> bool:
+    """Would writing `incoming` over `stored` forget a content verdict?
+
+    Registration answers ONE of the two questions the state machine asks —
+    who owns this board — and says nothing at all about whether it serves
+    jobs. `upsert_source` nevertheless `$set` the state unconditionally, so
+    re-registering an employer whose board was already `validated` rewrote it
+    to `ownership_verified` and removed the employer from coverage. Measured:
+    `verify_official_career_urls.py --apply --register` moved Intel, Adobe,
+    Accenture, Palantir, Splunk, DeepL, d-Matrix, Aikido and Lakera out of the
+    covered set in one run, and Tier-A coverage read 24/94 instead of 30/94 —
+    a reporting number moving on a write that proved something GOOD.
+
+    Demotion is the content pass's job, through `record_failure`, which has
+    evidence for it. This one does not.
+    """
+    return bool(stored) and stored in _CONTENT_STATES \
+        and incoming not in _CONTENT_STATES
+
+
 def upsert_source(record: Dict[str, Any]) -> str:
     """Insert or update one career source. Returns `source_id`.
 
@@ -500,6 +548,14 @@ def upsert_source(record: Dict[str, Any]) -> str:
     set_fields["updated_at"] = now
     if record.get("last_verified_at"):
         set_fields["last_verified_at"] = record["last_verified_at"]
+    if "state" in set_fields:
+        stored = col.find_one({"source_id": sid}, {"_id": 0, "state": 1}) or {}
+        # Everything else this registration learned still lands - the
+        # endpoint, the redirect chain, the verified domain, the evidence.
+        # Only the STATE is adjudicated.
+        set_fields["state"] = _registration_state(
+            str(stored.get("state") or ""), str(set_fields["state"] or ""),
+            owned=bool(record.get("ownership_verified")))
 
     push: Dict[str, Any] = {}
     for field in ("ownership_evidence", "content_validation_evidence"):
@@ -559,15 +615,30 @@ def bulk_upsert_sources(records: Iterable[Dict[str, Any]], *,
             return n
         return int((res.upserted_count or 0) + (res.modified_count or 0))
 
-    for record in records:
+    # The same guard `upsert_source` applies, at seeding scale: one read per
+    # BATCH rather than one per record. Chunked at `batch_size` because a
+    # seeding run passes every source in the registry and an `$in` of eleven
+    # thousand ids is a query document nobody wants to explain.
+    batch = [r for r in records if r.get("source_id")]
+    stored_states: Dict[str, str] = {}
+    for i in range(0, len(batch), max(1, int(batch_size))):
+        ids = [r["source_id"] for r in batch[i:i + max(1, int(batch_size))]]
+        for d in col.find({"source_id": {"$in": ids}},
+                          {"_id": 0, "source_id": 1, "state": 1}):
+            stored_states[str(d.get("source_id"))] = str(d.get("state") or "")
+
+    for record in batch:
         sid = record.get("source_id")
-        if not sid:
-            continue
         seen += 1
         set_fields = {k: record[k] for k in _MUTABLE if k in record}
         set_fields["updated_at"] = now
         if record.get("last_verified_at"):
             set_fields["last_verified_at"] = record["last_verified_at"]
+        if "state" in set_fields:
+            set_fields["state"] = _registration_state(
+                stored_states.get(str(sid), ""),
+                str(set_fields["state"] or ""),
+                owned=bool(record.get("ownership_verified")))
         update: Dict[str, Any] = {
             "$set": set_fields,
             "$setOnInsert": {

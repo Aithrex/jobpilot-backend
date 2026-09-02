@@ -1,5 +1,24 @@
 # ATS vendor coverage — what we crawl, what we cannot, and why
 
+> **HISTORICAL for the "cannot crawl" column, 2026-09-02.** Section 6 of this
+> document was the source for
+> `employer_tech_classifier.UNSUPPORTED_PROVIDERS`, and it went stale exactly
+> as a hand-maintained list does: it named `usajobs` and `successfactors`
+> while `ats_providers/usajobs.py` and `ats_providers/successfactors.py` were
+> both registered, implemented and crawling. Every employer on either vendor
+> was reported as an ATS we cannot reach.
+>
+> Readiness is now DERIVED from the registered provider implementations
+> (`ats_providers.registry.readiness()`), so a vendor stops being reported as
+> unsupported the moment its module lands. Two vendor gaps this document did
+> not record were also found and fixed on 2026-09-02: Lever's EU region
+> (`api.eu.lever.co`) was in no fingerprint and no host allowlist, and the
+> Workday PROVIDER could not fingerprint `myworkdaysite.com` even though the
+> legacy fetcher could crawl it.
+>
+> The vendor NOTES below — what each API is, where the tenants come from, what
+> the anti-bot posture is — remain accurate and are why this file is kept.
+
 **Last verified against live endpoints: 2026-08-18.**
 Regenerate the "works" column with `PYTHONPATH=shared/python python3 scripts/live_provider_check.py`.
 

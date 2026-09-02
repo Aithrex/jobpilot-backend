@@ -423,6 +423,47 @@ def _parse_iso(value: Any) -> Optional[datetime]:
 # Stage 1-3: the Mongo query (hard eligibility, tech scope, structured facets)
 # ---------------------------------------------------------------------------
 
+_CANONICAL_EMPLOYER_ID_RE = re.compile(r"^emp_[0-9a-f]{12}$")
+
+
+def _is_canonical_employer_id(value: Any) -> bool:
+    """Is this string one of OUR employer ids, rather than a legacy slug?
+
+    Shape-checked rather than looked up: the filter must not need a registry
+    round trip to decide which clause a value belongs in, and `emp_` + 12 hex
+    is a shape no ATS tenant or name slug produces.
+    """
+    return bool(_CANONICAL_EMPLOYER_ID_RE.match(str(value or "").strip()))
+
+
+def employer_key_of(row: Dict[str, Any]) -> str:
+    """THE employer identity of one posting row, for grouping and capping.
+
+    Order is evidence strength, and it is the same order everywhere in this
+    module so that dedupe, diversity and facets can never disagree about who
+    an employer is:
+
+        canonical_employer_id   proven ownership of the board it came from
+        (ats, tenant)           the board itself - one board, one employer,
+                                which is true for every board we have not
+                                had to refuse
+        employer_name           a name, which is what the slug already was
+
+    The last rung is a name and it is last for that reason. It exists because
+    a marketplace posting has no board identity worth grouping on and showing
+    fifteen of them is still wrong.
+    """
+    canonical = str(row.get("canonical_employer_id") or "").strip()
+    if canonical:
+        return canonical
+    tenant = str(row.get("tenant") or "").strip().lower()
+    if tenant:
+        return f"{str(row.get('ats') or '').strip().lower()}|{tenant}"
+    return (str(row.get("employer_name") or "").strip().lower()
+            or str(row.get("employer_id") or "").strip().lower()
+            or "")
+
+
 def build_query(req: Dict[str, Any], *, now: Optional[datetime] = None
                 ) -> Dict[str, Any]:
     """The indexed part of the filter. Everything expressible in Mongo is here.
@@ -513,10 +554,26 @@ def build_query(req: Dict[str, Any], *, now: Optional[datetime] = None
                 {"employment_type_normalized": {"$exists": False}},
             ]})
     if req["company_ids"]:
-        # A company may be named by its normalized employer id or by its ATS
-        # tenant slug; the UI hands back whichever the catalog gave it.
-        _and.append({"$or": [{"employer_id": {"$in": req["company_ids"]}},
-                             {"tenant": {"$in": req["company_ids"]}}]})
+        # CANONICAL FIRST. `company_ids` now carries `emp_<12 hex>` ids from
+        # the autocomplete, and those are the only spelling that survives an
+        # employer publishing under three of its own legal-entity names.
+        #
+        # The legacy spellings — the name-derived `employer_id` slug and the
+        # bare ATS tenant — are still accepted, because a saved search, a
+        # bookmarked URL and the browser extension all hold them, and breaking
+        # those would be a silent zero-result page rather than an error. They
+        # are a compatibility shim with an end date, not a second identity:
+        # once saved searches are migrated they come out.
+        canonical = [c for c in req["company_ids"] if _is_canonical_employer_id(c)]
+        legacy = [c for c in req["company_ids"] if not _is_canonical_employer_id(c)]
+        clauses: List[Dict[str, Any]] = []
+        if canonical:
+            clauses.append({"canonical_employer_id": {"$in": canonical}})
+        if legacy:
+            clauses.append({"employer_id": {"$in": legacy}})
+            clauses.append({"tenant": {"$in": legacy}})
+        if clauses:
+            _and.append({"$or": clauses} if len(clauses) > 1 else clauses[0])
     if req["cities"]:
         keys = [inv.normalize_location(c)["key"] for c in req["cities"]]
         keys = [k for k in keys if k]
@@ -590,6 +647,11 @@ _PROJECTION = {
     "industry": 1, "ats": 1, "tenant": 1, "compensation": 1,
     "tech": 1, "dedupe_group_id": 1, "variant_group_id": 1,
     "board_kind": 1,
+    # The canonical employer, when the board's ownership is proven. Absent is
+    # normal and means exactly that: no accepted evidence, or a contested
+    # board. Every employer-shaped operation below PREFERS it and falls back
+    # to `(ats, tenant)`, which is what they all keyed on before.
+    "canonical_employer_id": 1, "canonical_employer_basis": 1,
 }
 
 #: The retrieval projection. `requirements` is DELIBERATELY absent.
@@ -1340,6 +1402,7 @@ def build_facets(rows: Sequence[Dict[str, Any]], *, top: int = 25
     """
     from collections import Counter
     counters: Dict[str, Counter] = {f: Counter() for f in _FACET_FIELDS}
+    _facet_labels: Dict[str, str] = {}
     for row in rows:
         tech = row.get("_tech") or {}
         counters["tech_scope"][tech.get("tech_scope") or "unknown"] += 1
@@ -1349,7 +1412,14 @@ def build_facets(rows: Sequence[Dict[str, Any]], *, top: int = 25
             counters["role_specialty"][spec] += 1
         counters["seniority"][tech.get("seniority") or row.get("seniority") or "unknown"] += 1
         counters["work_mode"][row.get("work_mode") or "unknown"] += 1
-        counters["employer"][row.get("employer_name") or "(unknown)"] += 1
+        # Faceted on the CANONICAL identity and labelled with the name, so an
+        # employer publishing under three legal-entity names is one facet row
+        # rather than three. `_employer_facet_labels` turns the ids back into
+        # names after counting; counting on the name would have re-created the
+        # split the id exists to remove.
+        counters["employer"][employer_key_of(row) or "(unknown)"] += 1
+        _facet_labels.setdefault(employer_key_of(row) or "(unknown)",
+                                 str(row.get("employer_name") or "(unknown)"))
         counters["ats"][row.get("ats") or "(unknown)"] += 1
         counters["source"][row.get("source") or "(unknown)"] += 1
         counters["employment_type"][row.get("employment_type") or "(unstated)"] += 1
@@ -1361,10 +1431,15 @@ def build_facets(rows: Sequence[Dict[str, Any]], *, top: int = 25
         country = (locs[0].get("country") if locs and isinstance(locs[0], dict) else "") or "unknown"
         counters["country"][country] += 1
         counters["employer_kind"][_employer_kind_of(row)] += 1
-    return {
-        field: [{"value": v, "count": n} for v, n in c.most_common(top)]
-        for field, c in counters.items()
-    }
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for field, counter in counters.items():
+        if field == "employer":
+            out[field] = [{"value": _facet_labels.get(v, v), "count": n,
+                           "employer_id": v if _is_canonical_employer_id(v) else None}
+                          for v, n in counter.most_common(top)]
+        else:
+            out[field] = [{"value": v, "count": n} for v, n in counter.most_common(top)]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1383,7 +1458,14 @@ def _card(row: Dict[str, Any], *, now: datetime) -> Dict[str, Any]:
     card = {
         "job_id": row.get("job_id"),
         "dedupe_group_id": row.get("dedupe_group_id") or row.get("job_id"),
+        # LEGACY, and kept verbatim. It is a slug of whatever name the board
+        # printed; clients that hold one must keep matching on it.
         "employer_id": row.get("employer_id"),
+        # THE card's employer identity, when we can prove one. Absent means
+        # the board's ownership is unproven or contested — a real answer, and
+        # a client should fall back to `employer_name` rather than invent one.
+        "canonical_employer_id": row.get("canonical_employer_id") or None,
+        "canonical_employer_basis": row.get("canonical_employer_basis") or None,
         "employer_name": row.get("employer_name") or "",
         "employer_tech_classification": row.get("_employer_tech"),
         "employer_tech_evidence": row.get("_employer_tech_evidence") or [],
@@ -1548,8 +1630,37 @@ COVERAGE_TTL_SECONDS = int(os.getenv("TECH_FEED_COVERAGE_TTL", "300") or 300)
 _COVERAGE_CACHE: Dict[str, Any] = {"at": 0.0, "value": None}
 
 
+def reset_coverage_cache() -> None:
+    """Drop the cached coverage block.
+
+    Exists because the cache is PROCESS-global and the offline suite shares
+    one mongomock database: a test that asks for coverage pins the answer for
+    every later test, whose database looks nothing like it. That is a genuine
+    ordering hazard rather than a test-only nicety — the same thing happens in
+    a warm Lambda after a backfill, and an operator who has just re-run the
+    coverage report wants to see it.
+    """
+    _COVERAGE_CACHE["at"] = 0.0
+    _COVERAGE_CACHE["value"] = None
+
+
 def coverage_block(*, force: bool = False) -> Dict[str, Any]:
     """What the inventory can honestly claim about its own completeness.
+
+    Two kinds of number, and the difference is the point:
+
+    * **Live counts** — active postings, employers present in the inventory,
+      responding endpoints. Cheap, computed here, always current.
+    * **The measured coverage** — the technology-employer denominator, how
+      much of it is covered, by cohort and category, Tier-A. Those come from
+      `coverage_snapshots`, written by `scripts/employer_coverage_report.py`,
+      because measuring them reads five collections and classifies 23,782
+      employers. Computing a cheaper approximation here is exactly what
+      produced two different coverage numbers, one of which said 43%.
+
+    Every measured field therefore arrives with `measured_at`, `age_hours` and
+    `stale`. A surface that renders a coverage figure without its age is
+    making a claim the data does not support.
 
     Three of these numbers used to overstate it, and the brief is explicit
     that we must "never promise literal coverage of every technology company"
@@ -1567,7 +1678,8 @@ def coverage_block(*, force: bool = False) -> Dict[str, Any]:
       `responding_endpoints` — what it actually measures — and the real
       figures are reported beside it.
     * Nothing reported the DENOMINATOR at all, so no client could say what
-      share of the technology employers we track is owner-verified.
+      share of the technology employers we track is owner-verified. It does
+      now, from the snapshot.
     """
     from services import job_inventory_service as inv
     now = time.time()
@@ -1580,13 +1692,31 @@ def coverage_block(*, force: bool = False) -> Dict[str, Any]:
         db = _db()
         out["active_postings"] = db.job_postings.count_documents(
             {"status": inv.STATUS_ACTIVE})
-        # Employers we actually hold live postings for. `len(distinct(...))`
-        # over an indexed field, not a scan of the postings themselves.
+        # Employers we actually hold live postings for. Prefer the CANONICAL
+        # id: `employer_id` is a slug of whatever name the board printed, so
+        # counting distinct slugs counts JPMorgan three times. Both are
+        # reported — the difference between them IS the identity problem, and
+        # a banner that shows only the larger number is overstating reach.
         try:
-            out["known_employers"] = len(db.job_postings.distinct(
+            out["known_employers_legacy"] = len(db.job_postings.distinct(
                 "employer_id", {"status": inv.STATUS_ACTIVE}))
         except Exception:
-            out["known_employers"] = 0
+            out["known_employers_legacy"] = 0
+        try:
+            out["known_employers"] = len(db.job_postings.distinct(
+                "canonical_employer_id",
+                {"status": inv.STATUS_ACTIVE,
+                 "canonical_employer_id": {"$type": "string"}}))
+            out["postings_with_canonical_employer"] = db.job_postings.count_documents(
+                {"status": inv.STATUS_ACTIVE,
+                 "canonical_employer_id": {"$type": "string"}})
+        except Exception:
+            out["known_employers"] = out.get("known_employers_legacy", 0)
+        if not out.get("known_employers"):
+            # Nothing attributed yet (a fresh database, or the backfill has
+            # not run). Fall back rather than reporting zero employers for an
+            # inventory that plainly has some.
+            out["known_employers"] = out.get("known_employers_legacy", 0)
         out["harvested_companies"] = db.companies.estimated_document_count()
         out["responding_endpoints"] = db.company_ats_endpoints.count_documents(
             {"status": "validated"})
@@ -1601,8 +1731,52 @@ def coverage_block(*, force: bool = False) -> Dict[str, Any]:
     except Exception as exc:  # pragma: no cover
         logger.warning("tech_feed: coverage unavailable (%s)", type(exc).__name__)
         out["error"] = type(exc).__name__
+
+    out["measured"] = _measured_coverage()
     _COVERAGE_CACHE["at"] = now
     _COVERAGE_CACHE["value"] = dict(out)
+    return out
+
+
+#: Fields lifted out of the stored snapshot onto the response. Explicitly
+#: listed rather than passed through wholesale: a snapshot is an internal
+#: artefact and may grow fields (source revisions, evidence counts) that have
+#: no business on a public payload.
+_MEASURED_FIELDS: Tuple[str, ...] = (
+    "technology_employer_denominator", "covered_technology_employers",
+    "employer_coverage_pct", "candidate_technology_employers",
+    "covered_career_sources", "ownership_verified_unvalidated_sources",
+    "employers_yielding_postings", "employers_yielding_core_tech",
+    "core_tech_postings", "tier_a", "by_cohort", "by_category",
+    "inventory_watermark", "measured_at", "age_hours", "stale",
+)
+
+
+def _measured_coverage() -> Dict[str, Any]:
+    """The stored measurement, or an honest statement that there is none.
+
+    `available: False` is a real answer and the surface must render it as one.
+    An absent measurement is not a coverage of zero, and it is not a reason to
+    substitute a cheaper number that means something else.
+    """
+    try:
+        from services import coverage_snapshot as snap
+        doc = snap.latest()
+    except Exception as exc:      # pragma: no cover
+        logger.warning("tech_feed: coverage snapshot unavailable (%s)",
+                       type(exc).__name__)
+        doc = None
+    if not doc:
+        return {"available": False,
+                "detail": "no coverage measurement has been stored yet; run "
+                          "`scripts/employer_coverage_report.py --persist`"}
+    out: Dict[str, Any] = {"available": True}
+    for field in _MEASURED_FIELDS:
+        if field in doc:
+            out[field] = doc[field]
+    out["stale_after_hours"] = getattr(
+        __import__("services.coverage_snapshot", fromlist=["x"]),
+        "STALE_AFTER_HOURS", None)
     return out
 
 
@@ -1706,39 +1880,69 @@ def _resolve_employers(rows: List[Dict[str, Any]]) -> None:
         row["company"] = row.get("employer_name")
 
 
-def employer_categories_for(rows: Sequence[Dict[str, Any]]) -> Dict[str, List[str]]:
-    """`(ats|tenant) -> employer_categories` from the registry, in one query.
+def employer_categories_for(rows: Sequence[Dict[str, Any]]
+                            ) -> Dict[str, List[str]]:
+    """`employer key -> employer_categories` from the registry, in one query.
 
-    Keyed on `(ats, tenant)` for the same reason everything else here is: a
-    posting's `employer_id` is a slug derived from whatever name the board
-    printed. Both stored spellings of the join key are accepted while the
-    registry migration is in flight.
+    Keyed on `employer_key_of`, so a row that carries a canonical id is looked
+    up BY that id — one equality on the registry's own primary key — and a row
+    that does not falls back to the `(ats, tenant)` join both stored spellings
+    of which are still accepted while the registry migration is in flight.
+
+    That fallback is why this reads two ways rather than one: a posting on a
+    board whose ownership is unproven still has categories worth filtering on,
+    and dropping it because we cannot prove the board's owner would let an
+    ownership gap silently narrow a category search.
     """
-    keys: set = set()
+    ids: set = set()
+    tenants: set = set()
     for r in rows:
+        cid = str(r.get("canonical_employer_id") or "").strip()
+        if cid:
+            ids.add(cid)
+            continue
         ten = str(r.get("tenant") or "").strip().lower()
         if ten:
-            keys.add(f"{str(r.get('ats') or '').strip().lower()}:{ten}")
-            keys.add(f":{ten}")
-    if not keys:
+            tenants.add(f"{str(r.get('ats') or '').strip().lower()}:{ten}")
+            tenants.add(f":{ten}")
+    if not ids and not tenants:
         return {}
     out: Dict[str, List[str]] = {}
     try:
         db = _db()
+        clauses: List[Dict[str, Any]] = []
+        if ids:
+            clauses.append({"employer_id": {"$in": sorted(ids)}})
+        if tenants:
+            clauses.append({"registry_refs.tenant": {"$in": sorted(tenants)}})
+            clauses.append({"registry_refs.tenant_keys": {"$in": sorted(tenants)}})
         cur = db["employers"].find(
-            {"$or": [{"registry_refs.tenant": {"$in": sorted(keys)}},
-                     {"registry_refs.tenant_keys": {"$in": sorted(keys)}}]},
-            {"registry_refs": 1, "employer_categories": 1})
+            {"$or": clauses} if len(clauses) > 1 else clauses[0],
+            {"employer_id": 1, "registry_refs": 1, "employer_categories": 1})
         for doc in cur:
             cats = [str(c).lower() for c in (doc.get("employer_categories") or [])]
+            eid = str(doc.get("employer_id") or "")
+            if eid in ids:
+                out[eid] = cats
             refs = doc.get("registry_refs") or {}
             for k in list(refs.get("tenant") or []) + list(refs.get("tenant_keys") or []):
-                if str(k) in keys:
+                if str(k) in tenants:
                     out[str(k)] = cats
     except Exception as exc:  # pragma: no cover - a registry outage must not 500
         logger.warning("tech_feed: employer categories unavailable (%s)",
                        type(exc).__name__)
     return out
+
+
+def _category_keys_of(row: Dict[str, Any]) -> List[str]:
+    """The keys `employer_categories_for` may have filed this row's categories under."""
+    cid = str(row.get("canonical_employer_id") or "").strip()
+    if cid:
+        return [cid]
+    ten = str(row.get("tenant") or "").strip().lower()
+    if not ten:
+        return []
+    return [f"{str(row.get('ats') or '').strip().lower()}:{ten}", f":{ten}"]
 
 
 def filter_company_categories(rows: List[Dict[str, Any]], req: Dict[str, Any]
@@ -1763,11 +1967,11 @@ def filter_company_categories(rows: List[Dict[str, Any]], req: Dict[str, Any]
     kept: List[Dict[str, Any]] = []
     dropped = 0
     for row in rows:
-        ten = str(row.get("tenant") or "").strip().lower()
         got: List[str] = []
-        if ten:
-            got = (cats.get(f"{str(row.get('ats') or '').strip().lower()}:{ten}")
-                   or cats.get(f":{ten}") or [])
+        for key in _category_keys_of(row):
+            got = cats.get(key) or got
+            if got:
+                break
         if got and not (set(got) & wanted):
             dropped += 1
             continue
@@ -1799,6 +2003,36 @@ def _variant_key_of(row: Dict[str, Any]) -> str:
         return ""
 
 
+def _canonical_variant_key_of(row: Dict[str, Any]) -> str:
+    """The variant key an employer's OWN identity gives, when we know it.
+
+    `variant_group_id` is `hash(employer_id, title-group)` and `employer_id` is
+    a slug of whatever name the board printed. So the stored key does exactly
+    what the field it is built from does: one requisition published under
+    "JPMorgan Chase" and under "Nutmeg Container Corporation" hashes twice and
+    never collapses, and the seeker gets the same job on the same page under
+    two names.
+
+    Keyed on the canonical employer instead, they are one group. This is
+    computed ALONGSIDE the stored key rather than replacing it — the stored
+    key still groups rows the canonical id cannot reach, and re-hashing
+    405,133 stored `variant_group_id`s to change a grouping is a migration
+    this does not need.
+    """
+    canonical = str(row.get("canonical_employer_id") or "").strip()
+    if not canonical:
+        return ""
+    try:
+        from services import job_inventory_service as inv
+        title = str(row.get("title_normalized")
+                    or inv.normalize_title(row.get("title_raw") or ""))
+        if not title:
+            return ""
+        return inv._hash_key("variant", canonical, inv._title_group_key(title))
+    except Exception:      # pragma: no cover - collapsing must never 500
+        return ""
+
+
 def _collapse_location_variants(rows: List[Dict[str, Any]]
                                 ) -> List[Dict[str, Any]]:
     """One card per role per employer, with the other cities kept on it.
@@ -1809,8 +2043,16 @@ def _collapse_location_variants(rows: List[Dict[str, Any]]
     """
     best: Dict[str, Dict[str, Any]] = {}
     order: List[str] = []
+    #: Stored-key -> canonical-key, so two rows that the STORED key split
+    #: still meet when the canonical id says they are one employer's one role.
+    canonical_of: Dict[str, str] = {}
     for row in rows:
         key = str(row.get("variant_group_id") or "") or _variant_key_of(row)
+        canonical = _canonical_variant_key_of(row)
+        if canonical:
+            # First stored key to claim a canonical group owns it; every later
+            # stored key that maps to the same canonical group joins it.
+            key = canonical_of.setdefault(canonical, key or canonical)
         if not key:
             key = f"_r{len(order)}"
         prev = best.get(key)
@@ -1870,25 +2112,18 @@ def _diversify_employers(rows: List[Dict[str, Any]], page_size: int
     head, tail = rows[:depth], rows[depth:]
     rows = head
 
-    def _key(row: Dict[str, Any]) -> str:
-        """`(ats, tenant)` first — the same key `employer_identity.
-        apply_resolution` adjudicates on, and the only one that holds up.
-
-        `employer_id` on a posting is a slug derived from whatever name the
-        board printed, and one employer's board prints many. JPMorgan's Oracle
-        instance serves three CX sites under tenant `jpmc` and stamps its
-        postings `jpmorgan-chase`, `nutmeg-container-corporation` and
-        `chase-family-limited-partnership-no-5` — legal entities, not
-        employers. Keyed on the slug, those read as three companies and one of
-        them took nine of the first twenty-five cards.
-        """
-        ats = str(row.get("ats") or "").strip().lower()
-        tenant = str(row.get("tenant") or "").strip().lower()
-        if tenant:
-            return f"{ats}|{tenant}"
-        return (str(row.get("employer_name") or "").strip().lower()
-                or str(row.get("employer_id") or "").strip().lower()
-                or "")
+    #: `employer_key_of` — canonical id, else `(ats, tenant)`, else the name.
+    #: NEVER the posting's `employer_id` slug on its own: JPMorgan's Oracle
+    #: instance serves three CX sites under tenant `jpmc` and stamps its
+    #: postings `jpmorgan-chase`, `nutmeg-container-corporation` and
+    #: `chase-family-limited-partnership-no-5` — legal entities, not
+    #: employers. Keyed on the slug, those read as three companies and one of
+    #: them took nine of the first twenty-five cards.
+    #:
+    #: The canonical rung goes further than the board rung ever could: an
+    #: employer running BOTH a Workday and a Greenhouse board is two boards and
+    #: one employer, and only the canonical id says so.
+    _key = employer_key_of
 
     pending = list(rows)
     out: List[Dict[str, Any]] = []
@@ -1980,7 +2215,9 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
     t = time.perf_counter()
     kept, drops = hard_filter(docs, req, suppressed=suppressed)
     diagnostics["filter_ms"] = round((time.perf_counter() - t) * 1000, 1)
-    diagnostics["filtered_out"] = dict(sorted(drops.items(), key=lambda kv: -kv[1]))
+    # `filtered_out` is published further down, AFTER the employer-scope and
+    # category stages have folded their own drops into `drops`. Publishing it
+    # here left those stages out of the only tally the response carries.
     diagnostics["after_filter"] = len(kept)
     # How much of the candidate set had to be classified at READ time because
     # `tech` is not backfilled yet. This is the number that should fall to 0
@@ -1997,7 +2234,26 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
     diagnostics["employer_resolve_ms"] = round((time.perf_counter() - t) * 1000, 1)
     if req["employer_scope"] == EMPLOYER_SCOPE_TECH:
         kept, tech_only_dropped = _apply_employer_scope(kept)
-        diagnostics["employer_scope_dropped"] = tech_only_dropped
+        diagnostics["employer_scope_dropped"] = tech_only_dropped["total"]
+        # Reported separately: "they are not a technology company" and "we do
+        # not know whether they are" are different answers, and only the
+        # second is a gap in OUR records that the user might want to override.
+        diagnostics["employer_scope_dropped_non_tech"] = tech_only_dropped["non_tech"]
+        diagnostics["employer_scope_dropped_unclassified"] = \
+            tech_only_dropped["unclassified"]
+        # These stages run AFTER `hard_filter`, so their drops were never in
+        # `filtered_out` — and `broadening_suggestions` reads `filtered_out`.
+        # The employer-scope suggestion therefore always reported `removed: 0`
+        # for a filter that had just emptied the page. Fold them in, which is
+        # also what makes the counts on the page add up.
+        drops.update({k: v for k, v in (
+            ("employer_scope_dropped", tech_only_dropped["total"]),
+            ("employer_scope_dropped_non_tech", tech_only_dropped["non_tech"]),
+            ("employer_scope_dropped_unclassified",
+             tech_only_dropped["unclassified"])) if v})
+    if _cat_dropped:
+        drops["company_category_dropped"] = _cat_dropped
+    diagnostics["filtered_out"] = dict(sorted(drops.items(), key=lambda kv: -kv[1]))
 
     profile, skills, years = _load_profile(req)
     if req["personalize"] and req["user_email"] and profile is None:
@@ -2430,42 +2686,122 @@ def _company_docs_for(names: Iterable[str]) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def _registry_rows_for(rows: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """`canonical_employer_id -> employers row` for the canonical ids on a page.
+
+    One `$in` on the registry's primary key. Rows with no canonical id are not
+    looked up here at all — they fall through to the `companies` join below,
+    which is what every row used before.
+    """
+    ids = sorted({str(r.get("canonical_employer_id") or "").strip()
+                  for r in rows if r.get("canonical_employer_id")})
+    if not ids:
+        return {}
+    try:
+        db = _db()
+        return {str(d.get("employer_id")): d for d in db["employers"].find(
+            {"employer_id": {"$in": ids}},
+            {"_id": 0, "employer_id": 1, "display_name": 1, "canonical_domain": 1,
+             "employer_categories": 1, "cohorts": 1, "evidence": 1,
+             "registry_refs": 1, "aliases": 1})}
+    except Exception as exc:      # pragma: no cover - a registry outage must not 500
+        logger.warning("tech_feed: employer registry unavailable (%s)",
+                       type(exc).__name__)
+        return {}
+
+
 def _apply_employer_scope(rows: List[Dict[str, Any]]
                           ) -> Tuple[List[Dict[str, Any]], int]:
     """`employer_scope=tech_only`. Employer classification, NOT occupation.
 
-    The registry is the primary signal and the candidate-set posting mix is
-    only a supplement, because the mix ALONE cannot work here: measured on a
-    live core-tech search, a 2,000-row candidate set contained 191 distinct
-    employers of which **4** cleared `POSTING_MIX_MIN_ROWS`, median 1 row each.
-    An earlier version of this function classified from the mix alone and
-    therefore dropped nothing at all - a filter that renders in the UI, is
-    echoed in `applied_filters`, and does nothing. That is worse than not
-    having it.
+    Answered from the CANONICAL EMPLOYER REGISTRY first, using
+    `employer_tech_classifier.is_evidence_backed_tech` — the same function
+    that builds the coverage report's technology denominator. "Technology
+    companies only" and "the employers we report coverage for" are now the
+    same set by construction, so the filter is auditable: every employer it
+    admits appears in `docs/coverage/tech-employer-coverage.md`, and every one
+    it drops does not.
 
-    So the employers on the page are joined to `companies` in one query,
-    which brings the SEC SIC code and any persisted verdict with it.
+    Rows with no canonical id fall back to the previous path — the `companies`
+    join, which brings the SEC SIC code and any persisted verdict with it —
+    supplemented by the candidate-set posting mix. That fallback matters
+    because the mix ALONE cannot work: measured on a live core-tech search, a
+    2,000-row candidate set contained 191 distinct employers of which **4**
+    cleared `POSTING_MIX_MIN_ROWS`, median 1 row each. An earlier version
+    classified from the mix alone and therefore dropped nothing at all — a
+    filter that renders in the UI, is echoed in `applied_filters`, and does
+    nothing. That is worse than not having it.
 
-    An employer we cannot classify is KEPT. "Unknown" must not silently narrow
-    the market, and the card reports `employer_tech_classification: "unknown"`
-    so the user can see why it is there.
+    `tech_only` is a POSITIVE filter, and that is a deliberate change. It used
+    to drop only employers positively classified `non_tech`, which on live data
+    is almost none of them — a "Technology companies only" toggle that
+    rendered, echoed itself in `applied_filters` and removed nothing. A filter
+    the user can see and cannot feel is worse than no filter.
+
+    So it now KEEPS the employers there is technology evidence for and reports
+    the two reasons a row left separately: `non_tech` (we classified them and
+    they are not) and `unclassified` (we hold no evidence either way). The
+    second number is the honest cost of the toggle and the response carries it
+    to the surface, because "N results hidden from employers we have not
+    classified" is a sentence the user can act on and a silent narrowing is
+    not. The DEFAULT scope is unchanged and still `any`: technical roles at
+    every employer, which is where most technical jobs are.
     """
     from services import employer_identity as ei
     from services import employer_tech_classifier as etc
     from collections import Counter
 
+    registry = _registry_rows_for(rows)
+
+    #: Posting mix per employer key, from THIS candidate set. Supplementary
+    #: for both paths: it is the only signal that reaches a private company
+    #: EDGAR cannot see, and it is far too thin to decide alone.
     mixes: Dict[str, Counter] = {}
     for row in rows:
-        key = ei.name_key(row.get("employer_name")) or str(row.get("employer_id") or "")
+        key = employer_key_of(row)
         scope = (row.get("_tech") or {}).get("tech_scope") or "unknown"
         mixes.setdefault(key, Counter())[scope] += 1
 
     companies = _company_docs_for(
         {str(r.get("employer_name") or "") for r in rows})
 
-    verdicts: Dict[str, Any] = {}
-    for key, counter in mixes.items():
-        company = companies.get(key)
+    #: `employer key -> (classification, is_technology_employer, evidence)`.
+    #: Computed once per employer, not once per row. The boolean is separate
+    #: from the classification because they answer different questions: the
+    #: card shows a three-way verdict, and the filter needs a two-way one.
+    verdicts: Dict[str, Tuple[str, bool, List[Any]]] = {}
+
+    def _verdict_for(row: Dict[str, Any]) -> Tuple[str, bool, List[Any]]:
+        key = employer_key_of(row)
+        if key in verdicts:
+            return verdicts[key]
+        counter = mixes.get(key) or Counter()
+        mix = {"core": counter.get("core", 0), "adjacent": counter.get("adjacent", 0),
+               "non_tech": counter.get("non_tech", 0),
+               "unknown": counter.get("unknown", 0)}
+        canonical = str(row.get("canonical_employer_id") or "").strip()
+        emp = registry.get(canonical) if canonical else None
+        if emp is not None:
+            name_key = ei.name_key(emp.get("display_name")) or ei.name_key(
+                row.get("employer_name"))
+            ok, why = etc.is_evidence_backed_tech(
+                emp, mix, companies.get(name_key))
+            # The denominator rule answers a two-way question — in or out —
+            # and the card reports a three-way classification. An employer the
+            # rule declines is `unknown`, NOT `non_tech`: "we hold no
+            # technology evidence" is an absence, and turning an absence into
+            # a negative verdict is what would let a gap in our records
+            # silently remove an employer from the market.
+            declared = [str(c) for c in (emp.get("employer_categories") or [])
+                        if str(c) not in ("", "other")]
+            cls = (etc.TECH_SOFTWARE if (ok and declared)
+                   else etc.TECH_ADJACENT if ok else etc.TECH_UNKNOWN)
+            verdicts[key] = (cls, ok, [f"registry: {why}"])
+            return verdicts[key]
+
+        name_key = ei.name_key(row.get("employer_name")) or str(
+            row.get("employer_id") or "")
+        company = companies.get(name_key)
         if company and isinstance(company.get("tech"), dict) \
                 and company["tech"].get("tech_classification"):
             # A persisted verdict (scripts/tech_employer_coverage.py
@@ -2473,31 +2809,34 @@ def _apply_employer_scope(rows: List[Dict[str, Any]]
             # board, not this page's slice. Trust it over anything derivable
             # here.
             stored = company["tech"]
-            verdicts[key] = etc.EmployerClassification(
-                employer_name=str(company.get("name") or ""),
-                tech_classification=str(stored.get("tech_classification")),
-                tech_categories=list(stored.get("tech_categories") or []),
-                confidence=float(stored.get("confidence") or 0.0),
-                evidence=list(stored.get("evidence") or []),
-                evidence_source=str(stored.get("evidence_source") or "persisted"),
-            )
-            continue
-        verdicts[key] = etc.classify_employer(
-            company or {"name": key}, posting_mix=dict(counter))
+            cls = str(stored.get("tech_classification"))
+            verdicts[key] = (cls, cls in (etc.TECH_SOFTWARE, etc.TECH_ADJACENT),
+                             list(stored.get("evidence") or []))
+            return verdicts[key]
+        v = etc.classify_employer(company or {"name": name_key},
+                                  posting_mix=dict(counter))
+        verdicts[key] = (v.tech_classification,
+                         v.tech_classification in (etc.TECH_SOFTWARE,
+                                                   etc.TECH_ADJACENT),
+                         list(v.evidence or []))
+        return verdicts[key]
 
     kept: List[Dict[str, Any]] = []
-    dropped = 0
+    dropped_non_tech = 0
+    dropped_unclassified = 0
     for row in rows:
-        key = ei.name_key(row.get("employer_name")) or str(row.get("employer_id") or "")
-        v = verdicts.get(key)
-        cls = v.tech_classification if v else etc.TECH_UNKNOWN
+        cls, is_tech, evidence = _verdict_for(row)
         row["_employer_tech"] = cls
-        row["_employer_tech_evidence"] = (v.evidence if v else [])[:3]
-        if cls == etc.TECH_NON:
-            dropped += 1
-            continue
-        kept.append(row)
-    return kept, dropped
+        row["_employer_tech_evidence"] = evidence[:3]
+        if is_tech:
+            kept.append(row)
+        elif cls == etc.TECH_NON:
+            dropped_non_tech += 1
+        else:
+            dropped_unclassified += 1
+    return kept, {"non_tech": dropped_non_tech,
+                  "unclassified": dropped_unclassified,
+                  "total": dropped_non_tech + dropped_unclassified}
 
 
 def broadening_suggestions(req: Dict[str, Any], drops: Dict[str, int]
@@ -2559,6 +2898,15 @@ def broadening_suggestions(req: Dict[str, Any], drops: Dict[str, int]
         add("Include technical roles at non-technology employers",
             {"employer_scope": EMPLOYER_SCOPE_ANY},
             drops.get("employer_scope_dropped", 0))
+        # Named separately because it is OUR gap, not the employer's: these
+        # rows were hidden because the registry holds no technology evidence
+        # for the employer, which is a different thing from having decided
+        # they are not one.
+        unclassified = drops.get("employer_scope_dropped_unclassified", 0)
+        if unclassified:
+            add(f"Include {unclassified} result(s) from employers we have not "
+                f"yet classified",
+                {"employer_scope": EMPLOYER_SCOPE_ANY}, unclassified)
     if req["employer_kind"] != EMPLOYER_KIND_ANY:
         add("Include every employer type",
             {"employer_kind": EMPLOYER_KIND_ANY}, drops.get("employer_kind", 0))
