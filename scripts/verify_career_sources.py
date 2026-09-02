@@ -160,6 +160,50 @@ def verify_employer(employer: Dict[str, Any], ctx: Any,
     )
 
 
+def _tech_yield_order(db, employers_col, eq: Dict[str, Any],
+                      limit: int) -> List[Dict[str, Any]]:
+    """Uncovered TECHNOLOGY employers, most core-tech postings first.
+
+    `eq` already excludes covered employers and the ones with neither a domain
+    nor a source, so this only reorders and narrows — it never verifies an
+    employer the confidence order would have refused to.
+
+    If the report cannot be built (it reads `job_postings`, which a thin local
+    database may not have), this falls back to confidence order rather than
+    verifying nothing. A slower sweep beats a stalled one.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import employer_coverage_report as report_mod
+        built = report_mod.build(db, mix_days=30)
+    except Exception as exc:
+        print(f"  tech-yield order unavailable ({type(exc).__name__}); "
+              f"falling back to confidence order")
+        return list(employers_col.find(eq)
+                    .sort("identity_confidence", -1).limit(limit))
+
+    yield_by_id = {r["employer_id"]: int((r.get("_mix") or {}).get("core", 0))
+                   for r in built["employers"]}
+    eligible = {d["employer_id"]: d for d in employers_col.find(eq)}
+    ranked = sorted(
+        (d for eid, d in eligible.items() if eid in yield_by_id),
+        key=lambda d: (-yield_by_id.get(d["employer_id"], 0),
+                       -float(d.get("identity_confidence") or 0.0)),
+    )
+    picked = ranked[:limit]
+    if len(picked) < limit:
+        # The technology denominator is smaller than the budget: spend the
+        # remainder on everything else, still confidence-ordered, rather than
+        # returning early with the sweep half used.
+        rest = sorted((d for eid, d in eligible.items() if eid not in yield_by_id),
+                      key=lambda d: -float(d.get("identity_confidence") or 0.0))
+        picked += rest[:limit - len(picked)]
+    top = sum(yield_by_id.get(d["employer_id"], 0) for d in picked)
+    print(f"  tech-yield order: {len(ranked):,} uncovered technology employers, "
+          f"{top:,} core-tech postings in this sweep")
+    return picked
+
+
 # ---------------------------------------------------------------------------
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -175,6 +219,16 @@ def main() -> int:
     ap.add_argument("--budget", type=float, default=3600.0)
     ap.add_argument("--employer-id", action="append", default=None,
                     help="verify exactly these employers (repeatable)")
+    ap.add_argument("--order", choices=("tech-yield", "confidence"),
+                    default="tech-yield",
+                    help=("pass-2 ordering. `tech-yield` (default) walks the "
+                          "TECHNOLOGY denominator first, most core-tech "
+                          "postings first, because that is the number the "
+                          "coverage report is scored on and a sweep ordered "
+                          "by identity confidence spends most of its budget "
+                          "on employers outside it. `confidence` is the old "
+                          "behaviour and is how everything else eventually "
+                          "gets swept."))
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
 
@@ -304,9 +358,17 @@ def main() -> int:
             eq["employer_id"] = {"$nin": sorted(covered)}
         if args.employer_id:
             eq = {"employer_id": {"$in": args.employer_id}}
-        emps = list(employers_col.find(eq).sort("identity_confidence", -1)
-                    .limit(args.limit))
-        print(f"\npass 2 - verify domain and walk to the board: {len(emps):,} employers")
+        if args.order == "tech-yield" and not args.employer_id:
+            # The report already computes the technology denominator AND each
+            # employer's live core-tech posting count, so ordering by it costs
+            # one build rather than a second definition of "technology
+            # employer" that could drift from the one we are scored on.
+            emps = _tech_yield_order(db, employers_col, eq, args.limit)
+        else:
+            emps = list(employers_col.find(eq).sort("identity_confidence", -1)
+                        .limit(args.limit))
+        print(f"\npass 2 - verify domain and walk to the board: {len(emps):,} employers"
+              f" ({args.order} order)")
 
         endpoints_by_emp: Dict[str, List[Endpoint]] = collections.defaultdict(list)
         for r in sources_col.find({"employer_id": {"$in": [e["employer_id"] for e in emps]}},
