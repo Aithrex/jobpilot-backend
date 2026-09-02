@@ -173,53 +173,102 @@ the order they should be worked:
    (Rivian moved off iCIMS to `careers.rivian.com`) and nothing re-fingerprints
    the new host.
 
-## 4a. CORRECTION: the first probe found no new boards
+## 4a. The slug-probe channel does not work, and here is the evidence
 
-An earlier revision of this document claimed a read-only slug probe had found
-**134 new career pages**. That claim was wrong and is withdrawn.
+An earlier revision of this document claimed a probe had found **134 new career
+pages**. That claim is withdrawn, and the follow-up work says something
+stronger: **slug guessing cannot currently be made safe for this cohort.**
 
-What actually happened:
+### What was wrong with the original claim
 
-* The probe's output was captured through `tail -60`, which discarded most of
-  the log. Only 47 of the reported 134 hit lines survived, so 87 of them have
-  no evidence at all.
-* Of the 47 that can be checked, **all 47 were already rows in
-  `company_ats_endpoints`**. Rubrik, GoDaddy, Elastic, VeriSign, Commvault,
-  TripAdvisor - every one already known.
-* `probe_software_company_boards.py` does not skip already-covered companies,
-  and it was run over `signals.software` sorted by priority, which is exactly
-  the cohort most likely to already be covered. The run largely re-confirmed
-  boards we had.
+The run's output was piped through `tail -60`, discarding most of the log. Of
+the 47 hits that survived, **all 47 were already rows in
+`company_ats_endpoints`**. The prober does not skip already-covered companies
+and was pointed at `signals.software` sorted by priority - the cohort most
+likely to already be covered. **Verified new boards: 0.**
 
-**Verified new boards from that run: 0.**
+### The correct experiment
 
-The script now takes `--skip-covered` and `--company-ids`, so the correct
-experiment can be run: probe only employers with no validated endpoint.
+1,398 tech employers with no validated endpoint, untruncated log:
 
-```bash
-PYTHONPATH=shared/python python scripts/probe_software_company_boards.py \
-    --company-ids uncovered_tech_ids.txt --limit 2000 --rate 6 --workers 4
+```
+probed 1,398 companies in 1,866s
+boards found: 56 (4.0%)
+rejected at probe time: 15 named another company, 16 too weak a slug
 ```
 
-Early returns from that run are far lower than the first, which points the
-opposite way from the withdrawn claim: the uncovered tech employers mostly do
-**not** have findable boards on the four shared-host vendors (Greenhouse,
-Lever, Ashby, SmartRecruiters). That is consistent with them being uncovered -
-`career_portal_discovery` already crawled their sites and matched nothing, and
-a slug guess against four shared hosts is a narrower instrument than the site
-crawl, not a wider one.
+### Auditing those 56 destroyed them
 
-If that holds, the boards for Dell, Atlassian, Unity, Seagate, Super Micro,
-Procore and Synopsys are on per-employer hosts (Workday, Eightfold, Phenom,
-Oracle ORC) that a shared-host slug probe cannot reach by construction, and
-finding them needs a different instrument.
+Every hit was re-judged against the vendor's own declared board owner. **16 of
+56 (29%) were wrong** even before the guards were tightened - `greenhouse/public`
+is Public.com the investing app, claimed for "Public Policy Holding Company";
+`greenhouse/cts` is "CTS Cloud Trading Solutions", claimed for CTS Corp;
+`ashby/sphere`, `ashby/twenty`, `ashby/sierra`, `ashby/odyssey` are ordinary
+nouns.
 
-**Owner verification is doing real work** and is worth keeping whatever the hit
-rate: the runs rejected `greenhouse/archer` ("Archer Veterinary Clinic", not
-Archer Aviation), `greenhouse/super` ("Super Technologies", not Super League),
-`greenhouse/gds` ("Garage Door Specialist", not GDS Holdings) and
-`greenhouse/nve` ("NVE Experience Agency", not NVE Corp). Recording any of
-those would have read as coverage rather than as an error.
+Both holes were fixed (`names_match` now requires 40% name coverage;
+`slug_is_trustworthy`'s blocklist was widened). **The fix was not enough.** Seven
+of the 40 surviving hits were spot-checked against the boards' actual job
+listings, and **all seven were wrong**:
+
+| board | probe assigned it to | what it actually is | tell |
+|---|---|---|---|
+| `greenhouse/forward` | Forward Industries | Forward (healthcare) | jobs link to `getfwd.com` |
+| `greenhouse/beyond` | Beyond Air | Beyond Pricing | jobs link to `beyondpricing.com` |
+| `greenhouse/future` | Future FinTech Group | Future (fitness app) | "Health Coach Manager" |
+| `greenhouse/orchestra` | Orchestra BioMed | Orchestra (PR agency) | "Account Coordinator, Public Relations" |
+| `greenhouse/encore` | Encore Medical | Encore (travel programmes) | "Encore - Istanbul April-May 2027" |
+| `greenhouse/costar` | CoStar Group | Co-Star (astrology app) | "Haskell Developer", "Brand Designer" |
+| `greenhouse/universal` | Universal Token | a London design studio | "Freelance Designer" |
+
+Seven for seven. The survivor set is majority-contaminated, and the only signal
+that separated them was **reading the jobs**.
+
+### Why the automated checks cannot save it
+
+Three independent signals were tried and all three fail here:
+
+1. **Slug heuristic** - 29% wrong, and it is the ONLY guard on Ashby and Lever
+   because neither vendor declares a board owner at all.
+2. **Vendor-declared owner name** - Greenhouse and SmartRecruiters do declare
+   one, and it still passed all seven rows above. A board named "Forward"
+   genuinely is named Forward.
+3. **Board domain vs company domain** - unusable, because of sec. 4b.
+
+**Recommendation: do not apply slug-probe output.** Not with `--apply`, not
+after review of the summary line. For this cohort the channel produces
+majority-wrong attributions in the most dangerous available form - a live
+board, correctly fetched, filed under the wrong employer, which reads as
+coverage rather than as an error and which nobody will go looking for.
+
+## 4b. Root cause: 76% of company domains are guesses
+
+Measured over 40,000 `companies` rows:
+
+| | rows | share of those with a domain |
+|---|---:|---:|
+| domain is the NAME with punctuation stripped + `.com` | 8,030 | **76%** |
+| domain differs from the name | 2,593 | 24% |
+| no domain at all | 29,377 | - |
+
+The guess is right often enough to look like it works - `nvidia.com`,
+`microsoft.com`, `intel.com`, `visa.com` - and wrong often enough to lose
+employers silently: `alphabet.com` for Alphabet (not Google's domain),
+`amazon-com.com`, `capital.com` for Capital One (a CFD trading site),
+`stripes-solutions.com` for Stripe, `payoneer-global.com` for Payoneer (the
+real one is `payoneer.com`).
+
+This matters beyond the probe. `career_portal_discovery` is **company-first**:
+it fetches `companies.domain` and follows `/careers`. If the domain is a wrong
+guess, discovery crawls a stranger's website, finds no ATS fingerprint, and
+records `no_portal` - which is indistinguishable from an employer that has no
+portal.
+
+That is a credible explanation for why NVIDIA, Microsoft, Apple, Salesforce,
+Atlassian, Dell and Unity are all `no_portal` while all seven run a public ATS,
+and it means **the next real coverage work is verifying employer domains, not
+guessing more slugs.** A wrong domain poisons every downstream stage, and no
+amount of probing recovers from it.
 
 See [`source-provider-priority.md`](source-provider-priority.md) for which
 vendors to pursue first, ranked by core-tech yield per board rather than by raw
