@@ -1688,6 +1688,92 @@ def _collapse_location_variants(rows: List[Dict[str, Any]]
     return [best[k] for k in order]
 
 
+#: How many postings one employer may hold in a single page before the rest of
+#: its results are pushed to later pages. Ordering only - nothing is removed.
+EMPLOYER_PAGE_CAP = int(os.getenv("TECH_FEED_EMPLOYER_PAGE_CAP", "3") or 3)
+
+
+def _diversify_employers(rows: List[Dict[str, Any]], page_size: int
+                         ) -> Tuple[List[Dict[str, Any]], int]:
+    """Reorder so no employer monopolises a page. Returns `(rows, moved)`.
+
+    Measured on the live feed for one account: 15 of the first 25 cards were
+    JPMorgan Chase. They were not duplicates - Android, iOS, Java/AWS,
+    React/Java, all different requisitions - and every one of them deserved
+    its score. They just should not all be on page one, because a page that
+    shows one employer fifteen times has shown the user one employer.
+
+    This is ORDERING, not scoring: `match_score` is untouched, nothing is
+    dropped, and an employer's fourth-best role simply lands on page two. It
+    belongs here for the same reason source quality does - `rank_score` and
+    `match_score` are deliberately separate, and preference signals live in
+    the former.
+
+    Stable: within an employer, relative order is preserved exactly.
+    """
+    cap = max(1, EMPLOYER_PAGE_CAP)
+    size = max(1, int(page_size or DEFAULT_PAGE_SIZE))
+    if len(rows) <= size:
+        return rows, 0
+
+    def _key(row: Dict[str, Any]) -> str:
+        """`(ats, tenant)` first — the same key `employer_identity.
+        apply_resolution` adjudicates on, and the only one that holds up.
+
+        `employer_id` on a posting is a slug derived from whatever name the
+        board printed, and one employer's board prints many. JPMorgan's Oracle
+        instance serves three CX sites under tenant `jpmc` and stamps its
+        postings `jpmorgan-chase`, `nutmeg-container-corporation` and
+        `chase-family-limited-partnership-no-5` — legal entities, not
+        employers. Keyed on the slug, those read as three companies and one of
+        them took nine of the first twenty-five cards.
+        """
+        ats = str(row.get("ats") or "").strip().lower()
+        tenant = str(row.get("tenant") or "").strip().lower()
+        if tenant:
+            return f"{ats}|{tenant}"
+        return (str(row.get("employer_name") or "").strip().lower()
+                or str(row.get("employer_id") or "").strip().lower()
+                or "")
+
+    pending = list(rows)
+    out: List[Dict[str, Any]] = []
+    moved = 0
+    # Fill one page at a time: walk what is left in RANKED order and take the
+    # first `size` rows that keep every employer at or under `cap`. Anything
+    # skipped stays queued, in order, and gets first refusal on the next page.
+    while pending:
+        used: Dict[str, int] = {}
+        page: List[Dict[str, Any]] = []
+        held: List[Dict[str, Any]] = []
+        for row in pending:
+            if len(page) >= size:
+                held.append(row)
+                continue
+            k = _key(row)
+            if k and used.get(k, 0) >= cap:
+                held.append(row)
+                moved += 1
+                continue
+            used[k] = used.get(k, 0) + 1
+            page.append(row)
+        # Top up a short page from what was held back. The cap is best-effort,
+        # not a quota: when the remaining results genuinely ARE one employer,
+        # there is no diversity to be had, and emitting a four-row page would
+        # only shift every later page boundary while showing the user less.
+        if len(page) < size and held:
+            take = size - len(page)
+            page.extend(held[:take])
+            moved -= min(take, moved)
+            held = held[take:]
+        if not page:
+            out.extend(held)
+            break
+        out.extend(page)
+        pending = held
+    return out, moved
+
+
 def search(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Run one search, or serve a page of an existing one.
 
@@ -1782,6 +1868,8 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
 
     t = time.perf_counter()
     rank(kept, req, profile, skills, years, now=now)
+    kept, moved = _diversify_employers(kept, req["page_size"])
+    diagnostics["employer_diversity_moved"] = moved
     diagnostics["rank_ms"] = round((time.perf_counter() - t) * 1000, 1)
     t = time.perf_counter()
     facets = build_facets(kept)

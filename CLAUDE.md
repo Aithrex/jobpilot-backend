@@ -184,6 +184,20 @@ so a client can tell it is no longer relevance-ranked.
 `total` is now the real match count (bounded by `COUNT_LIMIT`), not the length
 of the ranked window.
 
+**Employer diversity is applied to the ORDER, never to the score.**
+`_diversify_employers` caps how many postings one employer may hold in a
+single page (`EMPLOYER_PAGE_CAP`, default 3), pushing the rest to later pages.
+Nothing is dropped and `match_score` is untouched — it belongs with
+`rank_score`, where preference signals live. The key is **`(ats, tenant)`**,
+the same key `employer_identity.apply_resolution` adjudicates on, because a
+posting's `employer_id` is a slug derived from whatever name the board
+printed: JPMorgan's Oracle instance serves three CX sites under tenant `jpmc`
+and stamps its postings `jpmorgan-chase`, `nutmeg-container-corporation` and
+`chase-family-limited-partnership-no-5`. Keyed on the slug, one employer took
+nine of the first twenty-five cards. The cap is best-effort — a page is topped
+up rather than shortened when the remaining results genuinely are one
+employer.
+
 ## Config & data
 Config via `shared/python/utils/config.py`; secrets via **AWS SSM** in prod (`USE_SSM_SECRETS=true`), `.env` locally (see `.env.example`). Résumé collection is **`user_resumes`** (not `base_resumes`). Résumé files → **S3**. Keep cold starts lean: reuse boto3/Mongo clients at module scope, no heavy import-time work. Deploy lives in-repo: `infra/terraform/` (HTTP API + the 6 Lambdas + shared layer + IAM + KMS credential store + managed mailbox/SES + schedulers) and `scripts/build_layer.sh` + `scripts/package.sh`; see `infra/README.md`. CI: `.github/workflows/tests.yml` (offline suite) + `deploy.yml` (path-filtered per-service deploy).
 

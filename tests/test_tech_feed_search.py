@@ -1045,3 +1045,103 @@ class TestAMarketplaceRepostIsNotTheEmployersOwnPosting:
         assert tfs._is_direct_apply(
             {"tenant": "acme", "employer_name": "Acme Inc",
              "canonical_url": "https://x/y", "cost_class": "free"}) is True
+
+
+class TestOneEmployerDoesNotOwnThePage:
+    """Measured on the live feed for one account: 15 of the first 25 cards
+    were JPMorgan Chase. They were not duplicates — Android, iOS, Java/AWS,
+    React/Java, all different requisitions — and each deserved its score. A
+    page that shows one employer fifteen times has shown the user one
+    employer.
+
+    This is ORDERING. Nothing is dropped and no score changes; an employer's
+    fourth-best role lands on page two.
+    """
+
+    def _rows(self, spec):
+        return [{"employer_id": e, "employer_name": e, "job_id": f"{e}{i}"}
+                for e, n in spec for i in range(n)]
+
+    def test_no_employer_exceeds_the_cap_while_others_are_available(self):
+        rows = self._rows([("big", 40), ("a", 3), ("b", 3), ("c", 3), ("d", 3)])
+        out, moved = tfs._diversify_employers(rows, 10)
+        first = [r["employer_id"] for r in out[:10]]
+        assert first.count("big") <= tfs.EMPLOYER_PAGE_CAP
+        assert moved > 0
+
+    def test_the_cap_is_best_effort_and_never_shortens_a_page(self):
+        """When the remaining results genuinely ARE one employer there is no
+        diversity to be had, and a four-row page would show the user less
+        while shifting every later boundary."""
+        rows = self._rows([("big", 40), ("a", 1)])
+        out, _ = tfs._diversify_employers(rows, 10)
+        assert len(out[:10]) == 10
+        assert "a" in [r["employer_id"] for r in out[:10]]
+
+    def test_nothing_is_dropped(self):
+        rows = self._rows([("big", 40), ("a", 3), ("b", 2)])
+        out, _ = tfs._diversify_employers(rows, 10)
+        assert sorted(r["job_id"] for r in out) == sorted(r["job_id"] for r in rows)
+
+    def test_relative_order_within_an_employer_is_preserved(self):
+        rows = self._rows([("big", 12), ("a", 20)])
+        out, _ = tfs._diversify_employers(rows, 5)
+        big = [r["job_id"] for r in out if r["employer_id"] == "big"]
+        assert big == [f"big{i}" for i in range(12)]
+
+    def test_a_result_set_smaller_than_a_page_is_untouched(self):
+        rows = self._rows([("big", 5)])
+        out, moved = tfs._diversify_employers(rows, 25)
+        assert out == rows and moved == 0
+
+    def test_a_feed_that_is_ALL_one_employer_still_returns_everything(self):
+        """The cap must never turn into a filter."""
+        rows = self._rows([("only", 30)])
+        out, _ = tfs._diversify_employers(rows, 10)
+        assert len(out) == 30
+
+    def test_the_top_ranked_row_is_still_first(self):
+        """Diversity reorders the tail, not the winner."""
+        rows = self._rows([("big", 40), ("a", 5)])
+        out, _ = tfs._diversify_employers(rows, 10)
+        assert out[0]["job_id"] == "big0"
+
+    def test_the_feed_applies_it(self, db):
+        for i in range(8):
+            seed(sjid=f"dv{i}", title=f"Backend Engineer {i}", company="BigCo",
+                 tenant="bigco")
+        seed(sjid="dv9", title="Backend Engineer X", company="SmallCo",
+             tenant="smallco")
+        got = search(page_size=5)
+        names = [j["employer_name"] for j in got["jobs"]]
+        # SmallCo ranked ninth by relevance and would never have been seen on a
+        # five-row page. Promoting it is the entire point.
+        assert "SmallCo" in names
+        assert names.index("SmallCo") <= tfs.EMPLOYER_PAGE_CAP
+        assert len(names) == 5, "the page must still be full"
+
+    def test_the_key_is_the_ats_tenant_not_the_posting_slug(self):
+        """One employer's board prints many legal-entity names. JPMorgan's
+        Oracle instance serves three CX sites under tenant `jpmc` and stamps
+        its postings `jpmorgan-chase`, `nutmeg-container-corporation` and
+        `chase-family-limited-partnership-no-5`. Keyed on the slug those read
+        as three companies, and they took nine of the first twenty-five
+        cards."""
+        rows = [{"ats": "oracle", "tenant": "jpmc", "employer_id": slug,
+                 "job_id": f"j{i}"}
+                for i, slug in enumerate(
+                    ["jpmorgan-chase", "nutmeg-container-corporation",
+                     "chase-family-limited-partnership-no-5",
+                     "jpmorgan-chase", "jpmorgan-chase", "jpmorgan-chase"])]
+        rows += [{"ats": "greenhouse", "tenant": f"co{i}", "employer_id": f"co{i}",
+                  "job_id": f"c{i}"} for i in range(6)]
+        out, _ = tfs._diversify_employers(rows, 6)
+        page = [r for r in out[:6] if r.get("tenant") == "jpmc"]
+        assert len(page) <= tfs.EMPLOYER_PAGE_CAP
+
+    def test_a_row_with_no_tenant_falls_back_to_the_employer_name(self):
+        rows = [{"employer_name": "Acme", "job_id": f"a{i}"} for i in range(6)]
+        rows += [{"employer_name": "Other", "job_id": f"o{i}"} for i in range(6)]
+        out, _ = tfs._diversify_employers(rows, 6)
+        assert sum(1 for r in out[:6] if r["employer_name"] == "Acme") \
+            <= tfs.EMPLOYER_PAGE_CAP
