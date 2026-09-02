@@ -378,15 +378,18 @@ def _score_rows(rows: List[Dict[str, Any]], user_email: str,
             "ineligible_reasons": (verdict.get("ineligible_reasons") or [])[:4],
             "evidence_breadth": verdict.get("evidence_breadth"),
             "role_alignment": verdict.get("role_alignment") or {},
-            # Only the UNMET-and-UNKNOWABLE ones. A `met` constraint is not a
-            # requirement to check, and a `missing` one is already in
-            # `missing_requirements`.
-            "hard_requirements": [
+            # The FULL constraint list, with `status` and `hard_requirement`
+            # intact, because the two useful readings need different subsets:
+            # a requirement to CHECK is `hard_requirement` + `status:
+            # unknown`, an ineligibility reason is `status: missing`, and a
+            # `met` one is worth showing as reassurance. Pre-filtering here
+            # would decide that for every surface at once.
+            "hard_constraints": [
                 {"type": c.get("type"), "status": c.get("status"),
+                 "hard_requirement": bool(c.get("hard_requirement")),
                  "detail": str(c.get("detail") or "")[:200]}
                 for c in (verdict.get("hard_constraints") or [])
-                if c.get("hard_requirement") and c.get("status") == "unknown"
-            ][:4],
+            ][:6],
         }
 
 

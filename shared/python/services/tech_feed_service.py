@@ -1375,7 +1375,7 @@ def _card(row: Dict[str, Any], *, now: datetime) -> Dict[str, Any]:
         "ineligible_reasons": (row.get("fit") or {}).get("ineligible_reasons") or [],
         "evidence_breadth": (row.get("fit") or {}).get("evidence_breadth"),
         "role_alignment": (row.get("fit") or {}).get("role_alignment") or {},
-        "hard_requirements": (row.get("fit") or {}).get("hard_requirements") or [],
+        "hard_constraints": (row.get("fit") or {}).get("hard_constraints") or [],
         "rank_score": row.get("rank_score"),
         "why_matched": row.get("why_matched") or [],
         "hard_constraint_mismatches": row.get("hard_constraint_mismatches") or [],

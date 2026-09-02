@@ -732,7 +732,7 @@ class TestVerdictReachesTheCard:
         assert card["role_alignment"].get("tier")
         assert card["role_alignment"].get("detail")
         assert card["evidence_breadth"] is not None
-        assert isinstance(card["hard_requirements"], list)
+        assert isinstance(card["hard_constraints"], list)
         assert isinstance(card["ineligible_reasons"], list)
 
     def test_an_unscored_card_carries_no_verdict_and_no_version(self, db):
@@ -769,10 +769,25 @@ class TestVerdictReachesTheCard:
             lambda email: [{"resume_id": "r1", "filename": "r.pdf",
                             "profile": fit_score.build_resume_profile(resume)}])
         card = search(personalize=True, user_email="a@example.com")["jobs"][0]
-        kinds = {r["type"] for r in card["hard_requirements"]}
-        assert "clearance" in kinds
-        assert all(r["status"] == "unknown" for r in card["hard_requirements"])
+        # The FULL list travels, with `status` and `hard_requirement` intact:
+        # a requirement to CHECK is `hard_requirement` + `status: unknown`, an
+        # ineligibility reason is `status: missing`, and a `met` one is worth
+        # showing as reassurance. Pre-filtering here would decide that for
+        # every surface at once. The frontend reads the same field name.
+        clearance = [c for c in card["hard_constraints"] if c["type"] == "clearance"]
+        assert clearance, card["hard_constraints"]
+        assert clearance[0]["status"] == "unknown"
+        assert clearance[0]["hard_requirement"] is True
         assert card["eligibility"] == "eligible"
+
+    def test_the_card_field_name_matches_what_the_frontend_reads(self, db):
+        """`techFeedEligibility.hardConstraintsOf` reads `hard_constraints`,
+        top level or inside `fit`. A backend that sends `hard_requirements`
+        renders nothing, silently, in both places."""
+        seed(sjid="v4", title="Backend Engineer")
+        card = search(personalize=False)["jobs"][0]
+        assert "hard_constraints" in card
+        assert "hard_requirements" not in card
 
 
 class TestIneligibleNeverOutranksReachable:
