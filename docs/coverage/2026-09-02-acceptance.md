@@ -113,7 +113,8 @@ database recorded who owned anything.
 | after pass 1 (provider owner metadata) | 8.9% |
 | after pass 2 (verify the domain, walk to the board) | 13.2% |
 | after registering the boards we were already crawling | 22.8% |
-| after the curated catalogs corroborated the provider | **33.1%** (868 of 2,624) |
+| after the curated catalogs corroborated the provider | 33.1% (868 of 2,624) |
+| after a guarded content pass re-validated them | **33.1%** (869 of 2,625) |
 
 By cohort at 33.1%: `niche_startup` 60.3% · `private_growth` 67.7% ·
 `mnc` 55.2% · `public_tech` 20.3%.
@@ -149,7 +150,9 @@ each one was worth more than a faster crawler:
    two others turned 830 sources `blocked` in a single sweep — boards the
    crawler had read that morning — and dropped validated from 2,040 to 1,311.
    A 403 to our prober is a fact about our request; the pass now checks it
-   against the live inventory and records a note instead of a demotion.
+   against the live inventory and records a note instead of a demotion. Re-run
+   with the guard and half the concurrency: 38 blocked, not 830, and 81
+   verdicts declined because the inventory contradicted them.
 
 ### What is left, measured
 

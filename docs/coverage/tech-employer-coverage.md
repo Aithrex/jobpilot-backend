@@ -7,9 +7,9 @@ Regenerate with:
 PYTHONPATH=shared/python python scripts/employer_coverage_report.py --markdown
 ```
 
-- measured at `2026-09-02T13:35:41.833635+00:00`
-- source revision `3a12186-dirty`
-- inventory watermark `2026-09-02T13:34:12.571000`
+- measured at `2026-09-02T14:33:17.800248+00:00`
+- source revision `b15ccb0`
+- inventory watermark `2026-09-02T14:32:23.034000`
 - posting-mix window: 30 days
 - versions: `taxonomy=tech-tax-1.1.0`, `adjacency=tech-adjacency-1.1.0`, `employer_registry=employer-registry-1.0.0`, `career_source=career-source-1.0.0`, `employer_classifier=employer-tech-1.0.0`
 
@@ -24,13 +24,13 @@ source only when its OWNERSHIP is proven and its content validated.
 |---|---:|
 | employers in the registry | 23,782 |
 | **evidence-backed technology employers** | **2,625** |
-| **validated official career sources** | **682** |
-| **validated coverage** | **26.0%** |
-| employers without validated coverage | 1,943 |
-| employers yielding postings | 846 |
+| **validated official career sources** | **869** |
+| **validated coverage** | **33.1%** |
+| employers without validated coverage | 1,756 |
+| employers yielding postings | 848 |
 | employers yielding core-tech postings | 690 |
-| active postings from them | 98,780 |
-| core-tech postings | 15,802 (16.0%) |
+| active postings from them | 99,756 |
+| core-tech postings | 15,816 (15.8%) |
 | open employer merge reviews | 1,443 |
 
 ## Every employer is in exactly one state
@@ -41,45 +41,45 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 
 | state | employers |
 |---|---:|
-| `candidate` | 1,527 |
-| `validated` | 611 |
-| `blocked` | 231 |
-| `content_validated` | 159 |
-| `empty` | 71 |
-| `ownership_verified` | 26 |
+| `candidate` | 1,581 |
+| `validated` | 807 |
+| `content_validated` | 155 |
+| `empty` | 62 |
+| `blocked` | 13 |
+| `ownership_verified` | 7 |
 
 ## Coverage by cohort
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `public_tech` | 1,859 | 332 | 17.9% | 6,686 |
+| `public_tech` | 1,859 | 378 | 20.3% | 6,689 |
 | `niche_startup` | 464 | 280 | 60.3% | 566 |
-| `unknown` | 241 | 40 | 16.6% | 6,307 |
-| `mnc` | 58 | 16 | 27.6% | 4,437 |
-| `private_growth` | 34 | 21 | 61.8% | 827 |
+| `unknown` | 241 | 167 | 69.3% | 6,316 |
+| `mnc` | 58 | 32 | 55.2% | 4,439 |
+| `private_growth` | 34 | 23 | 67.7% | 827 |
 
 ## Coverage by category
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `other` | 2,476 | 649 | 26.2% | 15,802 |
-| `software_saas` | 138 | 76 | 55.1% | 2,194 |
-| `fintech` | 123 | 50 | 40.6% | 3,339 |
+| `other` | 2,476 | 836 | 33.8% | 15,816 |
+| `software_saas` | 138 | 80 | 58.0% | 2,194 |
+| `fintech` | 123 | 95 | 77.2% | 3,344 |
 | `cloud_data` | 91 | 57 | 62.6% | 1,052 |
-| `semiconductor` | 81 | 34 | 42.0% | 970 |
-| `ai_ml` | 78 | 56 | 71.8% | 491 |
+| `semiconductor` | 81 | 40 | 49.4% | 970 |
+| `ai_ml` | 78 | 57 | 73.1% | 491 |
 | `security` | 61 | 40 | 65.6% | 191 |
 | `devtools` | 51 | 33 | 64.7% | 92 |
-| `it_services` | 50 | 18 | 36.0% | 1,424 |
+| `it_services` | 50 | 29 | 58.0% | 1,426 |
 | `consumer` | 49 | 27 | 55.1% | 82 |
 | `robotics` | 47 | 29 | 61.7% | 312 |
-| `healthtech` | 39 | 24 | 61.5% | 227 |
+| `healthtech` | 39 | 33 | 84.6% | 228 |
 | `gaming` | 26 | 10 | 38.5% | 45 |
-| `aerospace_defense` | 15 | 9 | 60.0% | 355 |
-| `energy` | 12 | 5 | 41.7% | 129 |
+| `aerospace_defense` | 15 | 13 | 86.7% | 355 |
+| `energy` | 12 | 12 | 100.0% | 129 |
 | `hardware` | 10 | 2 | 20.0% | 243 |
 | `media` | 7 | 6 | 85.7% | 19 |
-| `telecom` | 6 | 3 | 50.0% | 300 |
+| `telecom` | 6 | 6 | 100.0% | 300 |
 | `automotive` | 5 | 1 | 20.0% | 7 |
 | `ecommerce` | 4 | 1 | 25.0% | 552 |
 
@@ -87,7 +87,7 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `unknown` | 2,624 | 682 | 26.0% | 15,802 |
+| `unknown` | 2,624 | 869 | 33.1% | 15,816 |
 | `US` | 1 | 0 | 0.0% | 0 |
 
 ## Coverage by provider
@@ -95,10 +95,10 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 | provider | career sources | ownership verified | validated |
 |---|---:|---:|---:|
 | `unknown` | 6,514 | 0 | 0 |
-| `workday` | 1,509 | 989 | 169 |
+| `workday` | 1,510 | 989 | 896 |
 | `greenhouse` | 994 | 566 | 566 |
 | `icims` | 450 | 118 | 57 |
-| `ashby` | 369 | 214 | 214 |
+| `ashby` | 369 | 215 | 215 |
 | `phenom` | 205 | 194 | 194 |
 | `lever` | 187 | 99 | 99 |
 | `oracle_orc` | 164 | 31 | 4 |
@@ -143,11 +143,10 @@ from whatever the database happens to contain.
 
 | state | employers |
 |---|---:|
-| `candidate` | 58 |
-| `validated` | 21 |
-| `empty` | 7 |
+| `candidate` | 60 |
+| `validated` | 24 |
+| `empty` | 5 |
 | `ownership_verified` | 3 |
-| `blocked` | 3 |
 | `content_validated` | 2 |
 
 | employer | domain | state | sources | detail |
@@ -182,12 +181,12 @@ from whatever the database happens to contain.
 | Whatnot | `whatnot.com` | `candidate` | 1 | domain not verified |
 | Amazon | `amazon.com` | `validated` | 2 | two independent corroborating signals: ats_provider, curated_registry |
 | Netflix | `netflix.com` | `validated` | 2 | two independent corroborating signals: ats_provider, curated_registry |
-| Oracle | `oracle.com` | `content_validated` | 2 | one corroborating signal (ats_provider); the rule needs two independent classes |
-| Cisco | `cisco.com` | `empty` | 6 | verified employer domain -> endpoint (official_domain_link) |
-| Adobe | `adobe.com` | `empty` | 5 | verified employer domain -> endpoint (official_domain_link) |
+| Oracle | `oracle.com` | `candidate` | 2 | no host |
+| Cisco | `cisco.com` | `validated` | 6 | two independent corroborating signals: ats_provider, curated_registry |
+| Adobe | `adobe.com` | `validated` | 5 | two independent corroborating signals: ats_provider, curated_registry |
 | Intel | `intel.com` | `validated` | 1 | verified employer domain -> endpoint (official_domain_link) |
 | Qualcomm | `qualcomm.com` | `validated` | 2 | two independent corroborating signals: ats_provider, curated_registry |
-| Broadcom | `broadcom.com` | `blocked` | 2 | challenge: workday challenge (status=429) |
+| Broadcom | `broadcom.com` | `validated` | 2 | two independent corroborating signals: ats_provider, curated_registry |
 | VMware | `vmware.com` | `candidate` | 1 | read 3 page(s) on vmware.com; no ATS fingerprint found |
 | Uber | `uber.com` | `validated` | 1 | one corroborating signal (curated_registry); the rule needs two independent classes |
 | Lyft | `lyft.com` | `validated` | 1 | one corroborating signal (curated_registry); the rule needs two independent classes |
@@ -217,9 +216,9 @@ from whatever the database happens to contain.
 | Blue Origin | `blueorigin.com` | `candidate` | 1 | domain not verified |
 | Deel | `deel.com` | `candidate` | 1 | read 8 page(s) on deel.com; no ATS fingerprint found |
 | Palantir | `palantir.com` | `validated` | 1 | one corroborating signal (curated_registry); the rule needs two independent classes |
-| F5 | `f5.com` | `blocked` | 2 | challenge: workday challenge (status=429) |
-| Unity | `unity.com` | `blocked` | 1 | challenge: workday challenge (status=429) |
-| SpaceX | `spacex.com` | `candidate` | 2 | read 8 page(s) on spacex.com; no ATS fingerprint found |
+| F5 | `f5.com` | `candidate` | 2 | domain not verified |
+| Unity | `unity.com` | `candidate` | 1 | no working site path (last=404) |
+| SpaceX | `spacex.com` | `content_validated` | 2 | one corroborating signal (ats_provider); the rule needs two independent classes |
 | Zoox | `zoox.com` | `validated` | 2 | two independent corroborating signals: ats_provider, curated_registry |
 | Rippling | `rippling.com` | `content_validated` | 2 | one corroborating signal (ats_provider); the rule needs two independent classes |
 | Electronic Arts | `ea.com` | `candidate` | 1 | read 8 page(s) on ea.com; no ATS fingerprint found |
@@ -251,10 +250,10 @@ from whatever the database happens to contain.
 
 | source | shards | crawl lag (min) | stale | shards in backoff |
 |---|---:|---:|---|---:|
-| `career-pages` | 64 | 13 | False | 0 |
-| `icims` | 96 | 1 | False | 0 |
-| `oracle` | 48 | 9 | False | 0 |
-| `workday` | 48 | 3 | False | 0 |
+| `career-pages` | 64 | 10 | False | 0 |
+| `icims` | 96 | 13 | False | 0 |
+| `oracle` | 48 | 6 | False | 0 |
+| `workday` | 48 | 0 | False | 0 |
 
 - ingest runner heartbeat age: 0 min (healthy: True)
 

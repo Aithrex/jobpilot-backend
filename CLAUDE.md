@@ -80,6 +80,14 @@ crawler reads exactly the rows it read before.
   `SIGNAL_SLUG_SIMILARITY` and `SIGNAL_ENDPOINT_RESPONDS` are recorded and
   **never counted** — that is the whole fix.
 
+> **A 403 to our prober is not evidence a board is gone.** The content pass
+> checks a `blocked`/`empty` verdict against `_boards_with_fresh_postings`
+> (active postings by `(ats, tenant)` in the last 48h) and records a NOTE
+> instead of a demotion when the inventory contradicts it. Without that guard
+> one pass run beside two others turned 830 sources `blocked` in a single
+> sweep and dropped validated coverage by a third — our own concurrency, not
+> anything at the employer.
+
 > **`company_ats_endpoints.status == "validated"` is NOT coverage.** It means
 > the endpoint answered. It cannot tell a company's own board from a
 > stranger's board with a similar slug, and it is the number that reported
@@ -89,6 +97,16 @@ crawler reads exactly the rows it read before.
 Scripts, all **dry-run by default**:
 - `scripts/backfill_employer_registry.py [--apply]` — builds `employers` +
   `career_sources` from all five registries.
+- `scripts/register_ingested_boards.py [--apply] [--refresh]` — registers the
+  boards the crawler is ALREADY reading. 1,437 `(ats, tenant)` boards carrying
+  124,226 active postings had no `career_sources` row at all, so pass 2 had no
+  board to walk to. The employer names a board's own postings carry are the
+  PROVIDER naming its owner (`ats_provider`) when one name covers >= 90% of at
+  least three postings; a board naming many employers gets no signal, which is
+  how Jobgether and JPMorgan's shared Oracle instance are correctly refused.
+  A curated catalog row naming the same endpoint is the second, independent
+  class (`curated_registry`) — and only counts when the two AGREE.
+  `--refresh` never writes a weaker verdict than a row already holds.
 - `scripts/verify_career_sources.py [--apply] --mode endpoints|employers|both`
   — pass 1 asks the ATS who owns the board (cheap); pass 2 verifies the
   employer's domain and walks from it to the board (decisive, and the only
