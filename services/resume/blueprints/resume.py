@@ -22,6 +22,7 @@ User-specific endpoints with S3 storage:
 """
 
 import io
+import json
 import logging
 from datetime import datetime
 
@@ -2380,6 +2381,42 @@ def mail_ingress_resolve(suggestion_id):
 # POST /api/resume/download — Generate PDF or DOCX
 # ------------------------------------------------------------------
 
+_LAYOUT_HEADERS = (
+    "X-Resume-Pages", "X-Resume-Outcome",
+    "X-Resume-Fill-Ratio", "X-Resume-Dropped",
+)
+
+
+def _layout_payload(resolution) -> dict:
+    return resolution.to_dict() if resolution is not None else {}
+
+
+def _attach_layout_headers(resp, layout: dict):
+    if not layout:
+        return resp
+    resp.headers["X-Resume-Pages"] = str(layout.get("pages", ""))
+    resp.headers["X-Resume-Outcome"] = str(layout.get("outcome", ""))
+    resp.headers["X-Resume-Fill-Ratio"] = str(layout.get("fill_ratio", ""))
+    resp.headers["X-Resume-Dropped"] = json.dumps(layout.get("dropped") or [])
+    return resp
+
+
+def _render_document(svc, tailored, fmt):
+    """Return (bytes, layout_dict). Both formats share the same solver."""
+    if fmt == "pdf":
+        file_bytes, resolution = svc.renderer.generate_pdf(tailored)
+        return file_bytes, resolution.to_dict()
+    file_bytes = svc.renderer.generate_docx(tailored)
+    _working, resolution = svc.renderer._compute_pdf_layout(tailored)
+    return file_bytes, resolution.to_dict()
+
+
+@resume_bp.route("/layout-spec", methods=["GET"])
+def layout_spec():
+    """Public LayoutSpec JSON — the frontend preview's source of truth."""
+    from services.resume_renderer import DEFAULT_SPEC
+    return jsonify(DEFAULT_SPEC.to_public_dict())
+
 
 @resume_bp.route("/download", methods=["POST"])
 @jwt_required()
@@ -2479,20 +2516,18 @@ def download():
             ):
                 try:
                     file_bytes = storage.get_resume(cached["s3_key"])
-                    return send_file(
+                    resp = send_file(
                         io.BytesIO(file_bytes),
                         mimetype=mimetype,
                         as_attachment=True,
                         download_name=cached.get("filename") or filename,
                     )
+                    return _attach_layout_headers(resp, cached.get("layout") or {})
                 except Exception as cache_err:
                     logger.warning("Cached S3 fetch failed, re-rendering: %s", cache_err)
 
             # Cache miss — render and upload.
-            if fmt == "pdf":
-                file_bytes = svc.renderer.generate_pdf(tailored)
-            else:
-                file_bytes = svc.renderer.generate_docx(tailored)
+            file_bytes, layout = _render_document(svc, tailored, fmt)
             if not file_bytes or len(file_bytes) < 100:
                 return jsonify({"error": "Failed to generate document"}), 500
 
@@ -2523,6 +2558,7 @@ def download():
                 "content_hash": content_hash,
                 "render_version": svc.renderer.RENDER_VERSION,
                 "rendered_at": datetime.utcnow(),
+                "layout": layout,
             }
             update_set = {
                 "versions": versions,
@@ -2535,28 +2571,30 @@ def download():
                 {"$set": update_set},
             )
 
-            return send_file(
+            resp = send_file(
                 io.BytesIO(file_bytes),
                 mimetype=mimetype,
                 as_attachment=True,
                 download_name=filename,
             )
+            return _attach_layout_headers(resp, layout)
 
         # ── Legacy path (no record_id) — generate once, no DB dedup ──
-        if fmt == "pdf":
-            file_bytes = svc.renderer.generate_pdf(tailored)
-        else:
-            file_bytes = svc.renderer.generate_docx(tailored)
+        file_bytes, layout = _render_document(svc, tailored, fmt)
         if not file_bytes or len(file_bytes) < 100:
             return jsonify({"error": "Failed to generate document"}), 500
 
-        return send_file(
+        resp = send_file(
             io.BytesIO(file_bytes),
             mimetype=mimetype,
             as_attachment=True,
             download_name=filename,
         )
+        return _attach_layout_headers(resp, layout)
     except Exception as e:
+        from services.resume_renderer import UnrenderableTextError
+        if isinstance(e, UnrenderableTextError):
+            return jsonify({"error": str(e)}), 422
         logger.exception(f"Resume download error: {e}")
         return jsonify({"error": "Failed to generate document"}), 500
 

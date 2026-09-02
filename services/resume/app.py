@@ -69,7 +69,10 @@ def create_app():
                 "Content-Type", "Authorization",
                 "X-Guest-Id", "X-Guest-Device-Token",
             ],
-            "expose_headers": ["Content-Disposition", "X-Trace-Id", "X-Amzn-Trace-Id", "Server-Timing"],
+            "expose_headers": [
+                "Content-Disposition", "X-Trace-Id", "X-Amzn-Trace-Id", "Server-Timing",
+                "X-Resume-Pages", "X-Resume-Outcome", "X-Resume-Fill-Ratio", "X-Resume-Dropped",
+            ],
             "supports_credentials": True,
             "max_age": 3600,
         }

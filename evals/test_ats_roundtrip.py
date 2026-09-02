@@ -93,7 +93,8 @@ KEY_FACTS = [
 
 
 def _render():
-    return ResumeRenderer().generate_pdf(TAILORED)
+    pdf, _resolution = ResumeRenderer().generate_pdf(TAILORED)
+    return pdf
 
 
 def test_pdf_renders_with_a_real_text_layer():

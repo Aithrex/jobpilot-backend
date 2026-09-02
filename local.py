@@ -64,7 +64,10 @@ def create_app():
             "origins": allowed_origins,
             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
             "allow_headers": ["Content-Type", "Authorization"],
-            "expose_headers": ["Content-Disposition", "X-Trace-Id", "X-Amzn-Trace-Id", "Server-Timing"],
+            "expose_headers": [
+                "Content-Disposition", "X-Trace-Id", "X-Amzn-Trace-Id", "Server-Timing",
+                "X-Resume-Pages", "X-Resume-Outcome", "X-Resume-Fill-Ratio", "X-Resume-Dropped",
+            ],
             "supports_credentials": True,
             "max_age": 3600,
         }

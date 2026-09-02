@@ -870,7 +870,7 @@ def _pin_rendered_pdf(user_email: str, record_id: str,
         raise ValueError("tailoring_record_has_no_version")
     version_id = target.get("version_id")
 
-    pdf_bytes = svc.renderer.generate_pdf(tailored)
+    pdf_bytes, _resolution = svc.renderer.generate_pdf(tailored)
     if not pdf_bytes or len(pdf_bytes) < 100:
         raise ValueError("pdf_render_failed")
 
@@ -2077,8 +2077,9 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             # (parseability 0, overall capped) instead of silently skipping.
             pdf_bytes = None
             render_error = None
+            resolution = None
             try:
-                pdf_bytes = svc.renderer.generate_pdf(payload["tailored_resume"])
+                pdf_bytes, resolution = svc.renderer.generate_pdf(payload["tailored_resume"])
             except Exception as e:
                 logger.warning("ATS scoring: PDF render failed: %s", e)
                 render_error = f"PDF render failed: {e}"
@@ -2087,6 +2088,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 payload["jd_analysis"],
                 pdf_bytes=pdf_bytes,
                 render_error=render_error,
+                page_outcome=None if resolution is None else resolution.outcome,
             )
             svc.complete_job(job_id, {"ats_scores": result})
 

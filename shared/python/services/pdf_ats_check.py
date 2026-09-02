@@ -32,11 +32,12 @@ from typing import Any, Dict, List, Tuple
 logger = logging.getLogger(__name__)
 
 
-# Section headers the renderer emits — matches resume_renderer.py.
+# Section headers the renderer emits — matches LayoutSpec.headings.
 # All-caps because that's what the renderer prints; ATS parsers do
 # case-insensitive matching, but our renderer is consistent so we can
-# look for the exact strings.
-_EXPECTED_SECTIONS = ("SUMMARY", "EXPERIENCE", "SKILLS", "EDUCATION")
+# look for the exact strings. CERTIFICATIONS is only required when the
+# JSON actually has certifications (the section is omitted otherwise).
+_CORE_SECTIONS = ("SUMMARY", "EXPERIENCE", "SKILLS", "EDUCATION")
 
 # A simple but well-tested set of patterns that any production ATS parser
 # will use to recognize contact fields.
@@ -92,6 +93,8 @@ def check_pdf_parseability(
     pdf_bytes: bytes,
     tailored: Dict[str, Any],
     jd_analysis: Dict[str, Any] | None = None,
+    *,
+    outcome: str | None = None,
 ) -> Dict[str, Any]:
     """Run the parseability suite. Returns:
 
@@ -124,7 +127,7 @@ def check_pdf_parseability(
                 "contact_email_found": False,
                 "contact_phone_found": False,
                 "sections_found": [],
-                "sections_missing": list(_EXPECTED_SECTIONS),
+                "sections_missing": list(_CORE_SECTIONS),
                 "sections_in_order": False,
                 "skills_keywords_found": 0,
                 "skills_keywords_total": 0,
@@ -156,14 +159,17 @@ def check_pdf_parseability(
     )
 
     # --- Section header presence + ORDER ---
-    sections_found = [s for s in _EXPECTED_SECTIONS if s in text_upper]
-    sections_missing = [s for s in _EXPECTED_SECTIONS if s not in text_upper]
+    expected = list(_CORE_SECTIONS)
+    if any(str(c).strip() for c in (tailored.get("certifications") or [])):
+        expected.append("CERTIFICATIONS")
+    sections_found = [sec for sec in expected if sec in text_upper]
+    sections_missing = [sec for sec in expected if sec not in text_upper]
     # ATSes route fields by section position. If EXPERIENCE appears before
     # SUMMARY in the extracted text, parsers misclassify the summary as
     # experience bullets. Verify monotonic positions match expected order.
     positions = [(s, text_upper.find(s)) for s in sections_found]
     positions_sorted = sorted(positions, key=lambda p: p[1])
-    expected_seq = [s for s in _EXPECTED_SECTIONS if s in sections_found]
+    expected_seq = [sec for sec in expected if sec in sections_found]
     sections_in_order = (
         [p[0] for p in positions_sorted] == expected_seq
     )
@@ -207,8 +213,17 @@ def check_pdf_parseability(
         if all(t.lower() in text.lower() for t in tokens):
             dates_parseable += 1
 
-    # --- Page count ---
-    single_page = page_count == 1
+    # --- Page count / honest one-page bonus ---
+    # Award the single-page points only for an honest fit_one. A resume
+    # that was truncated to stay on one page must not outscore one that
+    # paginated honestly. Two-page outcomes that needed two pages are
+    # not penalized relative to a truncated one-pager.
+    honest_one = outcome == "fit_one" or (
+        outcome is None and page_count == 1
+    )
+    if outcome == "trimmed_to_one":
+        honest_one = False
+    single_page = honest_one
 
     # --- Skills keyword coverage ---
     # Take the flat list of skills from the tailored JSON and verify each
@@ -278,7 +293,7 @@ def check_pdf_parseability(
     if contact_at_top:
         score += weights["contact_at_top"]
     score += round(
-        weights["sections"] * (len(sections_found) / max(1, len(_EXPECTED_SECTIONS)))
+        weights["sections"] * (len(sections_found) / max(1, len(expected)))
     )
     if sections_in_order:
         score += weights["sections_in_order"]

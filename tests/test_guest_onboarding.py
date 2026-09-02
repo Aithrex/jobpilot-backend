@@ -858,8 +858,15 @@ class TestGuestDownloads:
         # Streaming goes through the EXISTING shared renderer (patched here —
         # its output quality is covered by the renderer suites).
         svc = rs.get_resume_service()
+        from services.resume_renderer import FontTier, GapPlan, PageResolution
+        fake_res = PageResolution(
+            tier=FontTier(10.0, 3.4, 3.08),
+            gaps=GapPlan(1.2, 0.9, 1.0, 0.5, 0.4, 15.24),
+            stretch=1.0, pages=1, predicted_height_mm=200.0,
+            fill_ratio=0.8, dropped=[], outcome="fit_one",
+        )
         monkeypatch.setattr(svc.renderer, "generate_pdf",
-                            lambda tailored: b"%PDF-1.4 rendered " + b"x" * 200)
+                            lambda tailored: (b"%PDF-1.4 rendered " + b"x" * 200, fake_res))
         got = client.get(f"/api/resume/guest/download/{body['token']}")
         assert got.status_code == 200
         assert got.mimetype == "application/pdf"

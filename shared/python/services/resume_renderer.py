@@ -1,43 +1,284 @@
 """
-Resume document renderer — PDF (fpdf2) and DOCX (python-docx) generation.
+Resume document renderer — PDF (fpdf2) and DOCX (python-docx).
 
-Template-based rendering with zero AI involvement.
-Format: A4, 0.6in left/right and 0.4in top/bottom, Tinos/Times, adaptive density.
-Section order: Summary → Experience → Projects → Technical Skills → Education.
+One LayoutSpec is the source of truth for page size, type scale, gaps,
+section order, and headings. Both renderers consume it. The layout solver
+always terminates in an explicit PageResolution — never silent clipping.
 """
+from __future__ import annotations
+
+import copy
 import io
+import logging
 import os
 import re
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 def _two_page_enabled() -> bool:
-    """Opt-in two-page rendering (Phase 5). Default OFF in prod; on in dev only
-    when a senior resume genuinely overflows one page at 10pt."""
+    """Legacy env flag. The solver may still emit two pages when content
+    cannot fit one page without clipping — clipping is never allowed.
+    This flag only changes the *allocator* budget (see bullet_allocator)."""
     default = "true" if os.environ.get("ENVIRONMENT", "development") == "development" else "false"
     return os.environ.get("ALLOW_TWO_PAGE", default).strip().lower() in ("1", "true", "yes", "on")
 
 
 ALLOW_TWO_PAGE = _two_page_enabled()
 
+Outcome = Literal["fit_one", "fit_two", "trimmed_to_one", "trimmed_to_two"]
+
+
+# ---------------------------------------------------------------------------
+# Layout spec — the single frozen definition of the page
+# ---------------------------------------------------------------------------
+
+PAGE_SIZES = {
+    "letter": (215.9, 279.4),
+    "a4": (210.0, 297.0),
+}
+
+
+_IN = 25.4  # mm per inch
+
+
+@dataclass(frozen=True)
+class LayoutSpec:
+    """Every literal both renderers (and the preview) must share."""
+
+    page: str = "letter"  # "letter" | "a4"
+
+    # Density-resolved margins. Sides never go below 0.50in.
+    side_margin_dense_in: float = 0.50
+    side_margin_sparse_in: float = 0.85
+    top_margin_dense_in: float = 0.34
+    top_margin_sparse_in: float = 0.55
+    bottom_margin_dense_in: float = 0.30
+    bottom_margin_sparse_in: float = 0.50
+
+    # PDF embeds Charis SIL. DOCX names Georgia: Charis is not installed on
+    # most machines, and Word's silent substitute is worse than a deliberate
+    # near-match (Georgia, similar x-height). Intentional, not drift.
+    pdf_font_family: str = "CharisSIL"
+    pdf_font_fallback_family: str = "Tinos"
+    docx_font_family: str = "Georgia"
+
+    name_pt: float = 19.0
+    section_pt: float = 11.5
+    entry_pt: float = 10.2
+    contact_pt: float = 9.4
+    min_heading_body_gap_pt: float = 1.5
+
+    section_order: Tuple[str, ...] = (
+        "summary", "experience", "projects", "skills", "education", "certifications",
+    )
+    headings: Tuple[Tuple[str, str], ...] = (
+        ("summary", "SUMMARY"),
+        ("experience", "EXPERIENCE"),
+        ("projects", "PROJECTS"),
+        ("skills", "TECHNICAL SKILLS"),
+        ("education", "EDUCATION"),
+        ("certifications", "CERTIFICATIONS"),
+    )
+
+    min_section_gap: float = 1.8
+    max_section_gap: float = 3.2
+    min_entry_gap: float = 1.2
+    max_entry_gap: float = 2.4
+    min_post_header: float = 0.3
+    max_post_header: float = 0.8
+    min_header_gap: float = 0.5
+    max_header_gap: float = 2.0
+    min_skill_gap: float = 0.4
+    max_skill_gap: float = 1.4
+    min_bullet_gap: float = 0.5
+    max_bullet_gap: float = 0.9
+    min_pre_bullet: float = 0.5
+    max_pre_bullet: float = 0.9
+    edu_entry_gap: float = 1.2
+    bullet_indent_mm: float = 3.6
+    bullet_radius_mm: float = 0.5
+    bullet_text_gap_mm: float = 1.5
+    split_row_gap_mm: float = 2.0
+    section_hr_width: float = 0.25
+    heading_cell_h: float = 4.4
+    name_cell_h: float = 6.2
+    job_title_cell_h: float = 4.0
+    max_skill_leading: float = 4.2
+    docx_max_skill_spacing: float = 1.15
+    # Empirically derived for Charis/Georgia at 10pt on Letter @ 0.50in sides.
+    docx_chars_per_line_at_10pt: float = 108.0
+
+    target_fill: float = 0.95
+    max_fill: float = 0.97
+    min_second_page_fill: float = 0.55
+    sparse_fill_floor: float = 0.62
+    fill_ramp_lo: float = 0.55
+    fill_ramp_hi: float = 0.68
+    max_leading_mm: float = 6.0
+    stretch_cap: float = 1.40
+
+    def heading(self, key: str) -> str:
+        return dict(self.headings).get(key, key.upper())
+
+    @property
+    def page_width_mm(self) -> float:
+        return PAGE_SIZES[self.page][0]
+
+    @property
+    def page_height_mm(self) -> float:
+        return PAGE_SIZES[self.page][1]
+
+    @property
+    def margin_lr_mm(self) -> float:
+        return self.side_margin_dense_in * _IN
+
+    @property
+    def margin_lr_wide_mm(self) -> float:
+        return self.side_margin_sparse_in * _IN
+
+    @property
+    def margin_top_mm(self) -> float:
+        return self.top_margin_dense_in * _IN
+
+    @property
+    def margin_bottom_mm(self) -> float:
+        return self.bottom_margin_dense_in * _IN
+
+    @property
+    def margin_top_sparse_mm(self) -> float:
+        return self.top_margin_sparse_in * _IN
+
+    @property
+    def margin_bottom_sparse_mm(self) -> float:
+        return self.bottom_margin_sparse_in * _IN
+
+    # Compat aliases used as stretch bases.
+    @property
+    def bullet_gap(self) -> float:
+        return self.min_bullet_gap
+
+    @property
+    def pre_bullet_gap(self) -> float:
+        return self.min_pre_bullet
+
+    def usable_height(self, top: Optional[float] = None, bottom: Optional[float] = None) -> float:
+        t = self.margin_top_mm if top is None else top
+        b = self.margin_bottom_mm if bottom is None else bottom
+        return self.page_height_mm - t - b
+
+    def usable_width(self, margin_lr: float) -> float:
+        return self.page_width_mm - 2 * margin_lr
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        """JSON the frontend preview consumes — headings, order, type scale."""
+        return {
+            "page": self.page,
+            "page_width_mm": self.page_width_mm,
+            "page_height_mm": self.page_height_mm,
+            "margin_top_mm": self.margin_top_mm,
+            "margin_bottom_mm": self.margin_bottom_mm,
+            "margin_lr_mm": self.margin_lr_mm,
+            "name_pt": self.name_pt,
+            "section_pt": self.section_pt,
+            "entry_pt": self.entry_pt,
+            "contact_pt": self.contact_pt,
+            "pdf_font_family": self.pdf_font_family,
+            "docx_font_family": self.docx_font_family,
+            "section_order": list(self.section_order),
+            "headings": {k: v for k, v in self.headings},
+        }
+
+
+DEFAULT_SPEC = LayoutSpec()
+
+
+@dataclass(frozen=True)
+class FontTier:
+    body_pt: float
+    lh: float
+    lh_s: float
+
+
+@dataclass(frozen=True)
+class GapPlan:
+    section_gap: float
+    entry_gap: float
+    post_header: float
+    header_gap: float
+    skill_gap: float
+    margin_lr: float
+    margin_top: float = 8.636   # 0.34in dense default
+    margin_bottom: float = 7.62  # 0.30in dense default
+    pre_bullet: float = 0.5
+    bullet_gap: float = 0.5
+
+
+@dataclass(frozen=True)
+class DroppedItem:
+    kind: str          # "project_bullet" | "project" | "experience_bullet" | "experience"
+    index: int
+    preview: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"kind": self.kind, "index": self.index, "preview": self.preview}
+
+
+@dataclass
+class PageResolution:
+    tier: FontTier
+    gaps: GapPlan
+    stretch: float
+    pages: int
+    predicted_height_mm: float
+    fill_ratio: float
+    dropped: List[DroppedItem] = field(default_factory=list)
+    outcome: Outcome = "fit_one"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "pages": self.pages,
+            "outcome": self.outcome,
+            "fill_ratio": round(self.fill_ratio, 4),
+            "dropped": [d.to_dict() for d in self.dropped],
+            "body_pt": self.tier.body_pt,
+            "predicted_height_mm": round(self.predicted_height_mm, 2),
+        }
+
+
+class UnrenderableTextError(ValueError):
+    """Raised when the resume contains codepoints no loaded font can draw."""
+
+
+# Density ladder (body only — headings stay on LayoutSpec).
+_UP_TIERS = (
+    FontTier(11.0, 4.00, 3.60),
+    FontTier(10.5, 3.70, 3.35),
+)
+_BASE_TIER = FontTier(10.0, 3.40, 3.08)
+_TIGHT_10 = (
+    FontTier(10.0, 3.35, 3.08),
+    FontTier(10.0, 3.22, 3.08),
+    FontTier(10.0, 3.10, 3.08),
+)
+_TIER_95 = FontTier(9.5, 3.5, 3.3)
+_TIER_90 = FontTier(9.0, 3.2, 3.0)
+_TWO_PAGE_FLOOR = FontTier(9.5, 3.5, 3.3)
+
+_CJK_RE = re.compile(
+    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]"
+)
+_FLOOR_RECENT = 3
+_FLOOR_OTHER = 2
+
 
 class ResumeRenderer:
-    """Generates PDF and DOCX documents from a structured (tailored) resume dict."""
+    """Generates PDF and DOCX from a structured (tailored) resume dict."""
 
-    # Bump this whenever the rendered OUTPUT changes (margins, fonts, name
-    # casing, section layout, bullet rules, etc.). The download endpoint caches
-    # rendered files in S3 keyed on the resume *content* hash — but format
-    # changes live here in the renderer, not the content, so without a version
-    # tag a cache "hit" would keep serving a PDF rendered by the OLD code.
-    # Including this in the cache key forces a re-render after any format fix.
-    RENDER_VERSION = "2026-08-31.1"  # sparse-page fill ramp + tighter skills block
+    RENDER_VERSION = "2026-09-02.2"  # Charis SIL, density margins, tighter intra-section gaps
 
-    # Allowed headings for the skills section. The tailor may pick one per
-    # industry via `skills_section_title` (ResumeTailor normalizes it); this
-    # is defense-in-depth so an unexpected value can never reach the page.
-    # Every entry must contain the word "Skills" — pdf_ats_check's
-    # section-presence check greps the extracted text for "SKILLS".
     SKILLS_TITLES = (
         "Technical Skills",
         "Skills",
@@ -46,6 +287,86 @@ class ResumeRenderer:
         "Key Skills",
     )
 
+    def __init__(self, spec: Optional[LayoutSpec] = None):
+        self.spec = spec or DEFAULT_SPEC
+        self._FONT_FAMILY = self.spec.pdf_font_family
+        self._FALLBACK_SANS = "NotoSans"
+        self._FALLBACK_CJK = "NotoSansSC"
+        self._loaded_fonts: set = set()
+
+    # Compatibility aliases so augmenter / allocator / tests keep working.
+    @property
+    def _AVAIL_H(self) -> float:
+        return self.spec.usable_height()
+
+    @property
+    def _MIN_SECTION_GAP(self) -> float:
+        return self.spec.min_section_gap
+
+    @property
+    def _MAX_SECTION_GAP(self) -> float:
+        return self.spec.max_section_gap
+
+    @property
+    def _MIN_ENTRY_GAP(self) -> float:
+        return self.spec.min_entry_gap
+
+    @property
+    def _MAX_ENTRY_GAP(self) -> float:
+        return self.spec.max_entry_gap
+
+    @property
+    def _MIN_POST_HEADER(self) -> float:
+        return self.spec.min_post_header
+
+    @property
+    def _MAX_POST_HEADER(self) -> float:
+        return self.spec.max_post_header
+
+    @property
+    def _MIN_HEADER_GAP(self) -> float:
+        return self.spec.min_header_gap
+
+    @property
+    def _MAX_HEADER_GAP(self) -> float:
+        return self.spec.max_header_gap
+
+    @property
+    def _MIN_SKILL_GAP(self) -> float:
+        return self.spec.min_skill_gap
+
+    @property
+    def _MAX_SKILL_GAP(self) -> float:
+        return self.spec.max_skill_gap
+
+    @property
+    def _MAX_SKILL_LEADING(self) -> float:
+        return self.spec.max_skill_leading
+
+    @property
+    def _DOCX_MAX_SKILL_SPACING(self) -> float:
+        return self.spec.docx_max_skill_spacing
+
+    @property
+    def _STRETCH_CAP(self) -> float:
+        return self.spec.stretch_cap
+
+    @property
+    def _MAX_LEADING_MM(self) -> float:
+        return self.spec.max_leading_mm
+
+    @property
+    def _SPARSE_FILL_FLOOR(self) -> float:
+        return self.spec.sparse_fill_floor
+
+    @property
+    def _FILL_RAMP_LO(self) -> float:
+        return self.spec.fill_ramp_lo
+
+    @property
+    def _FILL_RAMP_HI(self) -> float:
+        return self.spec.fill_ramp_hi
+
     @classmethod
     def _skills_title(cls, tailored: Dict[str, Any]) -> str:
         title = str(tailored.get("skills_section_title") or "").strip()
@@ -53,42 +374,18 @@ class ResumeRenderer:
 
     @staticmethod
     def _contact_display(key: str, value: str) -> tuple:
-        """Return (display_text, href_url_or_None) for a contact field.
-
-        The href element is currently unused by both renderers (contacts
-        render as plain text — product decision) but is kept for the display
-        normalization callers rely on and a possible future link toggle.
-        """
         if not value:
             return ("", None)
-        if key == "linkedin":
-            display = re.sub(r'^https?://', '', value)  # strip protocol
-            href = value if value.startswith("http") else f"https://{value}"
-            return (display, href)
-        if key == "github":
-            display = re.sub(r'^https?://', '', value)
-            href = value if value.startswith("http") else f"https://{value}"
-            return (display, href)
-        if key == "portfolio":
-            # Strip protocol for display, link to full URL
-            display = re.sub(r'^https?://', '', value).rstrip('/')
+        if key in ("linkedin", "github", "portfolio"):
+            display = re.sub(r"^https?://", "", value).rstrip("/")
             href = value if value.startswith("http") else f"https://{value}"
             return (display, href)
         if key == "email":
             return (value, f"mailto:{value}")
-        if key == "location":
-            return (value, None)  # plain text, no link
-        return (value, None)  # phone — no href
+        return (value, None)
 
     @staticmethod
     def _title_case_name(name: str) -> str:
-        """Normalize candidate name to Title Case.
-
-        If a token is entirely upper- or lower-case, capitalize only the first
-        letter ("HARSHITH" -> "Harshith"). If it already has mixed case
-        (e.g. "McDonald", "deShawn"), leave it untouched so we don't damage
-        legitimately styled surnames.
-        """
         if not name:
             return name
         out = []
@@ -101,237 +398,500 @@ class ResumeRenderer:
 
     @staticmethod
     def _sanitize_text(text) -> str:
-        """Replace Unicode chars unsupported by built-in PDF fonts with latin-1 equivalents."""
+        """Normalize punctuation. Does NOT replace unrenderable glyphs with '?'."""
         if not text:
             return ""
         text = str(text)
         replacements = {
-            "\u2022": "\xb7",  # bullet • → middle dot · (latin-1 compatible)
-            "\u2013": " - ",   # en-dash – → spaced hyphen
-            "\u2014": " - ",   # em-dash — → spaced hyphen
-            "\u2015": " - ",   # horizontal bar ―
-            "\u2212": "-",     # minus sign − (Latin-1 safe single hyphen)
-            "\u2018": "'",     # left single quote
-            "\u2019": "'",     # right single quote / apostrophe
-            "\u201c": '"',     # left double quote
-            "\u201d": '"',     # right double quote
-            "\u2026": "...",   # ellipsis …
-            "\u00a0": " ",     # non-breaking space
-            "\u200b": "",      # zero-width space
+            "\u2022": "\xb7",
+            "\u2013": " - ",
+            "\u2014": " - ",
+            "\u2015": " - ",
+            "\u2212": "-",
+            "\u2018": "'",
+            "\u2019": "'",
+            "\u201c": '"',
+            "\u201d": '"',
+            "\u2026": "...",
+            "\u00a0": " ",
+            "\u200b": "",
         }
         for char, repl in replacements.items():
             text = text.replace(char, repl)
-        # Collapse duplicate spaces that the spaced-hyphen replacement can
-        # introduce when the original already had a space (e.g. "x — y" →
-        # "x  -  y" → "x - y").
-        text = re.sub(r"  +", " ", text)
-        # Fallback: strip any remaining non-latin-1 characters
-        return text.encode("latin-1", errors="replace").decode("latin-1")
+        return re.sub(r"  +", " ", text)
+
+    def _assert_renderable(self, text: str, context: str = "") -> None:
+        """Fail loudly if a codepoint cannot be drawn by any loaded font."""
+        if not text:
+            return
+        if _CJK_RE.search(text) and "cjk" not in self._loaded_fonts:
+            sample = "".join(ch for ch in text if _CJK_RE.search(ch))[:8]
+            raise UnrenderableTextError(
+                f"Resume contains characters this renderer cannot draw "
+                f"({context or 'text'}: {sample!r}). "
+                "Add NotoSansSC-Regular.otf to services/fonts/."
+            )
+        # Core Times is latin-1 only. Charis/Tinos cover Latin/Greek/Cyrillic.
+        if self._FONT_FAMILY == "Times":
+            try:
+                text.encode("latin-1")
+            except UnicodeEncodeError:
+                if "sans" not in self._loaded_fonts and "cjk" not in self._loaded_fonts:
+                    raise UnrenderableTextError(
+                        f"Resume contains characters the Times fallback cannot "
+                        f"draw ({context or 'text'}). Install Charis SIL in services/fonts/."
+                    )
+
+    def _pick_face(self, text: str) -> str:
+        if _CJK_RE.search(text) and "cjk" in self._loaded_fonts:
+            return self._FALLBACK_CJK
+        return self._FONT_FAMILY
+
+    def _set_font(self, pdf, style: str, size: float, text: str = "") -> None:
+        face = self._pick_face(text) if text else self._FONT_FAMILY
+        try:
+            pdf.set_font(face, style, size)
+        except Exception:
+            pdf.set_font(self._FONT_FAMILY, style, size)
 
     # ------------------------------------------------------------------
-    # PDF generation (fpdf2) — matches LaTeX resume.cls template
+    # Fonts
     # ------------------------------------------------------------------
 
-    # Layout constants — loosened from a previous aggressive-density pass.
-    # The earlier ultra-tight values produced a "packed" look where bullets
-    # crashed into role titles and section headers crowded their content.
-    # These values give a clean professional appearance while staying within
-    # one page for typical 2-experience + up-to-3-project resumes. The Pass 2
-    # distribution + tier fallback (10pt-tight → 9.5pt → 9pt) still handle
-    # the densest layouts automatically.
-    _MARGIN_LR = 15.24         # 0.6 inch left/right
-    _MARGIN_TOP = 10.16        # 0.4 inch
-    _MARGIN_BOTTOM = 10.16     # 0.4 inch
-    _PAGE_H = 297.0            # A4 height mm
-    _AVAIL_H = _PAGE_H - _MARGIN_TOP - _MARGIN_BOTTOM  # ~276.7mm usable
+    def _register_fonts(self, pdf) -> None:
+        fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+        self._loaded_fonts = set()
+        s = self.spec
+        charis_ok = False
+        try:
+            pdf.add_font(s.pdf_font_family, "", os.path.join(fonts_dir, "CharisSIL-Regular.ttf"))
+            pdf.add_font(s.pdf_font_family, "B", os.path.join(fonts_dir, "CharisSIL-Bold.ttf"))
+            pdf.add_font(s.pdf_font_family, "I", os.path.join(fonts_dir, "CharisSIL-Italic.ttf"))
+            pdf.add_font(s.pdf_font_family, "BI", os.path.join(fonts_dir, "CharisSIL-BoldItalic.ttf"))
+            self._FONT_FAMILY = s.pdf_font_family
+            self._loaded_fonts.add("charis")
+            charis_ok = True
+        except Exception as e:
+            logger.warning("resume_render Charis SIL missing — %s", e)
 
-    # Font family: Tinos — the SIL-OFL, metric-identical twin of Times New
-    # Roman, matching the user's own Overleaf template (resume.cls compiles
-    # with newtxtext, a Times clone). Embedded from
-    # shared/python/services/fonts/ at render time; the DOCX renderer names
-    # "Times New Roman" directly (on every recipient's machine, same
-    # metrics). Falls back to core Times if the TTFs are missing.
-    _FONT_FAMILY = "Tinos"
+        try:
+            pdf.add_font(s.pdf_font_fallback_family, "", os.path.join(fonts_dir, "Tinos-Regular.ttf"))
+            pdf.add_font(s.pdf_font_fallback_family, "B", os.path.join(fonts_dir, "Tinos-Bold.ttf"))
+            pdf.add_font(s.pdf_font_fallback_family, "I", os.path.join(fonts_dir, "Tinos-Italic.ttf"))
+            pdf.add_font(s.pdf_font_fallback_family, "BI", os.path.join(fonts_dir, "Tinos-BoldItalic.ttf"))
+            self._loaded_fonts.add("tinos")
+            if not charis_ok:
+                self._FONT_FAMILY = s.pdf_font_fallback_family
+                logger.warning("resume_render fell back to Tinos")
+        except Exception:
+            if not charis_ok:
+                self._FONT_FAMILY = "Times"
+                logger.warning("resume_render Tinos missing — fell back to core Times")
 
-    # Font sizes. Section/company/role-title sizes are DERIVED per render as
-    # body_size + 1pt so the hierarchy scales with the adaptive density tier
-    # (11pt body → 12pt headers; 9pt body → 10pt headers) instead of headers
-    # staying fixed while the body moves.
-    _NAME_SIZE = 20.0          # large centered name (recruiter guidance: 20-22)
-    _CONTACT_SIZE = 10.0       # contact line
-    _BODY_SIZE = 11.0          # body base (overridden by adaptive tier)
-    _HEADING_DELTA = 1.0       # section/company/title = body + 1 (template: 12pt at 11 body)
-    _BULLET_INDENT = 5.05      # ~0.199in
+        sans = os.path.join(fonts_dir, "NotoSans-Regular.ttf")
+        if os.path.isfile(sans):
+            try:
+                pdf.add_font(self._FALLBACK_SANS, "", sans)
+                # Reuse regular for B/I so mixed-script lines don't crash.
+                pdf.add_font(self._FALLBACK_SANS, "B", sans)
+                pdf.add_font(self._FALLBACK_SANS, "I", sans)
+                pdf.add_font(self._FALLBACK_SANS, "BI", sans)
+                self._loaded_fonts.add("sans")
+            except Exception as e:
+                logger.warning("resume_render NotoSans load failed: %s", e)
 
-    # Line heights
-    _LH_BODY = 4.2             # body line height
-    _LH_BULLET = 4.0           # bullet line height
-    _LH_SKILL = 4.0            # skill row line height
-    _LH_CONTACT = 4.5          # contact line height
+        for name in ("NotoSansSC-Regular.otf", "NotoSansSC-Regular.ttf"):
+            cjk = os.path.join(fonts_dir, name)
+            if os.path.isfile(cjk):
+                try:
+                    pdf.add_font(self._FALLBACK_CJK, "", cjk)
+                    pdf.add_font(self._FALLBACK_CJK, "B", cjk)
+                    pdf.add_font(self._FALLBACK_CJK, "I", cjk)
+                    pdf.add_font(self._FALLBACK_CJK, "BI", cjk)
+                    self._loaded_fonts.add("cjk")
+                except Exception as e:
+                    logger.warning("resume_render NotoSansSC load failed: %s", e)
+                break
 
-    _SECTION_HR_WIDTH = 0.18   # rule under section header (template: 0.5pt)
+    # ------------------------------------------------------------------
+    # Measure / render PDF
+    # ------------------------------------------------------------------
 
-    # Spacing floors — minimum visual gaps. Each constant fires multiple times
-    # on a project-heavy resume, so values are kept conservative to fit one page:
-    #   section_gap fires 5× (Summary, Experience, Projects, Skills, Education)
-    #   entry_gap fires up to 4× (between experience entries + between projects)
-    #   post_header fires 5× (after each section's HR rule)
-    _MIN_SECTION_GAP = 1.2     # before section header (not the first).
-                               # 0.3mm tighter than 1.5 so the 1.0mm post-header
-                               # floor does not steal experience-bullet budget.
-    _MIN_ENTRY_GAP = 0.9       # between experiences / between projects
-    _MIN_POST_HEADER = 1.0     # after section HR, before first content
-                              # (0.4mm read as touching the rule on dense pages)
-    _MIN_HEADER_GAP = 0.5      # after name+contact block
-    _MIN_SKILL_GAP = 0.4       # compact separation between skill categories.
-                               # Reference LaTeX uses \vspace{-2pt} (tighter
-                               # than touching); we keep ours visible but
-                               # snug — the previous 0.8mm made skills look
-                               # airier than the rest of the resume.
-    _BULLET_GAP = 0.6          # gap between bullets within a list — breathing
-                               # room so consecutive bullets don't visually merge
-    _PRE_BULLET_GAP = 1.2      # gap below italic role title before first bullet
-    _EDU_ENTRY_GAP = 1.2       # gap between two education entries
-    _JOB_TITLE_CELL_H = 4.0    # italic role-title line height (was 4.5 — the
-                               # extra 0.5mm read as dead space under the title)
-    _NAME_CELL_H = 6.2         # name line (was 6.5 — offset for post_header floor)
-    _HEADING_CELL_H = 4.2      # section title cell (was 4.5 — same offset)
+    def _min_gaps(self) -> GapPlan:
+        s = self.spec
+        return GapPlan(
+            s.min_section_gap, s.min_entry_gap, s.min_post_header,
+            s.min_header_gap, s.min_skill_gap, s.margin_lr_mm,
+            s.margin_top_mm, s.margin_bottom_mm,
+            s.min_pre_bullet, s.min_bullet_gap,
+        )
 
-    # Spacing ceilings — how much Pass 2 may inflate on sparse pages.
-    # Heading→content, job→job, and between-section gaps stay tight.
-    # Leftover whitespace is absorbed by Pass-3 leading, not by holes
-    # between SUMMARY / EXPERIENCE / later sections.
-    _MAX_SECTION_GAP = 2.8     # before a section header (not the first)
-    _MAX_ENTRY_GAP = 2.2
-    _MAX_POST_HEADER = 1.6
-    _MAX_HEADER_GAP = 2.0
-    _MAX_SKILL_GAP = 1.4       # fires once PER CATEGORY, so its ceiling costs
-                               # n_categories × the gap. At 2.2 a six-category
-                               # block spent 13mm on inter-row air alone and
-                               # read far airier than the bullets above it.
+    def _max_gaps(self, margin_lr: Optional[float] = None) -> GapPlan:
+        s = self.spec
+        return GapPlan(
+            s.max_section_gap, s.max_entry_gap, s.max_post_header,
+            s.max_header_gap, s.max_skill_gap,
+            margin_lr if margin_lr is not None else s.margin_lr_wide_mm,
+            s.margin_top_sparse_mm, s.margin_bottom_sparse_mm,
+            s.max_pre_bullet, s.max_bullet_gap,
+        )
 
-    # Skills rows are dense comma lists, not prose — they don't need the body's
-    # Pass-3 leading. Without this cap an 11pt sparse page gave them 5.04mm
-    # per line (3.60 × 1.40), which is what made the block look padded.
-    _MAX_SKILL_LEADING = 4.2
-    _DOCX_MAX_SKILL_SPACING = 1.15  # same cap expressed as a DOCX line-spacing
-
-    # Sparse-page guards. A resume with genuinely half a page of content used
-    # to saturate everything at once — 11pt type, all five gaps pinned to their
-    # ceilings, leading stretched the full 1.40× — and STILL left a blank band
-    # at the bottom, so it read as padded and unfinished at the same time.
-    # These make the fill effort proportional to how fillable the page is.
-    #
-    # Measured at minimum gaps: a 2-role / 4-bullet resume is ~55% full at
-    # 11pt, the dead-band shape Pass 3 exists for is ~74%, a 4-role senior
-    # ~93%. The thresholds sit in the gap between the first two.
-    _SPARSE_FILL_FLOOR = 0.62  # refuse an up-tier that still leaves this empty
-    _FILL_RAMP_LO = 0.55       # at or below: minimum gaps, no stretch
-    _FILL_RAMP_HI = 0.68       # at or above: full Pass-2/3 effort, as before
-
-    # Pass-3 leading ceiling: body line height may stretch up to this many mm.
-    # Paired with a 1.40 stretch cap so 11pt body (lh=4.0) can actually reach
-    # it — leftover on short pages fills via taller lines, not section gaps.
-    _MAX_LEADING_MM = 6.0
-    _STRETCH_CAP = 1.40
-
-    # Up-tier ladder: (body_size, lh, lh_s, max_fill). A bigger font must be
-    # JUSTIFIED by emptiness — each rung is taken only when the content at
-    # that size still leaves max_fill headroom for Pass-2 gap distribution.
-    # Without the threshold, a borderline page picked the largest size that
-    # barely fit, rendering oversized text with zero breathing room (and
-    # Helvetica runs optically larger than Times at equal pt, so 11pt is
-    # reserved for genuinely sparse pages). Content-rich resumes stay at the
-    # professional 10pt base; denser still → generate_pdf's shrink tiers.
-    _UP_TIERS = (
-        (11.0, 4.00, 3.60, 0.78),
-        (10.5, 3.70, 3.35, 0.88),
-    )
-    _BASE_TIER = (10.0, 3.40, 3.08)
-
-    def _measure_min(self, tailored: Dict[str, Any], body_size: float,
-                     lh: float, lh_s: float) -> float:
-        """Content height (mm) at minimum gaps for the given density tier."""
+    def _measure(self, tailored: Dict[str, Any], tier: FontTier,
+                 gaps: Optional[GapPlan] = None, stretch: float = 1.0) -> float:
+        g = gaps or self._min_gaps()
         _, height = self._render_pdf(
             tailored,
-            section_gap=self._MIN_SECTION_GAP,
-            entry_gap=self._MIN_ENTRY_GAP,
-            post_header=self._MIN_POST_HEADER,
-            header_gap=self._MIN_HEADER_GAP,
-            skill_gap=self._MIN_SKILL_GAP,
-            body_size=body_size, lh=lh, lh_s=lh_s,
-            measure_only=True,
+            section_gap=g.section_gap, entry_gap=g.entry_gap,
+            post_header=g.post_header, header_gap=g.header_gap,
+            skill_gap=g.skill_gap, margin_lr=g.margin_lr,
+            margin_top=g.margin_top, margin_bottom=g.margin_bottom,
+            pre_bullet=g.pre_bullet, bullet_gap=g.bullet_gap,
+            body_size=tier.body_pt, lh=tier.lh, lh_s=tier.lh_s,
+            stretch=stretch, measure_only=True,
         )
         return height
 
-    def _choose_up_tier(
-        self, tailored: Dict[str, Any]
-    ) -> "tuple[float, float, float, float]":
-        """Pick the largest up-tier whose min-gap fill stays UNDER that
-        rung's max_fill threshold (bigger font ⇒ more emptiness required).
-
-        Returns (body_size, lh, lh_s, min_height). Falls through to the 10pt
-        base tier (possibly overflowing — generate_pdf's shrink tiers take it
-        from there).
-        """
-        for body_size, lh, lh_s, max_fill in self._UP_TIERS:
-            height = self._measure_min(tailored, body_size, lh, lh_s)
-            # Sparse floor: on a page that will still be mostly empty, a bigger
-            # font only makes the emptiness louder. Skipping the rung drops the
-            # resume to the professional 10pt base instead.
-            if height < self._AVAIL_H * self._SPARSE_FILL_FLOOR:
-                continue
-            if height <= self._AVAIL_H * max_fill:
-                return body_size, lh, lh_s, height
-        body_size, lh, lh_s = self._BASE_TIER
-        return body_size, lh, lh_s, self._measure_min(tailored, body_size, lh, lh_s)
+    def _measure_min(self, tailored: Dict[str, Any], body_size: float,
+                     lh: float, lh_s: float) -> float:
+        return self._measure(tailored, FontTier(body_size, lh, lh_s))
 
     def _count_spacing_slots(self, tailored: Dict[str, Any]) -> Dict[str, int]:
-        """Count the number of each spacing slot type in the resume."""
         section_count = 0
         entry_gaps = 0
         skill_rows = 0
-
         if tailored.get("summary"):
             section_count += 1
-        experience = tailored.get("experience", [])
+        experience = tailored.get("experience") or []
         if experience:
             section_count += 1
             entry_gaps += max(0, len(experience) - 1)
-        projects = tailored.get("projects", [])
+        projects = tailored.get("projects") or []
         if projects:
             section_count += 1
             entry_gaps += max(0, len(projects) - 1)
-        skills = tailored.get("skills", {})
+        skills = tailored.get("skills") or {}
         if skills:
             section_count += 1
             skill_rows = sum(1 for v in skills.values() if v)
         if tailored.get("education"):
             section_count += 1
+        certs = [c for c in (tailored.get("certifications") or []) if str(c).strip()]
+        if certs:
+            section_count += 1
+        return {"sections": section_count, "entry_gaps": entry_gaps, "skill_rows": skill_rows}
 
-        return {
-            "sections": section_count,
-            "entry_gaps": entry_gaps,
-            "skill_rows": skill_rows,
-        }
+    @staticmethod
+    def _lerp(a: float, b: float, t: float) -> float:
+        t = max(0.0, min(1.0, t))
+        return a + (b - a) * t
 
-    def _register_fonts(self, pdf) -> None:
-        """Embed the Tinos family (Times metrics, SIL OFL) into the PDF.
+    def _distribute_gaps(self, tailored: Dict[str, Any], remaining: float,
+                         ramp: float) -> GapPlan:
+        s = self.spec
+        slots = self._count_spacing_slots(tailored)
+        n_sections = max(slots["sections"], 1)
+        n_entry_gaps = max(slots["entry_gaps"], 1)
+        n_skill_gaps = max(slots["skill_rows"] - 1, 1)
+        total_slots = (
+            n_sections * 0.5 + n_entry_gaps * 0.6 + n_sections * 0.3
+            + 1 + n_skill_gaps * 0.3
+        )
+        unit = (remaining / total_slots) * ramp if total_slots > 0 and remaining > 0 else 0
+        return GapPlan(
+            min(s.min_section_gap + unit * 0.5, s.max_section_gap),
+            min(s.min_entry_gap + unit * 0.6, s.max_entry_gap),
+            min(s.min_post_header + unit * 0.3, s.max_post_header),
+            min(s.min_header_gap + unit * 1, s.max_header_gap),
+            min(s.min_skill_gap + unit * 0.3, s.max_skill_gap),
+            max(self._lerp(s.margin_lr_mm, s.margin_lr_wide_mm, ramp), s.margin_lr_mm),
+            self._lerp(s.margin_top_mm, s.margin_top_sparse_mm, ramp),
+            self._lerp(s.margin_bottom_mm, s.margin_bottom_sparse_mm, ramp),
+            self._lerp(s.min_pre_bullet, s.max_pre_bullet, ramp),
+            self._lerp(s.min_bullet_gap, s.max_bullet_gap, ramp),
+        )
 
-        Falls back to core Times when the TTFs are unavailable so a
-        missing font file degrades the look, never the render.
+    def _choose_up_tier(self, tailored: Dict[str, Any]
+                        ) -> Tuple[float, float, float, float]:
+        """Largest up-tier that fits under its max_fill, or the 10pt base.
+
+        Sparse pages are allowed to take 11pt (P1-6). The old sparse-floor
+        skip that forced 10pt on half-empty pages is gone.
         """
-        import os
+        avail = self._AVAIL_H
+        max_fills = {11.0: 0.78, 10.5: 0.88}
+        for tier in _UP_TIERS:
+            height = self._measure_min(tailored, tier.body_pt, tier.lh, tier.lh_s)
+            if height <= avail * max_fills[tier.body_pt]:
+                return tier.body_pt, tier.lh, tier.lh_s, height
+        t = _BASE_TIER
+        return t.body_pt, t.lh, t.lh_s, self._measure_min(tailored, t.body_pt, t.lh, t.lh_s)
 
-        fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
-        try:
-            pdf.add_font(self._FONT_FAMILY, "", os.path.join(fonts_dir, "Tinos-Regular.ttf"))
-            pdf.add_font(self._FONT_FAMILY, "B", os.path.join(fonts_dir, "Tinos-Bold.ttf"))
-            pdf.add_font(self._FONT_FAMILY, "I", os.path.join(fonts_dir, "Tinos-Italic.ttf"))
-            pdf.add_font(self._FONT_FAMILY, "BI", os.path.join(fonts_dir, "Tinos-BoldItalic.ttf"))
-        except Exception:
-            # Instance attribute shadows the class constant for this renderer.
-            self._FONT_FAMILY = "Times"
+    def _try_one_page_cascade(self, tailored: Dict[str, Any]
+                              ) -> Optional[Tuple[FontTier, float]]:
+        """Return (tier, min_height) if content fits one page at that tier."""
+        avail = self._AVAIL_H
+        body, lh, lh_s, height = self._choose_up_tier(tailored)
+        tier = FontTier(body, lh, lh_s)
+        if height <= avail:
+            return tier, height
+        for t in _TIGHT_10:
+            h = self._measure_min(tailored, t.body_pt, t.lh, t.lh_s)
+            if h <= avail:
+                return t, h
+        for t in (_TIER_95, _TIER_90):
+            h = self._measure_min(tailored, t.body_pt, t.lh, t.lh_s)
+            if h <= avail:
+                return t, h
+        return None
+
+    def _finish_one_page(self, tailored: Dict[str, Any], tier: FontTier,
+                         min_height: float, dropped: List[DroppedItem],
+                         outcome: Outcome) -> PageResolution:
+        s = self.spec
+        avail = s.usable_height()
+        fill_at_min = min_height / avail if avail else 1.0
+        sparse = fill_at_min < s.sparse_fill_floor and tier.body_pt >= 11.0
+        if sparse:
+            gaps = self._max_gaps()
+            stretch = 1.0
+            predicted = self._measure(tailored, tier, gaps, stretch)
+            resolved_avail = s.usable_height(gaps.margin_top, gaps.margin_bottom)
+            # Wider margins can wrap more — if that overflows, fall back.
+            if predicted > resolved_avail:
+                gaps = GapPlan(
+                    s.max_section_gap, s.max_entry_gap, s.max_post_header,
+                    s.max_header_gap, s.max_skill_gap, s.margin_lr_mm,
+                    s.margin_top_mm, s.margin_bottom_mm,
+                    s.max_pre_bullet, s.max_bullet_gap,
+                )
+                predicted = self._measure(tailored, tier, gaps, stretch)
+                resolved_avail = avail
+                if predicted > avail:
+                    gaps = self._min_gaps()
+                    predicted = min_height
+            last = predicted
+            return PageResolution(
+                tier=tier, gaps=gaps, stretch=stretch, pages=1,
+                predicted_height_mm=predicted,
+                fill_ratio=min(last / resolved_avail, s.max_fill) if resolved_avail else 0,
+                dropped=list(dropped), outcome=outcome,
+            )
+
+        remaining = max(0.0, avail * s.target_fill - min_height)
+        if fill_at_min >= s.fill_ramp_hi:
+            ramp = 1.0
+        elif fill_at_min <= s.fill_ramp_lo:
+            ramp = 0.0
+        else:
+            span = s.fill_ramp_hi - s.fill_ramp_lo
+            ramp = (fill_at_min - s.fill_ramp_lo) / span
+        gaps = self._distribute_gaps(tailored, remaining, ramp)
+        stretch = 1.0
+        h1 = self._measure(tailored, tier, gaps, 1.0)
+        resolved_avail = s.usable_height(gaps.margin_top, gaps.margin_bottom)
+        if h1 > resolved_avail * s.max_fill + 0.2:
+            gaps = GapPlan(
+                gaps.section_gap, gaps.entry_gap, gaps.post_header,
+                gaps.header_gap, gaps.skill_gap, s.margin_lr_mm,
+                s.margin_top_mm, s.margin_bottom_mm,
+                gaps.pre_bullet, gaps.bullet_gap,
+            )
+            resolved_avail = avail
+            h1 = self._measure(tailored, tier, gaps, 1.0)
+        target_h = resolved_avail * s.target_fill
+        max_h = resolved_avail * s.max_fill
+        s_max = min(s.stretch_cap, s.max_leading_mm / max(tier.lh, 0.1))
+        s_max = 1.0 + (s_max - 1.0) * ramp
+        predicted = h1
+        if s_max > 1.01 and (target_h - h1) > 1.0:
+            h2 = self._measure(tailored, tier, gaps, s_max)
+            if h2 <= max_h:
+                stretch = s_max
+                predicted = h2
+            elif h2 > h1:
+                stretch = 1.0 + (target_h - h1) * (s_max - 1.0) / (h2 - h1)
+                stretch = max(1.0, min(stretch, s_max))
+                hv = self._measure(tailored, tier, gaps, stretch)
+                if hv > max_h:
+                    stretch = max(1.0, stretch - 0.02)
+                    hv = self._measure(tailored, tier, gaps, stretch)
+                predicted = hv
+        if predicted > max_h and stretch > 1.0:
+            stretch = 1.0
+            predicted = h1
+        fill = predicted / resolved_avail if resolved_avail else 0
+        fill = min(fill, s.max_fill)
+        return PageResolution(
+            tier=tier, gaps=gaps, stretch=stretch, pages=1,
+            predicted_height_mm=predicted, fill_ratio=fill,
+            dropped=list(dropped), outcome=outcome,
+        )
+
+    def _finish_two_page(self, tailored: Dict[str, Any], dropped: List[DroppedItem],
+                         outcome: Outcome) -> PageResolution:
+        """Comfortable two-page density: start at 10pt, never below 9.5."""
+        s = self.spec
+        avail = s.usable_height()
+        budget = avail * 2
+        chosen = FontTier(10.0, 3.40, 3.08)
+        height = self._measure_min(tailored, chosen.body_pt, chosen.lh, chosen.lh_s)
+        if height > budget:
+            chosen = _TWO_PAGE_FLOOR
+            height = self._measure_min(tailored, chosen.body_pt, chosen.lh, chosen.lh_s)
+        gaps = self._min_gaps()
+        # No leading stretch across a page break.
+        predicted = height
+        pages = 2
+        if avail and predicted > avail * 2 + 0.5:
+            pages = max(2, int((predicted - 1e-6) / avail) + 1)
+        last = predicted - avail * (pages - 1)
+        fill = max(0.0, last / avail) if avail else 0
+        return PageResolution(
+            tier=chosen, gaps=gaps, stretch=1.0, pages=pages,
+            predicted_height_mm=predicted, fill_ratio=fill,
+            dropped=list(dropped), outcome=outcome,
+        )
+
+    def _trim_to_fit(self, tailored: Dict[str, Any], max_pages: int = 1
+                     ) -> Tuple[Dict[str, Any], List[DroppedItem]]:
+        """Deterministic trim. Deep-copies. Never touches summary/skills/edu/certs."""
+        working = copy.deepcopy(tailored)
+        dropped: List[DroppedItem] = []
+        avail = self._AVAIL_H * max(1, max_pages)
+
+        def fits() -> bool:
+            return self._measure_min(working, 9.0, 3.2, 3.0) <= avail
+
+        if fits():
+            return working, dropped
+
+        # 1. Project bullets beyond a 2-bullet floor (last project first).
+        projects = list(working.get("projects") or [])
+        for pi in range(len(projects) - 1, -1, -1):
+            bullets = list(projects[pi].get("bullets") or [])
+            while len(bullets) > 2 and not fits():
+                gone = bullets.pop()
+                dropped.append(DroppedItem("project_bullet", pi, str(gone)[:80]))
+            projects[pi]["bullets"] = bullets
+        working["projects"] = projects
+        if fits():
+            return working, dropped
+
+        # 2. Whole projects beyond the first (last first).
+        while len(working.get("projects") or []) > 1 and not fits():
+            gone = working["projects"].pop()
+            dropped.append(DroppedItem(
+                "project", len(working["projects"]),
+                str(gone.get("name") or "project")[:80],
+            ))
+        if fits():
+            return working, dropped
+
+        # 3. Oldest-role bullets down to the floor (never recent role below 3).
+        experience = list(working.get("experience") or [])
+        for ei in range(len(experience) - 1, -1, -1):
+            floor = _FLOOR_RECENT if ei == 0 else _FLOOR_OTHER
+            bullets = list(experience[ei].get("bullets") or [])
+            while len(bullets) > floor and not fits():
+                gone = bullets.pop()
+                dropped.append(DroppedItem("experience_bullet", ei, str(gone)[:80]))
+            experience[ei]["bullets"] = bullets
+        working["experience"] = experience
+        if fits():
+            return working, dropped
+
+        # 4. Oldest role entirely (keep at least the most recent).
+        while len(working.get("experience") or []) > 1 and not fits():
+            gone = working["experience"].pop()
+            dropped.append(DroppedItem(
+                "experience", len(working["experience"]),
+                str(gone.get("company") or gone.get("title") or "role")[:80],
+            ))
+        return working, dropped
+
+    def _compute_pdf_layout(self, tailored: Dict[str, Any]) -> Tuple[Dict[str, Any], PageResolution]:
+        """Solve layout. Returns (possibly-trimmed resume, resolution)."""
+        working = tailored
+        dropped: List[DroppedItem] = []
+
+        found = self._try_one_page_cascade(working)
+        if found:
+            tier, height = found
+            res = self._finish_one_page(working, tier, height, dropped, "fit_one")
+            return working, res
+
+        # Overflow at the 9.0 floor.
+        h9 = self._measure_min(working, 9.0, 3.2, 3.0)
+        overflow_frac = (h9 - self._AVAIL_H) / self._AVAIL_H if self._AVAIL_H else 1.0
+
+        if overflow_frac >= self.spec.min_second_page_fill:
+            res = self._finish_two_page(working, dropped, "fit_two")
+            if res.predicted_height_mm <= self._AVAIL_H * 2 + 0.5:
+                return working, res
+            working, dropped = self._trim_to_fit(working, max_pages=2)
+            outcome: Outcome = "trimmed_to_two" if dropped else "fit_two"
+            return working, self._finish_two_page(working, dropped, outcome)
+
+        working, dropped = self._trim_to_fit(working, max_pages=1)
+        found = self._try_one_page_cascade(working)
+        if found:
+            tier, height = found
+            res = self._finish_one_page(working, tier, height, dropped, "trimmed_to_one")
+            return working, res
+
+        # Trim exhausted — two pages, never clip.
+        outcome: Outcome = "trimmed_to_two" if dropped else "fit_two"
+        return working, self._finish_two_page(working, dropped, outcome)
+
+    # ------------------------------------------------------------------
+    # PDF drawing
+    # ------------------------------------------------------------------
+
+    def _draw_split_row(self, pdf, left: str, right: str, *,
+                        left_size: float, right_size: float, left_style: str,
+                        row_h: float, w: float, ml: float) -> None:
+        """Left + right-aligned dates with a reserved gap. Never overruns."""
+        s = self.spec
+        gap = s.split_row_gap_mm
+        left = self._sanitize_text(left)
+        right = self._sanitize_text(right)
+        self._assert_renderable(left + right, "header row")
+        if not right:
+            self._set_font(pdf, left_style, left_size, left)
+            pdf.multi_cell(w, row_h, left, new_x="LMARGIN", new_y="NEXT")
+            return
+
+        self._set_font(pdf, "", right_size, right)
+        date_w = pdf.get_string_width(right) + 0.8
+        left_w = w - date_w - gap
+        if left_w < 20:
+            # Pathological: dates take most of the line — wrap left fully, dates below.
+            self._set_font(pdf, left_style, left_size, left)
+            pdf.multi_cell(w, row_h, left, new_x="LMARGIN", new_y="NEXT")
+            self._set_font(pdf, "", right_size, right)
+            pdf.cell(w, row_h, right, align="R", new_x="LMARGIN", new_y="NEXT")
+            return
+
+        self._set_font(pdf, left_style, left_size, left)
+        if pdf.get_string_width(left) <= left_w:
+            pdf.cell(left_w, row_h, left)
+            # Explicit space cell so pypdf cannot glue location+date.
+            pdf.cell(gap, row_h, " ")
+            self._set_font(pdf, "", right_size, right)
+            pdf.cell(date_w, row_h, right, align="R", new_x="LMARGIN", new_y="NEXT")
+            return
+
+        # Wrap left into left_w; dates sit on the first line.
+        y0 = pdf.get_y()
+        self._set_font(pdf, left_style, left_size, left)
+        pdf.multi_cell(left_w, row_h, left, new_x="RIGHT", new_y="TOP")
+        y1 = pdf.get_y()
+        pdf.set_xy(ml + left_w, y0)
+        pdf.cell(gap, row_h, " ")
+        self._set_font(pdf, "", right_size, right)
+        pdf.cell(date_w, row_h, right, align="R")
+        pdf.set_y(max(y1, y0 + row_h))
+        pdf.set_x(ml)
 
     def _render_pdf(
         self,
@@ -342,62 +902,44 @@ class ResumeRenderer:
         post_header: float,
         header_gap: float,
         skill_gap: float,
-        body_size: float = 11.0,
-        lh: float = 4.2,
-        lh_s: float = 4.0,
+        body_size: float = 10.0,
+        lh: float = 3.4,
+        lh_s: float = 3.08,
         stretch: float = 1.0,
         measure_only: bool = False,
         max_pages: int = 1,
-    ) -> "tuple[bytes | None, float]":
-        """Core rendering logic matching the LaTeX resume.cls template.
-
-        Returns (pdf_bytes_or_None, content_height_mm). When `max_pages > 1`
-        (Phase 5), fpdf auto-page-break is enabled so content flows onto a
-        second page instead of overflowing; the returned height then spans all
-        pages used (page-count * usable-height + last-page content) so the
-        layout solver measures true total content.
-        If measure_only is True, pdf_bytes is None (saves memory).
-
-        `stretch` scales body leading and intra-entry gaps continuously
-        (Pass 3): line height doesn't change wrapping, so content height is
-        linear in it. Header/name/contact cell heights stay fixed on purpose —
-        headers hug their content; only body text breathes.
-        """
+        margin_lr: Optional[float] = None,
+        margin_top: Optional[float] = None,
+        margin_bottom: Optional[float] = None,
+        pre_bullet: Optional[float] = None,
+        bullet_gap: Optional[float] = None,
+    ) -> Tuple[Optional[bytes], float]:
         from fpdf import FPDF
-        sanitize = self._sanitize_text
 
-        # Pass-3 leading stretch — body leading + the gaps that read as part
-        # of the body rhythm. Section/entry gaps are Pass-2 knobs, not scaled.
+        s = self.spec
+        sanitize = self._sanitize_text
         lh = lh * stretch
         lh_s = lh_s * stretch
-        bullet_gap = self._BULLET_GAP * stretch
-        pre_bullet_gap = self._PRE_BULLET_GAP * stretch
-        edu_entry_gap = self._EDU_ENTRY_GAP * stretch
-        job_title_h = self._JOB_TITLE_CELL_H * stretch
+        resolved_bullet_gap = (s.min_bullet_gap if bullet_gap is None else bullet_gap) * stretch
+        pre_bullet_gap = (s.min_pre_bullet if pre_bullet is None else pre_bullet) * stretch
+        edu_entry_gap = s.edu_entry_gap * stretch
+        job_title_h = s.job_title_cell_h * stretch
 
-        contact = tailored.get("contact", {})
+        contact = tailored.get("contact") or {}
         name = sanitize(contact.get("name", "")).strip() or "Resume"
         name = self._title_case_name(name)
-        ml = self._MARGIN_LR
-        mt = self._MARGIN_TOP
-        # Section/company/role-title size scales with the density tier so the
-        # visual hierarchy holds at every body size (11 → 12pt headers, etc).
-        heading_size = body_size + self._HEADING_DELTA
 
-        pdf = FPDF(format="A4")
-        # Single-page (default): no auto break — content that overflows is
-        # caught by the layout solver's shrink cascade. Multi-page (Phase 5):
-        # enable auto break at the bottom margin so overflow flows to page 2+
-        # instead of being clipped.
-        if max_pages > 1:
-            pdf.set_auto_page_break(auto=True, margin=self._MARGIN_BOTTOM)
-        else:
-            pdf.set_auto_page_break(auto=False)
+        ml = s.margin_lr_mm if margin_lr is None else margin_lr
+        mt = s.margin_top_mm if margin_top is None else margin_top
+        mb = s.margin_bottom_mm if margin_bottom is None else margin_bottom
+        avail = s.usable_height(mt, mb)
+
+        pdf = FPDF(unit="mm", format=(s.page_width_mm, s.page_height_mm))
+        # Never clip. If the solver is wrong, fpdf2 emitting a second page
+        # is a visible bug, not silent data loss.
+        pdf.set_auto_page_break(auto=True, margin=mb)
         self._register_fonts(pdf)
-        # ATS hint: enterprise screeners (Workday, iCIMS) sometimes flag
-        # PDFs with empty Document Information as low-confidence — populating
-        # Title/Author/Subject also makes the file readable when recruiters
-        # save it locally and sort by metadata.
+        self._assert_renderable(name, "name")
         target_role = sanitize(str(tailored.get("target_role") or "")).strip()
         pdf.set_title(f"Resume - {name}")
         pdf.set_author(name)
@@ -406,42 +948,23 @@ class ResumeRenderer:
         pdf.add_page()
         pdf.set_margins(ml, mt, ml)
         pdf.set_y(mt)
-        w = pdf.w - 2 * ml  # usable width ≈ 184.6mm
+        w = pdf.w - 2 * ml
 
-        # Name in Title Case (centered, bold) — e.g. "Harshith Siddardha
-        # Manne" rather than "HARSHITH SIDDARDHA MANNE". `name` is already
-        # normalized to Title Case above via _title_case_name.
-        pdf.set_font(self._FONT_FAMILY, "B", self._NAME_SIZE)
-        pdf.cell(w, self._NAME_CELL_H, name, align="C", new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(0.5)  # \nameskip = \smallskip
+        self._set_font(pdf, "B", s.name_pt, name)
+        pdf.cell(w, s.name_cell_h, name, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(0.5)
 
-        # ── Contact line (centered, pipe-separated, plain black text) ──
-        # LaTeX: \fontsize{11}{13}\selectfont, pipe separator
-        # Product decision: contact fields render as PLAIN TEXT — no
-        # hyperlinks, no link color. _contact_display() still normalizes the
-        # display form (protocol stripping); its href is intentionally unused.
-        # Order matches the LaTeX template's reference resume:
-        #   location | phone | email | portfolio | linkedin | github
         contact_fields = []
         for key in ("location", "phone", "email", "portfolio", "linkedin", "github"):
             val = contact.get(key, "")
             if val:
                 display, href = self._contact_display(key, val)
                 contact_fields.append((sanitize(display), href))
-
         if contact_fields:
-            pdf.set_font(self._FONT_FAMILY, "", self._CONTACT_SIZE)
+            self._set_font(pdf, "", s.contact_pt)
             pdf.set_text_color(0, 0, 0)
             sep = " | "
             sep_w = pdf.get_string_width(sep)
-
-            # Wrap-aware layout: distribute contact fields across multiple
-            # lines so the line never exceeds page width. Previously a single
-            # too-wide line produced a negative x_start, pushing most of the
-            # text off the page (only the right-most fragment showed up).
-            # Matches the reference template which wraps when total width
-            # exceeds the page (Tempe, AZ | phone | email | portfolio |
-            # linkedin |\n github).
             lines: List[List[Tuple[str, Optional[str]]]] = []
             current_line: List[Tuple[str, Optional[str]]] = []
             current_width = 0.0
@@ -457,7 +980,7 @@ class ResumeRenderer:
                     current_width += added_w
             if current_line:
                 lines.append(current_line)
-
+            lh_c = 4.5
             for line in lines:
                 line_w = sum(pdf.get_string_width(d) for d, _ in line)
                 line_w += sep_w * max(0, len(line) - 1)
@@ -465,18 +988,12 @@ class ResumeRenderer:
                 pdf.set_x(x_start)
                 for i, (display, _href) in enumerate(line):
                     cell_w = pdf.get_string_width(display)
-                    pdf.cell(cell_w, self._LH_CONTACT, display)
+                    pdf.cell(cell_w, lh_c, display)
                     if i < len(line) - 1:
-                        pdf.cell(sep_w, self._LH_CONTACT, sep)
-                pdf.ln(self._LH_CONTACT)
+                        pdf.cell(sep_w, lh_c, sep)
+                pdf.ln(lh_c)
 
         pdf.ln(header_gap)
-
-        # ── Helper: section header — UPPERCASE title + hairline ──
-        # First section sits directly under the contact block (header_gap
-        # already applied). Later sections get section_gap so EXPERIENCE /
-        # PROJECTS still separate from the previous block, without stacking
-        # both gaps above SUMMARY.
         first_section = True
 
         def section_header(title: str):
@@ -485,163 +1002,124 @@ class ResumeRenderer:
                 first_section = False
             else:
                 pdf.ln(section_gap)
-            pdf.set_font(self._FONT_FAMILY, "B", heading_size)
-            pdf.cell(w, self._HEADING_CELL_H, title.upper(), new_x="LMARGIN", new_y="NEXT")
+            self._set_font(pdf, "B", s.section_pt, title)
+            pdf.cell(w, s.heading_cell_h, title.upper(), new_x="LMARGIN", new_y="NEXT")
             pdf.ln(0.15)
             ry = pdf.get_y()
             pdf.set_draw_color(0, 0, 0)
-            pdf.set_line_width(self._SECTION_HR_WIDTH)
+            pdf.set_line_width(s.section_hr_width)
             pdf.line(ml, ry, ml + w, ry)
             pdf.ln(post_header)
 
-        # ── Helper: bullet point — constant spacing between bullets ──
         def bullet(text: str, is_first: bool = False):
             if is_first:
-                pdf.ln(pre_bullet_gap)  # gap before first bullet
+                pdf.ln(pre_bullet_gap)
             else:
-                pdf.ln(bullet_gap)      # constant gap between bullets
-            indent = self._BULLET_INDENT
-            pdf.set_font(self._FONT_FAMILY, "", body_size)
+                pdf.ln(resolved_bullet_gap)
+            safe = sanitize(text)
+            self._assert_renderable(safe, "bullet")
+            indent = s.bullet_indent_mm
+            radius = s.bullet_radius_mm
+            self._set_font(pdf, "", body_size, safe)
             x_start = pdf.l_margin + indent
             y_center = pdf.get_y() + lh / 2
-
-            # Small filled circle bullet (Latin-1 safe)
+            cx = x_start + radius
             pdf.set_fill_color(0, 0, 0)
-            pdf.circle(x_start + 0.8, y_center, 0.6, style="F")
+            pdf.circle(cx, y_center, radius, style="F")
+            text_x = cx + s.bullet_text_gap_mm
+            pdf.set_x(text_x)
+            pdf.multi_cell(w - (text_x - ml), lh, safe, new_x="LMARGIN", new_y="NEXT")
 
-            pdf.set_x(x_start + 2.5)
-            pdf.multi_cell(w - indent - 2.5, lh, sanitize(text),
-                           new_x="LMARGIN", new_y="NEXT")
-
-        # ── SUMMARY ── (LaTeX: rSection{SUMMARY})
-        # Reference template uses the short "SUMMARY" header. First
-        # descriptor phrase rendered bold via multi_cell markdown — safer
-        # than pdf.write() which doesn't reset X reliably between
-        # font-weight switches.
+        # SUMMARY
         summary = tailored.get("summary", "")
         if summary:
-            section_header("Summary")
-            pdf.set_font(self._FONT_FAMILY, "", body_size)
+            section_header(s.heading("summary"))
             safe_summary = sanitize(summary)
-            # Detect the lead descriptor phrase: everything up to the first
-            # connective ("with", "who", "experienced", "skilled",
-            # "specializing", "focused", "that", "building", "designing",
-            # comma, en/em-dash). Bold only if ≤ 60 chars and ≥ 4 chars.
+            self._assert_renderable(safe_summary, "summary")
+            self._set_font(pdf, "", body_size, safe_summary)
             lead_match = re.match(
                 r'^([^,—\-]+?)(?=\s+(?:with|who|experienced|skilled|specializing|focused|that|building|designing)\b|\s*[—,]\s*|\s+-\s+)',
-                safe_summary,
-                flags=re.IGNORECASE,
+                safe_summary, flags=re.IGNORECASE,
             )
             lead = lead_match.group(1).strip() if lead_match else ""
             if lead and 3 < len(lead) <= 60 and "**" not in safe_summary:
-                # Wrap lead in markdown bold; multi_cell handles wrapping
-                # within `w` correctly, unlike pdf.write().
                 rest = safe_summary[len(lead):]
-                rendered = f"**{lead}**{rest}"
-                pdf.multi_cell(w, lh, rendered, markdown=True,
+                pdf.multi_cell(w, lh, f"**{lead}**{rest}", markdown=True,
                                new_x="LMARGIN", new_y="NEXT")
             else:
-                pdf.multi_cell(w, lh, safe_summary,
-                               new_x="LMARGIN", new_y="NEXT")
+                pdf.multi_cell(w, lh, safe_summary, new_x="LMARGIN", new_y="NEXT")
 
-        # ── EXPERIENCE ── (LaTeX: rSection{EXPERIENCE})
-        experience = tailored.get("experience", [])
+        # EXPERIENCE
+        experience = tailored.get("experience") or []
         if experience:
-            section_header("Experience")
+            section_header(s.heading("experience"))
             for i, exp in enumerate(experience):
                 company = sanitize(exp.get("company", ""))
                 location = sanitize(exp.get("location", ""))
-                # Dates are already normalized by services.date_normalizer
-                # before reaching the renderer (e.g. "August 2025 - Present"
-                # with ASCII hyphen). Pass through unchanged so the rendered
-                # PDF text matches the JSON exactly — the ATS parseability
-                # check tokenizes the JSON and requires those tokens to
-                # appear verbatim in the extracted PDF text.
                 dates = sanitize(exp.get("dates", ""))
                 company_line = f"{company}, {location}" if location else company
-
-                # Company bold + dates right — LaTeX: \textbf{COMPANY} \hfill {dates}
-                pdf.set_font(self._FONT_FAMILY, "B", heading_size)
-                if dates:
-                    pdf.set_font(self._FONT_FAMILY, "", body_size)
-                    date_w = pdf.get_string_width(dates) + 2
-                    pdf.set_font(self._FONT_FAMILY, "B", heading_size)
-                    pdf.cell(w - date_w, 4.5, company_line)
-                    pdf.set_font(self._FONT_FAMILY, "", body_size)
-                    pdf.cell(date_w, 4.5, dates, align="R",
-                             new_x="LMARGIN", new_y="NEXT")
-                else:
-                    pdf.cell(w, 4.5, company_line,
-                             new_x="LMARGIN", new_y="NEXT")
-
-                # Job title italic — LaTeX: \fontsize{12}{14}\selectfont\textit{title}
+                self._draw_split_row(
+                    pdf, company_line, dates,
+                    left_size=s.entry_pt, right_size=body_size, left_style="B",
+                    row_h=4.5, w=w, ml=ml,
+                )
                 title = sanitize(exp.get("title", ""))
-                if title:
-                    pdf.set_font(self._FONT_FAMILY, "I", heading_size)
-                    pdf.cell(w, job_title_h, title,
-                             new_x="LMARGIN", new_y="NEXT")
-
-                exp_bullets = exp.get("bullets", [])
+                role_type = sanitize(exp.get("type", "")).strip()
+                title_line = f"{title} · {role_type}" if title and role_type else title
+                if title_line:
+                    self._assert_renderable(title_line, "title")
+                    self._set_font(pdf, "I", s.entry_pt, title_line)
+                    pdf.cell(w, job_title_h, title_line, new_x="LMARGIN", new_y="NEXT")
+                exp_bullets = exp.get("bullets") or []
                 for bi, b in enumerate(exp_bullets):
                     bullet(b, is_first=(bi == 0))
                 if i < len(experience) - 1:
                     pdf.ln(entry_gap)
 
-        # ── PROJECTS ── (LaTeX: rSection{PROJECTS})
-        projects = tailored.get("projects", [])
+        # PROJECTS
+        projects = tailored.get("projects") or []
         if projects:
-            section_header("Projects")
+            section_header(s.heading("projects"))
             for i, proj in enumerate(projects):
-                # Project name bold — LaTeX: \textbf{Project Name}
-                pdf.set_font(self._FONT_FAMILY, "B", heading_size)
                 proj_name = sanitize(proj.get("name", ""))
                 proj_dates = sanitize(proj.get("dates", ""))
-                if proj_dates:
-                    pdf.set_font(self._FONT_FAMILY, "", body_size)
-                    date_w = pdf.get_string_width(proj_dates) + 2
-                    pdf.set_font(self._FONT_FAMILY, "B", heading_size)
-                    pdf.cell(w - date_w, 4.5, proj_name)
-                    pdf.set_font(self._FONT_FAMILY, "", body_size)
-                    pdf.cell(date_w, 4.5, proj_dates, align="R",
-                             new_x="LMARGIN", new_y="NEXT")
-                else:
-                    pdf.cell(w, 4.5, proj_name,
-                             new_x="LMARGIN", new_y="NEXT")
-
-                proj_bullets = proj.get("bullets", [])
+                self._draw_split_row(
+                    pdf, proj_name, proj_dates,
+                    left_size=s.entry_pt, right_size=body_size, left_style="B",
+                    row_h=4.5, w=w, ml=ml,
+                )
+                tech = sanitize(proj.get("tech", "")).strip()
+                if tech:
+                    self._set_font(pdf, "I", body_size, tech)
+                    pdf.cell(w, job_title_h, tech, new_x="LMARGIN", new_y="NEXT")
+                proj_bullets = proj.get("bullets") or []
                 for bi, b in enumerate(proj_bullets):
                     bullet(b, is_first=(bi == 0))
                 if i < len(projects) - 1:
                     pdf.ln(entry_gap)
 
-        # ── TECHNICAL SKILLS ── (LaTeX: rSection{TECHNICAL SKILLS})
-        skills = tailored.get("skills", {})
+        # SKILLS
+        skills = tailored.get("skills") or {}
         if skills:
-            section_header(self._skills_title(tailored))
-            # Use a slightly looser line-height than the bullet tight value
-            # so a category that wraps onto a second line still reads as one
-            # cohesive block. Without this, wrapped categories collapse onto
-            # the following category and the boundary disappears.
-            lh_skill = max(min(lh_s, self._MAX_SKILL_LEADING), 3.45)
+            skills_heading = self._skills_title(tailored)
+            section_header(skills_heading)
+            lh_skill = max(min(lh_s, s.max_skill_leading), 3.45)
             rows = [(cat, items) for cat, items in skills.items() if items]
             for i, (category, skill_list) in enumerate(rows):
-                # Bold category + regular skills in one multi_cell via markdown.
-                # multi_cell wraps all lines to the left margin.
-                pdf.set_font(self._FONT_FAMILY, "", body_size)
                 sk = ", ".join(skill_list) if isinstance(skill_list, list) else str(skill_list)
                 line = f"**{sanitize(category)}:** {sanitize(sk)}"
+                self._assert_renderable(sanitize(category) + sanitize(sk), "skills")
+                self._set_font(pdf, "", body_size, line)
                 pdf.multi_cell(w, lh_skill, line, markdown=True,
                                new_x="LMARGIN", new_y="NEXT")
-                # The last category gets no trailing gap — it would stack on
-                # top of the following section_gap and read as a double break.
                 if i < len(rows) - 1:
                     pdf.ln(skill_gap)
 
-        # ── EDUCATION ── (LaTeX: rSection{Education})
-        education = tailored.get("education", [])
+        # EDUCATION
+        education = tailored.get("education") or []
         if education:
             seen_edu = set()
-            deduped_education = []
+            deduped = []
             for edu in education:
                 inst = sanitize(edu.get("institution", "")).strip()
                 degree = sanitize(edu.get("degree", "")).strip()
@@ -651,37 +1129,28 @@ class ResumeRenderer:
                 if key in seen_edu:
                     continue
                 seen_edu.add(key)
-                deduped_education.append(edu)
-
-            if deduped_education:
-                section_header("Education")
-                for ei, edu in enumerate(deduped_education):
+                deduped.append(edu)
+            if deduped:
+                section_header(s.heading("education"))
+                for ei, edu in enumerate(deduped):
                     if ei > 0:
-                        pdf.ln(edu_entry_gap)  # gap between education entries
+                        pdf.ln(edu_entry_gap)
                     inst = sanitize(edu.get("institution", ""))
                     location = sanitize(edu.get("location", ""))
                     degree = sanitize(edu.get("degree", ""))
                     dates = sanitize(edu.get("dates", ""))
                     gpa = sanitize(edu.get("gpa", ""))
-
-                    # Strip date patterns baked into degree by AI
                     if degree and re.search(
-                        r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}\b',
+                        r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}\b",
                         degree, re.IGNORECASE,
                     ):
                         cleaned = re.sub(
-                            r'\s*\|?\s*\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*'
-                            r'\s+\d{4}\b',
-                            '', degree, flags=re.IGNORECASE,
-                        ).strip().rstrip('|').strip()
+                            r"\s*\|?\s*\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*"
+                            r"\s+\d{4}\b",
+                            "", degree, flags=re.IGNORECASE,
+                        ).strip().rstrip("|").strip()
                         if cleaned:
                             degree = cleaned
-
-                    # Reference layout:
-                    #   Institution[, Location] | Degree[, GPA: X.XX]   <date right-aligned>
-                    # Skip location if it's already substring of institution
-                    # (e.g. "JNTU Kakinada" + location "Kakinada" → don't
-                    # render "JNTU Kakinada, Kakinada").
                     if inst and location and location.lower() in inst.lower():
                         inst_part = inst
                     elif inst and location:
@@ -692,339 +1161,177 @@ class ResumeRenderer:
                     if gpa:
                         left_parts.append(f"GPA: {gpa}")
                     left_text = " | ".join(left_parts)
+                    self._draw_split_row(
+                        pdf, left_text, dates,
+                        left_size=body_size, right_size=body_size, left_style="",
+                        row_h=lh_s, w=w, ml=ml,
+                    )
+                    coursework = sanitize(edu.get("coursework", "")).strip()
+                    if coursework:
+                        self._set_font(pdf, "", body_size, coursework)
+                        pdf.multi_cell(w, lh_s, coursework, new_x="LMARGIN", new_y="NEXT")
 
-                    pdf.set_font(self._FONT_FAMILY, "", body_size)
-                    if dates:
-                        date_w = pdf.get_string_width(dates) + 2
-                        pdf.cell(w - date_w, lh_s, left_text)
-                        pdf.cell(date_w, lh_s, dates, align="R",
-                                 new_x="LMARGIN", new_y="NEXT")
-                    else:
-                        pdf.multi_cell(w, lh_s, left_text,
-                                       new_x="LMARGIN", new_y="NEXT")
+        # CERTIFICATIONS — last, never trimmed
+        certs = [sanitize(c).strip() for c in (tailored.get("certifications") or []) if str(c).strip()]
+        if certs:
+            section_header(s.heading("certifications"))
+            joined = ", ".join(certs)
+            self._assert_renderable(joined, "certifications")
+            self._set_font(pdf, "", body_size, joined)
+            if pdf.get_string_width(joined) <= w:
+                pdf.multi_cell(w, lh_s, joined, new_x="LMARGIN", new_y="NEXT")
+            else:
+                for c in certs:
+                    pdf.multi_cell(w, lh_s, c, new_x="LMARGIN", new_y="NEXT")
 
-        # Total content height. Single page: current Y minus top margin.
-        # Multi-page: each completed page contributed a full usable height, plus
-        # the content on the final page. `pdf.page` is the current (1-based) page
-        # number after all content is drawn.
-        if max_pages > 1 and getattr(pdf, "page", 1) > 1:
-            content_h = (pdf.page - 1) * self._AVAIL_H + (pdf.get_y() - mt)
+        if getattr(pdf, "page", 1) > 1:
+            content_h = (pdf.page - 1) * avail + (pdf.get_y() - mt)
         else:
             content_h = pdf.get_y() - mt
         if measure_only:
             return None, content_h
         return bytes(pdf.output()), content_h
 
-    def _compute_pdf_layout(self, tailored: Dict[str, Any]) -> Dict[str, float]:
-        """Solve the page layout in three passes and return the render knobs.
-
-        Pass 1: choose the largest font tier that fits (or shrink on overflow).
-        Pass 2: distribute leftover whitespace into gaps, capped at ceilings.
-        Pass 3: continuous leading stretch — the font rungs are discrete and
-          the gap ceilings absorb only ~25-30mm, so a page that just misses a
-          rung could still leave a 30-45mm dead band at the bottom. Leading
-          doesn't change line wrapping, so content height is LINEAR in the
-          stretch factor — solve it exactly from two measurements.
-
-        Returns a dict of `_render_pdf` kwargs plus `predicted_height` (mm),
-        which tests use to assert page fill without parsing a PDF.
-        """
-        avail = self._AVAIL_H
-        slots = self._count_spacing_slots(tailored)
-
-        # --- Phase 5: two-page decision (opt-in) ---
-        # Before shrinking a dense senior resume down to 9pt to force one page,
-        # check whether it genuinely overflows the densest 10pt single page. If
-        # so AND two-page is allowed, render on two pages at a readable 10pt
-        # instead of an unreadable 9pt single page. When ALLOW_TWO_PAGE is off
-        # (default in prod), max_pages stays 1 and behavior is byte-identical.
-        max_pages = 1
-        if ALLOW_TWO_PAGE:
-            _, densest_1page = self._render_pdf(
-                tailored,
-                section_gap=self._MIN_SECTION_GAP, entry_gap=self._MIN_ENTRY_GAP,
-                post_header=self._MIN_POST_HEADER, header_gap=self._MIN_HEADER_GAP,
-                skill_gap=self._MIN_SKILL_GAP,
-                body_size=10.0, lh=3.10, lh_s=3.08, measure_only=True,
-            )
-            if densest_1page > self._AVAIL_H:
-                max_pages = 2
-                avail = self._AVAIL_H * 2  # two-page budget
-
-        # --- Pass 1: choose the LARGEST presentation that fits (up-tiers) ---
-        # Bidirectional density: sparse resumes (e.g. an experienced 2-role
-        # resume with no generated projects) used to render at a fixed 10pt
-        # and leave a ~40mm dead band at the bottom of the page. The up-tier
-        # ladder scales the body font and leading UP first (11pt airy →
-        # 10.5pt) and only then falls back to the 10pt base + the shrink
-        # tiers below. 11pt is the ceiling — 12pt body reads as padding.
-        body_size, lh, lh_s, min_height = self._choose_up_tier(tailored)
-
-        # --- Overflow protection: tiered fallback (10pt-tight → 10pt-ultra → 9.5pt → 9pt) ---
-        # Body font size is what recruiters notice most — keep it at 10pt
-        # whenever possible. Two tight-lh tiers stack before any font drop:
-        #   Tier 1: lh=3.35 / lh_s=3.08 — keeps per-bullet-line breathing room
-        #   Tier 2: lh=3.22 / lh_s=3.08
-        #   Tier 3: lh=3.10 / lh_s=3.08 — densest 10pt tier before a font drop
-        # lh_s (skill/edu rows) is held at 3.08 across all 10pt tiers so those
-        # rows keep a consistent line height regardless of which tier fits.
-        # Only past Tier 3 do we drop to 9.5pt.
-        if min_height > avail:
-            for tier_lh, tier_lhs in ((3.35, 3.08), (3.22, 3.08), (3.10, 3.08)):
-                _, retry_height = self._render_pdf(
-                    tailored,
-                    section_gap=self._MIN_SECTION_GAP,
-                    entry_gap=self._MIN_ENTRY_GAP,
-                    post_header=self._MIN_POST_HEADER,
-                    header_gap=self._MIN_HEADER_GAP,
-                    skill_gap=self._MIN_SKILL_GAP,
-                    body_size=10.0, lh=tier_lh, lh_s=tier_lhs,
-                    measure_only=True, max_pages=max_pages,
-                )
-                if retry_height <= avail:
-                    lh = tier_lh
-                    lh_s = tier_lhs
-                    min_height = retry_height
-                    break
-
-        if min_height > avail:
-            # Still over budget → drop to 9.5pt
-            body_size = 9.5
-            lh = 3.5
-            lh_s = 3.3
-            _, min_height = self._render_pdf(
-                tailored,
-                section_gap=self._MIN_SECTION_GAP,
-                entry_gap=self._MIN_ENTRY_GAP,
-                post_header=self._MIN_POST_HEADER,
-                header_gap=self._MIN_HEADER_GAP,
-                skill_gap=self._MIN_SKILL_GAP,
-                body_size=body_size, lh=lh, lh_s=lh_s,
-                measure_only=True, max_pages=max_pages,
-            )
-
-        if min_height > avail:
-            # Even smaller
-            body_size = 9.0
-            lh = 3.2
-            lh_s = 3.0
-            _, min_height = self._render_pdf(
-                tailored,
-                section_gap=self._MIN_SECTION_GAP,
-                entry_gap=self._MIN_ENTRY_GAP,
-                post_header=self._MIN_POST_HEADER,
-                header_gap=self._MIN_HEADER_GAP,
-                skill_gap=self._MIN_SKILL_GAP,
-                body_size=body_size, lh=lh, lh_s=lh_s,
-                measure_only=True, max_pages=max_pages,
-            )
-
-        # --- Pass 2: distribute remaining whitespace ---
-        remaining = max(0, avail - min_height)
-
-        # Fill-aware ramp: how hard Passes 2 and 3 should try to reach the
-        # bottom. A page that CAN be filled honestly keeps the full effort; one
-        # that can't gets minimum gaps and no stretch, so it reads as a short
-        # resume rather than a padded one. Held at 1.0 on the opt-in two-page
-        # path, where `avail` is a two-page budget and the ratio is meaningless.
-        if max_pages > 1:
-            ramp = 1.0
-        else:
-            fill = min_height / avail if avail > 0 else 1.0
-            span = self._FILL_RAMP_HI - self._FILL_RAMP_LO
-            ramp = (fill - self._FILL_RAMP_LO) / span if span > 0 else 1.0
-            ramp = max(0.0, min(1.0, ramp))
-
-        # Weight distribution: leftover must not open holes between sections,
-        # under headings, or between roles. Pass-3 leading absorbs the rest.
-        n_sections = max(slots["sections"], 1)
-        n_entry_gaps = max(slots["entry_gaps"], 1)
-        # skill_gap renders BETWEEN categories, so a 6-row block has 5 gaps.
-        n_skill_gaps = max(slots["skill_rows"] - 1, 1)
-
-        total_slots = (
-            n_sections * 0.5    # section_gap — keep SUMMARY→EXPERIENCE tight
-            + n_entry_gaps * 0.6  # entry_gap — keep jobs tight
-            + n_sections * 0.3  # post_header — keep heading→content tight
-            + 1 * 1             # header_gap weight
-            + n_skill_gaps * 0.3  # skill_gap — the airiest knob per mm, since
-                                  # it repeats once per category
+    def generate_pdf(self, tailored: Dict[str, Any]) -> Tuple[bytes, PageResolution]:
+        """Render a PDF. Never clips. Returns (bytes, PageResolution)."""
+        working, resolution = self._compute_pdf_layout(tailored)
+        pdf_bytes, height = self._render_pdf(
+            working,
+            section_gap=resolution.gaps.section_gap,
+            entry_gap=resolution.gaps.entry_gap,
+            post_header=resolution.gaps.post_header,
+            header_gap=resolution.gaps.header_gap,
+            skill_gap=resolution.gaps.skill_gap,
+            margin_lr=resolution.gaps.margin_lr,
+            margin_top=resolution.gaps.margin_top,
+            margin_bottom=resolution.gaps.margin_bottom,
+            pre_bullet=resolution.gaps.pre_bullet,
+            bullet_gap=resolution.gaps.bullet_gap,
+            body_size=resolution.tier.body_pt,
+            lh=resolution.tier.lh,
+            lh_s=resolution.tier.lh_s,
+            stretch=resolution.stretch,
+            max_pages=resolution.pages,
         )
-
-        if total_slots > 0 and remaining > 0:
-            unit = (remaining / total_slots) * ramp
-        else:
-            unit = 0
-
-        section_gap = min(self._MIN_SECTION_GAP + unit * 0.5, self._MAX_SECTION_GAP)
-        entry_gap = min(self._MIN_ENTRY_GAP + unit * 0.6, self._MAX_ENTRY_GAP)
-        post_header = min(self._MIN_POST_HEADER + unit * 0.3, self._MAX_POST_HEADER)
-        header_gap = min(self._MIN_HEADER_GAP + unit * 1, self._MAX_HEADER_GAP)
-        skill_gap = min(self._MIN_SKILL_GAP + unit * 0.3, self._MAX_SKILL_GAP)
-
-        # --- Pass 3: continuous leading stretch absorbs what the gap ---
-        # --- ceilings couldn't ---
-        knobs = dict(
-            section_gap=section_gap,
-            entry_gap=entry_gap,
-            post_header=post_header,
-            header_gap=header_gap,
-            skill_gap=skill_gap,
-            body_size=body_size, lh=lh, lh_s=lh_s,
-            max_pages=max_pages,
+        # Prefer measured height from the final render.
+        resolution.predicted_height_mm = height
+        avail = self.spec.usable_height(
+            resolution.gaps.margin_top, resolution.gaps.margin_bottom,
         )
-        stretch = 1.0
-        _, h1 = self._render_pdf(tailored, **knobs, stretch=1.0,
-                                 measure_only=True)
-        predicted = h1
-        # Stretch cap held at _STRETCH_CAP — beyond this, leading reads as
-        # padding. The ramp then pulls it back toward 1.0 on pages too sparse
-        # to fill honestly, so a half-page resume keeps normal leading instead
-        # of stretching into a full page of air.
-        s_max = min(self._STRETCH_CAP, self._MAX_LEADING_MM / lh)
-        s_max = 1.0 + (s_max - 1.0) * ramp
-        # Leading stretch fills a single page's dead band. On a 2-page render,
-        # a partially-filled last page is expected — don't stretch content
-        # across the page break.
-        if max_pages == 1 and s_max > 1.01 and (avail - h1) > 1.0:
-            _, h2 = self._render_pdf(tailored, **knobs, stretch=s_max,
-                                     measure_only=True)
-            if h2 <= avail:
-                stretch = s_max
-                predicted = h2
-            elif h2 > h1:
-                # Height is linear in stretch: interpolate the exact factor
-                # that lands on the page bottom, then verify (rounding guard).
-                stretch = 1.0 + (avail - h1) * (s_max - 1.0) / (h2 - h1)
-                stretch = max(1.0, min(stretch, s_max))
-                _, hv = self._render_pdf(tailored, **knobs, stretch=stretch,
-                                         measure_only=True)
-                if hv > avail:
-                    stretch = max(1.0, stretch - 0.02)
-                    _, hv = self._render_pdf(tailored, **knobs,
-                                             stretch=stretch,
-                                             measure_only=True)
-                predicted = hv
-
-        knobs["stretch"] = stretch
-        knobs["predicted_height"] = predicted
-        return knobs
-
-    def generate_pdf(self, tailored: Dict[str, Any]) -> bytes:
-        """Generate a single-page PDF that adaptively fills one A4 page.
-
-        Layout is solved by `_compute_pdf_layout` (font tier → gap
-        distribution → leading stretch); this just runs the final render.
-        """
-        layout = self._compute_pdf_layout(tailored)
-        layout.pop("predicted_height", None)
-        pdf_bytes, _ = self._render_pdf(tailored, **layout)
-        return pdf_bytes
+        actual_pages = 1
+        if avail and height > avail + 0.5:
+            actual_pages = max(1, int((height - 1e-6) / avail) + 1)
+        if actual_pages != resolution.pages:
+            logger.error(
+                "resume_render page_mismatch solver=%d actual=%d h=%.1f avail=%.1f",
+                resolution.pages, actual_pages, height, avail,
+            )
+            resolution.pages = actual_pages
+        if resolution.pages <= 1:
+            resolution.fill_ratio = min(height / avail, self.spec.max_fill) if avail else 0
+        else:
+            last = height - avail * (resolution.pages - 1)
+            resolution.fill_ratio = min(max(last, 0) / avail, 1.0) if avail else 0
+        logger.info(
+            "resume_render outcome=%s pages=%d fill_ratio=%.3f body_pt=%.1f dropped=%d",
+            resolution.outcome, resolution.pages, resolution.fill_ratio,
+            resolution.tier.body_pt, len(resolution.dropped),
+        )
+        return pdf_bytes or b"", resolution
 
     # ------------------------------------------------------------------
-    # DOCX generation (python-docx) — mirrors the PDF renderer's layout
+    # DOCX — same LayoutSpec + same PageResolution knobs
     # ------------------------------------------------------------------
 
-    # Usable page height in pt (A4 297mm − 0.4in top/bottom ≈ 276.7mm ≈ 784pt).
-    _DOCX_AVAIL_PT = 780.0
+    def _chars_per_line(self, body_size: float, margin_lr: Optional[float] = None) -> float:
+        """Empirical wrap for the PDF face at `body_size` on the current page."""
+        s = self.spec
+        ml = s.margin_lr_mm if margin_lr is None else margin_lr
+        try:
+            from fpdf import FPDF
+            pdf = FPDF(unit="mm", format=(s.page_width_mm, s.page_height_mm))
+            self._register_fonts(pdf)
+            sample = "abcdefghijklmnopqrstuvwxyz 0123456789.,"
+            self._set_font(pdf, "", body_size, sample)
+            avg = pdf.get_string_width(sample) / max(len(sample), 1)
+            if avg <= 0:
+                raise ValueError("zero width")
+            return s.usable_width(ml) / avg
+        except Exception:
+            scale = 10.0 / max(body_size, 6.0)
+            return s.docx_chars_per_line_at_10pt * scale
 
-    def _estimate_docx_height_pt(
-        self,
-        tailored: Dict[str, Any],
-        *,
-        body_size: float,
-        line_spacing: float,
-        section_gap: float,
-        entry_gap: float,
-        skill_gap: float,
-        header_gap: float,
-    ) -> float:
-        """Heuristic height estimator in points.
-
-        python-docx can't render, so we estimate: each paragraph contributes
-        (line_count * line_spacing) + paragraph_before/after spacing. Line count
-        is derived by dividing text length by a characters-per-line constant
-        based on body_size (smaller font ⇒ more chars/line).
-        """
-        # Usable width in mm * (chars per mm at given pt). Arial at 10pt
-        # averages ~2.1 chars/mm in our 197mm-wide text box → ~414 chars/line.
-        # Scale inversely with font size (Times/Tinos metrics).
-        scale = 10.0 / max(body_size, 6.0)
-        chars_per_line = 95 * scale  # rough but stable
+    def _estimate_docx_height_pt(self, tailored, *, body_size, line_spacing,
+                                 section_gap, entry_gap, skill_gap, header_gap) -> float:
+        s = self.spec
+        chars_per_line = self._chars_per_line(body_size)
         h = 0.0
 
         def para(text: str, size: float = None, bullet: bool = False,
                  spacing: float = None) -> float:
-            s = size or body_size
-            # Body paragraphs honor the line_spacing knob (Pass-3 fill);
-            # name/contact/section headers below stay at the fixed 1.15.
-            line_h = s * (line_spacing if spacing is None else spacing)
+            sz = size or body_size
+            line_h = sz * (line_spacing if spacing is None else spacing)
             if not text:
-                return line_h + 2
-            length = len(text) + (3 if bullet else 0)
-            lines = max(1, int(length / chars_per_line) + (1 if length % chars_per_line else 0))
-            return lines * line_h + 1.5
+                return line_h + 1
+            n = len(str(text)) + (2 if bullet else 0)
+            cpl = max(int(chars_per_line), 1)
+            lines = max(1, -(-n // cpl))
+            return lines * line_h + 0.35
 
-        # Name + contact + HR
-        h += 17 * 1.15 + 2        # name
-        contact = tailored.get("contact", {})
+        h += s.name_pt * 1.15 + 2
+        contact = tailored.get("contact") or {}
         if any(contact.get(k) for k in ("location", "phone", "email", "portfolio", "linkedin", "github")):
-            h += 10.5 * 1.15 + 1  # contact line
-        h += 4                     # HR line
-        h += header_gap
+            h += s.contact_pt * 1.15 + 1
+        h += 4 + header_gap
 
-        def section(title: str) -> float:
-            return 11 * 1.15 + 2 + section_gap
-
-        def header_block(left: str, dates: str) -> float:
-            return max(11 * 1.15, body_size * 1.15) + 2
+        def section(_title: str) -> float:
+            return s.section_pt * 1.15 + 2 + section_gap
 
         if tailored.get("summary"):
             h += section("SUMMARY")
             h += para(tailored["summary"])
-
-        experience = tailored.get("experience", []) or []
+        experience = tailored.get("experience") or []
         if experience:
             h += section("EXPERIENCE")
             for i, exp in enumerate(experience):
-                h += header_block(exp.get("company", ""), exp.get("dates", ""))
-                if exp.get("title"):
-                    h += 10.5 * line_spacing + 1
-                for b in exp.get("bullets", []) or []:
+                h += max(s.entry_pt * 1.15, body_size * 1.15) + 2
+                if exp.get("title") or exp.get("type"):
+                    h += s.entry_pt * line_spacing + 1
+                for b in exp.get("bullets") or []:
                     h += para(b, bullet=True)
                 if i < len(experience) - 1:
                     h += entry_gap
-
-        projects = tailored.get("projects", []) or []
+        projects = tailored.get("projects") or []
         if projects:
             h += section("PROJECTS")
             for i, proj in enumerate(projects):
-                h += header_block(proj.get("name", ""), proj.get("dates", ""))
-                for b in proj.get("bullets", []) or []:
+                h += max(s.entry_pt * 1.15, body_size * 1.15) + 2
+                if proj.get("tech"):
+                    h += body_size * line_spacing + 1
+                for b in proj.get("bullets") or []:
                     h += para(b, bullet=True)
                 if i < len(projects) - 1:
                     h += entry_gap
-
-        skills = tailored.get("skills", {}) or {}
-        skill_rows = [(cat, v) for cat, v in skills.items() if v]
+        skills = tailored.get("skills") or {}
+        skill_rows = [(c, v) for c, v in skills.items() if v]
         if skill_rows:
-            h += section("TECHNICAL SKILLS")
-            skill_spacing = min(line_spacing, self._DOCX_MAX_SKILL_SPACING)
+            h += section("SKILLS")
+            skill_spacing = min(line_spacing, s.docx_max_skill_spacing)
             for cat, sk in skill_rows:
                 items = ", ".join(sk) if isinstance(sk, list) else str(sk)
-                # The bold "Category: " prefix is on the same line, so it has
-                # to count toward the wrap estimate.
                 h += para(f"{cat}: {items}", spacing=skill_spacing) + skill_gap
-
-        education = tailored.get("education", []) or []
+        education = tailored.get("education") or []
         if education:
             h += section("EDUCATION")
             for edu in education:
-                inst = edu.get("institution", "")
-                degree = edu.get("degree", "")
-                if inst or degree:
-                    h += para(f"{inst} | {degree}")
-
+                if edu.get("institution") or edu.get("degree"):
+                    h += para(f"{edu.get('institution', '')} | {edu.get('degree', '')}")
+                if edu.get("coursework"):
+                    h += para(str(edu.get("coursework")))
+        certs = [c for c in (tailored.get("certifications") or []) if str(c).strip()]
+        if certs:
+            h += section("CERTIFICATIONS")
+            h += para(", ".join(str(c) for c in certs))
         return h
 
     def _render_docx(
@@ -1032,34 +1339,35 @@ class ResumeRenderer:
         tailored: Dict[str, Any],
         *,
         body_size: float,
-        title_size: float,
-        header_size: float,
         section_gap: float,
         entry_gap: float,
         skill_gap: float,
         header_gap: float,
-        line_spacing: float = 1.1,
+        line_spacing: float,
+        margin_lr_in: float,
+        margin_top_in: Optional[float] = None,
+        margin_bottom_in: Optional[float] = None,
+        post_header: Optional[float] = None,
     ) -> bytes:
-        """Render a DOCX mirroring the PDF layout with the given spacing knobs."""
         from docx import Document
-        from docx.shared import Pt, Inches, Mm, Emu
+        from docx.shared import Pt, Inches, Mm, Emu, Twips
         from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
         from docx.oxml.ns import qn
         from docx.oxml import OxmlElement
 
-        FONT = "Times New Roman"  # matches the Overleaf template; Tinos-identical metrics
+        s = self.spec
+        FONT = s.docx_font_family
         doc = Document()
-
-        # A4 page: 0.6in left/right, 0.4in top/bottom (mirrors the PDF).
+        top_in = s.top_margin_dense_in if margin_top_in is None else margin_top_in
+        bottom_in = s.bottom_margin_dense_in if margin_bottom_in is None else margin_bottom_in
         for section in doc.sections:
-            section.page_width = Mm(210)
-            section.page_height = Mm(297)
-            section.top_margin = Inches(0.4)
-            section.bottom_margin = Inches(0.4)
-            section.left_margin = Inches(0.6)
-            section.right_margin = Inches(0.6)
+            section.page_width = Mm(s.page_width_mm)
+            section.page_height = Mm(s.page_height_mm)
+            section.top_margin = Inches(top_in)
+            section.bottom_margin = Inches(bottom_in)
+            section.left_margin = Inches(margin_lr_in)
+            section.right_margin = Inches(margin_lr_in)
 
-        # Normal style
         style = doc.styles["Normal"]
         style.font.name = FONT
         style.font.size = Pt(body_size)
@@ -1067,16 +1375,13 @@ class ResumeRenderer:
         style.paragraph_format.space_before = Pt(0)
         style.paragraph_format.line_spacing = line_spacing
 
-        # Usable width in EMU for right-aligned tab stops (page_width - L - R)
         usable_w_emu = section.page_width - section.left_margin - section.right_margin
 
-        # ------------------- helpers -------------------
         def set_run_font(run, size_pt: float, bold=False, italic=False, color="000000"):
             run.font.name = FONT
             run.font.size = Pt(size_pt)
             run.bold = bold
             run.italic = italic
-            # Pin the font for every script class (prevents font swap in Word)
             rPr = run._element.get_or_add_rPr()
             rFonts = rPr.find(qn("w:rFonts"))
             if rFonts is None:
@@ -1093,7 +1398,7 @@ class ResumeRenderer:
             p.paragraph_format.space_after = Pt(after)
             p.paragraph_format.line_spacing = line_spacing if spacing is None else spacing
 
-        def add_bottom_border(p, size="6"):
+        def add_bottom_border(p, size="4"):
             pPr = p._p.get_or_add_pPr()
             pBdr = OxmlElement("w:pBdr")
             bottom = OxmlElement("w:bottom")
@@ -1104,37 +1409,50 @@ class ResumeRenderer:
             pBdr.append(bottom)
             pPr.append(pBdr)
 
+        first_section = True
+
         def add_section_header(title: str):
+            nonlocal first_section
             p = doc.add_paragraph()
             run = p.add_run(title.upper())
-            set_run_font(run, header_size, bold=True)
-            tight(p, before=section_gap, after=2.8)
+            set_run_font(run, s.section_pt, bold=True)
+            before = 0.0 if first_section else section_gap
+            first_section = False
+            after_pt = (s.min_post_header if post_header is None else post_header) * 72 / 25.4
+            tight(p, before=before, after=after_pt)
             add_bottom_border(p, size="4")
 
-        def add_bullet(text: str, indent_emu=None):
+        def add_bullet(text: str):
             p = doc.add_paragraph()
-            # Manual bullet: filled circle + space, with hanging indent. Using a
-            # raw paragraph (not List Bullet style) avoids Word's auto-numbering
-            # XML which can drift across versions.
             r_dot = p.add_run("\u2022  ")
             set_run_font(r_dot, body_size, bold=True)
             r = p.add_run(text)
             set_run_font(r, body_size)
-            # Indent bullet glyph + hang text under it.
-            p.paragraph_format.left_indent = Inches(0.32)
-            p.paragraph_format.first_line_indent = Inches(-0.18)
+            p.paragraph_format.left_indent = Inches(s.bullet_indent_mm / 25.4 + 0.14)
+            p.paragraph_format.first_line_indent = Inches(-0.14)
             tight(p, before=0.5, after=0.3)
 
-        # ------------------- HEADER -------------------
-        contact = tailored.get("contact", {})
+        def header_line(left_bold: str, dates: str):
+            p = doc.add_paragraph()
+            if dates:
+                p.paragraph_format.tab_stops.add_tab_stop(
+                    usable_w_emu, WD_TAB_ALIGNMENT.RIGHT)
+            r1 = p.add_run(left_bold)
+            set_run_font(r1, s.entry_pt, bold=True)
+            if dates:
+                # Leading space before the tab so extraction cannot glue tokens.
+                r2 = p.add_run(f" \t{dates}")
+                set_run_font(r2, body_size)
+            tight(p, before=0.6, after=0.0)
+            return p
+
+        contact = tailored.get("contact") or {}
         name = (contact.get("name", "") or "Resume").strip()
         name = self._title_case_name(name)
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        # Title Case name — e.g. "Harshith Siddardha Manne" (name is already
-        # normalized to Title Case above via _title_case_name).
         run = p.add_run(name)
-        set_run_font(run, title_size, bold=True)
+        set_run_font(run, s.name_pt, bold=True)
         tight(p, before=0, after=1.0)
 
         contact_fields = []
@@ -1142,91 +1460,67 @@ class ResumeRenderer:
             val = contact.get(key, "")
             if val:
                 display, href = self._contact_display(key, val)
-                contact_fields.append((display, href))
+                contact_fields.append(display)
         if contact_fields:
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            # Plain black text — no hyperlinks (mirrors the PDF contact line).
-            for i, (display, _href) in enumerate(contact_fields):
+            for i, display in enumerate(contact_fields):
                 run = p.add_run(display)
-                set_run_font(run, body_size + 0.5)
+                set_run_font(run, s.contact_pt)
                 if i < len(contact_fields) - 1:
                     sep = p.add_run(" | ")
-                    set_run_font(sep, body_size + 0.5)
+                    set_run_font(sep, s.contact_pt)
             tight(p, before=0, after=header_gap)
 
-        # ------------------- SUMMARY -------------------
         summary = tailored.get("summary", "")
         if summary:
-            add_section_header("Professional Summary")
+            add_section_header(s.heading("summary"))
             p = doc.add_paragraph()
             run = p.add_run(summary)
             set_run_font(run, body_size)
             tight(p, before=0, after=0.5)
 
-        # ------------------- helper for a company/dates header line -------------------
-        def header_line(left_bold: str, dates: str, bold_size: float):
-            p = doc.add_paragraph()
-            if dates:
-                p.paragraph_format.tab_stops.add_tab_stop(
-                    usable_w_emu, WD_TAB_ALIGNMENT.RIGHT)
-            r1 = p.add_run(left_bold)
-            set_run_font(r1, bold_size, bold=True)
-            if dates:
-                r2 = p.add_run(f"\t{dates}")
-                set_run_font(r2, body_size)
-            tight(p, before=0.6, after=0.0)
-            return p
-
-        # ------------------- EXPERIENCE -------------------
-        experience = tailored.get("experience", []) or []
+        experience = tailored.get("experience") or []
         if experience:
-            add_section_header("Experience")
+            add_section_header(s.heading("experience"))
             for i, exp in enumerate(experience):
                 company = exp.get("company", "")
                 location = exp.get("location", "")
                 dates = exp.get("dates", "")
                 company_line = f"{company}, {location}" if location else company
-                header_line(company_line, dates, bold_size=body_size + 1)
-
+                header_line(company_line, dates)
                 title = exp.get("title", "")
-                if title:
+                role_type = (exp.get("type") or "").strip()
+                title_line = f"{title} · {role_type}" if title and role_type else title
+                if title_line:
                     p2 = doc.add_paragraph()
-                    r = p2.add_run(title)
-                    set_run_font(r, body_size + 0.5, italic=True)
+                    r = p2.add_run(title_line)
+                    set_run_font(r, s.entry_pt, italic=True)
                     tight(p2, before=0, after=0.5)
-
-                for b in exp.get("bullets", []) or []:
+                for b in exp.get("bullets") or []:
                     add_bullet(b)
                 if i < len(experience) - 1:
-                    # Gap between experience entries via an empty spacer para
                     spacer = doc.add_paragraph()
                     tight(spacer, before=entry_gap, after=0)
 
-        # ------------------- PROJECTS -------------------
-        projects = tailored.get("projects", []) or []
+        projects = tailored.get("projects") or []
         if projects:
-            add_section_header("Projects")
+            add_section_header(s.heading("projects"))
             for i, proj in enumerate(projects):
-                name = proj.get("name", "")
-                dates = proj.get("dates", "")
-                header_line(name, dates, bold_size=body_size + 1)
-
-                tech = proj.get("tech", "")
+                header_line(proj.get("name", ""), proj.get("dates", ""))
+                tech = (proj.get("tech") or "").strip()
                 if tech:
                     p2 = doc.add_paragraph()
                     r = p2.add_run(tech)
-                    set_run_font(r, body_size, italic=True, color="555555")
+                    set_run_font(r, body_size, italic=True)
                     tight(p2, before=0, after=0.5)
-
-                for b in proj.get("bullets", []) or []:
+                for b in proj.get("bullets") or []:
                     add_bullet(b)
                 if i < len(projects) - 1:
                     spacer = doc.add_paragraph()
                     tight(spacer, before=entry_gap, after=0)
 
-        # ------------------- TECHNICAL SKILLS -------------------
-        skills = tailored.get("skills", {}) or {}
+        skills = tailored.get("skills") or {}
         if any(v for v in skills.values()):
             add_section_header(self._skills_title(tailored))
             for category, skill_list in skills.items():
@@ -1239,239 +1533,123 @@ class ResumeRenderer:
                 r_sk = p.add_run(sk)
                 set_run_font(r_sk, body_size)
                 tight(p, before=skill_gap, after=0,
-                      spacing=min(line_spacing, self._DOCX_MAX_SKILL_SPACING))
+                      spacing=min(line_spacing, s.docx_max_skill_spacing))
 
-        # ------------------- EDUCATION -------------------
-        education = tailored.get("education", []) or []
+        education = tailored.get("education") or []
         if education:
-            seen_edu = set()
-            deduped_education = []
+            seen = set()
+            deduped = []
             for edu in education:
                 inst = (edu.get("institution", "") or "").strip()
                 degree = (edu.get("degree", "") or "").strip()
                 if not inst and not degree:
                     continue
                 key = (inst.lower(), degree.lower())
-                if key in seen_edu:
+                if key in seen:
                     continue
-                seen_edu.add(key)
-                deduped_education.append(edu)
-
-            if deduped_education:
-                add_section_header("Education")
-                for edu in deduped_education:
+                seen.add(key)
+                deduped.append(edu)
+            if deduped:
+                add_section_header(s.heading("education"))
+                for edu in deduped:
                     inst = edu.get("institution", "") or ""
                     location = edu.get("location", "") or ""
                     degree = edu.get("degree", "") or ""
                     dates = edu.get("dates", "") or ""
                     gpa = edu.get("gpa", "") or ""
-
                     if degree and re.search(
-                        r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}\b',
+                        r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4}\b",
                         degree, re.IGNORECASE,
                     ):
                         cleaned = re.sub(
-                            r'\s*\|?\s*\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*'
-                            r'\s+\d{4}\b',
-                            '', degree, flags=re.IGNORECASE,
-                        ).strip().rstrip('|').strip()
+                            r"\s*\|?\s*\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*"
+                            r"\s+\d{4}\b", "", degree, flags=re.IGNORECASE,
+                        ).strip().rstrip("|").strip()
                         if cleaned:
                             degree = cleaned
-
-                    inst_part = f"{inst}, {location}" if inst and location else inst
+                    if inst and location and location.lower() in inst.lower():
+                        inst_part = inst
+                    elif inst and location:
+                        inst_part = f"{inst}, {location}"
+                    else:
+                        inst_part = inst
                     parts = [x for x in [inst_part, degree] if x]
                     if gpa:
                         parts.append(f"GPA: {gpa}")
-                    left_text = " | ".join(parts)
+                    header_line(" | ".join(parts), dates)
+                    coursework = (edu.get("coursework") or "").strip()
+                    if coursework:
+                        p = doc.add_paragraph()
+                        r = p.add_run(coursework)
+                        set_run_font(r, body_size)
+                        tight(p, before=0.4, after=0)
 
-                    p = doc.add_paragraph()
-                    if dates:
-                        p.paragraph_format.tab_stops.add_tab_stop(
-                            usable_w_emu, WD_TAB_ALIGNMENT.RIGHT)
-                    r = p.add_run(left_text)
-                    set_run_font(r, body_size)
-                    if dates:
-                        r2 = p.add_run(f"\t{dates}")
-                        set_run_font(r2, body_size)
-                    tight(p, before=1.0, after=0)
+        certs = [str(c).strip() for c in (tailored.get("certifications") or []) if str(c).strip()]
+        if certs:
+            add_section_header(s.heading("certifications"))
+            p = doc.add_paragraph()
+            r = p.add_run(", ".join(certs))
+            set_run_font(r, body_size)
+            tight(p, before=0, after=0)
 
         buf = io.BytesIO()
         doc.save(buf)
         return buf.getvalue()
 
     def generate_docx(self, tailored: Dict[str, Any]) -> bytes:
-        """Generate a single-page DOCX that adaptively fills an A4 page.
-
-        Mirrors the PDF renderer's two-pass strategy:
-          Pass 1: estimate content height at body=10pt with minimum gaps.
-          Pass 2: shrink font to 9.5/9pt if estimated overflow; then distribute
-                  remaining whitespace across section/entry/skill gaps so the
-                  page fills naturally (same visual density as the PDF).
-        """
-        avail = self._DOCX_AVAIL_PT
-
-        # Minimum spacing knobs (pt)
-        min_section_gap = 2.0
-        min_entry_gap = 1.5
-        min_skill_gap = 0.0
-        min_header_gap = 2.0
-
-        # Max ceilings so fills don't explode on short resumes
-        max_section_gap = 6.0
-        max_entry_gap = 6.0
-        max_skill_gap = 2.5   # per-category, same reasoning as _MAX_SKILL_GAP
-        max_header_gap = 8.0
-
-        # Bidirectional ladder (mirrors the PDF's thresholded up-tiers): a
-        # bigger font must be justified by emptiness — up-tiers are taken
-        # only when content leaves headroom for gap distribution; otherwise
-        # fall to the 10pt base and, past that, the shrink tiers.
-        for body_size, title_size, header_size, max_fill in (
-            (11.0, 20.0, 12.0, 0.78),
-            (10.5, 19.5, 11.5, 0.88),
-            (10.0, 19.0, 11.0, 1.00),
-            (9.5, 18.5, 10.5, 1.00),
-            (9.0, 18.0, 10.0, 1.00),
-        ):
-            min_h = self._estimate_docx_height_pt(
-                tailored,
-                body_size=body_size,
-                line_spacing=1.1,
-                section_gap=min_section_gap,
-                entry_gap=min_entry_gap,
-                skill_gap=min_skill_gap,
-                header_gap=min_header_gap,
-            )
-            if min_h <= avail * max_fill:
-                break
-
-        # Count slots for fill distribution
-        n_sections = 0
-        n_entry_gaps = 0
-        n_skill_rows = 0
-        if tailored.get("summary"):
-            n_sections += 1
-        exp = tailored.get("experience", []) or []
-        if exp:
-            n_sections += 1
-            n_entry_gaps += max(0, len(exp) - 1)
-        proj = tailored.get("projects", []) or []
-        if proj:
-            n_sections += 1
-            n_entry_gaps += max(0, len(proj) - 1)
-        skills = tailored.get("skills", {}) or {}
-        skill_rows = [v for v in skills.values() if v]
-        if skill_rows:
-            n_sections += 1
-            n_skill_rows = len(skill_rows)
-        if tailored.get("education"):
-            n_sections += 1
-
-        # Distribute remaining whitespace (weights mirror the PDF renderer's)
-        remaining = max(0, avail - min_h)
-        total_weight = (
-            max(n_sections, 1) * 0.5
-            + max(n_entry_gaps, 1) * 0.6
-            + 1 * 1            # header gap
-            + max(n_skill_rows, 1) * 0.3
-        )
-        unit = (remaining / total_weight) if total_weight > 0 and remaining > 0 else 0
-
-        section_gap = min(min_section_gap + unit * 0.5, max_section_gap)
-        entry_gap = min(min_entry_gap + unit * 0.6, max_entry_gap)
-        skill_gap = min(min_skill_gap + unit * 0.3, max_skill_gap)
-        header_gap = min(min_header_gap + unit * 1, max_header_gap)
-
-        # Pass 3 (mirrors the PDF's leading stretch): whatever the gap
-        # ceilings couldn't absorb goes into line spacing, interpolated
-        # linearly between 1.1 and 1.40. Estimator-driven, so fill is
-        # approximate; the 1.40 cap prevents overshoot onto page 2.
-        line_spacing = 1.1
-        h1 = self._estimate_docx_height_pt(
-            tailored,
-            body_size=body_size,
-            line_spacing=1.1,
-            section_gap=section_gap,
-            entry_gap=entry_gap,
-            skill_gap=skill_gap,
-            header_gap=header_gap,
-        )
-        if (avail - h1) > 10.0:
-            h2 = self._estimate_docx_height_pt(
-                tailored,
-                body_size=body_size,
-                line_spacing=1.40,
-                section_gap=section_gap,
-                entry_gap=entry_gap,
-                skill_gap=skill_gap,
-                header_gap=header_gap,
-            )
-            if h2 <= avail:
-                line_spacing = 1.40
-            elif h2 > h1:
-                line_spacing = 1.1 + (avail - h1) * 0.3 / (h2 - h1)
-                line_spacing = max(1.1, min(line_spacing, 1.40))
-
+        """DOCX from the same PageResolution the PDF solver produced."""
+        working, resolution = self._compute_pdf_layout(tailored)
+        s = self.spec
+        margin_in = resolution.gaps.margin_lr / 25.4
+        line_spacing = 1.1 * resolution.stretch
+        line_spacing = max(1.1, min(line_spacing, 1.40))
         return self._render_docx(
-            tailored,
-            body_size=body_size,
-            title_size=title_size,
-            header_size=header_size,
-            section_gap=section_gap,
-            entry_gap=entry_gap,
-            skill_gap=skill_gap,
-            header_gap=header_gap,
+            working,
+            body_size=resolution.tier.body_pt,
+            section_gap=resolution.gaps.section_gap,
+            entry_gap=resolution.gaps.entry_gap,
+            skill_gap=resolution.gaps.skill_gap,
+            header_gap=resolution.gaps.header_gap,
             line_spacing=line_spacing,
+            margin_lr_in=margin_in,
+            margin_top_in=resolution.gaps.margin_top / 25.4,
+            margin_bottom_in=resolution.gaps.margin_bottom / 25.4,
+            post_header=resolution.gaps.post_header,
         )
 
     # ------------------------------------------------------------------
-    # Filename helper
+    # Filename helpers (unchanged contract)
     # ------------------------------------------------------------------
 
     @staticmethod
     def build_filename(tailored: Dict[str, Any], jd_analysis: Dict[str, Any], ext: str) -> str:
-        """Build ATS-friendly filename: Firstname_Lastname_JobTitle.ext"""
         contact = tailored.get("contact", {})
         name = contact.get("name", "").strip()
         name = ResumeRenderer._title_case_name(name)
         parts = name.split()
         first = parts[0] if parts else "Resume"
         last = parts[-1] if len(parts) > 1 else ""
-
         job_title = jd_analysis.get("job_title", "")
 
-        def clean(s: str) -> str:
-            s = re.sub(r"[^a-zA-Z0-9 ]+", " ", s).strip()
-            s = re.sub(r"\s+", "_", s).strip("_")
-            return s
+        def clean(val: str) -> str:
+            val = re.sub(r"[^a-zA-Z0-9 ]+", " ", val).strip()
+            return re.sub(r"\s+", "_", val).strip("_")
 
         segments = [clean(first), clean(last), clean(job_title)]
-        segments = [s for s in segments if s]
-        return "_".join(segments) + f".{ext}"
+        return "_".join(seg for seg in segments if seg) + f".{ext}"
 
     @staticmethod
     def build_cover_letter_filename(
         candidate_name: str, job_title: str, company: str, ext: str = "pdf",
     ) -> str:
-        """Build ATS-friendly cover letter filename:
-            Firstname_Lastname_JobTitle_Cover_Letter.ext
-
-        Mirrors the resume filename convention so recruiters see paired
-        documents in a single sorted view. Company is intentionally NOT
-        included — many ATS portals reject filenames containing punctuation
-        from real company names (e.g. "Two Sigma, LLC"), and the job_title
-        already disambiguates the role.
-        """
         normalized = ResumeRenderer._title_case_name((candidate_name or "").strip())
         parts = normalized.split()
         first = parts[0] if parts else "Applicant"
         last = parts[-1] if len(parts) > 1 else ""
 
-        def clean(s: str) -> str:
-            s = re.sub(r"[^a-zA-Z0-9 ]+", " ", s).strip()
-            s = re.sub(r"\s+", "_", s).strip("_")
-            return s
+        def clean(val: str) -> str:
+            val = re.sub(r"[^a-zA-Z0-9 ]+", " ", val).strip()
+            return re.sub(r"\s+", "_", val).strip("_")
 
         segments = [clean(first), clean(last), clean(job_title), "Cover_Letter"]
-        segments = [s for s in segments if s]
-        return "_".join(segments) + f".{ext}"
+        return "_".join(seg for seg in segments if seg) + f".{ext}"

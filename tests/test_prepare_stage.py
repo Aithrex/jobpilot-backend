@@ -79,7 +79,14 @@ def prep_env(monkeypatch):
         return {"contact": {"name": "Alice"}, "experience": []}
 
     def fake_pdf(tailored):
-        return b"%PDF-1.4\n" + b"x" * 400
+        from services.resume_renderer import FontTier, GapPlan, PageResolution
+        res = PageResolution(
+            tier=FontTier(10.0, 3.4, 3.08),
+            gaps=GapPlan(1.2, 0.9, 1.0, 0.5, 0.4, 15.24),
+            stretch=1.0, pages=1, predicted_height_mm=200.0,
+            fill_ratio=0.8, dropped=[], outcome="fit_one",
+        )
+        return b"%PDF-1.4\n" + b"x" * 400, res
 
     monkeypatch.setattr(svc.parser, "ensure_structured_resume", fake_ensure)
     monkeypatch.setattr(svc, "extract_jd", fake_extract_jd)

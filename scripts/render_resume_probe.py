@@ -66,13 +66,26 @@ def _dump_skills(label: str, resume: dict) -> str:
 
 
 def _render(renderer, resume: dict, label: str, out_dir: Path) -> None:
-    knobs = renderer._compute_pdf_layout(resume)
+    _working, resolution = renderer._compute_pdf_layout(resume)
+    knobs = {
+        "body_size": resolution.tier.body_pt,
+        "lh": resolution.tier.lh,
+        "lh_s": resolution.tier.lh_s,
+        "stretch": resolution.stretch,
+        "section_gap": resolution.gaps.section_gap,
+        "entry_gap": resolution.gaps.entry_gap,
+        "post_header": resolution.gaps.post_header,
+        "header_gap": resolution.gaps.header_gap,
+        "skill_gap": resolution.gaps.skill_gap,
+        "predicted_height": resolution.predicted_height_mm,
+    }
     print(_fmt_knobs(renderer, label, knobs))
     print(_dump_skills(label, resume))
 
     slug = label.lower().replace(" ", "_")
     pdf_path = out_dir / f"{slug}.pdf"
-    pdf_path.write_bytes(renderer.generate_pdf(resume))
+    pdf_bytes, _res = renderer.generate_pdf(resume)
+    pdf_path.write_bytes(pdf_bytes)
     json_path = out_dir / f"{slug}.json"
     json_path.write_text(json.dumps(resume, indent=2, default=str), encoding="utf-8")
     print(f"  wrote {pdf_path}")

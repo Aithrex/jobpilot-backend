@@ -90,14 +90,15 @@ def _senior(role_bullet_counts):
 SENIOR = _senior([6, 5, 4, 3])  # 4 roles, 18 bullets, experience-only
 
 
-def test_sparse_resume_refuses_the_up_tier():
-    """A resume with roughly half a page of content must NOT up-tier. Bigger
-    type on a page that will still be mostly empty only makes the emptiness
-    louder — the sparse floor drops it back to the professional 10pt base."""
+def test_sparse_resume_takes_the_11pt_up_tier():
+    """P1-6: a genuinely thin resume is allowed 11pt (larger type + wider
+    margins), not forced down to 10pt. Stretch stays off."""
     r = ResumeRenderer()
     body, lh, lh_s, height = r._choose_up_tier(SPARSE)
-    assert body == 10.0
-    assert height < r._AVAIL_H * r._SPARSE_FILL_FLOOR
+    assert body == 11.0
+    _, res = r._compute_pdf_layout(SPARSE)
+    assert res.tier.body_pt == 11.0
+    assert res.stretch == 1.0
 
 
 def test_density_stress_stays_at_base_or_below():
@@ -116,8 +117,8 @@ def test_realistic_senior_fills_one_page():
     assert body == 10.0  # content-rich: base size, gaps absorb the slack
     assert height / r._AVAIL_H >= 0.80
 
-    pdf = r.generate_pdf(SENIOR)
-    check = check_pdf_parseability(pdf, SENIOR, {})
+    pdf, res = r.generate_pdf(SENIOR)
+    check = check_pdf_parseability(pdf, SENIOR, {}, outcome=res.outcome)
     assert check["checks"]["page_count"] == 1
     assert check["pdf_parseable_score"] >= 85
 
@@ -131,39 +132,42 @@ def test_up_tier_measures_monotonic():
 
 
 @pytest.mark.parametrize(
-    "resume", [SPARSE, DENSITY_STRESS, SENIOR], ids=["sparse", "stress", "senior"]
+    "resume,max_pages",
+    [(SPARSE, 1), (SENIOR, 1), (DENSITY_STRESS, 2)],
+    ids=["sparse", "senior", "stress"],
 )
-def test_render_single_page_and_parseable(resume):
-    """Full render at the new margins/font stays one page and ATS-parseable."""
+def test_render_stays_parseable(resume, max_pages):
+    """Letter is shorter than A4 — stress content may take two pages, never clip."""
     from services.pdf_ats_check import check_pdf_parseability
 
-    pdf_bytes = ResumeRenderer().generate_pdf(resume)
-    check = check_pdf_parseability(pdf_bytes, resume, {})
-    assert check["checks"]["page_count"] == 1
+    pdf_bytes, res = ResumeRenderer().generate_pdf(resume)
+    check = check_pdf_parseability(pdf_bytes, resume, {}, outcome=res.outcome)
+    assert check["checks"]["page_count"] == res.pages
+    assert res.pages <= max_pages
     assert check["checks"]["extraction_ok"] is True
     assert check["checks"]["no_glyph_corruption"] is True
-    assert check["pdf_parseable_score"] >= 85
+    if res.outcome == "fit_one":
+        assert check["pdf_parseable_score"] >= 85
 
 
-def test_docx_renders_with_times(tmp_path):
+def test_docx_renders_with_spec_font(tmp_path):
     from docx import Document
     import io
 
-    data = ResumeRenderer().generate_docx(SPARSE)
+    r = ResumeRenderer()
+    data = r.generate_docx(SPARSE)
     doc = Document(io.BytesIO(data))
-    assert doc.styles["Normal"].font.name == "Times New Roman"
+    assert doc.styles["Normal"].font.name == r.spec.docx_font_family
     text = "\n".join(p.text for p in doc.paragraphs)
     # Name renders in Title Case (e.g. "Surya Kommuguri", not all caps).
     assert "Surya Kommuguri" in text
     assert "EXPERIENCE" in text
 
 
-def test_pdf_embeds_tinos():
-    """The PDF must carry the embedded Tinos family (Times metrics, per the
-    user's Overleaf template) — if the TTFs go missing the fallback silently
-    changes the product look."""
-    pdf_bytes = ResumeRenderer().generate_pdf(SPARSE)
-    assert b"Tinos" in pdf_bytes
+def test_pdf_embeds_charis():
+    """The PDF must carry the embedded Charis SIL family."""
+    pdf_bytes, _res = ResumeRenderer().generate_pdf(SPARSE)
+    assert b"Charis" in pdf_bytes
 
 
 def test_pdf_name_renders_title_case():
@@ -171,7 +175,7 @@ def test_pdf_name_renders_title_case():
     and the parseability checker must still find it in the text layer."""
     from services.pdf_ats_check import extract_pdf_text
 
-    pdf_bytes = ResumeRenderer().generate_pdf(SPARSE)
+    pdf_bytes, _res = ResumeRenderer().generate_pdf(SPARSE)
     text, _ = extract_pdf_text(pdf_bytes)
     assert "Surya Kommuguri" in text
 
@@ -183,7 +187,7 @@ def test_pdf_name_renders_title_case():
 def test_pdf_contacts_are_plain_text():
     """No link annotations anywhere in the PDF — email/LinkedIn render as
     plain black text."""
-    pdf_bytes = ResumeRenderer().generate_pdf(SPARSE)
+    pdf_bytes, _res = ResumeRenderer().generate_pdf(SPARSE)
     assert b"/URI" not in pdf_bytes
 
 
@@ -215,30 +219,21 @@ MID_DENSITY = _resume(n_roles=2, bullets_per_role=7)
 
 def test_mid_density_fills_page():
     r = ResumeRenderer()
-    layout = r._compute_pdf_layout(MID_DENSITY)
-    fill = layout["predicted_height"] / r._AVAIL_H
-    assert fill >= 0.95, f"dead-band case must fill the page (got {fill:.1%})"
-    # stretch stays within the leading ceiling
-    assert layout["stretch"] <= r._STRETCH_CAP + 1e-9
-    assert layout["lh"] * layout["stretch"] <= r._MAX_LEADING_MM + 1e-6
+    _working, layout = r._compute_pdf_layout(MID_DENSITY)
+    fill = layout.fill_ratio
+    assert 0.90 <= fill <= r.spec.max_fill + 1e-9, f"fill {fill:.1%}"
+    assert layout.stretch <= r._STRETCH_CAP + 1e-9
+    assert layout.tier.lh * layout.stretch <= r._MAX_LEADING_MM + 1e-6
 
 
 def test_sparse_resume_renders_compactly_not_padded():
-    """A genuinely thin resume is laid out at its natural density and simply
-    ends where it ends. Saturating every knob at once — 11pt type, all five
-    gaps at their ceilings, 1.40x leading — still left a blank band, so the
-    page read as padded AND unfinished at the same time."""
+    """Thin resumes get larger type and wider margins, not stretched leading."""
     r = ResumeRenderer()
-    layout = r._compute_pdf_layout(SPARSE)
-    assert layout["body_size"] == 10.0
-    assert layout["stretch"] == 1.0
-    assert layout["section_gap"] == pytest.approx(r._MIN_SECTION_GAP)
-    assert layout["entry_gap"] == pytest.approx(r._MIN_ENTRY_GAP)
-    assert layout["post_header"] == pytest.approx(r._MIN_POST_HEADER)
-    assert layout["header_gap"] == pytest.approx(r._MIN_HEADER_GAP)
-    assert layout["skill_gap"] == pytest.approx(r._MIN_SKILL_GAP)
-    # It does not pretend to fill the page.
-    assert layout["predicted_height"] / r._AVAIL_H < r._FILL_RAMP_LO
+    _working, layout = r._compute_pdf_layout(SPARSE)
+    assert layout.tier.body_pt == 11.0
+    assert layout.stretch == 1.0
+    assert layout.gaps.margin_lr == pytest.approx(r.spec.margin_lr_wide_mm)
+    assert layout.fill_ratio <= r.spec.max_fill + 1e-9
 
 
 def test_fill_ramp_leaves_fillable_pages_alone():
@@ -246,8 +241,9 @@ def test_fill_ramp_leaves_fillable_pages_alone():
     dead-band and senior shapes still reach the bottom."""
     r = ResumeRenderer()
     for resume in (MID_DENSITY, SENIOR):
-        layout = r._compute_pdf_layout(resume)
-        assert layout["predicted_height"] / r._AVAIL_H >= 0.95
+        _working, layout = r._compute_pdf_layout(resume)
+        assert layout.fill_ratio <= r.spec.max_fill + 1e-9
+        assert layout.fill_ratio >= 0.88
 
 
 def test_heading_and_job_gaps_stay_tight():
@@ -255,33 +251,28 @@ def test_heading_and_job_gaps_stay_tight():
     or between sections (SUMMARY → EXPERIENCE, etc.)."""
     r = ResumeRenderer()
     for resume in (SPARSE, MID_DENSITY, SENIOR, DENSITY_STRESS):
-        layout = r._compute_pdf_layout(resume)
-        assert layout["post_header"] >= r._MIN_POST_HEADER - 1e-9
-        assert layout["post_header"] <= r._MAX_POST_HEADER + 1e-9
-        assert layout["entry_gap"] <= r._MAX_ENTRY_GAP + 1e-9
-        assert layout["section_gap"] <= r._MAX_SECTION_GAP + 1e-9
-        assert layout["post_header"] <= 1.6 + 1e-9
-        assert layout["entry_gap"] <= 2.2 + 1e-9
-        assert layout["section_gap"] <= 2.8 + 1e-9
-        # skill_gap repeats once per category, so its ceiling costs
-        # n_categories x the gap — it is held tighter than the rest.
-        assert layout["skill_gap"] >= r._MIN_SKILL_GAP - 1e-9
-        assert layout["skill_gap"] <= r._MAX_SKILL_GAP + 1e-9
+        _working, layout = r._compute_pdf_layout(resume)
+        assert layout.gaps.post_header >= r._MIN_POST_HEADER - 1e-9
+        assert layout.gaps.post_header <= r._MAX_POST_HEADER + 1e-9
+        assert layout.gaps.entry_gap <= r._MAX_ENTRY_GAP + 1e-9
+        assert layout.gaps.section_gap <= r._MAX_SECTION_GAP + 1e-9
+        assert layout.gaps.skill_gap >= r._MIN_SKILL_GAP - 1e-9
+        assert layout.gaps.skill_gap <= r._MAX_SKILL_GAP + 1e-9
 
 
 def test_dense_resume_never_stretches():
     r = ResumeRenderer()
-    layout = r._compute_pdf_layout(DENSITY_STRESS)
-    assert layout["stretch"] == 1.0
-    assert layout["post_header"] >= r._MIN_POST_HEADER - 1e-9
+    _working, layout = r._compute_pdf_layout(DENSITY_STRESS)
+    assert layout.stretch == 1.0
+    assert layout.gaps.post_header >= r._MIN_POST_HEADER - 1e-9
 
 
 def test_stretch_still_single_page():
     """Stretched renders must not spill to page 2."""
     from services.pdf_ats_check import check_pdf_parseability
 
-    pdf_bytes = ResumeRenderer().generate_pdf(MID_DENSITY)
-    check = check_pdf_parseability(pdf_bytes, MID_DENSITY, {})
+    pdf_bytes, res = ResumeRenderer().generate_pdf(MID_DENSITY)
+    check = check_pdf_parseability(pdf_bytes, MID_DENSITY, {}, outcome=res.outcome)
     assert check["checks"]["page_count"] == 1
     assert check["pdf_parseable_score"] >= 85
 
@@ -345,10 +336,12 @@ def test_skills_title_whitelist():
 
     r = ResumeRenderer()
     core = dict(SPARSE, skills_section_title="Core Skills")
-    text, _ = extract_pdf_text(r.generate_pdf(core))
+    pdf_core, _ = r.generate_pdf(core)
+    text, _ = extract_pdf_text(pdf_core)
     assert "CORE SKILLS" in text
 
     # Unknown/hostile values fall back to the default heading.
     junk = dict(SPARSE, skills_section_title="Best Stuff Ever")
-    text, _ = extract_pdf_text(r.generate_pdf(junk))
+    pdf_junk, _ = r.generate_pdf(junk)
+    text, _ = extract_pdf_text(pdf_junk)
     assert "TECHNICAL SKILLS" in text

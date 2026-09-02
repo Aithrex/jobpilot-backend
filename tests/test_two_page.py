@@ -1,9 +1,8 @@
-"""Two-page rendering (Craft-overhaul Phase 5, opt-in ALLOW_TWO_PAGE).
+"""Two-page rendering.
 
-A dense senior resume renders on two pages at a readable 10pt instead of being
-crammed to 9pt on one page — but ONLY when the flag is on, and ONLY when content
-genuinely overflows. Flag off (prod default) must be byte-identical single-page.
-Real fpdf2 render, no LLM.
+Dense content that cannot fit Letter at the 9pt floor paginates. ALLOW_TWO_PAGE
+only changes the allocator budget — the renderer never clips, even when the
+flag is off. Real fpdf2 render, no LLM.
 """
 import io
 
@@ -55,29 +54,37 @@ def _pages(pdf_bytes):
     return len(PdfReader(io.BytesIO(pdf_bytes)).pages)
 
 
-def test_flag_off_dense_resume_stays_one_page(monkeypatch):
+def test_flag_off_dense_resume_never_clips(monkeypatch):
+    """Prod flag-off must paginate or trim — never discard overflow."""
     monkeypatch.setattr(resume_renderer, "ALLOW_TWO_PAGE", False, raising=False)
-    pdf = ResumeRenderer().generate_pdf(_dense_senior())
-    assert _pages(pdf) == 1  # shrink cascade forces one page (unchanged behavior)
+    pdf, res = ResumeRenderer().generate_pdf(_dense_senior())
+    assert res.pages >= 1
+    assert _pages(pdf) == res.pages
+    assert res.predicted_height_mm <= res.pages * ResumeRenderer()._AVAIL_H + 1.0
+    assert res.outcome in ("fit_one", "fit_two", "trimmed_to_one", "trimmed_to_two")
 
 
 def test_flag_on_dense_resume_uses_two_pages(monkeypatch):
     monkeypatch.setattr(resume_renderer, "ALLOW_TWO_PAGE", True, raising=False)
-    pdf = ResumeRenderer().generate_pdf(_dense_senior())
-    assert _pages(pdf) == 2  # flows to a second page at readable font
+    # 8×6 with long bullets overflows Letter by >55% of a second page.
+    pdf, res = ResumeRenderer().generate_pdf(_dense_senior(n_roles=8, bullets=6))
+    assert res.pages == 2
+    assert _pages(pdf) == 2
+    assert res.outcome in ("fit_two", "trimmed_to_two")
 
 
 def test_flag_on_normal_resume_still_one_page(monkeypatch):
     # Two-page is opt-in for OVERFLOW, not forced. A normal resume that fits one
     # page must still render one page even with the flag on.
     monkeypatch.setattr(resume_renderer, "ALLOW_TWO_PAGE", True, raising=False)
-    pdf = ResumeRenderer().generate_pdf(_normal())
+    pdf, res = ResumeRenderer().generate_pdf(_normal())
+    assert res.pages == 1
     assert _pages(pdf) == 1
 
 
 def test_two_page_output_is_parseable(monkeypatch):
     monkeypatch.setattr(resume_renderer, "ALLOW_TWO_PAGE", True, raising=False)
-    pdf = ResumeRenderer().generate_pdf(_dense_senior())
+    pdf, _res = ResumeRenderer().generate_pdf(_dense_senior(n_roles=8, bullets=6))
     reader = PdfReader(io.BytesIO(pdf))
     text = "".join(p.extract_text() or "" for p in reader.pages)
     # Content from both the first and last roles survives (nothing evicted).

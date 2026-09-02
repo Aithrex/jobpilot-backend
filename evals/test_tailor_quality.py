@@ -353,8 +353,10 @@ def test_offline_scores_and_coverage(name, resume, jd, offline_tailor, capsys):
     # Render a real PDF so the scorer isn't capped by the no-PDF penalty — this
     # makes the printed baseline reflect a meaningful overall score.
     from services.resume_renderer import ResumeRenderer
-    pdf = ResumeRenderer().generate_pdf(tailored)
-    scores = ResumeScorer().score(tailored, jd, pdf_bytes=pdf)
+    pdf, resolution = ResumeRenderer().generate_pdf(tailored)
+    scores = ResumeScorer().score(
+        tailored, jd, pdf_bytes=pdf, page_outcome=resolution.outcome,
+    )
     gap = KeywordGapEngine().analyze(tailored, jd)
 
     with capsys.disabled():

@@ -301,7 +301,7 @@ def _default_resume_resolver(application: Dict[str, Any],
     # Cache miss → render on the fly, then it's still just bytes to attach.
     from services.resume_service import get_resume_service
     tailored = rec.get("tailored_resume") or {}
-    pdf = get_resume_service().renderer.generate_pdf(tailored)
+    pdf, _resolution = get_resume_service().renderer.generate_pdf(tailored)
     return ("resume.pdf", pdf)
 
 

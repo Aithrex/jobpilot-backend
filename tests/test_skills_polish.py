@@ -329,7 +329,7 @@ def test_collapsed_skills_survive_pdf_extraction():
                            "Helm", "GitHub Actions", "Terraform"],
         "Languages": ["Python", "Go", "Java"],
     })
-    pdf = ResumeRenderer().generate_pdf(resume)
+    pdf, _resolution = ResumeRenderer().generate_pdf(resume)
     check = check_pdf_parseability(pdf, resume, {})
     found = check["checks"]["skills_keywords_found"]
     total = check["checks"]["skills_keywords_total"]

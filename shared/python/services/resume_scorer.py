@@ -141,6 +141,7 @@ class ResumeScorer:
         jd_analysis: Dict[str, Any],
         pdf_bytes: bytes | None = None,
         render_error: str | None = None,
+        page_outcome: str | None = None,
     ) -> Dict[str, Any]:
         """Run the full scoring pipeline. Returns a validated v2 scores dict.
 
@@ -157,7 +158,9 @@ class ResumeScorer:
         if pdf_bytes:
             try:
                 from services.pdf_ats_check import check_pdf_parseability
-                pdf_check = check_pdf_parseability(pdf_bytes, tailored, jd_analysis)
+                pdf_check = check_pdf_parseability(
+                    pdf_bytes, tailored, jd_analysis, outcome=page_outcome,
+                )
             except Exception as e:
                 logger.warning("PDF parseability check failed: %s", e)
                 render_error = render_error or f"Parseability check failed: {e}"

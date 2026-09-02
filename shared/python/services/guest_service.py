@@ -2549,8 +2549,9 @@ def render_record_file(record: Dict[str, Any], fmt: str) -> Tuple[bytes, str]:
         except Exception as cache_err:  # pragma: no cover - cache miss path
             logger.warning("guest download: cached fetch failed, re-rendering: %s", cache_err)
 
+    resolution = None
     if fmt == "pdf":
-        data = svc.renderer.generate_pdf(tailored)
+        data, resolution = svc.renderer.generate_pdf(tailored)
     else:
         data = svc.renderer.generate_docx(tailored)
     if not data or len(data) < 100:
