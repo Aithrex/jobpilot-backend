@@ -293,3 +293,205 @@ class TestPersistence:
         assert got["covered"] == 1
         assert got["by_state"][css.STATE_VALIDATED] == 1
         assert got["ownership_verified"] == 1
+
+
+# ---------------------------------------------------------------------------
+# End to end, with a fake network
+# ---------------------------------------------------------------------------
+class FakeFetcher:
+    """A `career_source_ownership.Fetcher` with a scripted internet.
+
+    Written as a class rather than a mock so the tests below read as
+    "here is what the web said" — which is the only input the verifier has.
+    """
+
+    def __init__(self, pages):
+        self.pages = pages
+        self.requested = []
+
+    def get(self, url):
+        self.requested.append(url)
+        for key, body in self.pages.items():
+            if key in url:
+                return {"status": 200, "text": body, "chain": [url],
+                        "final_url": url, "error": ""}
+        return {"status": 404, "text": "", "chain": [url],
+                "final_url": url, "error": ""}
+
+
+class _Ep:
+    """Minimal `ats_providers.base.Endpoint` stand-in."""
+
+    def __init__(self, vendor, tenant):
+        self.vendor = vendor
+        self.tenant = tenant
+        self.display_name = ""
+        self.member_key = f"{vendor}-{tenant}"
+
+
+class TestVerifyEmployerSourceEndToEnd:
+    def _employer(self, name="Databricks", domain="databricks.com"):
+        from services import employer_registry as er
+        return er.build_employer(display_name=name, canonical_domain=domain)
+
+    def test_the_employers_own_site_linking_to_the_board_is_enough(self):
+        from services import career_source_ownership as cso
+
+        fetcher = FakeFetcher({
+            "databricks.com/careers": (
+                '<html><body>Databricks careers. '
+                '<a href="https://boards.greenhouse.io/databricks">Open roles</a>'
+                "</body></html>"),
+            "databricks.com": "<html><body>Databricks</body></html>",
+        })
+        records = cso.verify_employer_source(
+            employer=self._employer(), fetcher=fetcher, ctx=None)
+        assert records
+        owned = [r for r in records if r["ownership_verified"]]
+        assert owned, [r["ownership_reason"] for r in records]
+        assert owned[0]["ats_vendor"] == "greenhouse"
+        assert owned[0]["tenant"] == "databricks"
+        assert owned[0]["discovery_method"] in (
+            css.METHOD_OFFICIAL_LINK, css.METHOD_OFFICIAL_REDIRECT)
+
+    def test_a_site_that_does_not_name_the_employer_proves_nothing(self):
+        """Domain confirmation is what makes "their site links here" a claim
+        about THEM. Without it the walk starts from a page we cannot attribute.
+
+        The body below names the employer ONLY inside an href. An attribute is
+        not a statement about whose page this is, and reading markup as text is
+        the same confusion this module exists to prevent, one level up."""
+        from services import career_source_ownership as cso
+
+        fetcher = FakeFetcher({
+            "databricks.com": (
+                '<html><body>Domain for sale. '
+                '<a href="https://boards.greenhouse.io/databricks">jobs</a>'
+                "</body></html>"),
+        })
+        records = cso.verify_employer_source(
+            employer=self._employer(), fetcher=fetcher, ctx=None)
+        assert not any(r["ownership_verified"] for r in records)
+
+    def test_an_employer_with_no_endpoint_still_gets_a_row(self):
+        """An employer with no row is an employer that silently left the
+        denominator."""
+        from services import career_source_ownership as cso
+
+        fetcher = FakeFetcher({"nowhere.example": "<html>Nowhere Inc</html>"})
+        records = cso.verify_employer_source(
+            employer=self._employer("Nowhere Inc", "nowhere.example"),
+            fetcher=fetcher, ctx=None)
+        assert len(records) == 1
+        assert records[0]["state"] == css.STATE_CANDIDATE
+        assert records[0]["failure_code"] == css.FAIL_OWNER_UNPROVEN
+        assert records[0]["failure_detail"]
+
+    def test_a_responding_board_alone_never_reaches_validated(self):
+        """The whole point, end to end: the endpoint is real and answering,
+        the slug looks right, and the employer's site says nothing."""
+        from services import career_source_ownership as cso
+
+        fetcher = FakeFetcher({})       # nothing resolves
+        records = cso.verify_employer_source(
+            employer=self._employer("Forward", "goforward.com"),
+            fetcher=fetcher, ctx=None,
+            candidate_endpoints=[_Ep("lever", "forward")])
+        assert records
+        for r in records:
+            assert r["state"] != css.STATE_VALIDATED
+            assert not r["ownership_verified"]
+        # And the heuristic IS recorded, so a report can say we declined it.
+        kinds = {e["kind"] for r in records for e in r["ownership_evidence"]}
+        assert css.SIGNAL_SLUG_SIMILARITY in kinds
+
+    def test_the_name_must_appear_in_VISIBLE_text(self):
+        from services import career_source_ownership as cso
+
+        in_markup = ('<html><body>Domain for sale.'
+                     '<a href="https://boards.greenhouse.io/databricks">x</a>'
+                     "</body></html>")
+        in_text = "<html><body>Databricks careers</body></html>"
+        assert cso.page_confirms_employer(in_markup, "Databricks")[0] is False
+        assert cso.page_confirms_employer(in_text, "Databricks")[0] is True
+
+    def test_a_title_or_site_name_counts_as_visible(self):
+        from services import career_source_ownership as cso
+
+        page = ('<html><head><title>Databricks</title>'
+                '<meta property="og:site_name" content="Databricks"></head>'
+                "<body><div></div></body></html>")
+        assert cso.page_confirms_employer(page, "Databricks")[0] is True
+
+    def test_script_contents_are_not_visible_text(self):
+        from services import career_source_ownership as cso
+
+        page = ('<html><body><script>var vendor="Databricks";</script>'
+                "Nothing here.</body></html>")
+        assert cso.page_confirms_employer(page, "Databricks")[0] is False
+
+    def test_a_domain_the_board_declares_is_a_candidate_not_a_conclusion(self):
+        """`candidate_domains_from_board` is how an employer that exists only
+        as an ATS display name gets a domain at all. It is then verified the
+        same way as any other."""
+        from services import career_source_ownership as cso
+
+        fetcher = FakeFetcher({
+            "jobs.lever.co/acme": (
+                '<html><a href="https://acme.example/about">Acme Corp</a></html>'),
+            "acme.example": "<html><body>Acme Corp</body></html>",
+        })
+        got = cso.candidate_domains_from_board(fetcher, _Ep("lever", "acme"))
+        assert "acme.example" in got
+
+    def test_board_infrastructure_is_never_offered_as_the_employers_domain(self):
+        from services import career_source_ownership as cso
+
+        fetcher = FakeFetcher({
+            "jobs.lever.co/acme": (
+                '<html><a href="https://www.linkedin.com/company/acme">li</a>'
+                '<a href="https://cdn.jsdelivr.net/x.js">cdn</a>'
+                '<a href="https://jobs.lever.co/acme/1">job</a></html>'),
+        })
+        assert cso.candidate_domains_from_board(fetcher, _Ep("lever", "acme")) == []
+
+
+class TestMigrationDetection:
+    def test_a_cross_host_redirect_is_a_move(self):
+        """Rivian's iCIMS tenant answered with a 143-byte redirect and nothing
+        re-fingerprinted it."""
+        from services import career_source_ownership as cso
+
+        class _F:
+            def get(self, url):
+                return {"status": 200, "text": "<html>ok</html>",
+                        "chain": [url, "https://careers.rivian.com/work/jobs"],
+                        "final_url": "https://careers.rivian.com/work/jobs",
+                        "error": ""}
+
+        moved, dest, chain = cso.detect_migration(
+            _F(), "https://us-careers-rivian.icims.com/jobs")
+        assert moved and "careers.rivian.com" in dest and len(chain) == 2
+
+    def test_a_tiny_redirect_shim_is_a_move(self):
+        from services import career_source_ownership as cso
+
+        class _F:
+            def get(self, url):
+                return {"status": 200,
+                        "text": '<meta http-equiv="refresh" '
+                                'content="0;url=https://new.example/jobs">',
+                        "chain": [url], "final_url": url, "error": ""}
+
+        moved, dest, _chain = cso.detect_migration(_F(), "https://old.example/jobs")
+        assert moved and dest == "https://new.example/jobs"
+
+    def test_a_normal_page_is_not_a_move(self):
+        from services import career_source_ownership as cso
+
+        class _F:
+            def get(self, url):
+                return {"status": 200, "text": "<html>" + "x" * 5000 + "</html>",
+                        "chain": [url], "final_url": url, "error": ""}
+
+        assert cso.detect_migration(_F(), "https://old.example/jobs")[0] is False

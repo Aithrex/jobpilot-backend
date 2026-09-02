@@ -126,3 +126,31 @@ The two `*_keyset` index families exist because the scope/family/specialty
 indexes end at `posted_at`, and a retrieval sorted `(posted_at DESC, job_id
 ASC)` — which it must be, or the keyset order is not total — fell back to a
 blocking sort over the whole matched set before the limit.
+
+## Re-verification is normal, and it is how a tightened check propagates
+
+`career_sources.next_check_at` is set from the state
+(`career_source_service._RECHECK`): 14 days for `validated`, 3 for `blocked`,
+1 for `moved`. Re-running pass 2 re-adjudicates from the evidence, so a
+STRICTER check demotes rows that no longer clear it — nothing has to be
+deleted by hand.
+
+That matters after a change to what counts as evidence. For example
+`page_confirms_employer` originally matched the employer name anywhere in the
+HTML, so a page that named the employer only inside an `href` read as "this
+page names them". It now matches VISIBLE TEXT only (tags, scripts and
+attributes stripped; `<title>` and `og:site_name` kept). Any row verified
+before that change should be re-verified:
+
+```bash
+PYTHONPATH=shared/python python scripts/verify_career_sources.py \
+    --mode employers --apply --workers 14 --rate 14
+```
+
+Pass 2 skips employers that already have a COVERED source, so to force a
+re-check of those specifically, pass their ids:
+
+```bash
+PYTHONPATH=shared/python python scripts/verify_career_sources.py \
+    --mode employers --apply --employer-id emp_xxxx --employer-id emp_yyyy
+```

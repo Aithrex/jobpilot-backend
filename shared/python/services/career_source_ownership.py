@@ -256,16 +256,42 @@ def _name_tokens(name: Any) -> List[str]:
     return [t for t in toks if len(t) > 2 and t not in _LEGAL_WORDS]
 
 
+_SCRIPT_STYLE_RE = re.compile(r"<(script|style|noscript)\b.*?</\1>",
+                              re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+_TITLE_RE = re.compile(r"<title[^>]*>(.{0,300}?)</title>", re.IGNORECASE | re.DOTALL)
+_META_NAME_RE = re.compile(
+    r"""<meta[^>]+(?:property|name)\s*=\s*["'](?:og:site_name|og:title|"""
+    r"""application-name|apple-mobile-web-app-title)["'][^>]+content\s*=\s*"""
+    r"""["']([^"']{0,200})["']""", re.IGNORECASE)
+
+
+def visible_text(html: str) -> str:
+    """The page's TEXT, plus the title and site-name metadata.
+
+    Matching an employer name against raw markup is how a page that merely
+    LINKS to `boards.greenhouse.io/databricks` reads as "this page names
+    Databricks" — the name is in an href, not in anything a human would see.
+    That is the exact confusion this whole module exists to prevent, one level
+    up: an attribute is not a statement about whose page this is.
+    """
+    text = _SCRIPT_STYLE_RE.sub(" ", html or "")
+    parts = [m.group(1) for m in _TITLE_RE.finditer(text)]
+    parts += [m.group(1) for m in _META_NAME_RE.finditer(text)]
+    parts.append(_TAG_RE.sub(" ", text))
+    return re.sub(r"\s+", " ", " ".join(parts))
+
+
 def page_confirms_employer(html: str, name: Any, *, host: str = "",
                            ticker: str = "") -> Tuple[bool, str]:
     """Does this page belong to this employer? `(ok, why)`.
 
     Three independent ways to say yes, ordered by strength. All of them read
-    the page's own text; none of them read the URL we guessed, because the
-    URL is the thing being tested.
+    the page's VISIBLE TEXT; none of them read the URL we guessed, and none of
+    them read markup, because both are the thing being tested.
     """
-    body = (html or "").lower()
-    if not body:
+    body = visible_text(html).lower()
+    if not body.strip():
         return False, "empty body"
     tick = str(ticker or "").strip().lower()
     if len(tick) >= 3 and re.search(rf"(?<![a-z0-9]){re.escape(tick)}(?![a-z0-9])", body):
