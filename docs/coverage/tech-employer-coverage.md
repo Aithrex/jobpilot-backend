@@ -7,9 +7,9 @@ Regenerate with:
 PYTHONPATH=shared/python python scripts/employer_coverage_report.py --markdown
 ```
 
-- measured at `2026-09-02T14:33:17.800248+00:00`
-- source revision `b15ccb0`
-- inventory watermark `2026-09-02T14:32:23.034000`
+- measured at `2026-09-02T15:38:32.072586+00:00`
+- source revision `9322df5`
+- inventory watermark `2026-09-02T15:37:41.407000`
 - posting-mix window: 30 days
 - versions: `taxonomy=tech-tax-1.1.0`, `adjacency=tech-adjacency-1.1.0`, `employer_registry=employer-registry-1.0.0`, `career_source=career-source-1.0.0`, `employer_classifier=employer-tech-1.0.0`
 
@@ -24,13 +24,13 @@ source only when its OWNERSHIP is proven and its content validated.
 |---|---:|
 | employers in the registry | 23,782 |
 | **evidence-backed technology employers** | **2,625** |
-| **validated official career sources** | **869** |
-| **validated coverage** | **33.1%** |
-| employers without validated coverage | 1,756 |
+| **validated official career sources** | **876** |
+| **validated coverage** | **33.4%** |
+| employers without validated coverage | 1,749 |
 | employers yielding postings | 848 |
 | employers yielding core-tech postings | 690 |
-| active postings from them | 99,756 |
-| core-tech postings | 15,816 (15.8%) |
+| active postings from them | 100,578 |
+| core-tech postings | 15,827 (15.7%) |
 | open employer merge reviews | 1,443 |
 
 ## Every employer is in exactly one state
@@ -41,42 +41,43 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 
 | state | employers |
 |---|---:|
-| `candidate` | 1,581 |
-| `validated` | 807 |
-| `content_validated` | 155 |
+| `candidate` | 1,578 |
+| `validated` | 814 |
+| `content_validated` | 149 |
 | `empty` | 62 |
-| `blocked` | 13 |
-| `ownership_verified` | 7 |
+| `dead` | 13 |
+| `ownership_verified` | 5 |
+| `blocked` | 4 |
 
 ## Coverage by cohort
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `public_tech` | 1,859 | 378 | 20.3% | 6,689 |
-| `niche_startup` | 464 | 280 | 60.3% | 566 |
-| `unknown` | 241 | 167 | 69.3% | 6,316 |
-| `mnc` | 58 | 32 | 55.2% | 4,439 |
-| `private_growth` | 34 | 23 | 67.7% | 827 |
+| `public_tech` | 1,859 | 379 | 20.4% | 6,694 |
+| `niche_startup` | 464 | 285 | 61.4% | 566 |
+| `unknown` | 241 | 167 | 69.3% | 6,318 |
+| `mnc` | 58 | 32 | 55.2% | 4,445 |
+| `private_growth` | 34 | 24 | 70.6% | 827 |
 
 ## Coverage by category
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `other` | 2,476 | 836 | 33.8% | 15,816 |
-| `software_saas` | 138 | 80 | 58.0% | 2,194 |
-| `fintech` | 123 | 95 | 77.2% | 3,344 |
+| `other` | 2,476 | 843 | 34.1% | 15,827 |
+| `software_saas` | 138 | 84 | 60.9% | 2,194 |
+| `fintech` | 123 | 95 | 77.2% | 3,350 |
 | `cloud_data` | 91 | 57 | 62.6% | 1,052 |
 | `semiconductor` | 81 | 40 | 49.4% | 970 |
-| `ai_ml` | 78 | 57 | 73.1% | 491 |
+| `ai_ml` | 78 | 58 | 74.4% | 491 |
 | `security` | 61 | 40 | 65.6% | 191 |
 | `devtools` | 51 | 33 | 64.7% | 92 |
-| `it_services` | 50 | 29 | 58.0% | 1,426 |
+| `it_services` | 50 | 29 | 58.0% | 1,428 |
 | `consumer` | 49 | 27 | 55.1% | 82 |
-| `robotics` | 47 | 29 | 61.7% | 312 |
+| `robotics` | 47 | 30 | 63.8% | 312 |
 | `healthtech` | 39 | 33 | 84.6% | 228 |
 | `gaming` | 26 | 10 | 38.5% | 45 |
-| `aerospace_defense` | 15 | 13 | 86.7% | 355 |
-| `energy` | 12 | 12 | 100.0% | 129 |
+| `aerospace_defense` | 15 | 14 | 93.3% | 355 |
+| `energy` | 12 | 12 | 100.0% | 131 |
 | `hardware` | 10 | 2 | 20.0% | 243 |
 | `media` | 7 | 6 | 85.7% | 19 |
 | `telecom` | 6 | 6 | 100.0% | 300 |
@@ -87,7 +88,7 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `unknown` | 2,624 | 869 | 33.1% | 15,816 |
+| `unknown` | 2,624 | 876 | 33.4% | 15,827 |
 | `US` | 1 | 0 | 0.0% | 0 |
 
 ## Coverage by provider
@@ -95,11 +96,11 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 | provider | career sources | ownership verified | validated |
 |---|---:|---:|---:|
 | `unknown` | 6,514 | 0 | 0 |
-| `workday` | 1,510 | 989 | 896 |
-| `greenhouse` | 994 | 566 | 566 |
+| `workday` | 1,510 | 988 | 896 |
+| `greenhouse` | 994 | 572 | 572 |
 | `icims` | 450 | 118 | 57 |
-| `ashby` | 369 | 215 | 215 |
-| `phenom` | 205 | 194 | 194 |
+| `ashby` | 369 | 216 | 216 |
+| `phenom` | 210 | 199 | 199 |
 | `lever` | 187 | 99 | 99 |
 | `oracle_orc` | 164 | 31 | 4 |
 | `ukg` | 160 | 38 | 38 |
@@ -144,10 +145,11 @@ from whatever the database happens to contain.
 | state | employers |
 |---|---:|
 | `candidate` | 60 |
-| `validated` | 24 |
+| `validated` | 25 |
 | `empty` | 5 |
-| `ownership_verified` | 3 |
-| `content_validated` | 2 |
+| `ownership_verified` | 2 |
+| `blocked` | 1 |
+| `content_validated` | 1 |
 
 | employer | domain | state | sources | detail |
 |---|---|---|---:|---|
@@ -162,7 +164,7 @@ from whatever the database happens to contain.
 | Atlassian | `atlassian.com` | `candidate` | 1 | read 8 page(s) on atlassian.com; no ATS fingerprint found |
 | Shopify | `shopify.com` | `candidate` | 1 | read 4 page(s) on shopify.com; no ATS fingerprint found |
 | DigitalOcean | `digitalocean.com` | `candidate` | 1 | read 4 page(s) on digitalocean.com; no ATS fingerprint found |
-| Procore | `procore.com` | `candidate` | 1 | read 1 page(s) on procore.com; no ATS fingerprint found |
+| Procore | `procore.com` | `candidate` | 1 | read 5 page(s) on procore.com; no ATS fingerprint found |
 | monday.com | `monday.com` | `candidate` | 1 | read 7 page(s) on monday.com; no ATS fingerprint found |
 | Fortinet | `fortinet.com` | `candidate` | 1 | domain not verified |
 | SentinelOne | `sentinelone.com` | `candidate` | 1 | read 8 page(s) on sentinelone.com; no ATS fingerprint found |
@@ -194,10 +196,10 @@ from whatever the database happens to contain.
 | Spotify | `spotify.com` | `validated` | 1 | one corroborating signal (curated_registry); the rule needs two independent classes |
 | HubSpot | `hubspot.com` | `validated` | 2 | two independent corroborating signals: ats_provider, curated_registry |
 | Splunk | `splunk.com` | `empty` | 5 | verified employer domain -> endpoint (official_domain_link) |
-| Zoom | `zoom.com` | `candidate` | 1 | read 3 page(s) on zoom.com; no ATS fingerprint found |
+| Zoom | `zoom.com` | `candidate` | 1 | read 1 page(s) on zoom.com; no ATS fingerprint found |
 | Intuit | `intuit.com` | `candidate` | 1 | read 8 page(s) on intuit.com; no ATS fingerprint found |
 | Confluent | `confluent.io` | `validated` | 1 | one corroborating signal (curated_registry); the rule needs two independent classes |
-| Arm | `arm.com` | `ownership_verified` | 2 | migrated to https://careers.arm.com/search-jobs |
+| Arm | `arm.com` | `blocked` | 2 | no shell page |
 | Seagate | `seagate.com` | `candidate` | 1 | read 8 page(s) on seagate.com; no ATS fingerprint found |
 | Lam Research | `lamresearch.com` | `empty` | 1 | verified employer domain -> endpoint (official_domain_link) |
 | Siemens | `siemens.com` | `candidate` | 1 | read 8 page(s) on siemens.com; no ATS fingerprint found |
@@ -218,9 +220,9 @@ from whatever the database happens to contain.
 | Palantir | `palantir.com` | `validated` | 1 | one corroborating signal (curated_registry); the rule needs two independent classes |
 | F5 | `f5.com` | `candidate` | 2 | domain not verified |
 | Unity | `unity.com` | `candidate` | 1 | no working site path (last=404) |
-| SpaceX | `spacex.com` | `content_validated` | 2 | one corroborating signal (ats_provider); the rule needs two independent classes |
+| SpaceX | `spacex.com` | `validated` | 2 | two independent corroborating signals: ats_provider, curated_registry |
 | Zoox | `zoox.com` | `validated` | 2 | two independent corroborating signals: ats_provider, curated_registry |
-| Rippling | `rippling.com` | `content_validated` | 2 | one corroborating signal (ats_provider); the rule needs two independent classes |
+| Rippling | `rippling.com` | `content_validated` | 2 | one corroborating signal (employer_domain); the rule needs two independent classes |
 | Electronic Arts | `ea.com` | `candidate` | 1 | read 8 page(s) on ea.com; no ATS fingerprint found |
 | Roblox | `roblox.com` | `validated` | 1 | one corroborating signal (curated_registry); the rule needs two independent classes |
 | Riot Games | `riotgames.com` | `candidate` | 1 | read 8 page(s) on riotgames.com; no ATS fingerprint found |
@@ -250,10 +252,10 @@ from whatever the database happens to contain.
 
 | source | shards | crawl lag (min) | stale | shards in backoff |
 |---|---:|---:|---|---:|
-| `career-pages` | 64 | 10 | False | 0 |
-| `icims` | 96 | 13 | False | 0 |
-| `oracle` | 48 | 6 | False | 0 |
-| `workday` | 48 | 0 | False | 0 |
+| `career-pages` | 64 | 0 | False | 0 |
+| `icims` | 96 | 4 | False | 0 |
+| `oracle` | 48 | 12 | False | 0 |
+| `workday` | 48 | 6 | False | 0 |
 
 - ingest runner heartbeat age: 0 min (healthy: True)
 

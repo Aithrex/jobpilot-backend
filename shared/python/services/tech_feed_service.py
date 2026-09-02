@@ -1775,6 +1775,30 @@ def filter_company_categories(rows: List[Dict[str, Any]], req: Dict[str, Any]
     return kept, dropped
 
 
+def _variant_key_of(row: Dict[str, Any]) -> str:
+    """`variant_group_id` derived at READ time when the stored one is absent.
+
+    Same formula as `job_inventory_service.compute_dedupe_identity`, so a
+    derived key groups with stored ones rather than beside them.
+
+    It matters far more than the 3% headline suggests: the identity is missing
+    on 7,043 of 232,032 active postings overall, but on **2,624 of the newest
+    3,000** — and newest-first is exactly the order the feed retrieves in. With
+    no key, every one of those rows got a unique group and nothing collapsed,
+    so a role open in six countries showed as six cards on page one.
+    """
+    try:
+        from services import job_inventory_service as inv
+        employer = str(row.get("employer_id") or "")
+        title = str(row.get("title_normalized")
+                    or inv.normalize_title(row.get("title_raw") or ""))
+        if not (employer and title):
+            return ""
+        return inv._hash_key("variant", employer, inv._title_group_key(title))
+    except Exception:      # pragma: no cover - collapsing must never 500
+        return ""
+
+
 def _collapse_location_variants(rows: List[Dict[str, Any]]
                                 ) -> List[Dict[str, Any]]:
     """One card per role per employer, with the other cities kept on it.
@@ -1786,7 +1810,7 @@ def _collapse_location_variants(rows: List[Dict[str, Any]]
     best: Dict[str, Dict[str, Any]] = {}
     order: List[str] = []
     for row in rows:
-        key = str(row.get("variant_group_id") or "")
+        key = str(row.get("variant_group_id") or "") or _variant_key_of(row)
         if not key:
             key = f"_r{len(order)}"
         prev = best.get(key)

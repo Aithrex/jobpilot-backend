@@ -1254,3 +1254,58 @@ class TestDiversityOnlyTouchesTheHeadOfTheRankedList:
         rows = self._rows()
         out, _ = tfs._diversify_employers(rows, 25)
         assert sorted(r["job_id"] for r in out) == sorted(r["job_id"] for r in rows)
+
+
+class TestARoleOpenInSixCountriesIsOneCard:
+    """`_collapse_location_variants` groups on `variant_group_id`. That field is
+    missing on 7,043 of 232,032 active postings — 3% — but on **2,624 of the
+    newest 3,000**, and newest-first is exactly the order the feed retrieves in.
+    With no key every such row got its own group and nothing collapsed, so
+    Elastic's "Software Engineer II - EDR Workflows" showed as six cards on
+    page one, one per country."""
+
+    def test_a_derived_key_matches_the_stored_formula(self):
+        from services import job_inventory_service as inv
+        row = {"employer_id": "elastic", "title_normalized": "software engineer ii"}
+        stored = inv.compute_dedupe_identity(
+            employer_id="elastic", ats="greenhouse", source="career-pages",
+            source_job_id="1", canonical_url="", content_hash="",
+            title_normalized="software engineer ii")["variant_group_id"]
+        assert tfs._variant_key_of(row) == stored
+
+    def test_rows_with_no_stored_key_still_collapse(self):
+        rows = [{"employer_id": "elastic", "title_normalized": "software engineer ii",
+                 "job_id": f"j{i}",
+                 "locations": [{"raw": c}]}
+                for i, c in enumerate(["Portugal", "Poland", "Ireland", "Greece"])]
+        out = tfs._collapse_location_variants(rows)
+        assert len(out) == 1
+        assert out[0]["duplicate_count"] == 3
+        assert len(out[0]["location_variants"]) == 3
+
+    def test_two_different_roles_are_not_merged(self):
+        rows = [{"employer_id": "elastic", "title_normalized": "software engineer ii",
+                 "job_id": "a", "locations": [{"raw": "Poland"}]},
+                {"employer_id": "elastic", "title_normalized": "security engineer",
+                 "job_id": "b", "locations": [{"raw": "Poland"}]}]
+        assert len(tfs._collapse_location_variants(rows)) == 2
+
+    def test_two_employers_with_the_same_title_are_not_merged(self):
+        rows = [{"employer_id": "a", "title_normalized": "backend engineer",
+                 "job_id": "a", "locations": [{"raw": "X"}]},
+                {"employer_id": "b", "title_normalized": "backend engineer",
+                 "job_id": "b", "locations": [{"raw": "X"}]}]
+        assert len(tfs._collapse_location_variants(rows)) == 2
+
+    def test_a_row_with_no_employer_gets_its_own_group_rather_than_merging(self):
+        """Failing to merge shows a duplicate; wrongly merging hides a job."""
+        rows = [{"job_id": "a", "locations": [{"raw": "X"}]},
+                {"job_id": "b", "locations": [{"raw": "Y"}]}]
+        assert len(tfs._collapse_location_variants(rows)) == 2
+
+    def test_a_stored_key_still_wins(self):
+        rows = [{"employer_id": "a", "title_normalized": "x", "job_id": "1",
+                 "variant_group_id": "g1", "locations": [{"raw": "X"}]},
+                {"employer_id": "b", "title_normalized": "y", "job_id": "2",
+                 "variant_group_id": "g1", "locations": [{"raw": "Y"}]}]
+        assert len(tfs._collapse_location_variants(rows)) == 1

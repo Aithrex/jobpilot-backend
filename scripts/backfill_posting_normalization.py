@@ -158,6 +158,27 @@ def plan(doc: Dict[str, Any], body: str = "") -> Tuple[Dict[str, Any], List[str]
             sets["locations"] = rebuilt
             why.append("locations[].country_code")
 
+    # --- dedupe identity ------------------------------------------------
+    # `variant_group_id` is what the location rollup collapses on. Missing on
+    # 7,043 of 232,032 active postings overall but on 2,624 of the NEWEST
+    # 3,000 — and newest-first is the order the feed retrieves in, so a role
+    # open in six countries showed as six cards on page one.
+    if not (doc.get("variant_group_id") or "").strip():
+        ident = inv.compute_dedupe_identity(
+            employer_id=str(doc.get("employer_id") or ""),
+            ats=str(doc.get("ats") or ""),
+            source=str(doc.get("source") or ""),
+            source_job_id=str(doc.get("source_job_id") or ""),
+            canonical_url=str(doc.get("canonical_url") or ""),
+            content_hash=str(doc.get("content_hash") or ""),
+            title_normalized=str(doc.get("title_normalized") or ""),
+        )
+        for k, v in ident.items():
+            if v and not (doc.get(k) or "").strip():
+                sets[k] = v
+        if sets.get("variant_group_id"):
+            why.append("variant_group_id")
+
     # --- board_kind -----------------------------------------------------
     # Never written by the ingest path until now, so it is absent on every
     # stored posting. A marketplace board lists many employers' roles under one
@@ -244,7 +265,14 @@ def main() -> int:
     jp = db.job_postings
     from pymongo import UpdateOne
 
-    q: Dict[str, Any] = {"normalization_version": {"$ne": TARGET}}
+    # Rows below the target version, PLUS any row missing the dedupe identity
+    # whatever its version. A row can be stamped current and still be missing
+    # something this pass can supply, and a selector that only looks at the
+    # version stamp would never revisit it.
+    q: Dict[str, Any] = {"$or": [
+        {"normalization_version": {"$ne": TARGET}},
+        {"variant_group_id": {"$in": [None, ""]}},
+    ]}
     if args.active_only:
         q["active"] = True
     total = jp.count_documents(q)
@@ -257,7 +285,11 @@ def main() -> int:
                   "employment_type": 1, "employment_type_normalized": 1,
                   "requirements": 1, "work_mode": 1, "description_ref": 1,
                   "description_text": 1, "content_hash": 1,
-                  "board_kind": 1, "tenant": 1, "employer_name": 1}
+                  "board_kind": 1, "tenant": 1, "employer_name": 1,
+                  "variant_group_id": 1, "dedupe_group_id": 1,
+                  "canonical_url_key": 1, "canonical_url": 1, "ats": 1,
+                  "source": 1, "source_job_id": 1, "title_normalized": 1,
+                  "employer_id": 1}
 
     fetch_body, bodies_live = _body_reader(args.with_bodies)
     stamp = bodies_live if args.stamp is None else bool(args.stamp)
