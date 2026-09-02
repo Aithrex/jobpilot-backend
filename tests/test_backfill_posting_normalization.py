@@ -108,3 +108,18 @@ class TestTheBodyReaderNeverBreaksTheBackfill:
         monkeypatch.setitem(sys.modules, "services.job_content_store", fake)
         read, live = bf._body_reader(True)
         assert live is False and read({"description_ref": "x"}) == ""
+
+
+class TestBoardKind:
+    def test_a_missing_board_kind_is_filled(self):
+        sets, why = bf.plan(_doc())
+        assert sets["board_kind"] == "employer"
+        assert any("board_kind" in w for w in why)
+
+    def test_a_marketplace_tenant_is_recorded_as_one(self):
+        sets, _ = bf.plan(_doc(tenant="jobgether", employer_name="Jobgether"))
+        assert sets["board_kind"] == "marketplace"
+
+    def test_an_existing_value_is_not_overwritten(self):
+        sets, _ = bf.plan(_doc(board_kind="marketplace"))
+        assert "board_kind" not in sets

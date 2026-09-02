@@ -807,6 +807,26 @@ def compute_dedupe_identity(
     }
 
 
+def _board_kind_of(raw: Dict[str, Any]) -> str:
+    """`"marketplace"` for a third-party aggregator board, else `"employer"`.
+
+    A marketplace lists MANY employers' roles under one board, so the board's
+    owner is not the job's employer. Getting this wrong is an
+    employer-attribution error, not a cosmetic one: Jobgether alone carries
+    1,806 core-tech postings that belong to other companies.
+    """
+    stated = str(raw.get("board_kind") or "").strip().lower()
+    if stated in ("marketplace", "employer"):
+        return stated
+    try:
+        from services.career_pages_catalog import is_marketplace_board
+        if is_marketplace_board(raw):
+            return "marketplace"
+    except Exception:      # pragma: no cover - a catalog import must not break ingest
+        pass
+    return "employer"
+
+
 def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Fetcher payload -> canonical `job_postings` shape (no DB access).
 
@@ -886,6 +906,13 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
         "industry": _safe_key(raw.get("industry"), 40) or "other",
         "ats": _safe_key(raw.get("ats"), 30),
         "tenant": _safe_key(raw.get("tenant"), 120),
+        # First-party employer board or third-party marketplace. The catalogs
+        # have carried this since Jobgether was added and `_PROJECTION` has
+        # always asked for it, but nothing on the write path ever stored it -
+        # so it was None on all 225,095 active postings and every reader that
+        # trusted the field alone saw a marketplace repost as an employer's own
+        # posting. Derived from the row when the source did not say.
+        "board_kind": _board_kind_of(raw),
         # Compensation, or absent. The description is offered as a fallback but
         # the result carries `confidence`, so a caller can tell an employer's
         # stated band from a number scraped out of prose. Absent is a real and

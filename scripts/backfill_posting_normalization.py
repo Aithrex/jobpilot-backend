@@ -20,6 +20,12 @@ in v4 exist in code and on no row:
   * **`locations[].country_code`** (ISO 3166-1 alpha-2), derived from the
     stored country spelling. Without it the country filter can only match on
     exact spelling, and "USA" / "United States" / "us" are three rows apart.
+  * **`board_kind`** — first-party employer board or third-party marketplace.
+    The catalogs have carried it since Jobgether was added and the feed's
+    projection has always asked for it, but no write path stored it: it was
+    absent on all 225,095 active postings, so `apply_mode: direct_apply`
+    matched every one of them, marketplace reposts included. Jobgether alone
+    carries 1,806 core-tech postings belonging to other companies.
   * **`employment_type_normalized`**, derived from the stored provider
     spelling. `employment_type` itself is deliberately NOT rewritten: it is
     digested by `compute_content_hash`, and changing it would re-hash and
@@ -152,6 +158,17 @@ def plan(doc: Dict[str, Any], body: str = "") -> Tuple[Dict[str, Any], List[str]
             sets["locations"] = rebuilt
             why.append("locations[].country_code")
 
+    # --- board_kind -----------------------------------------------------
+    # Never written by the ingest path until now, so it is absent on every
+    # stored posting. A marketplace board lists many employers' roles under one
+    # board, so leaving it absent means a repost reads as the employer's own
+    # posting - an attribution error, not a cosmetic one.
+    if not (doc.get("board_kind") or "").strip():
+        kind = inv._board_kind_of({"tenant": doc.get("tenant"),
+                                   "company": doc.get("employer_name")})
+        sets["board_kind"] = kind
+        why.append(f"board_kind -> {kind}")
+
     # --- employment_type_normalized ------------------------------------
     if not (doc.get("employment_type_normalized") or "").strip():
         et = inv.normalize_employment_type(doc.get("employment_type"),
@@ -239,7 +256,8 @@ def main() -> int:
     projection = {"job_id": 1, "title_raw": 1, "seniority": 1, "locations": 1,
                   "employment_type": 1, "employment_type_normalized": 1,
                   "requirements": 1, "work_mode": 1, "description_ref": 1,
-                  "description_text": 1, "content_hash": 1}
+                  "description_text": 1, "content_hash": 1,
+                  "board_kind": 1, "tenant": 1, "employer_name": 1}
 
     fetch_body, bodies_live = _body_reader(args.with_bodies)
     stamp = bodies_live if args.stamp is None else bool(args.stamp)

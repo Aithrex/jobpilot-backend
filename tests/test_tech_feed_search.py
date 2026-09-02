@@ -1009,3 +1009,39 @@ class TestTheExperienceRangeMatchesWhatThePostingStates:
         seed(sjid="y5", title="Backend Engineer", description=self.SILENT)
         assert len(titles(search(min_years=8))) == 1
         assert len(titles(search(max_years=1))) == 1
+
+
+class TestAMarketplaceRepostIsNotTheEmployersOwnPosting:
+    """A marketplace board lists MANY employers' roles under one board, so its
+    owner is not the job's employer. `board_kind` has been in the catalogs
+    since Jobgether was added and in `_PROJECTION` since the feed was written,
+    but nothing on the write path ever stored it: it was None on all 225,095
+    active postings, and `apply_mode: direct_apply` matched every one of them.
+    """
+
+    def test_the_ingest_path_now_stores_a_board_kind(self, db):
+        seed(sjid="bk1", title="Backend Engineer")
+        assert inv.get_posting("career-pages", "bk1")["board_kind"] == "employer"
+
+    def test_a_marketplace_tenant_is_recorded_as_one(self, db):
+        seed(sjid="bk2", title="Backend Engineer", company="Jobgether",
+             tenant="jobgether")
+        assert inv.get_posting("career-pages", "bk2")["board_kind"] == "marketplace"
+
+    def test_direct_apply_excludes_a_marketplace_repost(self, db):
+        seed(sjid="bk3", title="Backend Engineer")
+        seed(sjid="bk4", title="Backend Engineer", company="Jobgether",
+             tenant="jobgether")
+        got = search(apply_mode="direct_apply")
+        assert [j["employer_name"] for j in got["jobs"]] == ["Acme Inc"]
+
+    def test_a_stored_row_with_no_board_kind_still_reads_as_a_marketplace(self, db):
+        """225,095 rows predate the write-path fix, so the catalog lookup is
+        the fallback - the same one `inventory_feed` already uses, so the two
+        surfaces cannot disagree about which boards are aggregators."""
+        assert tfs._is_direct_apply(
+            {"tenant": "jobgether", "employer_name": "Jobgether",
+             "canonical_url": "https://x/y", "cost_class": "free"}) is False
+        assert tfs._is_direct_apply(
+            {"tenant": "acme", "employer_name": "Acme Inc",
+             "canonical_url": "https://x/y", "cost_class": "free"}) is True

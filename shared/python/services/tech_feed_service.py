@@ -1088,9 +1088,24 @@ def _employer_kind_of(doc: Dict[str, Any]) -> str:
 
 
 def _is_direct_apply(doc: Dict[str, Any]) -> bool:
-    """The posting links to the employer's own ATS, not to an aggregator."""
+    """The posting links to the employer's own ATS, not to an aggregator.
+
+    `board_kind` is the stored answer, but it was never written by the ingest
+    path, so it is None on every posting stored before that fix - which made
+    `apply_mode: direct_apply` match all 225,095 active rows, marketplace
+    reposts included. The catalog lookup is the same fallback `inventory_feed`
+    already uses, so both surfaces agree on which boards are aggregators.
+    """
     if str(doc.get("board_kind") or "").lower() == "marketplace":
         return False
+    if not doc.get("board_kind"):
+        try:
+            from services.career_pages_catalog import is_marketplace_board
+            if is_marketplace_board({"tenant": doc.get("tenant"),
+                                     "company": doc.get("employer_name")}):
+                return False
+        except Exception:      # pragma: no cover
+            pass
     return bool(doc.get("canonical_url")) and str(doc.get("cost_class") or "") == "free"
 
 
