@@ -128,7 +128,7 @@ def gmail_oauth_enabled() -> bool:
     single env var disables mail sync/consent without unsetting secrets.
 
     Unset → ON in dev, OFF in prod (the scope needs Google verification + CASA
-    Tier 2 before go-live — see MANUAL_STEPS.md), mirroring how
+    Tier 2 before go-live — see docs/ops/manual-steps.md), mirroring how
     `VOICE_GRAPH_ENABLED` / `MAIL_INGRESS_ENABLED` are read.
     """
     import os

@@ -361,7 +361,7 @@ def hash_ip(ip: str) -> Optional[str]:
     """sha256(ip + server salt) — stored for abuse correlation, never raw IP.
 
     The salt MUST come from config (`GUEST_IP_HASH_SALT` — SSM in prod, .env
-    locally; see MANUAL_STEPS.md). With no salt configured we fail CLOSED for
+    locally; see docs/ops/manual-steps.md). With no salt configured we fail CLOSED for
     storage: return None (ip_hash stored as null) rather than hash with a
     known constant an attacker could brute-force the IPv4 space against.
     Logged once per process, no PII."""

@@ -224,7 +224,17 @@ later postings out of the `MAX_ORDERED` window into date order: JPMorgan holds
 Config via `shared/python/utils/config.py`; secrets via **AWS SSM** in prod (`USE_SSM_SECRETS=true`), `.env` locally (see `.env.example`). Résumé collection is **`user_resumes`** (not `base_resumes`). Résumé files → **S3**. Keep cold starts lean: reuse boto3/Mongo clients at module scope, no heavy import-time work. Deploy lives in-repo: `infra/terraform/` (HTTP API + the 6 Lambdas + shared layer + IAM + KMS credential store + managed mailbox/SES + schedulers) and `scripts/build_layer.sh` + `scripts/package.sh`; see `infra/README.md`. CI: `.github/workflows/tests.yml` (offline suite) + `deploy.yml` (path-filtered per-service deploy).
 
 ## Docs
-`docs/` is current and worth reading before touching a feature: `specs/` (auto-apply fill engine, managed mailbox, guest onboarding, resume-platform-v3) · `security/` (auto-apply threat model, dataflow, audit, ADR) · `ops/` (auto-apply runbook, observability, rollout/rollback, mailbox + executor setup) · `qa/auto-apply-acceptance.md` · `decisions/` (ADR-001..003) · `workday-tenant-expansion.md` + `career-pages-expansion.md` (validated, not-yet-pasted catalog rows).
+**Start at [`docs/README.md`](docs/README.md)** — it maps the whole tree and
+says which directory answers which question. Ten directories, one rule each:
+`decisions/` (**ADR-000..007**, every ADR now in one place) · `specs/` ·
+`ops/` (runbooks, rollout/rollback, setup, `manual-steps.md`) · `security/` ·
+`qa/` · `coverage/` (the measured numbers, with dated snapshots quarantined in
+`coverage/reports/`) · `sourcing/` (validated, not-yet-pasted catalog rows) ·
+`product/` · `plans/` · `compass/`.
+
+**Quote a coverage figure only from `coverage/`, and regenerate it first.**
+Anything under `coverage/reports/` was true on its date and is not current
+truth.
 
 ## Agents & skills
 `.claude/agents/` holds a scoped subagent suite (`orchestrator`, `backend-engineer`, `database-engineer`, `data-scientist`, `security-engineer`, `performance-engineer`, `staff-engineer`, `qa-test-engineer`, `devops-engineer`). Start with **`orchestrator`** for fuzzy asks; see `.claude/agents/README.md`. `.claude/skills/` adds `api-design-principles`, `python-testing-patterns`.

@@ -564,7 +564,7 @@ WORKDAY_TENANT_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Transaction Network Services", "tenant": "tnsi", "wd_host": "wd1", "site": "Search", "industry": "telecom"},
     {"display_name": "Verizon", "tenant": "verizon", "wd_host": "wd12", "site": "verizon-careers", "industry": "telecom"},
     {"display_name": "Zayo", "tenant": "zayo", "wd_host": "wd1", "site": "Zayo_Careers", "industry": "telecom"},
-    # expansion 2026-07-19 (docs/workday-tenant-expansion.md, live-revalidated)
+    # expansion 2026-07-19 (docs/sourcing/workday-tenant-expansion.md, live-revalidated)
     {"display_name": "Coca-Cola", "tenant": "coke", "wd_host": "wd1", "site": "coca-cola-careers", "industry": "ecommerce_retail"},
     {"display_name": "Tyson Foods", "tenant": "tysonfoods", "wd_host": "wd5", "site": "tsn", "industry": "ecommerce_retail"},
     {"display_name": "Campbell's", "tenant": "campbellsoup", "wd_host": "wd5", "site": "ExternalCareers_GlobalSite", "industry": "ecommerce_retail"},

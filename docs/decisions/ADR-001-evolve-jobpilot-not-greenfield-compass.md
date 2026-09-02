@@ -25,7 +25,7 @@ to AWS via CI/CD, on a *different* stack:
 | Repo | one monorepo | two git repos (`Aithrex/jobpilot-{frontend,backend}`) |
 
 Most of Compass already exists in JobPilot under different names (see
-`docs/compass/GAP-MAP.md`): resume parse/tailor/score, sponsorship/visa signals,
+`docs/compass/gap-map.md`): resume parse/tailor/score, sponsorship/visa signals,
 ATS fetchers, a shipped Chrome MV3 extension, learning engine, GitHub proof,
 LinkedIn `w_member_social` posting, an entitlements/quota layer, and — critically —
 the exact never-fabricate guardrails Compass §9.4 demands (`integrity_guard.py`,

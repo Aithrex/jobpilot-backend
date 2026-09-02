@@ -601,7 +601,7 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
     {"display_name": "WebFX", "ats": "lever", "slug": "webfx", "industry": "media"},
     {"display_name": "Workable", "ats": "workable", "slug": "careers", "industry": "tech"},
     {"display_name": "Zen Sherpa", "ats": "workable", "slug": "zen-sherpa-llc", "industry": "other"},
-    # expansion 2026-07-19 (docs/career-pages-expansion.md, live-revalidated)
+    # expansion 2026-07-19 (docs/sourcing/career-pages-expansion.md, live-revalidated)
     {"display_name": "AECOM", "ats": "smartrecruiters", "slug": "AECOM2", "industry": "consulting"},
     {"display_name": "Rivian & VW Group Technologies", "ats": "ashby", "slug": "rivianvw.tech", "industry": "manufacturing_automotive"},
     {"display_name": "Pure Storage", "ats": "greenhouse", "slug": "purestorage", "industry": "tech"},
@@ -1335,7 +1335,7 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
     # returned 0), so do not add rows by pattern-matching a city name - the slug
     # is not derivable and an unverified guess is silently empty forever.
     #
-    # `docs/workday-tenant-expansion.md` §6.4 flagged this vein as the biggest
+    # `docs/sourcing/workday-tenant-expansion.md` §6.4 flagged this vein as the biggest
     # unclaimed one, and it is heavily NON-TECH (public works, nursing, admin,
     # inspectors, analysts), which is exactly the market `fit_score`'s 31-family
     # taxonomy exists to serve and the tech-only catalogs do not reach.

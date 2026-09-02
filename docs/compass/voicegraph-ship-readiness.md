@@ -51,7 +51,7 @@ boundary for determinism; that stubbing is now belt-and-braces, not a mask.
 
 ## Human gates before flipping `VOICE_GRAPH_ENABLED` in prod
 
-These are HUMAN gates (see `MANUAL_STEPS.md`). None of them is done, and none
+These are HUMAN gates (see `docs/ops/manual-steps.md`). None of them is done, and none
 may be faked or auto-checked:
 
 | Gate | What must happen | Status |

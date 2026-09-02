@@ -13,7 +13,7 @@ Usage
 -----
     PYTHONPATH=shared/python:. python scripts/extract_doc_rows.py [out.json]
 
-Reads docs/workday-tenant-expansion.md and docs/career-pages-expansion.md, only
+Reads docs/sourcing/workday-tenant-expansion.md and docs/sourcing/career-pages-expansion.md, only
 lines whose stripped form starts with `{` (never a `# ...` comment line). Writes a
 verdict JSON bucketed into new / dup / non_us / dead for each catalog. Nothing is
 written to a catalog — feed the `new` rows to a splice step by hand.
@@ -34,8 +34,8 @@ import scripts.discover_workday_tenants as wd
 import scripts.discover_career_pages as cp
 
 DOCS = {
-    "workday": "docs/workday-tenant-expansion.md",
-    "career": "docs/career-pages-expansion.md",
+    "workday": "docs/sourcing/workday-tenant-expansion.md",
+    "career": "docs/sourcing/career-pages-expansion.md",
 }
 _ROW_RE = re.compile(r"\{[^{}]*\}")
 

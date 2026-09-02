@@ -2,7 +2,7 @@
 JD Match Scorer — deterministic resume-vs-JD overlap scoring.
 
 SUPERSEDED by `services/fit_score.py` (ADR-002,
-docs/adr/2026-07-21-guest-discovery-freshness-and-fit.md). Do not build new
+docs/decisions/ADR-000-guest-discovery-freshness-and-fit.md). Do not build new
 callers on this module.
 
 Why it was replaced: the denominator here comes from the RESUME's own skill

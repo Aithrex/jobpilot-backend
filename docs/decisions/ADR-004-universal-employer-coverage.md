@@ -90,7 +90,7 @@ ATS they use and what their tenant is, in the href of their own "View openings" 
 because unknown-but-recurring hosts can be surfaced for review.
 
 This is the single most important design choice in this ADR. §5.1 of
-`docs/workday-tenant-expansion.md` reached the same conclusion for Workday specifically; this
+`docs/sourcing/workday-tenant-expansion.md` reached the same conclusion for Workday specifically; this
 generalises it.
 
 ## 3. Evidence — live probes, 2026-08-17

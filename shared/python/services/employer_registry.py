@@ -12,7 +12,7 @@ Five registries name employers and none of them agree on an identifier:
     job_postings                   405,133 rows, `employer_id` = SLUG OF THE NAME
 
 `job_postings.employer_id` being a slug of whatever name the crawler saw is
-the root cause of every identity bug in `docs/coverage/tech-search-baseline`:
+the root cause of every identity bug in `docs/coverage/reports/tech-search-baseline-2026-09-01.md`:
 one requisition published under two names is two employers, and a
 state-registry shell that is name-adjacent to a large employer claims its
 tenant and its entire posting run.
@@ -293,7 +293,7 @@ def _confidence_for_basis(basis: str) -> float:
 # --------------------------------------------------------------------------
 # Curated identity repairs
 # --------------------------------------------------------------------------
-#: The identity conflicts named in `docs/coverage/tech-search-baseline`, each
+#: The identity conflicts named in `docs/coverage/reports/tech-search-baseline-2026-09-01.md`, each
 #: with the domain that settles it. A row here asserts ONE thing: this display
 #: name, in a technology-employer context, means the entity at this domain.
 #: It never asserts which ATS they use — that stays owner-verified.

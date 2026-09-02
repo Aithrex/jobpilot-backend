@@ -1,6 +1,6 @@
 """Canonical job inventory - the single stable identity for a job posting.
 
-ADR-003 (docs/adr/2026-07-21-guest-discovery-freshness-and-fit.md) records the
+ADR-003 (docs/decisions/ADR-000-guest-discovery-freshness-and-fit.md) records the
 context: today there are FIVE mutually-unaware per-query caches (`jobs_cache`,
 `workday_jobs_cache`, `career_pages_cache`, `mnc_pages_cache`,
 `apify_actor_cache`). The same posting is stored once per distinct query hash,

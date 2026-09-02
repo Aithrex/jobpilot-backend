@@ -1,7 +1,7 @@
 """NeoGov / GovernmentJobs.com fetcher.
 
 The US public sector - states, counties, cities - reached through the agency
-board's own job-list call. `docs/workday-tenant-expansion.md` §6.4 called this
+board's own job-list call. `docs/sourcing/workday-tenant-expansion.md` §6.4 called this
 the biggest unclaimed vein, and it is heavily NON-TECH, which is the market the
 tech-only catalogs do not reach at all.
 

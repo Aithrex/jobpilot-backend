@@ -7,9 +7,9 @@ Regenerate with:
 PYTHONPATH=shared/python python scripts/employer_coverage_report.py --markdown
 ```
 
-- measured at `2026-09-02T15:38:32.072586+00:00`
-- source revision `9322df5`
-- inventory watermark `2026-09-02T15:37:41.407000`
+- measured at `2026-09-02T16:21:35.392930+00:00`
+- source revision `6c769dc`
+- inventory watermark `2026-09-02T16:19:07.246000`
 - posting-mix window: 30 days
 - versions: `taxonomy=tech-tax-1.1.0`, `adjacency=tech-adjacency-1.1.0`, `employer_registry=employer-registry-1.0.0`, `career_source=career-source-1.0.0`, `employer_classifier=employer-tech-1.0.0`
 
@@ -29,8 +29,8 @@ source only when its OWNERSHIP is proven and its content validated.
 | employers without validated coverage | 1,749 |
 | employers yielding postings | 848 |
 | employers yielding core-tech postings | 690 |
-| active postings from them | 100,578 |
-| core-tech postings | 15,827 (15.7%) |
+| active postings from them | 101,191 |
+| core-tech postings | 15,839 (15.7%) |
 | open employer merge reviews | 1,443 |
 
 ## Every employer is in exactly one state
@@ -53,25 +53,25 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `public_tech` | 1,859 | 379 | 20.4% | 6,694 |
+| `public_tech` | 1,859 | 379 | 20.4% | 6,701 |
 | `niche_startup` | 464 | 285 | 61.4% | 566 |
-| `unknown` | 241 | 167 | 69.3% | 6,318 |
-| `mnc` | 58 | 32 | 55.2% | 4,445 |
+| `unknown` | 241 | 167 | 69.3% | 6,319 |
+| `mnc` | 58 | 32 | 55.2% | 4,454 |
 | `private_growth` | 34 | 24 | 70.6% | 827 |
 
 ## Coverage by category
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `other` | 2,476 | 843 | 34.1% | 15,827 |
+| `other` | 2,476 | 843 | 34.1% | 15,839 |
 | `software_saas` | 138 | 84 | 60.9% | 2,194 |
 | `fintech` | 123 | 95 | 77.2% | 3,350 |
 | `cloud_data` | 91 | 57 | 62.6% | 1,052 |
-| `semiconductor` | 81 | 40 | 49.4% | 970 |
-| `ai_ml` | 78 | 58 | 74.4% | 491 |
+| `semiconductor` | 81 | 40 | 49.4% | 975 |
+| `ai_ml` | 78 | 58 | 74.4% | 496 |
 | `security` | 61 | 40 | 65.6% | 191 |
 | `devtools` | 51 | 33 | 64.7% | 92 |
-| `it_services` | 50 | 29 | 58.0% | 1,428 |
+| `it_services` | 50 | 29 | 58.0% | 1,431 |
 | `consumer` | 49 | 27 | 55.1% | 82 |
 | `robotics` | 47 | 30 | 63.8% | 312 |
 | `healthtech` | 39 | 33 | 84.6% | 228 |
@@ -88,7 +88,7 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `unknown` | 2,624 | 876 | 33.4% | 15,827 |
+| `unknown` | 2,624 | 876 | 33.4% | 15,839 |
 | `US` | 1 | 0 | 0.0% | 0 |
 
 ## Coverage by provider
@@ -129,8 +129,8 @@ a similar slug. Both are shown so the gap is visible.
 
 | endpoint status | count |
 |---|---:|
-| `validated` | 2,131 |
-| `empty` | 301 |
+| `validated` | 2,132 |
+| `empty` | 303 |
 | `dead` | 138 |
 | `blocked` | 44 |
 | `candidate` | 2 |
@@ -252,10 +252,10 @@ from whatever the database happens to contain.
 
 | source | shards | crawl lag (min) | stale | shards in backoff |
 |---|---:|---:|---|---:|
-| `career-pages` | 64 | 0 | False | 0 |
-| `icims` | 96 | 4 | False | 0 |
-| `oracle` | 48 | 12 | False | 0 |
-| `workday` | 48 | 6 | False | 0 |
+| `career-pages` | 64 | 13 | False | 0 |
+| `icims` | 96 | 2 | False | 0 |
+| `oracle` | 48 | 10 | False | 0 |
+| `workday` | 48 | 4 | False | 0 |
 
 - ingest runner heartbeat age: 0 min (healthy: True)
 

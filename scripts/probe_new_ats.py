@@ -23,7 +23,7 @@ It asserts nothing. It prints evidence.
 
 What it has already established (2026-08-05)
 --------------------------------------------
-Run against the employers `docs/workday-tenant-expansion.md` §6.4 names. Recorded
+Run against the employers `docs/sourcing/workday-tenant-expansion.md` §6.4 names. Recorded
 here so the next person does not repeat the requests:
 
 * **iCIMS** (emory, rivian): every pattern returns HTML, no JSON, no embedded job
@@ -158,7 +158,7 @@ PATTERNS: Dict[str, List[str]] = {
         "https://tbe.taleo.net/CR/ats/careersite/searchResults.jsp?org={slug}",
         "https://{slug}.taleo.net/careersection/jobsearch.ftl",
     ],
-    # The two docs/workday-tenant-expansion.md §6.4 actually recommends
+    # The two docs/sourcing/workday-tenant-expansion.md §6.4 actually recommends
     # ("NeoGov (big win, do first) and PeopleAdmin"), as opposed to the three
     # above, which the same section lists as Tier C - bot-walled or gated, with
     # an explicit "Do not build fetchers". They are kept here anyway so the

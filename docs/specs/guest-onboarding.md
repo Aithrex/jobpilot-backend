@@ -124,7 +124,7 @@ Claim seeds day-1 usage **once per subject per day** regardless of how many link
 · global breakers unchanged (`global_daily_guest_tailors/parses/matches`). All admin-editable at
 runtime via `GET/PUT /api/admin/guest-config` (allowlist + bounds validation as v1).
 
-### Secrets (env/SSM, follow the `GUEST_IP_HASH_SALT` pattern; document in MANUAL_STEPS.md)
+### Secrets (env/SSM, follow the `GUEST_IP_HASH_SALT` pattern; document in docs/ops/manual-steps.md)
 - `GUEST_SIGNAL_HMAC_KEY` (`SSM_GUEST_SIGNAL_HMAC_KEY`) — identity signal HMACs. Fail closed.
 - `GUEST_DOWNLOAD_TOKEN_SECRET` (`SSM_GUEST_DOWNLOAD_TOKEN_SECRET`) — download capability tokens.
   Fail closed (503 capacity-style message on issue attempts, never 401).

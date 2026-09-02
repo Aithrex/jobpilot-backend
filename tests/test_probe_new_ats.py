@@ -128,7 +128,7 @@ def test_no_probed_vendor_already_has_a_fetcher():
 
 
 def test_the_vendors_recommended_by_the_expansion_doc_are_covered():
-    """`docs/workday-tenant-expansion.md` §6.4 concluded that the only two new
+    """`docs/sourcing/workday-tenant-expansion.md` §6.4 concluded that the only two new
     fetchers worth building are NeoGov and PeopleAdmin - the rest of that
     section's table is Tier C, "Do not build fetchers". An earlier version of
     this script probed only the ATSs in `TRUSTED_ATS_DOMAINS`, which is a

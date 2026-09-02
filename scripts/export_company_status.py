@@ -57,7 +57,7 @@ def _clean(value: Any) -> str:
 def main(argv: Optional[list] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("-o", "--out",
-                    default="docs/coverage/company-discovery-status.tsv",
+                    default="docs/coverage/reports/company-discovery-status.tsv",
                     help="output path (default: %(default)s)")
     ap.add_argument("--status", action="append", default=[],
                     help="only this status (repeatable)")

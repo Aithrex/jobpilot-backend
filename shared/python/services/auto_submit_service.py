@@ -412,7 +412,7 @@ def create_whatsapp_approval(user_email: str, application_id: str,
     expiry — so a WhatsApp "YES" is exactly as safe as an in-app approval.
 
     The Twilio/WhatsApp Cloud API send+receive itself is a documented HUMAN GATE
-    (see MANUAL_STEPS.md) and the inbound webhook is a new top-level prefix that
+    (see docs/ops/manual-steps.md) and the inbound webhook is a new top-level prefix that
     needs an external Terraform route — neither is created here.
     """
     rec, _created = create_approval(user_email, application_id, answers,
