@@ -841,6 +841,72 @@ INDEX_SPECS = [
      {"name": "claim_order"}),
     ("discovery_queue", [("lease_expiry", ASCENDING)],
      {"name": "lease", "sparse": True}),
+
+    # ------------------------------------------------------------------
+    # ADR-005 - tech feed, employer coverage, and the discovery pipeline.
+    #
+    # `companies` had exactly ONE index (`company_id`) and
+    # `company_ats_endpoints` had NONE. Measured 2026-09-01: the discovery
+    # due-set query COLLSCANned all 82,815 company documents on every tick,
+    # and `registry_members()` COLLSCANned all 2,590 endpoint rows on every
+    # crawl. After: IXSCAN, 200 documents examined, 1 ms.
+    #
+    # That is very likely a material part of the throughput collapse recorded
+    # in TASK-company-discovery-throughput.md, independent of everything else
+    # in ADR-005.
+    # ------------------------------------------------------------------
+    ("companies", [("discovery_status", ASCENDING), ("priority", DESCENDING),
+                   ("last_discovered_at", ASCENDING)],
+     {"name": "discovery_status_priority"}),
+    ("companies", [("domain", ASCENDING)], {"name": "domain_idx", "sparse": True}),
+    ("companies", [("name_normalized", ASCENDING)], {"name": "name_normalized_idx"}),
+    ("companies", [("signals.software", ASCENDING), ("priority", DESCENDING)],
+     {"name": "software_signal_priority", "sparse": True}),
+
+    ("company_ats_endpoints", [("company_id", ASCENDING)],
+     {"name": "company_id_idx"}),
+    ("company_ats_endpoints", [("status", ASCENDING), ("vendor", ASCENDING)],
+     {"name": "status_vendor_idx"}),
+    ("company_ats_endpoints", [("vendor", ASCENDING), ("tenant", ASCENDING)],
+     {"name": "vendor_tenant_idx"}),
+    ("company_ats_endpoints", [("member_key", ASCENDING)],
+     {"name": "member_key_idx"}),
+
+    ("discovery_queue", [("company_id", ASCENDING)], {"name": "company_id_idx"}),
+
+    # The tech-feed read paths. Equality on status + the taxonomy field, then
+    # the sort key - the shape `find_active_fresh` documents.
+    ("job_postings", [("status", ASCENDING), ("tech.tech_scope", ASCENDING),
+                      ("posted_at", DESCENDING)],
+     {"name": "active_tech_scope_posted_at"}),
+    ("job_postings", [("status", ASCENDING), ("tech.role_families", ASCENDING),
+                      ("posted_at", DESCENDING)],
+     {"name": "active_tech_family_posted_at"}),
+    ("job_postings", [("status", ASCENDING), ("tech.role_specialties", ASCENDING),
+                      ("posted_at", DESCENDING)],
+     {"name": "active_tech_specialty_posted_at"}),
+    # Sparse: only rows the backfill has reached carry these, and a non-sparse
+    # index over 228k nulls buys nothing.
+    ("job_postings", [("status", ASCENDING), ("dedupe_group_id", ASCENDING)],
+     {"name": "active_dedupe_group", "sparse": True}),
+    ("job_postings", [("status", ASCENDING), ("variant_group_id", ASCENDING)],
+     {"name": "active_variant_group", "sparse": True}),
+    ("job_postings", [("status", ASCENDING), ("tenant", ASCENDING),
+                      ("posted_at", DESCENDING)],
+     {"name": "active_tenant_posted_at"}),
+
+    # Search sessions. The TTL is what makes a cursor expire cleanly (410)
+    # instead of accumulating ordered-id lists forever.
+    ("tech_feed_searches", [("search_id", ASCENDING)],
+     {"name": "search_id_unique", "unique": True}),
+    ("tech_feed_searches", [("expire_at", ASCENDING)],
+     {"name": "session_ttl", "expireAfterSeconds": 0}),
+
+    ("tech_feed_metrics", [("captured_at", DESCENDING)],
+     {"name": "captured_at_desc"}),
+    ("tech_feed_metrics", [("expire_at", ASCENDING)],
+     {"name": "metrics_ttl", "expireAfterSeconds": 0}),
+
 ]
 
 # Indexes DROPPED by this migration (Guest Onboarding v2: plaintext identity

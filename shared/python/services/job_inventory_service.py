@@ -484,6 +484,114 @@ def compute_content_hash(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+_TRACKING_PARAMS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "gh_src", "gh_jid", "src", "source", "ref", "referrer", "trackingid",
+    "trk", "lever-source", "lever-origin", "iis", "iisn", "fbclid", "gclid",
+})
+
+
+def canonical_url_key(url: Any) -> str:
+    """A URL reduced to what identifies the POSTING, not the click.
+
+    Two rows are the same opening when they point at the same requisition, and
+    they routinely differ only by a tracking parameter, a scheme, a `www.`, a
+    trailing slash, or host case. Comparing raw `canonical_url` therefore
+    under-counts duplicates: measured on live inventory, 733 exact-URL
+    duplicate groups exist even before normalization, and normalizing finds
+    more.
+
+    Returns "" when there is no usable URL - never a partial key, because a
+    partial key would collapse unrelated postings.
+    """
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+    raw = str(url or "").strip()
+    if not raw or "://" not in raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return ""
+    host = (parts.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    host = host.split(":")[0]
+    path = (parts.path or "/").rstrip("/") or "/"
+    query = urlencode(sorted(
+        (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=False)
+        if k.lower() not in _TRACKING_PARAMS))
+    if not host:
+        return ""
+    return urlunsplit(("https", host, path, query, ""))
+
+
+def _title_group_key(title: Any) -> str:
+    """Title reduced for VARIANT grouping (same role, many cities/reqs)."""
+    t = str(title or "").lower()
+    t = re.sub(r"[\(\[][^)\]]*[\)\]]", " ", t)
+    t = re.sub(r"\b(?:req|job|requisition)\s*(?:id|#|no\.?)?\s*[:#]?\s*[a-z]{0,4}[-_]?\d{3,}\b",
+               " ", t)
+    t = re.sub(r"\b\d{3,}\b", " ", t)
+    t = re.sub(r"[^a-z0-9]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _hash_key(*parts: Any) -> str:
+    blob = "|".join(str(p or "") for p in parts)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:24]
+
+
+def compute_dedupe_identity(
+    *,
+    employer_id: str,
+    ats: str,
+    source: str,
+    source_job_id: str,
+    canonical_url: str,
+    content_hash: str,
+    title_normalized: str,
+) -> Dict[str, str]:
+    """`{dedupe_group_id, variant_group_id, canonical_url_key}`.
+
+    The feed used to dedupe CLIENT-SIDE on `(employer_id, title_key,
+    location_key)` computed from display strings, and it DROPPED the losers -
+    so the same requisition reached through two sources lost the provenance of
+    whichever copy sorted second, and a genuinely multi-city role lost every
+    city but one with no record that it had them.
+
+    Two ids, because they answer different questions:
+
+    * `dedupe_group_id` - "is this the SAME posting?"  Strongest available
+      identity wins, in this order:
+        1. normalized canonical URL   - a requisition URL is the employer's
+           own identifier for it
+        2. (employer, ats, source requisition id) - the ATS's identifier
+        3. content hash               - same employer, title, locations, body
+      A row with none of these gets its own group (its `job_id`), which is the
+      safe default: failing to merge shows a duplicate, wrongly merging hides
+      a real job.
+
+    * `variant_group_id` - "is this the same ROLE at the same employer?"
+      `(employer_id, title group key)`. This is what the location rollup
+      collapses, and the members are kept as variants rather than deleted.
+    """
+    url_key = canonical_url_key(canonical_url)
+    if url_key:
+        group = _hash_key("url", url_key)
+    elif source_job_id:
+        group = _hash_key("req", employer_id, ats or source, source_job_id)
+    elif content_hash:
+        group = _hash_key("content", content_hash)
+    else:
+        group = ""
+    return {
+        "dedupe_group_id": group,
+        "variant_group_id": _hash_key("variant", employer_id,
+                                      _title_group_key(title_normalized)),
+        "canonical_url_key": url_key,
+    }
+
+
 def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Fetcher payload -> canonical `job_postings` shape (no DB access).
 
@@ -593,6 +701,40 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
             ref = None
     doc["description_ref"] = ref
     doc["description_text"] = stored_body if ref else description_text
+
+    # Canonical dedupe identity. Computed here so every reader agrees, rather
+    # than each surface re-deriving it from display strings.
+    doc.update(compute_dedupe_identity(
+        employer_id=employer_id,
+        ats=doc["ats"], source=source, source_job_id=source_job_id,
+        canonical_url=doc["canonical_url"], content_hash=content_hash,
+        title_normalized=title_raw,
+    ))
+
+    # Tech-occupation classification (ADR-005). Stored ALONGSIDE the legacy
+    # `role_family` rather than replacing it: every existing index and read
+    # path uses the old key, and a same-day cutover would take the feed down.
+    # Full body, because the ambiguous titles this exists to resolve
+    # ("Technology Analyst", "Member of Technical Staff") are resolvable only
+    # from the description - and the body is available HERE and nowhere
+    # downstream, since it is offloaded to S3 on the next line.
+    try:
+        from services import tech_taxonomy
+        doc["tech"] = tech_taxonomy.classify(
+            title_raw,
+            description=description_text,
+            department=raw.get("department") or raw.get("category") or "",
+            skills=(raw.get("requirements") or {}).get("skills")
+            if isinstance(raw.get("requirements"), dict) else None,
+            requirements=raw.get("requirements")
+            if isinstance(raw.get("requirements"), dict) else None,
+        ).to_doc()
+    except Exception as exc:  # pragma: no cover - ingest must never fail on this
+        logger.warning("normalize_posting: tech classification failed (%s)",
+                       type(exc).__name__)
+        doc["tech"] = {"tech_scope": "unknown",
+                       "taxonomy_version": "error",
+                       "classification_confidence": 0.0}
     return doc
 
 
@@ -1124,6 +1266,12 @@ _CARD_PROJECTION = {
     # layer later - the exact shape of silent loss this projection's own
     # comment warns about.
     "first_seen_at": 1,
+    # ADR-005: the tech-occupation verdict and the canonical dedupe identity.
+    # Both are STORED at ingest; a surface that has to recompute them from the
+    # projected card is a surface that will disagree with the index it just
+    # queried.
+    "tech": 1,
+    "dedupe_group_id": 1, "variant_group_id": 1, "canonical_url_key": 1,
 }
 
 

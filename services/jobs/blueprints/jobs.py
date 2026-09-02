@@ -519,6 +519,34 @@ def suggest_pipeline_filters():
         return jsonify({"error": "Failed to generate suggestions"}), 500
 
 
+def _salary_filter(data) -> dict:
+    """`{min_salary, include_unknown_salary}` from a search body.
+
+    `inventory_feed.build_feed` has read `payload["min_salary"]` since it was
+    written, but no route ever put it there - the three search routes build
+    their payload from an explicit whitelist, so the field was silently
+    dropped and the filter has never once run in production.
+
+    Unknown stays unknown. Most postings publish no band, so a floor that
+    excluded them would hide the market rather than narrow it. The default is
+    therefore to KEEP unpriced rows, and `include_unknown_salary: false` is
+    the explicit opt-out for a user who only wants published pay.
+    """
+    try:
+        raw = data.get("min_salary")
+        min_salary = float(raw) if raw not in (None, "", False) else 0.0
+    except (TypeError, ValueError):
+        min_salary = 0.0
+    # A negative or absurd floor is a client bug, not a filter.
+    if min_salary < 0 or min_salary > 10_000_000:
+        min_salary = 0.0
+    inc = data.get("include_unknown_salary")
+    return {
+        "min_salary": min_salary or None,
+        "include_unknown_salary": True if inc is None else bool(inc),
+    }
+
+
 @jobs_bp.route("/pipeline", methods=["POST"])
 @jwt_required()
 def daily_pipeline():
@@ -529,7 +557,8 @@ def daily_pipeline():
           "linkedin_keywords": ["Cloud Engineer DevOps", ...],
           "workday_titles":    ["Cloud Engineer", "Backend Engineer", ...],
           "past_days":         1,
-          "custom_role_terms": ["security", "data engineer"],
+          "custom_role_terms":   ["security", "data engineer"],   # POSITIVE
+          "exclude_title_terms": ["nurse", "sales"],               # NEGATIVE
           "linkedin_count":    80,
           "workday_limit":     200
         }
@@ -551,6 +580,14 @@ def daily_pipeline():
     linkedin_keywords = _split_lines(data.get("linkedin_keywords"), max_items=10, max_len=200)
     workday_titles = _split_lines(data.get("workday_titles"), max_items=200, max_len=120)
     custom_role_terms = _split_lines(data.get("custom_role_terms"), max_items=20, max_len=80)
+    # Negative list. Kept structurally separate from `custom_role_terms` all
+    # the way down: the pipeline drops a matching title before any positive
+    # rule can readmit it. Accepts the legacy `anti_keywords` spelling because
+    # the suggester's own LLM schema uses that word.
+    exclude_title_terms = _split_lines(
+        data.get("exclude_title_terms") if data.get("exclude_title_terms") is not None
+        else data.get("anti_keywords"),
+        max_items=20, max_len=80)
 
     try:
         linkedin_count = max(10, min(int(data.get("linkedin_count") or 80), 250))
@@ -609,6 +646,7 @@ def daily_pipeline():
         "workday_titles": workday_titles or None,
         "past_days": past_days,
         "custom_role_terms": custom_role_terms or None,
+        "exclude_title_terms": exclude_title_terms or None,
         "linkedin_count": linkedin_count,
         "workday_limit": workday_limit,
         "include_indeed": include_indeed,
@@ -694,6 +732,7 @@ def workday_search():
         "remote_only": remote_only,
         "us_only": us_only,
         "force_refresh": force_refresh,
+        **_salary_filter(data),
         "user_email": user_email,
         # Viewer timezone: "posted today" is computed in the USER's calendar
         # day (service clamps to the real-world offset range).
@@ -751,6 +790,7 @@ def career_pages_search():
         "remote_only": bool(data.get("remote_only", False)),
         "us_only": bool(data.get("us_only", True)),
         "force_refresh": bool(data.get("force_refresh", False)),
+        **_salary_filter(data),
         "user_email": get_jwt_identity(),
         "tz_offset_minutes": data.get("tz_offset_minutes"),
     }
@@ -807,6 +847,7 @@ def mnc_search():
         "remote_only": bool(data.get("remote_only", False)),
         "us_only": bool(data.get("us_only", True)),
         "force_refresh": bool(data.get("force_refresh", False)),
+        **_salary_filter(data),
         "user_email": get_jwt_identity(),
         "tz_offset_minutes": data.get("tz_offset_minutes"),
     }
@@ -819,6 +860,114 @@ def mnc_search():
     except Exception as e:
         logger.error(f"MNC search submit error: {e}")
         return jsonify({"error": "Failed to start MNC search"}), 500
+
+
+# ------------------------------------------------------------------
+# Tech feed (ADR-005) - ONE inventory-first search for software and
+# technical employment, replacing the three live-crawl fan-outs above.
+#
+# Mounted as a SUBPATH of the existing /api/jobs prefix on purpose: a new
+# top-level /api/<prefix> needs a matching external Terraform route (there is
+# no .tf in this repo) or it 404s in prod while working locally. /api/jobs is
+# already registered, so /api/jobs/tech-feed/* needs no infrastructure change.
+# ------------------------------------------------------------------
+
+@jobs_bp.route("/tech-feed/taxonomy", methods=["GET"])
+@jwt_required()
+def tech_feed_taxonomy():
+    """The role-family / specialty tree the filter UI renders.
+
+    Static for a given `taxonomy_version`, so the client may cache it hard and
+    revalidate only when the version in a search response changes.
+    """
+    try:
+        from services import tech_feed_service
+        payload = tech_feed_service.taxonomy_catalog()
+        resp = jsonify(payload)
+        resp.headers["Cache-Control"] = "private, max-age=3600"
+        return resp, 200
+    except Exception as e:
+        logger.error(f"Tech feed taxonomy error: {e}")
+        return jsonify({"error": "Failed to load taxonomy"}), 500
+
+
+@jobs_bp.route("/tech-feed/search", methods=["POST"])
+@jwt_required()
+def tech_feed_search():
+    """Search the canonical inventory for software / technical roles.
+
+    Body: see `tech_feed_service.normalize_request` - every field is optional
+    and anything unrecognised is dropped rather than passed through.
+
+    Responses:
+      200 {search_id, jobs, next_cursor, has_more, facets, applied_filters,
+           taxonomy_version, fit_score_version, inventory_watermark,
+           coverage, source_health, warnings}
+      202 {job_id}  - only when the caller asked for async, or when the first
+           page needs a resume profile that is not warm. Poll the EXISTING
+           /api/resume/job/<id> contract; no new poll endpoint.
+
+    Deliberately NOT entitlement-gated. Browsing the job market is not a paid
+    feature today and making it one is a product decision, not an
+    implementation detail (see CLAUDE.md / ADR-005 sec. 9).
+    """
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    # Generous relative to the crawl endpoints (6/5min) because this is a
+    # bounded indexed read, not a fan-out: paging and filter changes are
+    # normal interaction, not abuse.
+    if limiter.is_rate_limited(f"jobs_tech_feed:{client_ip}",
+                               max_requests=120, window_seconds=300):
+        return jsonify({"error": "Rate limit exceeded. "
+                                 "Tech feed searches are limited to 120 / 5 min."}), 429
+
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Body must be a JSON object"}), 400
+
+    user_email = get_jwt_identity()
+    payload = dict(data)
+    payload["user_email"] = user_email
+    payload.setdefault("tz_offset_minutes", data.get("tz_offset_minutes"))
+
+    want_async = bool(data.get("async"))
+    try:
+        from services import tech_feed_service
+        if want_async:
+            from services.resume_service import get_resume_service, ResumeService
+            svc = get_resume_service()
+            job_id = svc.create_job("tech_feed_search", payload,
+                                    user_email=user_email)
+            ResumeService.invoke_async(job_id, "tech_feed_search", payload)
+            return jsonify({"job_id": job_id}), 202
+        result = tech_feed_service.search(payload)
+        if result.get("error") == "cursor_expired":
+            # 410 and not 401: the FE force-logs-out on ANY 401, and an
+            # expired scroll position must never sign a user out.
+            return jsonify(result), 410
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"Tech feed search error: {e}", exc_info=True)
+        return jsonify({"error": "Failed to run tech feed search"}), 500
+
+
+@jobs_bp.route("/tech-feed/coverage", methods=["GET"])
+@jwt_required()
+def tech_feed_coverage():
+    """Inventory coverage + per-source crawl health.
+
+    Its own endpoint so the UI can render an honest "what you are NOT seeing"
+    banner without paying for it on every search.
+    """
+    try:
+        from services import tech_feed_service
+        return jsonify({
+            "coverage": tech_feed_service.coverage_block(),
+            "source_health": tech_feed_service.source_health_block(),
+        }), 200
+    except Exception as e:
+        logger.error(f"Tech feed coverage error: {e}")
+        return jsonify({"error": "Failed to load coverage"}), 500
 
 
 # ------------------------------------------------------------------
@@ -1094,6 +1243,7 @@ def save_pipeline_preset_route():
     # malicious or malformed payload can't smuggle other state through.
     allowed = {
         "linkedin_keywords", "workday_titles", "custom_role_terms",
+        "exclude_title_terms",
         "past_days", "linkedin_count", "workday_limit", "include_indeed",
         "location", "experience_level", "employment_type", "work_arrangement",
         "domain_strict",

@@ -291,3 +291,53 @@ def normalize(raw: Any = None, *, text: str = "") -> Optional[Dict[str, Any]]:
         return None
     comp["display"] = display(comp)
     return comp
+
+
+# ---------------------------------------------------------------------------
+# Serving-side salary filter
+# ---------------------------------------------------------------------------
+
+def apply_salary_floor(rows, min_salary, include_unknown=True):
+    """Filter card rows by a published annual floor. Unknown stays unknown.
+
+    One implementation for all four feed paths (inventory + the three legacy
+    live crawls) so the same request cannot mean different things depending on
+    which path served it.
+
+    Semantics, stated because the asymmetry is deliberate:
+
+    * A row whose band is KNOWN and whose top of band is below the floor is
+      dropped. It failed the filter.
+    * A row with NO published band is kept when `include_unknown` (the
+      default) and dropped otherwise. Most employers publish nothing, so
+      treating absent as "fails" would empty the feed and read as "the market
+      has no jobs" rather than "we do not know what these pay".
+    * `include_unknown=False` with no floor is still a filter: "only show me
+      jobs with published pay".
+
+    Returns `(kept_rows, dropped_count)` so a caller can report honestly how
+    much the filter removed.
+    """
+    try:
+        floor = float(min_salary or 0)
+    except (TypeError, ValueError):
+        floor = 0.0
+    if floor <= 0 and include_unknown:
+        return list(rows), 0
+    kept, dropped = [], 0
+    for row in rows:
+        top = row.get("salary_max_annual") or row.get("salary_min_annual")
+        if top is None:
+            if include_unknown:
+                kept.append(row)
+            else:
+                dropped += 1
+            continue
+        try:
+            if float(top) < floor:
+                dropped += 1
+                continue
+        except (TypeError, ValueError):
+            pass
+        kept.append(row)
+    return kept, dropped

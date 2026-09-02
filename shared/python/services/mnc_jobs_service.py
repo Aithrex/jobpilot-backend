@@ -359,6 +359,11 @@ def run_mnc_search(
     companies = {str(x).strip().lower() for x in (payload.get("companies") or []) if str(x or "").strip()}
     remote_only = bool(payload.get("remote_only", False))
     us_only = bool(payload.get("us_only", True))
+    # Salary floor on the legacy crawl path - see career_pages_service.
+    _min_salary = payload.get("min_salary")
+    _include_unknown_salary = payload.get("include_unknown_salary")
+    _include_unknown_salary = (True if _include_unknown_salary is None
+                               else bool(_include_unknown_salary))
     force_refresh = bool(payload.get("force_refresh", False))
     user_email = str(payload.get("user_email") or "")
     # Viewer timezone (recency in the USER's calendar day) + optional tighter
@@ -635,6 +640,10 @@ def run_mnc_search(
         j.pop("_meta", None)
         j.pop("_exp", None)
         j.pop("_fam_counts", None)
+    from services.salary_normalizer import apply_salary_floor
+    jobs, _salary_dropped = apply_salary_floor(
+        jobs, _min_salary, include_unknown=_include_unknown_salary)
+
     return {
         "ok": True,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -650,6 +659,9 @@ def run_mnc_search(
         "ats_available": sorted({_source_kind(r) for r in MNC_CATALOG}),
         "cache_hit": cache_hit,
         "us_only": us_only,
+        "min_salary": (float(_min_salary) if _min_salary else None),
+        "include_unknown_salary": _include_unknown_salary,
+        "salary_filtered_out": _salary_dropped,
         "resume_skill_count": len(skills),
         "diagnostics": diagnostics,
         "errors": errors[:20],
@@ -664,7 +676,10 @@ def catalog_summary() -> Dict[str, Any]:
         "total": len(MNC_CATALOG),
         "industries": [
             {"key": k, "count": len(by_sector[k]),
-             "companies": [{"name": r["display_name"], "tenant": r["slug"],
+             # `display_name` canonical, `name` legacy alias - see the note
+             # in career_pages_service.catalog_summary.
+             "companies": [{"display_name": r["display_name"],
+                            "name": r["display_name"], "tenant": r["slug"],
                             "ats": _source_kind(r)} for r in
                            sorted(by_sector[k], key=lambda x: x["display_name"].lower())]}
             for k in MNC_SECTORS if k in by_sector

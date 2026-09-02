@@ -90,7 +90,14 @@ def test_catalog_summary_shape():
         count_sum += ind["count"]
         seen_keys.append(ind["key"])
         for c in ind["companies"]:
-            assert set(c.keys()) == {"name", "tenant", "ats"}
+            # `display_name` is the CANONICAL catalog field - it is what the
+            # Workday catalog and the frontend `WorkdayCatalogIndustry` type
+            # both use, and emitting only `name` here is why every company
+            # chip on this tab rendered `undefined`. `name` stays as a legacy
+            # alias until the frontend boundary normalizer reaches every
+            # client; both must be present and equal.
+            assert set(c.keys()) == {"display_name", "name", "tenant", "ats"}
+            assert c["display_name"] == c["name"]
             assert c["ats"] in ("greenhouse", "lever", "ashby", "smartrecruiters",
                                 "workable", "recruitee", "amazon", "eightfold",
                                 "phenom", "radancy", "workday", "orc", "uber",
@@ -352,6 +359,9 @@ RESULT_KEYS = {
     "ok", "generated_at", "jobs", "total", "window_counts", "query_terms",
     "tenants_total", "tenants_done", "tenants_with_results",
     "industries_available", "ats_available", "cache_hit", "us_only",
+    # Salary is now a real filter on every feed path, and the response says
+    # what it applied so the surface can label it honestly.
+    "min_salary", "include_unknown_salary", "salary_filtered_out",
     "resume_skill_count", "diagnostics", "errors",
 }
 

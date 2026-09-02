@@ -1053,6 +1053,13 @@ def run_career_pages_search(
     companies = {str(x).strip().lower() for x in (payload.get("companies") or []) if str(x or "").strip()}
     remote_only = bool(payload.get("remote_only", False))
     us_only = bool(payload.get("us_only", True))
+    # Salary floor on the LEGACY crawl path too, so `FEED_MATCH_MODE=scan`
+    # (the rollback) answers the same request the same way the inventory path
+    # does. Unknown stays unknown - see salary_normalizer.apply_salary_floor.
+    _min_salary = payload.get("min_salary")
+    _include_unknown_salary = payload.get("include_unknown_salary")
+    _include_unknown_salary = (True if _include_unknown_salary is None
+                               else bool(_include_unknown_salary))
     force_refresh = bool(payload.get("force_refresh", False))
     user_email = str(payload.get("user_email") or "")
     # Viewer timezone (recency in the USER's calendar day) + optional tighter
@@ -1302,6 +1309,10 @@ def run_career_pages_search(
         if d <= 30:
             window_counts["d30"] += 1
 
+    from services.salary_normalizer import apply_salary_floor
+    jobs, _salary_dropped = apply_salary_floor(
+        jobs, _min_salary, include_unknown=_include_unknown_salary)
+
     return {
         "ok": True,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1316,6 +1327,9 @@ def run_career_pages_search(
         "ats_available": ATS_KINDS,
         "cache_hit": cache_hit,
         "us_only": us_only,
+        "min_salary": (float(_min_salary) if _min_salary else None),
+        "include_unknown_salary": _include_unknown_salary,
+        "salary_filtered_out": _salary_dropped,
         "resume_skill_count": len(skills),
         "diagnostics": diagnostics,
         "errors": errors[:20],
@@ -1331,7 +1345,17 @@ def catalog_summary() -> Dict[str, Any]:
         "total": len(all_rows),
         "industries": [
             {"key": k, "count": len(v),
-             "companies": [{"name": r["display_name"], "tenant": r["slug"],
+             "companies": [{"display_name": r["display_name"],
+                            # `name` is the LEGACY spelling. Workday's catalog
+                            # emitted `display_name` and these two emitted
+                            # `name`, while the frontend type declares
+                            # `display_name` for all three - so every company
+                            # chip on the career-pages and MNC tabs rendered
+                            # `undefined`. `display_name` is canonical from
+                            # here; `name` is kept only until the frontend
+                            # normalizer ships to every client (ADR-005 sec 4).
+                            "name": r["display_name"],
+                            "tenant": r["slug"],
                             "ats": r["ats"]} for r in
                            sorted(v, key=lambda x: x["display_name"].lower())]}
             for k, v in sorted(by_ind.items())

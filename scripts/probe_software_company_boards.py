@@ -91,14 +91,40 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=2000)
     ap.add_argument("--rate", type=float, default=8.0)
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--company-ids", default=None,
+                    help="newline-delimited company_id file. Probes EXACTLY "
+                         "these rows instead of a signals sweep - lets the "
+                         "richer `employer_tech_classifier` cohort be probed "
+                         "without first persisting a signal onto `companies`.")
+    ap.add_argument("--skip-covered", action="store_true",
+                    help="skip companies that already have a validated endpoint")
     args = ap.parse_args()
 
-    companies = list(reg._db()[reg.COMPANIES].find(
-        {f"signals.{args.signal}": True},
-        {"company_id": 1, "name": 1, "domain": 1, "priority": 1},
-    ).sort("priority", -1).limit(args.limit))
-    print(f"companies with signals.{args.signal}: {len(companies):,}   "
-          f"mode: {'APPLY' if args.apply else 'dry-run'}")
+    if args.company_ids:
+        ids = [line.strip() for line in Path(args.company_ids).read_text().splitlines()
+               if line.strip()]
+        companies = list(reg._db()[reg.COMPANIES].find(
+            {"company_id": {"$in": ids}},
+            {"company_id": 1, "name": 1, "domain": 1, "priority": 1},
+        ).sort("priority", -1).limit(args.limit))
+        print(f"companies from {args.company_ids}: {len(companies):,} of "
+              f"{len(ids):,} ids   mode: {'APPLY' if args.apply else 'dry-run'}")
+    else:
+        companies = list(reg._db()[reg.COMPANIES].find(
+            {f"signals.{args.signal}": True},
+            {"company_id": 1, "name": 1, "domain": 1, "priority": 1},
+        ).sort("priority", -1).limit(args.limit))
+        print(f"companies with signals.{args.signal}: {len(companies):,}   "
+              f"mode: {'APPLY' if args.apply else 'dry-run'}")
+
+    if args.skip_covered:
+        covered = {e.get("company_id") for e in
+                   reg._db()[reg.ENDPOINTS].find({"status": "validated"},
+                                                 {"company_id": 1})}
+        before = len(companies)
+        companies = [c for c in companies if c.get("company_id") not in covered]
+        print(f"  skipping {before - len(companies):,} already-covered; "
+              f"{len(companies):,} to probe")
 
     providers = [p for p in (ats_registry.get(v) for v in VENDORS) if p]
     ctx = simple_context(budget_seconds=60 * 60, global_rate=args.rate)

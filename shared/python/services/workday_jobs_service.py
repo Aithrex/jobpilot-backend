@@ -1253,6 +1253,13 @@ def run_workday_jobs_search(
     location = str(payload.get("location") or "").strip()
     remote_only = bool(payload.get("remote_only", False))
     us_only = bool(payload.get("us_only", True))
+    # Salary floor on the LEGACY crawl path too, so `FEED_MATCH_MODE=scan`
+    # (the rollback) answers the same request the same way the inventory path
+    # does. Unknown stays unknown - see salary_normalizer.apply_salary_floor.
+    _min_salary = payload.get("min_salary")
+    _include_unknown_salary = payload.get("include_unknown_salary")
+    _include_unknown_salary = (True if _include_unknown_salary is None
+                               else bool(_include_unknown_salary))
     force_refresh = bool(payload.get("force_refresh", False))
     user_email = str(payload.get("user_email") or "")
     # Viewer timezone: recency ("today") is computed in the USER's calendar
@@ -1552,6 +1559,10 @@ def run_workday_jobs_search(
         if d <= 30:
             window_counts["d30"] += 1
 
+    from services.salary_normalizer import apply_salary_floor
+    jobs, _salary_dropped = apply_salary_floor(
+        jobs, _min_salary, include_unknown=_include_unknown_salary)
+
     return {
         "ok": True,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1578,7 +1589,10 @@ def catalog_summary() -> Dict[str, Any]:
     by_industry: Dict[str, List[Dict[str, str]]] = {}
     for r in WORKDAY_TENANT_CATALOG:
         by_industry.setdefault(r.get("industry") or "tech", []).append(
-            {"display_name": r["display_name"], "tenant": r["tenant"]}
+            # `name` mirrors `display_name` so all three catalog endpoints
+            # answer with the SAME keys; a consumer may read either.
+            {"display_name": r["display_name"], "name": r["display_name"],
+             "tenant": r["tenant"], "ats": "workday"}
         )
     return {
         "total": len(WORKDAY_TENANT_CATALOG),

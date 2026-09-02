@@ -211,6 +211,11 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
         "contract_friendly": False,
         "source": _ATS_LABEL.get(ats, "Workday" if doc.get("source") == SOURCE_WORKDAY else "Career Page"),
         "seniority": doc.get("seniority") or "",
+        # Canonical identity, so the client never has to invent one from
+        # display strings (which is what produced duplicate cards).
+        "dedupe_group_id": doc.get("dedupe_group_id") or doc.get("job_id") or "",
+        "variant_group_id": doc.get("variant_group_id") or "",
+        "tech": doc.get("tech") or None,
         "_requirements": doc.get("requirements") or None,
     }
     if is_marketplace_board(row) or str(doc.get("board_kind") or "").lower() == "marketplace":
@@ -464,44 +469,97 @@ def _collapse_locations(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Collapse the same opening listed more than once.
+    """Collapse the same opening, PRESERVING the provenance of what collapsed.
 
-    Employers routinely publish one requisition per location, and large ones
-    re-post the same role across sub-boards, so an undeduped feed shows the same
-    job three times in the top five. The freshest copy wins so the displayed age
-    stays honest.
+    Two changes from the previous client-only rule.
 
-    The key is NORMALIZED identity, not the raw display strings. Matching on the
-    display strings is why duplicates still got through: the same opening
-    reaches us as "Google" and "Google LLC", as "Backend Engineer" and "Backend
-    Engineer (Remote)", and with a per-requisition id glued into the title - all
-    of which are byte-unequal and none of which are different jobs. `employer_id_of`
-    and `normalize_location` already exist for exactly this and are what the
-    inventory itself stores; only the title needs a narrower rule (`_title_key`).
+    **Identity comes from the inventory, not from display strings.** The old
+    key was `(employer_id_of(company), title_key(title), location_key)`
+    recomputed on the card. That is a guess made from three fields that were
+    themselves normalized for display, and it merged rows it should not (two
+    genuinely different reqs at one employer with the same shortened title)
+    while missing rows it should have merged (the same requisition reached via
+    two sources, whose URLs match but whose company strings do not).
+    `dedupe_group_id` is computed ONCE at ingest from the strongest identity
+    available - normalized requisition URL, then (employer, ATS, req id), then
+    content hash - and every reader now agrees with it.
+
+    **The losers are kept.** Dropping them destroyed information a seeker
+    needs: which board this reached us through, and whether the role is open
+    in more than one city. Each surviving card carries `source_variants`, so
+    "also on Greenhouse" and "also in Austin, TX" are answerable.
+
+    The freshest copy still wins the card, so the displayed age stays honest;
+    a DIRECT employer source outranks a marketplace board at equal age,
+    because that is the ordering rule the rest of the feed already uses.
     """
+    best: Dict[str, Dict[str, Any]] = {}
+    variants: Dict[str, List[Dict[str, Any]]] = {}
+    order: List[str] = []
+
+    def _variant_of(row: Dict[str, Any]) -> Dict[str, Any]:
+        return {"job_id": row.get("job_id"), "source": row.get("source"),
+                "ats": row.get("ats"), "location": row.get("location"),
+                "url": row.get("url") or row.get("apply_link"),
+                "days_ago": row.get("days_ago")}
+
+    def _better(new: Dict[str, Any], prev: Dict[str, Any]) -> bool:
+        new_direct = new.get("board_kind") != "marketplace"
+        prev_direct = prev.get("board_kind") != "marketplace"
+        if new_direct != prev_direct:
+            return new_direct
+        na, pa = new.get("days_ago"), prev.get("days_ago")
+        if na is None:
+            return False
+        return pa is None or na < pa
+
     # Lazy, matching the rest of this module: the inventory service pulls in
     # pymongo and the feed is imported on paths that never touch Mongo.
     from services import job_inventory_service as inv
 
-    best: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
-    order: List[Tuple[str, str, str]] = []
-    for row in rows:
+    def _key_of(row: Dict[str, Any], index: int) -> str:
+        """Stored identity when we have it, the display-string rule otherwise.
+
+        The fallback is not decoration. 227,914 active postings were written
+        before `dedupe_group_id` existed and carry none until the backfill
+        (docs/ops/tech-feed-rollout.md step 3) reaches them. Without this
+        branch every one of those rows becomes its own group on the day this
+        ships, and the feed shows every duplicate it currently collapses.
+        """
+        stored = str(row.get("dedupe_group_id") or "")
+        if stored:
+            return stored
         location = str(row.get("location") or "").strip()
-        key = (
+        return "|".join((
+            "legacy",
             inv.employer_id_of(row.get("company")),
             _title_key(row.get("title")),
             inv.normalize_location(location)["key"] if location else "",
-        )
+        ))
+
+    for index, row in enumerate(rows):
+        key = _key_of(row, index)
         prev = best.get(key)
         if prev is None:
             best[key] = row
+            variants[key] = []
             order.append(key)
             continue
-        prev_age = prev.get("days_ago")
-        new_age = row.get("days_ago")
-        if new_age is not None and (prev_age is None or new_age < prev_age):
+        if _better(row, prev):
+            variants[key].append(_variant_of(prev))
             best[key] = row
-    return [best[k] for k in order]
+        else:
+            variants[key].append(_variant_of(row))
+
+    out: List[Dict[str, Any]] = []
+    for key in order:
+        row = best[key]
+        vs = variants.get(key) or []
+        if vs:
+            row["source_variants"] = vs[:8]
+            row["duplicate_count"] = len(vs)
+        out.append(row)
+    return out
 
 
 def _window_counts(jobs: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -542,6 +600,14 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         min_salary = float(payload.get("min_salary") or 0) or 0.0
     except (TypeError, ValueError):
         min_salary = 0.0
+    # Unknown remains unknown, and the caller decides what to do with it.
+    # Default True: most postings publish no band, and treating "unpriced" as
+    # "fails the filter" hides the market instead of narrowing it. Only an
+    # explicit False drops them, and the payload echoes the choice back so the
+    # surface can say which it did.
+    include_unknown_salary = payload.get("include_unknown_salary")
+    include_unknown_salary = (True if include_unknown_salary is None
+                              else bool(include_unknown_salary))
     user_email = str(payload.get("user_email") or "")
     tz_offset = _clamp_tz_offset(payload.get("tz_offset_minutes"))
 
@@ -612,7 +678,15 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         # the frontend can label what it is showing.
         if min_salary:
             top = row.get("salary_max_annual") or row.get("salary_min_annual")
-            if top is not None and top < min_salary:
+            if top is None:
+                if not include_unknown_salary:
+                    continue
+            elif top < min_salary:
+                continue
+        elif not include_unknown_salary:
+            # "Only show jobs with published pay" is a filter in its own right,
+            # independent of any floor.
+            if (row.get("salary_max_annual") or row.get("salary_min_annual")) is None:
                 continue
         rows.append(row)
     rows = _dedupe(rows)
@@ -690,6 +764,7 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         "cache_hit": True,
         "us_only": us_only,
         "min_salary": min_salary or None,
+        "include_unknown_salary": include_unknown_salary,
         "resume_skill_count": len(skills),
         "diagnostics": {"task_errors": 0, "served_from": "inventory",
                         "candidates": len(docs)},

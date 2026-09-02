@@ -133,12 +133,19 @@ def _pipeline_payload(email: str) -> Dict[str, Any]:
     roles = prefs.get("target_roles")
     roles = [str(r).strip() for r in roles if str(r or "").strip()] if isinstance(roles, list) else []
 
+    excluded = prefs.get("exclude_title_terms")
+    excluded = ([str(t).strip() for t in excluded if str(t or "").strip()]
+                if isinstance(excluded, list) else [])
+
     return {
         "user_email": email,
         "experience_level": level,
         "location": location,
         "workday_titles": roles,
         "custom_role_terms": roles,
+        # Never `roles`. The scheduled digest is the one path a user cannot
+        # see running, so an exclusion silently inverted here is invisible.
+        "exclude_title_terms": excluded,
         "linkedin_keywords": roles,
         "past_days": 1,
         "apify_token": "",

@@ -2132,6 +2132,17 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 )
             svc.complete_job(job_id, result)
 
+        elif job_type == "tech_feed_search":
+            # ADR-005 unified feed. The search itself is a bounded inventory
+            # read and normally answers inline on the route; this branch
+            # exists for the case the route declines to block on - a cold
+            # resume profile that has to be built before the first page can
+            # carry a match score. Nothing here crawls and nothing calls an
+            # LLM, so the async wrapper costs a poll, not a model call.
+            from services import tech_feed_service
+            svc.complete_job(job_id, _stamp_job_logos(
+                tech_feed_service.search(payload)))
+
         elif job_type == "workday_jobs":
             # ADR-003 read cutover. `_feed_from_inventory` answers from
             # `job_postings` in milliseconds and returns None when the slice is
@@ -2190,6 +2201,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 workday_titles=payload.get("workday_titles"),
                 past_days=int(payload.get("past_days", 1) or 1),
                 custom_role_terms=payload.get("custom_role_terms"),
+                exclude_title_terms=payload.get("exclude_title_terms"),
                 linkedin_count=int(payload.get("linkedin_count", 80) or 80),
                 workday_limit=int(payload.get("workday_limit", 200) or 200),
                 include_indeed=bool(payload.get("include_indeed", False)),

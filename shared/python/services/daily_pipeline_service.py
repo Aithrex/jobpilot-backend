@@ -660,6 +660,34 @@ def _custom_term_hit(title: str, custom_role_terms: Optional[List[str]]) -> Opti
     return None
 
 
+def _exclude_term_hit(title: str, exclude_title_terms: Optional[List[str]]) -> Optional[str]:
+    """The excluded term this title matches, or None.
+
+    The NEGATIVE counterpart of `_custom_term_hit`, and deliberately stricter
+    than it: an exclusion drops a real job, so it matches on whole-word
+    boundaries only and never on the loose token-overlap fallback. "ml" must
+    not suppress "HTML Developer", and "nurse" must not suppress "Nurse Call
+    Systems Engineer" by partial token overlap.
+
+    This exists because `filter_suggester_service` used to route the
+    synthesizer's `anti_keywords` into `custom_role_terms`, which is a
+    POSITIVE list - so an excluded term was searched for, admitted and given a
+    +15 bonus. An excluded term can now only ever remove a job.
+    """
+    if not exclude_title_terms:
+        return None
+    tl = str(title or "").lower()
+    if not tl:
+        return None
+    for term in exclude_title_terms:
+        t = str(term or "").strip().lower()
+        if not t:
+            continue
+        if re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", tl):
+            return str(term)
+    return None
+
+
 def _title_of(j: dict) -> str:
     """Normalize the title field at the fetcher boundary (spec section 5):
     every emitted job row must carry `title`, whatever the source called it."""
@@ -1691,6 +1719,7 @@ def _filter_and_score(
     custom_role_terms: Optional[List[str]] = None,
     profile: Optional[Dict[str, Any]] = None,
     *,
+    exclude_title_terms: Optional[List[str]] = None,
     location_filter: str = "United States",
     experience_level: str = "entry",
     employment_type: str = "FULLTIME",
@@ -1950,6 +1979,13 @@ def _filter_and_score(
         if h1b_only and visa_status != "sponsor_verified":
             excluded.append({**r, "reason": "not a verified H-1B sponsor",
                              "tier": "Skip", "score": 0, "flags": ""}); continue
+        # Exclusions run FIRST and are unconditional. Nothing downstream -
+        # not the custom-term override, not domain-strict, not the +15 target
+        # bonus - can readmit a title the user excluded. That ordering is the
+        # invariant `tests/test_filter_exclusions.py` pins.
+        if (bad := _exclude_term_hit(r.get("title") or "", exclude_title_terms)):
+            excluded.append({**r, "reason": f"excluded title term: {bad}",
+                             "tier": "Skip", "score": 0, "flags": ""}); continue
         if (why := _healthcare_noise(r)):
             # The healthcare/non-tech noise drop protects TECH candidates.
             # When the row's title matches the user's OWN target role terms
@@ -2123,6 +2159,7 @@ def run_pipeline(
     workday_titles: Optional[List[str]] = None,
     past_days: int = 1,
     custom_role_terms: Optional[List[str]] = None,
+    exclude_title_terms: Optional[List[str]] = None,
     linkedin_count: int = 80,
     workday_limit: int = 200,
     apify_token: Optional[str] = None,
@@ -2372,6 +2409,7 @@ def run_pipeline(
         cutoff,
         custom_role_terms=custom_role_terms,
         profile=profile,
+        exclude_title_terms=exclude_title_terms,
         location_filter=location,
         experience_level=experience_level,
         employment_type=employment_type,
@@ -2493,6 +2531,7 @@ def run_pipeline(
             "linkedin_keywords": li_kw,
             "workday_titles": wd_titles[:20] + (["..."] if len(wd_titles) > 20 else []),
             "custom_role_terms": custom_role_terms or [],
+            "exclude_title_terms": exclude_title_terms or [],
         },
         # Actor-level diagnostics — surface the URLs we sent to LinkedIn and
         # whether each actor came back silently empty (no items + no error)

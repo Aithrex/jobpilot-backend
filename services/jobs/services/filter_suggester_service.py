@@ -32,6 +32,7 @@ _SUGGESTION_SCHEMA = {
     "linkedin_keyword_sets": [str],
     "workday_titles": [str],
     "custom_role_terms": [str],
+    "exclude_title_terms": [str],
     "past_days": int,
     "preset_tags": [str],
 }
@@ -308,8 +309,21 @@ def suggest_filters(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
          per-intent template). This is the authoritative output.
       3. If the LLM fails or returns too few titles, we fall back to the legacy
          static-seed path so the user is never left empty-handed.
-      4. Anti-keywords from the synthesizer get exposed back to the UI so the
-         pipeline scoring can use them to suppress off-domain noise.
+      4. Anti-keywords from the synthesizer get exposed back to the UI as
+         `exclude_title_terms` so the pipeline can SUPPRESS off-domain noise.
+
+    `custom_role_terms` vs `exclude_title_terms`
+    --------------------------------------------
+    These are opposites and they used to be the same list. `custom_role_terms`
+    are POSITIVE: `daily_pipeline_service._role_match` admits a posting whose
+    title matches one, `_filter_and_score` gives it +15, it overrides the
+    healthcare-noise drop, and on the Apify-free path it is sent to Workday AS
+    A SEARCH TERM. Assigning the synthesizer's `anti_keywords` to that field
+    therefore did the exact inverse of what the model asked for: a candidate
+    who said "not nursing" got nursing SEARCHED FOR, admitted, and boosted.
+
+    `exclude_title_terms` is the negative list, and it is applied as a hard
+    drop before scoring. Nothing may ever move a term from one to the other.
     """
     profile = build_profile(structured_resume)
     primary = profile["primary_intent"]
@@ -332,7 +346,10 @@ def suggest_filters(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
     if used_synth:
         workday_titles = list(synth["workday_titles"])
         linkedin_phrases = list(synth["linkedin_phrases"])
-        custom_role_terms = list(synth.get("anti_keywords") or [])
+        # The synthesizer's anti_keywords are EXCLUSIONS. They are never
+        # positive terms - see the contract note in this function's docstring.
+        exclude_title_terms = _clean_terms(synth.get("anti_keywords") or [])
+        custom_role_terms = []
         detected_role = synth.get("detected_role") or primary_label
         rationale = synth.get("rationale") or ""
         headline = detected_role
@@ -367,6 +384,7 @@ def suggest_filters(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
         workday_titles = list(profile["target_titles"])
         linkedin_phrases = list(profile["keyword_phrases"])
         custom_role_terms = []
+        exclude_title_terms = []
         detected_role = primary_label
         # Accurate rationale: the resume parse worked (profile got a confident
         # primary intent), but the LLM (PRO tier) AND Flash both errored or timed out.
@@ -422,6 +440,7 @@ def suggest_filters(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
         "linkedin_keyword_sets": linkedin_phrases,
         "workday_titles": workday_titles,
         "custom_role_terms": custom_role_terms[:12],
+        "exclude_title_terms": exclude_title_terms[:12],
         "past_days": past_days,
         "preset_tags": preset_tags,
     }
@@ -491,6 +510,22 @@ def suggest_filters(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
     return coerced
 
 
+def _clean_terms(values: Any, max_items: int = 12, max_len: int = 60) -> List[str]:
+    """Trim, dedupe case-insensitively, bound length. Used for exclusions,
+    where a stray empty string would otherwise match every title."""
+    out: List[str] = []
+    seen: set = set()
+    for v in (values or []):
+        sv = str(v or "").strip()[:max_len]
+        if not sv or sv.lower() in seen:
+            continue
+        seen.add(sv.lower())
+        out.append(sv)
+        if len(out) >= max_items:
+            break
+    return out
+
+
 def _merge_preserving_order(first: List[str], second: List[str]) -> List[str]:
     """Concatenate two string lists, dedup case-insensitively, keep first's order."""
     seen: set = set()
@@ -540,6 +575,7 @@ def _coerce(raw: Any) -> Dict[str, Any]:
         "linkedin_keyword_sets": _str_list("linkedin_keyword_sets", 8),
         "workday_titles": _str_list("workday_titles", 60),
         "custom_role_terms": _str_list("custom_role_terms", 12),
+        "exclude_title_terms": _str_list("exclude_title_terms", 12),
         "past_days": past_days,
         "preset_tags": _str_list("preset_tags", 5),
     }

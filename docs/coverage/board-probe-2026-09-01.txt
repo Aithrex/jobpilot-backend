@@ -1,0 +1,58 @@
+# Live slug-probe run, 2026-09-01 (DRY RUN - nothing written)
+#
+# PYTHONPATH=shared/python python scripts/probe_software_company_boards.py --limit 500 --rate 6 --workers 4
+#
+# 500 companies probed in 552s. 134 boards found (26.8%).
+# Every hit was owner-verified: provider.board_owner() must name the same
+# company, or the board is rejected (see the 'skip' lines at the end).
+#
+  HIT lever           velo3d                         5 jobs  Velo3D, Inc.
+  HIT ashby           expensify                      1 jobs  Expensify, Inc.
+  HIT greenhouse      firy                           5 jobs  Firy Inc.
+  HIT smartrecruiters asuresoftware                  1 jobs  ASURE SOFTWARE INC
+  HIT greenhouse      digimarc                       5 jobs  Digimarc Corp
+  HIT smartrecruiters endava                         5 jobs  Endava
+  HIT greenhouse      liveperson                     5 jobs  LIVEPERSON INC
+  HIT lever           system1                        4 jobs  System1, Inc.
+  HIT ashby           glimpse                        5 jobs  Glimpse Group, Inc.
+  HIT lever           crypto                         5 jobs  Crypto Co
+  HIT lever           entrata                        5 jobs  ENTRATA, INC.
+  HIT greenhouse      nebius                         5 jobs  Nebius Group N.V.
+  HIT greenhouse      baidu                          5 jobs  Baidu, Inc.
+  HIT greenhouse      verisign                       5 jobs  VERISIGN INC/CA
+  HIT greenhouse      rubrik                         5 jobs  Rubrik, Inc.
+  HIT greenhouse      godaddy                        5 jobs  GoDaddy Inc.
+  HIT smartrecruiters checkpointsoftwaretechnologies   2 jobs  CHECK POINT SOFTWARE TECHNOLOGIES 
+  HIT greenhouse      elastic                        5 jobs  Elastic N.V.
+  HIT greenhouse      zetaglobal                     5 jobs  Zeta Global Holdings Corp.
+  HIT lever           rigetti                        5 jobs  Rigetti Computing, Inc.
+  HIT greenhouse      clear                          5 jobs  Clear Secure, Inc.
+  HIT greenhouse      commvault                      5 jobs  COMMVAULT SYSTEMS INC
+  HIT greenhouse      octave                         5 jobs  Octave Intelligence plc
+  HIT smartrecruiters sportradar                     5 jobs  Sportradar Group AG
+  HIT ashby           ultra                          5 jobs  Ultra Clean Holdings, Inc.
+  HIT greenhouse      liftoff                        5 jobs  Liftoff Mobile, Inc.
+  HIT greenhouse      hawkeye360                     5 jobs  HawkEye 360, Inc.
+  HIT greenhouse      alarmcom                       5 jobs  Alarm.com Holdings, Inc.
+  HIT greenhouse      doubleverify                   5 jobs  DoubleVerify Holdings, Inc.
+  HIT greenhouse      via                            5 jobs  Via Transportation, Inc.
+  HIT lever           weride                         5 jobs  WeRide Inc.
+  HIT ashby           formula                        1 jobs  FORMULA SYSTEMS (1985) LTD
+  HIT greenhouse      tripadvisor                    5 jobs  TripAdvisor, Inc.
+  HIT greenhouse      taboola                        5 jobs  Taboola.com Ltd.
+  HIT greenhouse      indiesemiconductor             5 jobs  indie Semiconductor, Inc.
+  HIT greenhouse      upwork                         5 jobs  UPWORK, INC
+  HIT lever           horizon                        1 jobs  Horizon Quantum Holdings Ltd.
+  HIT greenhouse      vianttechnology                5 jobs  Viant Technology Inc.
+  HIT greenhouse      array                          5 jobs  Array Technologies, Inc.
+  HIT ashby           nexxen                         5 jobs  Nexxen International Ltd.
+  HIT ashby           swarmer                        5 jobs  Swarmer, Inc
+  HIT greenhouse      weave                          5 jobs  Weave Communications, Inc.
+  HIT greenhouse      ziprecruiter                   5 jobs  ZIPRECRUITER, INC.
+  HIT ashby           gorilla                        5 jobs  Gorilla Technology Group Inc.
+  HIT greenhouse      trivago                        5 jobs  trivago N.V.
+  HIT greenhouse      tucows                         1 jobs  TUCOWS INC /PA/
+  HIT greenhouse      audioeye                       2 jobs  AUDIOEYE INC
+#
+# --- rejected: board owner named a different company ---
+  skip greenhouse/nve: board is 'NVE Experience Agency', not 'NVE CORP /NEW/'
