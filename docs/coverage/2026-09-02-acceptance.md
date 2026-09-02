@@ -103,45 +103,73 @@ from a stranger's with a similar slug, so it is not a coverage number and the
 70% target cannot be read against it.
 
 Rebuilt on the honest definition, coverage started at **0%** — nothing in the
-database recorded who owned anything — and three live verification passes are
-what earn it back.
+database recorded who owned anything.
 
-Measured at source revision `aa76422`, inventory watermark
-`2026-09-02T09:56:19Z`:
+### Where it got to, and how
 
-| | |
+| stage | validated coverage of the technology denominator |
 |---|---:|
-| evidence-backed technology employers | 2,622 |
-| **validated coverage** | **13.2%** (346 employers) |
-| employers without validated coverage | 2,276 |
-| open employer merge reviews (held, not crawled) | 1,443 |
+| honest definition, before any verification | 0% |
+| after pass 1 (provider owner metadata) | 8.9% |
+| after pass 2 (verify the domain, walk to the board) | 13.2% |
+| after registering the boards we were already crawling | 22.8% |
+| after the curated catalogs corroborated the provider | **33.1%** (868 of 2,624) |
 
-What the three passes produced:
+By cohort at 33.1%: `niche_startup` 60.3% · `private_growth` 67.7% ·
+`mnc` 55.2% · `public_tech` 20.3%.
 
-| pass | what it does | result |
-|---|---|---|
-| 1 — provider owner metadata | ~2 requests per source; reaches Greenhouse, Lever, Ashby, SmartRecruiters | 341 sources proven of 2,251 checked. Workday, iCIMS, Oracle, UKG, Paylocity and BambooHR correctly reported `no signal` — their APIs name no owner |
-| 2 — verify the domain, walk to the board | 6–10 requests per employer; the only path that reaches the vendors above | 660 sources proven across 6,000 employers, in 68 minutes |
-| 3 — content validation | asks the provider's own `validate()` | 1,138 validated, 260 empty, 51 blocked, 326 dead, 410 challenged |
-
-**This criterion is NOT met.** 13.2%, not 70%.
-
-The gap is throughput, not design. Pass 2 covered 6,000 of 23,782 employers in
-68 minutes at an 11% ownership hit rate; the remaining employers need roughly
-three more runs, and each newly-discovered endpoint then needs passes 1 and 3
-behind it. What is in place is the whole machine: the evidence model, three
-passes that are re-runnable and idempotent, a prioritised re-arm queue ordered
-by measured technology-job yield, and a report that states the true number
-whenever it is run.
-
-What is emphatically NOT in place is a way to reach 70% by relaxing the
-definition, and that is the point. The old 43% was 43% of "the endpoint
-answered". Every one of these 346 employers has a documented chain from their
-own verified domain, or two independent parties agreeing.
-
-Read the current figure from the generated document, never from here:
+**This criterion is NOT met.** 33.1%, not 70%. Regenerate the current figure
+before quoting it — the passes are idempotent and re-runnable, so the number
+moves:
 
 ```bash
 PYTHONPATH=shared/python python scripts/employer_coverage_report.py --markdown
 cat docs/coverage/tech-employer-coverage.md
 ```
+
+### What actually stood in the way
+
+Three of the four blockers turned out to be bookkeeping, not discovery, and
+each one was worth more than a faster crawler:
+
+1. **1,437 boards carrying 124,226 active postings had no `career_sources`
+   row at all** — Wells Fargo, Northrop Grumman, RTX, PwC, CVS Health, Amazon.
+   We ingested their jobs on every crawl and the coverage registry did not know
+   their boards existed, so pass 2 — which walks from an employer's verified
+   domain TO a board — had nothing to walk to. `register_ingested_boards.py`.
+2. **`resolve_employer` read `registry_refs.tenant_keys`; the backfill wrote
+   `registry_refs.tenant`.** 4,156 employers carry the written spelling and 0
+   carry the read one, so the strongest join key available for a Workday or
+   Oracle board was dead. Unresolved employers went 373 → 4.
+3. **A second evidence class was already in the repo and unread.** The three
+   Python catalogs name 2,370 exact `(vendor, tenant)` endpoints and are
+   human-maintained — which is what `CLASS_CURATED` is for. Paired with the
+   provider's own statement they satisfy rule 4b, and only when the two AGREE.
+4. **Our own concurrency was erasing the number.** One content pass run beside
+   two others turned 830 sources `blocked` in a single sweep — boards the
+   crawler had read that morning — and dropped validated from 2,040 to 1,311.
+   A 403 to our prober is a fact about our request; the pass now checks it
+   against the live inventory and records a note instead of a demotion.
+
+### What is left, measured
+
+Of the uncovered technology employers:
+
+| bucket | employers | core-tech postings they hold |
+|---|---:|---:|
+| endpoint known, ownership unproven | 578 | **8,538** |
+| a source row but no endpoint | 822 | 165 |
+| no source row at all | 543 | 54 |
+
+Almost the entire posting-weighted gap is one bucket, and 187 of those already
+carry two independent signals and are waiting only on content validation. The
+long tail — 1,365 employers holding 219 postings between them — is real
+discovery work with very little yield behind it.
+
+### What is emphatically NOT in place
+
+A way to reach 70% by relaxing the definition. The old 43% was 43% of "the
+endpoint answered". Every employer counted here has either a documented chain
+from their own verified domain to the exact endpoint, or two independent
+parties agreeing about who owns it — and where those two disagree, the
+conflict is reported and no ownership is claimed.
