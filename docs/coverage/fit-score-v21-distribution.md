@@ -84,3 +84,80 @@ Before 2.1 the résumé side of the comparison was the 32-key legacy list
 verification résumé scored identically against a backend posting. Both sides
 now speak the same 14/102 vocabulary, which is what makes the ladder
 meaningful.
+
+---
+
+# Addendum, 2026-09-02: the veto was eating a fifth of the feed
+
+Re-measured after the v4 normalisation backfill, same account, same 2,500-row
+sample. The backfill itself changed almost nothing (>= 75 moved 172 -> 174),
+which is the right answer: recovering 11,653 seniority bands gave the
+`level_gap` component evidence it did not have, and `_normalized_score` was
+already excluding it rather than pricing it.
+
+What the re-measurement DID surface is a defect, and a costly one.
+
+## 522 of 2,500 core-tech postings were `ineligible`
+
+`ineligible` is not a low score. It removes the row from the ranked feed
+entirely. Broken down by what the veto rejected:
+
+| rejected family | postings | examples |
+|---|---:|---|
+| `technical_leadership` | 317 | Senior Software Engineer - AI Products (SVP) @ Citi · Staff Engineer @ Stryker · Associate Tech Lead @ Trane |
+| `security` | 161 | Information Security Engineer II @ First Citizens · Security Architect · Sr Security Engineer @ Wells Fargo |
+| `semiconductor_hardware` | 44 | CPU Verification Engineer @ Intel · Sr Principal Analog Design @ NXP |
+
+The résumé is software engineering and cloud platform. A software engineer
+being told they may not apply for "Staff Engineer" is not a screening result;
+it is a bug with a confident voice.
+
+## Two causes, both now fixed
+
+**1. `cross_domain` meant the wrong thing.** `role_alignment` set
+`cross_domain: bool(rf_all and jf_all)` on its `unrelated` return — i.e. any
+two technology families the adjacency matrix does not connect. `fit_score.
+_eligibility` turns that flag into INELIGIBLE. But the flag is documented, in
+the same function, as the teacher-versus-backend case: a change of
+occupational DOMAIN. Two technology families are still two technology
+families, and `unrelated` already carries a 0.08 weight — a severe penalty on
+its own. The flag is now set only by the two scope-level branches, and the
+mirror branch (a technical résumé against a non-tech posting) was added, since
+that case previously fell through to `unknown` (0.60, neutral).
+
+**2. The adjacency matrix had no edge into leadership or security.** The
+`technical_leadership` family connected only to itself and to
+`distributed_systems`, so the specialty bridge could not reach it from
+`backend`, `full_stack`, `platform_engineering` or `cloud_engineering` — the
+specialties leadership roles are *staffed from*. Security had the same hole.
+`tech-adjacency-1.1.0` declares 33 further pairs: IC specialties to
+`principal_staff_ic` and `architecture`, software specialties to
+`application_security` / `product_security`, and cloud specialties to
+`iam_pam` / `cloud_security` / `secops`. `engineering_management` is
+deliberately left with no direct IC pair — it is reachable at the
+adjacent-family rung (0.46) through the bridge, which is the honest distance.
+
+## After
+
+| band | before the fix | after |
+|---|---:|---:|
+| ineligible | 522 (20.9%) | **0** |
+| >= 90 | 2 | 2 |
+| >= 85 | 12 | 12 |
+| >= 80 | 57 | 59 |
+| >= 75 | 174 | 178 |
+| >= 70 | 354 | 357 |
+| >= 65 | 470 | 480 |
+| >= 50 | 1,470 (58.8%) | **1,696 (67.8%)** |
+| mean | 49.4 | 52.9 |
+| max | 95 | 95 |
+
+**The top bands did not move.** 57 -> 59 at >= 80. Nothing was inflated to
+make the feed look better: 522 postings stopped being hard-excluded and now
+compete on their merits, and they land in the middle of the distribution
+because that is where they belong. The `>= 50` band absorbed almost all of
+them.
+
+Reproduce: the sampling script is in the session log; the taxonomy assertions
+are pinned in `tests/test_cross_domain_veto_scope.py` and the per-stratum
+precision/recall in `evals/eval_tech_taxonomy.py` is unchanged by the edit.

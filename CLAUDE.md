@@ -131,6 +131,20 @@ the scoring path reads it for role alignment any more.
   confident cross-domain verdict, a named licence the résumé lacks, or a
   stated sponsorship conflict. Silence is never a mismatch; an unstated
   clearance is `unknown` and surfaces as a requirement to read, not a penalty.
+- **`cross_domain` means a change of OCCUPATIONAL DOMAIN, never an unfamiliar
+  technology family.** It is the only thing that turns role alignment into an
+  INELIGIBLE verdict, and ineligible rows leave the ranked feed entirely. Two
+  technology families the adjacency matrix does not connect score `unrelated`
+  (0.08 — already a severe penalty) and stay eligible. Setting it on any
+  unrelated tech pair made a software-and-cloud résumé ineligible for 522 of
+  2,500 live core-tech postings, 478 of them security or staff/architect roles
+  (`docs/coverage/fit-score-v21-distribution.md`).
+- **`tech-adjacency-1.1.0`** adds the edges leadership and security are
+  actually staffed from: IC specialties → `principal_staff_ic` /
+  `architecture`, software → `application_security` / `product_security`,
+  cloud → `iam_pam` / `cloud_security` / `secops`. `engineering_management`
+  keeps no direct IC pair on purpose — it is reachable at the adjacent-family
+  rung through the bridge, which is the honest distance.
 - **Bumping `FIT_SCORE_VERSION` is safe now**, via
   `_COMPATIBLE_REQUIREMENT_VERSIONS`: the extraction contract is unchanged, so
   216,687 stored `requirements` profiles stay valid through the deploy.
@@ -140,7 +154,15 @@ the scoring path reads it for role alignment any more.
 
 Backfills: `scripts/backfill_tech_taxonomy.py --apply` (version-aware — it
 selects rows whose `tech.taxonomy_version` is not current, so a bump is
-backfillable without `--all`).
+backfillable without `--all`) and `scripts/backfill_posting_normalization.py
+[--apply] [--with-bodies]`, which brings stored postings up to
+`NORMALIZATION_VERSION` from fields already on the document. The second one is
+how 11,653 postings that stated "minimum N years" but read `seniority:
+unknown` got their band back — retrieval filters on the stored value, so those
+rows were invisible to anyone filtering by level. **It stamps the version only
+when JD bodies were actually read** (`--with-bodies`, from our own S3):
+`job_ingest_worker._listing_implies_same_content` treats the stamp as "needs
+no re-fetch", so stamping a half-upgraded row would freeze it there.
 
 Evals: `evals/eval_tech_taxonomy.py` (per-family AND per-stratum precision/
 recall; stratum **H** is titles taken verbatim from live `job_postings`) and

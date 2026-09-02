@@ -2130,7 +2130,7 @@ LEGACY_TECH_CANDIDATE_FAMILIES: Tuple[str, ...] = (
 # Declaring it means it is reviewable and versioned; deriving it would mean
 # it silently changes whenever a phrase list does.
 
-ADJACENCY_VERSION = "tech-adjacency-1.0.0"
+ADJACENCY_VERSION = "tech-adjacency-1.1.0"
 
 #: Declared once, applied symmetrically. Each pair is "a team hiring for A
 #: would seriously consider a strong B", which is a narrower claim than
@@ -2261,6 +2261,51 @@ _ADJACENT_PAIRS: Tuple[Tuple[str, str], ...] = (
     ("engineering_management", "tpm"),
     ("architecture", "principal_staff_ic"),
     ("architecture", "distributed_systems"),
+    # The leadership family had no edge to the ICs it is STAFFED FROM. A
+    # "Staff Engineer" or "Cloud Architect" posting is the ordinary next step
+    # for a backend or platform engineer - it is the most common promotion in
+    # the industry - and with no pair here the specialty bridge could not
+    # reach `technical_leadership`, so alignment fell all the way to
+    # `unrelated` (0.08). Measured on one live account, 317 of 522 rejected
+    # postings were leadership titles the candidate is squarely qualified for.
+    ("principal_staff_ic", "backend"), ("principal_staff_ic", "full_stack"),
+    ("principal_staff_ic", "general_software"),
+    ("principal_staff_ic", "distributed_systems"),
+    ("principal_staff_ic", "platform_engineering"),
+    ("principal_staff_ic", "ml_engineering"),
+    ("architecture", "backend"), ("architecture", "general_software"),
+    ("architecture", "platform_engineering"),
+    ("architecture", "cloud_engineering"), ("architecture", "infrastructure"),
+    ("architecture", "data_platform"), ("architecture", "enterprise_mainframe"),
+    ("architecture", "ai_platform"),
+
+    # ---- software / cloud <-> security -------------------------------------
+    # Same gap, same consequence: 161 of those 522 were security postings.
+    # Application and product security are done BY people who read and write
+    # application code, and cloud security by people who run cloud
+    # infrastructure. One declared pair per family opens the 0.46
+    # adjacent-family rung for the rest through the bridge.
+    ("application_security", "backend"),
+    ("application_security", "full_stack"),
+    ("application_security", "general_software"),
+    ("application_security", "apis"),
+    ("application_security", "web_platform"),
+    ("application_security", "product_security"),
+    ("application_security", "penetration_testing"),
+    ("product_security", "backend"),
+    ("cloud_security", "cloud_engineering"), ("cloud_security", "infrastructure"),
+    ("cloud_security", "kubernetes_containers"), ("cloud_security", "devops"),
+    ("secops", "sre"), ("secops", "observability"),
+    ("secops", "detection_response"), ("secops", "network_operations"),
+    ("detection_response", "observability"),
+    # The one edge that lets a cloud engineer reach the security family at
+    # all: `cloud_security` lives in `cloud_platform`, so without this the
+    # bridge found nothing and "Cloud Security Engineer" read as unrelated to
+    # cloud engineering. Identity and access work in cloud is cloud work.
+    ("iam_pam", "cloud_engineering"),
+    ("iam_pam", "infrastructure"), ("iam_pam", "it_systems_administration"),
+    ("ai_security", "ai_safety"), ("ai_security", "red_teaming"),
+    ("ai_security", "application_security"),
 
     # ---- adjacent families ------------------------------------------------
     ("technical_product_management", "tpm"),
@@ -2453,6 +2498,18 @@ def role_alignment(
                 "detail": (f"this resume is a {dom} career; "
                            f"this is a technical role")}
 
+    # The mirror case, for the same reason. A backend engineer's resume against
+    # a registered-nurse posting is not "unknown distance apart" either, and
+    # without this it fell through to ALIGN_UNKNOWN (0.60, neutral) because a
+    # non-tech posting carries no tech families to compare.
+    if (str(job_scope or "") == SCOPE_NON_TECH
+            and str(resume_scope or "") in (SCOPE_CORE, SCOPE_ADJACENT)):
+        return {**base, "tier": ALIGN_UNRELATED,
+                "weight": ALIGNMENT_WEIGHT[ALIGN_UNRELATED], "matched": None,
+                "cross_domain": True,
+                "detail": "this is a technical resume; this role is not a "
+                          "technology occupation"}
+
     if not (jf or js) or not (rf or rs):
         return {**base, "tier": ALIGN_UNKNOWN,
                 "weight": ALIGNMENT_WEIGHT[ALIGN_UNKNOWN], "matched": None,
@@ -2512,9 +2569,22 @@ def role_alignment(
                     "matched": r,
                     "detail": (f"{FAMILY_LABELS.get(r, r)} is adjacent to "
                                f"{FAMILY_LABELS.get(j, j)}")}
+    # NOT cross-domain. `cross_domain` is what `fit_score._eligibility` turns
+    # into a hard INELIGIBLE verdict, and it means exactly one thing: the
+    # resume and the posting are in different OCCUPATIONAL DOMAINS — the
+    # teacher-versus-backend case the two blocks above handle. Two technology
+    # families that our adjacency matrix does not connect are still two
+    # technology families, and the 0.08 weight is already a severe penalty.
+    #
+    # Setting it here meant a software-and-cloud resume was declared INELIGIBLE
+    # for "Information Security Engineer", "Security Architect" and "Staff
+    # Engineer" — 478 of 522 ineligible verdicts in a 2,500-posting sample for
+    # one live account, none of them a domain change. Ineligible removes the
+    # row from the ranked feed entirely, so the cost of over-firing here is a
+    # job the candidate never sees.
     return {**base, "tier": ALIGN_UNRELATED,
             "weight": ALIGNMENT_WEIGHT[ALIGN_UNRELATED], "matched": None,
-            "cross_domain": bool(rf_all and jf_all),
+            "cross_domain": False,
             "detail": (f"{', '.join(FAMILY_LABELS.get(f, f) for f in rf_all[:2]) or 'the resume'}"
                        f" is unrelated to "
                        f"{', '.join(FAMILY_LABELS.get(f, f) for f in jf_all[:2]) or 'the job'}")}
