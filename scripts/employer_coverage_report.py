@@ -117,9 +117,16 @@ def posting_mix(db, *, days: int = 30) -> Dict[str, Dict[str, Any]]:
         key = f"{r['_id'].get('ats') or ''}:{r['_id'].get('tenant') or ''}"
         by_tenant[key][str(r["_id"].get("scope") or "unknown")] += int(r["n"])
 
+    # Both spellings, for the same reason as `cohorts_for`: `tenant_keys` is
+    # canonical and `tenant` is what rows written before the field names were
+    # unified carry. Reading only the new one would silently drop the
+    # posting-mix signal, which is the ONLY evidence that reaches a private
+    # company - EDGAR knows public filers and nothing else - and the
+    # denominator would quietly shrink to the employers we already crawl.
     tenant_to_employer: Dict[str, str] = {}
-    for emp in db.employers.find({}, {"employer_id": 1, "registry_refs.tenant_keys": 1}):
-        for t in ((emp.get("registry_refs") or {}).get("tenant_keys") or []):
+    for emp in db.employers.find({}, {"employer_id": 1, "registry_refs": 1}):
+        refs = emp.get("registry_refs") or {}
+        for t in list(refs.get("tenant_keys") or []) + list(refs.get("tenant") or []):
             tenant_to_employer.setdefault(str(t), emp["employer_id"])
 
     out: Dict[str, Dict[str, Any]] = collections.defaultdict(
@@ -251,8 +258,12 @@ def build(db, *, mix_days: int) -> Dict[str, Any]:
         "evidence": 1, "registry_refs": 1}))
 
     # Join the `companies` rows the registry references, in ONE query.
-    company_ids = sorted({cid for e in employers
-                          for cid in ((e.get("registry_refs") or {}).get("company_ids") or [])})
+    def _company_refs(row: Dict[str, Any]) -> List[str]:
+        refs = row.get("registry_refs") or {}
+        return [str(c) for c in
+                (list(refs.get("company_ids") or []) + list(refs.get("company") or []))]
+
+    company_ids = sorted({cid for e in employers for cid in _company_refs(e)})
     companies: Dict[str, Dict[str, Any]] = {}
     for chunk in range(0, len(company_ids), 5000):
         for c in db.companies.find(
@@ -266,8 +277,7 @@ def build(db, *, mix_days: int) -> Dict[str, Any]:
         if emp.get("operating_status") in er.REDIRECTING_STATUSES:
             continue      # attributed to the parent, not counted twice
         emp_mix = mix.get(emp["employer_id"], {})
-        company = next((companies[c] for c in
-                        ((emp.get("registry_refs") or {}).get("company_ids") or [])
+        company = next((companies[c] for c in _company_refs(emp)
                         if c in companies), None)
         ok, why = is_evidence_backed_tech(emp, emp_mix, company)
         if not ok:

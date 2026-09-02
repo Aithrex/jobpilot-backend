@@ -587,7 +587,33 @@ def main() -> int:
         for left, right, why in b.quarantined:
             er.quarantine_merge(left, right, why)
         print(f"    {len(b.quarantined):,} merge reviews filed")
+        # MERGE the state, never overwrite it. `bulk_upsert_sources` writes
+        # `state`, and a re-run rebuilds every source from the OFFLINE evidence
+        # only - so a blind re-run would demote a source that the live
+        # verification passes had taken to `validated` all the way back to
+        # `candidate`, i.e. destroy coverage by re-reading the same registries.
+        existing = {r["source_id"]: r for r in
+                    db[css.CAREER_SOURCES].find({}, {"source_id": 1, "state": 1,
+                                                     "ownership_verified": 1,
+                                                     "job_count_last": 1})}
+        kept_state = 0
+        for rec in sources:
+            prior = existing.get(rec["source_id"])
+            if not prior:
+                continue
+            if prior.get("ownership_verified"):
+                # Ownership is EVIDENCE, and the offline rebuild has none of
+                # it. Keep what the live pass proved.
+                rec["ownership_verified"] = True
+                rec["state"] = css.next_state(
+                    owned=True,
+                    content_ok=bool(rec.get("content_validation_evidence")) or None,
+                    job_count=int(rec.get("job_count_last")
+                                  or prior.get("job_count_last") or 0))
+                kept_state += 1
         src_stats = css.bulk_upsert_sources(sources)
+        if kept_state:
+            print(f"    preserved ownership on {kept_state:,} already-verified sources")
         print(f"    {src_stats['seen']:,} career sources "
               f"({src_stats['written']:,} inserted or changed)")
         summary["written"] = {"employers": emp_stats, "career_sources": src_stats,

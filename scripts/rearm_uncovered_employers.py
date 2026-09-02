@@ -142,7 +142,9 @@ def main() -> int:
     enqueued = 0
     if args.apply:
         for emp in queue:
-            for company_id in ((emp.get("registry_refs") or {}).get("company_ids") or []):
+            refs = emp.get("registry_refs") or {}
+            for company_id in (list(refs.get("company_ids") or [])
+                               + list(refs.get("company") or [])):
                 db.companies.update_one(
                     {"company_id": company_id},
                     {"$set": {"discovery_status": reg.DISCOVERY_PENDING,
