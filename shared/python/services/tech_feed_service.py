@@ -1542,20 +1542,67 @@ def _load_session(search_id: str, user_email: str) -> Optional[Dict[str, Any]]:
 # Coverage + source health (reported, never inferred)
 # ---------------------------------------------------------------------------
 
-def coverage_block() -> Dict[str, Any]:
-    """What the inventory can honestly claim about its own completeness."""
+#: `coverage_block` reads five collections. Recomputing that per search is
+#: waste, and the numbers move on a crawl cadence, not a request cadence.
+COVERAGE_TTL_SECONDS = int(os.getenv("TECH_FEED_COVERAGE_TTL", "300") or 300)
+_COVERAGE_CACHE: Dict[str, Any] = {"at": 0.0, "value": None}
+
+
+def coverage_block(*, force: bool = False) -> Dict[str, Any]:
+    """What the inventory can honestly claim about its own completeness.
+
+    Three of these numbers used to overstate it, and the brief is explicit
+    that we must "never promise literal coverage of every technology company"
+    and "maintain a dated, measurable denominator":
+
+    * `known_employers` was `companies.estimated_document_count()` — every
+      company ever HARVESTED, ~80,000 — rendered by the banner as "N active
+      postings across M employers". We do not have postings across 80,000
+      employers. It is now the count of employers actually present in the
+      active inventory.
+    * `validated_endpoints` counted `company_ats_endpoints.status ==
+      "validated"`, which means only that the endpoint answered. It is the
+      number that reported 43% coverage and cannot tell a company's own board
+      from a stranger's board with a similar slug (ADR-006). It is renamed to
+      `responding_endpoints` — what it actually measures — and the real
+      figures are reported beside it.
+    * Nothing reported the DENOMINATOR at all, so no client could say what
+      share of the technology employers we track is owner-verified.
+    """
     from services import job_inventory_service as inv
+    now = time.time()
+    if not force and _COVERAGE_CACHE["value"] is not None \
+            and now - float(_COVERAGE_CACHE["at"]) < COVERAGE_TTL_SECONDS:
+        return dict(_COVERAGE_CACHE["value"])
+
     out: Dict[str, Any] = {"as_of": _now()}
     try:
         db = _db()
         out["active_postings"] = db.job_postings.count_documents(
             {"status": inv.STATUS_ACTIVE})
-        out["validated_endpoints"] = db.company_ats_endpoints.count_documents(
+        # Employers we actually hold live postings for. `len(distinct(...))`
+        # over an indexed field, not a scan of the postings themselves.
+        try:
+            out["known_employers"] = len(db.job_postings.distinct(
+                "employer_id", {"status": inv.STATUS_ACTIVE}))
+        except Exception:
+            out["known_employers"] = 0
+        out["harvested_companies"] = db.companies.estimated_document_count()
+        out["responding_endpoints"] = db.company_ats_endpoints.count_documents(
             {"status": "validated"})
-        out["known_employers"] = db.companies.estimated_document_count()
+        try:
+            from services import career_source_service as css
+            out["owner_verified_sources"] = db[css.CAREER_SOURCES].count_documents(
+                {"state": {"$in": list(css.COVERED_STATES)}})
+            out["registered_employers"] = db[
+                "employers"].estimated_document_count()
+        except Exception:
+            pass
     except Exception as exc:  # pragma: no cover
         logger.warning("tech_feed: coverage unavailable (%s)", type(exc).__name__)
         out["error"] = type(exc).__name__
+    _COVERAGE_CACHE["at"] = now
+    _COVERAGE_CACHE["value"] = dict(out)
     return out
 
 

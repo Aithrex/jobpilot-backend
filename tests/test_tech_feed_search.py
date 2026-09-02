@@ -1145,3 +1145,40 @@ class TestOneEmployerDoesNotOwnThePage:
         out, _ = tfs._diversify_employers(rows, 6)
         assert sum(1 for r in out[:6] if r["employer_name"] == "Acme") \
             <= tfs.EMPLOYER_PAGE_CAP
+
+
+class TestTheCoverageBlockDoesNotOverclaim:
+    """The brief: "Never promise literal coverage of every technology company.
+    Maintain a dated, measurable denominator." Three of these numbers used to
+    do the opposite."""
+
+    def test_known_employers_counts_employers_we_hold_postings_for(self, db):
+        """It was `companies.estimated_document_count()` — every company ever
+        harvested, ~80,000 — rendered by the banner as "across N employers"."""
+        seed(sjid="cv1", title="Backend Engineer", company="Acme Inc", tenant="acme")
+        seed(sjid="cv2", title="Backend Engineer", company="Beta Ltd", tenant="beta")
+        for i in range(5):
+            db.companies.insert_one({"company_id": f"never-crawled-{i}"})
+        tfs.coverage_block(force=True)
+        got = tfs.coverage_block(force=True)
+        assert got["known_employers"] == 2
+        assert got["harvested_companies"] >= 5
+
+    def test_the_answering_endpoint_count_is_named_for_what_it_measures(self, db):
+        """`validated` on `company_ats_endpoints` means the endpoint answered.
+        It cannot tell a company's own board from a stranger's, and it is the
+        number that reported 43% (ADR-006)."""
+        got = tfs.coverage_block(force=True)
+        assert "responding_endpoints" in got
+        assert "validated_endpoints" not in got
+
+    def test_the_real_coverage_figure_is_reported_beside_it(self, db):
+        got = tfs.coverage_block(force=True)
+        assert "owner_verified_sources" in got
+
+    def test_the_block_is_cached_rather_than_recomputed_per_search(self, db):
+        seed(sjid="cv3", title="Backend Engineer", company="Acme Inc")
+        first = tfs.coverage_block(force=True)
+        seed(sjid="cv4", title="Backend Engineer", company="Zeta Co", tenant="zeta")
+        assert tfs.coverage_block()["known_employers"] == first["known_employers"]
+        assert tfs.coverage_block(force=True)["known_employers"] > first["known_employers"]
