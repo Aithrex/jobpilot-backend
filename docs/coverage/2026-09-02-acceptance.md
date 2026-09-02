@@ -169,6 +169,27 @@ carry two independent signals and are waiting only on content validation. The
 long tail — 1,365 employers holding 219 postings between them — is real
 discovery work with very little yield behind it.
 
+### Two things that were checked and found NOT to be problems
+
+Recorded because a negative result is only useful if it is written down, and
+both of these looked like large misses before they were measured.
+
+**The `adjacent` scope is not hiding software roles.** 2,700 active postings
+are `adjacent` and therefore outside the default `core` search. They are IT
+support (893), solutions engineering (867), technical product (510), UX and
+design systems (323), technical writing (85) and developer relations (24).
+Sampled titles are "Service Desk Analyst", "Senior Sales Engineer", "Technical
+Support Engineer". That is what adjacent means; nothing in it belongs in the
+default scope.
+
+**The `unknown` scope is not hiding them either**, which was the bigger worry:
+132,543 active postings (57.4%) carry `tech.tech_scope: unknown`, and the
+default query cannot reach them. Of a 6,000-row sample, 118 titles matched a
+deliberately obvious technical-title test, and re-running the CURRENT
+classifier over those 118 moved **3** to `core` — 0.05% of the sample, roughly
+66 postings across the whole bucket. The bucket is genuinely non-technical, not
+misclassified.
+
 ### What is emphatically NOT in place
 
 A way to reach 70% by relaxing the definition. The old 43% was 43% of "the
