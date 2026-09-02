@@ -46,12 +46,12 @@ def db(monkeypatch):
 def seed(*, source="career-pages", sjid, title, company="Acme Inc",
          description=SWE_JD, location="Austin, TX, USA", days=2,
          ats="greenhouse", tenant="acme", comp=None, work_mode=None,
-         url=None, parse=True):
+         url=None, parse=True, employment_type="Full time"):
     raw = {
         "source": source, "source_job_id": sjid,
         "url": url or f"https://boards.greenhouse.io/{tenant}/jobs/{sjid}",
         "company": company, "title": title, "location": [location],
-        "description": description, "employment_type": "Full time",
+        "description": description, "employment_type": employment_type,
         "cost_class": "free", "source_quality": "direct", "industry": "tech",
         "ats": ats, "tenant": tenant, "posted_at": NOW - timedelta(days=days),
     }
@@ -885,3 +885,110 @@ class TestRegionAndPayIntervalActuallyFilter:
         one, and 81.5% of the live inventory states no compensation at all."""
         seed(sjid="p1", title="Backend Engineer")
         assert len(titles(search(pay_interval="year"))) == 1
+
+
+class TestTheFiltersThatWereSilentlyDroppedByTheQueryBuilder:
+    """`build_query` ends with `q["$and"] = _and`, an ASSIGNMENT. Two clauses
+    used `q.setdefault("$and", []).append(...)` instead of appending to `_and`,
+    and since `_and` always holds the unconditional tech-scope clause, that
+    line deleted them. Measured live: `countries: ["india"]` returned the same
+    17,683 postings as no country filter at all."""
+
+    def test_a_country_filter_survives_into_the_query(self, db):
+        seed(sjid="c1", title="Backend Engineer", location="Bengaluru, KA, India")
+        seed(sjid="c2", title="Backend Engineer", location="Austin, TX, USA")
+        assert len(titles(search(countries=["india"]))) == 1
+
+    def test_an_employment_type_filter_survives_into_the_query(self, db):
+        seed(sjid="e1", title="Backend Engineer", employment_type="Contract")
+        seed(sjid="e2", title="Backend Engineer", employment_type="Part time")
+        assert len(titles(search(employment_types=["contract"]))) == 1
+
+    def test_both_at_once_still_work(self, db):
+        """The failure mode was one clause overwriting another, so the case
+        that matters is more than one of them present."""
+        seed(sjid="b1", title="Backend Engineer", location="Bengaluru, KA, India",
+             employment_type="Contract")
+        seed(sjid="b2", title="Backend Engineer", location="Bengaluru, KA, India",
+             employment_type="Part time")
+        seed(sjid="b3", title="Backend Engineer", location="Austin, TX, USA",
+             employment_type="Contract")
+        got = titles(search(countries=["india"], employment_types=["contract"]))
+        assert len(got) == 1
+
+
+class TestTheSearchBoxActuallySearches:
+    """`query` was compiled and then read in exactly ONE place: as a fallback
+    when `titles` was also set. With no title list — the normal case — typing
+    "kubernetes" narrowed nothing. Live: 17,683 postings either way."""
+
+    # A description distinct from `SWE_JD`, so a query hit can only have come
+    # from the field under test rather than from shared boilerplate.
+    PLAIN = ("We are hiring a software engineer. You will build and ship "
+             "features and work with the team on our product.")
+
+    def test_a_query_narrows_with_no_title_list(self, db):
+        seed(sjid="q1", title="Kubernetes Platform Engineer", description=self.PLAIN)
+        seed(sjid="q2", title="Frontend Engineer", description=self.PLAIN)
+        assert titles(search(query="kubernetes")) == ["Kubernetes Platform Engineer"]
+
+    def test_every_word_must_match_not_just_one(self, db):
+        """Any-of turns "senior kubernetes" into every senior role in the
+        index."""
+        seed(sjid="q3", title="Senior Kubernetes Engineer", description=self.PLAIN)
+        seed(sjid="q4", title="Senior Frontend Engineer", description=self.PLAIN)
+        assert titles(search(query="senior kubernetes")) == ["Senior Kubernetes Engineer"]
+
+    def test_the_employer_name_is_searchable(self, db):
+        seed(sjid="q5", title="Backend Engineer", company="Stripe",
+             description=self.PLAIN)
+        seed(sjid="q6", title="Backend Engineer", company="Acme",
+             description=self.PLAIN, tenant="acme2")
+        assert len(titles(search(query="stripe"))) == 1
+
+    def test_the_extracted_skills_are_searchable(self, db):
+        """Title-only matching returned 38 of 17,688 live core-tech postings
+        for "kubernetes", which is a shortfall, not a result."""
+        seed(sjid="q9", title="Platform Engineer",
+             description="Requirements: strong Kubernetes and Terraform experience.")
+        seed(sjid="q10", title="Platform Engineer", description=self.PLAIN,
+             tenant="acme2")
+        assert len(titles(search(query="kubernetes"))) == 1
+
+    def test_a_query_matching_nothing_returns_nothing_rather_than_everything(self, db):
+        seed(sjid="q7", title="Backend Engineer", description=self.PLAIN)
+        assert titles(search(query="zzzznotathing")) == []
+
+    def test_a_one_or_two_character_token_is_ignored_not_matched(self, db):
+        """Short tokens match everywhere and would silently widen the search."""
+        seed(sjid="q8", title="Backend Engineer", description=self.PLAIN)
+        assert len(titles(search(query="a backend"))) == 1
+
+
+class TestTheExperienceRangeMatchesWhatThePostingStates:
+    """`min_years` compared against `required_years_max`, which is populated
+    only when a JD spells out a range and is set on 0 of 224,389 live
+    postings."""
+
+    JUNIOR = "Requirements: minimum 2 years of experience building web services."
+    SENIOR = "Requirements: minimum 9 years of experience building web services."
+    SILENT = "Requirements: you enjoy building web services with a small team."
+
+    def test_min_years_drops_a_posting_asking_for_less(self, db):
+        seed(sjid="y1", title="Backend Engineer", description=self.JUNIOR)
+        seed(sjid="y2", title="Backend Engineer", description=self.SENIOR,
+             tenant="acme2")
+        assert len(titles(search(min_years=8))) == 1
+
+    def test_max_years_drops_a_posting_asking_for_more(self, db):
+        seed(sjid="y3", title="Backend Engineer", description=self.JUNIOR)
+        seed(sjid="y4", title="Backend Engineer", description=self.SENIOR,
+             tenant="acme2")
+        assert len(titles(search(max_years=3))) == 1
+
+    def test_a_posting_that_states_no_experience_survives_both(self, db):
+        """76.4% of the live inventory states none, and not stating a number
+        is not the same as failing one."""
+        seed(sjid="y5", title="Backend Engineer", description=self.SILENT)
+        assert len(titles(search(min_years=8))) == 1
+        assert len(titles(search(max_years=1))) == 1

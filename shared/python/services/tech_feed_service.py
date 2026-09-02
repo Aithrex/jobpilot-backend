@@ -508,7 +508,7 @@ def build_query(req: Dict[str, Any], *, now: Optional[datetime] = None
         wanted = sorted({normalize_employment_type(v) for v in req["employment_types"]}
                         - {"unknown"})
         if wanted:
-            q.setdefault("$and", []).append({"$or": [
+            _and.append({"$or": [
                 {"employment_type_normalized": {"$in": wanted}},
                 {"employment_type_normalized": {"$exists": False}},
             ]})
@@ -558,7 +558,7 @@ def build_query(req: Dict[str, Any], *, now: Optional[datetime] = None
         if len(clauses) == 1:
             q.update(clauses[0])
         elif clauses:
-            q.setdefault("$and", []).append({"$or": clauses})
+            _and.append({"$or": clauses})
 
     # Salary is a RANGE on a field most rows do not have, so it cannot be a
     # plain Mongo clause without silently excluding the unpriced majority.
@@ -568,6 +568,13 @@ def build_query(req: Dict[str, Any], *, now: Optional[datetime] = None
         q["compensation"] = {"$exists": True, "$ne": None}
 
     if _and:
+        # ASSIGN, which is why every clause above appends to `_and` rather
+        # than to `q["$and"]`. Two of them used `q.setdefault("$and", [])`,
+        # and since `_and` always holds at least the unconditional tech-scope
+        # clause, this line then overwrote them: `countries` and
+        # `employment_types` were built correctly, put on the query, and
+        # deleted one line later. Measured live, `countries: ["india"]`
+        # returned the same 17,683 postings as no country filter at all.
         q["$and"] = _and
     return q
 
@@ -602,8 +609,16 @@ _PROJECTION_LIGHT = {k: v for k, v in _PROJECTION.items() if k != "requirements"
 
 
 def _needs_requirements_upfront(req: Dict[str, Any]) -> bool:
-    """True when a HARD filter reads `requirements`, so it cannot be deferred."""
-    return bool(req.get("skills_required") or req.get("exclude_skills"))
+    """True when a HARD filter reads `requirements`, so it cannot be deferred.
+
+    A free-text query counts. Matching it against titles alone is the
+    difference between 38 and several thousand results for "kubernetes", and a
+    search box that misses the roles it should find is the failure this feed
+    exists to avoid. The cost is real and bounded - it applies only to requests
+    that actually carry a query - and it buys the recall.
+    """
+    return bool(req.get("skills_required") or req.get("exclude_skills")
+                or req.get("query"))
 
 
 def hydrate_requirements(rows: Sequence[Dict[str, Any]]) -> int:
@@ -783,9 +798,14 @@ def hard_filter(docs: Sequence[Dict[str, Any]], req: Dict[str, Any],
     exclude_skills = set(req["exclude_skills"])
     required_skills = set(req["skills_required"])
     title_terms = _compile_terms(req["titles"]) if req["titles"] else None
-    query_terms = _compile_terms(
-        [t for t in re.split(r"[\s,]+", req["query"]) if len(t) >= 3]
-    ) if req["query"] else None
+    query_words = [t for t in re.split(r"[\s,]+", req["query"]) if len(t) >= 3] \
+        if req["query"] else []
+    query_terms = _compile_terms(query_words) if query_words else None
+    # Each word compiled SEPARATELY, so the search can require all of them.
+    # `query_terms` (the any-of pattern) stays for the `titles` fallback below,
+    # which is a different question: "did the free-text box rescue a row the
+    # title list would have dropped".
+    query_each = [_compile_terms([w]) for w in query_words]
     wanted_scopes = set(req["tech_scope"])
     wanted_specialties = set(req["role_specialties"])
     wanted_families = set(req["role_families"])
@@ -846,17 +866,52 @@ def hard_filter(docs: Sequence[Dict[str, Any]], req: Dict[str, Any],
 
         if exclude_keywords and exclude_keywords.search(title):
             drop("excluded_keyword"); continue
+
+        # === free-text query ==================================================
+        # The search box was compiled and then read in exactly ONE place: as a
+        # fallback when `titles` was ALSO set. With no title list - the normal
+        # case - typing "kubernetes" narrowed nothing at all. Measured live:
+        # 17,683 postings with the box empty, 17,683 with "kubernetes" in it.
+        #
+        # What is searched: the title, the employer, the taxonomy verdict
+        # (families and specialties) and the EXTRACTED SKILLS. NOT the raw job
+        # description - the body lives in S3 behind `description_ref` and
+        # scanning it would mean an object fetch per candidate. Skills are what
+        # make this usable: title-only, "kubernetes" returned 38 of 17,688
+        # core-tech postings, which is not a search result, it is a shortfall.
+        # It is why `_needs_requirements_upfront` counts a query.
+        #
+        # ALL words must appear, each somewhere in that haystack. Any-of turns
+        # "senior kubernetes" into every senior role in the index.
+        if query_each:
+            hay = " ".join([
+                title, str(doc.get("title_normalized") or ""), company,
+                " ".join(str(f) for f in (tech.get("role_families") or [])),
+                " ".join(str(x) for x in (tech.get("role_specialties") or [])),
+                str(tech.get("role_family") or ""),
+                " ".join(sorted(skills)),
+            ])
+            if not all(pat.search(hay) for pat in query_each if pat):
+                drop("query_mismatch"); continue
+
         if title_terms and not title_terms.search(title):
             if not (query_terms and query_terms.search(title)):
                 drop("title_mismatch"); continue
 
+        # "Min years" / "Max years" are a range on what the POSTING asks for,
+        # so both compare against `required_years_min` - the number the
+        # employer actually stated. `min_years` used to read
+        # `required_years_max`, which is populated only when a JD spells out a
+        # RANGE ("3-5 years") and is therefore set on 0 of 224,389 live
+        # postings: the filter was accepted, echoed, and could never fire.
+        #
+        # A posting that states no requirement is KEPT by both, as everywhere
+        # else here: not stating a number is not the same as failing one.
         years_min = tech.get("required_years_min")
-        if req["max_years"] is not None and isinstance(years_min, int) \
-                and years_min > req["max_years"]:
-            drop("requires_more_years"); continue
-        if req["min_years"] is not None:
-            years_max = tech.get("required_years_max")
-            if isinstance(years_max, int) and years_max < req["min_years"]:
+        if isinstance(years_min, int):
+            if req["max_years"] is not None and years_min > req["max_years"]:
+                drop("requires_more_years"); continue
+            if req["min_years"] is not None and years_min < req["min_years"]:
                 drop("below_requested_experience"); continue
 
         comp = doc.get("compensation") or {}
@@ -2290,9 +2345,10 @@ def unapplied_filters(req: Dict[str, Any]) -> List[Dict[str, str]]:
         if value in (None, "", [], 0):
             continue
         out.append({"filter": key, "reason": reason})
-    # `sponsorship_preference` and `company_categories` are applied only when
-    # the data exists for the row, so they are reported as PARTIAL rather than
-    # inert - a different and weaker claim.
+    # PARTIAL filters. These DO narrow, but only the rows that carry the data
+    # they test, and rows without it are kept rather than excluded - the
+    # unknown-is-not-a-no rule this codebase applies everywhere. Reporting
+    # them here is a weaker and more accurate claim than the applied list's.
     if str(req.get("sponsorship_preference") or "any") != "any":
         out.append({"filter": "sponsorship_preference",
                     "reason": ("applied only to postings that state their "
@@ -2302,6 +2358,25 @@ def unapplied_filters(req: Dict[str, Any]) -> List[Dict[str, str]]:
         out.append({"filter": "company_categories",
                     "reason": ("applied only to employers the registry has "
                                "categorised; uncategorised employers are kept")})
+    if req.get("employment_types"):
+        out.append({"filter": "employment_types",
+                    "reason": ("applied to postings whose employment type we "
+                               "have normalised; the rest are kept, not "
+                               "excluded")})
+    if req.get("skills_required"):
+        out.append({"filter": "skills_required",
+                    "reason": ("applied to postings whose skills we could "
+                               "extract; a posting we could not parse is kept "
+                               "rather than failed on a test it never got")})
+    if req.get("min_years") is not None or req.get("max_years") is not None:
+        out.append({"filter": "min_years/max_years",
+                    "reason": ("matched against the experience the posting "
+                               "STATES; 76.4% state none and those are kept")})
+    if req.get("query"):
+        out.append({"filter": "query",
+                    "reason": ("searches the title, employer, role taxonomy "
+                               "and extracted skills - not the full job "
+                               "description, which is not held inline")})
     return out
 
 
