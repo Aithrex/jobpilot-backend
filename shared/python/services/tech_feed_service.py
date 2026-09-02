@@ -1706,6 +1706,75 @@ def _resolve_employers(rows: List[Dict[str, Any]]) -> None:
         row["company"] = row.get("employer_name")
 
 
+def employer_categories_for(rows: Sequence[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """`(ats|tenant) -> employer_categories` from the registry, in one query.
+
+    Keyed on `(ats, tenant)` for the same reason everything else here is: a
+    posting's `employer_id` is a slug derived from whatever name the board
+    printed. Both stored spellings of the join key are accepted while the
+    registry migration is in flight.
+    """
+    keys: set = set()
+    for r in rows:
+        ten = str(r.get("tenant") or "").strip().lower()
+        if ten:
+            keys.add(f"{str(r.get('ats') or '').strip().lower()}:{ten}")
+            keys.add(f":{ten}")
+    if not keys:
+        return {}
+    out: Dict[str, List[str]] = {}
+    try:
+        db = _db()
+        cur = db["employers"].find(
+            {"$or": [{"registry_refs.tenant": {"$in": sorted(keys)}},
+                     {"registry_refs.tenant_keys": {"$in": sorted(keys)}}]},
+            {"registry_refs": 1, "employer_categories": 1})
+        for doc in cur:
+            cats = [str(c).lower() for c in (doc.get("employer_categories") or [])]
+            refs = doc.get("registry_refs") or {}
+            for k in list(refs.get("tenant") or []) + list(refs.get("tenant_keys") or []):
+                if str(k) in keys:
+                    out[str(k)] = cats
+    except Exception as exc:  # pragma: no cover - a registry outage must not 500
+        logger.warning("tech_feed: employer categories unavailable (%s)",
+                       type(exc).__name__)
+    return out
+
+
+def filter_company_categories(rows: List[Dict[str, Any]], req: Dict[str, Any]
+                              ) -> Tuple[List[Dict[str, Any]], int]:
+    """Drop rows whose EMPLOYER is categorised and does not match.
+
+    The filter was accepted, echoed in `applied_filters` and read by nothing —
+    measured live, `company_categories: ["fintech"]` returned all 18,058
+    matching postings. It runs here rather than in `build_query` because the
+    categories live on `employers`, not on the posting, and Mongo cannot join.
+
+    An employer the registry has not categorised is KEPT, not excluded: that is
+    a gap in our records, not a statement about the company. The response says
+    so — `unapplied_filters` reports this one as `partial`.
+    """
+    wanted = {str(c).lower() for c in (req.get("company_categories") or [])}
+    if not wanted or not rows:
+        return rows, 0
+    cats = employer_categories_for(rows)
+    if not cats:
+        return rows, 0
+    kept: List[Dict[str, Any]] = []
+    dropped = 0
+    for row in rows:
+        ten = str(row.get("tenant") or "").strip().lower()
+        got: List[str] = []
+        if ten:
+            got = (cats.get(f"{str(row.get('ats') or '').strip().lower()}:{ten}")
+                   or cats.get(f":{ten}") or [])
+        if got and not (set(got) & wanted):
+            dropped += 1
+            continue
+        kept.append(row)
+    return kept, dropped
+
+
 def _collapse_location_variants(rows: List[Dict[str, Any]]
                                 ) -> List[Dict[str, Any]]:
     """One card per role per employer, with the other cities kept on it.
@@ -1883,6 +1952,9 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
 
     t = time.perf_counter()
     _resolve_employers(kept)
+    kept, _cat_dropped = filter_company_categories(kept, req)
+    if _cat_dropped:
+        diagnostics["company_category_dropped"] = _cat_dropped
     diagnostics["employer_resolve_ms"] = round((time.perf_counter() - t) * 1000, 1)
     if req["employer_scope"] == EMPLOYER_SCOPE_TECH:
         kept, tech_only_dropped = _apply_employer_scope(kept)
@@ -2096,6 +2168,7 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
             break
 
     _resolve_employers(kept)
+    kept, _ = filter_company_categories(kept, stored_req)
     if stored_req["employer_scope"] == EMPLOYER_SCOPE_TECH:
         kept, _dropped = _apply_employer_scope(kept)
     kept = inventory_feed._dedupe(kept)

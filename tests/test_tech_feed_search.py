@@ -1182,3 +1182,42 @@ class TestTheCoverageBlockDoesNotOverclaim:
         seed(sjid="cv4", title="Backend Engineer", company="Zeta Co", tenant="zeta")
         assert tfs.coverage_block()["known_employers"] == first["known_employers"]
         assert tfs.coverage_block(force=True)["known_employers"] > first["known_employers"]
+
+
+class TestTheCompanyCategoryFilter:
+    """Accepted, echoed in `applied_filters` and read by nothing: measured
+    live, `company_categories: ["fintech"]` returned all 18,058 matching
+    postings. The categories live on `employers`, not on the posting, so it
+    cannot be a Mongo clause — it runs after employer resolution."""
+
+    def _register(self, db, *, tenant, cats):
+        db.employers.insert_one({
+            "employer_id": f"emp_{tenant}", "display_name": tenant.title(),
+            "employer_categories": cats,
+            "registry_refs": {"tenant": [f"greenhouse:{tenant}", f":{tenant}"]},
+        })
+
+    def test_a_categorised_employer_that_does_not_match_is_dropped(self, db):
+        self._register(db, tenant="acme", cats=["fintech"])
+        self._register(db, tenant="beta", cats=["healthtech"])
+        seed(sjid="k1", title="Backend Engineer", company="Acme Inc", tenant="acme")
+        seed(sjid="k2", title="Backend Engineer", company="Beta Ltd", tenant="beta")
+        got = titles(search(company_categories=["fintech"]))
+        assert len(got) == 1
+
+    def test_an_uncategorised_employer_is_kept_not_excluded(self, db):
+        """A gap in OUR records is not a statement about the company."""
+        seed(sjid="k3", title="Backend Engineer", company="Unknown Co",
+             tenant="unknownco")
+        assert len(titles(search(company_categories=["fintech"]))) == 1
+
+    def test_it_is_reported_as_partial_rather_than_fully_applied(self, db):
+        seed(sjid="k4", title="Backend Engineer")
+        entry = [u for u in search(company_categories=["fintech"])["unapplied_filters"]
+                 if u["filter"] == "company_categories"]
+        assert entry and entry[0]["status"] == tfs.FILTER_PARTIAL
+
+    def test_no_category_requested_touches_nothing(self, db):
+        rows = [{"tenant": "acme", "ats": "greenhouse"}]
+        assert tfs.filter_company_categories(rows, {"company_categories": []}) \
+            == (rows, 0)
