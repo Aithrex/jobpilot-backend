@@ -648,3 +648,53 @@ def test_the_new_vendors_declare_their_hosts_and_join_the_termless_sweep():
         assert vendor in termless, vendor
         assert ats_registry.api_hosts(vendor), vendor
         assert set(ats_registry.api_hosts(vendor)) <= set(hosts), vendor
+
+
+class TestAdapterStatusIsHonest:
+    """`blocked` and `empty` are different claims about an employer.
+
+    A board we cannot READ is a fact about us. Reporting it as "no postings"
+    puts the employer in the covered column with the explanation "they are not
+    hiring", which is false and which the coverage report would then repeat.
+    """
+
+    def _provider(self, vendor):
+        from services.ats_providers import registry as ats_registry
+        return ats_registry.get(vendor)
+
+    def test_a_blocked_adapter_validates_as_BLOCKED_not_EMPTY(self):
+        from services.ats_providers.base import STATUS_BLOCKED, Endpoint
+        from services import official_career_registry as ocr
+
+        blocked = [r for r in ocr.CUSTOM_BOARD_ADAPTERS
+                   if r.get("status") == "blocked"]
+        assert blocked, "the fixture depends on at least one blocked adapter"
+        for row in blocked:
+            provider = self._provider(row["vendor"])
+            got = provider.validate(
+                Endpoint(vendor=row["vendor"], tenant=row["key"]), None)
+            assert got.status == STATUS_BLOCKED, row["vendor"]
+            assert got.detail, row["vendor"]
+
+    def test_every_adapter_records_what_a_live_probe_saw(self):
+        from services import official_career_registry as ocr
+
+        for row in ocr.CUSTOM_BOARD_ADAPTERS:
+            assert row.get("status") in ("verified", "blocked", "unverified"), row["key"]
+            assert row.get("status_detail"), row["key"]
+
+    def test_an_unprobed_adapter_is_treated_as_blocked_not_trusted(self):
+        from services.ats_providers.base import STATUS_BLOCKED, Endpoint
+        from services.ats_providers.config_boards import ConfigBoardProvider
+
+        provider = ConfigBoardProvider({
+            "key": "never-probed", "vendor": "custom_never_probed",
+            "display_name": "Never Probed",
+            "request": {"method": "GET", "url": "https://example.test/api"},
+            "pagination": {"style": "none"}, "records_path": "jobs",
+            "fields": {"source_job_id": ["id"], "title": ["title"]},
+        })
+        got = provider.validate(Endpoint(vendor="custom_never_probed",
+                                         tenant="never-probed"), None)
+        assert got.status == STATUS_BLOCKED
+        assert "never probed" in got.detail

@@ -155,6 +155,27 @@ class ConfigBoardProvider(AtsProvider):
     has_detail = False
     fingerprints: Tuple = ()
 
+    def validate(self, endpoint, ctx):
+        """A row the registry marks `blocked` reports BLOCKED, not EMPTY.
+
+        The default implementation reads "no postings returned" as
+        `STATUS_EMPTY`, and for these boards that is a false claim about the
+        employer. Apple's search API answers 200 with zero records without a
+        session token; Tesla's is behind an Akamai wall. Both boards exist and
+        both are full of jobs -- we cannot read them, which is a fact about US.
+        `empty` would put those employers in the covered column with the
+        explanation "they are not hiring".
+        """
+        from services.ats_providers.base import STATUS_BLOCKED, ValidationResult
+
+        status = str(self.row.get("status") or "unverified").strip().lower()
+        if status in ("blocked", "unverified"):
+            detail = str(self.row.get("status_detail") or "").strip()
+            return ValidationResult(
+                STATUS_BLOCKED, 0,
+                detail=detail or f"adapter status: {status}, never probed live")
+        return super().validate(endpoint, ctx)
+
     def __init__(self, row: Dict[str, Any]) -> None:
         self.row: Dict[str, Any] = dict(row or {})
         self.key = str(self.row.get("key") or "").strip().lower()

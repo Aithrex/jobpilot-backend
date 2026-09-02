@@ -50,6 +50,18 @@ on every origin, and an SSRF check on every hop. A sweep that gets us blocked
 costs more coverage than it buys. Start at `--rate 8` on an unfamiliar
 network and watch `pass*_error:*` in the summary.
 
+```bash
+# Pass 3 - content. Ownership proven, content never read: pass 2 walks TO the
+# endpoint and does not read it, so a newly-proven source sits in
+# `ownership_verified`, which is NOT coverage. This is the step that turns
+# proven ownership into a coverage number.
+PYTHONPATH=shared/python python scripts/verify_career_sources.py \
+    --mode content --apply --workers 12 --rate 12
+```
+
+Run them in order. `--mode both` is passes 1 and 2; pass 3 is separate because
+it is only worth running after pass 2 has produced something to validate.
+
 Pass 1 prints a per-vendor table. `no signal` for workday / icims / oracle /
 ukg / paylocity / bamboohr is CORRECT — those APIs publish no owner, which is
 exactly why pass 2 exists.

@@ -311,6 +311,15 @@ def lookup(*, domain: Any = None, name: Any = None) -> Optional[Dict[str, Any]]:
 #: the first non-empty wins, so a provider that renamed a field does not need
 #: a new adapter.
 #:
+#: `status` records what a LIVE probe observed, with the date:
+#:   `verified`   - the endpoint returned postings
+#:   `blocked`    - the endpoint exists and refuses us (bot wall, session
+#:                  token). `validate()` returns BLOCKED, never EMPTY: "we
+#:                  cannot read this board" and "this board has no jobs" are
+#:                  different claims about the employer, and only one of them
+#:                  is ours to make.
+#:   `unverified` - added but never probed. Treated as blocked until it is.
+#:
 #: `pagination.style`:
 #:   `page`   - `params[page_param] = page_index` from `page_start`
 #:   `offset` - `params[offset_param] = page_index * page_size`
@@ -322,16 +331,25 @@ CUSTOM_BOARD_ADAPTERS: Tuple[Dict[str, Any], ...] = (
         "domain": "apple.com",
         "vendor": "custom_apple",
         "career_landing_url": "https://jobs.apple.com/en-us/search",
+        # Probed 2026-09-02. `/api/role/search` 301s to apple.com/pagenotfound;
+        # `/api/v1/search` answers 200 with the right SHAPE and
+        # `{"res":{"searchResults":[],"totalRecords":0}}` -- it needs a session
+        # the crawler does not have. Recorded as `blocked`, not left as a
+        # silent zero: "we cannot read this board" and "this board is empty"
+        # are different claims about Apple.
+        "status": "blocked",
+        "status_detail": ("jobs.apple.com/api/v1/search answers 200 with 0 "
+                          "records without a session token (probed 2026-09-02)"),
         "request": {
             "method": "POST",
-            "url": "https://jobs.apple.com/api/role/search",
+            "url": "https://jobs.apple.com/api/v1/search",
             "json_body": {"query": "", "filters": {}, "page": 1,
                           "locale": "en-us", "sort": "newest"},
             "page_field": "page",
         },
         "pagination": {"style": "page", "page_start": 1, "max_pages": 20},
-        "records_path": "searchResults",
-        "total_path": "totalRecords",
+        "records_path": "res.searchResults",
+        "total_path": "res.totalRecords",
         "fields": {
             "source_job_id": ["positionId", "id"],
             "title": ["postingTitle", "title"],
@@ -347,6 +365,11 @@ CUSTOM_BOARD_ADAPTERS: Tuple[Dict[str, Any], ...] = (
         "domain": "tesla.com",
         "vendor": "custom_tesla",
         "career_landing_url": "https://www.tesla.com/careers/search/",
+        # Probed 2026-09-02: Akamai returns "Access Denied" to this endpoint.
+        # The board exists and we cannot read it, which is `blocked` -- a state
+        # with a retry -- and not `empty`.
+        "status": "blocked",
+        "status_detail": "Akamai denies www.tesla.com/cua-api (probed 2026-09-02)",
         "request": {
             "method": "GET",
             "url": "https://www.tesla.com/cua-api/apps/careers/state",
@@ -379,6 +402,8 @@ CUSTOM_BOARD_ADAPTERS: Tuple[Dict[str, Any], ...] = (
             "description": ["content"],
             "apply_url": ["absolute_url"],
         },
+        "status": "verified",
+        "status_detail": "returns postings (probed 2026-09-02)",
         "notes": "SpaceX publishes through Greenhouse; kept here so the "
                  "official landing URL and the endpoint stay joined.",
     },

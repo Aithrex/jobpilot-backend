@@ -165,7 +165,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true",
                     help="write the verified states (default: report only)")
-    ap.add_argument("--mode", choices=("endpoints", "employers", "both"),
+    ap.add_argument("--mode",
+                    choices=("endpoints", "employers", "content", "both"),
                     default="both")
     ap.add_argument("--limit", type=int, default=4000)
     ap.add_argument("--workers", type=int, default=10)
@@ -378,6 +379,75 @@ def main() -> int:
             print(f"    wrote {stats_write['seen']:,} sources "
                   f"({stats_write['written']:,} inserted or changed; "
                   f"{promoted:,} now covered)")
+
+    # ---------------- pass 3: content ----------------
+    # Ownership proven, content never checked. Pass 2 walks to the endpoint but
+    # does not read it, so a newly-proven source sits in `ownership_verified` -
+    # which is NOT coverage - until something fetches postings from it. The
+    # crawler gets there eventually; this closes the loop now, and it is the
+    # step that turns proven ownership into a coverage number.
+    if args.mode in ("content", "both"):
+        q3: Dict[str, Any] = {"state": {"$in": [css.STATE_OWNERSHIP_VERIFIED,
+                                                css.STATE_CONTENT_VALIDATED]},
+                              "ats_vendor": {"$nin": ["", None]}}
+        if args.employer_id:
+            q3["employer_id"] = {"$in": args.employer_id}
+        rows3 = list(sources_col.find(q3).limit(args.limit))
+        print(f"\npass 3 - content validation: {len(rows3):,} sources")
+
+        def _content(row):
+            provider = ats_registry.get(row.get("ats_vendor") or "")
+            if provider is None:
+                return {"source_id": row["source_id"], "unsupported": True}
+            ep = Endpoint(vendor=row["ats_vendor"], tenant=row.get("tenant") or "")
+            try:
+                result = provider.validate(ep, ctx)
+            except Exception as exc:
+                return {"source_id": row["source_id"], "error": type(exc).__name__}
+            return {"source_id": row["source_id"], "status": result.status,
+                    "count": int(result.job_count or 0),
+                    "sample": str(result.sample_title or "")[:120],
+                    "detail": str(result.detail or "")[:300],
+                    "vendor": row.get("ats_vendor")}
+
+        got3: List[Dict[str, Any]] = []
+        done3 = 0
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            for fut in as_completed([pool.submit(_content, r) for r in rows3]):
+                res = fut.result()
+                with lock:
+                    done3 += 1
+                    if res.get("unsupported"):
+                        stats["pass3_unsupported_provider"] += 1
+                    elif res.get("error"):
+                        stats[f"pass3_error:{res['error']}"] += 1
+                    else:
+                        stats[f"pass3_{res['status']}"] += 1
+                        got3.append(res)
+                    if done3 % 100 == 0:
+                        print(f"    {done3:,}/{len(rows3):,} checked "
+                              f"{time.time() - t0:.0f}s")
+
+        if args.apply:
+            promoted = 0
+            for res in got3:
+                if res["status"] == "validated":
+                    state = css.record_success(res["source_id"],
+                                               job_count=res["count"],
+                                               sample_title=res["sample"])
+                elif res["status"] == "empty":
+                    state = css.record_success(res["source_id"], job_count=0)
+                elif res["status"] == "blocked":
+                    state = css.record_failure(res["source_id"],
+                                               failure_code=css.FAIL_HTTP_403,
+                                               detail=res["detail"])
+                else:
+                    state = css.record_failure(res["source_id"],
+                                               failure_code=css.FAIL_PARSE,
+                                               detail=res["detail"])
+                if state in css.COVERED_STATES:
+                    promoted += 1
+            print(f"    wrote {len(got3):,} sources ({promoted:,} now covered)")
 
     print("\n--- results ---")
     for k, v in sorted(stats.items()):
