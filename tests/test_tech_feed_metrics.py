@@ -197,3 +197,50 @@ class TestAlarms:
 
     def test_a_dead_heartbeat_alarms(self, db):
         assert any("heartbeat" in a for a in m.alarms(db))
+
+
+class TestOwnershipMetrics:
+    """The two coverage numbers, published side by side.
+
+    `coverage_metrics` counts endpoints that ANSWERED. `ownership` counts
+    sources whose owner is proven. Reporting only the first is how 43% came to
+    mean something it did not.
+    """
+
+    def test_the_snapshot_carries_both(self, mock_db):
+        from services import tech_feed_metrics as tfm
+
+        got = tfm.snapshot(mock_db)
+        assert "coverage" in got
+        assert "ownership" in got
+
+    def test_ownership_reports_the_registry_and_the_sources(self, mock_db):
+        from services import career_source_service as css
+        from services import employer_registry as er
+        from services import tech_feed_metrics as tfm
+
+        mock_db[er.EMPLOYERS].delete_many({})
+        mock_db[css.CAREER_SOURCES].delete_many({})
+        er.upsert_employer(er.build_employer(
+            display_name="Stripe", canonical_domain="stripe.com",
+            cohorts=["private_growth"], employer_categories=["fintech"]))
+        css.upsert_source(css.build_source(
+            employer_id="e1", ats_vendor="greenhouse", tenant="stripe",
+            ownership_evidence=[css.evidence(css.SIGNAL_DOMAIN_LINK)],
+            content_validation_evidence=[css.evidence("content_fetch")],
+            job_count_last=10))
+
+        got = tfm.ownership_metrics(mock_db)
+        assert got["employers"]["total"] == 1
+        assert got["employers"]["by_cohort"]["private_growth"] == 1
+        assert got["career_sources"]["by_state"][css.STATE_VALIDATED] == 1
+        assert got["career_sources"]["ownership_verified"] == 1
+
+    def test_a_missing_collection_degrades_rather_than_raising(self, mock_db):
+        """A metrics snapshot must never be the thing that takes a dashboard
+        down, and a registry that has not been backfilled yet is a normal
+        state, not an error."""
+        from services import tech_feed_metrics as tfm
+
+        got = tfm.ownership_metrics(mock_db)
+        assert isinstance(got, dict)

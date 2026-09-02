@@ -285,6 +285,32 @@ def search_metrics(db=None, *, hours: int = 24) -> Dict[str, Any]:
     }
 
 
+def ownership_metrics(db=None) -> Dict[str, Any]:
+    """Employer identity and career-source ownership, from the new registries.
+
+    Reported ALONGSIDE `coverage_metrics`, never instead of it.
+    `coverage_metrics` counts `company_ats_endpoints.status == "validated"`,
+    which means the endpoint answered; this counts sources whose OWNERSHIP is
+    proven. Publishing both is the point: the gap between them is the number
+    that used to be reported as coverage.
+    """
+    db = _db() if db is None else db
+    out: Dict[str, Any] = {}
+    try:
+        from services import career_source_service as css
+        from services import employer_registry as er
+        out["employers"] = er.counts()
+        out["career_sources"] = css.counts()
+    except Exception as exc:      # pragma: no cover - a new collection may be absent
+        out["error"] = type(exc).__name__
+    try:
+        from services import tech_feed_feedback
+        out["feedback"] = tech_feed_feedback.counts()
+    except Exception as exc:      # pragma: no cover
+        out["feedback_error"] = type(exc).__name__
+    return out
+
+
 def snapshot(db=None) -> Dict[str, Any]:
     """Every metric, in one document. Read-only."""
     db = _db() if db is None else db
@@ -293,6 +319,7 @@ def snapshot(db=None) -> Dict[str, Any]:
         "inventory": inventory_metrics(db),
         "ingestion": ingestion_metrics(db),
         "coverage": coverage_metrics(db),
+        "ownership": ownership_metrics(db),
         "search": search_metrics(db),
     }
 
