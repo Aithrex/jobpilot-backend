@@ -59,10 +59,60 @@ def _db():
     return DBConnect().get_db()
 
 
+from services import canonical_employer as _ce           # noqa: E402
 from services import career_source_service as css        # noqa: E402
+from services import coverage_snapshot as _snap          # noqa: E402
 from services import employer_registry as er             # noqa: E402
 from services import employer_tech_classifier as etc     # noqa: E402
+from services import official_career_registry as _ocr    # noqa: E402
 from services import tech_taxonomy as tx                 # noqa: E402
+
+
+def _attribution(db) -> Dict[str, Any]:
+    """How much of the inventory carries a canonical employer, and why not."""
+    try:
+        return _ce.attribution_stats(db)
+    except Exception as exc:      # pragma: no cover
+        return {"error": type(exc).__name__}
+
+
+def _provider_readiness() -> Dict[str, Any]:
+    """Provider readiness DERIVED from the registered implementations.
+
+    Reported here because "we cannot crawl this ATS" is a coverage claim, and
+    it used to be made from a hand-written constant that listed two vendors we
+    had already built. A number in this report has to come from the thing it
+    describes.
+    """
+    try:
+        from services.ats_providers import registry as ats_registry
+        rows = ats_registry.readiness_report()
+        by_state = collections.Counter(r["state"] for r in rows.values())
+        return {"registered_providers": len(rows),
+                "by_state": dict(by_state),
+                "not_ready": {v: r["detail"] for v, r in sorted(rows.items())
+                              if r["state"] != ats_registry.READY}}
+    except Exception as exc:      # pragma: no cover
+        return {"error": type(exc).__name__}
+
+
+def _official_url_verification(db) -> Dict[str, Any]:
+    """How many registry URLs have an ACTUAL verification event behind them.
+
+    `verified_at` used to be `None` on every row because the script that was
+    documented as writing it did not exist. This counts the events.
+    """
+    try:
+        rows = _ocr.verified_rows(db=db)
+        checked = [r for r in rows if r.get("check_outcome")]
+        by_outcome = collections.Counter(str(r.get("check_outcome"))
+                                         for r in checked)
+        return {"registry_rows": len(rows),
+                "rows_with_a_verification_event": len(checked),
+                "rows_never_checked": len(rows) - len(checked),
+                "by_outcome": dict(by_outcome)}
+    except Exception as exc:      # pragma: no cover
+        return {"error": type(exc).__name__}
 
 
 def _now() -> datetime:
@@ -142,58 +192,13 @@ def posting_mix(db, *, days: int = 30) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-#: Evidence kinds that, on their own, put an employer in the TECHNOLOGY
-#: denominator. Each is documentary; none is a keyword in a name.
-TECH_EVIDENCE_KINDS = frozenset({
-    "curated_seed", "official_career_url", "identity_override",
-})
-
-
-def is_evidence_backed_tech(emp: Dict[str, Any], mix: Dict[str, Any],
-                            company: Optional[Dict[str, Any]] = None
-                            ) -> Tuple[bool, str]:
-    """`(in_denominator, why)` for one employer.
-
-    Deliberately NOT a name heuristic: the live registry contains "NUROTOCO OF
-    MASSACHUSETTS", "SLACK TIDE CRUISES LLC" and "NOTIONSBYNANCY LLC", and a
-    rule that reads "Technologies" in a name promotes all three.
-
-    The `companies` row is joined in because the strongest signal available -
-    the SEC-assigned SIC code - lives there and nowhere else. Classifying
-    without it discards a filing the registrant made about themselves and
-    leaves only the posting mix, which cuts the denominator to the employers
-    we already crawl. That is a denominator defined by our own coverage, which
-    is precisely the circularity a coverage number must not have.
-    """
-    kinds = {str(e.get("kind")) for e in (emp.get("evidence") or [])
-             if isinstance(e, dict)}
-    hit = kinds & TECH_EVIDENCE_KINDS
-    if hit:
-        return True, f"curated: {sorted(hit)[0]}"
-
-    company = company or {}
-    tech_rows = int(mix.get("core", 0)) + int(mix.get("adjacent", 0))
-    classified = etc.classify_employer(
-        {"name": emp.get("display_name"),
-         "domain": emp.get("canonical_domain") or company.get("domain"),
-         "sic": company.get("sic"),
-         "sic_description": company.get("sic_description"),
-         "signals": company.get("signals") or {},
-         "cik": company.get("cik"), "ticker": company.get("ticker")},
-        posting_mix={"core": int(mix.get("core", 0)),
-                     "adjacent": int(mix.get("adjacent", 0)),
-                     "non_tech": int(mix.get("non_tech", 0)),
-                     "unknown": int(mix.get("unknown", 0))} if mix else None)
-    if classified.tech_classification in (etc.TECH_SOFTWARE, etc.TECH_ADJACENT):
-        return True, f"classifier: {classified.evidence_source}"
-
-    classified_rows = tech_rows + int(mix.get("non_tech", 0))
-    if classified_rows >= etc.POSTING_MIX_MIN_ROWS:
-        share = tech_rows / classified_rows
-        if share >= etc.POSTING_MIX_ADJACENT:
-            return True, (f"posting mix: {tech_rows} of {classified_rows} "
-                          f"classified rows are technology ({share:.0%})")
-    return False, "no technology evidence"
+#: THE definition now lives in `employer_tech_classifier`, because the feed's
+#: `employer_scope=tech_only` filter has to give the same answer this report's
+#: denominator gives. A coverage number over a set the product cannot
+#: reproduce is a number about nothing. These two names are kept as aliases so
+#: every existing reference and test keeps resolving.
+TECH_EVIDENCE_KINDS = etc.TECH_EVIDENCE_KINDS
+is_evidence_backed_tech = etc.is_evidence_backed_tech
 
 
 #: How an employer is placed in a cohort, in order. Every rule reads recorded
@@ -357,8 +362,36 @@ def report(db, built: Dict[str, Any], *, mix_days: int) -> Dict[str, Any]:
         str(e.get("status") or "?")
         for e in db.company_ats_endpoints.find({}, {"status": 1}))
 
+    # ---------------------------------------------------------------------
+    # SOURCE-level counts. A different UNIT from the employer counts above,
+    # and conflating the two is how `validated_career_sources` came to hold a
+    # count of EMPLOYERS. One employer can hold several sources (a Workday
+    # board and a Greenhouse board), and one source can be owner-verified
+    # without being validated (proven ownership, content not yet confirmed) —
+    # so these three numbers are all different and all needed:
+    #
+    #   covered_career_sources                  sources in a COVERED state
+    #   ownership_verified_unvalidated_sources  ownership proven, coverage not
+    #   career_sources_total                    everything, including candidates
+    #
+    # The third one exists so the first two can be read as shares of something
+    # rather than as bare counts.
+    source_states = collections.Counter()
+    covered_sources = ov_unvalidated = sources_total = 0
+    for src in db.career_sources.find({}, {"state": 1, "ownership_verified": 1}):
+        sources_total += 1
+        state = str(src.get("state") or css.STATE_CANDIDATE)
+        source_states[state] += 1
+        if state in css.COVERED_STATES:
+            covered_sources += 1
+        elif src.get("ownership_verified"):
+            ov_unvalidated += 1
+
+    candidates = total - covered
+
     return {
         "generated_at": _now().isoformat(),
+        "measured_at": _now(),
         "source_revision": source_revision(),
         "inventory_watermark": watermark.isoformat() if watermark else None,
         "mix_window_days": mix_days,
@@ -368,18 +401,37 @@ def report(db, built: Dict[str, Any], *, mix_days: int) -> Dict[str, Any]:
             "employer_registry": er.REGISTRY_VERSION,
             "career_source": css.CAREER_SOURCE_VERSION,
             "employer_classifier": etc.CLASSIFIER_VERSION,
+            "canonical_employer": _ce.CANONICAL_EMPLOYER_VERSION,
+            "official_career_registry": _ocr.REGISTRY_VERSION,
         },
         "registry": {
             "employers_total": built["registry_total"],
             "evidence_backed_technology_employers": total,
             "open_merge_reviews": db.employer_merge_reviews.count_documents(
                 {"resolved": False}),
+            "open_board_conflicts": db[_ce.BOARD_CONFLICTS].count_documents(
+                {"resolved": False}) if _ce.BOARD_CONFLICTS in
+            db.list_collection_names() else 0,
         },
         "coverage": {
+            # --- EMPLOYERS (the accountability number) --------------------
+            "covered_employers": covered,
+            "employer_coverage_pct": round(covered / total, 4) if total else 0.0,
+            "candidate_employers": candidates,
+            "by_state": dict(by_state),
+            # --- SOURCES (a different unit) --------------------------------
+            "covered_career_sources": covered_sources,
+            "ownership_verified_unvalidated_sources": ov_unvalidated,
+            "career_sources_total": sources_total,
+            "sources_by_state": dict(source_states),
+            # --- compatibility --------------------------------------------
+            # `validated_career_sources` has ALWAYS held the covered-EMPLOYER
+            # count under a source-shaped name. Kept, pointing at the same
+            # number it always did, so no existing reader changes meaning
+            # under it; `covered_employers` is the name to read.
             "validated_career_sources": covered,
             "validated_pct": round(covered / total, 4) if total else 0.0,
-            "by_state": dict(by_state),
-            "without_validated_coverage": total - covered,
+            "without_validated_coverage": candidates,
         },
         "yield": {
             "employers_yielding_postings": yielding,
@@ -389,6 +441,9 @@ def report(db, built: Dict[str, Any], *, mix_days: int) -> Dict[str, Any]:
             "core_share": round(core_postings / active_postings, 4)
             if active_postings else 0.0,
         },
+        "attribution": _attribution(db),
+        "provider_readiness": _provider_readiness(),
+        "official_url_verification": _official_url_verification(db),
         "by_cohort": _facet("cohorts"),
         "by_category": _facet("employer_categories"),
         "by_country": _facet("countries"),
@@ -411,13 +466,15 @@ def tier_a_rollcall(db) -> Dict[str, Any]:
     """
     from services import employer_registry as _er
     rows: List[Dict[str, Any]] = []
-    for name, domain in strategic_tier_a():
+    for entry in _ocr.OFFICIAL_CAREER_URLS:
+        name, domain = entry["display_name"], entry["domain"]
         eid = _er.employer_id_for(domain=domain, name=name)
         emp = db.employers.find_one({"employer_id": eid},
                                     {"_id": 0, "employer_id": 1, "display_name": 1})
         cov = css.coverage_by_employer([eid]).get(eid, {}) if emp else {}
         rows.append({
             "display_name": name, "domain": domain, "employer_id": eid,
+            "batch": str(entry.get("batch") or _ocr.BATCH_BASELINE),
             "in_registry": bool(emp),
             "state": cov.get("state") if emp else "not_in_registry",
             "sources": cov.get("sources", 0) if emp else 0,
@@ -425,7 +482,83 @@ def tier_a_rollcall(db) -> Dict[str, Any]:
             "no employer row - the backfill did not mint one",
         })
     by_state = collections.Counter(r["state"] for r in rows)
-    return {"total": len(rows), "by_state": dict(by_state), "rows": rows}
+
+    # The target was set against the 94 employers in the registry ON THE DAY,
+    # so "75 of 94" has to stay checkable against THOSE 94. Rows added later
+    # are reported separately rather than being folded into a denominator that
+    # quietly grew — growing the denominator is the cheapest way to make a
+    # coverage ratio look worse, and shrinking it the cheapest way to make one
+    # look better. Neither is measurement.
+    def _bucket(batch: str) -> Dict[str, Any]:
+        subset = [r for r in rows if r["batch"] == batch]
+        states = collections.Counter(r["state"] for r in subset)
+        covered = sum(states.get(st, 0) for st in css.COVERED_STATES)
+        return {"total": len(subset), "covered": covered,
+                "pct": round(covered / len(subset), 4) if subset else 0.0,
+                "by_state": dict(states)}
+
+    batches = sorted({r["batch"] for r in rows})
+    return {"total": len(rows), "by_state": dict(by_state), "rows": rows,
+            "covered": sum(by_state.get(st, 0) for st in css.COVERED_STATES),
+            "by_batch": {b: _bucket(b) for b in batches},
+            "accountable": _bucket(_ocr.BATCH_BASELINE)}
+
+
+def snapshot_payload(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """The subset every product surface reads, flattened.
+
+    Flat on purpose: the health banner, the coverage endpoint and this report
+    must be reading the SAME field, and a nested shape invites each of them to
+    reach into a different part of it and drift.
+    """
+    cov, reg, yld = summary["coverage"], summary["registry"], summary["yield"]
+    tier = summary.get("tier_a") or {}
+    tier_states = tier.get("by_state") or {}
+    tier_covered = sum(tier_states.get(s, 0) for s in css.COVERED_STATES)
+    att = summary.get("attribution") or {}
+    return {
+        "measured_at": summary.get("measured_at") or _now(),
+        "source_revision": summary.get("source_revision"),
+        "inventory_watermark": summary.get("inventory_watermark"),
+        "mix_window_days": summary.get("mix_window_days"),
+        "versions": summary.get("versions") or {},
+        # --- employers -------------------------------------------------
+        "technology_employer_denominator":
+            reg["evidence_backed_technology_employers"],
+        "covered_technology_employers": cov["covered_employers"],
+        "employer_coverage_pct": cov["employer_coverage_pct"],
+        "candidate_technology_employers": cov["candidate_employers"],
+        "registry_employers_total": reg["employers_total"],
+        # --- sources ---------------------------------------------------
+        "covered_career_sources": cov["covered_career_sources"],
+        "ownership_verified_unvalidated_sources":
+            cov["ownership_verified_unvalidated_sources"],
+        "career_sources_total": cov["career_sources_total"],
+        # --- yield -----------------------------------------------------
+        "employers_yielding_postings": yld["employers_yielding_postings"],
+        "employers_yielding_core_tech": yld["employers_yielding_core_tech"],
+        "active_postings": yld["active_postings"],
+        "core_tech_postings": yld["core_tech_postings"],
+        # --- strategic -------------------------------------------------
+        "tier_a": {"total": tier.get("total", 0), "covered": tier_covered,
+                   "by_state": dict(tier_states),
+                   "by_batch": tier.get("by_batch") or {},
+                   "accountable": tier.get("accountable") or {}},
+        # --- breakdowns ------------------------------------------------
+        "by_cohort": summary.get("by_cohort") or {},
+        "by_category": summary.get("by_category") or {},
+        # --- attribution ------------------------------------------------
+        "canonical_attribution": {
+            "attributed_postings": att.get("attributed_postings", 0),
+            "owner_verified_postings": att.get("owner_verified_postings", 0),
+            "owner_verified_attribution_pct":
+                att.get("owner_verified_attribution_pct", 0.0),
+            "contested_boards_unresolved":
+                att.get("contested_boards_unresolved", 0),
+        },
+        "open_merge_reviews": reg.get("open_merge_reviews", 0),
+        "open_board_conflicts": reg.get("open_board_conflicts", 0),
+    }
 
 
 def render_markdown(summary: Dict[str, Any]) -> str:
@@ -460,11 +593,15 @@ def render_markdown(summary: Dict[str, Any]) -> str:
     a(f"| employers in the registry | {reg['employers_total']:,} |")
     a(f"| **evidence-backed technology employers** | "
       f"**{reg['evidence_backed_technology_employers']:,}** |")
-    a(f"| **validated official career sources** | "
-      f"**{cov['validated_career_sources']:,}** |")
-    a(f"| **validated coverage** | **{cov['validated_pct']:.1%}** |")
-    a(f"| employers without validated coverage | "
-      f"{cov['without_validated_coverage']:,} |")
+    a(f"| **covered technology employers** | "
+      f"**{cov['covered_employers']:,}** |")
+    a(f"| **employer coverage** | **{cov['employer_coverage_pct']:.1%}** |")
+    a(f"| candidate technology employers (no covered source) | "
+      f"{cov['candidate_employers']:,} |")
+    a(f"| covered career SOURCES | {cov['covered_career_sources']:,} |")
+    a(f"| ownership-verified but unvalidated SOURCES | "
+      f"{cov['ownership_verified_unvalidated_sources']:,} |")
+    a(f"| career sources total | {cov['career_sources_total']:,} |")
     a(f"| employers yielding postings | {yld['employers_yielding_postings']:,} |")
     a(f"| employers yielding core-tech postings | "
       f"{yld['employers_yielding_core_tech']:,} |")
@@ -472,6 +609,23 @@ def render_markdown(summary: Dict[str, Any]) -> str:
     a(f"| core-tech postings | {yld['core_tech_postings']:,} "
       f"({yld['core_share']:.1%}) |")
     a(f"| open employer merge reviews | {reg['open_merge_reviews']:,} |")
+    a(f"| open employer board conflicts | {reg.get('open_board_conflicts', 0):,} |")
+    a("")
+    a("### Four counts, four units")
+    a("")
+    a("These are deliberately separated because they were previously one")
+    a("number under a name that fitted none of them.")
+    a("")
+    a("- **covered technology employers** — employers, the accountability")
+    a("  number. One employer, however many boards.")
+    a("- **covered career sources** — boards. An employer running a Workday")
+    a("  board and a Greenhouse board is one employer and two sources.")
+    a("- **ownership-verified but unvalidated sources** — boards whose OWNER")
+    a("  is proven and whose CONTENT is not yet confirmed. Work in progress,")
+    a("  not failure, and not coverage.")
+    a("- **employers yielding postings** — employers we actually have live")
+    a("  postings from. Never equal to covered: a covered board can be")
+    a("  genuinely empty, and an uncovered board can still be crawled.")
     a("")
     a("## Every employer is in exactly one state")
     a("")
@@ -526,17 +680,96 @@ def render_markdown(summary: Dict[str, Any]) -> str:
     a("from whatever the database happens to contain.")
     a("")
     tier = summary.get("tier_a") or {}
+    acc = tier.get("accountable") or {}
+    a(f"**The accountable set is the {acc.get('total', 0)} employers the target "
+      f"was set against**, and it is reported separately from anything added")
+    a("since. A denominator that grows is not a measurement.")
+    a("")
+    a("| batch | employers | covered | % |")
+    a("|---|---:|---:|---:|")
+    for batch, m in sorted((tier.get("by_batch") or {}).items()):
+        a(f"| `{batch}` | {m['total']:,} | {m['covered']:,} | {m['pct']:.1%} |")
+    a("")
     a("| state | employers |")
     a("|---|---:|")
     for state, n in sorted((tier.get("by_state") or {}).items(),
                            key=lambda kv: -kv[1]):
         a(f"| `{state}` | {n:,} |")
     a("")
-    a("| employer | domain | state | sources | detail |")
-    a("|---|---|---|---:|---|")
+    a("| employer | domain | batch | state | sources | detail |")
+    a("|---|---|---|---|---:|---|")
     for r in tier.get("rows") or []:
-        a(f"| {r['display_name']} | `{r['domain']}` | `{r['state']}` | "
-          f"{r['sources']} | {str(r['detail'])[:90]} |")
+        a(f"| {r['display_name']} | `{r['domain']}` | `{r.get('batch', '')}` | "
+          f"`{r['state']}` | {r['sources']} | {str(r['detail'])[:90]} |")
+    a("")
+    a("## Canonical employer attribution")
+    a("")
+    a("A posting carries `canonical_employer_id` only when the board it came")
+    a("from has owner-verified evidence naming exactly one employer. Refusing")
+    a("is a correct answer, so the share is reported against the postings on")
+    a("owner-verified boards, not against the whole inventory.")
+    a("")
+    att = summary.get("attribution") or {}
+    if att.get("error"):
+        a(f"unavailable: `{att['error']}`")
+    else:
+        a("| | value |")
+        a("|---|---:|")
+        a(f"| active postings considered | {att.get('postings_considered', 0):,} |")
+        a(f"| on owner-verified boards | {att.get('owner_verified_postings', 0):,} |")
+        a(f"| **carrying a canonical employer** | "
+          f"**{att.get('attributed_postings', 0):,}** |")
+        a(f"| share of owner-verified postings | "
+          f"{float(att.get('owner_verified_attribution_pct') or 0):.1%} |")
+        a(f"| attributing boards | {att.get('attributing_boards', 0):,} |")
+        a(f"| contested boards | {att.get('contested_boards', 0):,} "
+          f"({att.get('contested_boards_unresolved', 0):,} still blocking) |")
+        a("")
+        a("| quarantine reason | postings |")
+        a("|---|---:|")
+        for reason, n in sorted((att.get("quarantined_by_reason") or {}).items(),
+                                key=lambda kv: -kv[1]):
+            a(f"| `{reason}` | {n:,} |")
+    a("")
+    a("## Provider readiness")
+    a("")
+    a("Derived from the REGISTERED provider implementations, not from a")
+    a("hand-maintained list. The previous list named `usajobs` and")
+    a("`successfactors` as unsupported while both were implemented and")
+    a("crawling, so every employer on either vendor was reported as an ATS we")
+    a("cannot reach.")
+    a("")
+    pr = summary.get("provider_readiness") or {}
+    if pr.get("error"):
+        a(f"unavailable: `{pr['error']}`")
+    else:
+        a(f"- registered providers: **{pr.get('registered_providers', 0)}**")
+        for state, n in sorted((pr.get("by_state") or {}).items(),
+                               key=lambda kv: -kv[1]):
+            a(f"- `{state}`: {n}")
+        if pr.get("not_ready"):
+            a("")
+            a("| vendor | why |")
+            a("|---|---|")
+            for vendor, why in sorted(pr["not_ready"].items()):
+                a(f"| `{vendor}` | {why} |")
+    a("")
+    a("## Official career-URL verification")
+    a("")
+    a("`verified_at` now records an actual fetch. Before")
+    a("`scripts/verify_official_career_urls.py` existed, `_row` hard-coded it")
+    a("to `None` and nothing could ever have written another value.")
+    a("")
+    ouv = summary.get("official_url_verification") or {}
+    if ouv.get("error"):
+        a(f"unavailable: `{ouv['error']}`")
+    else:
+        a(f"- registry rows: {ouv.get('registry_rows', 0)}")
+        a(f"- **with a verification event: {ouv.get('rows_with_a_verification_event', 0)}**")
+        a(f"- never checked: {ouv.get('rows_never_checked', 0)}")
+        for outcome, n in sorted((ouv.get("by_outcome") or {}).items(),
+                                 key=lambda kv: -kv[1]):
+            a(f"  - `{outcome}`: {n}")
     a("")
     a("## Crawl health")
     a("")
@@ -566,6 +799,9 @@ def main() -> int:
     ap.add_argument("--markdown", action="store_true",
                     help="regenerate docs/coverage/tech-employer-coverage.md")
     ap.add_argument("--mix-days", type=int, default=30)
+    ap.add_argument("--persist", action="store_true",
+                    help="store the measurement in `coverage_snapshots` so the "
+                         "product reads the SAME numbers this report prints")
     args = ap.parse_args()
 
     db = _db()
@@ -578,9 +814,13 @@ def main() -> int:
     print(f"inventory_watermark {summary['inventory_watermark']}")
     print(f"employers total     {reg['employers_total']:,}")
     print(f"tech denominator    {reg['evidence_backed_technology_employers']:,}")
-    print(f"validated sources   {cov['validated_career_sources']:,} "
-          f"({cov['validated_pct']:.1%})")
-    print(f"uncovered           {cov['without_validated_coverage']:,}")
+    print(f"covered employers   {cov['covered_employers']:,} "
+          f"({cov['employer_coverage_pct']:.1%})")
+    print(f"uncovered           {cov['candidate_employers']:,}")
+    print(f"covered SOURCES     {cov['covered_career_sources']:,} of "
+          f"{cov['career_sources_total']:,}")
+    print(f"owner-verified but  {cov['ownership_verified_unvalidated_sources']:,} "
+          f"(unvalidated sources)")
     print(f"yielding            {yld['employers_yielding_postings']:,} "
           f"({yld['employers_yielding_core_tech']:,} core-tech)")
     print(f"core-tech postings  {yld['core_tech_postings']:,} of "
@@ -598,6 +838,14 @@ def main() -> int:
         Path(args.json).write_text(json.dumps(summary, indent=2, default=str),
                                    encoding="utf-8")
         print(f"\nwrote {args.json}")
+    if args.persist:
+        _snap.ensure_indexes(db=db)
+        stored = _snap.save(snapshot_payload(summary), db=db)
+        if stored:
+            _snap.prune(db=db)
+            print(f"\npersisted coverage snapshot measured_at={stored}")
+        else:
+            print("\nsnapshot NOT persisted - the measurement was incomplete")
     if args.markdown:
         out = ROOT / "docs" / "coverage" / "tech-employer-coverage.md"
         out.parent.mkdir(parents=True, exist_ok=True)

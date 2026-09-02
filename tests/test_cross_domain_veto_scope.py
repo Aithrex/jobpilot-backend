@@ -117,7 +117,11 @@ class TestTheDeclaredMatrixIsVersioned:
     def test_the_version_moved_with_the_pairs(self):
         """The matrix is a declared, versioned artifact; adding edges without
         moving the version makes two different matrices answer to one name."""
-        assert tx.ADJACENCY_VERSION == "tech-adjacency-1.1.0"
+        # 1.2.0 added the quantum cluster: quantum_software / quantum_hardware
+        # / quantum_control / cryogenic_systems and the 17 edges that connect
+        # them to each other and to the specialties people actually move
+        # between (systems programming, FPGA/RTL, analog, HPC, photonics).
+        assert tx.ADJACENCY_VERSION == "tech-adjacency-1.2.0"
 
     def test_every_declared_pair_names_real_specialties(self):
         known = set(tx.SPECIALTY_LABELS)

@@ -1031,6 +1031,23 @@ def upsert_posting(
     if run_id:
         mutable["last_ingest_run_id"] = _safe_str(run_id, 64)
 
+    # The canonical employer, when — and ONLY when — the board carries
+    # owner-verified evidence naming one employer. `employer_id` above is
+    # untouched: it is the slug three production indexes key on, and the whole
+    # point of the canonical field is that it can be absent without breaking a
+    # single existing reader. An unattributable board actively CLEARS the
+    # field, because a stale attribution the evidence no longer supports is
+    # worse than none. See `services/canonical_employer.py`.
+    unset = {"purge_at": ""}
+    try:
+        from services import canonical_employer as _ce
+        stamp, clear = _ce.stamp_fields(doc)
+        mutable.update(stamp)
+        for field in clear:
+            unset[field] = ""
+    except Exception as exc:      # pragma: no cover - attribution is additive
+        logger.debug("upsert_posting: canonical attribution unavailable: %s", exc)
+
     update = {
         "$set": mutable,
         "$setOnInsert": {
@@ -1042,7 +1059,7 @@ def upsert_posting(
         },
         # A posting re-observed as live must NOT keep a retention stamp.
         # (purge_at is absent from $set, so there is no operator conflict.)
-        "$unset": {"purge_at": ""},
+        "$unset": unset,
     }
 
     try:

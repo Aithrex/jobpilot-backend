@@ -24,6 +24,23 @@ Two passes, cheapest first
     also the pass that finds employers we have NO endpoint for at all —
     Google, Apple, Meta, Atlassian and the other 37 the audit listed.
 
+`--mode backlink`
+    The cheap middle, and on live data the highest-yield pass there is. For
+    sources holding exactly ONE confirmed independent evidence class, derive
+    the employer's domain FROM THE BOARD and verify it names them. Three
+    requests per SOURCE rather than ten per employer, and only for rows that
+    are already one class short.
+
+    Measured: 1,465 sources are `content_validated` — we have READ their
+    postings — and only 18 of their employers carry a verified domain. 598
+    hold the ATS provider's owner metadata and 144 hold a curated catalog row.
+    Every one of those is one `employer_domain` signal from `validated`, and
+    that signal was UNOBTAINABLE for iCIMS, BambooHR, Cornerstone, Taleo,
+    Recruitee, Workday and Oracle until `AtsProvider.board_url` replaced a
+    board URL built by `hosts[0].lstrip(".")` — which turned the SUFFIX
+    `.icims.com` into `https://icims.com/<tenant>`, a page that is nobody's
+    board.
+
 Politeness is not optional here: one global rate limit, a per-host pace, and
 robots.txt on every origin. A verification sweep that gets us blocked costs
 more coverage than it buys.
@@ -160,6 +177,130 @@ def verify_employer(employer: Dict[str, Any], ctx: Any,
     )
 
 
+# ---------------------------------------------------------------------------
+# Pass 4 — the board's own backlink, for sources ONE signal short
+# ---------------------------------------------------------------------------
+def confirmed_classes(row: Dict[str, Any]) -> set:
+    """The distinct, confirmed, NON-HEURISTIC evidence classes on a source."""
+    out = set()
+    for ev in (row.get("ownership_evidence") or ()):
+        if not isinstance(ev, dict) or not ev.get("confirmed"):
+            continue
+        cls = str(ev.get("signal_class") or "")
+        if cls and cls != css.CLASS_HEURISTIC:
+            out.add(cls)
+    return out
+
+
+def hydrate_endpoint(row: Dict[str, Any], endpoints_by_member: Dict[str, Any]):
+    """Build an `Endpoint` that knows its real HOST, not just its tenant.
+
+    Workday and Oracle boards are not addressable from a tenant alone — a
+    Workday board needs the pod (`wd108`) and an Oracle pod hostname
+    (`eeho.fa.us2.oraclecloud.com`) is not derivable from a company name at
+    all. `company_ats_endpoints` already stores both, keyed by the same
+    `member_key` the career source carries, so the join costs one query for
+    the whole pass and turns two of the four biggest vendors from
+    unreachable into reachable.
+
+    `company_ats_endpoints` is the first source and the career source's own
+    `canonical_endpoint` is the second. The fallback matters: a source
+    discovered by the ownership walk or by
+    `verify_official_career_urls.py --register` has a canonical endpoint and
+    no `company_ats_endpoints` row at all, because nothing has crawled it yet
+    — which is precisely the population this pass exists to reach.
+    """
+    from services.ats_providers.base import Endpoint
+    doc = endpoints_by_member.get(str(row.get("member_key") or "")) or {}
+    if not doc:
+        url = str(row.get("canonical_endpoint") or "").strip()
+        if url:
+            try:
+                from services.ats_providers import registry as ats_registry
+                for endpoint in ats_registry.endpoints_from_urls([url]):
+                    if endpoint.vendor == (row.get("ats_vendor") or ""):
+                        return endpoint
+            except Exception:      # pragma: no cover - hydration is best-effort
+                pass
+    return Endpoint(
+        vendor=row.get("ats_vendor") or doc.get("vendor") or "",
+        tenant=row.get("tenant") or doc.get("tenant") or "",
+        site=str(doc.get("site") or ""),
+        host=str(doc.get("host") or ""),
+        extra=dict(doc.get("extra") or {}),
+    )
+
+
+def verify_backlink_source(row: Dict[str, Any], employer: Dict[str, Any],
+                           ctx: Any, fetcher: cso.Fetcher,
+                           endpoint: Any = None) -> Dict[str, Any]:
+    """Derive the employer's domain FROM the board, then verify it.
+
+    Why this is a pass of its own
+    -----------------------------
+    Measured on live `career_sources`: 1,465 sources are `content_validated`
+    — we have READ their postings — and only 18 of their employers carry a
+    verified domain. 598 of them hold exactly one confirmed evidence class
+    (the ATS naming the owner) and 144 hold exactly one (a curated catalog
+    row). Every one of those is ONE independent class away from `validated`,
+    and the class they are missing is `employer_domain`.
+
+    Pass 1 cannot supply it: `backlink_signal` needs a verified domain and
+    these employers have none. Pass 2 can, through
+    `candidate_domains_from_board`, but pass 2 costs six to ten requests per
+    EMPLOYER and is ordered by technology yield, so an employer outside the
+    denominator waits behind 1,204 that are in it.
+
+    This is the cheap middle: three requests per SOURCE, and only for sources
+    that are already one class short.
+
+    Why it is sound
+    ---------------
+    Two independent parties, which is rule 4b exactly:
+
+      the BOARD links to `example.com`   (read off the board)
+      `example.com` NAMES the employer   (read off their own site, in visible
+                                          text — never in markup)
+
+    A board link on its own is one page's assertion about itself, which is why
+    the candidate domain is handed to `verify_domain` rather than believed.
+    """
+    from services.ats_providers.base import Endpoint
+
+    name = employer.get("display_name") or ""
+    ep = endpoint if endpoint is not None else Endpoint(
+        vendor=row.get("ats_vendor") or "", tenant=row.get("tenant") or "")
+    ep.display_name = name
+    added: List[Dict[str, Any]] = []
+    domain = ""
+    for candidate in cso.candidate_domains_from_board(fetcher, ep, limit=3):
+        ok, url, ev = cso.verify_domain(fetcher, display_name=name,
+                                        domain=candidate)
+        if ok:
+            domain = er.normalize_domain(candidate)
+            added.extend(ev)
+            added.append(evidence(
+                css.SIGNAL_BOARD_BACKLINK, source=url,
+                value=f"the board links to {domain}, and that site names {name}",
+                confirmed=True))
+            break
+
+    existing = [e for e in (row.get("ownership_evidence") or [])
+                if isinstance(e, dict)]
+    owned, code, why = css.adjudicate_ownership(existing + added)
+    content_ok = None
+    if row.get("content_validation_evidence"):
+        content_ok = any(e.get("confirmed")
+                         for e in row["content_validation_evidence"])
+    state = css.next_state(owned=owned, content_ok=content_ok,
+                           job_count=int(row.get("job_count_last") or 0),
+                           failure_code="" if owned else code)
+    return {"source_id": row["source_id"], "state": state, "added": added,
+            "owned": owned, "reason": why, "vendor": row.get("ats_vendor"),
+            "verified_domain": domain,
+            "employer_id": employer.get("employer_id")}
+
+
 def _vendor_key(value: Any) -> str:
     """`oracle-orc` on a posting, `oracle_orc` in the registry."""
     return str(value or "").strip().lower().replace("-", "_")
@@ -267,7 +408,8 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true",
                     help="write the verified states (default: report only)")
     ap.add_argument("--mode",
-                    choices=("endpoints", "employers", "content", "both"),
+                    choices=("endpoints", "employers", "content", "backlink",
+                             "both"),
                     default="both")
     ap.add_argument("--limit", type=int, default=4000)
     ap.add_argument("--workers", type=int, default=10)
@@ -499,6 +641,148 @@ def main() -> int:
                   f"({stats_write['written']:,} inserted or changed; "
                   f"{promoted:,} now covered)")
 
+    # ---------------- pass 4: backlink ----------------
+    # Sources ONE independent evidence class short, where the missing class is
+    # `employer_domain` and the board itself can supply the candidate. Three
+    # requests each, and only for sources that are already close.
+    if args.mode == "backlink":
+        # `$elemMatch` on the evidence array does the "already has ONE
+        # confirmed, non-heuristic class" half in Mongo. Pulling a fixed
+        # multiple of `--limit` and filtering in Python instead returned an
+        # EMPTY queue against a collection that holds 742 qualifying rows —
+        # the qualifying ones are a small fraction and are not at the front.
+        q4: Dict[str, Any] = {
+            "ats_vendor": {"$nin": ["", None]},
+            "tenant": {"$nin": ["", None]},
+            "ownership_verified": {"$ne": True},
+            "state": {"$in": [css.STATE_CONTENT_VALIDATED, css.STATE_CANDIDATE]},
+            "ownership_evidence": {"$elemMatch": {
+                "confirmed": True,
+                "signal_class": {"$in": [css.CLASS_ATS_PROVIDER,
+                                         css.CLASS_CURATED,
+                                         css.CLASS_EMPLOYER_DOMAIN]}}},
+        }
+        if args.employer_id:
+            q4["employer_id"] = {"$in": args.employer_id}
+        # `content_validated` first: those already have the content half, so
+        # proving ownership takes them straight to `validated` rather than to
+        # `ownership_verified`, which is not coverage.
+        rows4 = [r for r in sources_col.find(q4).sort("state", 1)
+                 if len(confirmed_classes(r)) == 1][:args.limit]
+        print(f"\npass 4 - board backlink: {len(rows4):,} sources one class short")
+        emp_cache4: Dict[str, Dict[str, Any]] = {}
+        for r in rows4:
+            eid = r.get("employer_id")
+            if eid and eid not in emp_cache4:
+                emp_cache4[eid] = _employer(eid) or {}
+
+        # ONE query for every endpoint row these sources point at, so a
+        # Workday pod and an Oracle pod hostname are available without a
+        # lookup per source.
+        member_keys = sorted({str(r.get("member_key") or "") for r in rows4
+                              if r.get("member_key")})
+        endpoints_by_member = {
+            str(d.get("member_key")): d
+            for d in db.company_ats_endpoints.find(
+                {"member_key": {"$in": member_keys}},
+                {"_id": 0, "member_key": 1, "vendor": 1, "tenant": 1,
+                 "host": 1, "site": 1, "extra": 1})} if member_keys else {}
+        print(f"    hydrated {len(endpoints_by_member):,} endpoint host(s) "
+              f"from company_ats_endpoints")
+
+        shared4 = cso.Fetcher(min_interval=0.5)
+
+        def _one4(row):
+            emp = emp_cache4.get(row.get("employer_id")) or {}
+            if not emp:
+                return None
+            if ctx is not None and getattr(ctx, "should_stop", None) \
+                    and ctx.should_stop():
+                return None
+            try:
+                return verify_backlink_source(
+                    row, emp, ctx, shared4,
+                    endpoint=hydrate_endpoint(row, endpoints_by_member))
+            except Exception as exc:
+                return {"source_id": row["source_id"], "error": type(exc).__name__}
+
+        got4: List[Dict[str, Any]] = []
+        done4 = 0
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            for fut in as_completed([pool.submit(_one4, r) for r in rows4]):
+                res = fut.result()
+                with lock:
+                    done4 += 1
+                    if not res:
+                        stats["pass4_skipped"] += 1
+                    elif res.get("error"):
+                        stats[f"pass4_error:{res['error']}"] += 1
+                    else:
+                        stats[f"pass4_{res['state']}"] += 1
+                        if res["owned"]:
+                            stats["pass4_ownership_proven"] += 1
+                        got4.append(res)
+                    if done4 % 100 == 0:
+                        print(f"    {done4:,}/{len(rows4):,} checked "
+                              f"({stats['pass4_ownership_proven']:,} proven) "
+                              f"{time.time() - t0:.0f}s")
+
+        if args.apply and got4:
+            from pymongo import UpdateOne
+            ops = []
+            for res in got4:
+                update: Dict[str, Any] = {
+                    "$set": {"state": res["state"],
+                             "ownership_verified": bool(res["owned"]),
+                             "ownership_reason": res["reason"][:300],
+                             "last_checked_at": _now(),
+                             "last_verified_at": _now() if res["state"] in
+                             css.COVERED_STATES else None,
+                             "next_check_at": css.next_check_after(res["state"]),
+                             "failure_code": css.FAIL_NONE if res["owned"]
+                             else css.FAIL_OWNER_UNPROVEN,
+                             "updated_at": _now()},
+                }
+                if res.get("verified_domain"):
+                    update["$set"]["verified_domain"] = res["verified_domain"]
+                if res["added"]:
+                    update["$push"] = {"ownership_evidence":
+                                       {"$each": res["added"], "$slice": -20}}
+                ops.append(UpdateOne({"source_id": res["source_id"]}, update))
+            for i in range(0, len(ops), 500):
+                sources_col.bulk_write(ops[i:i + 500], ordered=False)
+            print(f"    wrote {len(ops):,} sources "
+                  f"({sum(1 for r in got4 if r['state'] in css.COVERED_STATES):,} "
+                  f"now covered)")
+
+            # The domain we just VERIFIED belongs on the employer too. Added
+            # to `verified_domains` (additive) and NEVER used to re-key the
+            # employer: `employer_id` is derived from the domain, so a rekey
+            # would change the id and orphan every `canonical_employer_id`
+            # already written onto a posting. What this buys is that
+            # `resolve_employer(domain=...)` — which reads `verified_domains`
+            # FIRST — can now find these employers, and the next pass 2 starts
+            # from a verified domain instead of from nothing.
+            #
+            # Promotion to a domain-derived id is `employer_registry.
+            # rekey_to_domain`, which keeps the old row as `merged` with a
+            # parent pointer. That is a deliberate, separate decision and not
+            # something a sweep should take.
+            domain_ops = []
+            for res in got4:
+                dom = res.get("verified_domain")
+                if not dom or not res.get("employer_id"):
+                    continue
+                domain_ops.append(UpdateOne(
+                    {"employer_id": res["employer_id"]},
+                    {"$addToSet": {"verified_domains": dom},
+                     "$set": {"last_verified_at": _now(), "updated_at": _now()}}))
+            if domain_ops:
+                for i in range(0, len(domain_ops), 500):
+                    employers_col.bulk_write(domain_ops[i:i + 500], ordered=False)
+                print(f"    recorded {len(domain_ops):,} verified employer "
+                      f"domain(s) (no re-key - see the comment)")
+
     # ---------------- pass 3: content ----------------
     # Ownership proven, content never checked. Pass 2 walks to the endpoint but
     # does not read it, so a newly-proven source sits in `ownership_verified` -
@@ -511,14 +795,55 @@ def main() -> int:
                               "ats_vendor": {"$nin": ["", None]}}
         if args.employer_id:
             q3["employer_id"] = {"$in": args.employer_id}
-        rows3 = list(sources_col.find(q3).limit(args.limit))
-        print(f"\npass 3 - content validation: {len(rows3):,} sources")
+        # `ownership_verified` FIRST, and not by alphabetical luck.
+        #
+        # Both states need a content check, but only one of them can change
+        # the coverage number: `ownership_verified` + content = `validated`,
+        # while `content_validated` + content = `content_validated` again,
+        # because what it lacks is ownership and this pass cannot supply it.
+        # Unordered, a 400-row budget spent 396 of its requests on the second
+        # kind — there are 1,197 of those and 93 of the first — and moved
+        # coverage by zero.
+        # TWO queries, not one sorted afterwards: a `.limit()` truncates
+        # before any ordering this side could apply, which is how a 400-row
+        # budget drew 396 rows of the kind that cannot move.
+        rows3 = list(sources_col.find(
+            {**q3, "state": css.STATE_OWNERSHIP_VERIFIED}).limit(args.limit))
+        movable = len(rows3)
+        if movable < args.limit:
+            rows3 += list(sources_col.find(
+                {**q3, "state": css.STATE_CONTENT_VALIDATED}
+            ).limit(args.limit - movable))
+        print(f"\npass 3 - content validation: {len(rows3):,} sources "
+              f"({movable:,} can reach `validated` on this pass; the rest are "
+              f"`content_validated` and need OWNERSHIP, which this pass "
+              f"cannot supply)")
+
+        # The SAME hydration pass 4 does, for the same reason. Rebuilding the
+        # endpoint as `(vendor, tenant)` throws away the pod and the site
+        # path, and a Workday board is not addressable without them: Adobe is
+        # `adobe.wd5.myworkdayjobs.com/external_experienced`, Accenture is
+        # `wd103`, Snap is `wd1.myworkdaysite.com/recruiting/snapchat/snap`.
+        # Every one of them came back `unparseable_response` — which reads as
+        # "their board is broken" and meant "we asked the wrong URL". The
+        # failure was concentrated in exactly the three vendors that need a
+        # host (Workday, iCIMS, Oracle) and invisible in the ones that do not.
+        member_keys3 = sorted({str(r.get("member_key") or "") for r in rows3
+                               if r.get("member_key")})
+        endpoints3 = {
+            str(d.get("member_key")): d
+            for d in db.company_ats_endpoints.find(
+                {"member_key": {"$in": member_keys3}},
+                {"_id": 0, "member_key": 1, "vendor": 1, "tenant": 1,
+                 "host": 1, "site": 1, "extra": 1})} if member_keys3 else {}
+        print(f"    hydrated {len(endpoints3):,} endpoint host(s) "
+              f"from company_ats_endpoints")
 
         def _content(row):
             provider = ats_registry.get(row.get("ats_vendor") or "")
             if provider is None:
                 return {"source_id": row["source_id"], "unsupported": True}
-            ep = Endpoint(vendor=row["ats_vendor"], tenant=row.get("tenant") or "")
+            ep = hydrate_endpoint(row, endpoints3)
             try:
                 result = provider.validate(ep, ctx)
             except ChallengeError as exc:

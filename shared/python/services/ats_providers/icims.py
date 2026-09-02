@@ -192,6 +192,13 @@ class IcimsProvider(AtsProvider):
             return None
         if _INTERNAL_LABEL_RE.search(label):
             return None
+        # The shared infrastructure guard, on top of the labels above. A
+        # careers page's cookie banner links `cookie-policy-scripts.icims.com`
+        # and its analytics loads `careers-cookie-policy-scripts` — both were
+        # registered as Booking.com career sources. The subdomain label is
+        # still the identity; this only refuses labels that name plumbing.
+        if self.is_reserved_tenant(label):
+            return None
         return Endpoint(vendor=self.vendor, tenant=label, host=host)
 
     @staticmethod

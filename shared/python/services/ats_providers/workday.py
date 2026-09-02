@@ -77,7 +77,22 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+#: Workday serves the SAME CXS contract from TWO public domains, in two URL
+#: shapes. `myworkdayjobs.com` puts the tenant in the subdomain;
+#: `myworkdaysite.com` does not — `https://wd1.myworkdaysite.com/wday/cxs/
+#: snapchat/snap/jobs` is a live board and was unreachable while the domain
+#: was hardcoded.
+#:
+#: `workday_cxs_fetcher` learned this (see `WD_DOMAIN_SITE` there) and THIS
+#: MODULE DID NOT, so the two Workday paths disagreed: the legacy fetcher
+#: could crawl a `myworkdaysite.com` board typed into a catalog, while the
+#: provider could not FINGERPRINT one at all. Fingerprinting is how
+#: `career_source_ownership` walks from an employer's own careers page to
+#: their board, so an employer on this domain could never be owner-verified —
+#: not because verification failed, but because the link on their careers page
+#: matched no pattern and the endpoint was never seen.
 _HOST_SUFFIX = ".myworkdayjobs.com"
+_SITE_SUFFIX = ".myworkdaysite.com"
 
 _DEFAULT_WD_HOST = "wd1"
 _DEFAULT_SITE = "External"
@@ -122,11 +137,12 @@ class WorkdayProvider(AtsProvider):
     # See the module docstring: the list payload publishes relative text only.
     date_confidence = DATE_RELATIVE
 
-    # One suffix covers every pod; the CXS API and the public apply pages live
-    # on the same host, which is why the crawler's two allowlists agree here and
-    # disagree for Greenhouse.
-    api_hosts = (_HOST_SUFFIX,)
-    portal_hosts = (_HOST_SUFFIX,)
+    # Two suffixes, one per public domain; within each, one suffix covers
+    # every pod. The CXS API and the public apply pages live on the same host,
+    # which is why the crawler's two allowlists agree here and disagree for
+    # Greenhouse.
+    api_hosts = (_HOST_SUFFIX, _SITE_SUFFIX)
+    portal_hosts = (_HOST_SUFFIX, _SITE_SUFFIX)
 
     policy = CrawlPolicy(
         # Per-host, i.e. per tenant: every customer is a separate origin on a
@@ -173,6 +189,17 @@ class WorkdayProvider(AtsProvider):
     )
 
     fingerprints = (
+        # --- myworkdaysite.com: tenant in the PATH ---------------------------
+        # Listed first and at the highest confidence because its URLs are
+        # strictly more specific: `wd1.myworkdaysite.com/wday/cxs/snap/...`
+        # would otherwise be a near-miss for nothing at all.
+        fp(r"https?://(?P<wd_host>wd\d+)\.myworkdaysite\.com/wday/cxs/"
+           r"(?P<tenant>[A-Za-z0-9\-]+)/(?P<site>[A-Za-z0-9_\-]+)/jobs",
+           confidence=99),
+        fp(r"https?://(?P<wd_host>wd\d+)\.myworkdaysite\.com/"
+           r"(?:[a-z]{2}-[A-Za-z]{2}/)?recruiting/(?P<tenant>[A-Za-z0-9\-]+)/"
+           r"(?P<site>[A-Za-z0-9_\-]+)", confidence=96),
+        # --- myworkdayjobs.com: tenant in the SUBDOMAIN ----------------------
         # The CXS endpoint itself — unambiguous, and it names all three
         # identity components.
         fp(r"https?://(?P<tenant>[A-Za-z0-9\-]+)\.(?P<wd_host>wd\d+)"
@@ -208,13 +235,22 @@ class WorkdayProvider(AtsProvider):
             site = _DEFAULT_SITE
         if site.lower() == "wday":
             site = _DEFAULT_SITE
+        # Which public domain the URL came from. Stored in `extra` beside the
+        # pod — NOT in `member_key` — for the same reason the pod is not:
+        # `member_key` is the prefix of every `source_job_id` this board
+        # writes, so a board that turns out to be reachable on the other
+        # domain must not orphan its own inventory.
+        on_site_domain = _SITE_SUFFIX[1:] in (url or "").lower()
+        host = (f"{wd_host}{_SITE_SUFFIX}" if on_site_domain
+                else f"{tenant}.{wd_host}{_HOST_SUFFIX}")
         return Endpoint(
-            vendor=self.vendor, tenant=tenant, site=site,
-            host=f"{tenant}.{wd_host}{_HOST_SUFFIX}",
+            vendor=self.vendor, tenant=tenant, site=site, host=host,
             # The pod is part of the URL but NOT part of `member_key`: a tenant
             # does not move between pods, and keeping it out means a corrected
             # pod does not orphan the inventory rows already written.
-            extra={"wd_host": wd_host})
+            extra={"wd_host": wd_host,
+                   "wd_domain": (_SITE_SUFFIX[1:] if on_site_domain
+                                 else _HOST_SUFFIX[1:])})
 
     @classmethod
     def _wd_host_of(cls, endpoint: Endpoint) -> str:
@@ -232,13 +268,64 @@ class WorkdayProvider(AtsProvider):
         site = (endpoint.site or "").strip() or _DEFAULT_SITE
         return site if _SITE_RE.match(site) else _DEFAULT_SITE
 
+    @classmethod
+    def _domain_of(cls, endpoint: Endpoint) -> str:
+        """Which public Workday domain this board lives on.
+
+        Read from `extra.wd_domain` (set by the fingerprint or a catalog row)
+        and, failing that, sniffed off `host` — a legacy row that carries only
+        the hostname still resolves correctly rather than silently defaulting
+        to the wrong domain and 404ing forever.
+        """
+        raw = str((endpoint.extra or {}).get("wd_domain") or "").strip().lower()
+        if raw in (_HOST_SUFFIX[1:], _SITE_SUFFIX[1:]):
+            return raw
+        if _SITE_SUFFIX[1:] in str(endpoint.host or "").lower():
+            return _SITE_SUFFIX[1:]
+        return _HOST_SUFFIX[1:]
+
     def _base(self, endpoint: Endpoint) -> str:
-        return (f"https://{endpoint.tenant}.{self._wd_host_of(endpoint)}"
-                f"{_HOST_SUFFIX}")
+        """The CXS origin. The two domains put the tenant in DIFFERENT places.
+
+        `myworkdayjobs.com` -> `https://{tenant}.{pod}.myworkdayjobs.com`
+        `myworkdaysite.com` -> `https://{pod}.myworkdaysite.com`
+
+        Getting this wrong does not error; it 404s, and a 404 on a board we
+        never reached reads as "this employer has no board".
+        """
+        pod = self._wd_host_of(endpoint)
+        if self._domain_of(endpoint) == _SITE_SUFFIX[1:]:
+            return f"https://{pod}{_SITE_SUFFIX}"
+        return f"https://{endpoint.tenant}.{pod}{_HOST_SUFFIX}"
+
+    def board_url(self, endpoint: Endpoint) -> str:
+        """The candidate-facing board. Needs the POD, which a bare tenant does
+        not carry — so an endpoint with neither `host` nor `extra.wd_host`
+        gets "" rather than a URL built on the default pod, which would be a
+        confident wrong answer about somebody else's board."""
+        pod = str((endpoint.extra or {}).get("wd_host") or "").strip().lower()
+        if not pod and not str(endpoint.host or "").strip():
+            return ""
+        return f"{self._apply_base(endpoint)}/{self._site_of(endpoint)}"
 
     def _jobs_url(self, endpoint: Endpoint) -> str:
         return (f"{self._base(endpoint)}/wday/cxs/{endpoint.tenant}"
                 f"/{self._site_of(endpoint)}/jobs")
+
+    def _apply_base(self, endpoint: Endpoint) -> str:
+        """The HUMAN-facing prefix an `externalPath` hangs off.
+
+        NOT the same shape as the CXS origin. `myworkdaysite.com` puts the
+        tenant in the PATH (`/recruiting/{tenant}/{site}`) where
+        `myworkdayjobs.com` puts it in the subdomain and needs only `/{site}`.
+        Mirrors `workday_cxs_fetcher.apply_base`, which learned this first:
+        getting it wrong yields an apply link that 404s AND a detail URL the
+        enricher cannot parse back, so the posting arrives with no description.
+        """
+        base = self._base(endpoint)
+        if self._domain_of(endpoint) == _SITE_SUFFIX[1:]:
+            return f"{base}/recruiting/{endpoint.tenant}"
+        return base
 
     # -- listing -------------------------------------------------------------
 
@@ -384,7 +471,8 @@ class WorkdayProvider(AtsProvider):
             # `externalUrl` — no locale segment. Minting a different shape here
             # would make the same posting look like two different jobs to the
             # apply flow.
-            apply_url=f"{base}/{site}/{path}" if path else base,
+            apply_url=(f"{self._apply_base(endpoint)}/{site}/{path}" if path
+                       else self._apply_base(endpoint)),
             location=location,
             posted_at=posted,
             date_confidence=DATE_RELATIVE if posted else DATE_UNKNOWN,

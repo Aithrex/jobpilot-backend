@@ -341,6 +341,82 @@ def classify_employer(
 
 
 # ---------------------------------------------------------------------------
+# The technology-employer denominator — ONE definition, two callers
+# ---------------------------------------------------------------------------
+#: Evidence kinds on an `employers` row that, on their own, make an employer a
+#: technology employer. Each is documentary; none is a keyword in a name.
+TECH_EVIDENCE_KINDS = frozenset({
+    "curated_seed", "official_career_url", "identity_override",
+})
+
+
+def is_evidence_backed_tech(
+    employer: Dict[str, Any],
+    mix: Optional[Dict[str, Any]] = None,
+    company: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str]:
+    """`(in_denominator, why)` for one employer row from the registry.
+
+    THE definition of "technology employer", and it lives here rather than in
+    `scripts/employer_coverage_report.py` because two callers need the same
+    answer and a second copy is a second answer:
+
+      * the coverage report's DENOMINATOR — the employers we hold ourselves
+        accountable for covering;
+      * the feed's `employer_scope=tech_only` FILTER — the employers a user
+        asking for "technology companies only" expects to see.
+
+    Those two being one rule is the point. A coverage number computed over a
+    set the product cannot reproduce is a number about nothing, and a filter
+    whose membership no report measures is a filter nobody can audit. They
+    were two implementations, and the filter's was a page-local posting mix
+    that on a live 2,000-row candidate set cleared its minimum for 4 of 191
+    employers — a filter that rendered, echoed and dropped nothing.
+
+    Deliberately NOT a name heuristic: the live registry contains "NUROTOCO OF
+    MASSACHUSETTS", "SLACK TIDE CRUISES LLC" and "NOTIONSBYNANCY LLC", and a
+    rule that reads "Technologies" in a name promotes all three.
+
+    The `companies` row is joined in because the strongest signal available —
+    the SEC-assigned SIC code — lives there and nowhere else. Classifying
+    without it discards a filing the registrant made about themselves and
+    leaves only the posting mix, which cuts the denominator to the employers
+    we already crawl. That is a denominator defined by our own coverage, which
+    is precisely the circularity a coverage number must not have.
+    """
+    mix = mix or {}
+    kinds = {str(e.get("kind")) for e in (employer.get("evidence") or [])
+             if isinstance(e, dict)}
+    hit = kinds & TECH_EVIDENCE_KINDS
+    if hit:
+        return True, f"curated: {sorted(hit)[0]}"
+
+    company = company or {}
+    tech_rows = int(mix.get("core", 0)) + int(mix.get("adjacent", 0))
+    classified = classify_employer(
+        {"name": employer.get("display_name"),
+         "domain": employer.get("canonical_domain") or company.get("domain"),
+         "sic": company.get("sic"),
+         "sic_description": company.get("sic_description"),
+         "signals": company.get("signals") or {},
+         "cik": company.get("cik"), "ticker": company.get("ticker")},
+        posting_mix={"core": int(mix.get("core", 0)),
+                     "adjacent": int(mix.get("adjacent", 0)),
+                     "non_tech": int(mix.get("non_tech", 0)),
+                     "unknown": int(mix.get("unknown", 0))} if mix else None)
+    if classified.tech_classification in (TECH_SOFTWARE, TECH_ADJACENT):
+        return True, f"classifier: {classified.evidence_source}"
+
+    classified_rows = tech_rows + int(mix.get("non_tech", 0))
+    if classified_rows >= POSTING_MIX_MIN_ROWS:
+        share = tech_rows / classified_rows
+        if share >= POSTING_MIX_ADJACENT:
+            return True, (f"posting mix: {tech_rows} of {classified_rows} "
+                          f"classified rows are technology ({share:.0%})")
+    return False, "no technology evidence"
+
+
+# ---------------------------------------------------------------------------
 # Coverage accounting
 # ---------------------------------------------------------------------------
 
@@ -355,10 +431,18 @@ COVERAGE_STATES = (COVERAGE_VALIDATED, COVERAGE_RETRYING, COVERAGE_BLOCKED,
                    COVERAGE_UNSUPPORTED, COVERAGE_NO_PUBLIC_JOBS,
                    COVERAGE_UNRESOLVED)
 
-#: Vendors we have investigated and cannot currently crawl, with the blocker.
-#: Source: docs/coverage/ats-vendor-coverage.md sec. 6. An employer on one of
-#: these is `unsupported_provider`, which is a DIFFERENT and more honest state
-#: than "we failed to find their board".
+#: Vendors with NO provider implementation, and why each was left. This list
+#: is now only about vendors we have never built, and `provider_blocker`
+#: below consults `ats_providers.registry` FIRST — so a vendor that ships a
+#: provider stops being reported as unsupported the moment the module lands,
+#: with no second list to remember.
+#:
+#: It used to be the whole answer, and it went stale exactly as you would
+#: expect: it listed `usajobs` and `successfactors` while
+#: `ats_providers/usajobs.py` and `ats_providers/successfactors.py` were both
+#: registered and crawling. Every employer on either vendor was reported as
+#: "we cannot crawl this ATS". Neither is in it any more, and neither can be
+#: re-added by accident, because the registry is asked first.
 UNSUPPORTED_PROVIDERS: Dict[str, str] = {
     "dayforce": "not probed to completion; Common Crawl index 504s on the domain",
     "ceridian": "see dayforce",
@@ -367,12 +451,36 @@ UNSUPPORTED_PROVIDERS: Dict[str, str] = {
     "teamtailor": "no tenants surfaced; mostly EU",
     "zohorecruit": "61 tenants found, provider not built",
     "adp": "boards behind cid-parameterised shells",
-    "successfactors": "white-labelled onto employer domains; fingerprint-only",
-    "usajobs": "public REST API requires a free API key (credential, not a technical blocker)",
     "peopleadmin": "per-institution hosts, higher-ed",
     "interfolio": "per-institution hosts, higher-ed",
     "pageup": "per-institution hosts, higher-ed",
 }
+
+
+def provider_blocker(vendor: Any) -> Optional[str]:
+    """Why we cannot crawl this vendor, or `None` when we can.
+
+    THE answer, derived from the registered provider implementation. A vendor
+    is unsupported when no provider is registered for it or when a registered
+    one is parked; a vendor missing a credential is reported as such, because
+    "set one config value" and "nobody has built this" are different problems
+    with different owners and only one of them is an engineering task.
+    """
+    v = str(vendor or "").strip().lower()
+    if not v:
+        return None
+    try:
+        from services.ats_providers import registry as ats_registry
+        verdict = ats_registry.readiness(v)
+    except Exception:      # pragma: no cover - fall back to the written list
+        return UNSUPPORTED_PROVIDERS.get(v)
+    if verdict["state"] == ats_registry.READY:
+        return None
+    if verdict["state"] == ats_registry.NEEDS_CREDENTIAL:
+        return verdict["detail"]
+    if verdict["state"] == ats_registry.PARKED:
+        return verdict["detail"]
+    return UNSUPPORTED_PROVIDERS.get(v) or verdict["detail"]
 
 
 def coverage_state_for(
@@ -408,10 +516,11 @@ def coverage_state_for(
         return COVERAGE_BLOCKED, detail[:200]
 
     vendors = {str(e.get("vendor") or "").lower() for e in endpoints}
-    unsupported = vendors & set(UNSUPPORTED_PROVIDERS)
-    if unsupported:
-        v = sorted(unsupported)[0]
-        return COVERAGE_UNSUPPORTED, f"{v}: {UNSUPPORTED_PROVIDERS[v]}"
+    blocked = {v: provider_blocker(v) for v in vendors}
+    blocked = {v: why for v, why in blocked.items() if why}
+    if blocked:
+        v = sorted(blocked)[0]
+        return COVERAGE_UNSUPPORTED, f"{v}: {blocked[v]}"
 
     dead = [e for e in endpoints if str(e.get("status") or "") == "dead"]
     if dead:

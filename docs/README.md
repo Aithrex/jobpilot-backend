@@ -10,7 +10,7 @@ Only `README.md` and `CLAUDE.md` live at the repo root.
 | --- | --- | --- |
 | [`decisions/`](decisions/) | Architecture decision records, `ADR-000` … `ADR-007` | You want to know **why** something is the way it is — before proposing to change it |
 | [`specs/`](specs/) | What a feature is meant to do, before it exists | You are implementing or reviewing a feature |
-| [`ops/`](ops/) | Runbooks, rollout/rollback, setup, and the human steps | Something is on fire, or you are deploying |
+| [`ops/`](ops/) | Runbooks, rollout/rollback, setup, and the human steps. [`tech-feed-rollout-gates.md`](ops/tech-feed-rollout-gates.md) is the one to read before widening the flag — every gate names the command that produces its number | Something is on fire, or you are deploying |
 | [`security/`](security/) | Threat model, dataflow, audit | You are touching untrusted input, credentials, or the browser fleet |
 | [`qa/`](qa/) | Acceptance criteria | You are deciding whether something is done |
 | [`coverage/`](coverage/) | **The measured numbers**, and the definitions behind them | You want to quote a figure — never quote one from anywhere else |
@@ -44,13 +44,27 @@ these are the documents people quote.
 
 | Document | What it measures |
 | --- | --- |
-| [`tech-employer-coverage.md`](coverage/tech-employer-coverage.md) | **Generated.** `python scripts/employer_coverage_report.py --markdown`, stamped with the source revision and inventory watermark |
+| [`tech-employer-coverage.md`](coverage/tech-employer-coverage.md) | **Generated.** `python scripts/employer_coverage_report.py --markdown`, stamped with the source revision, inventory watermark and every version that produced it. `--persist` also stores it in `coverage_snapshots`, which is what the product's health banner reads — so there is ONE set of coverage numbers and every surface can see how old it is |
 | [`employer-coverage-definition.md`](coverage/employer-coverage-definition.md) | What "covered" means, and why an endpoint that merely answers does not count |
 | [`fit-score-v21-distribution.md`](coverage/fit-score-v21-distribution.md) | What each scoring change did to the live distribution, measured per account |
 | [`ats-vendor-coverage.md`](coverage/ats-vendor-coverage.md) · [`source-provider-priority.md`](coverage/source-provider-priority.md) · [`state-registry-coverage.md`](coverage/state-registry-coverage.md) · [`tech-employers-and-their-career-pages.md`](coverage/tech-employers-and-their-career-pages.md) | Vendor, provider, registry and employer breakdowns |
+
+> **Four of the documents in `coverage/` now open with a HISTORICAL banner**
+> (`ats-vendor-coverage.md`, `source-provider-priority.md`,
+> `state-registry-coverage.md`, `tech-employers-and-their-career-pages.md`).
+> They were true on their dates and are not current truth; each banner names
+> the live source that replaced it. Provider readiness in particular is no
+> longer a document at all — `ats_providers.registry.readiness()` derives it
+> from the registered implementations, because the written list named two
+> vendors we had already built.
 
 **[`coverage/reports/`](coverage/reports/)** — dated one-off snapshots and the
 raw probe output behind them (`.csv`, `.tsv`, `.txt`, `.log`). These were true
 on their date and are **not** current truth. The acceptance record for the
 2026-09-02 milestone lives here:
-[`2026-09-02-acceptance.md`](coverage/reports/2026-09-02-acceptance.md).
+[`2026-09-02-acceptance.md`](coverage/reports/2026-09-02-acceptance.md), and
+the record for the canonical-employer, coverage, taxonomy and scorer work of
+the same day is
+[`2026-09-02-canonical-employer-and-scorer-acceptance.md`](coverage/reports/2026-09-02-canonical-employer-and-scorer-acceptance.md)
+— which prints the numbers where a target was NOT reached rather than the
+target.

@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from services.ats_providers.base import (AtsProvider, Endpoint, Fingerprint,
-                                         STATUS_CANDIDATE)
+                                         STATUS_CANDIDATE, is_asset_url)
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +131,88 @@ def detail_vendors() -> Tuple[str, ...]:
 
 
 # ---------------------------------------------------------------------------
+# Readiness — derived from the implementation, never from a written-down list
+# ---------------------------------------------------------------------------
+#: A vendor we can list jobs from today.
+READY = "ready"
+#: Implemented, but an operator has not supplied a required credential. This
+#: is an OPERATIONS gap: setting one config value makes it `ready` with no
+#: deploy.
+NEEDS_CREDENTIAL = "needs_credential"
+#: Implemented and deliberately parked (`enabled = False`).
+PARKED = "parked"
+#: No provider class exists for this vendor. The only honest "we cannot crawl
+#: this" answer.
+NOT_IMPLEMENTED = "not_implemented"
+
+READINESS_STATES: Tuple[str, ...] = (READY, NEEDS_CREDENTIAL, PARKED,
+                                     NOT_IMPLEMENTED)
+
+
+def readiness(vendor: str) -> Dict[str, Any]:
+    """`{vendor, state, detail, ...}` for one vendor, from the CODE.
+
+    Replaces `employer_tech_classifier.UNSUPPORTED_PROVIDERS`, a hand-written
+    dict that had to be edited every time a provider shipped and was not. It
+    listed `usajobs` and `successfactors` as unsupported while
+    `ats_providers/usajobs.py` and `ats_providers/successfactors.py` were both
+    registered, implemented and crawling — so every employer on either vendor
+    was reported as "we cannot crawl this ATS" when the truth was "someone has
+    not set an API key" and "we reach it by fingerprinting" respectively.
+
+    A derived answer cannot go stale. Adding a provider module makes its
+    vendor `ready` here on the next import, and deleting one makes it
+    `not_implemented`, with no second list to remember.
+    """
+    _load_builtins()
+    with _LOCK:
+        p = _PROVIDERS.get((vendor or "").strip().lower())
+    if p is None:
+        return {"vendor": (vendor or "").strip().lower(), "state": NOT_IMPLEMENTED,
+                "detail": "no provider is registered for this vendor",
+                "requires_credential": False, "credential_setting": "",
+                "crawlable": False}
+    note = str(getattr(p, "readiness_note", "") or "")
+    if getattr(p, "requires_credential", False):
+        setting = str(getattr(p, "credential_setting", "") or "")
+        # `enabled` is re-flagged at CALL time by providers that read a
+        # credential lazily (USAJOBS), so ASK rather than reading a flag that
+        # is still at its import-time default. A readiness report that trusted
+        # `enabled` here would call a key-less vendor ready until the first
+        # crawl failed, which is the same class of staleness this whole
+        # function replaces.
+        try:
+            have = bool(p.credential_available())
+        except Exception:      # pragma: no cover - a config outage is not a verdict
+            have = bool(getattr(p, "enabled", True))
+        if not have:
+            return {"vendor": p.vendor, "state": NEEDS_CREDENTIAL,
+                    "detail": (f"implemented; set `{setting}` to enable"
+                               if setting else "implemented; credential not set"),
+                    "requires_credential": True, "credential_setting": setting,
+                    "crawlable": False}
+    if not getattr(p, "enabled", True):
+        return {"vendor": p.vendor, "state": PARKED,
+                "detail": note or "provider is registered but disabled",
+                "requires_credential": bool(getattr(p, "requires_credential", False)),
+                "credential_setting": str(getattr(p, "credential_setting", "") or ""),
+                "crawlable": False}
+    return {"vendor": p.vendor, "state": READY,
+            "detail": note or "implemented and enabled",
+            "requires_credential": bool(getattr(p, "requires_credential", False)),
+            "credential_setting": str(getattr(p, "credential_setting", "") or ""),
+            "crawlable": True}
+
+
+def readiness_report() -> Dict[str, Dict[str, Any]]:
+    """Every REGISTERED vendor's readiness. Sorted, so a diff is readable."""
+    _load_builtins()
+    with _LOCK:
+        vendors_ = sorted(_PROVIDERS)
+    return {v: readiness(v) for v in vendors_}
+
+
+# ---------------------------------------------------------------------------
 # Derived tables
 # ---------------------------------------------------------------------------
 
@@ -201,9 +283,16 @@ def endpoints_from_urls(urls: Iterable[str]) -> List[Endpoint]:
 
     Deduped on `member_key` because a careers page routinely links the same board
     many times (nav, hero button, footer, per-job cards).
+
+    ASSET urls are dropped before any fingerprint runs. A page mentions its
+    vendor's CDN far more often than it mentions its own board, and a
+    stylesheet served from `cdn-prod-static.phenompeople.com` is not evidence
+    that host is somebody's job board — see `base.is_asset_url`.
     """
     seen: Dict[str, Endpoint] = {}
     for url in urls:
+        if is_asset_url(url):
+            continue
         hit = match_url(url)
         if hit is None:
             continue

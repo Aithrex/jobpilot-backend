@@ -15,6 +15,91 @@ country indexes. Idempotent. Three `[FAILED]` lines for pre-existing
 duplicate-name specs on `company_ats_endpoints` and `discovery_queue` are
 expected and harmless — both members of each pair already exist.
 
+**Run it after the 2026-09-02 deploy specifically**, and not only because
+there are new collections. Two of the canonical-employer posting indexes were
+REDECLARED, not added: their `partialFilterExpression` changed from
+`{"$type": "string"}` to `{"$exists": true}`, which is the difference between
+an index the planner can use and one it cannot. Mongo will not alter an
+existing index in place, so the migration DROPS the old spec before creating
+the new one — an index whose name already exists with different options is
+otherwise reported as a failure and silently left as it was.
+
+```bash
+# Verify afterwards. It fails loudly when a shape is answered by an index
+# other than the one built for it, which is exactly how the $type defect
+# survived: an IXSCAN on the wrong index reads as a green line.
+PYTHONPATH=shared/python python scripts/explain_job_inventory.py
+```
+
+## 0b. The 2026-09-02 additions, in the order they are worth running
+
+The passes below still work exactly as written. These are the newer steps that
+sit around them, and they are listed here because running them out of order
+wastes a sweep.
+
+```bash
+# Nothing to work on until you know what is blocked on what. READ-ONLY.
+PYTHONPATH=shared/python python scripts/coverage_work_queue.py
+
+# Junk first, so nothing below spends a request on it. Removes career sources
+# and ATS endpoints that name a VENDOR'S OWN infrastructure - every Phenom
+# customer's careers page loads the same four `*.phenompeople.com` asset
+# hosts, and each one got registered as that employer's owner-verified board.
+# It NEVER deletes a row the crawler is reading postings from: `greenhouse:css`
+# is CloudKitchens and `greenhouse:manifest` is Manifest Cyber.
+PYTHONPATH=shared/python python scripts/purge_infrastructure_sources.py --apply
+
+# Then repair the ADDRESSES. `https://icims.com/<tenant>` is nobody's board -
+# it was frozen onto 631 sources before `AtsProvider.board_url` existed, and
+# the content pass fetches whatever is stored. No network requests: the real
+# host is already recorded in the endpoint catalog, the redirect chain, or a
+# posting the crawler fetched from that board.
+PYTHONPATH=shared/python python scripts/repair_canonical_endpoints.py --apply
+
+# Metadata first: it is DB-only, it needs no network, and the category and
+# geography fields it fixes are read by the report you are about to run.
+PYTHONPATH=shared/python python scripts/repair_employer_metadata.py --apply
+
+# Attribution. Re-run after ANY verification sweep - newly proven ownership is
+# newly attributable inventory. Reversible with --unstamp.
+PYTHONPATH=shared/python python scripts/backfill_canonical_employer_id.py --apply
+
+# The official-URL verification events `verified_at` is read from. --register
+# hands what it finds to career_source_service, which decides the state.
+PYTHONPATH=shared/python python scripts/verify_official_career_urls.py \
+    --apply --register --workers 3 --rate 1.5
+
+# Order the human queues by consequence rather than by arrival.
+PYTHONPATH=shared/python python scripts/prioritize_reviews.py --apply
+
+# THE number, and --persist is what makes the product read the same one.
+PYTHONPATH=shared/python python scripts/employer_coverage_report.py \
+    --markdown --persist
+```
+
+### Cadence, and what happens if nobody runs it
+
+`--persist` is what the PRODUCT reads. The health banner serves the stored
+snapshot with `measured_at`, `age_hours` and `stale`, so the failure mode of
+forgetting is visible rather than silent: after
+`coverage_snapshot.STALE_AFTER_HOURS` (3 days) the banner labels the figure
+with its age and tells the reader to treat it as history.
+
+That is the honest degradation and it is deliberate, but it is degradation.
+**Re-run `--persist` after every verification sweep**, and at minimum weekly.
+
+There is no EventBridge rule for it yet. Adding one is a Terraform change
+outside both repos plus a `dispatch_scheduled` branch, and it was left undone
+rather than shipped dark — a scheduled job that cannot fire is harder to
+notice than a runbook step nobody has run.
+
+> **Run ONE network pass at a time.** This is not politeness advice, it is a
+> measured failure: one content pass run beside two others turned 830 sources
+> `blocked` in a single sweep — boards the crawler had read that morning — and
+> cut validated coverage by a third. The guard that now checks a `blocked`
+> verdict against the live inventory was added because of it, and it is a
+> backstop, not a licence to fan out.
+
 ## 1. Build the registry
 
 ```bash

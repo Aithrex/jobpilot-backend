@@ -64,7 +64,7 @@ FETCH_TIMEOUT = 12.0
 #: than this is a loop or a tracker.
 MAX_REDIRECTS = 6
 #: Careers pages read per employer before we give up on path (a).
-MAX_CAREER_PAGES = 8
+MAX_CAREER_PAGES = 10
 
 #: Paths tried on a verified domain when the employer publishes no career URL.
 #: Ordered by how often each is the real one, so the budget is spent well.
@@ -74,6 +74,20 @@ CAREER_PATHS: Tuple[str, ...] = (
     "/about-us/careers", "/join-us", "/work-with-us", "/careers/search",
     "/company/jobs", "/employment", "/opportunities",
 )
+
+#: SUBDOMAINS tried on a verified domain, before the paths.
+#:
+#: `CAREER_PATHS` only ever looked at `www.<domain>/<path>`, and that is not
+#: where a large employer's board lives. An enterprise runs a white-labelled
+#: board on its own careers HOST — `careers.<domain>`, `jobs.<domain>` — which
+#: usually redirects straight onto the ATS. The walk could not reach any of
+#: them, so every employer whose board is one DNS label away from their
+#: homepage read as "no ATS fingerprint found" no matter how many paths were
+#: tried on the wrong host.
+#:
+#: Two labels, not ten: each one is a request per employer against a host that
+#: usually does not exist, and the yield falls off a cliff after these.
+CAREER_SUBDOMAINS: Tuple[str, ...] = ("careers", "jobs")
 
 _LEGAL_WORDS = frozenset({
     "inc", "incorporated", "corp", "corporation", "co", "company", "llc",
@@ -394,11 +408,24 @@ def career_links(html: str, base_url: str, *, limit: int = 12) -> List[str]:
     return out
 
 
+def _is_asset_url(url: Any) -> bool:
+    """Kept as a name here because the ownership walk reads it too; the rule
+    itself lives with the fingerprints, in `ats_providers.base`."""
+    from services.ats_providers.base import is_asset_url
+    return is_asset_url(url)
+
+
 def endpoints_from_page(urls: Sequence[str]) -> List[Any]:
-    """ATS endpoints fingerprinted out of a page's outgoing links."""
+    """ATS endpoints fingerprinted out of a page's outgoing links.
+
+    Asset references are dropped before fingerprinting, in
+    `registry.endpoints_from_urls` — so `career_portal_discovery`, which calls
+    it directly, gets the same guard. A stylesheet hosted on a vendor's CDN is
+    not evidence that the CDN is the employer's job board.
+    """
     try:
         from services.ats_providers import registry as ats_registry
-        return ats_registry.endpoints_from_urls(urls)
+        return ats_registry.endpoints_from_urls(urls or ())
     except Exception as exc:  # pragma: no cover
         logger.debug("endpoints_from_page: registry unavailable: %s", exc)
         return []
@@ -426,8 +453,29 @@ def walk_to_endpoints(
     queue: List[str] = []
     if start_url:
         queue.append(start_url)
+    # The employer's own careers HOST before any path on the homepage host.
+    # This is where a white-labelled enterprise board lives and it is usually
+    # one redirect from the ATS itself.
+    queue.extend(f"https://{sub}.{verified_domain}/" for sub in CAREER_SUBDOMAINS)
     queue.extend(f"https://www.{verified_domain}{p}" for p in CAREER_PATHS[:6])
     queue.append(f"https://www.{verified_domain}/")
+
+    def _fingerprint(got: Dict[str, Any]) -> List[Any]:
+        """Every URL this fetch produced, including the ones it WAS.
+
+        The redirect chain and the final URL are fingerprinted alongside the
+        page's outgoing links, and leaving them out was a real miss: a careers
+        host that 302s straight onto the ATS —
+        `careers.rivian.com -> careers-rivian.icims.com/jobs/search` — has the
+        endpoint in its OWN address and, very often, nowhere in its body. The
+        walk read that page, looked only at what it linked to, found nothing,
+        and reported "no ATS fingerprint found" while standing on the board.
+        """
+        candidates = list(got.get("chain") or [])
+        if got.get("final_url"):
+            candidates.append(got["final_url"])
+        candidates.extend(extract_urls(got.get("text") or "", got.get("final_url") or ""))
+        return endpoints_from_page(candidates)
 
     for url in queue:
         if out["endpoints"] or out["pages_read"] >= MAX_CAREER_PAGES:
@@ -436,12 +484,26 @@ def walk_to_endpoints(
             continue
         tried.add(url)
         got = fetcher.get(url)
+        # A REDIRECT is evidence even when the destination refuses to answer.
+        # An employer host that 301s onto `<tenant>.icims.com` has named its
+        # board; whether iCIMS then served us a bot wall is a fact about our
+        # request. Fingerprinting the chain before the status check is what
+        # separates the two.
+        chain_eps = endpoints_from_page(list(got.get("chain") or [])
+                                        + ([got["final_url"]] if got.get("final_url") else []))
+        if chain_eps:
+            out["endpoints"] = chain_eps
+            out["career_landing_url"] = got.get("final_url") or url
+            out["chain"] = got.get("chain") or []
+            out["detail"] = (f"{url} resolves to "
+                             f"{got.get('final_url') or 'the ATS'}")
+            break
         if got["error"] or got["status"] != 200 or not got["text"]:
             continue
         out["pages_read"] += 1
         html, base = got["text"], got["final_url"]
         urls = extract_urls(html, base)
-        eps = endpoints_from_page(urls)
+        eps = _fingerprint(got)
         if eps:
             out["endpoints"] = eps
             out["career_landing_url"] = base
@@ -463,10 +525,19 @@ def walk_to_endpoints(
                 continue
             tried.add(link)
             sub = fetcher.get(link)
+            sub_chain_eps = endpoints_from_page(
+                list(sub.get("chain") or [])
+                + ([sub["final_url"]] if sub.get("final_url") else []))
+            if sub_chain_eps:
+                out["endpoints"] = sub_chain_eps
+                out["career_landing_url"] = sub.get("final_url") or link
+                out["chain"] = list(got["chain"]) + list(sub.get("chain") or [])
+                out["detail"] = f"{link} resolves to {sub.get('final_url')}"
+                break
             if sub["error"] or sub["status"] != 200 or not sub["text"]:
                 continue
             out["pages_read"] += 1
-            sub_eps = endpoints_from_page(extract_urls(sub["text"], sub["final_url"]))
+            sub_eps = _fingerprint(sub)
             if sub_eps:
                 out["endpoints"] = sub_eps
                 out["career_landing_url"] = sub["final_url"]
@@ -579,14 +650,9 @@ def backlink_signal(
     """
     if not verified_domain:
         return None
-    prov = _provider(getattr(endpoint, "vendor", ""))
-    if prov is None:
+    url = _endpoint_url(endpoint)
+    if not url:
         return None
-    hosts = list(getattr(prov, "portal_hosts", ()) or ())
-    tenant = str(getattr(endpoint, "tenant", "") or "")
-    if not hosts or not tenant:
-        return None
-    url = f"https://{hosts[0].lstrip('.')}/{tenant}"
     got = fetcher.get(url)
     if got["error"] or got["status"] != 200 or not got["text"]:
         return None
@@ -775,14 +841,29 @@ def verify_employer_source(
 
 
 def _endpoint_url(ep: Any) -> str:
+    """The PUBLIC board page, asked of the provider.
+
+    This used to be `f"https://{hosts[0].lstrip('.')}/{tenant}"`, and
+    `portal_hosts` entries are SUFFIXES for every vendor that gives each
+    customer its own hostname. `.icims.com` became `icims.com` and the URL
+    became `https://icims.com/careers-rivian` — a page that is nobody's board.
+    So iCIMS, BambooHR, Cornerstone, Taleo, Recruitee, Workday and Oracle had
+    no route to the `employer_domain` evidence class at all, which is the
+    class most of the uncovered queue is missing. Measured on the last pass-1
+    sweep: iCIMS 240 sources checked, 0 ownerships proven; BambooHR 95 and 0.
+
+    `AtsProvider.board_url` knows the shape per vendor and returns "" rather
+    than guessing when the board is not derivable (an Oracle pod hostname is
+    not derivable from a company name).
+    """
     prov = _provider(getattr(ep, "vendor", ""))
     if prov is None:
         return ""
-    hosts = list(getattr(prov, "portal_hosts", ()) or ())
-    tenant = str(getattr(ep, "tenant", "") or "")
-    if not hosts or not tenant:
+    try:
+        return str(prov.board_url(ep) or "")
+    except Exception as exc:      # pragma: no cover - a bad row is not fatal
+        logger.debug("_endpoint_url: %s", exc)
         return ""
-    return f"https://{hosts[0].lstrip('.')}/{tenant}"
 
 
 def detect_migration(fetcher: Fetcher, url: str) -> Tuple[bool, str, List[str]]:

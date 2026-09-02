@@ -1,5 +1,13 @@
 # Source and provider priority matrix
 
+> **HISTORICAL, 2026-09-02.** Measured 2026-09-01. Provider READINESS is no
+> longer a written-down list: `ats_providers.registry.readiness()` derives it
+> from the registered implementations, and
+> `scripts/employer_coverage_report.py` prints it. The yield ordering below
+> was true on its date; the work queue that supersedes it is
+> `scripts/coverage_work_queue.py`, which ranks by what each employer is
+> BLOCKED ON and weights every bucket by the postings behind it.
+
 Prioritised by **expected core-tech posting yield**, not by vendor count.
 Measured against live `aspirely_db`, 2026-09-01.
 

@@ -129,6 +129,13 @@ def _first(node: Any, *xpaths: str) -> str:
 
 class SuccessFactorsProvider(AtsProvider):
     vendor = "successfactors"
+    #: White-labelled onto employer domains, so there is no slug to guess and
+    #: `slug_probe` is False. Tenants come from fingerprinting the employer's
+    #: own site — which is the PRIMARY discovery strategy, not a fallback, so
+    #: this is a note about how the vendor is reached and not a reason it
+    #: cannot be.
+    readiness_note = ("reached by fingerprinting the employer's own site; "
+                      "the vendor exposes no guessable tenant slug")
     label = "SAP SuccessFactors"
 
     termless = True

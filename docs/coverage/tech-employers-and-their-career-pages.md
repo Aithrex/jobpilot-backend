@@ -1,5 +1,17 @@
 # The tech employers we know, and where their career pages are
 
+> **HISTORICAL, 2026-09-02.** This document and the CSV beside it were generated
+> on 2026-09-01, BEFORE canonical employer attribution, the owner-verified
+> coverage passes and the `tech-tax-1.2.0` taxonomy. Its employer counts,
+> coverage states and category assignments are the answers that were true on
+> that date and are not current truth.
+>
+> For the current numbers read
+> [`tech-employer-coverage.md`](tech-employer-coverage.md), which is
+> regenerated from code and stamped with the revision, the inventory watermark
+> and the taxonomy version that produced it. For what to work on next, run
+> `PYTHONPATH=shared/python python scripts/coverage_work_queue.py`.
+
 Generated 2026-09-01 by `scripts/tech_employer_coverage.py`. The full row-level
 data is **[`tech-employers-2026-09-01.csv`](tech-employers-2026-09-01.csv)** —
 2,374 employers, one row each, with classification, evidence, coverage state,

@@ -130,6 +130,13 @@ def _names(value: Any, limit: int = 3) -> str:
 
 class UsaJobsProvider(AtsProvider):
     vendor = "usajobs"
+    #: A free API key, requested from the vendor. `enabled` is re-flagged at
+    #: CALL time from this setting (see `_credentials`), so supplying the key
+    #: brings the vendor back with no redeploy — which is exactly why this is
+    #: declared as a CREDENTIAL gap rather than being written down somewhere
+    #: as "unsupported".
+    requires_credential = True
+    credential_setting = KEY_SETTING
     label = "USAJOBS"
 
     termless = True
@@ -195,6 +202,22 @@ class UsaJobsProvider(AtsProvider):
         ok = bool(key and agent)
         self.enabled = ok
         return (key, agent) if ok else None
+
+    def credential_available(self) -> bool:
+        """Is the key configured? Asked WITHOUT re-flagging `enabled`.
+
+        `_credentials` deliberately mutates `enabled` as a side effect, so
+        that a key delivered by SSM after the container warmed up brings the
+        vendor back with no redeploy. That is right on the CRAWL path, where
+        the flag is being set from an attempt that is about to happen.
+        It is wrong on the READINESS path: asking "is this vendor ready?"
+        must not park the vendor. Measured — `readiness_report()` called
+        `_credentials()`, which set `enabled = False` process-wide, and
+        `all_providers(enabled_only=True)` then dropped `usajobs` for every
+        later caller in the same process. Three unrelated provider tests
+        failed in the full suite and passed alone.
+        """
+        return bool(_config_value(KEY_SETTING) and _config_value(AGENT_SETTING))
 
     def _headers(self, key: str, agent: str) -> Dict[str, str]:
         # `Host` is sent explicitly because the vendor's own documentation

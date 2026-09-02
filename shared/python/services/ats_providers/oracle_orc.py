@@ -132,6 +132,16 @@ class OracleOrcProvider(AtsProvider):
         tenant = host.split(".")[0] or host
         return Endpoint(vendor=self.vendor, tenant=tenant, site=site, host=host)
 
+    def board_url(self, endpoint: Endpoint) -> str:
+        """Oracle's pod hostname is not derivable from a company name at all
+        (`eeho.fa.us2.oraclecloud.com`), so without a stored host there is no
+        board URL to give — and inventing one would fetch a stranger's page."""
+        host = self._host_of(endpoint)
+        if not host or host.startswith("."):
+            return ""
+        site = str(endpoint.site or "").strip() or "CX_1"
+        return f"https://{host}/hcmUI/CandidateExperience/en/sites/{site}"
+
     @staticmethod
     def _host_of(endpoint: Endpoint) -> str:
         host = (endpoint.host or "").strip().lower()
