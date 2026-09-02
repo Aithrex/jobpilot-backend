@@ -773,3 +773,48 @@ class TestVerdictReachesTheCard:
         assert "clearance" in kinds
         assert all(r["status"] == "unknown" for r in card["hard_requirements"])
         assert card["eligibility"] == "eligible"
+
+
+class TestIneligibleNeverOutranksReachable:
+    """The ordering half of the eligibility gate.
+
+    `fit_score` marks a posting `ineligible` and caps it into the bottom band,
+    but a cap is not an ordering: a very fresh ineligible posting could still
+    have beaten a stale reachable one on `rank_score`. Eligibility is now the
+    FIRST sort key on every sort.
+    """
+
+    def _rows(self):
+        return [
+            {"job_id": "reachable", "rank_score": 0.20, "match_score": 55,
+             "_days_ago": 25, "_salary_top": 100000,
+             "fit": {"eligibility": "eligible"}},
+            {"job_id": "unreachable", "rank_score": 0.95, "match_score": 30,
+             "_days_ago": 0, "_salary_top": 400000,
+             "fit": {"eligibility": "ineligible"}},
+            {"job_id": "unscored", "rank_score": 0.50, "match_score": 0,
+             "_days_ago": 5, "_salary_top": 150000, "fit": None},
+        ]
+
+    @pytest.mark.parametrize("sort", ["relevance", "newest", "salary"])
+    def test_on_every_sort(self, sort):
+        rows = self._rows()
+        tfs.rank(rows, {**tfs.normalize_request({}), "sort": sort},
+                 None, [], 0)
+        assert rows[-1]["job_id"] == "unreachable", [r["job_id"] for r in rows]
+
+    def test_an_unscored_posting_is_not_demoted(self):
+        """`not_scored` is an absence of evidence, and demoting on absence is
+        the mistake fit-v2.1 exists to correct."""
+        rows = self._rows()
+        tfs.rank(rows, {**tfs.normalize_request({}), "sort": "relevance"},
+                 None, [], 0)
+        order = [r["job_id"] for r in rows]
+        assert order.index("unscored") < order.index("unreachable")
+
+    def test_the_helper_reads_only_a_positive_finding(self):
+        assert tfs._ineligible({"fit": {"eligibility": "ineligible"}}) == 1
+        assert tfs._ineligible({"fit": {"eligibility": "eligible"}}) == 0
+        assert tfs._ineligible({"fit": {"eligibility": "not_scored"}}) == 0
+        assert tfs._ineligible({"fit": None}) == 0
+        assert tfs._ineligible({}) == 0

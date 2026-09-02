@@ -1,5 +1,20 @@
 # Tech-search baseline and gap matrix
 
+> **SNAPSHOT of 2026-09-01/02. Superseded on 2026-09-02 — kept as the BEFORE.**
+>
+> Every number here is a real measurement and none of them is current. It is
+> retained because it is the baseline the work of 2026-09-02 was measured
+> against, and a before/after with no before is an assertion.
+>
+> | what it says here | where the current number lives |
+> |---|---|
+> | "validated coverage 43.0%" | `docs/coverage/tech-employer-coverage.md` (generated). That 43.0% counted endpoints that ANSWERED; see [ADR-006](../decisions/ADR-006-canonical-employer-identity-and-owner-verified-coverage.md) for why that is not coverage. |
+> | "129 tenants with more than one employer_name" | the `employers` collection: one canonical `employer_id`, name-only matches quarantined |
+> | "core ~7.4% of active" | re-measured after `tech-tax-1.1.0`; `semiconductor_hardware` is now CORE |
+> | "2,000 candidate ceiling" | removed — paging continues by keyset past the ranked window |
+> | "work_mode 96.1% unknown" | still largely true, and it no longer COSTS anything: fit-v2.1 excludes an unmeasurable component instead of pricing it |
+> | "country filter" | it had never matched anything on any country; fixed, with an ISO-normalised `locations.country_code` |
+
 **Measured against live `aspirely_db` on 2026-09-01/02.** Every number below
 came from a read-only query, not from reading code. Where a number describes
 code capability rather than production reality, it says so.

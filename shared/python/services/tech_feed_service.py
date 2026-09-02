@@ -1195,7 +1195,8 @@ def rank(rows: List[Dict[str, Any]], req: Dict[str, Any],
         row["_seen_days_ago"] = seen_days
 
     if req["sort"] == SORT_NEWEST:
-        rows.sort(key=lambda r: (r["_days_ago"] if r["_days_ago"] is not None else 10 ** 6,
+        rows.sort(key=lambda r: (_ineligible(r),
+                                 r["_days_ago"] if r["_days_ago"] is not None else 10 ** 6,
                                  -(r.get("rank_score") or 0),
                                  str(r.get("job_id") or "")))
     elif req["sort"] == SORT_SALARY:
@@ -1207,13 +1208,30 @@ def rank(rows: List[Dict[str, Any]], req: Dict[str, Any],
             # not first. It is not a high-paying job; it is a job we cannot
             # price.
             return float(top) if top is not None else -1.0
-        rows.sort(key=lambda r: (-_pay(r), -(r.get("rank_score") or 0),
+        rows.sort(key=lambda r: (_ineligible(r), -_pay(r),
+                                 -(r.get("rank_score") or 0),
                                  str(r.get("job_id") or "")))
     else:
-        rows.sort(key=lambda r: (-(r.get("rank_score") or 0),
+        rows.sort(key=lambda r: (_ineligible(r),
+                                 -(r.get("rank_score") or 0),
                                  -(r.get("match_score") or 0),
                                  str(r.get("job_id") or "")))
     return rows
+
+
+def _ineligible(row: Dict[str, Any]) -> int:
+    """1 for a posting the candidate provably cannot take, 0 otherwise.
+
+    FIRST key in every sort, ahead of relevance, recency and salary. A
+    posting whose hard requirement the candidate provably does not meet - or
+    which is a confident cross-domain finding - does not belong above one they
+    can take, however fresh it is or however the component arithmetic lands.
+
+    `not_scored` and a missing verdict are NOT demoted: those are absences of
+    evidence, and demoting on absence is the mistake the whole of fit-v2.1 is
+    correcting. Only a positive `ineligible` finding sorts down.
+    """
+    return 1 if (row.get("fit") or {}).get("eligibility") == "ineligible" else 0
 
 
 # ---------------------------------------------------------------------------
