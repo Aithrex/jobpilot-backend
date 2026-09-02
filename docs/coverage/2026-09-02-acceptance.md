@@ -93,6 +93,12 @@ PYTHONPATH=shared/python python scripts/employer_coverage_report.py --markdown
 | `_diversify_employers`' first key was the posting's `employer_id` slug | JPMorgan's Oracle instance stamps three legal-entity names on one tenant, so the page cap saw three companies and **nine of the first twenty-five cards** were one employer |
 | `resolve_employer` queried `registry_refs.tenant_keys`; the backfill wrote `registry_refs.tenant` | 4,156 employers carry the written spelling, **0** carry the read one — the strongest join key available was dead |
 | `coverage_block` reported `companies.estimated_document_count()` as `known_employers` | the banner read "across N employers" where N was **every company ever harvested**, ~80,000 |
+| `_collapse_location_variants` groups on `variant_group_id`, absent on 2,624 of the newest 3,000 postings | a role open in six countries showed as **six cards on page one** |
+| `_legacy_role_tier` could return `unrelated` (0.08) for a resume the canonical taxonomy had declined to classify | one live account: **280 of 400** core-tech postings called "different field"; mean 32.9, max 77, nothing above 80 |
+| both Workday fetchers hardcoded `myworkdayjobs.com` | every board on `myworkdaysite.com` was unreachable — the request was never attempted |
+| `--order tech-yield` sorted by measured yield, and an employer we cannot crawl has a measured yield of zero | **65 of the 94** employers in the official careers registry sat at the bottom of every sweep |
+| `record_failure` moved a source to `blocked` on a 403 from our own prober | one content pass beside two others turned **830 sources blocked** in a sweep and cut validated coverage by a third |
+| `company_categories` was normalised, echoed and read by nothing | `["fintech"]` returned all **18,058** matching postings |
 | `normalize_posting` never ran again after ingest | 3 v4 normalisations existed in code and on **no row**; 10,721 postings stated "minimum N years" and still read `seniority: unknown`, invisible to anyone filtering by level |
 
 ## The coverage number
@@ -114,12 +120,13 @@ database recorded who owned anything.
 | after pass 2 (verify the domain, walk to the board) | 13.2% |
 | after registering the boards we were already crawling | 22.8% |
 | after the curated catalogs corroborated the provider | 33.1% (868 of 2,624) |
-| after a guarded content pass re-validated them | **33.1%** (869 of 2,625) |
+| after a guarded content pass re-validated them | 33.1% (869 of 2,625) |
+| after a registry-first pass 2 and a second content pass | **33.4%** (876 of 2,625) |
 
 By cohort at 33.1%: `niche_startup` 60.3% · `private_growth` 67.7% ·
 `mnc` 55.2% · `public_tech` 20.3%.
 
-**This criterion is NOT met.** 33.1%, not 70%. Regenerate the current figure
+**This criterion is NOT met.** 33.4%, not 70%. Regenerate the current figure
 before quoting it — the passes are idempotent and re-runnable, so the number
 moves:
 
