@@ -937,13 +937,22 @@ def resolve_employer(
         hit = col.find_one({"verified_domains": dom})
         if hit:
             return _follow(hit)
-    for kind, val in (("registry_refs.company_ids", company_id),
-                      ("registry_refs.tenant_keys", tenant_key)):
+    # BOTH spellings of every join key. The backfill wrote `registry_refs.
+    # tenant` (4,156 employers carry it) while the resolver asked only for
+    # `registry_refs.tenant_keys` (0 carry it), so the tenant lookup - the
+    # STRONGEST key available for a Workday or Oracle board, and the one the
+    # feed's own identity resolution adjudicates on - matched nothing at all.
+    # This is the same reader/writer split that was already fixed once for
+    # `company` / `company_ids`; two spellings of a join key is not a join.
+    for fields, val in (
+            (("registry_refs.company_ids", "registry_refs.company"), company_id),
+            (("registry_refs.tenant_keys", "registry_refs.tenant"), tenant_key)):
         v = str(val or "").strip()
-        if v:
-            hit = col.find_one({kind: v})
-            if hit:
-                return _follow(hit)
+        if not v:
+            continue
+        hit = col.find_one({"$or": [{f: v} for f in fields]})
+        if hit:
+            return _follow(hit)
     nk = name_key(name)
     if nk:
         if nk in wrong_name_keys():
