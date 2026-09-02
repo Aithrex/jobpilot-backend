@@ -173,58 +173,53 @@ the order they should be worked:
    (Rivian moved off iCIMS to `careers.rivian.com`) and nothing re-fingerprints
    the new host.
 
-## 4a. Measured: 134 career pages found in one 9-minute run
+## 4a. CORRECTION: the first probe found no new boards
 
-A **read-only, owner-verified, rate-limited** slug probe was run against 500 of
-the tech cohort on 2026-09-01. Full output:
-[`board-probe-2026-09-01.txt`](board-probe-2026-09-01.txt).
+An earlier revision of this document claimed a read-only slug probe had found
+**134 new career pages**. That claim was wrong and is withdrawn.
+
+What actually happened:
+
+* The probe's output was captured through `tail -60`, which discarded most of
+  the log. Only 47 of the reported 134 hit lines survived, so 87 of them have
+  no evidence at all.
+* Of the 47 that can be checked, **all 47 were already rows in
+  `company_ats_endpoints`**. Rubrik, GoDaddy, Elastic, VeriSign, Commvault,
+  TripAdvisor - every one already known.
+* `probe_software_company_boards.py` does not skip already-covered companies,
+  and it was run over `signals.software` sorted by priority, which is exactly
+  the cohort most likely to already be covered. The run largely re-confirmed
+  boards we had.
+
+**Verified new boards from that run: 0.**
+
+The script now takes `--skip-covered` and `--company-ids`, so the correct
+experiment can be run: probe only employers with no validated endpoint.
 
 ```bash
 PYTHONPATH=shared/python python scripts/probe_software_company_boards.py \
-    --limit 500 --rate 6 --workers 4        # dry run; --apply writes
+    --company-ids uncovered_tech_ids.txt --limit 2000 --rate 6 --workers 4
 ```
 
-| | |
-|---|---:|
-| companies probed | 500 |
-| wall clock | 552 s |
-| **boards found** | **134 (26.8%)** |
-| greenhouse | 88 |
-| ashby | 18 |
-| smartrecruiters | 15 |
-| lever | 13 |
-| rejected — board owner named a different company | 4 |
-| rejected — slug too weak to claim | 6 |
+Early returns from that run are far lower than the first, which points the
+opposite way from the withdrawn claim: the uncovered tech employers mostly do
+**not** have findable boards on the four shared-host vendors (Greenhouse,
+Lever, Ashby, SmartRecruiters). That is consistent with them being uncovered -
+`career_portal_discovery` already crawled their sites and matched nothing, and
+a slug guess against four shared hosts is a narrower instrument than the site
+crawl, not a wider one.
 
-Employers whose career page this located, none of which had one before:
-Rubrik, GoDaddy, Elastic, Check Point Software, VeriSign, Commvault,
-TripAdvisor, Taboola, Upwork, ZipRecruiter, Baidu, Nebius, Rigetti Computing,
-indie Semiconductor, DoubleVerify, Alarm.com, Sportradar, trivago, Endava,
-LivePerson, Expensify, Entrata, WeRide, Via Transportation, Liftoff,
-HawkEye 360, Digimarc, Zeta Global, Clear Secure, Nexxen, Weave, Tucows,
-AudioEye, Viant, Array Technologies, Velo3D, System1, Glimpse Group and ~95
-more.
+If that holds, the boards for Dell, Atlassian, Unity, Seagate, Super Micro,
+Procore and Synopsys are on per-employer hosts (Workday, Eightfold, Phenom,
+Oracle ORC) that a shared-host slug probe cannot reach by construction, and
+finding them needs a different instrument.
 
-**Nothing was written.** Applying these adds 134 rows to
-`company_ats_endpoints`, which is a production write and therefore gated
-(see [`../ops/tech-feed-rollout.md`](../ops/tech-feed-rollout.md)).
-
-Two things this run establishes:
-
-* **The hit rate is 26.8%, not 0.** The 236 `unresolved` employers are not
-  employers without a board; they are employers whose board the site-crawl
-  fingerprinter cannot see, because a modern software company's careers page
-  is a React shell. The slug probe finds them in ~1 second each.
-* **Owner verification works and matters.** `greenhouse/nve` is a live board
-  belonging to "NVE Experience Agency"; recording it against "NVE CORP" would
-  have read as coverage rather than as an error. Four such boards were
-  rejected in 500 probes.
-
-Only 500 of the 1,548 `signals.software` companies were probed, and the
-prober cannot yet see the ~900 employers this classification identifies that
-`signals.software` does not —
-`scripts/tech_employer_coverage.py --apply --persist-classification` closes
-that gap.
+**Owner verification is doing real work** and is worth keeping whatever the hit
+rate: the runs rejected `greenhouse/archer` ("Archer Veterinary Clinic", not
+Archer Aviation), `greenhouse/super` ("Super Technologies", not Super League),
+`greenhouse/gds` ("Garage Door Specialist", not GDS Holdings) and
+`greenhouse/nve` ("NVE Experience Agency", not NVE Corp). Recording any of
+those would have read as coverage rather than as an error.
 
 See [`source-provider-priority.md`](source-provider-priority.md) for which
 vendors to pursue first, ranked by core-tech yield per board rather than by raw

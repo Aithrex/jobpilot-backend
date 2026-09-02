@@ -1,5 +1,10 @@
 # Live slug-probe run, 2026-09-01 (DRY RUN - nothing written)
 #
+# WARNING: this capture is TRUNCATED - it was piped through `tail -60`, so only
+# 47 of the 134 reported hits are here. All 47 were ALREADY rows in
+# company_ats_endpoints. Verified new boards from this run: 0. See
+# tech-employers-and-their-career-pages.md section 4a.
+#
 # PYTHONPATH=shared/python python scripts/probe_software_company_boards.py --limit 500 --rate 6 --workers 4
 #
 # 500 companies probed in 552s. 134 boards found (26.8%).
