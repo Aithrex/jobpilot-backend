@@ -522,6 +522,23 @@ def build_query(req: Dict[str, Any], *, now: Optional[datetime] = None
         keys = [k for k in keys if k]
         if keys:
             q["locations.key"] = {"$in": keys}
+    if req["regions"]:
+        # Normalised through the same location parser as `cities`, so
+        # "TX" and "Texas" and "tx" all reach the same stored value. It was
+        # accepted, echoed in `applied_filters`, and never applied.
+        wanted = {r.strip() for r in req["regions"] if r and r.strip()}
+        variants = sorted({v for r in wanted
+                           for v in (r, r.upper(), r.title(), r.lower())})
+        if variants:
+            _and.append({"locations.region": {"$in": variants}})
+    if req["pay_interval"]:
+        # `compensation.period` is the stored field; the API renames it
+        # `salary.interval`. A row with NO compensation is ORed in: not
+        # stating a pay interval is not the same as stating a different one.
+        _and.append({"$or": [
+            {"compensation.period": req["pay_interval"]},
+            {"compensation": {"$exists": False}},
+        ]})
     if req["countries"]:
         # Filter on the NORMALISED code, and fall back to the raw spelling for
         # rows the location backfill has not reached yet. The old form -
@@ -2243,6 +2260,51 @@ def broadening_suggestions(req: Dict[str, Any], drops: Dict[str, int]
     return out[:6]
 
 
+#: Request fields that `normalize_request` accepts and echoes but that no
+#: stage actually applies. Each needs data the inventory does not carry yet;
+#: none of them is a bug to be quietly tolerated, and listing them is how the
+#: list gets shorter.
+INERT_FILTERS: Dict[str, str] = {
+    "radius_km": "needs geocoded coordinates; postings carry place names only",
+    "remote_eligible_locations": ("needs a posting to state WHICH geographies "
+                                  "its remote role is open to; 96.1% state no "
+                                  "work mode at all"),
+    "timezone_overlap_hours": "needs a stated timezone on the posting",
+    "work_authorization": ("needs the posting's accepted statuses; only an "
+                           "explicit no-sponsorship statement is parsed today"),
+    "resume_id": "the scorer uses every parsed resume and reports the best",
+}
+
+
+def unapplied_filters(req: Dict[str, Any]) -> List[Dict[str, str]]:
+    """The filters this request set that NOTHING narrowed on.
+
+    Returned in every response. A client that renders `applied_filters` as
+    "Server applied" is otherwise telling the user a filter worked when it did
+    not, which is worse than not offering it: the user believes they have
+    excluded something and stops looking.
+    """
+    out: List[Dict[str, str]] = []
+    for key, reason in INERT_FILTERS.items():
+        value = req.get(key)
+        if value in (None, "", [], 0):
+            continue
+        out.append({"filter": key, "reason": reason})
+    # `sponsorship_preference` and `company_categories` are applied only when
+    # the data exists for the row, so they are reported as PARTIAL rather than
+    # inert - a different and weaker claim.
+    if str(req.get("sponsorship_preference") or "any") != "any":
+        out.append({"filter": "sponsorship_preference",
+                    "reason": ("applied only to postings that state their "
+                               "sponsorship position; most do not, and those "
+                               "are kept rather than excluded")})
+    if req.get("company_categories"):
+        out.append({"filter": "company_categories",
+                    "reason": ("applied only to employers the registry has "
+                               "categorised; uncategorised employers are kept")})
+    return out
+
+
 def _envelope(*, search_id: str, req: Dict[str, Any], jobs: List[Dict[str, Any]],
               next_cursor: Optional[str], has_more: bool, total: int,
               facets: Dict[str, Any], watermark: Optional[datetime],
@@ -2261,6 +2323,11 @@ def _envelope(*, search_id: str, req: Dict[str, Any], jobs: List[Dict[str, Any]]
         "total": total,
         "facets": facets,
         "applied_filters": req,
+        # `applied_filters` echoes what was REQUESTED. Some of it is not
+        # applied, and a UI that renders the echo as "Server applied" tells
+        # the user their filter narrowed the results when it did not. This
+        # names those, so the gap is visible rather than convincing.
+        "unapplied_filters": unapplied_filters(req),
         "taxonomy_version": tx.TAXONOMY_VERSION,
         "fit_score_version": getattr(fit_score, "SCORE_VERSION", "fit-v2.0"),
         "feed_version": FEED_VERSION,

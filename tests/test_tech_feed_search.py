@@ -833,3 +833,55 @@ class TestIneligibleNeverOutranksReachable:
         assert tfs._ineligible({"fit": {"eligibility": "not_scored"}}) == 0
         assert tfs._ineligible({"fit": None}) == 0
         assert tfs._ineligible({}) == 0
+
+
+class TestTheResponseSaysWhichFiltersDidNothing:
+    """`applied_filters` echoes the REQUEST. Rendering that echo as "Server
+    applied" tells a user their filter narrowed the results when it did not,
+    which is worse than not offering the filter: they believe they have
+    excluded something and stop looking."""
+
+    def test_an_inert_filter_is_named(self, db):
+        seed(sjid="u1", title="Backend Engineer")
+        got = search(radius_km=50, timezone_overlap_hours=4)
+        named = {u["filter"] for u in got["unapplied_filters"]}
+        assert {"radius_km", "timezone_overlap_hours"} <= named
+        assert all(u["reason"] for u in got["unapplied_filters"])
+
+    def test_a_request_that_sets_none_of_them_reports_none(self, db):
+        seed(sjid="u2", title="Backend Engineer")
+        assert search()["unapplied_filters"] == []
+
+    def test_a_partially_applied_filter_says_partial_not_inert(self, db):
+        seed(sjid="u3", title="Backend Engineer")
+        got = search(sponsorship_preference="needs_sponsorship")
+        entry = [u for u in got["unapplied_filters"]
+                 if u["filter"] == "sponsorship_preference"]
+        assert entry and "most do not" in entry[0]["reason"]
+
+    def test_region_and_pay_interval_are_NOT_in_the_inert_list(self, db):
+        """Both were inert and are now implemented; if either regresses, this
+        is where it shows."""
+        seed(sjid="u4", title="Backend Engineer")
+        got = search(regions=["TX"], pay_interval="year")
+        named = {u["filter"] for u in got["unapplied_filters"]}
+        assert "regions" not in named
+        assert "pay_interval" not in named
+
+
+class TestRegionAndPayIntervalActuallyFilter:
+    def test_a_region_filter_narrows(self, db):
+        seed(sjid="r1", title="Backend Engineer", location="Austin, TX, USA")
+        seed(sjid="r2", title="Backend Engineer", location="Seattle, WA, USA")
+        got = titles(search(regions=["TX"]))
+        assert len(got) == 1
+
+    def test_a_region_filter_is_case_insensitive(self, db):
+        seed(sjid="r3", title="Backend Engineer", location="Austin, TX, USA")
+        assert len(titles(search(regions=["tx"]))) == 1
+
+    def test_a_posting_with_no_compensation_survives_a_pay_interval_filter(self, db):
+        """Not stating a pay interval is not the same as stating a different
+        one, and 81.5% of the live inventory states no compensation at all."""
+        seed(sjid="p1", title="Backend Engineer")
+        assert len(titles(search(pay_interval="year"))) == 1
