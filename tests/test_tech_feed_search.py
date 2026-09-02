@@ -853,11 +853,28 @@ class TestTheResponseSaysWhichFiltersDidNothing:
         assert search()["unapplied_filters"] == []
 
     def test_a_partially_applied_filter_says_partial_not_inert(self, db):
+        """A partial filter DID narrow. Reporting it as "not applied" would
+        replace one lie with the opposite one."""
         seed(sjid="u3", title="Backend Engineer")
         got = search(sponsorship_preference="needs_sponsorship")
         entry = [u for u in got["unapplied_filters"]
                  if u["filter"] == "sponsorship_preference"]
         assert entry and "most do not" in entry[0]["reason"]
+        assert entry[0]["status"] == tfs.FILTER_PARTIAL
+
+    def test_an_inert_filter_is_marked_not_applied_not_partial(self, db):
+        seed(sjid="u5", title="Backend Engineer")
+        got = search(radius_km=50)
+        entry = [u for u in got["unapplied_filters"] if u["filter"] == "radius_km"]
+        assert entry and entry[0]["status"] == tfs.FILTER_NOT_APPLIED
+
+    def test_every_entry_carries_a_status(self, db):
+        seed(sjid="u6", title="Backend Engineer")
+        got = search(radius_km=50, query="backend", employment_types=["contract"],
+                     min_years=3, skills_required=["python"])
+        assert got["unapplied_filters"]
+        for u in got["unapplied_filters"]:
+            assert u["status"] in (tfs.FILTER_PARTIAL, tfs.FILTER_NOT_APPLIED)
 
     def test_region_and_pay_interval_are_NOT_in_the_inert_list(self, db):
         """Both were inert and are now implemented; if either regresses, this

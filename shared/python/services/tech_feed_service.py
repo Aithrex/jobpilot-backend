@@ -2331,20 +2331,32 @@ INERT_FILTERS: Dict[str, str] = {
 }
 
 
-def unapplied_filters(req: Dict[str, Any]) -> List[Dict[str, str]]:
-    """The filters this request set that NOTHING narrowed on.
+#: `status` values on an `unapplied_filters` entry.
+FILTER_NOT_APPLIED = "not_applied"   #: nothing narrowed on it at all
+FILTER_PARTIAL = "partial"           #: narrows only the rows carrying the data
 
-    Returned in every response. A client that renders `applied_filters` as
-    "Server applied" is otherwise telling the user a filter worked when it did
-    not, which is worse than not offering it: the user believes they have
-    excluded something and stops looking.
+
+def unapplied_filters(req: Dict[str, Any]) -> List[Dict[str, str]]:
+    """The filters this request set that did not do what the name implies.
+
+    Two different claims, and conflating them would replace one lie with
+    another:
+
+    * `not_applied` — nothing narrowed on it. A client that renders
+      `applied_filters` as "Server applied" is telling the user a filter
+      worked when it did not, which is worse than not offering it: they
+      believe they have excluded something and stop looking.
+    * `partial` — it DID narrow, but only the rows that carry the data it
+      tests; rows without it are kept rather than excluded. Showing that as
+      "not applied" would be the opposite error.
     """
     out: List[Dict[str, str]] = []
     for key, reason in INERT_FILTERS.items():
         value = req.get(key)
         if value in (None, "", [], 0):
             continue
-        out.append({"filter": key, "reason": reason})
+        out.append({"filter": key, "reason": reason,
+                    "status": FILTER_NOT_APPLIED})
     # PARTIAL filters. These DO narrow, but only the rows that carry the data
     # they test, and rows without it are kept rather than excluded - the
     # unknown-is-not-a-no rule this codebase applies everywhere. Reporting
@@ -2353,30 +2365,36 @@ def unapplied_filters(req: Dict[str, Any]) -> List[Dict[str, str]]:
         out.append({"filter": "sponsorship_preference",
                     "reason": ("applied only to postings that state their "
                                "sponsorship position; most do not, and those "
-                               "are kept rather than excluded")})
+                               "are kept rather than excluded"),
+                    "status": FILTER_PARTIAL})
     if req.get("company_categories"):
         out.append({"filter": "company_categories",
                     "reason": ("applied only to employers the registry has "
-                               "categorised; uncategorised employers are kept")})
+                               "categorised; uncategorised employers are kept"),
+                    "status": FILTER_PARTIAL})
     if req.get("employment_types"):
         out.append({"filter": "employment_types",
                     "reason": ("applied to postings whose employment type we "
                                "have normalised; the rest are kept, not "
-                               "excluded")})
+                               "excluded"),
+                    "status": FILTER_PARTIAL})
     if req.get("skills_required"):
         out.append({"filter": "skills_required",
                     "reason": ("applied to postings whose skills we could "
                                "extract; a posting we could not parse is kept "
-                               "rather than failed on a test it never got")})
+                               "rather than failed on a test it never got"),
+                    "status": FILTER_PARTIAL})
     if req.get("min_years") is not None or req.get("max_years") is not None:
         out.append({"filter": "min_years/max_years",
                     "reason": ("matched against the experience the posting "
-                               "STATES; 76.4% state none and those are kept")})
+                               "STATES; 76.4% state none and those are kept"),
+                    "status": FILTER_PARTIAL})
     if req.get("query"):
         out.append({"filter": "query",
                     "reason": ("searches the title, employer, role taxonomy "
                                "and extracted skills - not the full job "
-                               "description, which is not held inline")})
+                               "description, which is not held inline"),
+                    "status": FILTER_PARTIAL})
     return out
 
 
