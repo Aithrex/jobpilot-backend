@@ -98,7 +98,7 @@ def patch_pdf_check(monkeypatch, score=100, **check_overrides):
     import services.pdf_ats_check as pac
     monkeypatch.setattr(
         pac, "check_pdf_parseability",
-        lambda pdf_bytes, tailored, jd=None: {
+        lambda pdf_bytes, tailored, jd=None, outcome=None, **_kw: {
             "pdf_parseable_score": score, "checks": checks, "warnings": [],
         },
     )

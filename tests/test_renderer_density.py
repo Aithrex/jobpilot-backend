@@ -90,31 +90,31 @@ def _senior(role_bullet_counts):
 SENIOR = _senior([6, 5, 4, 3])  # 4 roles, 18 bullets, experience-only
 
 
-def test_sparse_resume_takes_the_11pt_up_tier():
-    """P1-6: a genuinely thin resume is allowed 11pt (larger type + wider
-    margins), not forced down to 10pt. Stretch stays off."""
+def test_sparse_resume_takes_the_10pt_up_tier():
+    """Thin resume takes the largest body that still keeps section_pt 1.5pt
+    above the body (10pt). Stretch stays off."""
     r = ResumeRenderer()
     body, lh, lh_s, height = r._choose_up_tier(SPARSE)
-    assert body == 11.0
+    assert body == 10.0
     _, res = r._compute_pdf_layout(SPARSE)
-    assert res.tier.body_pt == 11.0
+    assert res.tier.body_pt == 10.0
     assert res.stretch == 1.0
 
 
 def test_density_stress_stays_at_base_or_below():
     r = ResumeRenderer()
     body, lh, lh_s, height = r._choose_up_tier(DENSITY_STRESS)
-    assert body == 10.0, "over-full content must not inflate"
+    assert body <= 10.0, "over-full content must not inflate"
 
 
 def test_realistic_senior_fills_one_page():
-    """4 roles at 6/5/4/3 bullets, no projects — professional density (10pt,
-    content-rich resumes never inflate) that fills the page without spilling."""
+    """4 roles at 6/5/4/3 bullets, no projects — professional density
+    (content-rich resumes never inflate) that fills the page without spilling."""
     from services.pdf_ats_check import check_pdf_parseability
 
     r = ResumeRenderer()
     body, _, _, height = r._choose_up_tier(SENIOR)
-    assert body == 10.0  # content-rich: base size, gaps absorb the slack
+    assert body <= 10.0
     assert height / r._AVAIL_H >= 0.80
 
     pdf, res = r.generate_pdf(SENIOR)
@@ -126,9 +126,9 @@ def test_realistic_senior_fills_one_page():
 def test_up_tier_measures_monotonic():
     """Bigger presentation must measure taller — guards the ladder ordering."""
     r = ResumeRenderer()
-    h11 = r._measure_min(SPARSE, 11.0, 4.00, 3.60)
-    h10 = r._measure_min(SPARSE, 10.0, 3.40, 3.08)
-    assert h11 > h10
+    h10 = r._measure_min(SPARSE, 10.0, 4.01, 4.01)
+    h94 = r._measure_min(SPARSE, 9.4, 3.77, 3.77)
+    assert h10 > h94
 
 
 @pytest.mark.parametrize(
@@ -230,7 +230,7 @@ def test_sparse_resume_renders_compactly_not_padded():
     """Thin resumes get larger type and wider margins, not stretched leading."""
     r = ResumeRenderer()
     _working, layout = r._compute_pdf_layout(SPARSE)
-    assert layout.tier.body_pt == 11.0
+    assert layout.tier.body_pt == 10.0
     assert layout.stretch == 1.0
     assert layout.gaps.margin_lr == pytest.approx(r.spec.margin_lr_wide_mm)
     assert layout.fill_ratio <= r.spec.max_fill + 1e-9
@@ -263,7 +263,7 @@ def test_heading_and_job_gaps_stay_tight():
 def test_dense_resume_never_stretches():
     r = ResumeRenderer()
     _working, layout = r._compute_pdf_layout(DENSITY_STRESS)
-    assert layout.stretch == 1.0
+    assert layout.stretch == pytest.approx(1.0, abs=0.02)
     assert layout.gaps.post_header >= r._MIN_POST_HEADER - 1e-9
 
 

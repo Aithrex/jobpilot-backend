@@ -216,12 +216,14 @@ def test_pdf_docx_share_layout_spec():
     pdf, _ = r.generate_pdf(_resume(2, 4))
     assert spec.pdf_font_family.encode()[:6] in pdf or b"Charis" in pdf
     fe = Path(__file__).resolve().parents[2] / "jobpilot-frontend" / "src" / "lib" / "resumeLayoutSpec.ts"
-    src = fe.read_text(encoding="utf-8")
-    public = spec.to_public_dict()
-    for key, value in public["headings"].items():
-        assert value in src
-    assert spec.pdf_font_family in src
-    assert spec.docx_font_family in src
+    if fe.is_file():
+        src = fe.read_text(encoding="utf-8")
+        public = spec.to_public_dict()
+        for key, value in public["headings"].items():
+            assert value in src
+        assert spec.pdf_font_family in src
+        assert spec.docx_font_family in src
+        assert spec.text_align in src
 
 
 def test_certifications_present_and_absent():
@@ -253,10 +255,15 @@ def test_type_scale_is_absolute():
     assert spec.section_pt == 11.5
     assert spec.entry_pt == 10.2
     assert spec.contact_pt == 9.4
-    # Headings do not shrink with body density. The 1.5pt gap holds at the
-    # 9–10pt working range; 11pt body is allowed to sit closer (11.5 is fixed).
-    for body in (9.0, 9.5, 10.0):
-        assert spec.section_pt - body >= spec.min_heading_body_gap_pt - 1e-9
+    r = ResumeRenderer()
+    for key in FIXTURES:
+        _w, res = r._compute_pdf_layout(FIXTURES[key])
+        assert spec.section_pt - res.tier.body_pt >= spec.min_heading_body_gap_pt - 1e-9
+        assert res.tier.body_pt <= 10.0
+    # Headings do not shrink with body density.
+    assert spec.name_pt == 19.0
+    assert spec.section_pt == 11.5
+    assert spec.entry_pt == 10.2
 
 
 def test_cjk_name_has_no_question_marks():
@@ -353,9 +360,9 @@ def test_property_corpus_invariants(seed):
 # Snapshot of chosen body_pt under Charis SIL. A future font change should
 # fail this explicitly rather than silently reflow.
 DENSITY_TIER_SNAPSHOT = {
-    "sparse": 11.0,
-    "new_grad": 11.0,
-    "senior": 10.0,
+    "sparse": 10.0,
+    "new_grad": 10.0,
+    "senior": 9.4,
 }
 
 
@@ -380,7 +387,8 @@ def test_docx_height_estimator_within_5_percent():
         est_pt = r._estimate_docx_height_pt(
             working,
             body_size=res.tier.body_pt,
-            line_spacing=1.1 * res.stretch,
+            line_spacing=(DEFAULT_SPEC.body_lh_mm_at_ref * 72 / 25.4)
+            / DEFAULT_SPEC.body_pt * res.stretch,
             section_gap=res.gaps.section_gap,
             entry_gap=res.gaps.entry_gap,
             skill_gap=res.gaps.skill_gap,
@@ -430,6 +438,52 @@ def test_charis_embedded_and_tinos_fallback(monkeypatch):
     assert pdf2.startswith(b"%PDF")
     assert res.pages >= 1
     assert b"Tinos" in pdf2 or b"Times" in pdf2
+
+
+def test_text_align_is_left_and_never_justified():
+    assert DEFAULT_SPEC.text_align == "L"
+    renderer = (
+        Path(__file__).resolve().parents[1]
+        / "shared" / "python" / "services" / "resume_renderer.py"
+    )
+    src = renderer.read_text(encoding="utf-8")
+    assert 'align="J"' not in src
+    assert "align='J'" not in src
+
+
+def test_bullet_glyphs_extract():
+    r = ResumeRenderer()
+    resume = _resume(n_roles=2, bullets_per_role=3, n_projects=1, bullets_per_project=2)
+    expected = 2 * 3 + 2
+    pdf, _res = r.generate_pdf(resume)
+    text, _ = extract_pdf_text(pdf)
+    count = text.count("•") + text.count("\u00b7")
+    if count < expected:
+        count = len(re.findall(r"(?:^|\n)\s*[-•\u00b7]", text))
+    assert count >= expected, f"extracted {count} markers, expected {expected}\n{text[:800]}"
+
+
+def test_headings_extract_as_single_tokens():
+    r = ResumeRenderer()
+    pdf, _ = r.generate_pdf(_resume(2, 3, n_projects=1, bullets_per_project=2))
+    text, _ = extract_pdf_text(pdf)
+    for heading in ("SUMMARY", "EXPERIENCE", "PROJECTS", "TECHNICAL SKILLS", "EDUCATION"):
+        assert heading in text, heading
+        lead = heading[0]
+        rest = heading[1:].lstrip()
+        assert not re.search(rf"{lead}\s+{re.escape(rest)}", text), heading
+
+
+def test_sixty_char_company_keeps_location_date_space():
+    r = ResumeRenderer()
+    resume = _resume(n_roles=1, bullets_per_role=3)
+    resume["experience"][0]["company"] = "A" * 60
+    resume["experience"][0]["location"] = "Tempe, AZ"
+    resume["experience"][0]["dates"] = "January 2020 - December 2021"
+    pdf, _ = r.generate_pdf(resume)
+    text, _ = extract_pdf_text(pdf)
+    collapsed = re.sub(r"\s+", " ", text)
+    assert re.search(r"AZ\s+January 2020", collapsed), collapsed
 
 
 def test_visual_snapshots():

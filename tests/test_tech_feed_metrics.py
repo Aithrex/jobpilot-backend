@@ -15,6 +15,11 @@ from services import job_inventory_service as inv
 from services import tech_feed_metrics as m
 
 NOW = datetime.now(timezone.utc)
+
+
+def _fresh() -> datetime:
+    """Wall-clock now. Module-level NOW goes stale if the suite runs >5 min."""
+    return datetime.now(timezone.utc)
 COLLECTIONS = ("job_postings", "job_source_state", "job_ingestion_runs",
                "companies", "company_ats_endpoints", "ingest_runner_heartbeat",
                "tech_feed_searches", "tech_feed_metrics")
@@ -107,7 +112,7 @@ class TestIngestionMetrics:
         db.job_source_state.insert_one({
             "source": "workday", "shard": "s000",
             "last_success_at": NOW - timedelta(minutes=3), "retry_count": 0})
-        db.ingest_runner_heartbeat.insert_one({"updated_at": NOW})
+        db.ingest_runner_heartbeat.insert_one({"updated_at": _fresh()})
         got = m.ingestion_metrics(db)
         assert got["sources"][0]["stale"] is False
         assert got["alarms"] == []
@@ -180,7 +185,7 @@ class TestAlarms:
         db.job_source_state.insert_one({
             "source": "workday", "shard": "s000",
             "last_success_at": NOW, "retry_count": 0})
-        db.ingest_runner_heartbeat.insert_one({"updated_at": NOW})
+        db.ingest_runner_heartbeat.insert_one({"updated_at": _fresh()})
         db.company_ats_endpoints.insert_many(
             [{"vendor": "greenhouse", "status": "validated", "tenant": f"t{i}"}
              for i in range(8)])
@@ -190,7 +195,7 @@ class TestAlarms:
         assert m.alarms(db) == []
 
     def test_an_employer_name_conflict_epidemic_alarms(self, db):
-        db.ingest_runner_heartbeat.insert_one({"updated_at": NOW})
+        db.ingest_runner_heartbeat.insert_one({"updated_at": _fresh()})
         _post("c1", company="Boeing", tenant="boeing", ats="workday")
         _post("c2", company="M.J. Williams", tenant="boeing", ats="workday")
         assert any("employer-name conflicts" in a for a in m.alarms(db))
