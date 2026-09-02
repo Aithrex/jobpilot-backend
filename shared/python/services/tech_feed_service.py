@@ -1808,6 +1808,16 @@ def _collapse_location_variants(rows: List[Dict[str, Any]]
 #: its results are pushed to later pages. Ordering only - nothing is removed.
 EMPLOYER_PAGE_CAP = int(os.getenv("TECH_FEED_EMPLOYER_PAGE_CAP", "3") or 3)
 
+#: How deep the cap applies. Beyond this the ranked list stays in pure score
+#: order, for a reason that is easy to miss: the ranked window is bounded by
+#: `MAX_ORDERED`, so diversifying the WHOLE list would push a dominant
+#: employer's later postings out of it entirely - JPMorgan holds 839 core-tech
+#: postings and a cap of 3 per 25-row page admits only ~240 within 2,000. Those
+#: rows would still be reachable by keyset, but in date order rather than by
+#: relevance, and that is a real loss to fix a first-page problem.
+EMPLOYER_DIVERSITY_DEPTH = int(
+    os.getenv("TECH_FEED_EMPLOYER_DIVERSITY_DEPTH", "250") or 250)
+
 
 def _diversify_employers(rows: List[Dict[str, Any]], page_size: int
                          ) -> Tuple[List[Dict[str, Any]], int]:
@@ -1831,6 +1841,10 @@ def _diversify_employers(rows: List[Dict[str, Any]], page_size: int
     size = max(1, int(page_size or DEFAULT_PAGE_SIZE))
     if len(rows) <= size:
         return rows, 0
+    # Only the head is reordered; the tail keeps pure score order.
+    depth = max(size, int(EMPLOYER_DIVERSITY_DEPTH or 0))
+    head, tail = rows[:depth], rows[depth:]
+    rows = head
 
     def _key(row: Dict[str, Any]) -> str:
         """`(ats, tenant)` first — the same key `employer_identity.
@@ -1887,6 +1901,7 @@ def _diversify_employers(rows: List[Dict[str, Any]], page_size: int
             break
         out.extend(page)
         pending = held
+    out.extend(tail)
     return out, moved
 
 

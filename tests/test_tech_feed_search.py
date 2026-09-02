@@ -1221,3 +1221,36 @@ class TestTheCompanyCategoryFilter:
         rows = [{"tenant": "acme", "ats": "greenhouse"}]
         assert tfs.filter_company_categories(rows, {"company_categories": []}) \
             == (rows, 0)
+
+
+class TestDiversityOnlyTouchesTheHeadOfTheRankedList:
+    """The ranked window is bounded by `MAX_ORDERED`, so diversifying the WHOLE
+    list would push a dominant employer's later postings out of it — still
+    reachable by keyset, but in date order rather than by relevance. That is a
+    real loss to fix a first-page problem."""
+
+    def _rows(self):
+        # One other employer INSIDE the diversified head, so the head has
+        # something to interleave with; everything after is one employer.
+        head = [{"employer_id": "big", "job_id": f"b{i}"} for i in range(100)]
+        head.insert(50, {"employer_id": "a", "job_id": "a0"})
+        return head + [{"employer_id": "big", "job_id": f"t{i}"} for i in range(300)]
+
+    def test_the_tail_keeps_pure_score_order(self):
+        rows = self._rows()
+        out, _ = tfs._diversify_employers(rows, 25)
+        d = tfs.EMPLOYER_DIVERSITY_DEPTH
+        assert [r["job_id"] for r in out[d:]] == [r["job_id"] for r in rows[d:]]
+
+    def test_the_head_is_still_diversified(self):
+        rows = self._rows()
+        out, moved = tfs._diversify_employers(rows, 25)
+        assert moved > 0
+        head_ids = [r["job_id"] for r in out[:tfs.EMPLOYER_DIVERSITY_DEPTH]]
+        assert "a0" in head_ids
+        assert head_ids.index("a0") < 50, "it was promoted, not just carried"
+
+    def test_nothing_is_lost_when_the_list_is_split(self):
+        rows = self._rows()
+        out, _ = tfs._diversify_employers(rows, 25)
+        assert sorted(r["job_id"] for r in out) == sorted(r["job_id"] for r in rows)
