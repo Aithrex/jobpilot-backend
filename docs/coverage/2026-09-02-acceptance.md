@@ -93,15 +93,41 @@ from a stranger's with a similar slug, so it is not a coverage number and the
 70% target cannot be read against it.
 
 Rebuilt on the honest definition, coverage started at **0%** — nothing in the
-database recorded who owned anything — and the two live verification passes
-are what earn it back. Pass 1 (provider owner metadata) proved 341 sources.
-Pass 2 (verify the employer's domain, then walk from it to the board) was still
-running when this session ended.
+database recorded who owned anything — and three live verification passes are
+what earn it back.
 
-**This criterion is not met, and the gap is a measurement in progress rather
-than a design gap.** What is in place: the evidence model, the two passes, the
-prioritised re-arm queue, and a report that will say the true number whenever
-it is run. What is not: enough completed verification passes to reach 70%.
+Measured at source revision `aa76422`, inventory watermark
+`2026-09-02T09:56:19Z`:
+
+| | |
+|---|---:|
+| evidence-backed technology employers | 2,622 |
+| **validated coverage** | **13.2%** (346 employers) |
+| employers without validated coverage | 2,276 |
+| open employer merge reviews (held, not crawled) | 1,443 |
+
+What the three passes produced:
+
+| pass | what it does | result |
+|---|---|---|
+| 1 — provider owner metadata | ~2 requests per source; reaches Greenhouse, Lever, Ashby, SmartRecruiters | 341 sources proven of 2,251 checked. Workday, iCIMS, Oracle, UKG, Paylocity and BambooHR correctly reported `no signal` — their APIs name no owner |
+| 2 — verify the domain, walk to the board | 6–10 requests per employer; the only path that reaches the vendors above | 660 sources proven across 6,000 employers, in 68 minutes |
+| 3 — content validation | asks the provider's own `validate()` | 1,138 validated, 260 empty, 51 blocked, 326 dead, 410 challenged |
+
+**This criterion is NOT met.** 13.2%, not 70%.
+
+The gap is throughput, not design. Pass 2 covered 6,000 of 23,782 employers in
+68 minutes at an 11% ownership hit rate; the remaining employers need roughly
+three more runs, and each newly-discovered endpoint then needs passes 1 and 3
+behind it. What is in place is the whole machine: the evidence model, three
+passes that are re-runnable and idempotent, a prioritised re-arm queue ordered
+by measured technology-job yield, and a report that states the true number
+whenever it is run.
+
+What is emphatically NOT in place is a way to reach 70% by relaxing the
+definition, and that is the point. The old 43% was 43% of "the endpoint
+answered". Every one of these 346 employers has a documented chain from their
+own verified domain, or two independent parties agreeing.
 
 Read the current figure from the generated document, never from here:
 
