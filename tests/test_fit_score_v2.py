@@ -815,3 +815,64 @@ class TestSeniorityTaxonomy:
             {"job_level": "senior", "required_years": 5},
             {"level": "intern", "years": 2})
         assert pts < mx * 0.5 and severe is True
+
+
+class TestTheCoarserClassifierMayNotOverrideTheFinerOnesSilence:
+    """`_legacy_role_tier` is the 32-key bridge. `unrelated` is the harshest
+    verdict it can return (0.08), and when the canonical taxonomy declined to
+    classify the resume at all — no families, no specialties, confidence 0.0 —
+    letting the blunter classifier assert "different field" inverts which one
+    we trust.
+
+    Measured on a live account whose entire resume is "Assistant Engineer" and
+    nineteen skills: 280 of 400 core-tech postings came back `unrelated`, and
+    the account topped out at 77 with nothing above 80. After the fix: 312
+    `unknown`, max 84, mean 32.9 -> 41.8.
+    """
+
+    def _prof(self, *, families, tech):
+        return {"families": set(families), "titles": ["Assistant Engineer"],
+                "listed_skills": ["python"], "experience_skills": ["sql"],
+                "tech": tech}
+
+    def test_an_unclassified_resume_yields_unknown_not_unrelated(self):
+        # `accounting` is not in `RELATED_FAMILIES["software_engineering"]`, so
+        # the legacy tree's own verdict here is `unrelated` — which is exactly
+        # the verdict it is no longer entitled to.
+        prof = self._prof(families=["accounting"],
+                          tech={"classification_confidence": 0.0,
+                                "role_families": [], "role_specialties": []})
+        assert fit_score._legacy_role_tier(
+            {"role_family": "software_engineering"}, prof,
+            "Backend Engineer") is None
+
+    def test_a_confidently_classified_resume_still_gets_the_verdict(self):
+        prof = self._prof(families=["healthcare"],
+                          tech={"classification_confidence": 0.9,
+                                "role_families": [], "role_specialties": [],
+                                "non_tech_domain": "clinical"})
+        got = fit_score._legacy_role_tier(
+            {"role_family": "software_engineering"}, prof, "Backend Engineer")
+        assert got is not None and got[0] == "unrelated"
+
+    def test_a_positive_finding_never_needed_the_confidence_gate(self):
+        """`same_family` and `adjacent_family` ADD information; only the
+        harshest verdict is gated."""
+        prof = self._prof(families=["software_engineering"],
+                          tech={"classification_confidence": 0.0,
+                                "role_families": [], "role_specialties": []})
+        got = fit_score._legacy_role_tier(
+            {"role_family": "software_engineering"}, prof, "Backend Engineer")
+        assert got is not None and got[0] == "same_family"
+
+    def test_the_cross_domain_veto_is_untouched(self):
+        """A licensed teacher's resume IS confidently classified, and
+        `role_alignment` answers it in its own branch before the legacy bridge
+        is reached."""
+        from services import tech_taxonomy as tx
+        got = tx.role_alignment(
+            job_families=["software_engineering"], job_specialties=["backend"],
+            resume_families=[], resume_specialties=[],
+            job_scope=tx.SCOPE_CORE, resume_scope=tx.SCOPE_NON_TECH,
+            resume_non_tech_domain="education_public")
+        assert got["cross_domain"] is True and got["tier"] == tx.ALIGN_UNRELATED

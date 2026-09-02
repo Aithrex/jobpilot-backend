@@ -1953,6 +1953,28 @@ def _legacy_role_tier(reqs: Dict[str, Any], prof: Dict[str, Any],
     if RELATED_FAMILIES.get(job_fam, set()) & fams:
         return ("adjacent_family", 0.46,
                 "Your background is in an adjacent role family.")
+    # `unrelated` is the harshest verdict this function can return (0.08), and
+    # the 32-key legacy tree is the COARSER of the two classifiers. When the
+    # canonical taxonomy declined to classify the resume at all — no families,
+    # no specialties, confidence 0.0 — letting the blunter one assert "different
+    # field" inverts which classifier we trust.
+    #
+    # Measured on a live account whose whole resume is "Assistant Engineer" and
+    # nineteen skills: 280 of 400 core-tech postings came back `unrelated`, and
+    # the account topped out at 77 with nothing above 80. Not knowing must cost
+    # what not knowing costs, which is `unknown` (0.60).
+    #
+    # This does not touch the cross-domain veto. A licensed teacher's resume
+    # IS confidently classified — `classify_resume` returns `non_tech` with a
+    # named domain — and `role_alignment` answers that in its own branch before
+    # this function is ever reached.
+    res_tax = prof.get("tech") or {}
+    confident = (float(res_tax.get("classification_confidence") or 0.0) >= 0.7
+                 and bool(res_tax.get("role_families")
+                          or res_tax.get("role_specialties")
+                          or res_tax.get("non_tech_domain")))
+    if not confident:
+        return None
     return ("unrelated", 0.08,
             "This role is in a different field from your background.")
 

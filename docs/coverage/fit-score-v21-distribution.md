@@ -161,3 +161,61 @@ them.
 Reproduce: the sampling script is in the session log; the taxonomy assertions
 are pinned in `tests/test_cross_domain_veto_scope.py` and the per-stratum
 precision/recall in `evals/eval_tech_taxonomy.py` is unchanged by the edit.
+
+
+---
+
+# Addendum 2: does it generalise, or was it tuned to one account?
+
+The brief names one account, so the obvious risk is a change that helps that
+résumé and nobody else. Six live accounts with parsed résumés, same 1,200
+most-recent core-tech postings, same code:
+
+| account | mean | max | >= 80 | >= 70 |
+|---|---:|---:|---:|---:|
+| harshith.manne.jobs | 52.9 | 100 | 46 | 186 |
+| suryateja2132003 | 52.3 | 92 | 28 | 172 |
+| vamsim1221 | 49.3 | 97 | 24 | 193 |
+| harshithdanda096 | 42.4 | 83 | 3 | 12 |
+| sujatha@nalluri.in | 41.8 | 84 | 1 | 10 |
+| zaheermohammad900 | 23.2 | 70 | 0 | 2 |
+
+The spread is the point. It is not one number for everybody.
+
+## The account that was scored wrongly, and why
+
+`sujatha@nalluri.in` measured mean 32.9 / max 77 / **nothing above 80** across
+1,200 core-tech postings. The résumé is a single title — "Assistant Engineer" —
+and nineteen skills. `classify_resume` looked at it and correctly declined:
+`tech_scope: unknown`, `classification_confidence: 0.0`, no families, no
+specialties.
+
+`role_alignment` therefore returned `unknown`, exactly as designed. Then
+`_score_role` fell through to `_legacy_role_tier`, the 32-key bridge — which
+DID assign a family from the sparse evidence and returned **`unrelated` for 280
+of 400 postings**, at weight 0.08.
+
+So the coarser of the two classifiers was overriding the finer one's silence,
+with the harshest verdict in the system. The legacy tree may still return
+`same_family` and `adjacent_family` — those ADD information — but it can only
+return `unrelated` when the canonical taxonomy is confident about the résumé
+(`classification_confidence >= 0.7`, the same bar `_eligibility` uses).
+
+After: 312 `unknown` instead of 280 `unrelated`, mean 41.8, max 84.
+
+**The cross-domain veto is untouched.** A licensed teacher's résumé IS
+confidently classified — `classify_resume` returns `non_tech` with a named
+domain — and `role_alignment` answers that in its own branch before the legacy
+bridge is reached. `evals/test_fit_score_ranking.py` still passes with every
+`j_backend*` posting ineligible for all five non-technical résumés.
+
+## The account that is scored correctly and still scores low
+
+`zaheermohammad900` is an AI Data Analyst / BI résumé with zero years of
+experience and seventeen skills. 349 of 400 core-tech postings come back
+`unrelated`, and that is right: a BI analyst is not a backend engineer. Its
+`exact_specialty` (12) and `same_family` (25) hits are the data and BI
+postings, and its ceiling of 70 with zero years is a fair reading, not a bug.
+
+A low score that is TRUE is not a problem to fix. The problem was only ever
+the low scores that were false.
