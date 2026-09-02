@@ -510,7 +510,14 @@ def _fetch_tenant_term(
     Returns (jobs, meta). Failures return ([], meta) — a partial result
     across N tenants always beats a hard error."""
     tenant, host, site = row["tenant"], row["wd_host"], row["site"]
-    base = f"https://{tenant}.{host}.myworkdayjobs.com"
+    # Both public Workday domains. A catalog row selects with `wd_domain`;
+    # absent means the original `myworkdayjobs.com`, so every existing row is
+    # unchanged. `myworkdaysite.com` serves the identical CXS contract from a
+    # different URL shape and was unreachable while the domain was hardcoded.
+    from services.workday_cxs_fetcher import apply_base, cxs_base
+    wd_domain = row.get("wd_domain") or ""
+    base = cxs_base(tenant, host, wd_domain)
+    human_base = apply_base(tenant, host, site, wd_domain)
     url = f"{base}/wday/cxs/{tenant}/{site}/jobs"
     location_lc = (location or "").strip().lower()
     if location_lc in {"united states", "us", "usa"}:
@@ -594,7 +601,7 @@ def _fetch_tenant_term(
                 "location": loc_text or "Not specified",
                 # Canonical form Workday itself emits in the detail endpoint's
                 # externalUrl — no locale segment.
-                "apply_link": f"{base}/{site}/{path}" if path else base,
+                "apply_link": f"{human_base}/{path}" if path else human_base,
                 "description": "",
                 "salary": "",
                 "employment_type": (jp.get("timeType") or "").strip(),

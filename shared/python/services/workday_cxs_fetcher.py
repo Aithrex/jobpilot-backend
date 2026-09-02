@@ -183,14 +183,17 @@ def _load_tenants() -> List[TenantSpec]:
         parsed = json.loads(raw)
         out: List[TenantSpec] = []
         for row in parsed:
-            if isinstance(row, list) and len(row) == 4:
-                tenant, host, site, display = row
+            if isinstance(row, list) and len(row) in (4, 5):
+                tenant, host, site, display = row[0], row[1], row[2], row[3]
                 # Accept either a string or a list of candidates.
                 if isinstance(site, list):
                     site = tuple(str(s) for s in site)
                 else:
                     site = str(site)
-                out.append((str(tenant), str(host), site, str(display)))
+                spec = [str(tenant), str(host), site, str(display)]
+                if len(row) == 5 and row[4]:
+                    spec.append(str(row[4]).strip().lower())
+                out.append(tuple(spec))
         return out + DEFAULT_WORKDAY_TENANTS if out else DEFAULT_WORKDAY_TENANTS
     except Exception as e:
         logger.warning("WORKDAY_TENANTS env override failed to parse (%s); falling back to defaults", e)
@@ -216,6 +219,15 @@ _RESOLVED_SITES: Dict[Tuple[str, str], str] = {}
 _RESOLVED_LOCK = Lock()
 
 
+def spec_domain(spec: Sequence[Any]) -> str:
+    """A tenant spec's Workday domain. Optional 5th element, defaulting to the
+    original `myworkdayjobs.com`, so every existing 4-tuple keeps working."""
+    try:
+        return str(spec[4] or WD_DOMAIN_JOBS).strip().lower() or WD_DOMAIN_JOBS
+    except (IndexError, TypeError):
+        return WD_DOMAIN_JOBS
+
+
 def _candidates_for(spec_site: Union[str, Sequence[str]]) -> List[str]:
     """Normalize the `site` field to an ordered list of candidates."""
     if isinstance(spec_site, str):
@@ -223,11 +235,53 @@ def _candidates_for(spec_site: Union[str, Sequence[str]]) -> List[str]:
     return [s for s in spec_site if s]
 
 
+#: Workday serves the SAME CXS contract from two public domains, in two URL
+#: shapes. `myworkdayjobs.com` puts the tenant in the subdomain;
+#: `myworkdaysite.com` does not — `https://wd1.myworkdaysite.com/wday/cxs/
+#: snapchat/snap/jobs` is a live board with 184 postings and was unreachable
+#: while the domain was hardcoded. A catalog row selects with `wd_domain`.
+WD_DOMAIN_JOBS = "myworkdayjobs.com"
+WD_DOMAIN_SITE = "myworkdaysite.com"
+
+
+def cxs_base(tenant: str, host: str, domain: str = WD_DOMAIN_JOBS) -> str:
+    """The origin a tenant's CXS API lives on, for either Workday domain."""
+    dom = str(domain or WD_DOMAIN_JOBS).strip().lower() or WD_DOMAIN_JOBS
+    if dom == WD_DOMAIN_SITE:
+        return f"https://{host}.{WD_DOMAIN_SITE}"
+    return f"https://{tenant}.{host}.{dom}"
+
+
+def apply_base(tenant: str, host: str, site: str,
+               domain: str = WD_DOMAIN_JOBS, *, locale: bool = False) -> str:
+    """The HUMAN-facing prefix an `externalPath` hangs off.
+
+    Not the same shape as the API origin: `myworkdaysite.com` puts the tenant
+    in the PATH (`/recruiting/{tenant}/{site}`) where `myworkdayjobs.com` puts
+    it in the subdomain. Getting this wrong yields an apply link that 404s AND
+    a detail URL the enricher cannot parse back, so the posting arrives with
+    no description.
+
+    `locale` reproduces the `/en-US` segment this module has always emitted.
+    The two Workday callers have historically minted DIFFERENT shapes — the
+    live-search fetcher with `/en-US`, the inventory service without — and
+    both are stored on hundreds of thousands of postings as `canonical_url`.
+    Unifying them here would re-hash the whole Workday inventory for a
+    cosmetic change, so each caller keeps the shape it already writes.
+    """
+    dom = str(domain or WD_DOMAIN_JOBS).strip().lower() or WD_DOMAIN_JOBS
+    if dom == WD_DOMAIN_SITE:
+        return f"{cxs_base(tenant, host, dom)}/recruiting/{tenant}/{site}"
+    prefix = "/en-US" if locale else ""
+    return f"{cxs_base(tenant, host, dom)}{prefix}/{site}"
+
+
 def _resolve_site(
     tenant: str,
     host: str,
     candidates: List[str],
     timeout: int,
+    domain: str = WD_DOMAIN_JOBS,
 ) -> Optional[Tuple[str, Dict[str, Any]]]:
     """Probe candidate site paths and return (winning_site, response_json).
 
@@ -235,7 +289,7 @@ def _resolve_site(
     next call goes straight to the right URL. On exhaustion of candidates we
     return None and the tenant is silently skipped for this run.
     """
-    key = (tenant, host)
+    key = (tenant, host, str(domain or WD_DOMAIN_JOBS))
     with _RESOLVED_LOCK:
         cached = _RESOLVED_SITES.get(key)
     if cached and cached in candidates:
@@ -243,7 +297,7 @@ def _resolve_site(
         candidates = [cached] + [c for c in candidates if c != cached]
 
     for site in candidates:
-        url = f"https://{tenant}.{host}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs"
+        url = f"{cxs_base(tenant, host, domain)}/wday/cxs/{tenant}/{site}/jobs"
         body = {"searchText": "", "locations": [], "appliedFacets": {}, "limit": 1, "offset": 0}
         try:
             resp = requests.post(url, json=body, headers=_HEADERS, timeout=timeout)
@@ -272,18 +326,20 @@ def _fetch_tenant(
     location: str,
     limit: int = 20,
     timeout: int = 8,
+    domain: str = WD_DOMAIN_JOBS,
 ) -> List[Dict[str, Any]]:
     candidates = _candidates_for(site_spec)
     if not candidates:
         return []
     # First confirm a working site path (uses limit=1 probe so it's cheap),
     # then issue the real search against the resolved path.
-    resolved = _resolve_site(tenant, host, candidates, timeout=timeout)
+    resolved = _resolve_site(tenant, host, candidates, timeout=timeout,
+                             domain=domain)
     if not resolved:
         return []
     site, _probe = resolved
 
-    base = f"https://{tenant}.{host}.myworkdayjobs.com"
+    base = cxs_base(tenant, host, domain)
     url = f"{base}/wday/cxs/{tenant}/{site}/jobs"
     body = {
         "searchText": search_text or "",
@@ -320,7 +376,8 @@ def _fetch_tenant(
                 continue
         path = (jp.get("externalPath") or "").lstrip("/")
         apply_link = (
-            f"{base}/en-US/{site}/{path}" if path else
+            f"{apply_base(tenant, host, site, domain, locale=True)}/{path}"
+            if path else
             jp.get("externalPath") or ""
         )
         posted_on = jp.get("postedOn") or ""
@@ -397,10 +454,11 @@ def fetch_workday_direct(
         futures = [
             pool.submit(
                 _fetch_tenant,
-                tenant, host, site_spec, display,
+                spec[0], spec[1], spec[2], spec[3],
                 search_text, location, per_tenant_limit,
+                domain=spec_domain(spec),
             )
-            for tenant, host, site_spec, display in tenant_list
+            for spec in tenant_list
         ]
         # Critical: when overall_timeout expires before every future is done,
         # as_completed raises TimeoutError on its next iteration. We absorb
@@ -445,8 +503,17 @@ def resolved_site_map() -> Dict[Tuple[str, str], str]:
 # module minted: {base}/en-US/{site}/{externalPath}) back to detail URLs and
 # fetches them in parallel, best effort, hard-bounded.
 
+# Both public Workday domains, in their two URL shapes. `myworkdaysite.com`
+# puts no tenant in the subdomain, so the tenant is the first PATH segment
+# after `/recruiting/`. A detail fetch that cannot parse its own apply URL
+# silently returns no description, which starves the scorer.
 _APPLY_URL_RE = re.compile(
     r"^https://([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com/(?:en-US/)?([^/]+)/(job/.+)$",
+    re.IGNORECASE,
+)
+_APPLY_URL_SITE_RE = re.compile(
+    r"^https://(wd\d+)\.myworkdaysite\.com/(?:en-US/)?recruiting/([a-z0-9-]+)/"
+    r"([^/]+)/(job/.+)$",
     re.IGNORECASE,
 )
 
@@ -471,9 +538,10 @@ def _detail_html_to_text(html: str) -> str:
 
 
 def _fetch_one_detail(
-    apply_url: str, tenant: str, host: str, site: str, path: str, timeout: float
+    apply_url: str, tenant: str, host: str, site: str, path: str, timeout: float,
+    domain: str = WD_DOMAIN_JOBS,
 ) -> Tuple[str, str]:
-    url = f"https://{tenant}.{host}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/{path}"
+    url = f"{cxs_base(tenant, host, domain)}/wday/cxs/{tenant}/{site}/{path}"
     try:
         resp = requests.get(url, headers=_HEADERS, timeout=timeout)
         if not resp.ok:
@@ -502,20 +570,27 @@ def fetch_job_details(
     (best effort — enrichment must never break matching). Parallel with a
     per-request timeout and an overall wall-clock budget.
     """
-    targets: List[Tuple[str, str, str, str, str]] = []
+    targets: List[Tuple[str, str, str, str, str, str]] = []
     for u in apply_urls or []:
-        m = _APPLY_URL_RE.match(str(u or "").strip())
+        raw = str(u or "").strip()
+        m = _APPLY_URL_RE.match(raw)
         if m:
             targets.append((str(u), m.group(1).lower(), m.group(2).lower(),
-                            m.group(3), m.group(4)))
+                            m.group(3), m.group(4), WD_DOMAIN_JOBS))
+            continue
+        ms = _APPLY_URL_SITE_RE.match(raw)
+        if ms:
+            host, tenant, site, path = ms.groups()
+            targets.append((str(u), tenant.lower(), host.lower(), site, path,
+                            WD_DOMAIN_SITE))
     if not targets or overall_budget <= 0:
         return {}
     out: Dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(targets)))) as pool:
         futures = [
             pool.submit(_fetch_one_detail, u, tenant, host, site, path,
-                        per_request_timeout)
-            for u, tenant, host, site, path in targets
+                        per_request_timeout, domain)
+            for u, tenant, host, site, path, domain in targets
         ]
         try:
             for fut in as_completed(futures, timeout=overall_budget):

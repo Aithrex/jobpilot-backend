@@ -13,8 +13,19 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-# Each row: display_name, tenant, wd_host, site, industry
+# Each row: display_name, tenant, wd_host, site, industry, and optionally
+# `wd_domain`. Workday serves the SAME CXS contract from two public domains:
+# `myworkdayjobs.com` (the default, tenant in the subdomain) and
+# `myworkdaysite.com` (tenant in the path). Omit `wd_domain` for the former.
 WORKDAY_TENANT_CATALOG: List[Dict[str, str]] = [
+    # ── myworkdaysite.com tenants ─────────────────────────────────
+    # Probed live 2026-09-02: wd1.myworkdaysite.com/wday/cxs/snapchat/snap/jobs
+    # returns HTTP 200 with total=184. Snap's own careers site is a wrapper
+    # over this board and its records carry the absolute Workday URL, which is
+    # how the tenant was identified rather than guessed.
+    {"display_name": "Snap Inc.", "tenant": "snapchat", "wd_host": "wd1",
+     "site": "snap", "industry": "tech", "wd_domain": "myworkdaysite.com"},
+
     # ── banking ───────────────────────────────────────────────────
     {"display_name": "Bread Financial", "tenant": "alliancedata", "wd_host": "wd5", "site": "breadfinancial_India", "industry": "banking"},
     {"display_name": "Ares Management", "tenant": "aresmgmt", "wd_host": "wd1", "site": "External", "industry": "banking"},
