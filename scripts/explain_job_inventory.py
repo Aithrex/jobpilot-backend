@@ -187,6 +187,28 @@ def posting_paths(content_hash):
          {"status": "active", "locations.country_code": {"$in": ["US"]},
           "posted_at": {"$gte": cutoff}},
          [("posted_at", DESCENDING)], 2000),
+        # The four clauses that were fixed after the live filter audit. Each
+        # one was accepted, echoed and inert; each is now a real predicate, so
+        # each needs a plan that a regression would show up in.
+        ("tech-feed country filter (raw spelling fallback)",
+         {"status": "active", "posted_at": {"$gte": cutoff},
+          "$and": [{"$or": [{"locations.country_code": {"$in": ["IN"]}},
+                            {"locations.country": {"$in": ["india", "India", "INDIA"]}}]}]},
+         [("posted_at", DESCENDING)], 2000),
+        ("tech-feed region filter",
+         {"status": "active", "posted_at": {"$gte": cutoff},
+          "$and": [{"locations.region": {"$in": ["TX", "Tx", "tx"]}}]},
+         [("posted_at", DESCENDING)], 2000),
+        ("tech-feed employment-type filter (normalised, unknown ORed in)",
+         {"status": "active", "posted_at": {"$gte": cutoff},
+          "$and": [{"$or": [{"employment_type_normalized": {"$in": ["contract"]}},
+                            {"employment_type_normalized": {"$exists": False}}]}]},
+         [("posted_at", DESCENDING)], 2000),
+        ("tech-feed pay-interval filter (no compensation ORed in)",
+         {"status": "active", "posted_at": {"$gte": cutoff},
+          "$and": [{"$or": [{"compensation.period": "year"},
+                            {"compensation": {"$exists": False}}]}]},
+         [("posted_at", DESCENDING)], 2000),
         ("tech-feed page fetch by id (cursor page)",
          {"job_id": {"$in": ["0" * 32, "1" * 32, "2" * 32]}}, None, 25),
     ]

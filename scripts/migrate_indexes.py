@@ -935,6 +935,19 @@ INDEX_SPECS = [
     ("job_postings", [("status", ASCENDING), ("locations.country_code", ASCENDING),
                       ("posted_at", DESCENDING)],
      {"name": "active_country_posted_at"}),
+    # The raw spelling is still needed: `country_code` only exists on rows the
+    # normalisation backfill reached, so the filter ORs the two. Without this
+    # index the OR degraded the whole clause - measured on live Atlas, 148,907
+    # keys examined to return 1,874 rows, 1,446 ms.
+    ("job_postings", [("status", ASCENDING), ("locations.country", ASCENDING),
+                      ("posted_at", DESCENDING)],
+     {"name": "active_country_raw_posted_at"}),
+    # The region filter had no index at all - it was inert until the `$and`
+    # clobbering was fixed, so nothing had ever measured it. 71,018 keys
+    # examined for 2,000 rows, 838 ms.
+    ("job_postings", [("status", ASCENDING), ("locations.region", ASCENDING),
+                      ("posted_at", DESCENDING)],
+     {"name": "active_region_posted_at"}),
     # The scope/family/specialty indexes end at `posted_at`, so a retrieval
     # sorted `(posted_at DESC, job_id ASC)` - which it must be, or the keyset
     # order is not total - fell back to a BLOCKING SORT over the whole matched
