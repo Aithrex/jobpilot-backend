@@ -255,10 +255,16 @@ def offline_tailor(monkeypatch):
     from _vg_support import FakeLLM
     fake = FakeLLM().set_handler(_handler)
     monkeypatch.setattr(cc, "claude_json", fake)
-    # Keep the deterministic pipeline isolated: no summary refiner / market hint
-    # / quality gate (they'd make additional LLM calls the handler would
-    # misinterpret). The quality gate is exercised by its own dedicated test.
-    monkeypatch.setattr(rt, "SECTION_REFINE_SUMMARY", False, raising=False)
+    # Keep the deterministic pipeline isolated: no deferred-summary LLM call /
+    # market hint / quality gate (they'd make additional LLM calls the handler
+    # would misinterpret). The summary writer is exercised by its own tests.
+    import services.summary_tailor as st
+
+    def _passthrough_summary(tailored, structured, jd, gap=None, user_feedback=None):
+        tailored["summary"] = structured.get("summary") or tailored.get("summary") or ""
+        return tailored
+
+    monkeypatch.setattr(st, "write_summary", _passthrough_summary)
     monkeypatch.setattr(rt, "USE_ATS_MARKET_SIGNALS", False, raising=False)
     monkeypatch.setattr(rt, "QUALITY_REFLECTION_GATE", False, raising=False)
     # Skill-heading placement is a second FLASH call the handler above would

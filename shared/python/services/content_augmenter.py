@@ -11,14 +11,13 @@ Phases:
   3: Impact injection on existing no-metric bullets
   3b: Second expansion round against the stretch caps if still well short
   4: Overflow protection (trim if > 95%)
-  5: ATS hardening (keyword density + summary alignment in PARALLEL, then weak verbs)
+  5: ATS hardening (keyword density, then weak verbs)
   6: Final overflow check after hardening
 """
 import copy
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -64,11 +63,11 @@ class ContentAugmenter:
     def _finalize_safe_substitutions(self, tailored: Dict[str, Any]) -> Dict[str, Any]:
         """Re-apply IntegrityGuard's safe-substitution passes after augmentation.
 
-        The tailor pipeline runs IntegrityGuard once after the LLM emits the
-        initial tailored resume — that strips AI tells, Unicode dashes,
-        banned phrases, and enforces terminal periods. But the augmenter's
-        Phase 2 (bullet expansion), Phase 3 (impact injection), and Phase 5
-        (ATS hardening) all call the LLM again to rewrite or add bullets.
+        The tailor pipeline runs IntegrityGuard after the primary LLM emit,
+        and summary_tailor runs cosmetics after the deferred summary is
+        accepted. The augmenter's Phase 2 (bullet expansion), Phase 3
+        (impact injection), and Phase 5 (keyword density / weak verbs)
+        all call the LLM again to rewrite or add bullets.
         Anything those phases emit (tildes, en-dashes, missing periods,
         K+/M+/%+ suffixes) would bypass the original guard.
 
@@ -1045,86 +1044,16 @@ class ContentAugmenter:
     ) -> Dict[str, Any]:
         """Ensure the resume passes AI ATS screeners.
 
-        Parallelizes keyword density and summary alignment (they touch
-        different resume sections), then runs weak verbs sequentially
-        (since it modifies bullets that keyword density may have changed).
+        Keyword density rewrites under-evidenced bullets; weak verbs run
+        after that (they depend on the density output). The professional
+        summary is written earlier by summary_tailor and is not touched here.
         """
-        # Step 1: Run keyword density + summary alignment in PARALLEL.
-        # These are independent: keyword density modifies bullets,
-        # summary alignment modifies the summary field.
-        #
-        # Timeout handling: a `with ThreadPoolExecutor(...)` block waits on
-        # __exit__ for ALL submitted threads, even ones we abandoned via
-        # `future.result(timeout=...)`. If keyword density's LLM call
-        # hangs (e.g. 503 retries), the per-future timeout fires at 30s but
-        # then the context manager blocks for another ~30s waiting for the
-        # runaway thread — net ~60s of wall time per timeout for what was
-        # already abandoned.
-        #
-        # Fix: explicit executor lifecycle + shutdown(wait=False) in finally
-        # so we return as soon as our useful work is done. Orphan threads
-        # finish on their own without blocking this request. Per-future
-        # timeouts are unchanged from the original (30s each) — accuracy is
-        # preserved: any LLM response that would have completed inside
-        # 30s before is still captured now.
-        keyword_result = tailored
-        summary_result = tailored
-
-        tailored_for_keywords = copy.deepcopy(tailored)
-        tailored_for_summary = copy.deepcopy(tailored)
-
-        executor = ThreadPoolExecutor(max_workers=2)
-        had_timeout = False
         try:
-            future_kw = executor.submit(
-                self._enforce_keyword_density, tailored_for_keywords, jd_analysis
-            )
-            future_summary = executor.submit(
-                self._verify_summary_alignment, tailored_for_summary, jd_analysis
-            )
+            tailored = self._enforce_keyword_density(tailored, jd_analysis)
+        except Exception as e:
+            logger.error("ContentAugmenter ATS: keyword density failed: %s", e)
 
-            try:
-                keyword_result = future_kw.result(timeout=30)
-            except FuturesTimeoutError:
-                had_timeout = True
-                logger.warning(
-                    "ContentAugmenter ATS: keyword density timed out (>30s) — abandoning thread"
-                )
-                keyword_result = tailored
-            except Exception as e:
-                logger.error("ContentAugmenter ATS: keyword density failed: %s", e)
-                keyword_result = tailored
-
-            try:
-                summary_result = future_summary.result(timeout=30)
-            except FuturesTimeoutError:
-                had_timeout = True
-                logger.warning(
-                    "ContentAugmenter ATS: summary alignment timed out (>30s) — abandoning thread"
-                )
-                summary_result = tailored
-            except Exception as e:
-                logger.error("ContentAugmenter ATS: summary alignment failed: %s", e)
-                summary_result = tailored
-        finally:
-            # Don't wait for orphan threads. They finish on their own; the
-            # Lambda either reuses the warm container with the thread idle,
-            # or the container is recycled. Either way, this request returns
-            # immediately instead of holding the user.
-            executor.shutdown(wait=False)
-            if had_timeout:
-                logger.info(
-                    "ContentAugmenter ATS: returning early; orphan thread will complete in background"
-                )
-
-        # Merge: take experience/projects from keyword result, summary from summary result
-        tailored["experience"] = keyword_result.get("experience", tailored.get("experience", []))
-        tailored["summary"] = summary_result.get("summary", tailored.get("summary", ""))
-
-        # Step 2: Run weak verbs sequentially (depends on keyword density output)
         tailored = self._fix_weak_verbs(tailored)
-
-        # Step 3: Chronological order (pure Python, instant)
         tailored = self._enforce_chronological_order(tailored)
         return tailored
 
@@ -1317,141 +1246,6 @@ class ContentAugmenter:
             if 0 <= idx < len(weak_bullets) and new_text:
                 wb = weak_bullets[idx]
                 tailored[wb["section"]][wb["entry_index"]]["bullets"][wb["bullet_index"]] = new_text
-
-        return tailored
-
-    def _verify_summary_alignment(
-        self,
-        tailored: Dict[str, Any],
-        jd_analysis: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Ensure summary mentions job title and >= 3 required skills."""
-        from services.claude_client import claude_json, CLAUDE_FLASH
-
-        summary = tailored.get("summary", "")
-        if not summary:
-            return tailored
-
-        job_title = jd_analysis.get("job_title", "").lower()
-        required = [s.lower() for s in jd_analysis.get("required_skills", [])[:5]]
-
-        summary_lower = summary.lower()
-        has_title = job_title in summary_lower if job_title else True
-        skills_in_summary = sum(1 for s in required if s in summary_lower)
-
-        if has_title and skills_in_summary >= 3:
-            logger.info("ContentAugmenter ATS: summary alignment OK")
-            return tailored
-
-        logger.info(
-            "ContentAugmenter ATS: summary needs alignment (title=%s, skills=%d/3)",
-            has_title, skills_in_summary,
-        )
-
-        # Get candidate's actual background for grounding
-        experience = tailored.get("experience", [])
-        exp_context = ", ".join(
-            f"{e.get('title', '')} at {e.get('company', '')}" for e in experience[:3]
-        )
-
-        prompt = (
-            "Rewrite this professional resume summary to naturally include the target role "
-            "and key skills. The summary belongs on the candidate's own resume, so it must "
-            "be written FROM the candidate's perspective (first-person-implied, no 'I' "
-            "pronoun) — never AS an outside observer describing the candidate.\n\n"
-            "VOICE — non-negotiable:\n"
-            "  • Write as the candidate's own self-description. Opening should describe what\n"
-            "    the candidate IS or DOES, e.g. 'Backend engineer with hands-on experience\n"
-            "    building...' / 'Cloud and DevOps engineer focused on...'.\n"
-            "  • NEVER use the words 'candidate', 'candidates', 'the candidate',\n"
-            "    'This candidate', 'Software Engineer X candidates should...', or any\n"
-            "    third-person framing. This is a resume summary, not a job description or\n"
-            "    a recruiter blurb.\n"
-            "  • NEVER open the summary with the JD's job title as a noun phrase being\n"
-            "    described (e.g. 'Software Engineer II Backend candidates should have...').\n"
-            "    The JD title can appear LATER in the summary as the candidate's target\n"
-            "    role, but not as the grammatical subject of the opening sentence.\n"
-            "\n"
-            "STYLE rules:\n"
-            f"1. {prompt_rules.SUMMARY_RULE}\n"
-            "2. Naturally mention the target role title and at least 3 of the required skills.\n"
-            "3. Ground every claim in the candidate's actual experience below.\n"
-            "4. Use plain, professional language. Direct, specific, no buzzwords.\n"
-            f"5. {prompt_rules.banned_phrases_rule()}\n"
-            "6. Do NOT start with an adjective.\n"
-            "7. Do NOT start with 'I' or with the JD's job title verbatim.\n\n"
-            "GOOD examples (match this voice):\n"
-            "  • 'Backend engineer with hands-on experience building Python microservices on\n"
-            "    AWS, designing RESTful APIs against PostgreSQL, and shipping CI/CD pipelines\n"
-            "    that span dev through production. Comfortable owning the full development\n"
-            "    lifecycle in fast-paced environments. Ready to apply this foundation to the\n"
-            "    Software Engineer II role on the Platform Team.'\n"
-            "  • 'Cloud and DevOps engineer skilled in Terraform-driven AWS infrastructure,\n"
-            "    Kubernetes workloads, and golden-signal observability across production\n"
-            "    systems. Background spans containerized backend services on ECS/EKS with\n"
-            "    Multi-AZ Postgres and SRE-aligned incident response.'\n\n"
-            f"Target role: {jd_analysis.get('job_title', '')}\n"
-            f"Required skills: {', '.join(jd_analysis.get('required_skills', [])[:5])}\n"
-            f"Candidate background: {exp_context}\n"
-            f"Current summary: {summary}\n\n"
-            "Return ONLY the rewritten summary as a JSON object with one key named "
-            "\"summary\" whose value is the new summary string. The string value must be "
-            "plain prose. Just the prose.\n"
-        )
-
-        try:
-            # NOTE: do NOT pass schema= here. Earlier we used schema={"summary": str}
-            # which triggered Claude's tool-use mode; combined with the prompt's
-            # JSON example, Claude returned `{"summary": "{\"summary\": \"...\"}"}`
-            # — a nested envelope — which got stored verbatim as the summary string
-            # and showed in the rendered PDF as `{"summary": "I build..."}`. Plain
-            # prompt + JSON parse + envelope unwrap below is the safe path.
-            result = claude_json(
-                prompt, max_tokens=6000, temperature=0.3,
-                model=CLAUDE_FLASH,
-            )
-            new_summary = result.get("summary", "") if isinstance(result, dict) else ""
-            # Defensive unwrap: if the model still nests {"summary": "..."} inside
-            # the value, peel one layer.
-            if isinstance(new_summary, str) and new_summary.strip().startswith("{"):
-                try:
-                    import json as _json
-                    parsed = _json.loads(new_summary)
-                    if isinstance(parsed, dict) and isinstance(parsed.get("summary"), str):
-                        new_summary = parsed["summary"]
-                        logger.warning("ContentAugmenter ATS: peeled nested {summary:...} envelope")
-                except Exception:
-                    pass
-            if new_summary and len(new_summary) > 50:
-                # Defensive QC: reject the rewrite if the model slipped back
-                # into the third-person voice or opened with the JD title
-                # verbatim. Keep the original (tailor-produced) summary in
-                # that case — it's almost always better than a broken
-                # rewrite. The list below captures every red-flag pattern
-                # we've seen the model emit in production.
-                _new_lower = new_summary.lower()
-                _job_title = (jd_analysis.get("job_title") or "").strip().lower()
-                _bad_patterns = [
-                    " candidate ", " candidates ", "the candidate", "this candidate",
-                    "candidates should", "should have built",
-                    "i build ", "i have built ", "i'm a ", "i am a ",
-                ]
-                _opens_with_jd_title = (
-                    _job_title
-                    and len(_job_title) > 6
-                    and _new_lower.startswith(_job_title)
-                )
-                if any(p in _new_lower for p in _bad_patterns) or _opens_with_jd_title:
-                    logger.warning(
-                        "ContentAugmenter ATS: REJECTED alignment rewrite "
-                        "(third-person voice or JD-title opener) — keeping original. Rewrite was: %r",
-                        new_summary[:200],
-                    )
-                else:
-                    tailored["summary"] = new_summary
-                    logger.warning("ContentAugmenter ATS: summary rewritten for alignment")
-        except Exception as e:
-            logger.error("ContentAugmenter ATS summary alignment failed: %s", e)
 
         return tailored
 

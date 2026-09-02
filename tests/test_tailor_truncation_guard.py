@@ -33,8 +33,7 @@ def test_passes_when_all_core_sections_present():
 @pytest.mark.parametrize(
     "dropped",
     [
-        {"summary": "", "skills": {"L": ["Python"]}, "experience": [{"x": 1}]},
-        {"summary": "s", "skills": {}, "experience": [{"x": 1}]},
+        {"summary": "", "skills": {}, "experience": [{"x": 1}]},
         {"summary": "s", "skills": {"L": ["Python"]}, "experience": []},
         # skills present as a dict of only-empty lists → still "empty"
         {"summary": "s", "skills": {"L": []}, "experience": [{"x": 1}]},
@@ -48,8 +47,19 @@ def test_raises_when_input_present_but_output_dropped_a_core_section(dropped):
 
 
 def test_no_raise_when_original_also_lacked_the_section():
-    # If the ORIGINAL had no projects/summary, an empty output for that section
+    # If the ORIGINAL had no skills, an empty output for that section
     # is not a truncation — only input-present/output-empty counts.
-    original = {"skills": {"L": ["Python"]}, "experience": [{"x": 1}]}  # no summary
-    tailored = {"summary": "", "skills": {"L": ["Python"]}, "experience": [{"x": 1}]}
+    original = {"experience": [{"x": 1}]}  # no skills
+    tailored = {"summary": "", "skills": {}, "experience": [{"x": 1}]}
     ResumeTailor._assert_core_sections_present(original, tailored)  # no raise
+
+
+def test_empty_summary_is_not_truncation_after_primary():
+    # The primary tailor no longer writes a summary. An empty summary after
+    # that call is expected, not a dropped section.
+    tailored = {
+        "summary": "",
+        "skills": {"L": ["Python"]},
+        "experience": [{"company": "Acme", "title": "SWE", "bullets": ["Did Y."]}],
+    }
+    ResumeTailor._assert_core_sections_present(_ORIGINAL, tailored)  # no raise

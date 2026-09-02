@@ -64,8 +64,8 @@ def test_project_examples_drop_banned_sub_and_tilde_forms():
 
 def test_banned_phrase_rule_is_derived_from_the_canonical_tuple():
     rule = prompt_rules.banned_phrases_rule()
-    # Every canonical banned phrase must be present (the old hand-copied list in
-    # _verify_summary_alignment had drifted — it omitted several).
+    # Every canonical banned phrase must be present (a previous hand-copied
+    # list in the old alignment pass had drifted — it omitted several).
     for phrase in BANNED_PHRASES:
         assert phrase in rule, f"banned-phrase rule missing canonical entry {phrase!r}"
 
@@ -107,11 +107,9 @@ def test_project_cap_matches_integrity_guard():
     assert prompt_rules.MAX_PROJECTS == _MAX_PROJECTS
 
 
-def test_summary_length_agrees_with_primary_tailor_contract():
-    # The shared SUMMARY_RULE (used by the augmenter's alignment pass) must not
-    # fight the PRIMARY tailor prompt's summary contract. The tailor states
-    # "2-3 ... sentences" / "max ~60 words"; the shared rule must match so the
-    # two passes don't push the summary to different lengths.
+def test_summary_length_agrees_with_deferred_writer_contract():
+    # The shared SUMMARY_RULE is the deferred writer's length band. Keep it
+    # locked so a later prompt cannot silently widen to 3-4 sentences.
     assert prompt_rules.SUMMARY_MIN_SENTENCES == 2
     assert prompt_rules.SUMMARY_MAX_SENTENCES == 3
     assert prompt_rules.SUMMARY_MAX_WORDS == 60

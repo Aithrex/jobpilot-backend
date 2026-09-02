@@ -7,11 +7,13 @@ Output: tailored resume JSON conforming to TAILORED_RESUME_SCHEMA
 Enhancements over base tailoring:
   - Keyword gap analysis injected into prompt (missing keywords explicitly listed)
   - Bullet structure enforced: Action + Tech + Impact
-  - Role alignment: detects title mismatch and instructs summary bridging
+  - Role alignment: detects title mismatch and reframes bullets/skills (summary is
+    written later from settled content — see services.summary_tailor)
   - Weak verb prohibition
   - Required skill frequency rule (each must appear ≥2 times)
   - Post-tailor integrity guard: immutable field enforcement, hallucination detection,
     project generation rules, correction retry loop
+  - Deferred summary: one PRO writer + comparative validator after bullets settle
 
 Never fabricates experience. Only rewords, reorders, and emphasizes existing content.
 """
@@ -64,13 +66,6 @@ def _flag_enabled(name: str) -> bool:
     default = "true" if os.environ.get("ENVIRONMENT", "development") == "development" else "false"
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
 
-
-# Coordinated section refinement (Craft-overhaul Part A). The primary Sonnet
-# call produces the interlinked draft; this OPTIONAL, guard-gated pass polishes
-# ONE section (the summary) against the settled bullets. Fail-safe: if the
-# refinement introduces an ungrounded claim, it is discarded and the base
-# summary kept. Toggle per-section so it can be A/B'd and rolled back.
-SECTION_REFINE_SUMMARY = _flag_enabled("SECTION_REFINE_SUMMARY")
 
 # Cross-user ATS market signals (Craft-overhaul Part B3). Injects a STRATEGY
 # hint — "for this role, these keywords correlate with higher ATS" — never
@@ -268,12 +263,10 @@ class ResumeTailor:
             )
             t = self._stamp_skill_headings(t, headings)
             t = self._allocate_bullets(t, jd_analysis)
-            # Coordinated summary refinement (Part A) — runs AFTER bullets/skills
-            # are settled so the summary can echo the final document, and BEFORE
-            # match-gaps so gaps reflect the refined summary. Guard-gated and
-            # fail-safe: on any error or ungrounded claim it returns t unchanged.
-            if SECTION_REFINE_SUMMARY:
-                t = self._refine_summary(t, structured_resume, jd_analysis, gap)
+            # Deferred summary — the only writer. Primary tailor emits no
+            # summary; this pass builds a deterministic brief from settled
+            # bullets and accepts a PRO rewrite only when it beats the base.
+            t = self._write_settled_summary(t, structured_resume, jd_analysis, gap)
             if target_role:
                 t["target_role"] = target_role
             # Match-gap report: tell the user which JD requirements they
@@ -323,8 +316,9 @@ class ResumeTailor:
         # repair pass "recovers" by closing brackets — silently dropping whole
         # sections. Detect that: a section the INPUT resume had must not come
         # back empty. IntegrityGuard re-injects dropped experience, but a lost
-        # summary/skills would otherwise reach the user unnoticed. Fail loudly
+        # skills block would otherwise reach the user unnoticed. Fail loudly
         # so the job surfaces a clear error instead of a mangled résumé.
+        # Summary is written later and checked by _assert_summary_preserved.
         self._assert_core_sections_present(structured_resume, validated)
 
         # --- Integrity enforcement ---
@@ -498,7 +492,7 @@ class ResumeTailor:
             "or filler?\n"
             "- bullet_defensibility: is every bullet a complete accomplishment the "
             "candidate could defend in an interview (Situation/Action/Result)?\n"
-            "- jd_alignment: does the summary + ordering foreground what THIS job wants?\n"
+            "- jd_alignment: does the skill ordering and bullet ranking foreground what THIS job wants?\n"
             "Set 'overall' to the weighted holistic score, list the 1-2 "
             "'weakest_dimensions', and give a one-paragraph 'critique' of the most "
             "impactful fixes.\n\n"
@@ -539,7 +533,8 @@ class ResumeTailor:
             "Regenerate the FULL resume, fixing the weaknesses above while keeping "
             "every factual claim. Do NOT fabricate — preserve all companies, "
             "titles, dates, and every source number; strengthen phrasing, keyword "
-            "usage-in-context, and bullet defensibility only.\n"
+            "usage-in-context, and bullet defensibility only. Leave summary as an "
+            "empty string — a later pass writes it from settled bullets.\n"
             + prompt_rules.bullet_floor_rules() + "\n\n"
             "=== CURRENT DRAFT ===\n" + wrap_untrusted("current_resume", draft_json) + "\n\n"
             "=== ORIGINAL RESUME (source of truth) ===\n"
@@ -650,6 +645,12 @@ class ResumeTailor:
         )
         corrected = self._stamp_skill_headings(corrected, headings)
         corrected = self._allocate_bullets(corrected, jd_analysis)
+        from services.keyword_gap_engine import KeywordGapEngine
+        gap = KeywordGapEngine().analyze(structured_resume, jd_analysis)
+        corrected = self._write_settled_summary(
+            corrected, structured_resume, jd_analysis, gap,
+            user_feedback=user_feedback,
+        )
         target_role = (jd_analysis.get("job_title") or "").strip()
         if target_role:
             corrected["target_role"] = target_role
@@ -664,12 +665,16 @@ class ResumeTailor:
 
         When the LLM output is truncated mid-JSON, the repair pass closes the
         open brackets and returns technically-valid-but-incomplete JSON — a
-        lost `summary`/`skills`/`experience`. `validate_and_coerce` then fills
-        the gap with an empty default and no signal. IntegrityGuard re-injects
-        dropped *experience*, but a lost summary or skills block would sail
-        through to the user. Treat an input-present / output-empty core section
-        as a truncation failure so the job surfaces a clear error and the user
-        can retry, rather than downloading a gutted résumé.
+        lost `skills`/`experience`. `validate_and_coerce` then fills the gap
+        with an empty default and no signal. IntegrityGuard re-injects dropped
+        *experience*, but a lost skills block would sail through to the user.
+        Treat an input-present / output-empty core section as a truncation
+        failure so the job surfaces a clear error and the user can retry,
+        rather than downloading a gutted résumé.
+
+        Summary is intentionally absent from this check: the primary tailor
+        no longer writes one. `_assert_summary_preserved` runs after the
+        deferred writer.
         """
         def _empty(section: Any) -> bool:
             if isinstance(section, dict):
@@ -677,9 +682,11 @@ class ResumeTailor:
                 return not any(v for v in section.values())
             return not section
 
+        # Summary is written AFTER this guard (deferred writer). A missing
+        # summary here is expected, not truncation — see _assert_summary_preserved.
         dropped = [
             name
-            for name in ("summary", "skills", "experience")
+            for name in ("skills", "experience")
             if not _empty(original.get(name)) and _empty(tailored.get(name))
         ]
         if dropped:
@@ -907,163 +914,38 @@ class ResumeTailor:
 
         return build_match_gaps(tailored, jd_analysis)
 
-    # ------------------------------------------------------------------
-    # Coordinated section refinement (Part A)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _allocate_summary_keywords(gap: Dict[str, Any]) -> List[str]:
-        """A1: pick the handful of JD keywords the SUMMARY should surface.
-
-        Deterministic, no LLM. The summary is prime real estate for the
-        highest-signal terms: required keywords the candidate already has
-        (defensible) come first, then a couple of matched general keywords.
-        Kept small (<=6) so the refiner weaves rather than stuffs.
-        """
-        seen: set = set()
-        out: List[str] = []
-        for kw in list(gap.get("required_matched") or []) + list(gap.get("matched_keywords") or []):
-            k = (kw or "").strip()
-            if k and k.lower() not in seen:
-                seen.add(k.lower())
-                out.append(k)
-            if len(out) >= 6:
-                break
-        return out
-
-    def _refine_summary(
+    def _write_settled_summary(
         self,
         tailored: Dict[str, Any],
         structured_resume: Dict[str, Any],
         jd_analysis: Dict[str, Any],
         gap: Dict[str, Any],
+        user_feedback: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """A2: rewrite ONLY the summary against the settled document, then
-        guard-gate the result.
+        """Single deferred summary writer. See services.summary_tailor."""
+        from services import summary_tailor
 
-        The primary tailor call already produced an interlinked summary; this
-        pass sharpens it now that bullets/skills are final. It is fail-safe in
-        every branch:
-          - any exception → keep the original summary
-          - a refined summary that introduces an ungrounded claim (per
-            claim_guard) → discard, keep the original.
-        Only ``tailored["summary"]`` is ever replaced.
-        """
-        base_summary = tailored.get("summary") or ""
-        if not base_summary.strip():
-            return tailored
-
-        try:
-            from services.claude_client import claude_json, CLAUDE_PRO
-            from services import prompt_rules
-
-            # Final experience bullets the summary must be consistent with.
-            bullet_lines: List[str] = []
-            for exp in (tailored.get("experience") or [])[:4]:
-                for b in (exp.get("bullets") or [])[:3]:
-                    if isinstance(b, str) and b.strip():
-                        bullet_lines.append(f"- {b.strip()}")
-            evidence = "\n".join(bullet_lines[:12]) or "(no bullets)"
-
-            target_role = (jd_analysis.get("job_title") or "").strip()
-            allocated = self._allocate_summary_keywords(gap)
-            kw_line = ", ".join(allocated) if allocated else "(none — do not force keywords)"
-
-            prompt = (
-                "Rewrite ONLY the professional summary of this resume so it sharply "
-                "reflects the candidate's actual, final experience below and reads as "
-                "their own self-description.\n\n"
-                f"{prompt_rules.SUMMARY_RULE}\n"
-                f"{prompt_rules.VOICE_RULE}\n"
-                f"{prompt_rules.METRIC_HONESTY_RULE}\n"
-                f"{prompt_rules.BANNED_SYMBOLS_RULE}\n"
-                f"{prompt_rules.banned_phrases_rule()}\n"
-                "Every claim in the summary must be supported by the experience "
-                "bullets below — do NOT introduce any skill, metric, product, or "
-                "employer that is not evidenced there.\n"
-                f"Weave in these target keywords ONLY where truthful (do not stuff): {kw_line}\n"
-                f"Target role (may appear as the candidate's goal, never as the opening "
-                f"subject): {target_role or '(unspecified)'}\n\n"
-                "=== FINAL EXPERIENCE BULLETS (source of truth) ===\n"
-                + wrap_untrusted("experience_bullets", evidence) + "\n\n"
-                "=== CURRENT SUMMARY ===\n"
-                + wrap_untrusted("current_summary", redact_pii_for_model(base_summary)) + "\n\n"
-                'Return ONLY a JSON object: {"summary": "the rewritten summary as plain prose"}.'
-            )
-
-            result = claude_json(
-                prompt=prompt,
-                max_tokens=1024,
-                temperature=0.3,
-                model=CLAUDE_PRO,
-                system=_TAILOR_SYSTEM,
-            )
-            new_summary = result.get("summary") if isinstance(result, dict) else ""
-            # Defensive unwrap of a nested {"summary": ...} envelope.
-            if isinstance(new_summary, str) and new_summary.strip().startswith("{"):
-                try:
-                    parsed = json.loads(new_summary)
-                    if isinstance(parsed, dict) and isinstance(parsed.get("summary"), str):
-                        new_summary = parsed["summary"]
-                except Exception:
-                    pass
-
-            if not isinstance(new_summary, str) or len(new_summary.strip()) < 40:
-                return tailored  # too short / malformed — keep base
-
-            # --- A2 fabrication gate: discard if the refinement introduced an
-            # ungrounded claim in the summary. claim_guard audits summary
-            # sentences deterministically (IntegrityGuard does NOT check prose).
-            candidate = dict(tailored)
-            candidate["summary"] = new_summary
-            if self._summary_introduces_ungrounded_claim(candidate, structured_resume, jd_analysis):
-                logger.warning(
-                    "Summary refiner: REJECTED rewrite (ungrounded claim) — keeping base."
-                )
-                return tailored
-
-            tailored["summary"] = new_summary
-            logger.info("Summary refiner: applied refined summary.")
-            return tailored
-        except Exception as e:  # fail-safe — never break tailoring for a polish step
-            logger.warning("Summary refiner: skipped due to error: %s", e)
-            return tailored
+        tailored = summary_tailor.write_summary(
+            tailored, structured_resume, jd_analysis, gap,
+            user_feedback=user_feedback,
+        )
+        self._assert_summary_preserved(structured_resume, tailored)
+        return tailored
 
     @staticmethod
-    def _summary_introduces_ungrounded_claim(
-        candidate: Dict[str, Any],
-        structured_resume: Dict[str, Any],
-        jd_analysis: Dict[str, Any],
-    ) -> bool:
-        """True if claim_guard flags any summary sentence as ungrounded.
+    def _assert_summary_preserved(
+        original: Dict[str, Any], tailored: Dict[str, Any]
+    ) -> None:
+        """Fail if the input had a summary and the deferred writer left none.
 
-        Runs in flag mode (non-mutating). Only summary.* addresses are
-        inspected — bullets are the primary call's responsibility, already
-        guarded upstream.
+        The writer falls back to the base summary on any failure, so this
+        firing means something dropped the field entirely.
         """
-        try:
-            from services.claim_guard import audit_resume
-            from services.profile_facts import build_fact_store, grounding_texts
-
-            fact_store = build_fact_store(structured_resume=structured_resume)
-            _, audit = audit_resume(
-                candidate,
-                structured_resume,
-                jd_analysis,
-                extra_grounding_texts=grounding_texts(fact_store),
+        if (original.get("summary") or "").strip() and not (tailored.get("summary") or "").strip():
+            raise ValueError(
+                "Tailoring produced an incomplete résumé (the AI response was "
+                "cut off before finishing: missing summary). Please try again."
             )
-            for addr, item in (getattr(audit, "items", {}) or {}).items():
-                if str(addr).startswith("summary.") and (item.get("flags") or []):
-                    return True
-            return False
-        except Exception as e:
-            # Fail CLOSED for the gate would drop good rewrites on any infra
-            # hiccup; the base summary is already safe, so fail OPEN (treat as
-            # "no fabrication detected") only means we might keep a rewrite the
-            # guard couldn't check. Prefer safety: treat an audit failure as a
-            # reason to KEEP THE BASE (return True = "reject rewrite").
-            logger.warning("Summary refiner gate: audit failed (%s) — rejecting rewrite.", e)
-            return True
 
     @classmethod
     def _polish_skills(
@@ -2339,13 +2221,9 @@ class ResumeTailor:
             "       number. A specific unnumbered outcome ('eliminated the manual reconciliation\n"
             "       step') beats a fabricated metric every time.\n\n"
 
-            "(E) VOICE — the summary is the CANDIDATE'S self-description on THEIR resume:\n"
-            "    - Write in first-person-implied voice (no 'I' pronoun, but describing the\n"
-            "      candidate's own work).\n"
-            "      Example: 'Backend engineer with hands-on experience building Python microservices on AWS...'\n"
+            "(E) VOICE — first-person-implied on every bullet (no 'I' pronoun):\n"
             "    - NEVER write in third-person about 'the candidate' / 'this candidate' / 'candidates should...'\n"
-            "    - NEVER open the summary with the JD's job title as the grammatical subject\n"
-            "      (e.g. NEVER: 'Software Engineer II Backend candidates should have built...').\n\n"
+            "    - Do NOT write a professional summary in this pass. Leave summary as an empty string.\n\n"
 
             # ----------------------------------------------------------------
             # IMMUTABLE FIELDS
@@ -2396,17 +2274,9 @@ class ResumeTailor:
             "  number and do NOT repeat the same achievement across bullets. Fewer strong bullets beats\n"
             "  more weak ones — the allocator will trim, but it cannot invent quality.\n\n"
 
-            "1. Summary: 2-3 clear, confident sentences, max ~60 words total. Sentence 1 MUST name\n"
-            "   the candidate using the TARGET ROLE's title family — truthfully: mirror the JD\n"
-            "   title's core role words ('Backend engineer', 'Data analyst'), but NEVER add\n"
-            "   seniority the candidate lacks ('Senior' stays out unless their real history\n"
-            "   supports it) — plus their strongest 2-3 JD-matching skills. Sentence 2 (and\n"
-            "   optionally 3): the sharpest proof — scope, domain, or ONE standout metric from the\n"
-            "   source. Recruiters anchor on the title match in their first 7-second scan; this is\n"
-            "   the highest-value real estate on the resume. Do NOT start with an adjective or with\n"
-            "   'I'. Do NOT list skills the candidate lacks (if they lack the JD's core skills,\n"
-            "   write an honest summary around their real strengths), and do NOT turn the summary\n"
-            "   into a keyword list — it must read like a human wrote it.\n\n"
+            "1. Summary: Do NOT write a professional summary. Set \"summary\" to an empty string \"\".\n"
+            "   A later guarded pass writes it from the settled bullets and skills. Putting PILE-2\n"
+            "   working-style fit into bullets is fine; do not draft summary prose here.\n\n"
 
             "2. Skills: if the original resume already has a skills section, you may omit\n"
             "   the skills field or echo it unchanged — a deterministic post-pass restores\n"
@@ -2489,9 +2359,9 @@ class ResumeTailor:
             f"BANNED PHRASES: {banned_phrases_str}.\n\n"
             "BANNED PATTERNS:\n"
             "  - Third-person about the candidate ('the candidate', 'candidates should have...')\n"
-            "  - Opening the summary with the JD's job title as the grammatical subject\n"
-            "  - Opening the summary with an adjective ('Versatile...', 'Dynamic...')\n"
-            "  - Opening any bullet or summary with 'I'\n"
+            "  - Writing any professional-summary prose in this pass (leave summary empty)\n"
+            "  - Opening any bullet with an adjective ('Versatile...', 'Dynamic...')\n"
+            "  - Opening any bullet with 'I'\n"
             "  - AI-tell numeric/dash symbols — see HARD CONSTRAINT (D.4) (no 'K+/M+/%+', '~N',\n"
             "    'sub-N', en/em-dash, or 'near-*' compounds).\n"
             "BAD example: 'Versatile Python FullStack Developer with extensive experience designing scalable systems'\n"
@@ -2505,10 +2375,9 @@ class ResumeTailor:
             "================================================================\n"
             "ATS & KEYWORD STRATEGY\n"
             "================================================================\n"
-            "1. TITLE MIRROR — the single strongest ranking signal for both ATS search and the\n"
-            "   recruiter's first scan. The summary's first sentence names the candidate with the\n"
-            "   JD title's core role family (see Content Rule 1). NEVER fabricate seniority to\n"
-            "   match the JD title.\n"
+            "1. KEYWORD PLACEMENT — put JD terms in experience and project bullets WITH usage\n"
+            "   context. The professional summary is written later from settled bullets; do not\n"
+            "   draft it here. NEVER fabricate seniority to match the JD title.\n"
             "2. EXACT TERM + VARIATIONS — mirror the JD's exact terminology ('microservices', not\n"
             "   'micro-services'), then use 1-2 natural semantic variations across the resume\n"
             "   ('program delivery' alongside 'project management'). NEVER repeat the same phrase\n"
@@ -2657,7 +2526,7 @@ class ResumeTailor:
             '    "location": "City, ST (copy from original)",\n'
             '    "portfolio": "portfolio URL (copy from original)"\n'
             "  },\n"
-            '  "summary": "2-3 sentence professional summary (max ~60 words), first-person-implied, sentence 1 names the target role title family",\n'
+            '  "summary": "",\n'
             '  "skills": {\n'
             '    "Category Name": ["Skill1", "Skill2", "..."],\n'
             '    "Another Category": ["Skill3", "Skill4", "..."]\n'
@@ -2739,7 +2608,7 @@ class ResumeTailor:
             + "\n".join(original_companies) + "\n\n"
             "RULES:\n"
             "- Include ONLY the experience entries listed above. Do NOT invent any others.\n"
-            "- Keep all other improvements (summary, skills, bullet rewording).\n"
+            "- Keep all other improvements (skills, bullet rewording). Leave summary as \"\".\n"
             "- Return the same JSON structure as before.\n"
             + prompt_rules.bullet_floor_rules() + "\n\n"
             f"=== CORRECTED RESUME SO FAR ===\n{corrected_json}\n\n"
@@ -2865,22 +2734,18 @@ class ResumeTailor:
             f"Candidate's recent titles: {', '.join(candidate_titles[:3])}\n"
             f"Target role: {jd_title}\n\n"
             "Because the candidate is shifting roles, apply ALL of the following strategies:\n"
-            "1. SUMMARY: Write a bridge narrative that explicitly connects the candidate's background "
-            f"to the {jd_title} role. Highlight how their existing expertise translates — e.g., "
-            "'Cloud Engineer with hands-on full-stack development experience' rather than just "
-            "'Cloud Engineer'. Reference specific overlapping technologies.\n"
-            "2. EXPERIENCE BULLETS: For each role, reframe bullets to emphasize aspects that are "
+            "1. EXPERIENCE BULLETS: For each role, reframe bullets to emphasize aspects that are "
             "transferable to the target role. Bring forward any bullets involving technologies or "
             "responsibilities that overlap with the JD. For example, if a Cloud Engineer built "
             "internal dashboards or APIs, lead with those bullets and emphasize the development "
             "work, not just the infrastructure aspect.\n"
-            "3. SKILL CATEGORIES: Reorder skill categories so the most target-role-relevant category "
+            "2. SKILL CATEGORIES: Reorder skill categories so the most target-role-relevant category "
             f"appears first. For a {jd_title} role, lead with languages/frameworks, then tools, "
             "then infrastructure. Within each category, put JD-matching skills first.\n"
-            "4. TRANSFERABLE FRAMING: Map the candidate's domain expertise to JD requirements — "
+            "3. TRANSFERABLE FRAMING: Map the candidate's domain expertise to JD requirements — "
             "e.g., 'CI/CD pipeline design' maps to 'DevOps and deployment automation', "
             "'monitoring and observability' maps to 'production reliability', "
             "'API development' maps to 'backend engineering'.\n"
-            "5. Do NOT fabricate experience. Only reframe, reorder, and emphasize existing work. "
+            "4. Do NOT fabricate experience. Only reframe, reorder, and emphasize existing work. "
             "The candidate's actual companies, titles, and dates must remain unchanged.\n\n"
         )

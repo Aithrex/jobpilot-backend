@@ -47,10 +47,10 @@ def test_v2_additions_present():
     # Honest quantification menu
     assert "HONEST QUANTIFICATION MENU" in prompt
     assert "SCOPE:" in prompt and "FREQUENCY:" in prompt
-    # Title mirror + summary contract
-    assert "TITLE MIRROR" in prompt
-    assert "2-3 clear, confident sentences" in prompt
-    assert "max ~60 words" in prompt
+    # Summary is deferred — primary must not write one
+    assert "Do NOT write a professional summary" in prompt
+    assert "TITLE MIRROR" not in prompt
+    assert "2-3 sentence professional summary" not in prompt
     # Acronym pairs
     assert "Amazon Web Services (AWS)" in prompt
     assert "ACRONYM PAIRS" in prompt
@@ -82,7 +82,8 @@ def test_truth_anchors_survived():
     assert "job_description_analysis" in prompt
 
 
-def test_summary_schema_line_updated():
+def test_summary_schema_line_is_empty():
     prompt = _build_prompt()
-    assert "2-3 sentence professional summary" in prompt
+    assert '"summary": ""' in prompt
+    assert "2-3 sentence professional summary" not in prompt
     assert "3-4 sentence professional summary" not in prompt

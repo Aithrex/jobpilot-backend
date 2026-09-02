@@ -47,10 +47,9 @@ MAX_SAME_OPENING_VERB = 2
 KEYWORD_COVERAGE_LOW = 75
 KEYWORD_COVERAGE_HIGH = 80
 
-# Summary length — one band, matching the PRIMARY tailor contract (which is the
-# authority: it's generation-time and covered by test_prompt_contract_v2). The
-# augmenter's alignment pass previously said "EXACTLY 3-4 sentences", fighting the
-# tailor's "2-3 sentences / <=60 words"; it now defers to this shared rule.
+# Summary length — one band, matching the deferred summary writer
+# (services.summary_tailor). Previously the augmenter alignment pass said
+# "EXACTLY 3-4 sentences", fighting the tailor's "2-3 sentences / <=60 words".
 SUMMARY_MIN_SENTENCES = 2
 SUMMARY_MAX_SENTENCES = 3
 SUMMARY_MAX_WORDS = 60
