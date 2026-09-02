@@ -210,22 +210,54 @@ def _tech_yield_order(db, employers_col, eq: Dict[str, Any],
     yield_by_id = {r["employer_id"]: int((r.get("_mix") or {}).get("core", 0))
                    for r in built["employers"]}
     eligible = {d["employer_id"]: d for d in employers_col.find(eq)}
+
+    # Employers a HUMAN put in the official careers registry come first, before
+    # any yield ordering. Their measured yield is 0 precisely BECAUSE we cannot
+    # reach their board — Google, Apple, Meta, Atlassian, Bloomberg, Riot,
+    # 65 of the registry's 94 rows produce no live postings — so ordering
+    # purely by yield sorted the ones we most need to discover to the very
+    # bottom and they were never swept.
+    wanted_domains, wanted_names = set(), set()
+    try:
+        for row in ocr.OFFICIAL_CAREER_URLS:
+            dom = er.normalize_domain(row.get("domain"))
+            if dom:
+                wanted_domains.add(dom)
+            nk = er.name_key(row.get("display_name"))
+            if nk:
+                wanted_names.add(nk)
+    except Exception:
+        pass
+
+    def _is_wanted(d: Dict[str, Any]) -> bool:
+        if er.normalize_domain(d.get("canonical_domain")) in wanted_domains:
+            return True
+        if any(er.normalize_domain(v) in wanted_domains
+               for v in (d.get("verified_domains") or [])):
+            return True
+        return er.name_key(d.get("display_name")) in wanted_names
+
     ranked = sorted(
-        (d for eid, d in eligible.items() if eid in yield_by_id),
-        key=lambda d: (-yield_by_id.get(d["employer_id"], 0),
+        (d for eid, d in eligible.items()
+         if eid in yield_by_id or _is_wanted(d)),
+        key=lambda d: (0 if _is_wanted(d) else 1,
+                       -yield_by_id.get(d["employer_id"], 0),
                        -float(d.get("identity_confidence") or 0.0)),
     )
+    n_wanted = sum(1 for d in ranked[:limit] if _is_wanted(d))
     picked = ranked[:limit]
     if len(picked) < limit:
         # The technology denominator is smaller than the budget: spend the
         # remainder on everything else, still confidence-ordered, rather than
         # returning early with the sweep half used.
-        rest = sorted((d for eid, d in eligible.items() if eid not in yield_by_id),
+        chosen = {d["employer_id"] for d in picked}
+        rest = sorted((d for eid, d in eligible.items() if eid not in chosen),
                       key=lambda d: -float(d.get("identity_confidence") or 0.0))
         picked += rest[:limit - len(picked)]
     top = sum(yield_by_id.get(d["employer_id"], 0) for d in picked)
     print(f"  tech-yield order: {len(ranked):,} uncovered technology employers, "
-          f"{top:,} core-tech postings in this sweep")
+          f"{top:,} core-tech postings in this sweep "
+          f"({n_wanted:,} from the official careers registry, taken first)")
     return picked
 
 

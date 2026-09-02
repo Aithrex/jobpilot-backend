@@ -99,3 +99,49 @@ def test_a_report_that_cannot_be_built_falls_back_rather_than_verifying_nothing(
     assert len(got) == 3
     # confidence order, which is what the fallback promises
     assert got[0] in {"emp_small", "emp_nontech"}
+
+
+class TestTheOfficialRegistryComesFirst:
+    """An employer a human put in `official_career_registry` has measured yield
+    of ZERO precisely because we cannot reach their board. Ordering purely by
+    yield sorted Google, Apple, Meta, Atlassian, Bloomberg and Riot Games to the
+    very bottom — 65 of the registry's 94 rows produce no live postings — so
+    the employers we most need to discover were never swept."""
+
+    def test_a_registry_employer_with_no_yield_outranks_a_high_yield_one(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "employer_coverage_report",
+                            _report({"emp_big": 900}))
+        rows = [
+            {"employer_id": "emp_big", "identity_confidence": 0.95},
+            {"employer_id": "emp_goog", "identity_confidence": 0.95,
+             "canonical_domain": "google.com", "display_name": "Google"},
+        ]
+        got = [d["employer_id"] for d in
+               verify._tech_yield_order(object(), _Col(rows), {}, 10)]
+        assert got[0] == "emp_goog"
+
+    def test_a_registry_employer_is_included_even_with_no_measured_yield(self, monkeypatch):
+        """Yield order alone dropped them from the candidate set entirely."""
+        monkeypatch.setitem(sys.modules, "employer_coverage_report", _report({}))
+        rows = [{"employer_id": "emp_goog", "identity_confidence": 0.4,
+                 "canonical_domain": "google.com", "display_name": "Google"}]
+        got = [d["employer_id"] for d in
+               verify._tech_yield_order(object(), _Col(rows), {}, 10)]
+        assert got == ["emp_goog"]
+
+    def test_it_matches_on_a_verified_domain_too(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "employer_coverage_report", _report({}))
+        rows = [{"employer_id": "emp_x", "identity_confidence": 0.9,
+                 "verified_domains": ["apple.com"], "display_name": "Not Apple Inc"}]
+        got = [d["employer_id"] for d in
+               verify._tech_yield_order(object(), _Col(rows), {}, 10)]
+        assert got == ["emp_x"]
+
+    def test_an_unrelated_employer_is_not_promoted(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "employer_coverage_report",
+                            _report({"emp_a": 5}))
+        rows = [{"employer_id": "emp_a", "identity_confidence": 0.9,
+                 "canonical_domain": "some-random-co.example",
+                 "display_name": "Some Random Co"}]
+        got = verify._tech_yield_order(object(), _Col(rows), {}, 10)
+        assert [d["employer_id"] for d in got] == ["emp_a"]
