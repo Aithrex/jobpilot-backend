@@ -157,6 +157,50 @@ class _BoardProvider(AtsProvider):
 
     # -- rows ----------------------------------------------------------------
 
+    #: Strip the boilerplate an ATS appends to the employer's name in a page
+    #: title: "Ramp Jobs", "Match Group Careers", "Acme - Job Board".
+    _TITLE_TRIM_RE = re.compile(
+        r"\s*[|\-\u2013\u2014:]?\s*"
+        r"(jobs?|careers?|job board|open (?:roles|positions)|openings|"
+        r"we(?:'|\u2019)?re hiring|hiring|current openings)\s*$",
+        re.IGNORECASE)
+
+    def _owner_from_portal_title(self, url: str, ctx: FetchContext) -> Optional[str]:
+        """The employer name out of a board portal's `<title>`.
+
+        Lever and Ashby publish no owner field on their JSON APIs, which is
+        exactly why they were the two vendors where a guessed slug could
+        become `validated` on string similarity alone. Both render the
+        employer's own name into the portal title - `jobs.lever.co/matchgroup`
+        is "Match Group", `jobs.ashbyhq.com/ramp` is "Ramp Jobs" - so one
+        cheap GET turns a guess into a checkable claim.
+
+        Returns None rather than guessing when the title is missing, empty, an
+        error page, or so generic that it names no employer.
+        """
+        try:
+            status, body = ctx.get_text(url, timeout=self.policy.timeout,
+                                        vendor=self.vendor)
+        except Exception:
+            return None
+        if status != 200 or not body:
+            return None
+        m = re.search(r"<title[^>]*>(.{0,200}?)</title>", body,
+                      re.IGNORECASE | re.DOTALL)
+        if not m:
+            return None
+        name = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()
+        prev = None
+        while prev != name:
+            prev = name
+            name = self._TITLE_TRIM_RE.sub("", name).strip(" -|:\u2013\u2014")
+        low = name.lower()
+        if (len(name) < 2 or len(name) > 120
+                or "not found" in low or "404" in low or "error" in low
+                or low in {"jobs", "careers", "job board", "lever", "ashby"}):
+            return None
+        return name
+
     @staticmethod
     def _rows(payload: Any, key: str) -> List[Dict[str, Any]]:
         if not isinstance(payload, dict):
@@ -301,6 +345,16 @@ class LeverProvider(_BoardProvider):
            confidence=90),
     )
 
+    def board_owner(self, endpoint: Endpoint,
+                    ctx: FetchContext) -> Optional[str]:
+        """Lever's postings API carries no company field, but the public
+        portal titles itself with the employer's name. Without this, `lever`
+        was one of the two vendors where `slug_is_trustworthy` was the only
+        thing standing between a guess and `validated` - and it cannot tell
+        Archer Aviation from Archer Daniels Midland."""
+        return self._owner_from_portal_title(
+            f"https://jobs.lever.co/{endpoint.tenant}", ctx)
+
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
         payload = self._get_json(
@@ -404,6 +458,14 @@ class AshbyProvider(_BoardProvider):
         fp(r"https?://jobs\.ashbyhq\.com/(?P<tenant>[A-Za-z0-9_\-\.]+)",
            confidence=90),
     )
+
+    def board_owner(self, endpoint: Endpoint,
+                    ctx: FetchContext) -> Optional[str]:
+        """Ashby's posting API returns jobs and nothing about the org, so the
+        owner comes from the portal title (`jobs.ashbyhq.com/ramp` -> "Ramp
+        Jobs" -> "Ramp"). Ashby was the other vendor with no owner check."""
+        return self._owner_from_portal_title(
+            f"https://jobs.ashbyhq.com/{endpoint.tenant}", ctx)
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:

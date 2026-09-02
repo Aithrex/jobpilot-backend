@@ -221,8 +221,29 @@ class TestBonusesStayOutOfTheScore:
             [_job("c", description=_MAX_BONUS_JD)], user_email=USER)[0]
         # Same JD text => same fit. Only rank_score moves.
         assert boosted["match_score"] == bare["match_score"]
-        assert boosted["rank_score"] > bare["rank_score"]
+        assert boosted["rank_score"] >= bare["rank_score"]
         assert plain["rank_score"] == plain["match_score"]
+
+    def test_a_bonus_lifts_rank_score_when_there_is_headroom(self, svc):
+        """The same property, measured where it is observable.
+
+        Under fit-v2.1 this fixture's résumé fully covers `_MAX_BONUS_JD`, so
+        the fit itself reaches 100 and `rank_score` — which is capped at 100 —
+        has nowhere to move. That is a ceiling, not a bug, and asserting a
+        strict increase against it would be asserting that the fit is
+        imperfect. A partially-covered JD leaves room, and there the bonus
+        must show.
+        """
+        partial = ("Software Engineer. Requirements: Python, SQL, Kubernetes, "
+                   "Terraform, Kafka, Scala, Elixir and Rust.\n")
+        bare = svc.match_jobs([_job("d", description=partial)],
+                              user_email=USER)[0]
+        boosted = svc.match_jobs(
+            [_job("e", description=partial + "This is a fully remote New Grad "
+                  "opportunity.\n", is_remote=True, h1b_sponsor=True)],
+            user_email=USER)[0]
+        assert bare["rank_score"] < 100
+        assert boosted["rank_score"] > bare["rank_score"]
 
     def test_rank_score_never_exceeds_100(self, svc):
         row = svc.match_jobs(

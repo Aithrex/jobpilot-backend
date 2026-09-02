@@ -54,11 +54,15 @@ plausible one. A full O*NET title/software-skills bulk import is a follow-up
 """
 from __future__ import annotations
 
+import functools
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-TAXONOMY_VERSION = "tech-tax-1.0.0"
+logger = logging.getLogger(__name__)
+
+TAXONOMY_VERSION = "tech-tax-1.1.0"
 
 # ---------------------------------------------------------------------------
 # Scopes
@@ -90,11 +94,19 @@ F_UX_DESIGN_SYSTEMS = "ux_design_systems"
 F_IT_SUPPORT = "it_support"
 F_SEMICONDUCTOR = "semiconductor_hardware"
 
+#: `semiconductor_hardware` is CORE, not adjacent.
+#:
+#: It was adjacent in 1.0.0, which meant the default scope (`["core"]`) hid
+#: every ASIC, RTL, verification, firmware, analog, RF, EDA and photonics role
+#: unless the searcher went and ticked an extra box. Measured on live
+#: `aspirely_db`, that is 7,161 active postings under the legacy
+#: `hardware_engineering` family alone — a silicon engineer searching this
+#: product saw an empty feed by default. Chip design is technology employment;
+#: the taxonomy now says so.
 CORE_FAMILIES = (F_SOFTWARE, F_AI_ML, F_DATA, F_CLOUD, F_SECURITY, F_QUALITY,
-                 F_TECH_LEADERSHIP)
+                 F_TECH_LEADERSHIP, F_SEMICONDUCTOR)
 ADJACENT_FAMILIES = (F_TECHNICAL_PRODUCT, F_SOLUTIONS_ENG, F_DEVREL,
-                     F_TECH_WRITING, F_UX_DESIGN_SYSTEMS, F_IT_SUPPORT,
-                     F_SEMICONDUCTOR)
+                     F_TECH_WRITING, F_UX_DESIGN_SYSTEMS, F_IT_SUPPORT)
 ALL_FAMILIES = CORE_FAMILIES + ADJACENT_FAMILIES
 
 FAMILY_LABELS: Dict[str, str] = {
@@ -228,6 +240,13 @@ _SPEC_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
         "machine learning developer",
     )),
     (F_AI_ML, "applied_ai", (
+        # "Applied AI" alone: real live titles interleave a level word
+        # ("Applied AI SENIOR Consultant"), and the phrase compiler joins
+        # words with a single separator, so the full phrases below cannot
+        # reach them. The bare term is unambiguous in a job title.
+        "applied ai", "applied machine learning",
+        "applied ai consultant", "applied ai specialist", "applied ai lead",
+        "applied ai architect", "applied machine learning engineer",
         "applied ai engineer", "ai engineer", "applied machine learning engineer",
         "applied scientist", "applied ai scientist", "ai developer",
         "artificial intelligence engineer",
@@ -244,7 +263,6 @@ _SPEC_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
         "genai engineer", "generative ai engineer", "llm engineer",
         "large language model engineer", "foundation model engineer",
         "prompt engineer", "llm scientist", "generative ai scientist",
-        "agent engineer", "ai agent engineer",
     )),
     (F_AI_ML, "nlp", (
         "nlp engineer", "natural language processing engineer", "nlp scientist",
@@ -281,6 +299,9 @@ _SPEC_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
         "training infrastructure engineer",
     )),
     (F_AI_ML, "inference_performance", (
+        "inference performance engineer", "inference engineer",
+        "model performance engineer", "model optimization engineer",
+        "inference optimization engineer", "gpu performance engineer",
         "inference engineer", "model optimization engineer",
         "gpu engineer", "cuda engineer", "kernel optimization engineer",
         "performance ml engineer", "quantization engineer",
@@ -375,7 +396,7 @@ _SPEC_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     (F_CLOUD, "infrastructure", (
         "infrastructure engineer", "infrastructure software engineer",
         "systems engineer", "linux engineer", "unix engineer",
-        "virtualization engineer", "storage engineer", "compute engineer",
+        "compute engineer",
         "datacenter engineer", "data center engineer",
         "infrastructure engineering", "systems operations engineer",
         "infrastructure architecture", "cloud architecture",
@@ -569,6 +590,16 @@ _SPEC_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
         "active directory administrator", "m365 administrator",
         "salesforce administrator", "workday administrator",
     )),
+    (F_IT_SUPPORT, "data_center_operations", (
+        "data center technician", "data centre technician",
+        "data center operations technician", "data center engineer",
+        "data centre engineer", "data center operations engineer",
+        "critical facilities technician", "critical environment technician",
+        "cabling infrastructure technician", "cabling infrastructure tech",
+        "data center operations", "data centre operations",
+        "colocation technician",
+        "engineering operations technician",
+    )),
     (F_IT_SUPPORT, "network_operations", (
         "network administrator", "noc technician", "noc engineer",
         "network operations", "network technician",
@@ -592,9 +623,157 @@ _SPEC_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     (F_SEMICONDUCTOR, "hardware_engineering", (
         "hardware engineer", "hardware design engineer",
         "board design engineer", "pcb design engineer",
-        "signal integrity engineer", "analog design engineer",
-        "mixed signal design engineer", "rf design engineer",
-        "computer hardware engineer",
+        "signal integrity engineer", "power electronics engineer",
+        "computer hardware engineer", "hardware systems engineer",
+    )),
+
+    # ---- 1.1.0 additions --------------------------------------------------
+    #
+    # Every specialty below was added from UNMATCHED live titles, not from
+    # imagination. Before this, each of these titles classified as `unknown`
+    # or landed in `general_software`, which is why the taxonomy report showed
+    # a large unclassified tail inside employers we crawl well.
+
+    (F_SOFTWARE, "enterprise_mainframe", (
+        "mainframe developer", "mainframe engineer", "mainframe programmer",
+        "cobol developer", "cobol programmer", "cobol engineer",
+        "as400 developer", "as/400 developer", "iseries developer",
+        "rpg developer", "jcl developer", "cics developer",
+        "z/os systems programmer", "mainframe systems programmer",
+        "sap abap developer", "abap developer", "abap consultant",
+        "peoplesoft developer", "siebel developer", "mumps developer",
+        "legacy modernization engineer",
+    )),
+    (F_SOFTWARE, "quantitative_low_latency", (
+        # Live titles interleave the language: "Low Latency C++ Engineer".
+        # The phrase compiler joins words with ONE separator, so the bare
+        # phrase cannot reach them and `c++ engineer` won the span instead.
+        "low latency engineer", "low-latency engineer",
+        "low latency c++ engineer", "low latency java engineer",
+        "low latency rust engineer", "low latency systems engineer",
+        "low latency software engineer", "low latency platform engineer",
+        "ultra low latency engineer", "quantitative developer",
+        "quantitative software engineer", "quant developer",
+        "quantitative engineer", "trading systems engineer",
+        "electronic trading engineer", "market data engineer",
+        "exchange connectivity engineer", "hft engineer",
+        "high frequency trading engineer", "algorithmic trading engineer",
+    )),
+    (F_CLOUD, "hpc", (
+        "hpc engineer", "high performance computing engineer",
+        "high-performance computing engineer", "supercomputing engineer",
+        "hpc systems engineer", "hpc software engineer",
+        "parallel computing engineer", "cuda engineer",
+        "gpu computing engineer", "scientific computing engineer",
+        "cluster engineer", "slurm administrator",
+    )),
+    (F_CLOUD, "edge_cdn", (
+        "edge engineer", "edge computing engineer", "cdn engineer",
+        "content delivery engineer", "edge infrastructure engineer",
+        "edge platform engineer", "edge network engineer",
+    )),
+    (F_CLOUD, "storage_engineering", (
+        "storage engineer", "storage systems engineer",
+        "distributed storage engineer", "filesystem engineer",
+        "file system engineer", "object storage engineer",
+        "san engineer", "nas engineer", "storage software engineer",
+        "block storage engineer",
+    )),
+    (F_CLOUD, "virtualization", (
+        "virtualization engineer", "hypervisor engineer",
+        "vmware engineer", "kvm engineer", "xen engineer",
+        "virtual infrastructure engineer", "vdi engineer",
+        "virtualization software engineer",
+    )),
+    (F_QUALITY, "build_release", (
+        "build engineer", "release engineer", "build and release engineer",
+        "build & release engineer", "release management engineer",
+        "software configuration management engineer", "scm engineer",
+        "build systems engineer", "toolchain engineer",
+        "release train engineer", "continuous integration engineer",
+        "ci engineer", "ci/cd engineer",
+    )),
+    (F_AI_ML, "ai_agents", (
+        "ai agent engineer", "agent engineer", "agentic ai engineer",
+        "ai agent developer", "agentic ai developer", "agent developer",
+        "agentic systems engineer", "autonomous agent engineer",
+        "ai automation engineer", "agent infrastructure engineer",
+        "multi agent systems engineer", "ai orchestration engineer",
+    )),
+    (F_AI_ML, "ai_tooling", (
+        "ai tooling engineer", "ai developer tools engineer",
+        "llm tooling engineer",
+        "ai developer experience engineer", "ai product engineer",
+        "forward deployed engineer",
+    )),
+    (F_SECURITY, "ai_security", (
+        "ai security engineer", "ml security engineer",
+        "llm security engineer", "ai red team engineer",
+        "adversarial machine learning engineer",
+        "model security engineer", "ai trust and safety engineer",
+    )),
+    (F_SECURITY, "privacy_engineering", (
+        "privacy engineer", "data privacy engineer",
+        "privacy software engineer", "privacy infrastructure engineer",
+        "privacy program engineer", "gdpr engineer",
+    )),
+    (F_SECURITY, "cryptography", (
+        "cryptography engineer", "cryptographic engineer",
+        "applied cryptography engineer", "cryptography researcher",
+        "pki engineer", "key management engineer",
+        "post quantum cryptography engineer", "hsm engineer",
+        "confidential computing engineer",
+    )),
+    (F_SEMICONDUCTOR, "analog_mixed_signal", (
+        "analog design engineer", "analog ic design engineer",
+        "mixed signal design engineer", "mixed-signal design engineer",
+        "analog layout engineer", "analog circuit design engineer",
+        "ams design engineer", "serdes design engineer",
+        "pll design engineer", "adc design engineer", "dac design engineer",
+        "power management ic engineer", "pmic design engineer",
+    )),
+    (F_SEMICONDUCTOR, "rf_engineering", (
+        "rf engineer", "rf design engineer", "rfic design engineer",
+        "rf systems engineer", "microwave engineer", "antenna engineer",
+        "millimeter wave engineer", "mmwave engineer",
+        "rf test engineer", "wireless hardware engineer",
+    )),
+    (F_SEMICONDUCTOR, "eda_cad", (
+        "cad engineer", "eda engineer", "design automation engineer",
+        "physical design cad engineer", "eda software engineer",
+        "cad methodology engineer", "pdk engineer",
+        "design enablement engineer", "circuit simulation engineer",
+    )),
+    (F_SEMICONDUCTOR, "process_yield", (
+        # A BARE "process engineer" is not a semiconductor role - the golden
+        # set's own example is "Optimize the polymerization line" in a
+        # Manufacturing department. Every phrase here names the fab.
+        "semiconductor process engineer", "wafer process engineer",
+        "fab process engineer", "process integration engineer",
+        "yield engineer", "yield enhancement engineer", "yield analysis engineer",
+        "semiconductor device engineer", "device physics engineer",
+        "lithography engineer", "photolithography engineer", "etch engineer",
+        "thin film engineer", "cmp engineer", "diffusion engineer",
+        "epitaxy engineer", "defect engineer", "metrology engineer",
+    )),
+    (F_SEMICONDUCTOR, "product_test", (
+        "semiconductor product engineer", "semiconductor test engineer",
+        "ate engineer", "automated test equipment engineer",
+        "silicon test engineer", "silicon characterization engineer",
+        "product test engineer semiconductor", "burn in engineer",
+        "wafer test engineer", "probe engineer",
+    )),
+    (F_SEMICONDUCTOR, "packaging", (
+        "semiconductor packaging engineer", "advanced packaging engineer",
+        "ic packaging engineer", "assembly and test engineer",
+        "substrate engineer", "chiplet engineer", "3d integration engineer",
+        "flip chip engineer", "wafer level packaging engineer",
+    )),
+    (F_SEMICONDUCTOR, "photonics", (
+        "photonics engineer", "silicon photonics engineer",
+        "photonic integrated circuit engineer", "optical design engineer",
+        "optical systems engineer", "electro optic engineer",
+        "fiber optic engineer", "laser engineer", "optomechanical engineer",
     )),
 )
 
@@ -649,9 +828,30 @@ SPECIALTY_LABELS: Dict[str, str] = {
     "it_support": "IT Support",
     "it_systems_administration": "IT Systems Administration",
     "network_operations": "Network Operations",
+    "data_center_operations": "Data Center Operations",
     "asic_soc_design": "ASIC / SoC Design", "fpga_rtl": "FPGA / RTL",
     "verification": "Design Verification",
     "hardware_engineering": "Hardware Engineering",
+    # 1.1.0
+    "enterprise_mainframe": "Enterprise / Mainframe",
+    "quantitative_low_latency": "Quant / Low Latency",
+    "hpc": "High-Performance Computing",
+    "edge_cdn": "Edge / CDN",
+    "storage_engineering": "Storage Engineering",
+    "virtualization": "Virtualization",
+    "build_release": "Build & Release",
+    "ai_agents": "AI Agents",
+    "ai_tooling": "AI Tooling",
+    "ai_security": "AI Security",
+    "privacy_engineering": "Privacy Engineering",
+    "cryptography": "Cryptography",
+    "analog_mixed_signal": "Analog / Mixed-Signal",
+    "rf_engineering": "RF & Antenna",
+    "eda_cad": "EDA / CAD",
+    "process_yield": "Process & Yield",
+    "product_test": "Product & Test Engineering",
+    "packaging": "Advanced Packaging",
+    "photonics": "Photonics & Optics",
 }
 
 #: Phrases that genuinely belong to TWO families at once.
@@ -801,6 +1001,20 @@ _NON_TECH_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "medical technologist", "surgical technologist", "midwife",
         "chiropractor", "optometrist", "psychologist", "psychiatrist",
         "clinical research coordinator", "home health aide", "caregiver",
+        "medical laboratory scientist", "clinical laboratory scientist",
+        "clinical laboratory technologist", "medical laboratory technician",
+        "radiology technologist", "mri technologist", "ct technologist",
+        "mammography technologist", "nuclear medicine technologist",
+        "histotechnologist", "cytotechnologist", "polysomnographic technologist",
+        "echocardiographer", "cardiovascular technologist",
+        "\\bnurse\\b", "\\brn\\b", "charge nurse", "staff nurse",
+        "travel nurse", "clinical nurse", "nurse manager", "\\bcrna\\b",
+        "physician assistant", "\\bmd\\b", "hospitalist", "radiologist",
+        "pathologist", "dietitian", "nutritionist", "medical scribe",
+        "patient care coordinator", "ultrasound technologist",
+        "surgical assistant", "perfusionist", "audiologist",
+        "pharmacy intern", "pharmacy graduate", "dietary aide",
+        "patient access representative", "unit secretary", "sterile processing",
     )),
     ("retail_food_hospitality", (
         "store manager", "assistant store manager", "shift supervisor",
@@ -812,6 +1026,21 @@ _NON_TECH_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "food service", "grocery clerk", "produce clerk", "deli clerk",
         "meat cutter", "baker", "pharmacy clerk", "loss prevention",
         "assistant manager retail",
+        # Added 2026-09-02 from the highest-VOLUME unmatched live titles. Each
+        # was landing in `unknown`, and `unknown` is ORed into retrieval by
+        # design - so tens of thousands of shop-floor postings were diluting a
+        # technology feed instead of being confidently excluded from it.
+        "store associate", "in store shopper", "front end entry level",
+        "restaurant shift manager", "meat clerk", "seafood clerk",
+        "bakery clerk", "cake decorator", "merchandise associate",
+        "retail merchandise associate", "customer experience associate",
+        "customer experience manager", "retail sales consultant",
+        "retail parts pro", "sales lead", "support lead", "manager trainee",
+        "room attendant", "order fulfillment associate", "mobile associate",
+        "personal banker", "bank teller", "branch manager",
+        "retail display installer", "asset protection specialist",
+        "retail security specialist", "guest advocate", "fulfillment associate",
+        "overnight stocker", "cart attendant", "food service worker",
     )),
     ("trades_logistics", (
         "truck driver", "cdl driver", "forklift operator", "warehouse associate",
@@ -824,6 +1053,9 @@ _NON_TECH_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "diesel mechanic", "automotive technician", "aircraft mechanic",
         "construction worker", "heavy equipment operator", "roofer",
         "pipefitter", "boilermaker", "ironworker", "rigger", "surveyor",
+        "janitorial cleaner", "janitorial maintenance", "diesel technician",
+        "production supervisor", "warehouse supervisor", "shipping clerk",
+        "receiving clerk", "inventory associate",
     )),
     ("business_admin", (
         "accountant", "accounts payable", "accounts receivable", "bookkeeper",
@@ -855,6 +1087,18 @@ _NON_TECH_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "client services associate", "customer success manager",
         "member services", "patient access representative",
     )),
+    # Gig / content work that carries an AI or technology word in the title
+    # without being a technical occupation. This is a fast-growing shape in
+    # the live inventory ("Portuguese Voice Actor - Freelance AI Trainer
+    # Project", "AI Visual Creator (Static Ads)") and it is exactly the kind
+    # of row a keyword reading of "AI" puts in front of an ML engineer.
+    ("gig_content", (
+        "voice actor", "ai trainer", "ai tutor", "data annotator",
+        "data annotation specialist", "content moderator", "transcriptionist",
+        "freelance writer", "translator", "subtitler", "captioner",
+        "search quality rater", "ads quality rater", "crowd worker",
+        "ai visual creator", "prompt writer",
+    )),
     ("education_public", (
         "teacher", "teaching assistant", "professor", "lecturer",
         "instructor", "school counselor", "principal school",
@@ -862,6 +1106,10 @@ _NON_TECH_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "police officer", "firefighter", "correctional officer",
         "security guard", "security officer", "dispatcher",
         "park ranger", "social services specialist",
+        "substitute teacher", "special education teacher", "paraprofessional",
+        "school administrator", "curriculum specialist", "school psychologist",
+        "academic advisor", "admissions counselor", "registrar",
+        "\\bdean\\b", "preschool", "daycare",
     )),
     ("physical_engineering", (
         "mechanical engineer", "civil engineer", "structural engineer",
@@ -874,6 +1122,15 @@ _NON_TECH_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         "welding engineer", "packaging engineer", "agricultural engineer",
         "marine engineer", "mechanical design engineer",
         "facilities engineer", "reliability engineer maintenance",
+        "controls engineer", "maintenance engineer", "operating engineer",
+        "chief engineer", "stationary engineer", "building engineer",
+        "traffic engineer", "landscape architect", "structural designer",
+        "civil engineering intern", "civil engineering analyst",
+        "hvac design engineer", "fire protection engineer",
+        "geological engineer", "drilling engineer", "completions engineer",
+        "supplier quality engineer", "landscape architecture",
+        "quality engineer manufacturing", "tooling engineer",
+        "plant maintenance engineer", "utilities engineer",
     )),
 )
 
@@ -940,6 +1197,21 @@ _STACK_PATTERNS: List[Tuple[str, str, re.Pattern]] = [
         r"shopify", r"api", r"backend", r"frontend", r"full[\s-]?stack",
         r"web", r"mobile", r"ios", r"android", r"embedded", r"firmware",
         r"blockchain", r"solidity", r"web3", r"unity", r"unreal",
+        # Added 2026-09-02 from live unmatched titles: "Senior Sitecore
+        # Developer", "Mulesoft Developer", "Guidewire Developer" and the
+        # rest were classifying as `unknown` purely because their platform
+        # was not in this list.
+        r"sitecore", r"mulesoft", r"guidewire", r"duck ?creek", r"tibco",
+        r"boomi", r"camunda", r"outsystems", r"mendix", r"powerapps",
+        r"power ?platform", r"adobe experience manager", r"aem",
+        r"sitefinity", r"episerver", r"optimizely", r"contentful",
+        r"hybris", r"commercetools", r"epic", r"cerner", r"mumps",
+        r"rpg", r"as/?400", r"iseries", r"progress", r"clarity",
+        r"anaplan", r"oracle ?ebs", r"jde", r"sap ?hana", r"s/?4hana",
+        r"veeva", r"coupa", r"ariba", r"blackline", r"workfront",
+        r"flutter", r"react ?native", r"xamarin", r"maui", r"electron",
+        r"graphql", r"grpc", r"elixir", r"erlang", r"clojure", r"haskell",
+        r"julia", r"matlab", r"labview", r"verilog", r"vhdl", r"systemverilog",
     ), F_SOFTWARE, "general_software"),
     _stack_rule((
         r"aws", r"azure", r"gcp", r"google cloud", r"kubernetes", r"k8s",
@@ -1045,7 +1317,136 @@ _TECH_EVIDENCE_TERMS: Tuple[str, ...] = (
     "mainframe", "\\bjcl\\b", "\\bcics\\b", "\\bsas\\b programming",
     "computer science", "software engineering degree",
 )
-_TECH_EVIDENCE_RE = _compile_alternation(_TECH_EVIDENCE_TERMS)
+def _onet_skill_terms() -> Tuple[str, ...]:
+    """Technology skills from the imported O*NET release plus the overlay.
+
+    Both are OPTIONAL: a missing or malformed data module degrades to the
+    hand-written `_TECH_EVIDENCE_TERMS` rather than breaking classification.
+    A taxonomy that cannot classify because a dataset failed to import is a
+    worse failure than one with a smaller vocabulary.
+
+    Terms are filtered before they join the alternation:
+
+    * two characters or fewer would match inside ordinary words;
+    * anything with a regex metacharacter is escaped by the compiler already,
+      but a term containing a slash or parenthesis produces a phrase no title
+      contains, so it is dropped rather than carried;
+    * O*NET's generic category names ("... software", "... system") are
+      dropped because they match prose rather than a skill.
+    """
+    terms: List[str] = []
+    seen: Set[str] = set()
+
+    def _add(raw: Any) -> None:
+        text = str(raw or "").strip()
+        low = text.lower()
+        if (len(text) <= 2 or low in seen
+                or any(ch in text for ch in "()/\\[]{}|*+?^$")
+                or low.endswith((" software", " system", " systems",
+                                 " application", " applications", " tool",
+                                 " tools", " program", " programs"))):
+            return
+        seen.add(low)
+        terms.append(re.escape(text))
+
+    try:
+        from services.onet_data import ALL_SKILLS
+        for skill in ALL_SKILLS:
+            _add(skill)
+    except Exception as exc:      # pragma: no cover - optional dataset
+        logger.debug("tech_taxonomy: onet_data unavailable (%s)", type(exc).__name__)
+    try:
+        from services.onet_overlay import ALL_TOOLS
+        for tool in ALL_TOOLS:
+            _add(tool)
+    except Exception as exc:      # pragma: no cover
+        logger.debug("tech_taxonomy: onet_overlay unavailable (%s)",
+                     type(exc).__name__)
+    return tuple(terms)
+
+
+#: The hand-written terms FIRST, so a curated phrase always wins a tie against
+#: an imported one, then the sourced vocabulary.
+_TECH_EVIDENCE_RE = _compile_alternation(
+    tuple(_TECH_EVIDENCE_TERMS) + _onet_skill_terms())
+
+
+#: SOC prefixes whose O*NET alternate titles are evidence that a title is
+#: TECHNICAL. Deliberately narrower than the set the taxonomy maps to: the
+#: crosswalk legitimately points `grc` at 13-1041 (Compliance Officers) and
+#: `tpm` at 13-1082 (Project Management Specialists), and those SOCs carry
+#: alternate titles like "Air Pollution Compliance Inspector". A specialty
+#: mapping is a statement about where a role sits; it is not a licence to read
+#: every title in that occupation as technical.
+_ONET_TECH_SOC_PREFIXES: Tuple[str, ...] = (
+    "15-12",     # computer occupations
+    "15-2051",   # data scientists
+    "17-2061",   # computer hardware engineers
+    "17-2071",   # electrical engineers
+    "17-2072",   # electronics engineers
+    "11-3021",   # computer and information systems managers
+)
+
+
+@functools.lru_cache(maxsize=1)
+def onet_titles() -> frozenset:
+    """Folded O*NET alternate titles for the COMPUTER occupations.
+
+    Used as EVIDENCE that an otherwise-ambiguous title is technical - not as a
+    specialty assignment. O*NET maps a title to a SOC code, and a SOC code is
+    coarser than a specialty ("Software Developers" covers backend, frontend,
+    mobile and embedded), so treating it as a specialty would assert a
+    precision the source does not have.
+
+    LAZY, and that is load-bearing: `_norm` is defined further down this
+    module, so computing this at import time raised `NameError` into a bare
+    `except` and produced an empty set - a vocabulary that silently did
+    nothing. Deferring it to first use is what makes the data actually
+    reachable.
+    """
+    try:
+        from services.onet_data import ALTERNATE_TITLES
+    except Exception:      # pragma: no cover - optional dataset
+        return frozenset()
+    out = set()
+    for soc, titles in ALTERNATE_TITLES.items():
+        if not str(soc).startswith(_ONET_TECH_SOC_PREFIXES):
+            continue
+        for title in titles:
+            # "AI Engineer (Artificial Intelligence Engineer)" - the
+            # parenthetical is a gloss, not part of the title anybody posts.
+            head = str(title).split(" (")[0].strip()
+            for variant in {title, head}:
+                folded = _norm(variant)
+                if folded and not _is_bare_ambiguous(folded):
+                    out.add(folded)
+    return frozenset(out)
+
+
+def _is_bare_ambiguous(folded_title: str) -> bool:
+    """Is this title one our OWN market evidence says is ambiguous?
+
+    O*NET lists "Business Analyst" and "Technology Analyst" under computer
+    SOC codes, and it is not wrong to: those ARE computer occupations in the
+    survey's frame. But in a job board they are used across finance,
+    operations and IT, and `_AMBIGUOUS_TITLE_RE` exists because reading them
+    as software produced exactly the false positives this taxonomy was built
+    to stop.
+
+    So O*NET is trusted EXCEPT where the ambiguous pattern covers most of the
+    title. "business analyst" is entirely the ambiguous phrase and is
+    excluded; "applications systems analyst" contains it only as a suffix and
+    is kept, because the qualifier is what makes it technical.
+    """
+    m = _AMBIGUOUS_TITLE_RE.search(folded_title)
+    if not m:
+        return False
+    # 0.4, measured against the titles in the golden set rather than picked:
+    # "technology analyst" is 100% the ambiguous phrase, "business analyst" is
+    # 44%, "analyst programmer" 39% and "applications systems analyst" 25%.
+    # The first two must be excluded and the last two kept, so the boundary
+    # sits between 0.39 and 0.44.
+    return (m.end() - m.start()) >= 0.4 * len(folded_title)
 
 # Departments that make a technical reading of an ambiguous title credible.
 _TECH_DEPARTMENT_RE = _compile_alternation((
@@ -1403,10 +1804,21 @@ def classify(
 
         # Ambiguity guard: a title whose ONLY hit came from a broad phrase and
         # which also reads as a non-tech occupation needs body evidence.
+        #
+        # Unless the tech phrase CONTAINS the non-tech one. "Advanced Packaging
+        # Engineer" matches the semiconductor rule across the whole title and
+        # the non-tech rule across its last two words; that is the same
+        # `_dedupe_overlapping` situation as "Design Systems Engineer", one
+        # boundary further out. The longer phrase is the more specific reading
+        # of the same words, not a second, conflicting reading of them.
+        if nt and any(start <= nt.start() and nt.end() <= end
+                      for _f, _s, _p, start, end in spanned):
+            nt = None
         if nt:
             has_body = bool(_TECH_EVIDENCE_RE.search(body_blob)
                             or _TECH_DEPARTMENT_RE.search(dept_blob)
-                            or skills_blob)
+                            or skills_blob
+                            or title_blob in onet_titles())
             if not has_body:
                 result.tech_scope = SCOPE_UNKNOWN
                 result.classification_confidence = 0.3
@@ -1448,9 +1860,17 @@ def classify(
     # corroboration for a title that is ALREADY technically ambiguous, never
     # evidence on its own. Two skill terms are enough on an ambiguous title
     # (the non-tech titles are vetoed above), three otherwise.
+    # An exact O*NET alternate title for one of the occupations we classify is
+    # documentary evidence that the title is technical, and it is the only
+    # signal that reaches a title the phrase rules do not name at all. It is
+    # filtered to OUR SOC codes at import, which is what keeps "Informatics
+    # Nurse Specialist" (a clinical SOC) out while letting "Applications
+    # Systems Analyst" (a computer SOC) in.
+    onet_title = title_blob in onet_titles()
     strong_enough = (
         bool(body_hits)
         or len(tech_terms) >= 3
+        or onet_title
         or (ambiguous and (bool(dept_hit) or len(tech_terms) >= 2))
     )
     if not strong_enough:
@@ -1674,3 +2094,564 @@ LEGACY_TECH_CANDIDATE_FAMILIES: Tuple[str, ...] = (
     "data_science", "data_analysis", "it_support", "hardware_engineering",
     "product", "project_management", "design", "other",
 )
+
+
+# ===========================================================================
+# Specialty adjacency, and the role-alignment ladder
+# ===========================================================================
+#
+# The problem this replaces
+# -------------------------
+# `fit_score._score_role` scored role fit against its own 32-key
+# `ROLE_FAMILIES` list, whose finest software distinction is
+# "software_engineering". Under it, a backend engineer and an ASIC verification
+# engineer scored IDENTICALLY against a backend posting, because both resolve
+# to the same family. That is why the same handful of jobs came back at 80+
+# for everyone: the role term was nearly constant, so ranking fell to skill
+# overlap alone.
+#
+# Alignment is now a five-rung ladder over the 14/101 tree:
+#
+#   exact_specialty     backend resume  -> backend posting
+#   adjacent_specialty  backend         -> distributed systems      (declared)
+#   same_family         backend         -> mobile                   (same family)
+#   adjacent_family     backend         -> data engineering         (declared)
+#   unrelated           backend         -> nursing / ASIC design
+#
+# `unknown` is a SIXTH answer and is deliberately NOT on the ladder: when one
+# side carries no taxonomy signal we do not know the distance, and scoring it
+# as "unrelated" would punish a résumé for being hard to parse.
+#
+# Why the matrix is declared, not derived
+# ---------------------------------------
+# Adjacency is a claim about how hiring managers actually substitute skills,
+# and no string metric encodes that. "Backend" and "distributed systems" are
+# adjacent; "backend" and "browsers" are the same family and not adjacent.
+# Declaring it means it is reviewable and versioned; deriving it would mean
+# it silently changes whenever a phrase list does.
+
+ADJACENCY_VERSION = "tech-adjacency-1.0.0"
+
+#: Declared once, applied symmetrically. Each pair is "a team hiring for A
+#: would seriously consider a strong B", which is a narrower claim than
+#: "related" and a much narrower one than "same family".
+_ADJACENT_PAIRS: Tuple[Tuple[str, str], ...] = (
+    # ---- software ---------------------------------------------------------
+    ("backend", "full_stack"), ("backend", "apis"),
+    ("backend", "distributed_systems"), ("backend", "general_software"),
+    ("backend", "production_engineering"), ("backend", "database_engineering"),
+    # Reach across families for transitions people actually make. Each of
+    # these was `unrelated` before, which is a 0.08 weight - i.e. a claim that
+    # a backend engineer has no business applying to an AI-platform role.
+    ("backend", "ai_platform"), ("backend", "data_engineering"),
+    ("frontend", "full_stack"), ("frontend", "web_platform"),
+    ("frontend", "design_systems"), ("frontend", "general_software"),
+    ("full_stack", "apis"), ("full_stack", "web_platform"),
+    ("full_stack", "general_software"),
+    ("web_platform", "browsers"),
+    ("mobile", "full_stack"), ("mobile", "desktop"), ("mobile", "embedded"),
+    ("desktop", "systems_programming"),
+    ("distributed_systems", "systems_programming"),
+    ("distributed_systems", "platform_engineering"),
+    ("distributed_systems", "streaming"),
+    ("distributed_systems", "storage_engineering"),
+    ("systems_programming", "embedded"), ("systems_programming", "firmware"),
+    ("systems_programming", "browsers"), ("systems_programming", "virtualization"),
+    ("systems_programming", "malware_reverse_engineering"),
+    ("apis", "developer_tools"),
+    ("developer_tools", "platform_engineering"),
+    ("developer_tools", "build_release"), ("developer_tools", "test_infrastructure"),
+    ("developer_tools", "eda_cad"), ("developer_tools", "ai_tooling"),
+    ("games_xr", "computer_vision"), ("games_xr", "general_software"),
+    ("embedded", "firmware"), ("embedded", "hardware_engineering"),
+    ("embedded", "robotics_autonomy"), ("embedded", "fpga_rtl"),
+    ("firmware", "hardware_engineering"), ("firmware", "asic_soc_design"),
+    ("general_software", "apis"),
+    ("enterprise_mainframe", "backend"),
+    ("enterprise_mainframe", "general_software"),
+    ("enterprise_mainframe", "database_engineering"),
+    ("quantitative_low_latency", "systems_programming"),
+    ("quantitative_low_latency", "distributed_systems"),
+    ("quantitative_low_latency", "hpc"), ("quantitative_low_latency", "backend"),
+
+    # ---- ai / ml ----------------------------------------------------------
+    ("ml_engineering", "applied_ai"), ("ml_engineering", "mlops_llmops"),
+    ("ml_engineering", "ai_platform"), ("ml_engineering", "data_engineering"),
+    ("ml_engineering", "research_engineering"),
+    ("ml_engineering", "recsys_search_ranking"), ("ml_engineering", "ml_data"),
+    ("applied_ai", "genai_llm"), ("applied_ai", "ai_agents"),
+    ("applied_ai", "ai_tooling"),
+    ("research_engineering", "research_science"),
+    ("research_engineering", "inference_performance"),
+    ("research_science", "data_science"), ("research_science", "evaluations"),
+    ("genai_llm", "ai_agents"), ("genai_llm", "ai_tooling"),
+    ("genai_llm", "nlp"), ("genai_llm", "evaluations"),
+    ("nlp", "speech"), ("speech", "computer_vision"),
+    ("computer_vision", "robotics_autonomy"),
+    ("recsys_search_ranking", "data_science"),
+    ("mlops_llmops", "devops"), ("mlops_llmops", "ai_platform"),
+    ("ai_platform", "platform_engineering"), ("ai_platform", "infrastructure"),
+    ("inference_performance", "hpc"),
+    ("inference_performance", "systems_programming"),
+    ("ai_safety", "red_teaming"), ("ai_safety", "evaluations"),
+    ("ai_safety", "ai_security"),
+    ("red_teaming", "penetration_testing"), ("red_teaming", "ai_security"),
+    ("ai_agents", "ai_tooling"),
+
+    # ---- data -------------------------------------------------------------
+    ("data_engineering", "data_platform"),
+    ("data_engineering", "analytics_engineering"),
+    ("data_engineering", "streaming"), ("data_engineering", "ml_data"),
+    ("data_platform", "platform_engineering"),
+    ("data_platform", "infrastructure"), ("data_platform", "database_engineering"),
+    ("analytics_engineering", "business_intelligence"),
+    ("analytics_engineering", "data_science"),
+    ("data_science", "business_intelligence"),
+    ("database_engineering", "sre"),
+    ("data_governance", "privacy_engineering"), ("data_governance", "grc"),
+
+    # ---- cloud / platform -------------------------------------------------
+    ("cloud_engineering", "devops"), ("cloud_engineering", "infrastructure"),
+    ("cloud_engineering", "platform_engineering"), ("cloud_engineering", "finops"),
+    ("devops", "sre"), ("devops", "platform_engineering"),
+    ("devops", "build_release"), ("devops", "kubernetes_containers"),
+    ("sre", "production_engineering"), ("sre", "observability"),
+    ("sre", "infrastructure"), ("sre", "performance_testing"),
+    ("platform_engineering", "infrastructure"),
+    ("platform_engineering", "kubernetes_containers"),
+    ("platform_engineering", "test_infrastructure"),
+    ("platform_engineering", "architecture"),
+    ("infrastructure", "networking"), ("infrastructure", "storage_engineering"),
+    ("infrastructure", "virtualization"), ("infrastructure", "hpc"),
+    ("infrastructure", "it_systems_administration"),
+    ("observability", "developer_tools"),
+    ("networking", "edge_cdn"), ("networking", "network_operations"),
+    ("networking", "cloud_security"),
+    ("cloud_security", "application_security"), ("cloud_security", "secops"),
+    ("cloud_security", "iam_pam"),
+    ("hpc", "storage_engineering"),
+    ("edge_cdn", "web_platform"),
+    ("storage_engineering", "database_engineering"),
+    ("virtualization", "kubernetes_containers"),
+
+    # ---- security ---------------------------------------------------------
+    ("application_security", "product_security"),
+    ("application_security", "penetration_testing"),
+    ("application_security", "secops"), ("application_security", "ai_security"),
+    ("product_security", "cryptography"),
+    ("product_security", "penetration_testing"),
+    ("iam_pam", "secops"), ("iam_pam", "grc"),
+    ("secops", "detection_response"),
+    ("detection_response", "malware_reverse_engineering"),
+    ("detection_response", "penetration_testing"),
+    ("grc", "privacy_engineering"),
+    ("privacy_engineering", "cryptography"),
+
+    # ---- quality ----------------------------------------------------------
+    ("qa_automation", "general_software"),
+    ("qa_automation", "sdet"), ("qa_automation", "test_infrastructure"),
+    ("qa_automation", "reliability_qa"),
+    ("sdet", "test_infrastructure"), ("sdet", "backend"),
+    ("performance_testing", "reliability_qa"),
+    ("test_infrastructure", "build_release"),
+
+    # ---- leadership -------------------------------------------------------
+    ("engineering_management", "architecture"),
+    ("engineering_management", "principal_staff_ic"),
+    ("engineering_management", "tpm"),
+    ("architecture", "principal_staff_ic"),
+    ("architecture", "distributed_systems"),
+
+    # ---- adjacent families ------------------------------------------------
+    ("technical_product_management", "tpm"),
+    ("technical_product_management", "product_design"),
+    ("technical_product_management", "solutions_engineering"),
+    ("solutions_engineering", "customer_engineering"),
+    ("solutions_engineering", "developer_relations"),
+    ("customer_engineering", "developer_relations"),
+    ("developer_relations", "technical_writing"),
+    ("developer_relations", "ai_tooling"),
+    ("design_systems", "product_design"),
+    ("it_support", "it_systems_administration"),
+    ("it_systems_administration", "network_operations"),
+
+    # ---- semiconductor / hardware -----------------------------------------
+    ("asic_soc_design", "fpga_rtl"), ("asic_soc_design", "verification"),
+    ("asic_soc_design", "eda_cad"), ("asic_soc_design", "analog_mixed_signal"),
+    ("fpga_rtl", "verification"),
+    ("verification", "product_test"), ("verification", "eda_cad"),
+    ("hardware_engineering", "analog_mixed_signal"),
+    ("hardware_engineering", "rf_engineering"),
+    ("hardware_engineering", "packaging"),
+    ("hardware_engineering", "product_test"),
+    ("analog_mixed_signal", "rf_engineering"),
+    ("analog_mixed_signal", "photonics"),
+    ("rf_engineering", "photonics"),
+    ("process_yield", "product_test"), ("process_yield", "packaging"),
+    ("packaging", "photonics"),
+)
+
+
+def _build_adjacency() -> Dict[str, frozenset]:
+    out: Dict[str, Set[str]] = {s: set() for s in ALL_SPECIALTIES}
+    for a, b in _ADJACENT_PAIRS:
+        if a not in out or b not in out:      # pragma: no cover - guarded by a test
+            continue
+        out[a].add(b)
+        out[b].add(a)
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+#: `{specialty: frozenset(adjacent specialties)}`. Symmetric by construction.
+SPECIALTY_ADJACENCY: Dict[str, frozenset] = _build_adjacency()
+
+
+#: `{family: frozenset(adjacent families)}`. Coarser and more forgiving than
+#: the specialty matrix: it is the rung BELOW "same family", so it is where a
+#: genuine discipline change lands (backend -> data engineering), not where a
+#: neighbouring speciality does.
+_ADJACENT_FAMILY_PAIRS: Tuple[Tuple[str, str], ...] = (
+    (F_SOFTWARE, F_CLOUD), (F_SOFTWARE, F_QUALITY), (F_SOFTWARE, F_DATA),
+    (F_SOFTWARE, F_AI_ML), (F_SOFTWARE, F_SEMICONDUCTOR),
+    (F_SOFTWARE, F_TECH_LEADERSHIP), (F_SOFTWARE, F_SECURITY),
+    (F_SOFTWARE, F_UX_DESIGN_SYSTEMS), (F_SOFTWARE, F_SOLUTIONS_ENG),
+    (F_AI_ML, F_DATA), (F_AI_ML, F_CLOUD),
+    (F_DATA, F_CLOUD),
+    (F_CLOUD, F_SECURITY), (F_CLOUD, F_QUALITY), (F_CLOUD, F_IT_SUPPORT),
+    (F_CLOUD, F_SEMICONDUCTOR),
+    (F_SECURITY, F_IT_SUPPORT),
+    (F_QUALITY, F_TECH_LEADERSHIP),
+    (F_TECH_LEADERSHIP, F_TECHNICAL_PRODUCT), (F_TECH_LEADERSHIP, F_AI_ML),
+    (F_TECH_LEADERSHIP, F_DATA), (F_TECH_LEADERSHIP, F_CLOUD),
+    (F_TECH_LEADERSHIP, F_SECURITY), (F_TECH_LEADERSHIP, F_SEMICONDUCTOR),
+    (F_TECHNICAL_PRODUCT, F_SOLUTIONS_ENG), (F_TECHNICAL_PRODUCT, F_UX_DESIGN_SYSTEMS),
+    (F_SOLUTIONS_ENG, F_DEVREL),
+    (F_DEVREL, F_TECH_WRITING),
+    (F_SEMICONDUCTOR, F_QUALITY),
+)
+
+
+def _build_family_adjacency() -> Dict[str, frozenset]:
+    out: Dict[str, Set[str]] = {f: set() for f in ALL_FAMILIES}
+    for a, b in _ADJACENT_FAMILY_PAIRS:
+        out[a].add(b)
+        out[b].add(a)
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+FAMILY_ADJACENCY: Dict[str, frozenset] = _build_family_adjacency()
+
+
+# ---------------------------------------------------------------------------
+# The ladder
+# ---------------------------------------------------------------------------
+ALIGN_EXACT_SPECIALTY = "exact_specialty"
+ALIGN_ADJACENT_SPECIALTY = "adjacent_specialty"
+ALIGN_SAME_FAMILY = "same_family"
+ALIGN_ADJACENT_FAMILY = "adjacent_family"
+ALIGN_UNRELATED = "unrelated"
+ALIGN_UNKNOWN = "unknown"
+
+#: Human-readable names for the non-tech domains, used in the "why not"
+#: explanation a candidate actually reads.
+NON_TECH_DOMAIN_LABELS: Dict[str, str] = {
+    "clinical": "clinical / healthcare",
+    "retail_food_hospitality": "retail, food or hospitality",
+    "trades_logistics": "skilled trades or logistics",
+    "business_admin": "business, finance or administration",
+    "sales_marketing_support": "sales, marketing or customer support",
+    "education_public": "education or public service",
+    "physical_engineering": "physical / non-software engineering",
+}
+
+#: Best to worst. `unknown` is absent on purpose — it is off the ladder.
+ALIGNMENT_TIERS: Tuple[str, ...] = (
+    ALIGN_EXACT_SPECIALTY, ALIGN_ADJACENT_SPECIALTY, ALIGN_SAME_FAMILY,
+    ALIGN_ADJACENT_FAMILY, ALIGN_UNRELATED,
+)
+
+#: Fraction of the role-alignment component each rung earns.
+#:
+#: `unknown` sits at 0.60 — the same neutral credit the old scorer gave when
+#: it had no family on either side. Not knowing must cost about what it always
+#: cost; it must never cost what being wrong costs.
+#:
+#: `unrelated` at 0.08 is deliberately near-zero rather than zero: a component
+#: that can reach exactly 0 makes the whole score bimodal, and a teacher
+#: applying to a backend role should rank last, not be assigned a number that
+#: implies a measurement we did not make.
+ALIGNMENT_WEIGHT: Dict[str, float] = {
+    ALIGN_EXACT_SPECIALTY: 1.00,
+    ALIGN_ADJACENT_SPECIALTY: 0.84,
+    ALIGN_SAME_FAMILY: 0.70,
+    ALIGN_ADJACENT_FAMILY: 0.46,
+    ALIGN_UNRELATED: 0.08,
+    ALIGN_UNKNOWN: 0.60,
+}
+
+
+def non_tech_domain_of(title: Any) -> Optional[str]:
+    """Which non-tech occupation a title names (`clinical`, `education_public`,
+    `retail_food_hospitality`, ...), or None if it names none.
+
+    Naming the domain is what turns "not technical" into evidence. A veto that
+    can only say "not tech" is indistinguishable from a parse failure.
+    """
+    m = _NON_TECH_RE.search(_norm(title))
+    if not m:
+        return None
+    return _NON_TECH_CATEGORY.get(m.group(0).lower())
+
+
+def specialties_are_adjacent(a: Any, b: Any) -> bool:
+    return str(b or "") in SPECIALTY_ADJACENCY.get(str(a or ""), frozenset())
+
+
+def families_are_adjacent(a: Any, b: Any) -> bool:
+    return str(b or "") in FAMILY_ADJACENCY.get(str(a or ""), frozenset())
+
+
+def role_alignment(
+    *,
+    job_families: Sequence[Any] = (),
+    job_specialties: Sequence[Any] = (),
+    resume_families: Sequence[Any] = (),
+    resume_specialties: Sequence[Any] = (),
+    job_scope: Any = None,
+    resume_scope: Any = None,
+    resume_non_tech_domain: Any = None,
+) -> Dict[str, Any]:
+    """How close is this candidate's discipline to this job's?
+
+    Returns `{tier, weight, matched, detail, adjacency_version,
+    taxonomy_version}`. Best rung across every (job, résumé) pair wins — a
+    candidate is credited for their strongest overlap, not their average one,
+    because a hiring manager reads the strongest one too.
+
+    Either side being empty returns `ALIGN_UNKNOWN`, never `ALIGN_UNRELATED`.
+    Those are different claims and the second one is a penalty.
+    """
+    jf = [str(f) for f in (job_families or ()) if f]
+    js = [str(s) for s in (job_specialties or ()) if s]
+    rf = [str(f) for f in (resume_families or ()) if f]
+    rs = [str(s) for s in (resume_specialties or ()) if s]
+
+    base = {"adjacency_version": ADJACENCY_VERSION,
+            "taxonomy_version": TAXONOMY_VERSION, "cross_domain": False}
+
+    # The confident cross-domain case. A licensed teacher's résumé and a
+    # backend posting are not "unknown distance apart" — we know exactly how
+    # far apart they are, and saying "unknown" (0.60, neutral) is what let a
+    # teacher tie with a software engineer on generic evidence.
+    if (str(resume_scope or "") == SCOPE_NON_TECH
+            and str(job_scope or "") in (SCOPE_CORE, SCOPE_ADJACENT)):
+        raw = str(resume_non_tech_domain or "")
+        dom = NON_TECH_DOMAIN_LABELS.get(raw, raw.replace("_", " ") or "another")
+        return {**base, "tier": ALIGN_UNRELATED,
+                "weight": ALIGNMENT_WEIGHT[ALIGN_UNRELATED], "matched": None,
+                "cross_domain": True,
+                "detail": (f"this resume is a {dom} career; "
+                           f"this is a technical role")}
+
+    if not (jf or js) or not (rf or rs):
+        return {**base, "tier": ALIGN_UNKNOWN,
+                "weight": ALIGNMENT_WEIGHT[ALIGN_UNKNOWN], "matched": None,
+                "detail": "no taxonomy signal on "
+                          + ("the job" if not (jf or js) else "the resume")}
+
+    for j in js:
+        if j in rs:
+            return {**base, "tier": ALIGN_EXACT_SPECIALTY,
+                    "weight": ALIGNMENT_WEIGHT[ALIGN_EXACT_SPECIALTY],
+                    "matched": j,
+                    "detail": f"same specialty: {SPECIALTY_LABELS.get(j, j)}"}
+    for j in js:
+        for r in rs:
+            if specialties_are_adjacent(j, r):
+                return {**base, "tier": ALIGN_ADJACENT_SPECIALTY,
+                        "weight": ALIGNMENT_WEIGHT[ALIGN_ADJACENT_SPECIALTY],
+                        "matched": r,
+                        "detail": (f"{SPECIALTY_LABELS.get(r, r)} is adjacent to "
+                                   f"{SPECIALTY_LABELS.get(j, j)}")}
+    # Families implied by specialties, so a caller that passes only
+    # specialties still gets the family rungs.
+    jf_all = list(dict.fromkeys(jf + families_for_specialties(js)))
+    rf_all = list(dict.fromkeys(rf + families_for_specialties(rs)))
+    for j in jf_all:
+        if j in rf_all:
+            return {**base, "tier": ALIGN_SAME_FAMILY,
+                    "weight": ALIGNMENT_WEIGHT[ALIGN_SAME_FAMILY], "matched": j,
+                    "detail": f"same family: {FAMILY_LABELS.get(j, j)}"}
+    for j in jf_all:
+        for r in rf_all:
+            if not families_are_adjacent(j, r):
+                continue
+            # Family adjacency alone is too blunt to be the answer when both
+            # sides know their specialty. Software and Semiconductor ARE
+            # adjacent — through embedded, firmware and systems programming —
+            # but a backend engineer is not a chip designer, and letting the
+            # family edge speak for them credits a discipline change nobody
+            # would make. So when the resume names specialties, require one of
+            # them to actually reach INTO the job's family through the
+            # declared matrix. No new data: it is the same matrix, read one
+            # step further out.
+            if rs and js:
+                target = set(FAMILY_SPECIALTIES.get(j, ()))
+                bridge = next((r_spec for r_spec in rs
+                               if SPECIALTY_ADJACENCY.get(r_spec, frozenset()) & target),
+                              None)
+                if bridge is None:
+                    continue
+                return {**base, "tier": ALIGN_ADJACENT_FAMILY,
+                        "weight": ALIGNMENT_WEIGHT[ALIGN_ADJACENT_FAMILY],
+                        "matched": bridge,
+                        "detail": (f"{SPECIALTY_LABELS.get(bridge, bridge)} reaches "
+                                   f"into {FAMILY_LABELS.get(j, j)}")}
+            return {**base, "tier": ALIGN_ADJACENT_FAMILY,
+                    "weight": ALIGNMENT_WEIGHT[ALIGN_ADJACENT_FAMILY],
+                    "matched": r,
+                    "detail": (f"{FAMILY_LABELS.get(r, r)} is adjacent to "
+                               f"{FAMILY_LABELS.get(j, j)}")}
+    return {**base, "tier": ALIGN_UNRELATED,
+            "weight": ALIGNMENT_WEIGHT[ALIGN_UNRELATED], "matched": None,
+            "cross_domain": bool(rf_all and jf_all),
+            "detail": (f"{', '.join(FAMILY_LABELS.get(f, f) for f in rf_all[:2]) or 'the resume'}"
+                       f" is unrelated to "
+                       f"{', '.join(FAMILY_LABELS.get(f, f) for f in jf_all[:2]) or 'the job'}")}
+
+
+# ---------------------------------------------------------------------------
+# Résumé-side classification
+# ---------------------------------------------------------------------------
+#: How much of a résumé's own history has to point at a family before we will
+#: call that family the candidate's. One contract title out of twelve is not a
+#: discipline, and treating it as one is how a teacher's single "IT
+#: coordinator" stint made every backend role look reachable.
+RESUME_FAMILY_MIN_SHARE = 0.20
+
+#: A cross-domain veto is a REFUSAL TO RANK, so the evidence bar is high: most
+#: of the résumé's titles must name the same non-tech occupation, and there
+#: must be more than one of them. One "Barista" on an otherwise-software
+#: résumé vetoes nothing.
+NON_TECH_VETO_SHARE = 0.75
+NON_TECH_VETO_MIN_TITLES = 2
+RESUME_MAX_FAMILIES = 4
+RESUME_MAX_SPECIALTIES = 8
+
+
+def classify_resume(
+    *,
+    titles: Sequence[Any] = (),
+    skills: Sequence[Any] = (),
+    summary: Any = "",
+    descriptions: Sequence[Any] = (),
+) -> Dict[str, Any]:
+    """A résumé's own families and specialties, on the same 14/101 tree.
+
+    Job classification and résumé classification MUST use one vocabulary or
+    the alignment ladder has nothing to compare. Before this, jobs used
+    `tech_taxonomy` (14/101) and résumés used `fit_score.ROLE_FAMILIES` (32
+    coarse keys), so "backend" on one side and "software_engineering" on the
+    other were the finest distinction available.
+
+    Titles are weighted by RECENCY-neutral count, not by position: a résumé's
+    ordering is a formatting choice, and inferring seniority of interest from
+    it would be reading the layout, not the career.
+    """
+    counts: Dict[str, int] = {}
+    spec_counts: Dict[str, int] = {}
+    evidence_titles: List[str] = []
+    non_tech_domains: Dict[str, int] = {}
+    total = 0
+    seen_titles = 0
+
+    for title in titles or ():
+        text = str(title or "").strip()
+        if not text:
+            continue
+        seen_titles += 1
+        got = classify(text, skills=skills)
+        if got.tech_scope in (SCOPE_CORE, SCOPE_ADJACENT) and got.role_families:
+            total += 1
+            evidence_titles.append(text)
+            for f in got.role_families:
+                counts[f] = counts.get(f, 0) + 1
+            for s in got.role_specialties:
+                spec_counts[s] = spec_counts.get(s, 0) + 1
+        elif got.tech_scope == SCOPE_NON_TECH:
+            # WHICH non-tech domain matters. "we found no tech evidence" is an
+            # absence; "every title on this resume is a classroom teaching
+            # title" is a positive finding about a different occupation, and
+            # only the second one may veto anything.
+            dom = non_tech_domain_of(text) or "other"
+            non_tech_domains[dom] = non_tech_domains.get(dom, 0) + 1
+
+    # Only if the titles said nothing: the summary and the bodies. A title is
+    # a claim about what the person IS; a body is a claim about what they have
+    # touched, and the two are not interchangeable evidence.
+    if not counts:
+        blob = " ".join([str(summary or "")] + [str(d or "") for d in (descriptions or ())])
+        if blob.strip():
+            got = classify("", description=blob, skills=skills)
+            if got.tech_scope in (SCOPE_CORE, SCOPE_ADJACENT):
+                for f in got.role_families:
+                    counts[f] = counts.get(f, 0) + 1
+                for s in got.role_specialties:
+                    spec_counts[s] = spec_counts.get(s, 0) + 1
+                total = max(total, 1)
+
+    if not counts:
+        # A confidently non-tech career is a POSITIVE classification, and the
+        # only thing that may license a cross-domain veto. The bar is high on
+        # purpose: most of the résumé's titles must name the same non-tech
+        # domain, because a software engineer who waited tables for a summer
+        # must not be vetoed out of software.
+        nt_total = sum(non_tech_domains.values())
+        classified = nt_total + total
+        share = (nt_total / classified) if classified else 0.0
+        # Two non-tech titles, or a résumé whose classified history is
+        # ENTIRELY non-tech. The second clause matters: a single-employer
+        # nurse or teacher résumé is a complete career, not a thin one, and
+        # requiring two entries would have exempted exactly the people the
+        # veto exists for.
+        if nt_total and share >= NON_TECH_VETO_SHARE \
+                and (nt_total >= NON_TECH_VETO_MIN_TITLES or share >= 1.0):
+            domain = max(non_tech_domains, key=lambda k: non_tech_domains[k])
+            return {"role_families": [], "role_specialties": [],
+                    "taxonomy_version": TAXONOMY_VERSION,
+                    # Confidence rises with corroboration AND with coverage.
+                    # A résumé whose classified history is 100% one non-tech
+                    # domain is a confident finding even with a single entry;
+                    # three-of-four is confident because of the count.
+                    "classification_confidence": round(
+                        min(0.95, 0.50 + 0.15 * min(nt_total, 3)
+                            + (0.10 if share >= 1.0 else 0.0)), 3),
+                    "evidence_titles": [], "tech_scope": SCOPE_NON_TECH,
+                    "non_tech_domain": domain,
+                    "non_tech_titles": nt_total, "titles_seen": seen_titles}
+        return {"role_families": [], "role_specialties": [],
+                "taxonomy_version": TAXONOMY_VERSION,
+                "classification_confidence": 0.0,
+                "evidence_titles": [], "tech_scope": SCOPE_UNKNOWN,
+                "non_tech_domain": None,
+                "non_tech_titles": nt_total, "titles_seen": seen_titles}
+
+    threshold = max(1, int(round(total * RESUME_FAMILY_MIN_SHARE)))
+    families = [f for f, n in sorted(counts.items(), key=lambda kv: -kv[1])
+                if n >= threshold][:RESUME_MAX_FAMILIES]
+    if not families:                       # pragma: no cover - threshold floor is 1
+        families = [max(counts, key=lambda k: counts[k])]
+    specialties = [s for s, _ in sorted(spec_counts.items(), key=lambda kv: -kv[1])
+                   ][:RESUME_MAX_SPECIALTIES]
+    scope = (SCOPE_CORE if any(FAMILY_SCOPE.get(f) == SCOPE_CORE for f in families)
+             else SCOPE_ADJACENT)
+    # Confidence rises with corroboration: one matching title is a hint, four
+    # are a discipline.
+    conf = min(0.95, 0.45 + 0.12 * min(total, 4))
+    return {"role_families": families, "role_specialties": specialties,
+            "taxonomy_version": TAXONOMY_VERSION,
+            "classification_confidence": round(conf, 3),
+            "evidence_titles": evidence_titles[:6], "tech_scope": scope,
+            "non_tech_domain": None,
+            "non_tech_titles": sum(non_tech_domains.values()),
+            "titles_seen": seen_titles}

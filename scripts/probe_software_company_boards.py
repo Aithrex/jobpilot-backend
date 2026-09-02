@@ -58,8 +58,26 @@ from services import company_registry_service as reg          # noqa: E402
 from services.ats_providers import registry as ats_registry    # noqa: E402
 from services.ats_providers.base import STATUS_VALIDATED, Endpoint  # noqa: E402
 from services.ats_providers.http import simple_context         # noqa: E402
+
 from services.ats_providers.util import (names_match,          # noqa: E402
                                          slug_is_trustworthy)
+
+
+def _ssrf_guard():
+    """Block private/link-local space and non-HTTP schemes on every fetch.
+
+    `jd_fetcher.url_is_safe` returns `(ok, reason)`; the tuple must be
+    unpacked or the check silently passes everything.
+    """
+    from services.jd_fetcher import url_is_safe
+
+    def guard(_vendor: str, url: str) -> str:
+        ok, reason = url_is_safe(url)
+        if not ok:
+            raise ValueError(f"blocked: {reason or 'unsafe_url'}")
+        return url
+    return guard
+
 
 #: Only vendors with ONE shared API host, where a wrong guess is a cheap 404
 #: rather than a DNS lookup or a hit against a shared anti-bot budget. Workday,
@@ -127,7 +145,11 @@ def main() -> int:
               f"{len(companies):,} to probe")
 
     providers = [p for p in (ats_registry.get(v) for v in VENDORS) if p]
-    ctx = simple_context(budget_seconds=60 * 60, global_rate=args.rate)
+    # This script reaches arbitrary employer-guessed hosts, so it needs the
+    # same SSRF guard the discovery worker uses. Without `guard=` the
+    # fetchers fall back to `_noop_guard` and nothing is checked at all.
+    ctx = simple_context(budget_seconds=60 * 60, global_rate=args.rate,
+                         guard=_ssrf_guard())
 
     lock = threading.Lock()
     hits, stats = [], collections.Counter()

@@ -1,4 +1,6 @@
 """ATS provider plugins: Oracle/iCIMS stay registered; Jobvite/BambooHR added."""
+import pytest
+
 from services.ats_providers import registry as ats_registry
 from services.ats_providers.base import Endpoint
 from services.ats_providers.boards import BambooHrProvider, JobviteProvider
@@ -360,21 +362,59 @@ class TestSlugCorroboration:
                            ("Public Policy Holding Company, Inc", "public")]:
             assert slug_is_trustworthy(name, slug) is False, f"{name} -> {slug}"
 
-    def test_greenhouse_and_smartrecruiters_can_name_their_owner(self):
-        """The two vendors that publish it must expose it, because that is
-        what makes a guess checkable rather than merely plausible."""
+    def test_every_slug_probed_vendor_can_name_its_owner(self):
+        """All four probe targets must expose an owner, because that is what
+        makes a guess checkable rather than merely plausible.
+
+        Greenhouse and SmartRecruiters publish it on their JSON APIs. Lever
+        and Ashby do not — and being the two that could not be checked is
+        precisely why they were the vendors where `slug_is_trustworthy`, a
+        string-similarity function, was the ONLY thing between a guessed slug
+        and `validated`. Both render the employer's own name into their public
+        portal title (`jobs.lever.co/matchgroup` -> "Match Group",
+        `jobs.ashbyhq.com/ramp` -> "Ramp Jobs"), so one cheap GET closes the
+        hole. A vendor that genuinely cannot say must still return None rather
+        than a guess — `_owner_from_portal_title` returns None on a 404, an
+        empty title, or a title too generic to name anybody.
+        """
         from services.ats_providers import registry as ats_registry
         from services.ats_providers.base import AtsProvider
 
-        for vendor in ("greenhouse", "smartrecruiters"):
+        for vendor in ("greenhouse", "smartrecruiters", "lever", "ashby"):
             provider = ats_registry.get(vendor)
             assert provider.board_owner.__func__ is not AtsProvider.board_owner, \
-                f"{vendor} publishes an owner name and must return it"
-        # Lever and Ashby do not publish one; "cannot say" must stay None
-        # rather than becoming "does not match".
-        for vendor in ("lever", "ashby"):
-            provider = ats_registry.get(vendor)
-            assert provider.board_owner.__func__ is AtsProvider.board_owner
+                f"{vendor} is slug-probed and must be able to name its owner"
+
+    @pytest.mark.parametrize("title, want", [
+        ("<title>Ramp Jobs</title>", "Ramp"),
+        ("<title>Match Group</title>", "Match Group"),
+        ("<title>Acme Corp - Careers</title>", "Acme Corp"),
+        ("<title>Foo Inc | Open Roles</title>", "Foo Inc"),
+        ("<title>Not found - 404 error</title>", None),
+        ("<title>Jobs</title>", None),
+        ("<title></title>", None),
+        ("no title element at all", None),
+    ])
+    def test_portal_title_names_the_employer_or_nobody(self, title, want):
+        from services.ats_providers import registry as ats_registry
+
+        provider = ats_registry.get("lever")
+        captured = {}
+
+        def fake_get_text(url, **kw):
+            captured["url"] = url
+            return 200, title
+
+        ctx = type("Ctx", (), {"get_text": staticmethod(fake_get_text)})()
+        assert provider._owner_from_portal_title("https://x/y", ctx) == want
+
+    def test_a_non_200_portal_names_nobody(self):
+        from services.ats_providers import registry as ats_registry
+
+        provider = ats_registry.get("ashby")
+        ctx = type("Ctx", (), {
+            "get_text": staticmethod(lambda url, **kw: (404, ""))})()
+        assert provider._owner_from_portal_title("https://x/y", ctx) is None
 
 
 def test_the_provider_registry_is_safe_to_load_concurrently():

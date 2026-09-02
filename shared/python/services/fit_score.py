@@ -57,21 +57,30 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.0"
+FIT_SCORE_VERSION = "fit-v2.1"
 
-# HAZARD - do not bump this without a re-parse plan.
+# The cliff described below is REAL, and this is how 2.1 crosses it.
 #
-# `_precomputed_requirements` rejects any stored profile whose score_version is
-# not this exact string, and `score()` then falls back to extracting from the JD
-# body. Inventory rows carry NO body (it lives in S3), so the fallback extracts
-# from an empty string, `has_job_requirements` goes False for every posting at
-# once, and the guest path filters the entire inventory out as evidence-less.
+# `_precomputed_requirements` used to reject any stored profile whose
+# `score_version` was not the current string, and `score()` then fell back to
+# extracting from the JD body. Inventory rows carry NO body (it lives in S3),
+# so the fallback extracted from an empty string, `has_job_requirements` went
+# False for every posting at once, and the guest path filtered the entire
+# inventory out as evidence-less. A bump was a hard cliff.
 #
-# A bump is therefore a hard cliff, not a gradual migration. Change the
-# EXTRACTOR contract via `job_inventory_service.EXTRACTOR_VERSION` instead
-# whenever the change is to what gets extracted rather than to how the
-# components are weighed: that drives a re-parse through the normal crawl with
-# no window during which nothing is servable.
+# What changed in 2.1 is HOW COMPONENTS ARE WEIGHED, not WHAT IS EXTRACTED:
+# `extract_requirements` produces the identical dict, field for field. So a
+# 2.0 requirements profile is still valid input to a 2.1 scorer, and
+# `_COMPATIBLE_REQUIREMENT_VERSIONS` says so explicitly. The 216,687 postings
+# carrying a stored `requirements` keep scoring through the deploy with no
+# window during which nothing is servable, and
+# `scripts/backfill_fit_score_v21.py` re-stamps them at leisure.
+#
+# The rule this encodes, for the next bump: add to this set when the
+# extraction CONTRACT is unchanged; change
+# `job_inventory_service.EXTRACTOR_VERSION` (which drives a re-parse through
+# the normal crawl) when it is not.
+_COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset({"fit-v2.0", "fit-v2.1"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
@@ -110,6 +119,23 @@ CONSTRAINT_CAPS: Dict[str, int] = {
     # and never reads as a "possible match" (>=50) it has no evidence to claim.
     "insufficient_job_requirements": 40,
 }
+
+# ---------------------------------------------------------------------------
+# Eligibility is SEPARATE from the score, and is not a second score.
+#
+# A hard requirement is not a preference expressed strongly. A role that
+# demands an active RN licence is not 40% reachable by someone without one; it
+# is not reachable. Before 2.1 those were score CAPS, which put them on the
+# same axis as skill overlap and let a strong-on-paper candidate out-rank a
+# qualified one. Now they answer a different question, in a different field.
+#
+# The gate only ever fires on a KNOWN mismatch. "The résumé does not mention a
+# clearance" is not a mismatch, it is silence, and silence is `unknown` — it
+# surfaces as a requirement the reader can check for themselves and costs
+# nothing.
+ELIGIBLE = "eligible"
+INELIGIBLE = "ineligible"
+NOT_SCORED = "not_scored"
 
 BANDS: Sequence[Tuple[int, str]] = (
     (80, "strong match"),
@@ -436,6 +462,20 @@ def find_skills(text: str) -> List[str]:
 # Role families
 # ---------------------------------------------------------------------------
 
+#: LEGACY. `tech_taxonomy` (14 families / 101 specialties) is the canonical
+#: occupation ontology as of `tech-tax-1.1.0`, and it is what `_score_role`
+#: now scores against.
+#:
+#: This 32-key map is kept for exactly one reason: `job_postings.role_family`
+#: is written from it on 405,133 stored rows and three production indexes key
+#: on that field (`active_role_cost_posted_at` among them). Deleting it would
+#: invalidate the stored value and the indexes in the same commit.
+#:
+#: So it stays as a BRIDGE, not as a taxonomy: `classify_role` still answers
+#: "which legacy family is this" for retrieval and storage, and nothing in the
+#: scoring path reads it for role alignment any more. `tech_taxonomy.
+#: LEGACY_FAMILY_MAP` translates between the two. When the stored field is
+#: re-backfilled onto `tech.role_families`, this can go.
 ROLE_FAMILIES: Dict[str, List[str]] = {
     "software_engineering": [
         "software engineer", "software developer", "backend engineer", "back end engineer",
@@ -838,8 +878,19 @@ def classify_role(text: Any) -> Optional[str]:
 # positions while burying the graduate programmes they actually want. The
 # separation also runs the other way - an intern posting is a real result for
 # someone still enrolled.
+#: `principal` is its own band, between `staff` and `director`.
+#:
+#: It used to fold into `director`, and that was wrong in both directions.
+#: A Principal Engineer is a senior INDIVIDUAL CONTRIBUTOR, not a people
+#: manager, so folding them together made a "Principal Engineer" search
+#: return engineering directors and vice versa. It was also unreachable:
+#: `tech_feed_service.normalize_request` accepts `principal` as a seniority
+#: filter and `tech_taxonomy._SENIORITY_ORDER` has always carried it, so a
+#: user could select a band that `job_postings.seniority` could never hold —
+#: the same shape of silent-zero-results bug `_LEVEL_ALIASES` documents.
+#: These three vocabularies now agree.
 LEVELS: Tuple[str, ...] = ("intern", "entry", "mid", "senior", "staff",
-                           "director", "executive")
+                           "principal", "director", "executive")
 
 # Titles that contain a band word but do NOT carry that band. Checked BEFORE
 # `_LEVEL_PATTERNS`, because each one is a measured misclassification off the
@@ -894,8 +945,13 @@ _LEVEL_PATTERNS: Sequence[Tuple[str, re.Pattern]] = (
                              r"executive director)(?![a-z])")),
     # `partner` is deliberately absent: "Partner Solutions Engineer" and
     # "Channel Partner Manager" are not partners.
-    ("director", re.compile(r"(?<![a-z])(director|principal|distinguished|"
-                            r"fellow|dean|superintendent)(?![a-z])")),
+    # `principal`, `distinguished` and `fellow` are the IC ladder above
+    # staff; `director` and friends are the management ladder. Reading them
+    # as one band meant a Principal Engineer and an Engineering Director were
+    # the same result.
+    ("director", re.compile(r"(?<![a-z])(director|dean|superintendent)(?![a-z])")),
+    ("principal", re.compile(r"(?<![a-z])(principal|distinguished|"
+                             r"fellow|senior\s+principal)(?![a-z])")),
     # 4. The IC staff band. `manager`, `supervisor` and `lead` are NOT here any
     #    more - see `_MANAGER_LEVEL` below, which reads them at the band they
     #    actually sit at.
@@ -950,7 +1006,7 @@ _MANAGER_LEVEL: Sequence[Tuple[str, re.Pattern]] = (
 # Years a level normally implies, used only when the posting names no number.
 _LEVEL_YEARS: Dict[str, int] = {
     "intern": 0, "entry": 0, "mid": 3, "senior": 5, "staff": 8,
-    "director": 10, "executive": 12,
+    "principal": 11, "director": 10, "executive": 12,
 }
 
 # Ordinal seniority bands, used to compare a resume's title level against the
@@ -960,7 +1016,8 @@ _LEVEL_YEARS: Dict[str, int] = {
 _LEVEL_ORDER: Dict[str, int] = {name: i for i, name in enumerate(LEVELS)}
 # Bands where a two-plus-band under-level is a genuine screen-out signal, not
 # just a stretch.
-_SENIOR_PLUS: frozenset = frozenset({"senior", "staff", "director", "executive"})
+_SENIOR_PLUS: frozenset = frozenset({"senior", "staff", "principal",
+                                     "director", "executive"})
 # Bands an early-career candidate is actually looking at.
 EARLY_CAREER_LEVELS: frozenset = frozenset({"intern", "entry"})
 
@@ -1067,8 +1124,12 @@ _INTERN_JD = re.compile(r"(internship|intern\s+program|co[ -]?op\s+(program|term
 # Years -> band, for a posting whose TITLE names no level. The bands match
 # `_LEVEL_YEARS` read backwards, so `level_from_signals` and `_score_experience`
 # cannot disagree about what "5 years" means.
+#: A years-only reading stops at `staff`. Years cannot distinguish a
+#: Principal IC from a Director — that distinction is about the LADDER, which
+#: only the title states — so a posting that names no level and asks for 12
+#: years is `staff`, not a guess between two different jobs.
 _YEARS_TO_LEVEL: Sequence[Tuple[int, str]] = (
-    (2, "entry"), (4, "mid"), (7, "senior"), (9, "staff"), (11, "director"),
+    (2, "entry"), (4, "mid"), (7, "senior"), (9, "staff"),
 )
 
 
@@ -1111,7 +1172,12 @@ def level_from_signals(title: Any, *, description: Any = "",
     for ceiling, level in _YEARS_TO_LEVEL:
         if years <= ceiling:
             return level
-    return "executive"
+    # Years alone top out at `staff`. "12+ years" is not evidence of an
+    # executive posting - it is evidence of a senior one - and reading it as
+    # `executive` put ordinary senior engineering roles three bands above
+    # where they belong, which is a three-band `level_gap` against every
+    # candidate who applied.
+    return "staff"
 
 
 # ---------------------------------------------------------------------------
@@ -1495,13 +1561,19 @@ def has_job_requirements(reqs: Any) -> bool:
 def _precomputed_requirements(stored: Any) -> Optional[Dict[str, Any]]:
     """Validate a requirement profile persisted by the ingestion path.
 
-    Returns the profile only when it is complete AND was produced by this exact
-    scorer version. Returns None otherwise, which makes the caller fall back to
-    extracting from the JD body - correct, just slower.
+    Returns the profile only when it is complete AND was produced by a scorer
+    version whose EXTRACTION contract matches this one
+    (`_COMPATIBLE_REQUIREMENT_VERSIONS`). Returns None otherwise, which makes
+    the caller fall back to extracting from the JD body - correct, just slower,
+    and on an inventory row (whose body lives in S3) not possible at all.
+
+    This is the backward-compatibility half of the 2.0 -> 2.1 migration: the
+    weights changed, the extracted fields did not, so 216,687 stored profiles
+    stay valid and no posting becomes unscorable at deploy time.
     """
     if not isinstance(stored, dict) or not stored:
         return None
-    if stored.get("score_version") != FIT_SCORE_VERSION:
+    if stored.get("score_version") not in _COMPATIBLE_REQUIREMENT_VERSIONS:
         return None
     if any(k not in stored for k in _REQUIRED_PROFILE_KEYS):
         return None
@@ -1591,12 +1663,20 @@ def build_resume_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
         fam = classify_role(resume.get("summary") or "")
         if fam:
             families.add(fam)
+    listed = set(find_skills(skills_text))
+    applied = set(find_skills(exp_text))
     return {
-        "experience_skills": set(find_skills(exp_text)),
-        "listed_skills": set(find_skills(skills_text)),
+        "experience_skills": applied,
+        "listed_skills": listed,
         "all_text": full_norm,
         "titles": [t for t in titles if t.strip()],
         "families": families,
+        # The CANONICAL occupation classification, on the same 14/101 tree the
+        # postings are classified with. `families` above is the legacy 32-key
+        # reading, kept because `job_postings.role_family` is written from it.
+        # Alignment scores against THIS.
+        "tech": _resume_taxonomy(titles, sorted(listed | applied),
+                                 resume.get("summary") or "", exp_text),
         "years": _resume_years(resume),
         "level": resume_level(titles),
         "degree_level": _degree_level(_norm(" ".join(
@@ -1606,6 +1686,67 @@ def build_resume_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
         "location": _norm((resume.get("contact") or {}).get("location") or ""),
         "has_dated_experience": _resume_years(resume) is not None,
     }
+
+
+#: Persisted onto résumé profiles so a stored profile can be read back
+#: without re-classifying, and so a taxonomy upgrade is detectable.
+RESUME_TAXONOMY_KEYS = ("role_families", "role_specialties", "taxonomy_version",
+                        "tech_scope", "non_tech_domain",
+                        "classification_confidence")
+
+
+def _resume_taxonomy(titles: Sequence[Any], skills: Sequence[Any],
+                     summary: Any = "", exp_text: Any = "") -> Dict[str, Any]:
+    """The résumé's own families/specialties on the canonical tree.
+
+    Degrades to an empty, `unknown`-scoped result on any failure: a taxonomy
+    problem must cost a candidate their role points, never their whole score.
+    """
+    try:
+        from services import tech_taxonomy as tx
+        return tx.classify_resume(titles=titles, skills=skills,
+                                  summary=summary, descriptions=[exp_text])
+    except Exception as exc:  # pragma: no cover - never break scoring
+        logger.debug("fit_score._resume_taxonomy: %s", exc)
+        return {"role_families": [], "role_specialties": [],
+                "taxonomy_version": "error", "tech_scope": "unknown",
+                "non_tech_domain": None, "classification_confidence": 0.0}
+
+
+def job_taxonomy(job: Optional[Dict[str, Any]], reqs: Dict[str, Any],
+                 job_title: str = "") -> Dict[str, Any]:
+    """The job's families/specialties, preferring the value stored at ingest.
+
+    `job_postings.tech` is written by `job_inventory_service.normalize_posting`
+    from the FULL body, which the request path no longer has (it lives in S3).
+    Re-deriving from the title alone would throw away the better answer, so the
+    stored subdocument wins whenever it is present and current.
+    """
+    stored = (job or {}).get("tech")
+    if isinstance(stored, dict) and stored.get("role_families"):
+        return {"role_families": list(stored.get("role_families") or []),
+                "role_specialties": list(stored.get("role_specialties") or []),
+                "tech_scope": stored.get("tech_scope") or "unknown",
+                "taxonomy_version": stored.get("taxonomy_version") or "",
+                "source": "stored"}
+    try:
+        from services import tech_taxonomy as tx
+        got = tx.classify(
+            job_title or (job or {}).get("title") or "",
+            description=str((job or {}).get("description")
+                            or (job or {}).get("jd_text") or "")[:8000],
+            skills=(reqs.get("required_skills") or []) + (reqs.get("preferred_skills") or []),
+            requirements=reqs)
+        return {"role_families": list(got.role_families),
+                "role_specialties": list(got.role_specialties),
+                "tech_scope": got.tech_scope,
+                "taxonomy_version": got.taxonomy_version,
+                "source": "derived"}
+    except Exception as exc:  # pragma: no cover
+        logger.debug("fit_score.job_taxonomy: %s", exc)
+        return {"role_families": [], "role_specialties": [],
+                "tech_scope": "unknown", "taxonomy_version": "error",
+                "source": "error"}
 
 
 def resume_level(titles: Sequence[Any]) -> Optional[str]:
@@ -1710,40 +1851,121 @@ def effective_role_family(reqs: Dict[str, Any], job_title: Any) -> Optional[str]
     return job_fam
 
 
-def _score_role(reqs: Dict[str, Any], prof: Dict[str, Any], job_title: str
-                ) -> Tuple[float, str, bool]:
-    """(points, detail, unrelated_flag)"""
+def _score_role(reqs: Dict[str, Any], prof: Dict[str, Any], job_title: str,
+                job_tax: Optional[Dict[str, Any]] = None
+                ) -> Tuple[float, str, bool, Dict[str, Any]]:
+    """(points, detail, unrelated_flag, alignment)
+
+    Scored on the canonical 14/101 tree via
+    `tech_taxonomy.role_alignment`, which distinguishes
+
+        exact_specialty > adjacent_specialty > same_family >
+        adjacent_family > unrelated
+
+    where the previous implementation's finest software distinction was the
+    single family `software_engineering`. That flatness is the mechanical
+    reason a user saw only a handful of jobs above 80: for anyone in software,
+    this 25-point component was very nearly a constant, so ranking collapsed
+    onto skill overlap and the whole distribution compressed.
+
+    A title-token overlap bonus is retained as a TIE-BREAK inside a tier, not
+    as a tier of its own - "Engineer" appearing on both sides is weak evidence
+    and it used to be able to outrank a real specialty match.
+    """
     mx = COMPONENT_MAX["role_alignment"]
-    job_fam = effective_role_family(reqs, job_title)
-    fams = prof.get("families") or set()
+    tax = job_tax or {}
+    res_tax = prof.get("tech") or {}
+
+    try:
+        from services import tech_taxonomy as tx
+        align = tx.role_alignment(
+            job_families=tax.get("role_families") or [],
+            job_specialties=tax.get("role_specialties") or [],
+            resume_families=res_tax.get("role_families") or [],
+            resume_specialties=res_tax.get("role_specialties") or [],
+            job_scope=tax.get("tech_scope"),
+            resume_scope=res_tax.get("tech_scope"),
+            resume_non_tech_domain=res_tax.get("non_tech_domain"),
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.debug("fit_score._score_role: %s", exc)
+        align = {"tier": "unknown", "weight": 0.6, "detail": "",
+                 "cross_domain": False, "matched": None}
+
+    tier = str(align.get("tier") or "unknown")
+    weight = float(align.get("weight") or 0.6)
+
+    # Legacy fallback. The canonical tree returns `unknown` when either side
+    # carries no taxonomy signal, and "unknown" must never be scored as
+    # "unrelated" — but the 32-key legacy classification sometimes DOES know
+    # both sides (it reads "Registered Nurse" and "Staff Accountant", which
+    # `tech_taxonomy` deliberately declines to give a tech family). Where the
+    # legacy reading is confident on both sides and says the two are
+    # unrelated, that is real evidence and it is used. Taxonomy leads; legacy
+    # only speaks when taxonomy is silent.
+    if tier == "unknown":
+        legacy = _legacy_role_tier(reqs, prof, job_title)
+        if legacy is not None:
+            tier, weight, legacy_detail = legacy
+            align = dict(align)
+            align["tier"] = tier
+            align["weight"] = weight
+            align["detail"] = legacy_detail
+            align["source"] = "legacy_families"
+            align["cross_domain"] = tier == "unrelated"
+
+    # Tie-break, capped so it can never promote a tier.
     job_tokens = _title_tokens(job_title)
     res_tokens: Set[str] = set()
     for t in prof.get("titles") or []:
         res_tokens |= _title_tokens(t)
     overlap = job_tokens & res_tokens
+    if overlap and tier not in ("unrelated", "exact_specialty"):
+        weight = min(weight + 0.04 * min(len(overlap), 2),
+                     _TIER_CEILING.get(tier, weight))
 
-    if not job_fam and not fams:
-        return mx * 0.6, "Role family could not be determined from either side.", False
-    if job_fam and job_fam in fams:
-        if overlap:
-            return float(mx), "Your job titles are in the same role family as this posting.", False
-        return mx * 0.92, "Your background is in the same role family as this posting.", False
-    if not fams:
-        if overlap:
-            return mx * 0.6, "Partial title overlap, but your role history is unclear.", False
-        return mx * 0.48, "Your role history could not be classified.", False
-    if not job_fam:
-        if overlap:
-            return mx * 0.68, "Partial title overlap with this posting.", False
-        return mx * 0.48, "This posting's role family could not be determined.", False
-    related = RELATED_FAMILIES.get(job_fam, set()) & fams
-    if related:
-        return mx * 0.6, "Your background is in an adjacent role family.", False
-    if len(overlap) >= 2:
-        return mx * 0.4, "Some title overlap across different role families.", False
-    if overlap:
-        return mx * 0.24, "Limited title overlap across different role families.", True
-    return mx * 0.08, "This role is in a different field from your background.", True
+    detail = str(align.get("detail") or "")
+    if tier == "unknown":
+        detail = detail or "Role family could not be determined from either side."
+    elif tier == "exact_specialty":
+        detail = f"Same specialty as your background - {align.get('matched')}."
+    align = dict(align)
+    align["overlap_tokens"] = sorted(overlap)[:6]
+    align["effective_weight"] = round(weight, 3)
+    return mx * weight, detail, tier == "unrelated", align
+
+
+def _legacy_role_tier(reqs: Dict[str, Any], prof: Dict[str, Any],
+                      job_title: str) -> Optional[Tuple[str, float, str]]:
+    """`(tier, weight, detail)` from the 32-key legacy families, or None.
+
+    Returns None unless BOTH sides classify — an absent legacy family is the
+    same non-answer as an absent taxonomy family, and turning it into
+    "unrelated" is exactly the mistake this whole module is correcting.
+    """
+    job_fam = effective_role_family(reqs, job_title)
+    fams = prof.get("families") or set()
+    if not job_fam or not fams:
+        return None
+    if job_fam in fams:
+        return ("same_family", 0.70,
+                "Your background is in the same role family as this posting.")
+    if RELATED_FAMILIES.get(job_fam, set()) & fams:
+        return ("adjacent_family", 0.46,
+                "Your background is in an adjacent role family.")
+    return ("unrelated", 0.08,
+            "This role is in a different field from your background.")
+
+
+#: A tie-break may lift a tier's weight toward, but never past, the next
+#: tier's floor. Without this a two-word title overlap could carry a
+#: `same_family` match above an `adjacent_specialty` one.
+_TIER_CEILING: Dict[str, float] = {
+    "adjacent_specialty": 0.92,
+    "same_family": 0.78,
+    "adjacent_family": 0.54,
+    "unknown": 0.66,
+}
 
 
 # Smallest requirement list a coverage RATIO is computed over. See `_coverage`.
@@ -1797,8 +2019,8 @@ def _coverage(reqs_list: Sequence[str], prof: Dict[str, Any]
 
 
 def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any]
-                      ) -> Tuple[float, str, bool]:
-    """(points, detail, severe_gap_flag).
+                      ) -> Tuple[float, str, bool, bool]:
+    """(points, detail, severe_gap_flag, known).
 
     Scored primarily off the years gap, then corrected by the resume's title
     SENIORITY band. Dated-years alone miss the case of someone with several
@@ -1825,12 +2047,26 @@ def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any]
 
     if have is None or want is None:
         # Years unknown on one side. A clear two-plus-band under-level for a
-        # senior+ posting is still a real signal, so don't hand out the neutral
-        # "unknown" credit in that case.
+        # senior+ posting is still a real signal - the TITLES said it, which is
+        # evidence, not absence - so that case is scored and marked known.
         if level_gap is not None and level_gap >= 2 and job_level in _SENIOR_PLUS:
-            return mx * 0.30, ("Your job titles read below the seniority this role "
-                               "asks for."), True
-        return mx * 0.65, "Years of experience are not stated on both sides.", False
+            return (mx * 0.30, "Your job titles read below the seniority this role "
+                    "asks for.", True, True)
+        if level_gap is not None:
+            # Bands known on both sides, years on neither. Score the bands.
+            if level_gap <= 0:
+                return (mx, f"Your seniority ({res_level}) meets this "
+                        f"{job_level} role.", False, True)
+            if level_gap == 1:
+                return (mx * 0.72, f"One seniority band below this {job_level} "
+                        f"role.", False, True)
+            return (mx * 0.40, f"Below the seniority this {job_level} role asks "
+                    f"for.", False, True)
+        # Genuinely unknown on both axes. 43.3% of the live inventory states no
+        # seniority and 92% state no years, so charging this component's
+        # neutral 65% to almost every posting was a systematic 7-point tax on
+        # every candidate for a gap that is ours, not theirs.
+        return 0.0, "Years of experience are not stated on both sides.", False, False
 
     gap = want - have
     if gap <= 0:
@@ -1882,67 +2118,164 @@ def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any]
         pts, detail = mx * 0.7, ("Your seniority is well above what this early "
                                  "career role asks for.")
 
-    return pts, detail, severe
+    return pts, detail, severe, True
 
 
-def _score_domain(reqs: Dict[str, Any], prof: Dict[str, Any]) -> Tuple[float, str]:
+def _score_domain(reqs: Dict[str, Any], prof: Dict[str, Any]
+                  ) -> Tuple[float, str, bool]:
+    """(points, detail, known). `known=False` drops the component from BOTH
+    sides of the average - see `_normalized_score`."""
     mx = COMPONENT_MAX["domain"]
     job_inds = set(reqs.get("industries") or [])
     res_inds = prof.get("industries") or set()
     if not job_inds or not res_inds:
-        return mx * 0.6, "Industry could not be determined on both sides."
+        return 0.0, "Industry could not be determined on both sides.", False
     shared = job_inds & res_inds
     if shared:
-        return float(mx), f"Shared industry context: {', '.join(sorted(shared))}."
-    return mx * 0.2, "Different industry from your background."
+        return float(mx), f"Shared industry context: {', '.join(sorted(shared))}.", True
+    return mx * 0.2, "Different industry from your background.", True
 
 
 def _score_location(reqs: Dict[str, Any], prof: Dict[str, Any], job_location: str
-                    ) -> Tuple[float, str, bool]:
+                    ) -> Tuple[float, str, bool, bool]:
+    """(points, detail, location_incompatible, known).
+
+    `work_mode` is UNKNOWN on 96.1% of the live inventory. Charging that
+    inventory half the location component was not measuring location fit, it
+    was measuring our own parsing gap - and it did so on almost every posting
+    at once, which is a large part of why nothing reached the top band.
+    An unknown work mode is now `known=False`: excluded, not penalised.
+    """
     mx = COMPONENT_MAX["location"]
     mode = reqs.get("work_mode")
     if mode == "remote":
-        return float(mx), "This role is remote.", False
+        return float(mx), "This role is remote.", False, True
     res_loc = prof.get("location") or ""
     job_loc = _norm(job_location)
     if not res_loc or not job_loc:
-        return mx * 0.6, "Location compatibility is unknown.", False
+        return 0.0, "Location compatibility is unknown.", False, False
     res_states = set(_STATE_RE.findall(res_loc))
     job_states = set(_STATE_RE.findall(job_loc))
     res_city = res_loc.split(",")[0].strip()
     job_city = job_loc.split(",")[0].strip()
     if res_city and res_city == job_city:
-        return float(mx), "Same city as your listed location.", False
+        return float(mx), "Same city as your listed location.", False, True
     if res_states & job_states:
-        return mx * 0.8, "Same state as your listed location.", False
+        return mx * 0.8, "Same state as your listed location.", False, True
     if mode == "hybrid":
-        return mx * 0.4, "Hybrid role in a different area from your listed location.", False
+        return (mx * 0.4, "Hybrid role in a different area from your listed location.",
+                False, True)
     if mode == "onsite":
-        return mx * 0.2, "Onsite role in a different area from your listed location.", True
-    return mx * 0.5, "Different area from your listed location.", False
+        return (mx * 0.2, "Onsite role in a different area from your listed location.",
+                True, True)
+    # Work mode unknown and the areas differ. We do not know whether that
+    # matters, so we do not score it either way.
+    return 0.0, "This posting does not state whether the role is remote.", False, False
 
 
 def _score_education(reqs: Dict[str, Any], prof: Dict[str, Any],
-                     license_ok: Optional[bool]) -> Tuple[float, str]:
+                     license_ok: Optional[bool]) -> Tuple[float, str, bool]:
+    """(points, detail, known).
+
+    A posting that names no degree used to score 4/5, never 5/5, because
+    `license_ok` is `None` whenever the posting names no licence either -
+    which is almost every software posting. Every candidate silently lost a
+    point for a requirement nobody stated. Naming no requirement is not a
+    requirement the candidate failed.
+    """
     mx = COMPONENT_MAX["education"]
     want = int(reqs.get("required_degree_level") or 0)
     have = int(prof.get("degree_level") or 0)
     if license_ok is False:
-        return 0.0, "A required credential is not shown on your resume."
+        return 0.0, "A required credential is not shown on your resume.", True
     if want == 0:
-        return float(mx) if license_ok else mx * 0.8, "No specific degree is required."
+        return float(mx), "No specific degree is required.", True
     if have == 0:
-        return mx * 0.6, "Your education level could not be read from the resume."
+        return 0.0, "Your education level could not be read from the resume.", False
     if have >= want:
-        return float(mx), "Your education meets the stated requirement."
+        return float(mx), "Your education meets the stated requirement.", True
     if want - have == 1:
-        return mx * 0.5, "Your education is one level below the stated requirement."
-    return mx * 0.2, "Your education is below the stated requirement."
+        return mx * 0.5, "Your education is one level below the stated requirement.", True
+    return mx * 0.2, "Your education is below the stated requirement.", True
 
 
 # ---------------------------------------------------------------------------
 # Bands, confidence, copy
 # ---------------------------------------------------------------------------
+
+#: An ineligible candidate can still be shown - people apply to roles they do
+#: not formally qualify for, and hiding the posting would be a worse product -
+#: but they must never sit in a band that implies they clear screening.
+_INELIGIBLE_CEILING = 34   # top of "unlikely match"
+
+
+def _normalized_score(components: Dict[str, Dict[str, Any]]) -> Tuple[int, float]:
+    """Average the components we could actually measure. `(score, breadth)`.
+
+    This is the change that fixes the compressed distribution. Before 2.1
+    every component paid out a NEUTRAL fraction when it had no evidence -
+    experience 65%, domain 60%, location 60%, education 80%, absent skills
+    60% - so a perfect, fully-evidenced match summed to about 86 and a
+    typical good one to the low 70s. Roughly twelve points were being deducted
+    from every candidate for facts the POSTING never stated: 96.1% of live
+    postings do not state work mode, 43.3% state no seniority, 81.5% no
+    salary.
+
+    A neutral fraction is still a deduction. The statistically correct
+    treatment of a missing feature is to drop it from both the numerator and
+    the denominator, which is what this does, and which is what "unknown
+    metadata is never converted into a negative signal" actually requires.
+
+    `breadth` is the share of the 100-point frame that had evidence, returned
+    so the caller can say how complete the picture was instead of quietly
+    baking that into the number.
+    """
+    earned = sum(c["score"] for c in components.values() if c.get("known"))
+    possible = sum(c["max"] for c in components.values() if c.get("known"))
+    breadth = round(possible / 100.0, 3)
+    if possible <= 0:
+        return 0, 0.0
+    return int(round(max(0.0, min(100.0, 100.0 * earned / possible)))), breadth
+
+
+def _eligibility(constraints: Sequence[Dict[str, Any]],
+                 alignment: Dict[str, Any],
+                 prof: Dict[str, Any],
+                 reqs: Dict[str, Any]) -> Tuple[str, List[str]]:
+    """`(eligibility, reasons)` — a KNOWN-mismatch gate, never a guess.
+
+    Three things make somebody ineligible, and all three are positive
+    findings rather than absences:
+
+    * a confident cross-domain verdict — the résumé is a classroom-teaching
+      career and the posting is a backend role. Not "we could not classify
+      this résumé", which stays eligible;
+    * a named licence the résumé does not evidence anywhere;
+    * the résumé stating it needs sponsorship against a posting stating it
+      offers none.
+
+    Silence is never a mismatch. A posting requiring a clearance against a
+    résumé that simply does not mention one yields `unknown`, which surfaces
+    as a requirement to read and costs nothing.
+    """
+    reasons: List[str] = []
+    if not (prof.get("experience_skills") or prof.get("listed_skills")
+            or prof.get("titles")):
+        return NOT_SCORED, ["No readable evidence on the resume."]
+
+    if alignment.get("cross_domain") and alignment.get("tier") == "unrelated":
+        res_tax = prof.get("tech") or {}
+        if float(res_tax.get("classification_confidence") or 0) >= 0.7:
+            reasons.append(str(alignment.get("detail")
+                               or "This role is in a different field."))
+
+    for c in constraints:
+        if c.get("status") != "missing":
+            continue
+        if c.get("type") in ("license", "work_authorization"):
+            reasons.append(str(c.get("detail") or c.get("type")))
+    return (INELIGIBLE if reasons else ELIGIBLE), reasons[:4]
+
 
 def band_for(score: int) -> str:
     for floor, name in BANDS:
@@ -2033,18 +2366,18 @@ def _hard_constraints(reqs: Dict[str, Any], prof: Dict[str, Any],
                 continue
             if rule["resume"].search(text):
                 results.append(True)
-                out.append({"type": "license", "key": entry["key"], "status": "met",
+                out.append({"type": "license", "key": entry["key"], "status": "met", "hard_requirement": True,
                             "detail": f"{entry['label']} is evidenced on your resume."})
             elif (rule.get("role_evidence") is not None
                   and rule["role_evidence"].search(titles_text)):
                 results.append(None)
-                out.append({"type": "license", "key": entry["key"], "status": "unknown",
+                out.append({"type": "license", "key": entry["key"], "status": "unknown", "hard_requirement": True,
                             "detail": (f"This posting requires a {entry['label'].lower()}. "
                                        f"Your job titles suggest you hold one, but the "
                                        f"resume does not state it.")})
             else:
                 results.append(False)
-                out.append({"type": "license", "key": entry["key"], "status": "missing",
+                out.append({"type": "license", "key": entry["key"], "status": "missing", "hard_requirement": True,
                             "cap": CONSTRAINT_CAPS["license_missing"],
                             "detail": (f"This posting requires a {entry['label'].lower()}, "
                                        f"which is not shown on your resume.")})
@@ -2056,21 +2389,32 @@ def _hard_constraints(reqs: Dict[str, Any], prof: Dict[str, Any],
     if reqs.get("clearance_required"):
         if _CLEARANCE_RESUME.search(text):
             out.append({"type": "clearance", "status": "met",
+                        "hard_requirement": True,
                         "detail": "A security clearance is evidenced on your resume."})
         else:
-            out.append({"type": "clearance", "status": "missing",
-                        "cap": CONSTRAINT_CAPS["clearance_missing"],
-                        "detail": ("This posting requires a security clearance, which "
-                                   "is not shown on your resume.")})
+            # UNKNOWN, not missing. Almost nobody writes "I hold a Secret
+            # clearance" on a résumé, and the previous branch read that silence
+            # as a definite absence and capped the score at 40 - so a cleared
+            # candidate was scored as if they were not, on the strength of a
+            # phrase they had no reason to include. There is nothing on a
+            # résumé that can CONTRADICT a clearance requirement, so this is
+            # surfaced as a requirement to check, not priced as a gap.
+            out.append({"type": "clearance", "status": "unknown",
+                        "hard_requirement": True,
+                        "detail": ("This posting requires an active security "
+                                   "clearance. Your resume does not state whether "
+                                   "you hold one.")})
 
     if reqs.get("work_authorization_restricted"):
         if _WORKAUTH_RESUME_NEEDS.search(text):
             out.append({"type": "work_authorization", "status": "missing",
+                        "hard_requirement": True,
                         "cap": CONSTRAINT_CAPS["work_authorization_conflict"],
                         "detail": ("This employer states it does not sponsor, and your "
                                    "resume indicates sponsorship would be needed.")})
         else:
             out.append({"type": "work_authorization", "status": "unknown",
+                        "hard_requirement": True,
                         "detail": ("This employer states it does not sponsor. Your work "
                                    "authorization is not stated on the resume.")})
 
@@ -2138,47 +2482,52 @@ def score(resume: Dict[str, Any], job: Dict[str, Any],
     required = reqs.get("required_skills") or []
     preferred = reqs.get("preferred_skills") or []
 
-    role_pts, role_detail, unrelated = _score_role(reqs, prof, job_title)
+    job_tax = job_taxonomy(job, reqs, job_title)
+    role_pts, role_detail, unrelated, alignment = _score_role(
+        reqs, prof, job_title, job_tax)
     req_cov, req_covered, req_missing = _coverage(required, prof)
-    req_pts = (req_cov * COMPONENT_MAX["required_skills"]) if required \
-        else COMPONENT_MAX["required_skills"] * 0.6
+    req_pts = (req_cov * COMPONENT_MAX["required_skills"]) if required else 0.0
     pref_cov, pref_covered, pref_missing = _coverage(preferred, prof)
-    pref_pts = (pref_cov * COMPONENT_MAX["preferred_skills"]) if preferred \
-        else COMPONENT_MAX["preferred_skills"] * 0.6
-    exp_pts, exp_detail, severe_gap = _score_experience(reqs, prof)
-    dom_pts, dom_detail = _score_domain(reqs, prof)
-    loc_pts, loc_detail, location_bad = _score_location(reqs, prof, job_location)
+    pref_pts = (pref_cov * COMPONENT_MAX["preferred_skills"]) if preferred else 0.0
+    exp_pts, exp_detail, severe_gap, exp_known = _score_experience(reqs, prof)
+    dom_pts, dom_detail, dom_known = _score_domain(reqs, prof)
+    loc_pts, loc_detail, location_bad, loc_known = _score_location(
+        reqs, prof, job_location)
 
     unrelated = unrelated and req_cov < 0.35
     constraints, license_ok = _hard_constraints(
         reqs, prof, severe_gap, location_bad, unrelated)
-    edu_pts, edu_detail = _score_education(reqs, prof, license_ok)
+    edu_pts, edu_detail, edu_known = _score_education(reqs, prof, license_ok)
 
     components = {
         "role_alignment": {"score": round(role_pts, 2),
-                           "max": COMPONENT_MAX["role_alignment"], "detail": role_detail},
+                           "max": COMPONENT_MAX["role_alignment"],
+                           "known": alignment.get("tier") != "unknown",
+                           "detail": role_detail},
         "required_skills": {"score": round(req_pts, 2),
                             "max": COMPONENT_MAX["required_skills"],
+                            "known": bool(required),
                             "detail": (f"{len(req_covered)} of {len(required)} required "
                                        f"items evidenced.") if required
                             else "This posting names no clear required skills."},
         "experience": {"score": round(exp_pts, 2),
-                       "max": COMPONENT_MAX["experience"], "detail": exp_detail},
+                       "max": COMPONENT_MAX["experience"], "known": exp_known,
+                       "detail": exp_detail},
         "preferred_skills": {"score": round(pref_pts, 2),
                              "max": COMPONENT_MAX["preferred_skills"],
+                             "known": bool(preferred),
                              "detail": (f"{len(pref_covered)} of {len(preferred)} preferred "
                                         f"items evidenced.") if preferred
                              else "This posting names no separate preferred skills."},
-        "domain": {"score": round(dom_pts, 2),
+        "domain": {"score": round(dom_pts, 2), "known": dom_known,
                    "max": COMPONENT_MAX["domain"], "detail": dom_detail},
-        "location": {"score": round(loc_pts, 2),
+        "location": {"score": round(loc_pts, 2), "known": loc_known,
                      "max": COMPONENT_MAX["location"], "detail": loc_detail},
-        "education": {"score": round(edu_pts, 2),
+        "education": {"score": round(edu_pts, 2), "known": edu_known,
                       "max": COMPONENT_MAX["education"], "detail": edu_detail},
     }
 
-    raw = sum(c["score"] for c in components.values())
-    final = int(round(max(0.0, min(100.0, raw))))
+    final, evidence_breadth = _normalized_score(components)
 
     applied_caps: List[str] = []
     for c in constraints:
@@ -2186,6 +2535,11 @@ def score(resume: Dict[str, Any], job: Dict[str, Any],
         if cap is not None and final > cap:
             final = int(cap)
             applied_caps.append(str(c.get("type")))
+
+    eligibility, ineligible_reasons = _eligibility(
+        constraints, alignment, prof, reqs)
+    if eligibility == INELIGIBLE and final > _INELIGIBLE_CEILING:
+        final = _INELIGIBLE_CEILING
 
     band = band_for(final)
     # A posting we could not read requirements from cannot yield a confident
@@ -2220,6 +2574,20 @@ def score(resume: Dict[str, Any], job: Dict[str, Any],
         "band": band,
         "confidence": confidence,
         "score_version": FIT_SCORE_VERSION,
+        # NOT a second score. `score` answers "how well does this fit"; this
+        # answers "may this person be considered at all", which a number
+        # cannot express - see the ELIGIBLE/INELIGIBLE/NOT_SCORED note above.
+        "eligibility": eligibility,
+        "ineligible_reasons": ineligible_reasons,
+        # How much of the 100-point frame had evidence on both sides. The
+        # score is an average over exactly these components, so a reader can
+        # tell "80 out of a complete picture" from "80 out of half of one"
+        # without either being penalised for the other's gaps.
+        "evidence_breadth": evidence_breadth,
+        "role_alignment": alignment,
+        "job_taxonomy": job_tax,
+        "resume_taxonomy": {k: (prof.get("tech") or {}).get(k)
+                            for k in RESUME_TAXONOMY_KEYS},
         "components": components,
         "component_scores": {k: v["score"] for k, v in components.items()},
         "evidence": {

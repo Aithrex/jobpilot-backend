@@ -216,7 +216,11 @@ class TestEnrichment:
         # python/go/sql/aws that the resume fully covers scores high rather
         # than 4/8-of-the-resume = 50.
         assert "Software Engineer" in by_title
-        assert by_title["Software Engineer"]["match_score"] == 76
+        # 82 under fit-v2.1, 76 under 2.0. The move is the renormalisation:
+        # this posting states no industry, no work mode and no years, and 2.0
+        # charged the candidate a "neutral" fraction of each. 2.1 excludes an
+        # unmeasurable component from the average instead of pricing it.
+        assert by_title["Software Engineer"]["match_score"] == 82
         assert "python" in by_title["Software Engineer"]["matched_skills"]
 
     def test_enrichment_failure_never_breaks_matching(self, guest_db, monkeypatch):

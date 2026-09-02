@@ -339,14 +339,49 @@ def filters_fingerprint(req: Dict[str, Any]) -> str:
 # Cursors
 # ---------------------------------------------------------------------------
 
-def encode_cursor(search_id: str, offset: int) -> str:
-    raw = json.dumps({"s": search_id, "o": int(offset)},
-                     separators=(",", ":")).encode("utf-8")
+#: How far past the ranked window one keyset page reads before giving up.
+#: The hard filters run in Python, so a page of 25 may need several hundred
+#: raw rows; this bounds that without bounding the TRAVERSAL, which is the
+#: whole point of the keyset phase.
+KEYSET_OVERFETCH = int(os.getenv("TECH_FEED_KEYSET_OVERFETCH", "8") or 8)
+KEYSET_MAX_SCAN = int(os.getenv("TECH_FEED_KEYSET_MAX_SCAN", "1500") or 1500)
+
+#: Ceiling on the exact-match count. Counting 222,000 documents on every
+#: search is not worth the latency, so above this the total is reported as a
+#: floor and `total_is_exact` says so - a number that might be a floor and
+#: does not admit it is worse than no number.
+COUNT_LIMIT = int(os.getenv("TECH_FEED_COUNT_LIMIT", "50000") or 50000)
+
+
+def encode_cursor(search_id: str, offset: Optional[int] = None, *,
+                  keyset: Optional[Dict[str, Any]] = None) -> str:
+    """Two cursor shapes, one encoding.
+
+    `{"s": id, "o": offset}` pages the RANKED order recorded at search time —
+    stable, personalised, and bounded by `MAX_ORDERED` because the order lives
+    in a session document.
+
+    `{"s": id, "k": {"p": posted_at, "j": job_id}}` continues PAST that window
+    by keyset on the same `(posted_at desc, job_id asc)` the retrieval index
+    is built for. It is what removes the 2,000-result traversal ceiling: the
+    ranked window is a memory bound on how many rows can be SCORED at once,
+    and it was silently doubling as a bound on how many could be REACHED.
+    """
+    if keyset is not None:
+        posted = keyset.get("p")
+        obj: Dict[str, Any] = {
+            "s": search_id,
+            "k": {"p": posted.isoformat() if isinstance(posted, datetime) else None,
+                  "j": str(keyset.get("j") or "")[:64]},
+        }
+    else:
+        obj = {"s": search_id, "o": int(offset or 0)}
+    raw = json.dumps(obj, separators=(",", ":")).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
-def decode_cursor(cursor: Any) -> Optional[Tuple[str, int]]:
-    """`(search_id, offset)` or None. Never raises on client input."""
+def decode_cursor(cursor: Any) -> Optional[Tuple[str, int, Optional[Dict[str, Any]]]]:
+    """`(search_id, offset, keyset)` or None. Never raises on client input."""
     s = str(cursor or "").strip()
     if not s or len(s) > 512:
         return None
@@ -355,12 +390,33 @@ def decode_cursor(cursor: Any) -> Optional[Tuple[str, int]]:
         raw = base64.urlsafe_b64decode(s + pad)
         obj = json.loads(raw.decode("utf-8"))
         sid = str(obj["s"])[:64]
-        off = int(obj["o"])
     except (ValueError, KeyError, TypeError, binascii.Error, UnicodeDecodeError):
         return None
-    if not sid or off < 0 or off > MAX_ORDERED:
+    if not sid:
         return None
-    return sid, off
+
+    if isinstance(obj.get("k"), dict):
+        raw_posted = obj["k"].get("p")
+        posted = _as_utc(_parse_iso(raw_posted)) if raw_posted else None
+        job_id = str(obj["k"].get("j") or "")[:64]
+        if raw_posted and posted is None:
+            return None
+        return sid, 0, {"p": posted, "j": job_id}
+
+    try:
+        off = int(obj["o"])
+    except (ValueError, KeyError, TypeError):
+        return None
+    if off < 0 or off > MAX_ORDERED:
+        return None
+    return sid, off, None
+
+
+def _parse_iso(value: Any) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +497,21 @@ def build_query(req: Dict[str, Any], *, now: Optional[datetime] = None
             wanted.add("unknown")
         q["seniority"] = {"$in": sorted(wanted)}
     if req["employment_types"]:
-        q["employment_type"] = {"$in": req["employment_types"]}
+        # Read the NORMALISED field. Filtering on the raw provider spelling
+        # meant `full_time` matched "full-time" and missed "fulltime",
+        # "regular-full-time", "ft-hourly-w-bn" and "cdi" - 3,700+ live rows
+        # of the same employment type under four other names. Rows the
+        # normalisation backfill has not reached carry no normalised value, so
+        # they are ORed in rather than excluded: an unnormalised row is one we
+        # have not read yet, not a part-time job.
+        from services.job_inventory_service import normalize_employment_type
+        wanted = sorted({normalize_employment_type(v) for v in req["employment_types"]}
+                        - {"unknown"})
+        if wanted:
+            q.setdefault("$and", []).append({"$or": [
+                {"employment_type_normalized": {"$in": wanted}},
+                {"employment_type_normalized": {"$exists": False}},
+            ]})
     if req["company_ids"]:
         # A company may be named by its normalized employer id or by its ATS
         # tenant slug; the UI hands back whichever the catalog gave it.
@@ -453,7 +523,25 @@ def build_query(req: Dict[str, Any], *, now: Optional[datetime] = None
         if keys:
             q["locations.key"] = {"$in": keys}
     if req["countries"]:
-        q["locations.country"] = {"$in": req["countries"]}
+        # Filter on the NORMALISED code, and fall back to the raw spelling for
+        # rows the location backfill has not reached yet. The old form -
+        # `{"locations.country": {"$in": req["countries"]}}` - compared a
+        # lowercased request against a stored "USA"/"India"/"Canada" and
+        # therefore matched nothing at all, on any country, ever.
+        from services.job_inventory_service import normalize_country
+        codes = sorted({c for c in (normalize_country(v) for v in req["countries"]) if c})
+        spellings = sorted({v for v in req["countries"] if v}
+                           | {v.upper() for v in req["countries"] if v}
+                           | {v.title() for v in req["countries"] if v})
+        clauses: List[Dict[str, Any]] = []
+        if codes:
+            clauses.append({"locations.country_code": {"$in": codes}})
+        if spellings:
+            clauses.append({"locations.country": {"$in": spellings}})
+        if len(clauses) == 1:
+            q.update(clauses[0])
+        elif clauses:
+            q.setdefault("$and", []).append({"$or": clauses})
 
     # Salary is a RANGE on a field most rows do not have, so it cannot be a
     # plain Mongo clause without silently excluding the unpriced majority.
@@ -527,10 +615,19 @@ def hydrate_requirements(rows: Sequence[Dict[str, Any]]) -> int:
     return n
 
 
-def retrieve(req: Dict[str, Any], *, limit: int = CANDIDATE_LIMIT,
+def retrieve(req: Dict[str, Any], *, limit: Optional[int] = None,
              now: Optional[datetime] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """One bounded read. Returns `(docs, diagnostics)`."""
+    """One bounded read. Returns `(docs, diagnostics)`.
+
+    `limit` resolves at CALL time, not at import: a default argument bound to
+    `CANDIDATE_LIMIT` froze the value at module load, so changing the constant
+    (in an operational tweak or a test) had no effect on the query that
+    actually ran.
+    """
     from services import job_inventory_service as inv
+
+    if limit is None:
+        limit = CANDIDATE_LIMIT
 
     query = build_query(req, now=now)
     projection = (_PROJECTION if _needs_requirements_upfront(req)
@@ -540,12 +637,46 @@ def retrieve(req: Dict[str, Any], *, limit: int = CANDIDATE_LIMIT,
     # for; the FINAL order is decided in `rank`, but retrieving newest-first
     # means a truncated candidate set is truncated at the OLD end, which is
     # the only truncation a job seeker would accept.
+    # `(posted_at desc, job_id asc)` rather than `posted_at` alone. The second
+    # key costs nothing on an index that already leads with `posted_at`, and it
+    # is what makes the order TOTAL - a keyset cursor cannot resume from a
+    # position that ties, and `posted_at` ties constantly (28,025 postings
+    # shared one day in the live inventory).
     docs = list(inv._postings().find(query, projection)
-                .sort("posted_at", -1).limit(int(limit)))
+                .sort([("posted_at", -1), ("job_id", 1)]).limit(int(limit)))
     took = (time.perf_counter() - started) * 1000
-    return docs, {"retrieval_ms": round(took, 1), "candidates": len(docs),
-                  "requirements_upfront": projection is _PROJECTION,
-                  "query_keys": sorted(query.keys())}
+
+    total_matched, exact = _count_matches(query)
+    diagnostics = {"retrieval_ms": round(took, 1), "candidates": len(docs),
+                   "requirements_upfront": projection is _PROJECTION,
+                   "query_keys": sorted(query.keys()),
+                   "total_matched": total_matched, "total_is_exact": exact}
+    if docs:
+        last = docs[-1]
+        diagnostics["_keyset"] = {"p": _as_utc(last.get("posted_at")),
+                                  "j": str(last.get("job_id") or "")}
+    return docs, diagnostics
+
+
+def _count_matches(query: Dict[str, Any]) -> Tuple[int, bool]:
+    """`(count, is_exact)` for the whole match set, bounded.
+
+    The feed used to report `total` as the length of the RANKED WINDOW, so a
+    query matching 40,000 postings said "2000" - the same number as one
+    matching exactly 2,000. Counting is cheap on an index and the difference
+    between "2,000" and "at least 50,000" is the difference between a feed a
+    user believes and one they do not.
+    """
+    from services import job_inventory_service as inv
+    try:
+        n = inv._postings().count_documents(query, limit=COUNT_LIMIT + 1,
+                                            maxTimeMS=2500)
+    except Exception as exc:      # pragma: no cover - a slow count must not 500
+        logger.debug("tech_feed._count_matches: %s", type(exc).__name__)
+        return 0, False
+    if n > COUNT_LIMIT:
+        return COUNT_LIMIT, False
+    return int(n), True
 
 
 # ---------------------------------------------------------------------------
@@ -582,13 +713,49 @@ def _compile_terms(terms: Sequence[str]) -> Optional[re.Pattern]:
                       re.IGNORECASE)
 
 
-def hard_filter(docs: Sequence[Dict[str, Any]], req: Dict[str, Any]
+def _drop_user_suppressed(docs: Sequence[Dict[str, Any]],
+                          suppressed: Optional[Dict[str, Any]]
+                          ) -> Tuple[List[Dict[str, Any]], int]:
+    """Remove rows this user dismissed. Returns `(kept, dropped_count)`.
+
+    `suppressed` is whatever `tech_feed_feedback.suppressed_for` returned, loaded
+    ONCE per search by `_run_search`. Only preference reasons appear in it
+    (`not_interested` / `irrelevant_role` / `duplicate`); data-quality reports
+    such as `wrong_company` are deliberately absent and never hide a posting -
+    see `tech_feed_feedback`'s module docstring.
+
+    Matching on `dedupe_group_id` as well as `job_id` is what makes "I already
+    saw this" hold: the same requisition reached through two sources is two
+    `job_id`s and one group, and dismissing one copy must not leave the other.
+    """
+    if not suppressed:
+        return list(docs), 0
+    job_ids = set(suppressed.get("job_ids") or ())
+    group_ids = set(suppressed.get("dedupe_group_ids") or ())
+    if not job_ids and not group_ids:
+        return list(docs), 0
+    kept: List[Dict[str, Any]] = []
+    dropped = 0
+    for doc in docs:
+        gid = str(doc.get("dedupe_group_id") or "")
+        if str(doc.get("job_id") or "") in job_ids or (gid and gid in group_ids):
+            dropped += 1
+            continue
+        kept.append(doc)
+    return kept, dropped
+
+
+def hard_filter(docs: Sequence[Dict[str, Any]], req: Dict[str, Any],
+                *, suppressed: Optional[Dict[str, Any]] = None
                 ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """Stages 1-4 that Mongo cannot express. Returns `(kept, drop_reasons)`.
 
     Exclusions run FIRST and unconditionally. Nothing below can readmit a row
     an exclusion removed - the same invariant `test_filter_exclusions.py` pins
     for the daily pipeline, for the same reason.
+
+    `suppressed` (optional) is the caller-supplied per-user suppression set;
+    `None` for a guest, in which case nothing is looked up or dropped.
     """
     from services import tech_taxonomy as tx
     from services import employer_tech_classifier as etc
@@ -611,6 +778,16 @@ def hard_filter(docs: Sequence[Dict[str, Any]], req: Dict[str, Any]
 
     def drop(reason: str) -> None:
         drops[reason] = drops.get(reason, 0) + 1
+
+    # === BEGIN user suppression (tech_feed_feedback) - ONE block ============
+    # Rows this user explicitly dismissed, removed before every other stage for
+    # the same reason exclusions are: nothing below may readmit them. The set is
+    # loaded once per search by `_run_search` and passed in, so this stays a
+    # pure function of its arguments and a guest search costs nothing here.
+    docs, _n_suppressed = _drop_user_suppressed(docs, suppressed)
+    if _n_suppressed:
+        drops["user_suppressed"] = _n_suppressed
+    # === END user suppression ==============================================
 
     kept: List[Dict[str, Any]] = []
     for doc in docs:
@@ -1146,8 +1323,14 @@ def _card(row: Dict[str, Any], *, now: datetime) -> Dict[str, Any]:
             # still shown; the number is not trusted for filtering or sorting.
             "plausible": bool(row.get("_salary_plausible", True)),
         },
-        "sponsorship": row.get("_sponsorship"),
-        "clearance_required": _mentions_clearance(str(row.get("title_raw") or "")) or None,
+        # Both read the PARSED requirements, which the extractor already
+        # produces and nothing was surfacing: `_sponsorship` was never written
+        # anywhere, so every card reported `null` for a field the posting had
+        # actually stated. `None` still means "the posting did not say" - the
+        # absence is preserved, it is just no longer manufactured.
+        "sponsorship": _sponsorship_of(row),
+        "clearance_required": _clearance_of(row),
+        "employment_type_normalized": row.get("employment_type_normalized"),
         "source": row.get("source"),
         "ats": row.get("ats"),
         "source_requisition_id": row.get("source_job_id"),
@@ -1165,6 +1348,16 @@ def _card(row: Dict[str, Any], *, now: datetime) -> Dict[str, Any]:
         "match_score": int(row.get("match_score") or 0),
         "fit_score_version": row.get("fit_score_version"),
         "fit": row.get("fit"),
+        # PROMOTED to the top level as well as living inside `fit`. A client
+        # deciding whether to render a passing band must not have to reach
+        # into a nested block whose shape has changed once already; and
+        # `eligibility` answers a question `match_score` cannot, so burying it
+        # one level below the score is exactly the wrong place for it.
+        "eligibility": (row.get("fit") or {}).get("eligibility"),
+        "ineligible_reasons": (row.get("fit") or {}).get("ineligible_reasons") or [],
+        "evidence_breadth": (row.get("fit") or {}).get("evidence_breadth"),
+        "role_alignment": (row.get("fit") or {}).get("role_alignment") or {},
+        "hard_requirements": (row.get("fit") or {}).get("hard_requirements") or [],
         "rank_score": row.get("rank_score"),
         "why_matched": row.get("why_matched") or [],
         "hard_constraint_mismatches": row.get("hard_constraint_mismatches") or [],
@@ -1186,7 +1379,10 @@ def _card(row: Dict[str, Any], *, now: datetime) -> Dict[str, Any]:
 def _save_session(*, search_id: str, req: Dict[str, Any], order: List[str],
                   facets: Dict[str, Any], watermark: Optional[datetime],
                   diagnostics: Dict[str, Any], coverage: Dict[str, Any],
-                  source_health: Dict[str, Any], warnings: List[str]) -> None:
+                  source_health: Dict[str, Any], warnings: List[str],
+                  keyset: Optional[Dict[str, Any]] = None,
+                  total_matched: Optional[int] = None,
+                  total_is_exact: bool = True) -> None:
     now = _now()
     try:
         _sessions().update_one(
@@ -1198,6 +1394,13 @@ def _save_session(*, search_id: str, req: Dict[str, Any], order: List[str],
                 "applied_filters": req,
                 "order": order[:MAX_ORDERED],
                 "total": len(order),
+                # Where the ranked window ENDED, in index order. Paging past
+                # `order` resumes here instead of stopping, which is what
+                # makes the traversal unbounded while the SCORED window stays
+                # bounded.
+                "keyset": keyset,
+                "total_matched": total_matched,
+                "total_is_exact": bool(total_is_exact),
                 "facets": facets,
                 "inventory_watermark": watermark,
                 "diagnostics": diagnostics,
@@ -1393,7 +1596,10 @@ def search(payload: Dict[str, Any]) -> Dict[str, Any]:
     req = normalize_request(payload)
     cursor = decode_cursor(payload.get("cursor"))
     if cursor:
-        return _serve_page(cursor[0], cursor[1], req, started)
+        search_id, offset, keyset = cursor
+        if keyset is not None:
+            return _serve_keyset_page(search_id, keyset, req, started)
+        return _serve_page(search_id, offset, req, started)
     return _run_search(req, started)
 
 
@@ -1403,14 +1609,30 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
 
     docs, diagnostics = retrieve(req, now=now)
     watermark = _watermark(docs)
-    if len(docs) >= CANDIDATE_LIMIT:
+    keyset = diagnostics.pop("_keyset", None)
+    truncated = len(docs) >= CANDIDATE_LIMIT
+    total_matched = int(diagnostics.get("total_matched") or 0)
+    total_is_exact = bool(diagnostics.get("total_is_exact"))
+    if truncated:
+        # NOT "narrow the filters to reach the rest" any more — the rest IS
+        # reachable. The ranked window is a scoring bound; paging past it
+        # continues in index order, and the message now says which is which
+        # instead of presenting our memory limit as the edge of the market.
+        shown = f"{total_matched:,}" if total_is_exact else f"over {COUNT_LIMIT:,}"
         warnings.append(
-            f"More than {CANDIDATE_LIMIT} postings match; showing the "
-            f"{CANDIDATE_LIMIT} most recently posted. Narrow the filters to "
-            "reach the rest.")
+            f"{shown} postings match. The first {CANDIDATE_LIMIT:,} are ranked "
+            f"by relevance; paging beyond them continues in date order.")
+
+    # The user's suppression set, read ONCE per search - not per page (a cursor
+    # page is served from the order recorded here) and not per row. A guest has
+    # no identity to key on, so there is no query at all.
+    suppressed = None
+    if req.get("user_email"):
+        from services import tech_feed_feedback
+        suppressed = tech_feed_feedback.suppressed_for(req["user_email"])
 
     t = time.perf_counter()
-    kept, drops = hard_filter(docs, req)
+    kept, drops = hard_filter(docs, req, suppressed=suppressed)
     diagnostics["filter_ms"] = round((time.perf_counter() - t) * 1000, 1)
     diagnostics["filtered_out"] = dict(sorted(drops.items(), key=lambda kv: -kv[1]))
     diagnostics["after_filter"] = len(kept)
@@ -1438,9 +1660,16 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
     kept = inventory_feed._dedupe(kept)
     kept = _collapse_location_variants(kept)
 
-    # Phase two. Only the survivors, and only when there is a profile to score
-    # them against - an unpersonalized feed never reads `requirements` at all.
-    if profile is not None:
+    # Phase two. Only the survivors, and only on a PERSONALIZED search - an
+    # unpersonalized feed never reads `requirements` at all.
+    #
+    # Gated on the REQUEST, not on `profile`. It used to be gated on
+    # `_load_profile` returning something, but `inventory_feed._score_rows`
+    # builds its own profile when handed None - so the two could disagree, and
+    # when they did every row was scored with NO requirements: the
+    # `insufficient_job_requirements` cap pinned the whole page at 40 and
+    # every hard constraint vanished, on a search that looked like it worked.
+    if req["personalize"] and req["user_email"]:
         t_hydrate = time.perf_counter()
         diagnostics["hydrated"] = hydrate_requirements(kept)
         diagnostics["hydrate_ms"] = round(
@@ -1466,7 +1695,10 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
 
     _save_session(search_id=search_id, req=req, order=order, facets=facets,
                   watermark=watermark, diagnostics=diagnostics,
-                  coverage=coverage, source_health=health, warnings=warnings)
+                  coverage=coverage, source_health=health, warnings=warnings,
+                  keyset=keyset if truncated else None,
+                  total_matched=total_matched or len(order),
+                  total_is_exact=total_is_exact)
 
     if not order:
         suggestions = broadening_suggestions(req, diagnostics.get("filtered_out") or {})
@@ -1481,14 +1713,225 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
                             "slice yet. See `coverage`.")
 
     page = kept[:req["page_size"]]
-    has_more = len(order) > req["page_size"]
+    more_in_order = len(order) > req["page_size"]
+    # The ranked window is exhausted but the match set is not: hand straight
+    # to the keyset phase rather than reporting the end of results.
+    has_more = more_in_order or bool(truncated and keyset)
+    if more_in_order:
+        next_cursor = encode_cursor(search_id, req["page_size"])
+    elif has_more:
+        next_cursor = encode_cursor(search_id, keyset=keyset)
+    else:
+        next_cursor = None
     return _envelope(
         search_id=search_id, req=req,
         jobs=[_card(r, now=now) for r in page],
-        next_cursor=(encode_cursor(search_id, req["page_size"]) if has_more else None),
-        has_more=has_more, total=len(order), facets=facets, watermark=watermark,
+        next_cursor=next_cursor,
+        has_more=has_more, total=int(total_matched or len(order)),
+        facets=facets, watermark=watermark,
         coverage=coverage, source_health=health, warnings=warnings,
         diagnostics=diagnostics, started=started)
+
+
+def _position_of(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """A document's position in `(posted_at desc, job_id asc)` order."""
+    return {"p": _as_utc(doc.get("posted_at")), "j": str(doc.get("job_id") or "")}
+
+
+def _index_position_key(doc: Dict[str, Any]) -> Tuple[int, float, str]:
+    """Sort key matching `(posted_at desc, job_id asc)`, undated last."""
+    posted = doc.get("posted_at")
+    if isinstance(posted, datetime):
+        return (0, -posted.timestamp(), str(doc.get("job_id") or ""))
+    return (1, 0.0, str(doc.get("job_id") or ""))
+
+
+def keyset_predicate(keyset: Dict[str, Any]) -> Dict[str, Any]:
+    """The "everything strictly after this row" clause for `(posted_at desc,
+    job_id asc)`.
+
+    BSON orders `Null < Date`, so a descending sort puts UNDATED postings
+    last, and `{"posted_at": {"$lt": <date>}}` already includes them. That is
+    correct and load-bearing: 18,222 live postings carry no date, and a naive
+    keyset would either skip them entirely or serve them twice. Once the
+    traversal reaches them, `p` is None and the clause narrows to the undated
+    tail ordered by `job_id`.
+    """
+    posted = keyset.get("p")
+    job_id = str(keyset.get("j") or "")
+    if posted is None:
+        return {"posted_at": None, "job_id": {"$gt": job_id}}
+    return {"$or": [
+        {"posted_at": {"$lt": posted}},
+        {"posted_at": posted, "job_id": {"$gt": job_id}},
+    ]}
+
+
+def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
+                       req: Dict[str, Any], started: float) -> Dict[str, Any]:
+    """Continue a search PAST the ranked window, by index position.
+
+    This is the half of paging that has no ceiling. `_serve_page` replays a
+    frozen, personalised order and therefore cannot exceed `MAX_ORDERED`;
+    this reads forward from a recorded `(posted_at, job_id)` and can reach
+    every matching indexed posting.
+
+    What is preserved, and what honestly is not:
+
+    * ORDERING is stable and total — index order, never re-shuffled, and the
+      response says `sort: "index_order"` in its diagnostics so a client can
+      tell it is no longer relevance-ranked. Ranking a page in isolation
+      would produce an order that looks personalised and is not comparable
+      across pages, which is worse than saying so.
+    * DEDUPLICATION still runs (`inventory_feed._dedupe` plus location-variant
+      collapsing), within the page.
+    * CURSOR EXPIRY is unchanged: the session still carries the filters and
+      still expires, and a dead session still returns 410.
+    """
+    session = _load_session(search_id, req.get("user_email") or "")
+    if not session:
+        return {"error": "cursor_expired",
+                "message": "This result set has expired. Re-run the search.",
+                "search_id": search_id, "jobs": [], "next_cursor": None,
+                "has_more": False, "feed_version": FEED_VERSION}
+
+    from services import inventory_feed
+    from services import job_inventory_service as inv
+
+    now = _now()
+    stored_req = normalize_request(session.get("applied_filters") or req)
+    page_size = req["page_size"]
+    stored_req["page_size"] = page_size
+
+    base = build_query(stored_req, now=now)
+    query = {"$and": [base, keyset_predicate(keyset)]}
+    projection = (_PROJECTION if _needs_requirements_upfront(stored_req)
+                  else _PROJECTION_LIGHT)
+
+    suppressed = None
+    if stored_req.get("user_email"):
+        from services import tech_feed_feedback
+        suppressed = tech_feed_feedback.suppressed_for(stored_req["user_email"])
+
+    profile, skills, years = _load_profile(stored_req)
+
+    kept: List[Dict[str, Any]] = []
+    scanned = 0
+    cursor_key: Optional[Dict[str, Any]] = dict(keyset)
+    exhausted = False
+    t = time.perf_counter()
+
+    # Read forward in bounded hops until the page is full. Each hop advances
+    # `cursor_key` past every row EXAMINED, not merely every row kept, so a
+    # heavily-filtered slice never re-reads what it already rejected.
+    while len(kept) < page_size and scanned < KEYSET_MAX_SCAN:
+        hop = min(page_size * KEYSET_OVERFETCH, KEYSET_MAX_SCAN - scanned)
+        batch = list(inv._postings()
+                     .find({"$and": [base, keyset_predicate(cursor_key)]}, projection)
+                     .sort([("posted_at", -1), ("job_id", 1)]).limit(hop))
+        if not batch:
+            exhausted = True
+            break
+        scanned += len(batch)
+        last = batch[-1]
+        cursor_key = {"p": _as_utc(last.get("posted_at")),
+                      "j": str(last.get("job_id") or "")}
+        for doc in batch:
+            doc["_tech"] = _read_time_tech(doc)
+        survivors, _drops = hard_filter(batch, stored_req, suppressed=suppressed)
+        kept.extend(survivors)
+        if len(batch) < hop:
+            exhausted = True
+            break
+
+    _resolve_employers(kept)
+    if stored_req["employer_scope"] == EMPLOYER_SCOPE_TECH:
+        kept, _dropped = _apply_employer_scope(kept)
+    kept = inventory_feed._dedupe(kept)
+    kept = _collapse_location_variants(kept)
+    # Index order, explicitly, before slicing. Every stage above preserves
+    # input order, but the cursor for the next page is derived from the LAST
+    # ROW OF THIS PAGE, so "in order" has to be a guarantee rather than a
+    # property that happens to hold.
+    kept.sort(key=_index_position_key)
+    page = kept[:page_size]
+
+    if profile is not None:
+        hydrate_requirements(page)
+        rank(page, stored_req, profile, skills, years, now=now)
+        # `rank` re-sorts by relevance; index order is what the cursor
+        # promised, so restore it. The per-page scores are still attached and
+        # still true - they simply do not reorder a page whose position in the
+        # traversal is fixed.
+        page.sort(key=_index_position_key)
+
+    # A hop can over-fetch: 80 raw rows can survive into 40 kept when the page
+    # is 10. Serving 10 and reporting "exhausted" threw the other 30 away and
+    # ended the traversal 30 rows early. When there is a remainder, the next
+    # cursor resumes from the last row SERVED; only when the whole hop was
+    # consumed does it resume from the last row EXAMINED (which is faster,
+    # because it skips rows already rejected).
+    if len(kept) > len(page):
+        cursor_key = _position_of(page[-1]) if page else cursor_key
+        has_more = True
+    else:
+        has_more = not exhausted and bool(cursor_key)
+    warnings = list(session.get("warnings") or [])
+    total = session.get("total_matched") or session.get("total") or len(page)
+    return _envelope(
+        search_id=search_id, req=stored_req,
+        jobs=[_card(d, now=now) for d in page],
+        next_cursor=(encode_cursor(search_id, keyset=cursor_key) if has_more else None),
+        has_more=has_more, total=int(total),
+        facets=session.get("facets") or {},
+        watermark=session.get("inventory_watermark"),
+        coverage=session.get("coverage") or {},
+        source_health=session.get("source_health") or {},
+        warnings=warnings,
+        diagnostics={"served_from": "keyset", "sort": "index_order",
+                     "scanned": scanned, "kept": len(kept),
+                     "exhausted": exhausted,
+                     "keyset_ms": round((time.perf_counter() - t) * 1000, 1)},
+        started=started)
+
+
+def _sponsorship_of(row: Dict[str, Any]) -> Optional[str]:
+    """`"not_offered"`, `"offered"` or None (the posting did not say).
+
+    Only an EXPLICIT statement produces a value. Silence is by far the common
+    case - most employers say nothing about sponsorship - and turning silence
+    into "not offered" would remove from a visa-dependent candidate's feed
+    every job that simply did not mention it.
+    """
+    reqs = row.get("requirements")
+    if isinstance(reqs, dict) and reqs.get("work_authorization_restricted"):
+        return "not_offered"
+    blob = f"{row.get('title_raw') or ''} {row.get('description_text') or ''}"[:4000]
+    if re.search(r"\b(visa sponsorship (?:is )?available|will sponsor|"
+                 r"sponsorship (?:is )?provided|h-?1b sponsorship available)\b",
+                 blob, re.IGNORECASE):
+        return "offered"
+    if re.search(r"\b(no (?:visa )?sponsorship|not able to sponsor|"
+                 r"unable to sponsor|does not (?:offer|provide) sponsorship|"
+                 r"without (?:current or future )?sponsorship)\b",
+                 blob, re.IGNORECASE):
+        return "not_offered"
+    return None
+
+
+def _clearance_of(row: Dict[str, Any]) -> Optional[bool]:
+    """True when the posting states a clearance requirement, else None.
+
+    Never False. "This posting did not mention a clearance" is not the same
+    claim as "this posting does not require one", and only the first is
+    supported by the evidence.
+    """
+    reqs = row.get("requirements")
+    if isinstance(reqs, dict) and reqs.get("clearance_required"):
+        return True
+    if _mentions_clearance(str(row.get("title_raw") or "")):
+        return True
+    return None
 
 
 def _serve_page(search_id: str, offset: int, req: Dict[str, Any],
@@ -1506,9 +1949,13 @@ def _serve_page(search_id: str, offset: int, req: Dict[str, Any],
     page_size = req["page_size"]
     slice_ids = order[offset:offset + page_size]
     if not slice_ids:
+        session_keyset = session.get("keyset")
+        if session_keyset:
+            return _serve_keyset_page(search_id, session_keyset, req, started)
         return _envelope(
             search_id=search_id, req=session.get("applied_filters") or req,
-            jobs=[], next_cursor=None, has_more=False, total=len(order),
+            jobs=[], next_cursor=None, has_more=False,
+            total=int(session.get("total_matched") or len(order)),
             facets=session.get("facets") or {},
             watermark=session.get("inventory_watermark"),
             coverage=session.get("coverage") or {},
@@ -1546,12 +1993,26 @@ def _serve_page(search_id: str, offset: int, req: Dict[str, Any],
             f"{missing} posting(s) on this page closed since the search ran.")
 
     next_offset = offset + page_size
-    has_more = next_offset < len(order)
+    more_in_order = next_offset < len(order)
+    session_keyset = session.get("keyset")
+    if more_in_order:
+        next_cursor = encode_cursor(search_id, next_offset)
+        has_more = True
+    elif session_keyset:
+        # End of the ranked window, more matches beyond it. Switch cursor
+        # shape rather than stopping — this is the join between the two
+        # paging phases, and it is the single place the 2,000-row ceiling
+        # used to live.
+        next_cursor = encode_cursor(search_id, keyset=session_keyset)
+        has_more = True
+    else:
+        next_cursor, has_more = None, False
     return _envelope(
         search_id=search_id, req=stored_req,
         jobs=[_card(d, now=now) for d in ordered],
-        next_cursor=(encode_cursor(search_id, next_offset) if has_more else None),
-        has_more=has_more, total=len(order),
+        next_cursor=next_cursor,
+        has_more=has_more,
+        total=int(session.get("total_matched") or len(order)),
         facets=session.get("facets") or {},
         watermark=session.get("inventory_watermark"),
         coverage=session.get("coverage") or {},

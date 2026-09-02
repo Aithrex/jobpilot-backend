@@ -45,12 +45,122 @@ Every `resume` blueprint except `tech_chronicle` mounts under **`/api/resume/*`*
 
 **`shared/python/`** = the Lambda layer, shared by all 6: **~126 services** (incl. `resume_service` async orchestrator + its parser/tailor/scorer/renderer tree, `job_service`, `browser_executor`, `entitlements_service`, `usage_service`, `s3_service`, `gmail_service`, `claude_client`, `llm_providers/`, the job-source catalogs), `schemas/resume_schemas.py` (LLM output: PARSED/TAILORED_RESUME, JD_ANALYSIS, ATS_SCORES), `utils/` (`db_connect` Mongo singleton, `config` +SSM, `security`), `models/user.py` (pw rules: 8+ chars, upper/lower/digit/special, bcrypt), `requirements.txt`.
 
-> **ONE match score:** `shared/python/services/fit_score.py` (ADR-002, `fit-v2.0`) is the **only** candidate-to-job match score. `/api/jobs/search`, `/api/jobs/pipeline/match-scores`, the inventory feed, the career-portal scans and the `apply_match_sweep` gate (band "good match" = **65**) all read it. Never add a second formula and never post-process its output under the same `match_score` key — carry ordering/preference signals in `rank_score` and tailorability in `tailor_feasibility`. **No parsed résumé ⇒ NO score** (`match_score = 0`, no `fit`/`score_version` marker → the FE renders "Not scored"); never a number.
+> **ONE match score:** `shared/python/services/fit_score.py` (ADR-002, `fit-v2.1`) is the **only** candidate-to-job match score. `/api/jobs/search`, `/api/jobs/pipeline/match-scores`, the inventory feed, the career-portal scans and the `apply_match_sweep` gate (band "good match" = **65**) all read it. Never add a second formula and never post-process its output under the same `match_score` key — carry ordering/preference signals in `rank_score` and tailorability in `tailor_feasibility`. **No parsed résumé ⇒ NO score** (`match_score = 0`, no `fit`/`score_version` marker → the FE renders "Not scored"); never a number.
 
 > **Coupling note:** `jobs.py` uses `resume_service` and `resume_service` uses `job_service` — both live in the shared layer precisely because the jobs↔resume domains are circularly coupled. Keep cross-domain services in `shared/python/services/`; a shared service must NOT import a domain-local one.
 
+## Employer identity and career-source ownership (ADR-006, 2026-09-02)
+
+Two NEW collections, both additive and both reversible by dropping them.
+`companies`, `company_ats_endpoints` and `job_postings` are untouched, so the
+crawler reads exactly the rows it read before.
+
+- **`employers`** (`shared/python/services/employer_registry.py`) — ONE
+  canonical `employer_id` (`emp_<12 hex>`) shared by `companies`, the curated
+  seed, the three Python catalogs, `company_ats_endpoints` and `job_postings`.
+  Derived deterministically, domain-first: `sha1("domain:"+registrable_domain)`
+  > `sha1("curated:"+key)` > `sha1("name:"+name_key)`, with
+  `identity_confidence` 0.95 / 0.80 / 0.45. **Never merge two employers on a
+  normalized name** — `merge_decision` returns `merge` only on a shared
+  verified domain, a curated alias, or an owner-verified `(vendor, tenant)`;
+  everything else that merely looks like a match is `quarantine` and goes to
+  `employer_merge_reviews`. `operating_status` (`active|renamed|acquired|
+  merged|closed|product_or_brand`) is load-bearing: the resolver FOLLOWS
+  `parent_employer_id`, so an acquisition never deletes an employer from the
+  denominator. `IDENTITY_OVERRIDES` repairs the documented conflicts (Stripe,
+  Notion, Ramp, Capital One, Intuit, JPMorgan, Boeing, Roche, AT&T, Abbott,
+  NVIDIA, Salesforce/Slack, Alphabet/BMW).
+- **`career_sources`** (`career_source_service.py` + `career_source_ownership.py`)
+  — a nine-state machine (`candidate, ownership_verified, content_validated,
+  validated, empty, blocked, moved, dead, manual_review`). **Only `validated`
+  and `empty` count as coverage.** Ownership needs EITHER a link/redirect
+  chain from an independently verified employer domain to the exact endpoint,
+  OR two corroborating signals from two DIFFERENT classes
+  (`employer_domain` / `ats_provider` / `curated_registry`).
+  `SIGNAL_SLUG_SIMILARITY` and `SIGNAL_ENDPOINT_RESPONDS` are recorded and
+  **never counted** — that is the whole fix.
+
+> **`company_ats_endpoints.status == "validated"` is NOT coverage.** It means
+> the endpoint answered. It cannot tell a company's own board from a
+> stranger's board with a similar slug, and it is the number that reported
+> 43.0%. Coverage now comes from `career_sources`. Both are printed side by
+> side by the report so the gap is visible.
+
+Scripts, all **dry-run by default**:
+- `scripts/backfill_employer_registry.py [--apply]` — builds `employers` +
+  `career_sources` from all five registries.
+- `scripts/verify_career_sources.py [--apply] --mode endpoints|employers|both`
+  — pass 1 asks the ATS who owns the board (cheap); pass 2 verifies the
+  employer's domain and walks from it to the board (decisive, and the only
+  path that reaches Workday/iCIMS/Oracle, which name no owner).
+- `scripts/employer_coverage_report.py [--markdown]` — THE accountability
+  artifact. Read-only. Generates `docs/coverage/tech-employer-coverage.md`
+  stamped with the source revision and the inventory watermark.
+
 ## Job sourcing
 Jobs come from JSearch **plus direct employer ATS portals** — the differentiator. Catalogs + engines live in the shared layer: `workday_tenant_catalog.py` / `workday_jobs_service.py` / `workday_cxs_fetcher.py` (Workday CXS) · `career_pages_catalog.py` / `career_pages_service.py` (**`FETCHERS`** greenhouse/lever/ashby/smartrecruiters/workable/recruitee; **`ENTERPRISE_FETCHERS`** amazon/eightfold/phenom/orc/uber) · `mnc_catalog.py` / `mnc_jobs_service.py`. Routes in `services/jobs/blueprints/jobs.py` (`/workday/*`, `/career-pages/*`, `/mnc/*`). Adding companies = catalog rows, validated live via `scripts/discover_workday_tenants.py` / `scripts/discover_career_pages.py`; a new ATS = a `_fetch_<ats>()` registered in `FETCHERS`. **Apify is disabled** (reversible — every edit tagged `APIFY DISABLED (temporary)`).
+
+## Occupation taxonomy and match scoring (`tech-tax-1.1.0`, `fit-v2.1`)
+
+`shared/python/services/tech_taxonomy.py` is the **canonical occupation
+ontology** — 14 families / 102 specialties — and it is now what ingestion,
+résumé parsing, search AND `fit_score` all score against. `fit_score.
+ROLE_FAMILIES` (32 coarse keys) survives only as the LEGACY BRIDGE for
+`job_postings.role_family`, which three production indexes key on; nothing in
+the scoring path reads it for role alignment any more.
+
+- **`semiconductor_hardware` is CORE**, not adjacent. It was adjacent, which
+  meant the default scope hid every ASIC, RTL, verification, firmware, analog,
+  RF, EDA and photonics role unless the searcher ticked an extra box.
+- **Role alignment is a five-rung ladder** (`role_alignment`): `exact_specialty
+  > adjacent_specialty > same_family > adjacent_family > unrelated`, over a
+  versioned, DECLARED adjacency matrix (`ADJACENCY_VERSION`, 184 pairs). The
+  previous implementation's finest software distinction was the single family
+  `software_engineering`, so for anyone in software this 25-point component was
+  near-constant and the whole score distribution compressed.
+- **`unknown` is a sixth answer and is off the ladder.** Not knowing costs
+  what it always cost; it must never cost what being wrong costs.
+- **Unknown is EXCLUDED, not priced.** `_normalized_score` averages only the
+  components with evidence on BOTH sides. Every component used to pay a
+  "neutral" fraction when it had nothing to say, and a neutral fraction is
+  still a deduction — on live data that was a systematic ~12-point tax on
+  every candidate for gaps in OUR parsing (96.1% of postings state no work
+  mode, 43.3% no seniority).
+- **`eligibility` is separate from `score`** and is not a second score:
+  `eligible | ineligible | not_scored`, fired only on a KNOWN mismatch — a
+  confident cross-domain verdict, a named licence the résumé lacks, or a
+  stated sponsorship conflict. Silence is never a mismatch; an unstated
+  clearance is `unknown` and surfaces as a requirement to read, not a penalty.
+- **Bumping `FIT_SCORE_VERSION` is safe now**, via
+  `_COMPATIBLE_REQUIREMENT_VERSIONS`: the extraction contract is unchanged, so
+  216,687 stored `requirements` profiles stay valid through the deploy.
+- **`principal` is its own seniority band**, between `staff` and `director`.
+  The feed accepted it as a filter and `job_postings.seniority` could never
+  hold it.
+
+Backfills: `scripts/backfill_tech_taxonomy.py --apply` (version-aware — it
+selects rows whose `tech.taxonomy_version` is not current, so a bump is
+backfillable without `--all`).
+
+Evals: `evals/eval_tech_taxonomy.py` (per-family AND per-stratum precision/
+recall; stratum **H** is titles taken verbatim from live `job_postings`) and
+`evals/eval_tech_feed_retrieval.py` + `evals/test_tech_feed_retrieval.py`
+(retrieval by source / family / specialty / cohort / ambiguous title /
+geography / seniority, plus the traversal-ceiling regression).
+
+## Retrieval: no 2,000-result ceiling
+
+`tech_feed_service` pages in two phases. `_serve_page` replays the frozen,
+personalised RANKED order (bounded by `MAX_ORDERED`, because it lives in a
+session document). When that is exhausted the cursor CHANGES SHAPE to a
+keyset — `{"s": id, "k": {"p": posted_at, "j": job_id}}` — and
+`_serve_keyset_page` continues in `(posted_at DESC, job_id ASC)` index order
+over every matching posting. Ordering stays total and stable, dedup still
+runs, cursor expiry still 410s, and the response says `sort: "index_order"`
+so a client can tell it is no longer relevance-ranked.
+
+`total` is now the real match count (bounded by `COUNT_LIMIT`), not the length
+of the ranked window.
 
 ## Config & data
 Config via `shared/python/utils/config.py`; secrets via **AWS SSM** in prod (`USE_SSM_SECRETS=true`), `.env` locally (see `.env.example`). Résumé collection is **`user_resumes`** (not `base_resumes`). Résumé files → **S3**. Keep cold starts lean: reuse boto3/Mongo clients at module scope, no heavy import-time work. Deploy lives in-repo: `infra/terraform/` (HTTP API + the 6 Lambdas + shared layer + IAM + KMS credential store + managed mailbox/SES + schedulers) and `scripts/build_layer.sh` + `scripts/package.sh`; see `infra/README.md`. CI: `.github/workflows/tests.yml` (offline suite) + `deploy.yml` (path-filtered per-service deploy).

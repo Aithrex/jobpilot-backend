@@ -105,12 +105,23 @@ def run(*, apply: bool, batch: int, sample: int, only_missing: bool,
         status: str) -> int:
     from pymongo import UpdateOne
 
+    from services import tech_taxonomy as tx
+
     db = _db()
     query: Dict[str, Any] = {}
     if status != "all":
         query["status"] = status
     if only_missing:
-        query["tech.taxonomy_version"] = {"$exists": False}
+        # Version-aware, not merely presence-aware. `$exists: False` alone
+        # meant a taxonomy BUMP could not be backfilled without `--all`, which
+        # re-classifies every posting including the ones already current.
+        # tech-tax-1.1.0 promoted `semiconductor_hardware` to a CORE family
+        # and added 20 specialties, so every row still carrying 1.0.0 is
+        # stale in a way that changes what the default feed returns.
+        query["$or"] = [
+            {"tech.taxonomy_version": {"$exists": False}},
+            {"tech.taxonomy_version": {"$ne": tx.TAXONOMY_VERSION}},
+        ]
 
     total = db.job_postings.count_documents(query)
     print(f"matching documents: {total:,}   (apply={apply}, sample={sample or 'none'})")

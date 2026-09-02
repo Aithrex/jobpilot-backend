@@ -970,6 +970,122 @@ def tech_feed_coverage():
         return jsonify({"error": "Failed to load coverage"}), 500
 
 
+# --- Tech feed feedback -------------------------------------------------
+# Mounted under the SAME /api/jobs/tech-feed subpath as the routes above, for
+# the same infrastructure reason: a new top-level /api/<prefix> would need a
+# matching entry in var.service_config and would 404 in prod until it existed.
+
+@jobs_bp.route("/tech-feed/feedback", methods=["POST"])
+@jwt_required()
+def tech_feed_feedback_record():
+    """Record one piece of feedback on one posting.
+
+    Body: {job_id (required), reason (required, one of
+           tech_feed_feedback.REASONS), dedupe_group_id?, employer_id?,
+           search_id?, note?}
+
+    Responses:
+      204  recorded (no body). Idempotent per (user, job_id): re-posting
+           updates the single existing row rather than adding another.
+      400  {"error": ...} - missing job_id, or a reason outside the closed set.
+      429  {"error": ...} - rate limited.
+
+    Only three of the six reasons hide anything (`not_interested`,
+    `irrelevant_role`, `duplicate`). `wrong_company`, `stale_job` and
+    `incorrect_metadata` are data-quality reports and are recorded but never
+    used to suppress a posting - see `tech_feed_feedback`'s module docstring.
+    """
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    # Higher than the search limit: dismissing cards is a per-row gesture, so a
+    # user scrolling a feed legitimately produces many more of these than
+    # searches. Still bounded, because this is an authenticated write.
+    if limiter.is_rate_limited(f"jobs_tech_feed_feedback:{client_ip}",
+                               max_requests=240, window_seconds=300):
+        return jsonify({"error": "Rate limit exceeded. Tech feed feedback is "
+                                 "limited to 240 / 5 min."}), 429
+
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Body must be a JSON object"}), 400
+
+    from services import tech_feed_feedback
+
+    def _opt(key, limit=128):
+        """Sanitized scalar or "". A container is rejected outright rather than
+        stringified, so nothing user-supplied can look like a Mongo operator."""
+        value = data.get(key)
+        if isinstance(value, (dict, list)):
+            return ""
+        return InputSanitizer.sanitize_string(str(value or ""), max_length=limit)
+
+    job_id = _opt("job_id")
+    if not job_id:
+        return jsonify({"error": "job_id is required"}), 400
+
+    raw_reason = data.get("reason")
+    reason = raw_reason.strip().lower() if isinstance(raw_reason, str) else ""
+    if reason not in tech_feed_feedback.REASONS:
+        return jsonify({"error": "reason must be one of: "
+                                 + ", ".join(tech_feed_feedback.REASONS)}), 400
+
+    try:
+        tech_feed_feedback.record(
+            get_jwt_identity(),
+            job_id=job_id,
+            reason=reason,
+            dedupe_group_id=_opt("dedupe_group_id"),
+            employer_id=_opt("employer_id"),
+            search_id=_opt("search_id", 64),
+            note=_opt("note", tech_feed_feedback.MAX_NOTE_CHARS),
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Tech feed feedback record error: {e}")
+        return jsonify({"error": "Failed to record feedback"}), 500
+    return "", 204
+
+
+@jobs_bp.route("/tech-feed/feedback/<job_id>", methods=["DELETE"])
+@jwt_required()
+def tech_feed_feedback_undo(job_id):
+    """Undo feedback on one posting. Always 204 - deleting nothing is not an
+    error, so a double-tapped undo and a retried request behave identically."""
+    try:
+        from services import tech_feed_feedback
+        tech_feed_feedback.undo(get_jwt_identity(), job_id)
+    except Exception as e:
+        logger.error(f"Tech feed feedback undo error: {e}")
+        return jsonify({"error": "Failed to remove feedback"}), 500
+    return "", 204
+
+
+@jobs_bp.route("/tech-feed/feedback", methods=["GET"])
+@jwt_required()
+def tech_feed_feedback_list():
+    """The caller's current suppression set.
+
+    Exists so a second device converges on the same feed: suppression is
+    applied server-side during search, and this endpoint lets a client hide the
+    same cards optimistically without waiting for a round trip.
+
+    `employer_ids` is always empty today and the key is present only for shape
+    stability - no reason suppresses at the employer level.
+    """
+    try:
+        from services import tech_feed_feedback
+        payload = tech_feed_feedback.suppressed_for(get_jwt_identity())
+        resp = jsonify(payload)
+        # Short and PRIVATE: this is per-user state that changes on every
+        # dismissal, so it must never land in a shared cache.
+        resp.headers["Cache-Control"] = "private, max-age=30"
+        return resp, 200
+    except Exception as e:
+        logger.error(f"Tech feed feedback list error: {e}")
+        return jsonify({"error": "Failed to load feedback"}), 500
+
+
 # ------------------------------------------------------------------
 # POST /api/jobs/analyze
 # ------------------------------------------------------------------

@@ -1037,8 +1037,13 @@ def _worker_guard():
     non-HTTP schemes rather than checking a vendor list.
     """
     def guard(_vendor: str, url: str) -> str:
+        # `url_is_safe` returns a 2-TUPLE `(ok, reason)`. `not (False, "...")`
+        # is False, so the previous `if not url_is_safe(url)` never fired and
+        # the scheduled worker's guard was a no-op against every unsafe URL it
+        # was written to block. Unpack it.
         from services.jd_fetcher import url_is_safe
-        if not url_is_safe(url):
-            raise ValueError("blocked: unsafe_url")
+        ok, reason = url_is_safe(url)
+        if not ok:
+            raise ValueError(f"blocked: {reason or 'unsafe_url'}")
         return url
     return guard

@@ -145,8 +145,27 @@ class TestNormalizeRequest:
 # ---------------------------------------------------------------------------
 
 class TestCursor:
-    def test_round_trip(self):
-        assert tfs.decode_cursor(tfs.encode_cursor("abc123", 75)) == ("abc123", 75)
+    def test_offset_round_trip(self):
+        assert tfs.decode_cursor(tfs.encode_cursor("abc123", 75)) == ("abc123", 75, None)
+
+    def test_keyset_round_trip(self):
+        """The second cursor shape: a position in index order rather than an
+        offset into a frozen list. This is what pages past the 2,000-row
+        ranked window."""
+        from datetime import datetime, timezone
+        posted = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+        raw = tfs.encode_cursor("abc123", keyset={"p": posted, "j": "job-9"})
+        sid, off, keyset = tfs.decode_cursor(raw)
+        assert sid == "abc123" and off == 0
+        assert keyset["j"] == "job-9"
+        assert keyset["p"] == posted
+
+    def test_an_undated_keyset_round_trips_as_none(self):
+        """18,222 live postings carry no date. The undated tail is a real
+        position in the traversal, not a missing one."""
+        raw = tfs.encode_cursor("abc123", keyset={"p": None, "j": "job-1"})
+        _sid, _off, keyset = tfs.decode_cursor(raw)
+        assert keyset == {"p": None, "j": "job-1"}
 
     @pytest.mark.parametrize("bad", [
         None, "", "not-base64!!", "e30", "!!!!",
@@ -154,7 +173,34 @@ class TestCursor:
         "x" * 600,                          # absurdly long
     ])
     def test_malformed_cursors_return_none_and_never_raise(self, bad):
-        assert tfs.decode_cursor(bad) in (None, ("a", 0))
+        assert tfs.decode_cursor(bad) in (None, ("a", 0, None))
+
+    def test_a_keyset_with_an_unparseable_date_is_refused(self):
+        import base64 as _b64
+        import json as _json
+        raw = _b64.urlsafe_b64encode(_json.dumps(
+            {"s": "a", "k": {"p": "not-a-date", "j": "x"}}).encode()).decode().rstrip("=")
+        assert tfs.decode_cursor(raw) is None
+
+
+class TestKeysetPredicate:
+    """`(posted_at desc, job_id asc)` with an undated tail.
+
+    BSON orders `Null < Date`, so descending puts undated postings LAST and
+    `$lt: <date>` already includes them. Getting this wrong either skips
+    18,222 postings or serves them on every page.
+    """
+
+    def test_dated_position_advances_on_both_keys(self):
+        from datetime import datetime, timezone
+        posted = datetime(2026, 8, 30, tzinfo=timezone.utc)
+        pred = tfs.keyset_predicate({"p": posted, "j": "j5"})
+        assert pred["$or"][0] == {"posted_at": {"$lt": posted}}
+        assert pred["$or"][1] == {"posted_at": posted, "job_id": {"$gt": "j5"}}
+
+    def test_the_undated_tail_orders_by_job_id_alone(self):
+        assert tfs.keyset_predicate({"p": None, "j": "j5"}) == {
+            "posted_at": None, "job_id": {"$gt": "j5"}}
 
 
 # ---------------------------------------------------------------------------
@@ -634,3 +680,81 @@ class TestFacetsAndHealth:
         cov = search()["coverage"]
         assert cov["active_postings"] >= 1
         assert "known_employers" in cov
+
+
+class TestVerdictReachesTheCard:
+    """fit-v2.1 fields the card renders.
+
+    The frontend cannot honestly distinguish "not reachable" from "low score"
+    unless the verdict travels with the row. These were computed by
+    `fit_score.score()` and dropped on the floor by `_card`, so a card had a
+    number and no way to say what it meant.
+    """
+
+    def test_eligibility_and_alignment_are_on_the_card(self, db, monkeypatch):
+        seed(sjid="v1", title="Senior Backend Engineer")
+        resume = {
+            "contact": {"name": "A", "location": "Austin, TX"},
+            "summary": "Backend engineer.",
+            "skills": {"core": ["Python", "AWS", "Kubernetes", "PostgreSQL"]},
+            "experience": [{"title": "Senior Backend Engineer", "company": "X",
+                            "dates": "Jan 2019 - Jan 2025",
+                            "bullets": ["Python services on AWS with Kubernetes "
+                                        "and PostgreSQL."]}],
+            "education": [{"degree": "BS Computer Science"}],
+        }
+        # `score_one_best` reads `entry["profile"]`, so a bare profile in the
+        # list scores against an EMPTY resume and every verdict comes back
+        # `not_scored`. The entry shape is the contract.
+        monkeypatch.setattr(
+            fit_score, "load_profiles_for_user",
+            lambda email: [{"resume_id": "r1", "filename": "r.pdf",
+                            "profile": fit_score.build_resume_profile(resume)}])
+        got = search(personalize=True, user_email="a@example.com")
+        card = got["jobs"][0]
+        assert card["eligibility"] in ("eligible", "ineligible", "not_scored")
+        assert isinstance(card["role_alignment"], dict)
+        assert card["role_alignment"].get("tier")
+        assert card["role_alignment"].get("detail")
+        assert card["evidence_breadth"] is not None
+        assert isinstance(card["hard_requirements"], list)
+        assert isinstance(card["ineligible_reasons"], list)
+
+    def test_an_unscored_card_carries_no_verdict_and_no_version(self, db):
+        """CLAUDE.md invariant: no parsed resume => NO score, and no marker
+        that implies one was computed."""
+        seed(sjid="v2", title="Senior Backend Engineer")
+        card = search(personalize=False)["jobs"][0]
+        assert card["match_score"] == 0
+        assert card["fit_score_version"] is None
+        assert card["eligibility"] is None
+        assert card["role_alignment"] == {}
+
+    def test_a_hard_requirement_is_reported_only_when_unknowable(
+            self, db, monkeypatch):
+        """A clearance the résumé cannot speak to is a requirement to check.
+        A requirement the résumé MEETS is not, and one it definitely fails is
+        already in `missing_requirements`."""
+        seed(sjid="v3", title="Software Engineer",
+             description=("Software Engineer. An active TS/SCI security clearance "
+                          "is required. Requirements: 5+ years of Python, AWS, "
+                          "Kubernetes and PostgreSQL."))
+        resume = {
+            "contact": {"name": "A", "location": "Austin, TX"},
+            "skills": {"core": ["Python", "AWS", "Kubernetes", "PostgreSQL"]},
+            "experience": [{"title": "Software Engineer", "company": "X",
+                            "dates": "Jan 2019 - Jan 2025",
+                            "bullets": ["Python on AWS with Kubernetes."]}],
+        }
+        # `score_one_best` reads `entry["profile"]`, so a bare profile in the
+        # list scores against an EMPTY resume and every verdict comes back
+        # `not_scored`. The entry shape is the contract.
+        monkeypatch.setattr(
+            fit_score, "load_profiles_for_user",
+            lambda email: [{"resume_id": "r1", "filename": "r.pdf",
+                            "profile": fit_score.build_resume_profile(resume)}])
+        card = search(personalize=True, user_email="a@example.com")["jobs"][0]
+        kinds = {r["type"] for r in card["hard_requirements"]}
+        assert "clearance" in kinds
+        assert all(r["status"] == "unknown" for r in card["hard_requirements"])
+        assert card["eligibility"] == "eligible"

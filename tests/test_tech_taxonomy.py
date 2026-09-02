@@ -125,12 +125,35 @@ class TestFailureModes:
             assert got.tech_scope == tx.SCOPE_CORE, title
             assert got.role_family == tx.F_SOFTWARE
 
-    def test_silicon_design_is_adjacent_and_selectable(self):
+    def test_silicon_design_is_CORE_and_in_the_default_scope(self):
+        """Chip design is technology employment, so it is in the default feed.
+
+        In tech-tax-1.0.0 `semiconductor_hardware` was adjacent, which meant
+        the default scope (`["core"]`) returned nothing for a silicon
+        engineer unless they found and ticked an extra box. That is not a
+        taxonomy nuance, it is an empty product for a whole discipline.
+        """
         for title in ("FPGA Engineer", "Design Verification Engineer",
-                      "ASIC Physical Design Engineer"):
+                      "ASIC Physical Design Engineer", "RF Design Engineer",
+                      "Analog IC Design Engineer", "Silicon Photonics Engineer",
+                      "Yield Engineer", "ATE Engineer"):
             got = tx.classify(title)
-            assert got.tech_scope == tx.SCOPE_ADJACENT, title
-            assert got.role_family == tx.F_SEMICONDUCTOR
+            assert got.tech_scope == tx.SCOPE_CORE, title
+            assert got.role_family == tx.F_SEMICONDUCTOR, title
+        assert tx.F_SEMICONDUCTOR in tx.CORE_FAMILIES
+
+    def test_a_bare_manufacturing_title_is_still_not_semiconductor(self):
+        """The other half of promoting the family: it must not swallow the
+        plant. A bare "Process Engineer" optimising a polymerization line is
+        not a fab role, and "Packaging Engineer" in a warehouse is not
+        advanced packaging."""
+        assert tx.classify("Process Engineer",
+                           description="Optimize the polymerization line.",
+                           department="Manufacturing").tech_scope != tx.SCOPE_CORE
+        assert tx.classify("Warehouse Packaging Engineer").tech_scope \
+            != tx.SCOPE_CORE
+        assert tx.classify("Semiconductor Process Engineer").role_family \
+            == tx.F_SEMICONDUCTOR
 
     def test_physical_security_is_not_infosec(self):
         assert tx.classify("Target Security Specialist").tech_scope != tx.SCOPE_CORE

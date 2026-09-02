@@ -91,7 +91,7 @@ logger = logging.getLogger(__name__)
 # `_listing_implies_same_content` would keep refreshing only `last_seen_at`,
 # leaving them permanently invisible to a salary filter. The bump makes them
 # look stale exactly once so the next pass over each shard rewrites them.
-NORMALIZATION_VERSION = 3
+NORMALIZATION_VERSION = 4
 # The requirement extractor's contract version (ADR-002). A bump re-parses.
 #
 # v2: the role taxonomy gained ~180 phrases and a `hardware_engineering` family,
@@ -403,9 +403,122 @@ def employer_id_of(name: Any) -> str:
     return slug.strip("-")
 
 
+#: Country spellings -> ISO 3166-1 alpha-2. Providers write whatever they
+#: like: "USA", "United States", "US", "U.S.A.", "United States of America".
+#: Storing the spelling and filtering on it means a country filter matches
+#: the spelling the user's client happened to send and nothing else - which is
+#: exactly why `{"locations.country": {"$in": ["usa"]}}` matched ZERO of the
+#: 217,019 located postings: the request is lowercased and the stored value is
+#: not. Normalising to a code fixes both halves at once.
+_COUNTRY_ALIASES: Dict[str, str] = {}
+
+
+def _fold(value: Any) -> str:
+    """Lowercase, strip diacritics, keep only [a-z0-9].
+
+    Location strings are international: "Türkiye", "München", "São Paulo",
+    "Québec". Stripping non-ASCII without folding turns "türkiye" into
+    "trkiye", which matches nothing - so the country of every accented
+    spelling was unrecognisable.
+    """
+    import unicodedata
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _alias(code: str, *names: str) -> None:
+    _COUNTRY_ALIASES[code.lower()] = code
+    for n in names:
+        _COUNTRY_ALIASES[_fold(n)] = code
+
+
+_alias("US", "usa", "u.s.", "u.s.a.", "united states", "united states of america",
+       "america", "us of a")
+_alias("CA", "canada", "can")
+_alias("GB", "uk", "u.k.", "united kingdom", "great britain", "britain",
+       "england", "scotland", "wales", "northern ireland", "gbr")
+_alias("IE", "ireland", "republic of ireland", "irl")
+_alias("DE", "germany", "deutschland", "deu", "ger")
+_alias("FR", "france", "fra")
+_alias("ES", "spain", "espana", "esp")
+_alias("PT", "portugal", "prt")
+_alias("IT", "italy", "italia", "ita")
+_alias("NL", "netherlands", "the netherlands", "holland", "nld")
+_alias("BE", "belgium", "bel")
+_alias("CH", "switzerland", "che")
+_alias("AT", "austria", "aut")
+_alias("SE", "sweden", "swe")
+_alias("NO", "norway", "nor")
+_alias("DK", "denmark", "dnk")
+_alias("FI", "finland", "fin")
+_alias("PL", "poland", "pol")
+_alias("CZ", "czechia", "czech republic", "cze")
+_alias("RO", "romania", "rou")
+_alias("HU", "hungary", "hun")
+_alias("GR", "greece", "grc")
+_alias("IN", "india", "ind", "bharat")
+_alias("CN", "china", "prc", "chn", "peoples republic of china")
+_alias("JP", "japan", "jpn")
+_alias("KR", "south korea", "korea", "republic of korea", "kor")
+_alias("SG", "singapore", "sgp")
+_alias("MY", "malaysia", "mys")
+_alias("TH", "thailand", "tha")
+_alias("VN", "vietnam", "viet nam", "vnm")
+_alias("PH", "philippines", "phl")
+_alias("ID", "indonesia", "idn")
+_alias("TW", "taiwan", "twn")
+_alias("HK", "hong kong", "hkg")
+_alias("AU", "australia", "aus")
+_alias("NZ", "new zealand", "nzl")
+_alias("IL", "israel", "isr")
+_alias("AE", "uae", "united arab emirates", "are")
+_alias("SA", "saudi arabia", "sau")
+_alias("TR", "turkey", "turkiye", "tur")
+_alias("ZA", "south africa", "zaf")
+_alias("EG", "egypt", "egy")
+_alias("NG", "nigeria", "nga")
+_alias("KE", "kenya", "ken")
+_alias("BR", "brazil", "brasil", "bra")
+_alias("MX", "mexico", "mex")
+_alias("AR", "argentina", "arg")
+_alias("CL", "chile", "chl")
+_alias("CO", "colombia", "col")
+_alias("PE", "peru", "per")
+_alias("CR", "costa rica", "cri")
+_alias("UY", "uruguay", "ury")
+_alias("UA", "ukraine", "ukr")
+_alias("RS", "serbia", "srb")
+_alias("BG", "bulgaria", "bgr")
+_alias("HR", "croatia", "hrv")
+_alias("EE", "estonia", "est")
+_alias("LV", "latvia", "lva")
+_alias("LT", "lithuania", "ltu")
+_alias("PK", "pakistan", "pak")
+_alias("BD", "bangladesh", "bgd")
+_alias("LK", "sri lanka", "lka")
+
+
+def normalize_country(value: Any) -> str:
+    """Any country spelling -> ISO 3166-1 alpha-2, or "" when unrecognised.
+
+    Returning "" for an unknown value is deliberate: inventing a code would
+    put postings in a country they are not in, and an unrecognised country is
+    a normalisation gap we can measure, not a fact about the job.
+    """
+    key = _fold(value)
+    if not key:
+        return ""
+    return _COUNTRY_ALIASES.get(key, "")
+
+
 def normalize_location(loc: Any) -> Dict[str, str]:
-    """One location entry -> {raw, city, region, country, key}. `key` is the
-    indexed equality form; `raw` preserves what the source actually said."""
+    """One location entry -> {raw, city, region, country, country_code, key}.
+
+    `key` is the indexed equality form; `raw` preserves what the source
+    actually said; `country_code` is the only field a country filter should
+    ever read.
+    """
     if isinstance(loc, dict):
         raw = _safe_display(loc.get("raw") or loc.get("name") or loc.get("text"), 200)
         city = _safe_display(loc.get("city"), 80)
@@ -422,8 +535,16 @@ def normalize_location(loc: Any) -> Dict[str, str]:
             region = region or _safe_display(parts[1], 80)
         if len(parts) > 2:
             country = country or _safe_display(parts[-1], 80)
+    # "Berlin, Germany" and "Remote, USA" are two-part strings whose SECOND
+    # part is the country, not a region. Parsing them positionally filed the
+    # country under `region` and left `country` empty, so every non-US
+    # two-part location was uncountable.
+    if not country and region and normalize_country(region):
+        country, region = region, ""
+    code = normalize_country(country)
     key = _safe_key("-".join(p for p in (city, region, country) if p), 160)
-    return {"raw": raw, "city": city, "region": region, "country": country, "key": key}
+    return {"raw": raw, "city": city, "region": region, "country": country,
+            "country_code": code, "key": key}
 
 
 def normalize_locations(values: Any, limit: int = 12) -> List[Dict[str, str]]:
@@ -445,16 +566,110 @@ def normalize_locations(values: Any, limit: int = 12) -> List[Dict[str, str]]:
     return out
 
 
-def normalize_work_mode(value: Any, *, title: Any = None, locations: Any = None) -> str:
+#: Closed employment-type vocabulary. Everything else is `unknown`.
+EMPLOYMENT_FULL_TIME = "full_time"
+EMPLOYMENT_PART_TIME = "part_time"
+EMPLOYMENT_CONTRACT = "contract"
+EMPLOYMENT_TEMPORARY = "temporary"
+EMPLOYMENT_INTERNSHIP = "internship"
+EMPLOYMENT_VOLUNTEER = "volunteer"
+EMPLOYMENT_UNKNOWN = "unknown"
+
+EMPLOYMENT_TYPES: Tuple[str, ...] = (
+    EMPLOYMENT_FULL_TIME, EMPLOYMENT_PART_TIME, EMPLOYMENT_CONTRACT,
+    EMPLOYMENT_TEMPORARY, EMPLOYMENT_INTERNSHIP, EMPLOYMENT_VOLUNTEER,
+    EMPLOYMENT_UNKNOWN,
+)
+
+#: Ordered longest-first at match time. Every pattern below is derived from a
+#: value the LIVE inventory actually carries: 174,563 rows blank plus a tail of
+#: 61+ distinct spellings — `fulltime`, `regular-full-time`, `ft-hourly-w-bn`,
+#: `cdi` (contrat à durée indéterminée), `foh` (front of house), `sm`,
+#: `career-service-exec`. An equality filter over that is not a filter.
+_EMPLOYMENT_RULES: Tuple[Tuple[str, str], ...] = (
+    (EMPLOYMENT_INTERNSHIP, r"intern(ship)?|co[\s\-]?op|apprentice|trainee|"
+                            r"working student|werkstudent|praktikum|stage"),
+    (EMPLOYMENT_VOLUNTEER, r"volunteer|unpaid|pro[\s\-]?bono"),
+    (EMPLOYMENT_TEMPORARY, r"temp(orary)?|seasonal|casual|fixed[\s\-]?term|"
+                           r"limited[\s\-]?duration|\bprn\b|per[\s\-]?diem|"
+                           r"on[\s\-]?call|relief|\bcdd\b|befristet|interim|"
+                           r"non[\s\-]?permanent|supplemental"),
+    (EMPLOYMENT_CONTRACT, r"contract(or)?|freelance|consultant|c2c|corp[\s\-]?to|"
+                          r"\bw2\b|1099|agency|\bsow\b|contingent"),
+    (EMPLOYMENT_PART_TIME, r"part[\s\-]?time|\bpt\b|teilzeit|halftime|"
+                           r"half[\s\-]?time|reduced hours"),
+    (EMPLOYMENT_FULL_TIME, r"full[\s\-]?time|\bft\b|permanent|regular|\bcdi\b|"
+                           r"festanstellung|vollzeit|salaried|salary|exempt|"
+                           r"employee|staff position|indeterminate|"
+                           r"ind[\s\-]?termin"),
+)
+
+_EMPLOYMENT_PATTERNS = tuple(
+    (label, re.compile(pattern, re.IGNORECASE)) for label, pattern in _EMPLOYMENT_RULES)
+
+
+def normalize_employment_type(value: Any, *, title: Any = None) -> str:
+    """Provider spelling -> one of `EMPLOYMENT_TYPES`.
+
+    Order matters and is INTENT-first, not frequency-first: "Temporary
+    Full-Time" is temporary, "Full-Time Internship" is an internship, and
+    "Full-Time Permanent Contract" is a contract. Reading the full-time token
+    first would collapse all three into the same bucket.
+
+    An unrecognised spelling returns `unknown` rather than a guess. `foh`,
+    `sm` and `career-service-exec` are department and grade codes that name no
+    employment type at all, and inventing one for them would put a filter in
+    front of a user that quietly excludes real jobs.
+    """
+    blob = f"{value or ''} {title or ''}"
+    if not blob.strip():
+        return EMPLOYMENT_UNKNOWN
+    for label, pattern in _EMPLOYMENT_PATTERNS:
+        if pattern.search(blob):
+            return label
+    return EMPLOYMENT_UNKNOWN
+
+
+def normalize_work_mode(value: Any, *, title: Any = None, locations: Any = None,
+                        description: Any = None) -> str:
+    """Provider signal -> remote / hybrid / onsite / unknown.
+
+    `description` is read LAST and only for explicit phrases, because 96.1% of
+    the live inventory states no work mode and the gap is ours, not the
+    employer's. Widening the signal is the right fix; guessing "onsite"
+    because a posting names a city is not — a posting can be remote and still
+    name the office it reports to.
+    """
     blob = " ".join(
         str(x or "") for x in (value, title, locations if isinstance(locations, str) else "")
     ).lower()
-    if "hybrid" in blob:
+    if "hybrid" in blob or "flex office" in blob or "flexible office" in blob:
         return WORK_MODE_HYBRID
-    if "remote" in blob or "work from home" in blob or "wfh" in blob:
+    if ("remote" in blob or "work from home" in blob or "wfh" in blob
+            or "telework" in blob or "telecommut" in blob or "distributed" in blob
+            or "anywhere" in blob or "home based" in blob or "home-based" in blob):
         return WORK_MODE_REMOTE
-    if "on-site" in blob or "onsite" in blob or "in office" in blob or "in-office" in blob:
+    if ("on-site" in blob or "onsite" in blob or "on site" in blob
+            or "in office" in blob or "in-office" in blob or "in person" in blob
+            or "in-person" in blob):
         return WORK_MODE_ONSITE
+
+    body = str(description or "")[:6000].lower()
+    if body:
+        if re.search(r"\bhybrid\b"
+                     r"|\d\s*days?\s*(?:per|a)\s*week\s*in\s*(?:the\s*)?office"
+                     r"|in\s*(?:the\s*)?office\s*\d\s*days?"
+                     r"|days?\s*(?:per|a)?\s*week\s*(?:in|on)[\s-]?site"
+                     r"|days? in office", body):
+            return WORK_MODE_HYBRID
+        if re.search(r"\b(fully|100%|entirely)\s+remote\b|\bremote[- ]first\b|"
+                     r"\bwork from home\b|\bthis (?:is|role is) a remote\b|"
+                     r"\bremote (?:position|role|opportunity)\b", body):
+            return WORK_MODE_REMOTE
+        if re.search(r"\b(?:fully )?on[- ]?site\b|\bin[- ]office (?:role|position)\b|"
+                     r"\bthis role is on[- ]?site\b|\brequires? (?:you to be )?on[- ]?site\b",
+                     body):
+            return WORK_MODE_ONSITE
     return WORK_MODE_UNKNOWN
 
 
@@ -651,8 +866,15 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
         "work_mode": normalize_work_mode(
             raw.get("work_mode"), title=title_raw,
             locations=" ".join(l["raw"] for l in locations),
+            description=description_text,
         ),
         "employment_type": employment_type,
+        # The filterable form. `employment_type` keeps the provider's own
+        # spelling because `compute_content_hash` digests it - rewriting it in
+        # place would change every hash at once and re-parse the whole
+        # inventory for a normalisation that changes no meaning.
+        "employment_type_normalized": normalize_employment_type(
+            employment_type, title=title_raw),
         "posted_at": posted_at,
         "raw_posted_text": _safe_display(raw.get("raw_posted_text") or raw.get("posted_text"), 120),
         "posted_at_confidence": confidence,

@@ -818,8 +818,9 @@ INDEX_SPECS = [
     ("companies", [("name_normalized", ASCENDING), ("state", ASCENDING)],
      {"name": "name_state"}),
     ("companies", [("state", ASCENDING)], {"name": "state"}),
-    ("companies", [("domain", ASCENDING)],
-     {"name": "domain", "sparse": True}),
+    # `domain_idx` further down is the SAME key. Two specs for one index means
+    # one of them fails with IndexOptionsConflict on every migration run, which
+    # trains a reader to ignore the failure count. One spec, one index.
     # company_ats_endpoints: member_key is the crawl identity (ADR-003 prefix);
     # (vendor, status) is how job_ingest_worker._mongo_members pages;
     # revalidation walks status + last_checked_at.
@@ -906,6 +907,80 @@ INDEX_SPECS = [
      {"name": "captured_at_desc"}),
     ("tech_feed_metrics", [("expire_at", ASCENDING)],
      {"name": "metrics_ttl", "expireAfterSeconds": 0}),
+
+    # Tech feed feedback. tech_feed_feedback.record() upserts on
+    # (user_email, job_id), so UNIQUE is the idempotency guarantee in the
+    # schema rather than only in the code; suppressed_for() reads
+    # user_email + newest-first; expire_at carries the 180-day TTL.
+    ("tech_feed_feedback", [("user_email", ASCENDING), ("job_id", ASCENDING)],
+     {"name": "user_job_unique", "unique": True}),
+    ("tech_feed_feedback", [("user_email", ASCENDING), ("updated_at", DESCENDING)],
+     {"name": "user_updated_desc"}),
+    ("tech_feed_feedback", [("expire_at", ASCENDING)],
+     {"name": "feedback_ttl", "expireAfterSeconds": 0}),
+
+    # === keyset pagination + the country filter ===========================
+    # `_serve_keyset_page` sorts `(posted_at DESC, job_id ASC)` and resumes
+    # from a recorded position. Without `job_id` as a second key the sort is
+    # not TOTAL — 28,025 live postings share one day — and a keyset cursor
+    # cannot resume from a tie. This is the index that makes traversal past
+    # the ranked window an IXSCAN instead of a blocking sort.
+    ("job_postings", [("status", ASCENDING), ("posted_at", DESCENDING),
+                      ("job_id", ASCENDING)],
+     {"name": "active_keyset_posted_job"}),
+    # The country filter. `{"locations.country": {"$in": ["usa"]}}` compared a
+    # lowercased request against a stored "USA" and matched zero of 217,019
+    # located postings; the filter now reads the normalised ISO code, and this
+    # is what keeps it off a COLLSCAN.
+    ("job_postings", [("status", ASCENDING), ("locations.country_code", ASCENDING),
+                      ("posted_at", DESCENDING)],
+     {"name": "active_country_posted_at"}),
+
+    # === canonical employer registry ======================================
+    # `employer_registry.resolve_employer` reads domain first, then a join
+    # reference, then a name; `coverage_by_employer` reads a cohort in one
+    # query. Mirrors `employer_registry.ensure_indexes` so a deploy and a
+    # migration cannot disagree.
+    ("employers", [("employer_id", ASCENDING)],
+     {"unique": True, "name": "employer_id_unique"}),
+    ("employers", [("canonical_domain", ASCENDING)],
+     {"sparse": True, "name": "canonical_domain_idx"}),
+    ("employers", [("verified_domains", ASCENDING)], {"name": "verified_domains_idx"}),
+    ("employers", [("name_key", ASCENDING)], {"name": "name_key_idx"}),
+    ("employers", [("operating_status", ASCENDING), ("cohorts", ASCENDING)],
+     {"name": "status_cohort_idx"}),
+    ("employers", [("employer_categories", ASCENDING),
+                   ("identity_confidence", DESCENDING)],
+     {"name": "category_confidence_idx"}),
+    ("employers", [("next_verification_at", ASCENDING)],
+     {"name": "next_verification_idx"}),
+    ("employers", [("parent_employer_id", ASCENDING)],
+     {"sparse": True, "name": "parent_idx"}),
+    ("employers", [("registry_refs.company_ids", ASCENDING)], {"name": "ref_company_idx"}),
+    ("employers", [("registry_refs.tenant_keys", ASCENDING)], {"name": "ref_tenant_idx"}),
+    ("employer_merge_reviews", [("review_key", ASCENDING)],
+     {"unique": True, "name": "review_key_unique"}),
+    ("employer_merge_reviews", [("resolved", ASCENDING), ("created_at", DESCENDING)],
+     {"name": "open_reviews_idx"}),
+
+    # === career sources (ownership) =======================================
+    # `due_for_check` is the scheduler's query; `coverage_by_employer` is the
+    # report's. Both must be indexed or the coverage number costs a COLLSCAN
+    # every time anybody asks for it.
+    ("career_sources", [("source_id", ASCENDING)],
+     {"unique": True, "name": "source_id_unique"}),
+    ("career_sources", [("employer_id", ASCENDING), ("state", ASCENDING)],
+     {"name": "employer_state_idx"}),
+    ("career_sources", [("state", ASCENDING), ("next_check_at", ASCENDING)],
+     {"name": "due_check_idx"}),
+    ("career_sources", [("ats_vendor", ASCENDING), ("tenant", ASCENDING)],
+     {"name": "vendor_tenant_idx"}),
+    ("career_sources", [("member_key", ASCENDING)],
+     {"sparse": True, "name": "member_key_idx"}),
+    ("career_sources", [("state", ASCENDING), ("ats_vendor", ASCENDING)],
+     {"name": "state_vendor_idx"}),
+    ("career_sources", [("verified_domain", ASCENDING)],
+     {"sparse": True, "name": "verified_domain_idx"}),
 
 ]
 

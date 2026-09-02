@@ -369,6 +369,24 @@ def _score_rows(rows: List[Dict[str, Any]], user_email: str,
             "components": verdict.get("component_scores") or {},
             "explanation": str(verdict.get("explanation") or "")[:400],
             "missing_requirements": (verdict.get("missing_requirements") or [])[:4],
+            # fit-v2.1. Without these the card cannot tell a candidate WHY a
+            # role is or is not reachable: `eligibility` is a different
+            # question from `score` and no number expresses it, `evidence_
+            # breadth` says how much of the frame had evidence, and
+            # `role_alignment.detail` is written to be read aloud.
+            "eligibility": verdict.get("eligibility"),
+            "ineligible_reasons": (verdict.get("ineligible_reasons") or [])[:4],
+            "evidence_breadth": verdict.get("evidence_breadth"),
+            "role_alignment": verdict.get("role_alignment") or {},
+            # Only the UNMET-and-UNKNOWABLE ones. A `met` constraint is not a
+            # requirement to check, and a `missing` one is already in
+            # `missing_requirements`.
+            "hard_requirements": [
+                {"type": c.get("type"), "status": c.get("status"),
+                 "detail": str(c.get("detail") or "")[:200]}
+                for c in (verdict.get("hard_constraints") or [])
+                if c.get("hard_requirement") and c.get("status") == "unknown"
+            ][:4],
         }
 
 

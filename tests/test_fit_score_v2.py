@@ -102,12 +102,32 @@ class TestContract:
             assert comp["max"] == COMPONENT_MAX[name]
             assert 0 <= comp["score"] <= comp["max"]
 
-    def test_score_equals_capped_sum_of_components(self):
+    def test_score_is_the_average_over_the_components_we_could_measure(self):
+        """fit-v2.1: the score is `earned / possible` over components that had
+        evidence on BOTH sides, not a raw sum over all seven.
+
+        A raw sum required every unmeasurable component to pay out some
+        neutral fraction, and a neutral fraction is still a deduction — see
+        `_normalized_score`. Under the sum, a fully-evidenced perfect match
+        topped out near 86 because the posting happened not to state its
+        industry or its work mode."""
         v = fit_score.score(_resume(), {"title": "Senior Backend Engineer",
                                         "description": SWE_JD})
         assert not v["applied_caps"]
-        assert v["score"] == round(sum(v["component_scores"].values()))
+        known = [c for c in v["components"].values() if c["known"]]
+        earned = sum(c["score"] for c in known)
+        possible = sum(c["max"] for c in known)
+        assert v["score"] == round(100 * earned / possible)
+        assert v["evidence_breadth"] == pytest.approx(possible / 100.0)
         assert 0 <= v["score"] <= 100
+
+    def test_an_unmeasurable_component_is_excluded_from_both_sides(self):
+        v = fit_score.score(_resume(), {"title": "Senior Backend Engineer",
+                                        "description": SWE_JD})
+        for key, comp in v["components"].items():
+            if not comp["known"]:
+                assert comp["score"] == 0.0, key
+        assert 0.0 < v["evidence_breadth"] <= 1.0
 
     def test_empty_inputs_do_not_raise(self):
         v = fit_score.score({}, {})
@@ -260,12 +280,29 @@ class TestRoleAlignment:
         pts = v["component_scores"]["role_alignment"]
         assert 0 < pts < COMPONENT_MAX["role_alignment"]
 
-    def test_unrelated_role_is_capped(self):
+    def test_an_unrelated_role_lands_in_the_bottom_band(self):
+        """The outcome, not the mechanism.
+
+        Under fit-v2.1 the score reaches the bottom band on the component
+        arithmetic alone, so the `unrelated_role` CAP frequently no longer
+        needs to fire — `applied_caps` records a cap only when it actually
+        lowered something. Asserting the cap fired was asserting that the
+        score was too high without it.
+        """
         v = fit_score.score(_nurse_resume(), {
             "title": "Senior Backend Engineer", "description": SWE_JD})
-        assert "role" in v["applied_caps"]
         assert v["score"] <= fit_score.CONSTRAINT_CAPS["unrelated_role"]
         assert v["band"] == "unlikely match"
+        assert any(c["type"] == "role" and c["status"] == "missing"
+                   for c in v["hard_constraints"])
+
+    def test_a_clinical_resume_is_ineligible_for_a_backend_role(self):
+        """The cross-domain veto, on a complete single-employer career."""
+        v = fit_score.score(_nurse_resume(), {
+            "title": "Senior Backend Engineer", "description": SWE_JD})
+        assert v["eligibility"] == fit_score.INELIGIBLE
+        assert v["ineligible_reasons"]
+        assert v["score"] <= 34
 
 
 class TestSeniority:
@@ -340,13 +377,25 @@ class TestHardConstraints:
         assert licenses and licenses[0]["status"] == "unknown"
         assert "license" not in v["applied_caps"]
 
-    def test_missing_clearance_caps_the_score(self):
+    def test_an_unstated_clearance_is_surfaced_as_a_requirement_not_priced(self):
+        """fit-v2.1: silence about a clearance is UNKNOWN, not a failure.
+
+        Almost nobody writes "I hold an active Secret clearance" on a resume.
+        Reading that silence as a definite absence capped every cleared
+        candidate at 40 on the strength of a phrase they had no reason to
+        include. A clearance requirement is now a hard requirement the reader
+        is shown, which is what a hard constraint that we cannot evaluate
+        should be: visible, and not a deduction.
+        """
         jd = ("Software Engineer supporting a federal program. An active TS/SCI "
               "security clearance is required. Requirements: 5+ years of software "
               "engineering experience, Python, SQL, AWS and Docker.")
         v = fit_score.score(_resume(), {"title": "Software Engineer", "description": jd})
-        assert "clearance" in v["applied_caps"]
-        assert v["score"] <= fit_score.CONSTRAINT_CAPS["clearance_missing"]
+        clearance = [c for c in v["hard_constraints"] if c["type"] == "clearance"]
+        assert clearance and clearance[0]["status"] == "unknown"
+        assert clearance[0]["hard_requirement"] is True
+        assert "clearance" not in v["applied_caps"]
+        assert v["eligibility"] == fit_score.ELIGIBLE
 
     def test_held_clearance_removes_the_cap(self):
         jd = ("Software Engineer supporting a federal program. An active TS/SCI "
@@ -463,34 +512,63 @@ class TestNontechnicalIsNotSoftwareEngineering:
 # ---------------------------------------------------------------------------
 
 class TestUnknownDoesNotAutoFail:
-    def test_posting_with_no_readable_requirements_is_neutral_not_zero(self):
+    """Unknown is EXCLUDED, not priced.
+
+    Under fit-v2.0 each of these paid a "neutral" fraction, which sounds
+    generous and is not: a component that pays 60% of its maximum when it has
+    nothing to say costs the candidate the other 40%. Measured on the live
+    inventory that was systematic — 96.1% of postings state no work mode,
+    43.3% no seniority, 81.5% no salary — so essentially every candidate lost
+    roughly twelve points to gaps in OUR parsing, and almost nothing could
+    reach the top band. v2.1 drops an unmeasurable component from the
+    numerator and the denominator both.
+    """
+
+    def test_posting_with_no_readable_requirements_is_excluded_not_scored(self):
         v = fit_score.score(_resume(), {"title": "Backend Engineer",
                                         "description": "Join our growing team!"})
-        assert v["component_scores"]["required_skills"] == \
-            COMPONENT_MAX["required_skills"] * 0.6
+        assert v["components"]["required_skills"]["known"] is False
         assert v["evidence"]["requirements_source"] == "none"
         assert v["confidence"] in ("low", "medium")
+        # ...and the job-evidence cap still stops it reading as a real match.
+        assert "job_evidence" in v["applied_caps"]
 
-    def test_unknown_years_on_either_side_is_neutral(self):
+    def test_unknown_years_on_either_side_costs_nothing(self):
         jd = "Backend Engineer. Requirements: Python, SQL, AWS and Docker."
         v = fit_score.score(_resume(), {"title": "Backend Engineer", "description": jd})
         assert v["evidence"]["required_years"] is None
-        assert v["component_scores"]["experience"] == \
-            pytest.approx(COMPONENT_MAX["experience"] * 0.65)
+        known = [c for c in v["components"].values() if c["known"]]
+        assert v["score"] == round(100 * sum(c["score"] for c in known)
+                                   / sum(c["max"] for c in known))
 
-    def test_unknown_location_is_neutral_not_a_penalty(self):
+    def test_unknown_location_is_neither_scored_nor_capped(self):
         jd = "Backend Engineer. Requirements: Python, SQL, AWS and Docker."
         no_loc = _resume(contact={"name": "Jordan Alvarez"})
         v = fit_score.score(no_loc, {"title": "Backend Engineer", "description": jd})
-        assert v["component_scores"]["location"] == \
-            pytest.approx(COMPONENT_MAX["location"] * 0.6)
+        assert v["components"]["location"]["known"] is False
         assert "location" not in v["applied_caps"]
 
-    def test_unknown_industry_is_neutral(self):
+    def test_unknown_industry_is_excluded(self):
         jd = "Backend Engineer. Requirements: Python and SQL."
         v = fit_score.score(_resume(), {"title": "Backend Engineer", "description": jd})
-        assert v["component_scores"]["domain"] == \
-            pytest.approx(COMPONENT_MAX["domain"] * 0.6)
+        assert v["components"]["domain"]["known"] is False
+
+    def test_an_unstated_work_mode_never_lowers_the_score(self):
+        """The single largest unknown in the inventory."""
+        jd = "Backend Engineer. Requirements: Python, SQL, AWS and Docker."
+        far = _resume(contact={"name": "J", "location": "Austin, TX"})
+        v = fit_score.score(far, {"title": "Backend Engineer", "description": jd,
+                                  "location": "Seattle, WA"})
+        assert v["components"]["location"]["known"] is False
+        assert v["components"]["location"]["score"] == 0.0
+        assert "location" not in v["applied_caps"]
+
+    def test_a_posting_naming_no_degree_does_not_cost_a_point(self):
+        jd = "Backend Engineer. Requirements: Python, SQL, AWS and Docker."
+        v = fit_score.score(_resume(), {"title": "Backend Engineer", "description": jd})
+        edu = v["components"]["education"]
+        assert edu["known"] is True
+        assert edu["score"] == edu["max"]
 
     def test_sparse_resume_is_flagged_rather_than_silently_scored(self):
         sparse = {"contact": {"name": "A"}, "skills": {}, "experience": [
@@ -704,12 +782,12 @@ class TestSeniorityTaxonomy:
     def test_an_intern_resume_is_not_docked_on_an_entry_role(self):
         """intern -> entry is the intended progression, not a stretch."""
         mx = COMPONENT_MAX["experience"]
-        pts, _detail, severe = fit_score._score_experience(
+        pts, _detail, severe, _known = fit_score._score_experience(
             {"job_level": "entry", "required_years": 0},
             {"level": "intern", "years": 2})
         assert pts == float(mx) and severe is False
         # A senior role IS still a real gap for the same resume.
-        pts, _detail, severe = fit_score._score_experience(
+        pts, _detail, severe, _known = fit_score._score_experience(
             {"job_level": "senior", "required_years": 5},
             {"level": "intern", "years": 2})
         assert pts < mx * 0.5 and severe is True

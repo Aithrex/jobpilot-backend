@@ -109,10 +109,10 @@ GOLDEN: tuple = (
     ("Manufacturing Engineer", "Line balancing and fixture design.", "", NON, None, "E"),
     ("HVAC Engineer", "Load calcs and duct design.", "", NON, None, "E"),
     ("Embedded Systems Engineer, Motor Control", "Embedded C on STM32, RTOS, I2C.", "Engineering", CORE, "software_engineering", "E - embedded IS software"),
-    ("FPGA Engineer", "Verilog, SystemVerilog, timing closure.", "Silicon", ADJ, "semiconductor_hardware", "E - adjacent, selectable"),
-    ("Design Verification Engineer", "UVM testbenches for a SoC.", "Silicon", ADJ, "semiconductor_hardware", "E"),
-    ("ASIC Physical Design Engineer", "Place and route, tapeout.", "", ADJ, "semiconductor_hardware", "E"),
-    ("Analog Design Engineer", "Mixed signal, RF front end.", "", ADJ, "semiconductor_hardware", "E"),
+    ("FPGA Engineer", "Verilog, SystemVerilog, timing closure.", "Silicon", CORE, "semiconductor_hardware", "E - CORE since tech-tax-1.1.0; chip design is technology employment"),
+    ("Design Verification Engineer", "UVM testbenches for a SoC.", "Silicon", CORE, "semiconductor_hardware", "E"),
+    ("ASIC Physical Design Engineer", "Place and route, tapeout.", "", CORE, "semiconductor_hardware", "E"),
+    ("Analog Design Engineer", "Mixed signal, RF front end.", "", CORE, "semiconductor_hardware", "E"),
 
     # ---- F. technical vs nontechnical product/support/sales/consulting -----
     ("Technical Program Manager, Infrastructure", "Drive multi-team platform migrations.", "Engineering", ADJ, "technical_product", "F"),
@@ -154,4 +154,61 @@ GOLDEN: tuple = (
     ("Data Annotation Specialist", "Label images for training sets.", "Operations", NON, None, "G - not an engineering role"),
     ("Quantitative Researcher", "Statistical modelling of market data in Python.", "Research", CORE, "data", "G"),
     ("Business Intelligence Analyst", "Tableau dashboards and SQL.", "Analytics", CORE, "data", "G"),
+
+    # ---- H. REAL unmatched titles, taken verbatim from live `job_postings` --
+    #
+    # Sampled 2026-09-02 from the 26,990 distinct active titles that
+    # `tech-tax-1.0.0` classified `unknown` (77,962 postings). Stratum A-G
+    # rows were written to probe a hypothesis; these were written down because
+    # the production inventory actually contains them, which is the only way
+    # this eval measures the classifier against the job market rather than
+    # against its author.
+    #
+    # The labels are what a hiring manager would say, not what makes the
+    # numbers look good: several of these are deliberately still `unknown`
+    # because the TITLE alone genuinely does not settle it.
+    ("Senior Sitecore Developer (Contract)", "", "", CORE, "software_engineering", "H - stack-named role; platform was absent from the stack list"),
+    ("Mulesoft Developer", "", "", CORE, "software_engineering", "H - integration platform"),
+    ("Guidewire Developer", "", "", CORE, "software_engineering", "H - insurance core platform"),
+    ("Senior .NET Developer", "", "", CORE, "software_engineering", "H"),
+    ("AI Agent Developer", "", "", CORE, "ai_ml", "H - 'developer' variant was missing"),
+    ("Applied AI Senior Consultant", "Deploy LLM solutions for clients.", "", CORE, "ai_ml", "H"),
+    ("Data Center Technician", "", "", ADJ, "it_support", "H - real technical occupation with no home in 1.0.0"),
+    ("Engineering Operations Technician, ADC InfraOps DCEO", "", "", ADJ, "it_support", "H - Amazon data-centre operations"),
+    ("Cabling Infrastructure Tech, Data Center Operations", "", "", ADJ, "it_support", "H"),
+    ("Medical Laboratory Scientist I", "", "Laboratory", NON, None, "H - 'Scientist' is not a data scientist"),
+    ("Clinical Laboratory Scientist", "", "", NON, None, "H"),
+    ("MRI Technologist", "", "Imaging", NON, None, "H - 'Technologist' is not technology"),
+    ("CT Technologist", "", "", NON, None, "H"),
+    ("Radiology Technologist", "", "", NON, None, "H"),
+    ("Controls Engineer", "PLC programming for a bottling line.", "Manufacturing", NON, None, "H - plant automation, not software"),
+    ("Maintenance Engineer", "", "Facilities", NON, None, "H"),
+    ("Chief Engineer", "Run building systems for a 400-room hotel.", "", NON, None, "H - building operations"),
+    ("Operating Engineer", "", "", NON, None, "H"),
+    ("Civil Engineering Intern", "", "", NON, None, "H"),
+    ("Landscape Architecture Intern", "", "", NON, None, "H"),
+    ("Supplier Quality Engineer", "", "Manufacturing", NON, None, "H - already handled; kept as a live-sourced regression"),
+    ("Target Security Specialist", "", "", UNK, None, "H - employer-dependent: 'Target' is the retailer here, and the classifier takes no employer input by design"),
+    ("Personal Banker", "", "", NON, None, "H"),
+    ("Store Associate", "", "", NON, None, "H - highest-volume unmatched title in the inventory"),
+    ("Front End Entry Level", "Grocery checkout and bagging.", "Retail", NON, None, "H - 'Front End' is a supermarket department here"),
+    ("In-Store Shopper", "", "", NON, None, "H"),
+    ("Restaurant Shift Manager", "", "", NON, None, "H"),
+    ("Janitorial Cleaner", "", "", NON, None, "H"),
+    ("Meat - Seafood Clerk", "", "", NON, None, "H"),
+    ("Pharmacy Intern", "", "", NON, None, "H"),
+    ("Mobile Associate - Retail Sales", "", "", NON, None, "H - 'Mobile' is the carrier store, not mobile engineering"),
+    ("Retail Display Installer - Technology", "", "", NON, None, "H - 'Technology' is the aisle"),
+    ("Business Analyst", "", "", UNK, None, "H - genuinely ambiguous from the title alone"),
+    ("Business Systems Analyst", "", "", UNK, None, "H"),
+    ("Project Engineer", "", "", UNK, None, "H - construction or software, unknowable from the title"),
+    ("Test Engineer", "", "", UNK, None, "H - software QA or hardware test"),
+    ("Application Engineer", "", "", UNK, None, "H - often pre-sales at an instrument vendor"),
+    ("Field Service Engineer", "", "", UNK, None, "H"),
+    ("Program Manager", "", "", UNK, None, "H"),
+    ("Analyst", "", "", UNK, None, "H - a title carrying no occupation at all"),
+    ("Engineer", "", "", UNK, None, "H"),
+    ("Now Hiring! Join us for our Hiring Event on September 9th!", "", "", UNK, None, "H - a real live 'title'; must not classify as anything"),
+    ("Portuguese Voice Actor - Freelance AI Trainer Project", "Record speech samples.", "", NON, None, "H - 'AI' in the title, not an AI role"),
+    ("Competitive Programming Expert - Freelance AI Trainer", "Write and review competitive programming solutions.", "", NON, None, "H - AI TRAINING DATA work. Labelled UNK on first pass and corrected: the classifier is right and the label was wrong. It is paid per task, hires no engineers, and putting it in front of one is the exact failure the gig_content rules exist to stop"),
 )

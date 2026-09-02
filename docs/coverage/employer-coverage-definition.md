@@ -1,5 +1,30 @@
 # What "covered" means, and the metrics that prove it
 
+> **SUPERSEDED for the coverage DEFINITION, 2026-09-02 — see
+> [ADR-006](../decisions/ADR-006-canonical-employer-identity-and-owner-verified-coverage.md).**
+>
+> Section 2 below defines `validated` as "we fetched content from their
+> board". That is what `company_ats_endpoints.status` records, and it cannot
+> distinguish a company's own board from a stranger's board with a similar
+> slug — `slug_is_trustworthy` admitted `forward`, `beyond`, `public`, `cts`,
+> `super`, `archer`, `costar` and `alphabet` to the wrong employers.
+>
+> Coverage is now counted in `career_sources`, where `validated` requires
+> proven OWNERSHIP as well as content. The current numbers are generated, not
+> written by hand:
+>
+> ```bash
+> PYTHONPATH=shared/python python scripts/employer_coverage_report.py --markdown
+> ```
+>
+> → [`tech-employer-coverage.md`](tech-employer-coverage.md), stamped with the
+> source revision and the inventory watermark that produced it.
+>
+> The rest of this document is still accurate about the DENOMINATOR (the
+> evidence ladder in section 1 is unchanged and still implemented in
+> `employer_tech_classifier`) and about the dashboard metrics in section 3.
+> The measured figures in it are a snapshot of 2026-09-01 and are not current.
+
 "Every tech company" is a **measurable coverage objective**, not a claim of
 completeness. This document defines the denominator, the numerator, and the
 states an employer can be in — so a coverage number is falsifiable.
