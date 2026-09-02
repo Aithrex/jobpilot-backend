@@ -467,7 +467,79 @@ class TestVersionsActiveDeleteRoutes:
         assert by_id["a1"]["is_active"] is False
         assert by_id["a3"]["parse_status"] == "pending"
         assert set(rows[0]) == {"resume_id", "filename", "uploaded_at",
-                                "size_bytes", "parse_status", "is_active"}
+                                "size_bytes", "parse_status", "is_active",
+                                "from_guest_session"}
+        assert by_id["a2"]["from_guest_session"] is False
+
+    def test_versions_lists_claimed_guest_assets(self, db, resume_app):
+        """A resume uploaded as a guest and CLAIMED at signup must appear.
+
+        Regression test. This route used to filter `owner_type == "user"`
+        while `resume_access.list_parsed_assets` — the resolver behind
+        tailoring, scoring and `base_resume_selector` — filters only on
+        `user_email`. A claimed guest resume was therefore invisible in the
+        library yet fully eligible for tailoring, so the product tailored from
+        a file the user could neither see nor delete. Measured on live data
+        (2026-09-02): 10 such assets across 6 accounts.
+
+        An UNCLAIMED guest asset carries no `user_email` and must still be
+        excluded — that is what keeps this from surfacing someone else's file.
+        """
+        self._seed_assets(db)
+        now = datetime.now(timezone.utc)
+        db.resume_assets.insert_one({
+            "resume_id": "g1", "owner_type": "guest", "claim_status": "claimed",
+            "user_email": self.EMAIL, "filename": "from_guest.pdf",
+            "size_bytes": 999, "parse_status": "parsed",
+            "structured": {"summary": "g1"},
+            "object_key": "resume-assets/g1/original",
+            "created_at": now - timedelta(days=3),
+        })
+        db.resume_assets.insert_one({
+            "resume_id": "g2", "owner_type": "guest", "claim_status": "unclaimed",
+            "user_email": None, "filename": "stranger.pdf",
+            "size_bytes": 999, "parse_status": "parsed",
+            "structured": {"summary": "g2"},
+            "created_at": now - timedelta(days=4),
+        })
+
+        resp = resume_app.test_client().get(
+            "/api/resume/versions", headers=_headers(resume_app, self.EMAIL))
+        assert resp.status_code == 200
+        ids = [r["resume_id"] for r in resp.get_json()["versions"]]
+        assert "g1" in ids, "claimed guest resume must be listed"
+        assert "g2" not in ids, "unclaimed guest resume must never be listed"
+
+        by_id = {r["resume_id"]: r for r in resp.get_json()["versions"]}
+        assert by_id["g1"]["from_guest_session"] is True
+
+    def test_versions_matches_what_tailoring_can_use(self, db, resume_app):
+        """The library and the tailor resolver must agree on ownership.
+
+        The bug was not either query in isolation; it was that they disagreed.
+        Pinning them together means a future change to one that forgets the
+        other fails here rather than in production.
+        """
+        from services import resume_access
+
+        self._seed_assets(db)
+        now = datetime.now(timezone.utc)
+        db.resume_assets.insert_one({
+            "resume_id": "g1", "owner_type": "guest", "claim_status": "claimed",
+            "user_email": self.EMAIL, "filename": "from_guest.pdf",
+            "size_bytes": 999, "parse_status": "parsed",
+            "structured": {"summary": "g1"},
+            "object_key": "resume-assets/g1/original",
+            "created_at": now - timedelta(days=3),
+        })
+
+        resp = resume_app.test_client().get(
+            "/api/resume/versions", headers=_headers(resume_app, self.EMAIL))
+        listed = {r["resume_id"] for r in resp.get_json()["versions"]
+                  if r["parse_status"] == "parsed"}
+        usable = {a["resume_id"] for a in resume_access.list_parsed_assets(self.EMAIL)}
+        assert usable - listed == set(), (
+            f"tailoring can use resumes the library hides: {usable - listed}")
 
     def test_put_active_validates_ownership_and_parse_state(self, db, resume_app):
         self._seed_assets(db)

@@ -161,15 +161,24 @@ resource "aws_lambda_function" "service" {
       # Stage-4 armed for easy ATS (Greenhouse / Lever / Ashby) + Workday
       # best-effort. LinkedIn/generic stay disabled. Kill via AUTO_SUBMIT_ENABLED
       # or EXECUTOR_REMOTE_ENABLED without a deploy.
-      AUTO_APPLY_EXECUTOR           = "remote"
-      EXECUTOR_REMOTE_ENABLED       = "true"
-      APPLY_EXECUTOR_FUNCTION       = "${var.project}-apply-executor-${var.environment}"
-      AUTO_SUBMIT_ENABLED           = "true"
-      AUTO_APPLY_ADAPTERS_DISABLED  = "linkedin,generic"
-      AUTO_APPLY_PREPARE            = "true"
-      AUTO_APPLY_MODES              = "true"
-      AUTO_APPLY_RESERVE            = "true"
-      AUTO_APPLY_APPROVAL_FOLD      = "true"
+      #
+      # DISARMED 2026-09-02 by owner decision: auto-apply is not ready, so no
+      # code path may file an application. Declared false HERE, not merely
+      # flipped in the console: the lifecycle block below ignores
+      # source_code_hash and layers but NOT environment, so terraform owns
+      # this map outright and a console-only flip would be silently reverted
+      # by the next `terraform apply` for any unrelated reason.
+      # To re-arm, flip these here AND re-enable the two apply_* rules in
+      # schedulers.tf, so the change is reviewable.
+      AUTO_APPLY_EXECUTOR          = "remote"
+      EXECUTOR_REMOTE_ENABLED      = "false"
+      APPLY_EXECUTOR_FUNCTION      = "${var.project}-apply-executor-${var.environment}"
+      AUTO_SUBMIT_ENABLED          = "false"
+      AUTO_APPLY_ADAPTERS_DISABLED = "linkedin,generic"
+      AUTO_APPLY_PREPARE           = "true"
+      AUTO_APPLY_MODES             = "true"
+      AUTO_APPLY_RESERVE           = "true"
+      AUTO_APPLY_APPROVAL_FOLD     = "true"
 
       # Skill-heading placement (resume_tailor). A JD skill the base résumé
       # doesn't already list has to be filed under one of the user's OWN
@@ -180,7 +189,7 @@ resource "aws_lambda_function" "service" {
       # résumé's real headings instead. `_flag_enabled` defaults OFF outside
       # development, so this var is what turns it on in prod. Fail-open: any
       # error falls straight back to the taxonomy chain.
-      SKILLS_CATEGORIZER = "true"
+      SKILLS_CATEGORIZER     = "true"
       SKILLS_PRESERVE_LAYOUT = "true"
     }
   }

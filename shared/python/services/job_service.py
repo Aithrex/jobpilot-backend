@@ -1278,7 +1278,8 @@ class JobService:
         # letting it resolve per call meant one Mongo read per source. `None`
         # here is meaningful: no parsed résumé => no fit score at all.
         from services import fit_score as _fit_score
-        fit_profile = _fit_score.load_profile_for_user(user_email)
+        # Resume SET (see `_score_jobs`); resolved once and reused per source.
+        fit_profile = _fit_score.load_profiles_for_user(user_email)
 
         tasks = []
         task_meta: Dict[Any, str] = {}
@@ -2203,7 +2204,11 @@ class JobService:
         from services import fit_score
 
         if profile is _PROFILE_UNSET:
-            profile = fit_score.load_profile_for_user(user_email)
+            # The resume SET, not users.active_resume_id alone. See
+            # `fit_score.load_profiles_for_user`: a multi-resume account was
+            # scored on whichever file was pinned, so the coverage its other
+            # resumes carried never reached the score.
+            profile = fit_score.load_profiles_for_user(user_email)
 
         # No parsed resume => NO score. The old fallback here scored a résumé-less
         # account off a hardcoded PORTFOLIO_SKILLS list plus +15/+10/+5 bonuses and
@@ -2213,13 +2218,25 @@ class JobService:
         if not profile:
             return self._unscored_jobs(jobs)
 
+        profiles = profile if isinstance(profile, list) else [
+            {"resume_id": "", "filename": "", "profile": profile}]
+        # Ordering-bonus input, taken across the SET: the new-grad bonus asks
+        # "is this person early-career", which the most experienced resume
+        # answers, not whichever one is pinned.
+        set_years = max(
+            [int((e.get("profile") or {}).get("years") or 0) for e in profiles]
+            or [0])
         for job in jobs:
-            verdict = fit_score.score_one(
+            verdict = fit_score.score_one_best(
+                profiles,
                 jd_text=job.get("description") or "",
                 title=job.get("title") or "",
-                profile=profile,
                 location=job.get("location") or "",
             )
+            if verdict is None:
+                continue
+            if verdict.get("matched_resume"):
+                job["matched_resume"] = verdict["matched_resume"]
             score = int(verdict["match_score"])
             job["match_score"] = score
             # Requirements this posting names that the résumé evidences /
@@ -2243,7 +2260,7 @@ class JobService:
             if job.get("h1b_sponsor"):
                 bonus += 8
             blob = f"{job.get('title') or ''} {job.get('description') or ''}".lower()
-            resume_years = (profile.get("years") or 0)
+            resume_years = set_years
             if any(kw in blob for kw in NEW_GRAD_KEYWORDS) and resume_years <= 3:
                 bonus += 5
             if job.get("is_remote"):

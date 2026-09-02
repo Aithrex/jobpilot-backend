@@ -48,7 +48,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
+import threading
+from collections import OrderedDict
 from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -2362,3 +2365,202 @@ def _batch_meta(prof: Dict[str, Any]) -> Dict[str, Any]:
         "resume_years": prof["years"],
         "resume_role_families": sorted(prof["families"]),
     }
+
+
+# ---------------------------------------------------------------------------
+# Multi-resume scoring (resume-set aware)
+# ---------------------------------------------------------------------------
+# `load_profile_for_user` scores against users.active_resume_id ALONE. That is
+# right for a one-resume account and wrong for every other one: a user who
+# keeps a Backend, an AI-Platform and a Cloud-Platform resume is scored on
+# whichever file happens to be active, so a backend posting is matched against
+# the cloud resume and loses required-skill coverage it actually has. Measured
+# on live data (2026-09-01, a 6-resume account): role_alignment sat at 24.7/25
+# and experience at 17.0/20 while required_skills returned 14.1/30 and
+# preferred_skills 5.1/10 — i.e. the entire deficit was skill coverage the
+# other resumes carried.
+#
+# `base_resume_selector` already ranks every asset with this same engine, but
+# only at TAILOR time. This is that idea moved to the scoring path: score the
+# posting against each parsed resume and keep the best verdict, which is also
+# the honest one — "can this candidate do this job" is a question about the
+# person, not about which file is currently pinned.
+#
+# Cost is bounded two ways: `MAX_SCORING_RESUMES` caps the fan-out, and the
+# built profiles are memoized on the resume-set FINGERPRINT (the same one
+# `job_title_seed` uses), so the profiles are rebuilt only when a resume is
+# added, removed or re-parsed — never per request.
+
+MAX_SCORING_RESUMES = int(os.environ.get("FIT_MAX_SCORING_RESUMES", "") or 6)
+
+# (user_email, fingerprint) -> [{resume_id, filename, profile}]. Module scope so
+# a warm Lambda container and the long-lived ingest process both reuse it. Only
+# ever grows by one entry per user per resume-set change; `_PROFILES_MAX` bounds
+# it so a long-lived process cannot accumulate every user who ever searched.
+_PROFILES_CACHE: "OrderedDict[Tuple[str, str], List[Dict[str, Any]]]" = OrderedDict()
+_PROFILES_MAX = int(os.environ.get("FIT_PROFILE_CACHE_MAX", "") or 256)
+_PROFILES_LOCK = threading.Lock()
+
+
+def _profiles_cache_get(key: Tuple[str, str]) -> Optional[List[Dict[str, Any]]]:
+    with _PROFILES_LOCK:
+        hit = _PROFILES_CACHE.get(key)
+        if hit is not None:
+            _PROFILES_CACHE.move_to_end(key)
+        return hit
+
+
+def _profiles_cache_put(key: Tuple[str, str], value: List[Dict[str, Any]]) -> None:
+    with _PROFILES_LOCK:
+        _PROFILES_CACHE[key] = value
+        _PROFILES_CACHE.move_to_end(key)
+        while len(_PROFILES_CACHE) > _PROFILES_MAX:
+            _PROFILES_CACHE.popitem(last=False)
+
+
+def reset_profiles_cache() -> None:
+    """Test hook / explicit invalidation (the cache is otherwise process-wide)."""
+    with _PROFILES_LOCK:
+        _PROFILES_CACHE.clear()
+
+
+def load_profiles_for_user(user_email: str) -> List[Dict[str, Any]]:
+    """One built profile per parsed resume, active resume FIRST.
+
+    Returns `[]` for an account with no parsed resume — the same "cannot be
+    scored" signal `load_profile_for_user` returns None for. Ordering matters:
+    ties are broken toward the active resume, so a user who pinned a file still
+    sees that file credited when two resumes score identically.
+    """
+    if not user_email:
+        return []
+    try:
+        from services import resume_access
+        from services.job_title_seed import fingerprint_assets
+
+        assets = resume_access.list_parsed_assets(user_email)
+    except Exception as exc:
+        logger.warning("fit_score: could not list resumes for %s: %s",
+                       user_email, type(exc).__name__)
+        return []
+    if not assets:
+        return []
+
+    fp = ""
+    try:
+        fp = fingerprint_assets(assets)
+    except Exception:
+        fp = ""
+    key = (user_email, fp)
+    if fp:
+        hit = _profiles_cache_get(key)
+        if hit is not None:
+            return hit
+
+    active_id = ""
+    try:
+        from services import resume_access as _ra
+        active_id = _ra.get_active_resume_id(user_email) or ""
+    except Exception:
+        active_id = ""
+
+    # Active first, then newest-parsed (list_parsed_assets already sorts by
+    # parsed_at desc), so the cap drops the STALEST resumes, never the pinned one.
+    ordered = sorted(assets, key=lambda a: str(a.get("resume_id") or "") != active_id)
+
+    built: List[Dict[str, Any]] = []
+    for asset in ordered[:max(1, MAX_SCORING_RESUMES)]:
+        structured = asset.get("structured")
+        if not isinstance(structured, dict) or not structured:
+            continue
+        try:
+            profile = build_resume_profile(structured)
+        except Exception as exc:
+            logger.warning("fit_score: profile build failed for resume %s: %s",
+                           asset.get("resume_id"), type(exc).__name__)
+            continue
+        if not profile:
+            continue
+        built.append({
+            "resume_id": str(asset.get("resume_id") or ""),
+            "filename": str(asset.get("filename") or ""),
+            "profile": profile,
+        })
+
+    if fp:
+        _profiles_cache_put(key, built)
+    return built
+
+
+def best_profile_meta(profiles: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Batch meta for a resume SET: the union of what we know about the person.
+
+    `_batch_meta` describes one resume. A set-aware caller reports the union so
+    "has_resume" and the role families reflect every file, not the pinned one.
+    """
+    if not profiles:
+        return unscored_meta()
+    skills: set = set()
+    families: set = set()
+    years: Optional[int] = None
+    for entry in profiles:
+        prof = entry.get("profile") or {}
+        skills |= (prof.get("experience_skills") or set())
+        skills |= (prof.get("listed_skills") or set())
+        families |= (prof.get("families") or set())
+        y = prof.get("years")
+        if isinstance(y, int) and (years is None or y > years):
+            years = y
+    return {
+        "score_version": FIT_SCORE_VERSION,
+        "resume_skill_count": len(skills),
+        "has_resume": bool(skills or families),
+        "resume_years": years,
+        "resume_role_families": sorted(families),
+        "resume_count": len(profiles),
+    }
+
+
+def score_one_best(
+    profiles: List[Dict[str, Any]],
+    *,
+    jd_text: str = "",
+    title: str = "",
+    job: Optional[Dict[str, Any]] = None,
+    location: str = "",
+) -> Optional[Dict[str, Any]]:
+    """`score_one` against every resume in the set; the BEST verdict wins.
+
+    The winning verdict carries a `matched_resume` sidecar naming the file that
+    produced it, so the UI can say WHICH resume this score belongs to (and the
+    tailor step can pre-select it). Returns None for an empty set — the caller
+    must render "not scored" rather than invent a number.
+
+    Ties keep the earlier entry, and `load_profiles_for_user` puts the active
+    resume first, so a tie resolves to the resume the user pinned.
+    """
+    if not profiles:
+        return None
+    best: Optional[Dict[str, Any]] = None
+    best_score = -1
+    for entry in profiles:
+        try:
+            verdict = score_one(
+                jd_text=jd_text, title=title, job=job,
+                profile=entry.get("profile"), location=location,
+            )
+        except Exception as exc:
+            logger.warning("fit_score: scoring failed for resume %s: %s",
+                           entry.get("resume_id"), type(exc).__name__)
+            continue
+        score_value = int(verdict.get("match_score") or 0)
+        if score_value > best_score:
+            best_score = score_value
+            verdict["matched_resume"] = {
+                "resume_id": entry.get("resume_id") or "",
+                "filename": entry.get("filename") or "",
+            }
+            best = verdict
+    if best is not None and len(profiles) > 1:
+        best["scored_across_resumes"] = len(profiles)
+    return best

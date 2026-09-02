@@ -2871,8 +2871,24 @@ def list_versions():
     user = db.users.find_one({"email": user_email}, {"active_resume_id": 1}) or {}
     active_id = user.get("active_resume_id")
     versions = []
+    # Ownership here is `user_email`, NOT `owner_type == "user"`.
+    #
+    # The two used to disagree, and that disagreement was the bug: this route
+    # excluded `owner_type: "guest"` while `resume_access.list_parsed_assets`
+    # — which tailoring, scoring and `base_resume_selector` all resolve
+    # through — filters only on `user_email`. A resume uploaded during a guest
+    # session and then CLAIMED at signup therefore became invisible in the
+    # library while staying fully eligible for tailoring, so the product
+    # tailored from a file the user could neither see nor delete. Measured
+    # 2026-09-02: 10 of 18 guest assets were claimed and in exactly this state.
+    #
+    # `user_email` is the correct test because an UNCLAIMED guest asset never
+    # carries one (verified live: every `claim_status: "unclaimed"` row has
+    # `user_email: None`), so this cannot surface another person's upload.
+    # `owner_type` is kept as provenance and returned below rather than used as
+    # a filter — the guest retention sweep keys on `claim_status`, not on it.
     cursor = db.resume_assets.find(
-        {"user_email": user_email, "owner_type": "user"},
+        {"user_email": user_email},
         {
             "_id": 0,
             "resume_id": 1,
@@ -2880,6 +2896,7 @@ def list_versions():
             "created_at": 1,
             "size_bytes": 1,
             "parse_status": 1,
+            "owner_type": 1,
         },
     ).sort("created_at", -1)
     for asset in cursor:
@@ -2893,6 +2910,9 @@ def list_versions():
             "size_bytes": int(asset.get("size_bytes") or 0),
             "parse_status": asset.get("parse_status", ""),
             "is_active": asset.get("resume_id") == active_id,
+            # Provenance, so the UI can label a resume the user uploaded before
+            # they had an account instead of it appearing from nowhere.
+            "from_guest_session": asset.get("owner_type") == "guest",
         })
     return jsonify({"versions": versions}), 200
 

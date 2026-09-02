@@ -34,7 +34,7 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,14 @@ MIN_ROWS = int(os.getenv("FEED_INVENTORY_MIN_ROWS", "25") or 25)
 # (ADR-001 keeps the strict 7-day gate for guests only).
 WINDOW_DAYS = int(os.getenv("FEED_INVENTORY_WINDOW_DAYS", "30") or 30)
 GLOBAL_KEEP = 1500
+
+#: Collapse (employer, title) across cities into one card. ON by default; the
+#: flag exists so a feed regression can be reverted from the console rather
+#: than by a deploy.
+LOCATION_ROLLUP = (os.getenv("FEED_LOCATION_ROLLUP", "1") or "1").strip().lower() \
+    not in ("0", "false", "no", "off")
+#: How many other cities one card names before it just reports the count.
+LOCATION_ROLLUP_CAP = int(os.getenv("FEED_LOCATION_ROLLUP_CAP", "5") or 5)
 
 
 def enabled() -> bool:
@@ -262,6 +270,14 @@ def _role_families(titles: Iterable[str], skills: Iterable[str],
     return out
 
 
+def _resume_families(profile: Optional[Dict[str, Any]]) -> Set[str]:
+    """Union of role families across every resume in the scoring set."""
+    families: Set[str] = set()
+    for entry in (profile or {}).get("_profiles") or []:
+        families |= ((entry.get("profile") or {}).get("families") or set())
+    return families
+
+
 def _build_profile(user_email: str, resume_skills: List[str],
                    resume_years: Optional[int]) -> Optional[Dict[str, Any]]:
     """The scorer's resume profile, or None when there is nothing to score on.
@@ -272,24 +288,29 @@ def _build_profile(user_email: str, resume_skills: List[str],
     """
     from services import fit_score
 
-    # Same resolution path `fit_score.score_batch_for_user` uses:
-    # users.active_resume_id -> resume_assets (Resume Platform v3).
-    resume: Dict[str, Any] = {}
+    # EVERY parsed resume, not just users.active_resume_id. A user who keeps a
+    # Backend and a Cloud resume was scored on whichever was pinned, so the
+    # other file's skill coverage was invisible to the feed; `score_one_best`
+    # takes the best verdict across the set. Profiles are memoized on the
+    # resume-set fingerprint, so this costs one Mongo read per resume CHANGE,
+    # not per request.
+    profiles: List[Dict[str, Any]] = []
     if user_email:
         try:
-            from services import resume_access
-
-            record = resume_access.get_active_structured(user_email)
-            resume = (record or {}).get("structured") or {}
+            profiles = fit_score.load_profiles_for_user(user_email)
         except Exception as exc:
-            logger.warning("inventory_feed: could not load resume for scoring: %s",
+            logger.warning("inventory_feed: could not load resumes for scoring: %s",
                            type(exc).__name__)
-            resume = {}
+            profiles = []
 
-    if resume:
-        return fit_score.build_resume_profile(resume)
+    if profiles:
+        return {"_profiles": profiles}
     if resume_skills:
-        return fit_score._profile_from_skills(resume_skills, None, resume_years)
+        return {"_profiles": [{
+            "resume_id": "", "filename": "",
+            "profile": fit_score._profile_from_skills(
+                resume_skills, None, resume_years),
+        }]}
     return None
 
 
@@ -319,12 +340,20 @@ def _score_rows(rows: List[Dict[str, Any]], user_email: str,
             row.setdefault("missing_skills", [])
         return
 
+    profiles = profile.get("_profiles") or []
     for row in rows:
-        verdict = fit_score.score_one(
-            jd_text="", title=row.get("title") or "",
-            profile=profile, location=row.get("location") or "",
+        verdict = fit_score.score_one_best(
+            profiles, jd_text="", title=row.get("title") or "",
+            location=row.get("location") or "",
             job={"requirements": row.get("_requirements")},
         )
+        if verdict is None:
+            row["match_score"] = 0
+            row["matched_skills"] = []
+            row.setdefault("missing_skills", [])
+            continue
+        if verdict.get("matched_resume"):
+            row["matched_resume"] = verdict["matched_resume"]
         row["match_score"] = verdict["match_score"]
         row["matched_skills"] = verdict.get("matched_skills") or []
         row["missing_skills"] = (verdict.get("missing_top") or [])[:5]
@@ -375,6 +404,63 @@ def _title_key(title: Any) -> str:
     t = re.sub(r"[^a-z0-9+#/ .-]+", " ", t)
     t = re.sub(r"[\s.\-/]+", " ", t)
     return t.strip()
+
+
+def _collapse_locations(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One card per (employer, title), with the other cities rolled up.
+
+    `_dedupe` above keys on (employer, title, LOCATION), which is right for
+    "the same opening listed twice" and leaves the other half of the problem
+    untouched: an employer that opens one requisition PER STORE. Measured on
+    the live inventory (2026-09-02) that is 33% of 229,965 active rows — CVS
+    "Pharmacy Technician" is 1,148 separate, genuinely distinct requisitions,
+    Dick's "Teammate - Sales" 602, Dollar Tree "Assistant Manager I" 592. None
+    of them are data errors, and all of them read as spam in a feed.
+
+    So they are collapsed for DISPLAY, not deleted: the best-scoring copy
+    represents the group and carries `location_count` plus `other_locations`,
+    which is the "Olathe, KS +1 more" affordance. The user can still reach
+    every city, and one employer can no longer own the whole page.
+
+    Deliberately runs AFTER `_score_rows`: the representative has to be the
+    best-scoring copy, which is not knowable before scoring.
+    """
+    from services import job_inventory_service as inv
+
+    groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    order: List[Tuple[str, str]] = []
+    for row in rows:
+        key = (inv.employer_id_of(row.get("company")), _title_key(row.get("title")))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+
+    out: List[Dict[str, Any]] = []
+    for key in order:
+        members = groups[key]
+        if len(members) == 1:
+            out.append(members[0])
+            continue
+        # Highest score wins; ties go to the freshest, so the age we print
+        # stays the age of the copy we are showing.
+        members.sort(key=lambda r: (
+            -(r.get("match_score") or 0),
+            r.get("days_ago") if r.get("days_ago") is not None else 99))
+        lead = members[0]
+        others: List[str] = []
+        seen = {str(lead.get("location") or "").strip().lower()}
+        for row in members[1:]:
+            loc = str(row.get("location") or "").strip()
+            if not loc or loc.lower() in seen:
+                continue
+            seen.add(loc.lower())
+            others.append(loc)
+        lead["location_count"] = len(seen)
+        if others:
+            lead["other_locations"] = others[:LOCATION_ROLLUP_CAP]
+        out.append(lead)
+    return out
 
 
 def _dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -475,8 +561,13 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     # the feed's binding constraint, not the ranking), and reusing the same
     # object for scoring means the resume is loaded and analysed once.
     profile = _build_profile(user_email, skills, resume_years)
+    # UNION of every resume's families, not the active resume's. Same reasoning
+    # as the docstring above — retrieval that is too tight reads as an empty
+    # market — except the pool was additionally narrowed to whichever file
+    # happened to be pinned. A user with a Backend and a Cloud resume retrieves
+    # for both families now, and `fit_score` still decides the ordering.
     families = _role_families(titles, skills,
-                              sorted((profile or {}).get("families") or ()))
+                              sorted(_resume_families(profile)))
     try:
         docs = inv.find_active_fresh(
             source=None if source == SOURCE_CAREER else source,
@@ -559,6 +650,8 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
             return fam is None or fam in allowed
 
         rows = [r for r in rows if _in_family(r)]
+    if LOCATION_ROLLUP:
+        rows = _collapse_locations(rows)
     from services.career_pages_catalog import marketplace_sort_key
     rows.sort(key=lambda j: (
         marketplace_sort_key(j),

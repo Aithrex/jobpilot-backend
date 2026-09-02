@@ -1,0 +1,105 @@
+# JobPilot ingest runner — the crawl, off Lambda.
+#
+# Install:  sudo cp ingest-runner.service /etc/systemd/system/
+#           sudo systemctl daemon-reload && sudo systemctl enable --now ingest-runner
+# Cutover:  edit INGEST_SOURCES below, restart, THEN disable the matching
+#           EventBridge rule. Running both is safe (Mongo leases make the
+#           loser a no-op) but pays twice.
+[Unit]
+Description=JobPilot job-inventory ingest runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jobpilot
+Group=jobpilot
+WorkingDirectory=/opt/jobpilot/app
+
+# Secrets come from SSM via the instance profile, exactly as on Lambda.
+#
+# `USE_SSM_SECRETS=true` alone is NOT enough and fails in the worst way:
+# utils/ssm_config reads env vars holding SSM PATHS, and with none configured
+# it logs "No SSM parameter paths configured" at WARNING and utils/config falls
+# back to `mongodb://localhost:27017/`. The runner then starts cleanly, dials
+# localhost, and every tick fails — a healthy-looking process doing nothing.
+#
+# Only the paths the CRAWL needs are listed. The Lambda carries 20+ SSM_* vars
+# (JWT signing key, Google/LinkedIn/GitHub OAuth secrets, mail HMACs); a
+# crawler box has no reason to resolve any of them, and not naming them is the
+# cheapest way to guarantee it never holds them. The IAM policy still scopes
+# reads to /jobpilot/prod/* — this is defence in depth, not the only control.
+Environment=USE_SSM_SECRETS=true
+Environment=ENVIRONMENT=prod
+Environment=AWS_REGION=us-east-1
+Environment=SSM_MONGODB_URI=/jobpilot/prod/mongodb-uri
+Environment=DB_NAME=aspirely_db
+# Only used by `ingest_maintenance` (archives pinned postings before purge),
+# which stays on Lambda for now — present so enabling it later is one flag.
+Environment=RESUME_S3_BUCKET=jobpilot-resumes-prod-032398581420
+Environment=PYTHONPATH=/opt/jobpilot/app/shared/python:/opt/jobpilot/app
+Environment=PYTHONUNBUFFERED=1
+Environment=LOG_LEVEL=INFO
+
+# --- the dials Lambda could not offer -------------------------------------
+# No 300s wall, so a shard may actually finish its members instead of being
+# starved by budget. Raise these DELIBERATELY and one at a time, watching
+# job_ingestion_runs counts: they are the whole point of the move.
+# Sized for the CURRENT t3.small (2 vCPU / 2 GB), which is adequate because
+# auto-apply is dark so Chromium is not resident, and because the rollout
+# starts on the two LIGHT sources: icims is 216 members over 96 shards (~2.2
+# per shard) and oracle 159 over 48 (~3.3).
+#
+# RESIZE BEFORE STAGE 3. career-pages (2,506 members, ~39/shard) and workday
+# (1,403, ~29/shard) are an order of magnitude heavier. Watch `MemoryMax`
+# pressure and the box's own swap before widening to them; t3.medium is a
+# stop / modify-instance-attribute / start away and needs no redeploy.
+Environment=JOB_INGEST_SHARD_BUDGET=300
+Environment=INGEST_RUNNER_SHARDS_PER_TICK=16
+Environment=INGEST_RUNNER_WORKERS=12
+Environment=MONGO_MAX_POOL_SIZE=60
+# Which sources this box owns.
+#
+# TARGET STATE is all four plus discovery — every 15-minute crawl belongs here,
+# and Lambda keeps only what a user triggers and waits on (tailoring, auth,
+# search, digests).
+#
+# ROLLOUT: start at `icims` with --no-discovery, and widen one source at a time
+# as each matching EventBridge rule is disabled. Running a source in both places
+# is safe (the Mongo lease makes the loser a no-op) but pays twice, and running
+# it in NEITHER place silently stops that crawl — so always start the box first
+# and disable the rule second.
+#
+#   stage 1  INGEST_SOURCES=icims                                --no-discovery
+#   stage 2  INGEST_SOURCES=icims,oracle                         --no-discovery
+#   stage 3  INGEST_SOURCES=icims,oracle,career-pages            --no-discovery
+#   stage 4  INGEST_SOURCES=icims,oracle,career-pages,workday    --no-discovery
+#   stage 5  INGEST_SOURCES=icims,oracle,career-pages,workday    (drop the flag)
+Environment=INGEST_SOURCES=icims
+Environment=INGEST_EXTRA_FLAGS=--no-discovery
+
+# `ingest_maintenance` is a DAILY retention purge, not a 15-minute crawl, and it
+# archives pinned postings to S3 before deleting them. It stays on Lambda until
+# the four crawls are proven here.
+ExecStart=/opt/jobpilot/venv/bin/python -m services.ingest_runner.runner \
+    --sources ${INGEST_SOURCES} ${INGEST_EXTRA_FLAGS} --no-maintenance
+
+# SIGTERM drains in-flight shards (INGEST_RUNNER_DRAIN=150s) before exit.
+KillSignal=SIGTERM
+TimeoutStopSec=180
+Restart=always
+RestartSec=10
+
+# Hardening. The runner needs outbound HTTPS and nothing on this disk except
+# its own code, so it gets nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/jobpilot
+# 2 GB box: leave the OS and the 2 GB swap real headroom. systemd kills the
+# unit rather than letting the kernel OOM-pick the SSM agent.
+MemoryMax=1200M
+
+[Install]
+WantedBy=multi-user.target

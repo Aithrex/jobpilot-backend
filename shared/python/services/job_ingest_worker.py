@@ -264,6 +264,11 @@ RETRY_BASE_SECONDS = _env_float("JOB_INGEST_RETRY_BASE", 0.4)
 # self-invoked ingest Lambdas; there is no queue to throttle us.
 MAX_SHARDS_PER_TICK = _env_int("JOB_INGEST_SHARDS_PER_TICK", 16)
 
+# How long `run_bounded` waits for already-running tasks at teardown. Bounded
+# by construction: a task clamps every request to the remaining budget, so it
+# returns within roughly one request timeout of being cancelled.
+TEARDOWN_DRAIN_SECONDS = _env_float("JOB_INGEST_TEARDOWN_DRAIN", 10.0)
+
 # Requirement extraction spends Bedrock tokens, so it is OFF unless explicitly
 # enabled. It is never called from a listing/detail path either way.
 REQUIREMENTS_ENABLED = _env_flag("JOB_INGEST_REQUIREMENTS_ENABLED", False)
@@ -280,7 +285,17 @@ def _default_owner() -> str:
     """Lease owner id. The Lambda log stream is unique per container, so two
     warm containers racing the same shard get different owners and exactly one
     wins `acquire_lease`."""
-    stream = os.environ.get("AWS_LAMBDA_LOG_STREAM_NAME") or "local"
+    stream = os.environ.get("AWS_LAMBDA_LOG_STREAM_NAME")
+    if not stream:
+        # Off Lambda (the EC2/systemd runner, or a local run) every worker
+        # would otherwise be called "local", which is unique enough for
+        # `acquire_lease` but useless when reading `job_source_state` to see
+        # WHICH box is holding a shard.
+        import socket
+        try:
+            stream = f"{socket.gethostname()}:{os.getpid()}"
+        except Exception:  # pragma: no cover - defensive
+            stream = f"host:{os.getpid()}"
     return f"{stream[:60]}:{uuid.uuid4().hex[:8]}"
 
 
@@ -298,6 +313,19 @@ def _default_owner() -> str:
 
 _REGISTRY_LOCK = threading.Lock()
 _REGISTRY_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+_REGISTRY_CACHED_AT: Dict[str, float] = {}
+
+# How long a loaded registry may be reused before it is re-read from Mongo.
+#
+# On Lambda this was free: the container died within minutes, so "cached at
+# module scope" WAS a per-invocation cache. In a long-lived process (the
+# EC2/systemd runner) it is permanent, and permanent is wrong here — the
+# `discover_companies` tick writes new `company_ats_endpoints` rows every 15
+# minutes, and `_mongo_members` is how they become crawlable. Without a TTL a
+# newly discovered board would never be crawled until someone restarted the
+# process, which would silently cap the discovery->ingest pipeline the whole
+# registry expansion exists to widen.
+REGISTRY_TTL_SECONDS = _env_float("JOB_INGEST_REGISTRY_TTL", 600.0)
 
 # The literals these tables USED to be, kept as the fallback the derived values
 # below degrade to. Not dead code: they are the last known-good crawl, and the
@@ -888,13 +916,17 @@ def registry_members(source: str) -> List[Dict[str, Any]]:
     constant here.
     """
     src = normalize_source(source)
+    now = time.monotonic()
     with _REGISTRY_LOCK:
         cached = _REGISTRY_CACHE.get(src)
         if cached is not None:
-            return cached
+            age = now - _REGISTRY_CACHED_AT.get(src, 0.0)
+            if REGISTRY_TTL_SECONDS <= 0 or age < REGISTRY_TTL_SECONDS:
+                return cached
     members = _load_members(src)
     with _REGISTRY_LOCK:
         _REGISTRY_CACHE[src] = members
+        _REGISTRY_CACHED_AT[src] = now
     return members
 
 
@@ -902,6 +934,7 @@ def reset_registry_cache() -> None:
     """Test hook: drop the cached registries (they are otherwise process-wide)."""
     with _REGISTRY_LOCK:
         _REGISTRY_CACHE.clear()
+        _REGISTRY_CACHED_AT.clear()
 
 
 def normalize_source(source: Any) -> str:
@@ -1429,6 +1462,20 @@ def run_bounded(
         local_stop.set()
         for future in list(inflight):
             future.cancel()
+        # Give already-RUNNING tasks a bounded chance to notice `local_stop`
+        # and exit before we walk away from them. `shutdown(wait=False)` alone
+        # was right for Lambda, where the container freezes moments later and
+        # takes the threads with it. A long-lived process has no such reaper:
+        # every shard run leaks its still-running tasks, and at 16 shards x 4
+        # sources x 96 ticks a day those threads and sockets accumulate. The
+        # wait is bounded (tasks already clamp each request to the remaining
+        # budget) so this can delay a shard by at most TEARDOWN_DRAIN_SECONDS,
+        # never block it.
+        if inflight and TEARDOWN_DRAIN_SECONDS > 0:
+            try:
+                futures_wait(set(inflight), timeout=TEARDOWN_DRAIN_SECONDS)
+            except Exception:  # pragma: no cover - defensive
+                pass
         executor.shutdown(wait=False, cancel_futures=True)
     return results
 

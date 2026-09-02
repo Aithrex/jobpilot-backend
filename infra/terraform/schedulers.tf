@@ -18,7 +18,7 @@ locals {
     # DRAFT — human review. Hourly auto-apply sweep: enqueue eligible applications,
     # send the evening summary (self-filtered by local hour), reconcile Oracle
     # verify-freezes. Routes to scheduled_jobs.dispatch_scheduled("apply_hourly").
-    apply_hourly = { expression = "rate(1 hour)", desc = "Auto-apply hourly sweep + evening summary + verify re-check" }
+    apply_hourly = { expression = "rate(1 hour)", desc = "Auto-apply hourly sweep + evening summary + verify re-check", state = "DISABLED" }
     # DRAFT — human review. Spec §5: the NEW-POSTING auto-apply fan-out.
     # `apply_hourly` above only ever considered jobs the user had already SAVED
     # by hand, so the user was still the discovery step. This tick joins new
@@ -50,7 +50,7 @@ locals {
     # Making THIS tick faster barely moves that number. Landing in a hot
     # posting's first ~100 applicants needs a HOT-SHARD TIER (a handful of
     # high-value employers on their own 1-2 minute rule), not a faster sweep.
-    apply_match_sweep = { expression = "cron(10/15 * * * ? *)", desc = "New-posting auto-apply fan-out (fit-gated, per-user watermark)" }
+    apply_match_sweep = { expression = "cron(10/15 * * * ? *)", desc = "New-posting auto-apply fan-out (fit-gated, per-user watermark)", state = "DISABLED" }
     # DRAFT — human review. Nightly cross-user skill-market recompute. Option (a)
     # is wired: scheduled_jobs.dispatch_scheduled("trend_aggregate") enqueues the
     # resume `_process_job` job of the same name (system actor, payload {}).
@@ -99,7 +99,15 @@ locals {
     # Offsets continue the existing 7-minute stagger so four fan-outs never
     # overlap: :00 workday, :07 career-pages, :11 oracle, :04 icims.
     ingest_oracle = { expression = "cron(11/15 * * * ? *)", desc = "Oracle ORC shard ingestion tick (48 shards, <=16/tick)" }
-    ingest_icims  = { expression = "cron(4/15 * * * ? *)", desc = "iCIMS shard ingestion tick (96 shards, <=16/tick)" }
+    ingest_icims  = { expression = "cron(4/15 * * * ? *)", desc = "iCIMS shard ingestion tick (96 shards, <=16/tick)", state = "DISABLED" }
+    # CUT OVER TO EC2 2026-09-02 (stage 1). The crawl now runs in the
+    # `ingest-runner` systemd unit on i-06bf0e03e60d9d409, which schedules
+    # icims on the same :04/:19/:34/:49 offsets this rule used. Declared
+    # DISABLED rather than only clicked off: `state` is looked up with an
+    # ENABLED default, so an undeclared rule silently re-enables itself on
+    # the next apply — and both planes crawling is double cost (the Mongo
+    # lease keeps it merely wasteful rather than incorrect).
+    # To roll back: flip to ENABLED here and drop icims from INGEST_SOURCES.
     # Career-portal discovery: grows the crawlable registry rather than
     # crawling it. A one-off script was never going to drain it — 99.9% of the
     # company registry had never been probed — so it gets a tick.
