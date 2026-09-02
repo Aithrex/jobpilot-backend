@@ -137,7 +137,9 @@ OFFICIAL_CAREER_URLS: Tuple[Dict[str, Any], ...] = (
          cohorts=("public_tech",), categories=("semiconductor",)),
     _row("VMware", "vmware.com", "https://www.broadcom.com/company/careers",
          cohorts=("public_tech",), categories=("cloud_data",),
-         notes="acquired by Broadcom; identity resolves to Broadcom"),
+         notes="the VMware careers URL redirects to Broadcom's, which is "
+               "documentary; the acquisition itself is not asserted here. "
+               "`operating_status` is set by evidence, not by this note."),
     _row("Uber", "uber.com", "https://www.uber.com/us/en/careers/list/",
          cohorts=("public_tech",), categories=("consumer",)),
     _row("Lyft", "lyft.com", "https://www.lyft.com/careers",
@@ -232,7 +234,7 @@ OFFICIAL_CAREER_URLS: Tuple[Dict[str, Any], ...] = (
          cohorts=("private_growth",), categories=("ai_ml",)),
     _row("Pydantic", "pydantic.dev", "https://pydantic.dev/careers",
          cohorts=("niche_startup",), categories=("devtools",),
-         notes="audit candidate - confirm public hiring before counting"),
+         notes="audit candidate. Probed 2026-09-02: domain confirmed, careers URL 200."),
     _row("Turso", "turso.tech", "https://turso.tech/careers",
          cohorts=("niche_startup",), categories=("cloud_data", "devtools"),
          notes="audit candidate"),
@@ -253,26 +255,35 @@ OFFICIAL_CAREER_URLS: Tuple[Dict[str, Any], ...] = (
          notes="audit candidate"),
     _row("Protect AI", "protectai.com", "https://protectai.com/careers",
          cohorts=("niche_startup",), categories=("security", "ai_ml"),
-         notes="audit candidate - acquired by Palo Alto Networks 2025; "
-               "confirm operating_status before counting as an employer"),
+         notes="audit candidate. Probed 2026-09-02: domain confirmed, careers "
+               "URL 404. An acquisition is the likely cause and is NOT "
+               "verified here - `operating_status` stays `active` until it "
+               "is, because guessing `acquired` is the same class of error as "
+               "guessing an owner."),
     _row("Lakera", "lakera.ai", "https://www.lakera.ai/careers",
          cohorts=("niche_startup",), categories=("security", "ai_ml"),
-         notes="audit candidate - acquired by Check Point 2025; confirm status"),
+         notes="audit candidate. Probed 2026-09-02: domain confirmed, careers "
+               "URL 200. Acquisition rumours are NOT verified here."),
     _row("HiddenLayer", "hiddenlayer.com", "https://hiddenlayer.com/careers/",
          cohorts=("niche_startup",), categories=("security", "ai_ml"),
          notes="audit candidate"),
     _row("Ampere Computing", "amperecomputing.com",
          "https://amperecomputing.com/careers", cohorts=("private_growth",),
-         categories=("semiconductor",), notes="audit candidate"),
+         categories=("semiconductor",),
+         notes="audit candidate. Probed 2026-09-02: domain confirmed, careers "
+               "URL 403 (bot wall). BLOCKED, not empty."),
     _row("Celestial AI", "celestial.ai", "https://www.celestial.ai/careers",
          cohorts=("niche_startup",), categories=("semiconductor", "ai_ml"),
-         notes="audit candidate"),
+         notes="audit candidate. Probed 2026-09-02: careers URL 200, but the "
+               "homepage does not NAME the company in visible text (a JS "
+               "shell), so the domain is unconfirmed by our own check."),
     _row("d-Matrix", "d-matrix.ai", "https://www.d-matrix.ai/careers/",
          cohorts=("niche_startup",), categories=("semiconductor", "ai_ml"),
          notes="audit candidate"),
     _row("Enfabrica", "enfabrica.net", "https://www.enfabrica.net/careers",
          cohorts=("niche_startup",), categories=("semiconductor", "hardware"),
-         notes="audit candidate"),
+         notes="audit candidate. Probed 2026-09-02: domain confirmed, careers "
+               "URL 404 - the path has moved; re-fingerprint from the domain."),
 )
 
 
