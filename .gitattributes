@@ -1,0 +1,21 @@
+# Normalise line endings in the repo, always.
+#
+# Without this the repo drifted: HEAD stored LF while a Windows/WSL checkout
+# rewrote files as CRLF, so 38 files sat permanently "modified" with no content
+# change. That buries real diffs (one 22-line fix showed as 9,972 changed lines)
+# and invites someone to commit the noise, flipping files to CRLF in a codebase
+# that is built and run on Linux.
+* text=auto eol=lf
+
+# Binary — never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.zip binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.ico binary
