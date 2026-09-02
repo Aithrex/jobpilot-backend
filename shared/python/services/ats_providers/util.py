@@ -351,6 +351,24 @@ _GENERIC_FIRST_TOKENS = frozenset({
     "science", "sciences", "energy", "power", "health", "medical", "bio",
     "life", "green", "blue", "red", "silver", "gold", "diamond", "star",
     "sun", "moon", "river", "lake", "mountain", "eagle", "falcon", "phoenix",
+    # Added after a live run over the uncovered tech cohort claimed
+    # `ashby/sphere` for "Sphere 3D Corp.", `ashby/twenty` for "Twenty One
+    # Capital", `ashby/sierra` for "SIERRA INTERNATIONAL NETWORK" and
+    # `ashby/odyssey` for "Odyssey Health". Ashby and Lever publish no owner
+    # name, so this table is the ONLY guard on those two vendors - an ordinary
+    # noun missing from it is a wrong board filed under a real employer.
+    "sphere", "twenty", "thirty", "sierra", "odyssey", "uniti", "unity",
+    "public", "private", "circle", "square", "vector", "orbit", "prism",
+    "cube", "axis", "arc", "crest", "peak", "ridge", "canyon", "mesa",
+    "aspen", "tahoe", "denali", "everest", "journey", "voyage", "quest",
+    "legacy", "heritage", "liberty", "freedom", "victory", "triumph",
+    "century", "millennium", "horizon", "zenith", "meridian", "compass",
+    "anchor", "beacon", "harbor", "haven", "keystone", "cornerstone",
+    "landmark", "milestone", "signal", "sentinel", "guardian", "patriot",
+    "empire", "kingdom", "crown", "royal", "noble", "titan",
+    "genesis", "origin", "element", "essence", "catalyst",
+    "momentum", "velocity", "impulse", "kinetic", "photon",
+    "proton", "neutron", "fusion", "helix",
 })
 
 
@@ -395,12 +413,33 @@ def slug_is_trustworthy(company_name: str, slug: str) -> bool:
     return slug_key in tokens and distinctive
 
 
+#: How much of the longer name a shorter declared name must cover before the
+#: two are the same company. 0.4 keeps "CLEAR" for "Clear Secure" (0.45) and
+#: "Payoneer" for "Payoneer Global" (0.57) while rejecting "Public" for
+#: "Public Policy Holding Company" (0.23), which is a real live false match.
+_NAME_OVERLAP_MIN = 0.4
+#: A declared name this long is distinctive on its own, whatever the ratio -
+#: "servicetitan" inside "ServiceTitan Holdings International" is not a
+#: coincidence the way "public" is.
+_NAME_DISTINCTIVE_CHARS = 8
+
+
 def names_match(company_name: str, board_name: str) -> bool:
     """Does a board's DECLARED owner name refer to this company?
 
     Compared on letters only, so "Asure Software" matches "ASURE SOFTWARE INC"
-    and "TradeDesk" matches "Trade Desk, Inc.". One name being a prefix of the
-    other is accepted ("Sandisk" for "Sandisk Corp"); anything else is not.
+    and "TradeDesk" matches "Trade Desk, Inc.". One name being a prefix of, or
+    contained in, the other is accepted ("Sandisk" for "Sandisk Corp", "CLEAR"
+    for "Clear Secure") only when it covers enough of the longer name to be
+    evidence rather than a coincidence.
+
+    KNOWN LIMIT: two different companies can normalise to the SAME string, and
+    no rule here can separate them. Measured live, Greenhouse's `costar` board
+    declares `name: "Co-Star"` - the astrology app - which normalises to
+    `costar`, exactly like "COSTAR GROUP, INC.", the real-estate data company.
+    An exact-name collision needs a second signal (the board's own domain, its
+    job locations) and is out of scope for a name comparison. It is recorded
+    here so the next reader does not conclude this function is airtight.
     """
     import re as _re
 
@@ -420,10 +459,21 @@ def names_match(company_name: str, board_name: str) -> bool:
     a, b = key(company_name), key(board_name)
     if not a or not b:
         return False
-    if a == b or a.startswith(b) or b.startswith(a):
+    if a == b:
         return True
-    # Containment either way, for a parent/brand pairing that is still plainly
-    # the same name ("CS Disco, Inc." <-> "DISCO"). Bounded at four characters
-    # so a short token cannot match by accident.
+
+    # Prefix or containment, for a parent/brand pairing that is still plainly
+    # the same name ("CS Disco, Inc." <-> "DISCO", "Clear Secure" <-> "CLEAR").
+    #
+    # Both directions need a LENGTH bound, not just a four-character floor.
+    # Measured live: Greenhouse's `public` board declares `name: "Public"` -
+    # it is Public.com, the investing app - and a bare prefix rule matched it
+    # to "Public Policy Holding Company, Inc", which would have filed a
+    # stranger's board under a real employer. The declared name has to be most
+    # of the company name, or long enough to be distinctive on its own.
     shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
-    return len(shorter) >= 4 and shorter in longer
+    if len(shorter) < 4 or shorter not in longer:
+        return False
+    if len(shorter) >= _NAME_DISTINCTIVE_CHARS:
+        return True
+    return (len(shorter) / len(longer)) >= _NAME_OVERLAP_MIN

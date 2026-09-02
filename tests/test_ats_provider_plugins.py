@@ -324,6 +324,42 @@ class TestSlugCorroboration:
         assert not names_match("Super League Enterprise, Inc.", "Super Technologies")
         assert not names_match("SPACE EXPLORATION TECHNOLOGIES CORP", "Space Programs")
 
+    def test_a_short_declared_name_must_cover_most_of_the_company_name(self):
+        """Greenhouse's `public` board declares `name: "Public"` - it is
+        Public.com, the investing app. A bare prefix rule matched that to
+        "Public Policy Holding Company, Inc" on a live run, which would have
+        filed a stranger's board under a real employer. Verified against the
+        vendor: GET /v1/boards/public -> 200 {"name": "Public"}.
+        """
+        from services.ats_providers.util import names_match
+
+        assert not names_match("Public Policy Holding Company, Inc", "Public")
+        # ...while the pairings that ARE the same company still pass:
+        assert names_match("Clear Secure, Inc.", "CLEAR")          # 0.45
+        assert names_match("Payoneer Global Inc.", "Payoneer")     # 0.57
+        assert names_match("CS Disco, Inc.", "DISCO")              # 0.71
+
+    def test_a_long_declared_name_stands_on_its_own_whatever_the_ratio(self):
+        from services.ats_providers.util import names_match
+
+        assert names_match("ServiceTitan Holdings International Inc.",
+                           "ServiceTitan")
+
+    def test_an_ordinary_noun_is_not_a_claimable_slug_for_the_blind_vendors(self):
+        """Ashby and Lever publish no owner name, so `slug_is_trustworthy` is
+        the ONLY guard on those two. A live run over the uncovered tech cohort
+        claimed all four of these; each is somebody else's board.
+        """
+        from services.ats_providers.util import slug_is_trustworthy
+
+        for name, slug in [("Sphere 3D Corp.", "sphere"),
+                           ("Twenty One Capital, Inc.", "twenty"),
+                           ("SIERRA INTERNATIONAL NETWORK INC", "sierra"),
+                           ("Odyssey Health, Inc.", "odyssey"),
+                           ("Uniti Group Inc.", "uniti"),
+                           ("Public Policy Holding Company, Inc", "public")]:
+            assert slug_is_trustworthy(name, slug) is False, f"{name} -> {slug}"
+
     def test_greenhouse_and_smartrecruiters_can_name_their_owner(self):
         """The two vendors that publish it must expose it, because that is
         what makes a guess checkable rather than merely plausible."""
