@@ -214,7 +214,11 @@ and stamps its postings `jpmorgan-chase`, `nutmeg-container-corporation` and
 `chase-family-limited-partnership-no-5`. Keyed on the slug, one employer took
 nine of the first twenty-five cards. The cap is best-effort — a page is topped
 up rather than shortened when the remaining results genuinely are one
-employer.
+employer — and it applies only to the first `EMPLOYER_DIVERSITY_DEPTH` rows
+(250, ten pages). Diversifying the whole list would push a dominant employer's
+later postings out of the `MAX_ORDERED` window into date order: JPMorgan holds
+839 core-tech postings and a cap of 3 per 25-row page admits only ~240 within
+2,000.
 
 ## Config & data
 Config via `shared/python/utils/config.py`; secrets via **AWS SSM** in prod (`USE_SSM_SECRETS=true`), `.env` locally (see `.env.example`). Résumé collection is **`user_resumes`** (not `base_resumes`). Résumé files → **S3**. Keep cold starts lean: reuse boto3/Mongo clients at module scope, no heavy import-time work. Deploy lives in-repo: `infra/terraform/` (HTTP API + the 6 Lambdas + shared layer + IAM + KMS credential store + managed mailbox/SES + schedulers) and `scripts/build_layer.sh` + `scripts/package.sh`; see `infra/README.md`. CI: `.github/workflows/tests.yml` (offline suite) + `deploy.yml` (path-filtered per-service deploy).
