@@ -2538,6 +2538,14 @@ def score(resume: Dict[str, Any], job: Dict[str, Any],
 
     eligibility, ineligible_reasons = _eligibility(
         constraints, alignment, prof, reqs)
+    if evidence_breadth <= 0.0 and eligibility == ELIGIBLE:
+        # Nothing on either side could be measured, so `final` is 0 by
+        # arithmetic rather than by judgement. A 0 renders as "unlikely
+        # match", which is a claim; "not scored" is the true one. Same rule
+        # as no-parsed-resume: never print a number we did not measure.
+        eligibility = NOT_SCORED
+        ineligible_reasons = ["Nothing on this posting could be compared "
+                              "against your resume."]
     if eligibility == INELIGIBLE and final > _INELIGIBLE_CEILING:
         final = _INELIGIBLE_CEILING
 

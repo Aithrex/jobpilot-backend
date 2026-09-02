@@ -72,7 +72,7 @@ from services import career_source_service as css        # noqa: E402
 from services import employer_registry as er             # noqa: E402
 from services import official_career_registry as ocr     # noqa: E402
 from services.ats_providers import registry as ats_registry   # noqa: E402
-from services.ats_providers.base import Endpoint         # noqa: E402
+from services.ats_providers.base import ChallengeError, Endpoint  # noqa: E402
 from services.ats_providers.http import simple_context   # noqa: E402
 from services.career_source_service import evidence      # noqa: E402
 
@@ -402,6 +402,15 @@ def main() -> int:
             ep = Endpoint(vendor=row["ats_vendor"], tenant=row.get("tenant") or "")
             try:
                 result = provider.validate(ep, ctx)
+            except ChallengeError as exc:
+                # A bot challenge IS the `blocked` state, with a retry. Counting
+                # it as an unclassified error left 410 sources sitting in
+                # whatever state they were already in, so a wall read as "no
+                # news" instead of "come back in three days".
+                return {"source_id": row["source_id"], "status": "blocked",
+                        "count": 0, "sample": "",
+                        "detail": f"challenge: {str(exc)[:200]}",
+                        "vendor": row.get("ats_vendor")}
             except Exception as exc:
                 return {"source_id": row["source_id"], "error": type(exc).__name__}
             return {"source_id": row["source_id"], "status": result.status,

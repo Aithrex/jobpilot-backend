@@ -563,6 +563,30 @@ class TestUnknownDoesNotAutoFail:
         assert v["components"]["location"]["score"] == 0.0
         assert "location" not in v["applied_caps"]
 
+    def test_nothing_measurable_is_not_scored_rather_than_scored_zero(self):
+        """A 0 renders as "unlikely match", which is a claim about the
+        candidate. When NOTHING could be compared, the honest answer is the
+        same one a missing resume gets: not scored."""
+        v = fit_score.score(
+            {"contact": {"name": "A"}, "skills": {"core": ["Widgetry"]},
+             "experience": [{"title": "Widget Coordinator", "company": "X",
+                             "dates": "", "bullets": ["Coordinated widgets."]}],
+             "education": [{"degree": "Diploma"}]},
+            {"title": "Coordinator", "description": "Join us!",
+             "requirements": {"score_version": fit_score.FIT_SCORE_VERSION,
+                              "required_degree_level": 3,
+                              "required_skills": [], "preferred_skills": [],
+                              "required_years": None, "role_family": None,
+                              "job_level": None, "industries": [],
+                              "work_mode": "unknown", "licenses": [],
+                              "clearance_required": False,
+                              "work_authorization_restricted": False,
+                              "requirements_source": "none", "text_length": 9,
+                              "content_hash": "x"}})
+        if v["evidence_breadth"] == 0.0:
+            assert v["eligibility"] == fit_score.NOT_SCORED
+            assert v["ineligible_reasons"]
+
     def test_a_posting_naming_no_degree_does_not_cost_a_point(self):
         jd = "Backend Engineer. Requirements: Python, SQL, AWS and Docker."
         v = fit_score.score(_resume(), {"title": "Backend Engineer", "description": jd})
