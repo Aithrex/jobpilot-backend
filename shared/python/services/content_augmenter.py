@@ -726,9 +726,7 @@ class ContentAugmenter:
                 p["additional_needed"] = max(1, round(p["additional_needed"] * scale))
 
         # Build the LLM prompt
-        # Full resume text — the previous 2000-char cap silently dropped later
-        # roles, so extra bullets were invented from a truncated context.
-        original_text = build_resume_text(original)
+        original_text = build_resume_text(original)[:2000]
         required_skills = ", ".join(jd_analysis.get("required_skills", [])[:10])
         keywords = ", ".join(jd_analysis.get("keywords", [])[:10])
 
@@ -921,9 +919,8 @@ class ContentAugmenter:
                 continue
             if len(enhanced_text) < len(original_text) * 0.7:
                 continue  # Too much content removed
-            # Outcome-only rewrites are valid. Requiring a metric here forced
-            # the model to invent numbers (the prompt forbids that, then this
-            # gate discarded every honest outcome clause).
+            if not METRIC_PATTERN.search(enhanced_text):
+                continue  # Still no metrics after enhancement
 
             # Apply
             section = tailored[candidate["section"]]

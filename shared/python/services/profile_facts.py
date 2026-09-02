@@ -88,32 +88,11 @@ def build_fact_store(
             # Voice Graph must never break tailoring — degrade silently.
             logger.warning("profile_facts: voicegraph merge failed: %s", e)
 
-    for fact in facts:
-        _ensure_v2_fields(fact)
-
     return {
         "facts": facts,
         "by_id": {f["fact_id"]: f for f in facts},
         "sources": sources,
     }
-
-
-def _ensure_v2_fields(fact: Dict[str, Any]) -> Dict[str, Any]:
-    """Add Increment-6 fields without dropping fact_id / display / source."""
-    fact.setdefault("fact_type", fact.get("type") or "unknown")
-    fact.setdefault("value", fact.get("display") or "")
-    fact.setdefault("context", "")
-    fact.setdefault("source_span", {})
-    source = fact.get("source") or "resume"
-    fact.setdefault(
-        "candidate_confirmed",
-        source == "resume" or source in ("linkedin", "github", "user", "voicegraph"),
-    )
-    fact.setdefault(
-        "verification_status",
-        "trusted" if source == "resume" else "confirmed",
-    )
-    return fact
 
 
 # Only confident, user-confirmed graph nodes become grounding. A low-confidence
@@ -252,74 +231,6 @@ def _resume_facts(structured: Dict[str, Any]):
             "display": "CERTIFICATIONS: " + ", ".join(
                 c for c in certs if isinstance(c, str)
             ),
-            "value": ", ".join(c for c in certs if isinstance(c, str)),
-            "fact_type": "certifications",
-        }
-        for cert in certs:
-            if isinstance(cert, str) and cert.strip():
-                yield {
-                    "fact_id": "res:cert:" + _sha(cert.lower()),
-                    "type": "certification",
-                    "fact_type": "credential",
-                    "source": "resume",
-                    "display": f"CERTIFICATION: {cert.strip()}",
-                    "value": cert.strip(),
-                    "context": "certifications",
-                }
-
-    licenses = structured.get("licenses") or []
-    if licenses:
-        yield {
-            "fact_id": "res:licenses",
-            "type": "licenses",
-            "fact_type": "license",
-            "source": "resume",
-            "display": "LICENSES: " + ", ".join(
-                c for c in licenses if isinstance(c, str)
-            ),
-            "value": ", ".join(c for c in licenses if isinstance(c, str)),
-        }
-        for lic in licenses:
-            if isinstance(lic, str) and lic.strip():
-                yield {
-                    "fact_id": "res:license:" + _sha(lic.lower()),
-                    "type": "license",
-                    "fact_type": "license",
-                    "source": "resume",
-                    "display": f"LICENSE: {lic.strip()}",
-                    "value": lic.strip(),
-                    "context": "licenses",
-                }
-
-    # Per-skill facts so writers can cite a single capability, not the blob.
-    seen_skills = set()
-    for skill in flatten_skills(structured):
-        if not isinstance(skill, str) or not skill.strip():
-            continue
-        key = skill.strip().lower()
-        if key in seen_skills:
-            continue
-        seen_skills.add(key)
-        yield {
-            "fact_id": "res:skill:" + _sha(key),
-            "type": "skill",
-            "fact_type": "skill",
-            "source": "resume",
-            "display": f"SKILL: {skill.strip()}",
-            "value": skill.strip(),
-            "context": "skills",
-        }
-
-    portfolio = ((structured.get("contact") or {}).get("portfolio") or "").strip()
-    if portfolio:
-        yield {
-            "fact_id": "res:portfolio",
-            "type": "portfolio",
-            "fact_type": "portfolio",
-            "source": "resume",
-            "display": f"PORTFOLIO: {portfolio}",
-            "value": portfolio,
-            "context": "contact",
         }
 
 
@@ -614,42 +525,6 @@ def record_decisions(user_email: str, decisions: List[Dict[str, Any]]) -> int:
             "decided_at": now,
         }
 
-    if not updates:
-        return 0
-    updates["updated_at"] = now
-    _db()[CONFIRMATIONS_COLLECTION].update_one(
-        {"user_email": email}, {"$set": updates}, upsert=True
-    )
-    return len(updates) - 1
-
-
-def confirm_review_skills(user_email: str, items: List[Dict[str, Any]]) -> int:
-    """Persist adjacent-skill confirmations as reusable ``user:skill:*`` facts.
-
-    These are terms the writer withheld because they were not on the original
-    resume. Once confirmed they merge into the fact store for every later job.
-    """
-    from utils.security import InputSanitizer
-
-    email = InputSanitizer.sanitize_string(user_email or "")
-    if not email or not isinstance(items, list):
-        return 0
-    now = datetime.now(timezone.utc)
-    updates: Dict[str, Any] = {}
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        term = InputSanitizer.sanitize_string(str(item.get("term") or item.get("skill") or ""))
-        status = str(item.get("status") or "confirmed").strip().lower()
-        if not term or status not in _VALID_DECISIONS:
-            continue
-        fid = "user:skill:" + _sha(term.lower())
-        updates[f"decisions.{fid}"] = {
-            "status": status,
-            "kind": "skill",
-            "payload": {"display": f"Skill: {term}", "term": term},
-            "decided_at": now,
-        }
     if not updates:
         return 0
     updates["updated_at"] = now

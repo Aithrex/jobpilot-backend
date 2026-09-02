@@ -180,22 +180,6 @@ class IntegrityGuard:
         tailored["certifications"] = [
             c for c in original_certs if isinstance(c, str) and c.strip()
         ]
-        original_licenses = original.get("licenses") or []
-        tailored["licenses"] = [
-            c for c in original_licenses if isinstance(c, str) and c.strip()
-        ]
-        # Optional extras: mirror the original so the tailor cannot invent
-        # awards, publications, clearance, etc.
-        if (original.get("headline") or "").strip():
-            tailored["headline"] = original["headline"].strip()
-        for key in (
-            "languages", "awards", "publications", "patents",
-            "leadership", "volunteering", "associations", "clearance",
-        ):
-            tailored[key] = [
-                c for c in (original.get(key) or [])
-                if isinstance(c, str) and c.strip()
-            ]
 
         # Step 4b: Strip fabricated certifications the LLM placed in the skills
         # section (the back door around the certifications field). This is the

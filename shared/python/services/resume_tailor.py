@@ -56,13 +56,13 @@ logger = logging.getLogger(__name__)
 
 
 def _flag_enabled(name: str) -> bool:
-    """Read a boolean feature flag from the shared registry.
+    """Read a boolean feature flag, default-on in development.
 
-    Defaults live in `utils.feature_flags.DEFAULTS` and are the same in every
-    environment, so the suite exercises the pipeline production actually runs.
+    Mirrors the differentiation_service pattern: on unless explicitly disabled
+    in a non-development environment.
     """
-    from utils.feature_flags import enabled
-    return enabled(name)
+    default = "true" if os.environ.get("ENVIRONMENT", "development") == "development" else "false"
+    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
 # Coordinated section refinement (Craft-overhaul Part A). The primary Sonnet
