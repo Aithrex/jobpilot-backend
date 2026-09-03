@@ -1,8 +1,8 @@
 """ContentAugmenter keyword-density phase — anti-stuffing alignment tests.
 
-The phase must: skip entirely when required coverage is already >= 80%,
-never inject keywords with ZERO occurrences (that's the tailor's
-Defensibility call), and cap strengthening at 8 keywords.
+The phase must: skip entirely when required coverage in bullets/summary is
+already >= 80%, never inject keywords with ZERO occurrences anywhere on the
+resume, weave skills-list-only terms into bullets, and cap strengthening at 8.
 """
 import pytest
 
@@ -14,10 +14,10 @@ def _augmenter() -> ContentAugmenter:
     return ContentAugmenter(renderer=object(), project_generator=object())
 
 
-def _tailored_with_bullets(bullets):
+def _tailored_with_bullets(bullets, skills=None):
     return {
         "contact": {}, "summary": "",
-        "skills": {},
+        "skills": skills or {},
         "experience": [{
             "title": "Engineer", "company": "Acme", "location": "",
             "dates": "March 2022 - Present", "type": "Full-time",
@@ -42,7 +42,7 @@ def llm_spy(monkeypatch):
 
 
 def test_skips_when_coverage_in_honest_band(llm_spy):
-    # 4 of 5 required present (80%) → phase must not spend an LLM call.
+    # 4 of 5 required present in bullets (80%) → phase must not spend an LLM call.
     jd = {"required_skills": ["alphatool", "betatool", "gammatool", "deltatool", "epsilontool"]}
     tailored = _tailored_with_bullets([
         "Used alphatool and betatool for data pipelines",
@@ -51,6 +51,21 @@ def test_skips_when_coverage_in_honest_band(llm_spy):
     result = _augmenter()._enforce_keyword_density(tailored, jd)
     assert result is tailored
     assert llm_spy == []
+
+
+def test_does_not_skip_when_coverage_only_in_skills(llm_spy):
+    # 4/5 required sit only in Skills — that used to trip the 80% skip and
+    # leave bullets untouched. Context coverage is 0%, so weave must run.
+    jd = {"required_skills": ["alphatool", "betatool", "gammatool", "deltatool", "epsilontool"]}
+    tailored = _tailored_with_bullets(
+        ["Built data pipelines for the analytics team"],
+        skills={"Tools": ["alphatool", "betatool", "gammatool", "deltatool"]},
+    )
+    _augmenter()._enforce_keyword_density(tailored, jd)
+    assert len(llm_spy) == 1
+    prompt = llm_spy[0]["prompt"]
+    assert "alphatool" in prompt
+    assert "epsilontool" not in prompt  # truly absent — never invent
 
 
 def test_never_injects_absent_keywords(llm_spy):

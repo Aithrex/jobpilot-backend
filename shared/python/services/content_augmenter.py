@@ -1062,19 +1062,23 @@ class ContentAugmenter:
         tailored: Dict[str, Any],
         jd_analysis: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Strengthen how PRESENT keywords are evidenced — never introduce
-        absent ones.
+        """Strengthen how PRESENT keywords are evidenced in bullets — never
+        invent absent ones.
+
+        Coverage is measured on summary + experience/project bullets (the ATS
+        "used in context" zones), NOT the skills list. A skills dump alone
+        used to trip the >=80% skip and leave bullets untouched, which tanks
+        hard_skill_match after the deferred-summary path.
 
         Anti-stuffing alignment with the tailor prompt's 75-80% coverage
         target:
-          - Keywords with ZERO occurrences are the tailor's Defensibility
-            call, not ours — injecting them here would fabricate claims the
-            model deliberately left out.
-          - When required-keyword coverage is already >= 80%, skip entirely:
-            the resume is in the honest band and more repetition reads as
-            stuffing to recruiters and modern ATS ranking.
-          - Only keywords appearing exactly ONCE get woven into one more
-            bullet as usage context, capped at 8.
+          - Keywords with ZERO occurrences anywhere are the tailor's
+            Defensibility call — never inject them here.
+          - When required-keyword coverage in bullets/summary is already
+            >= 80%, skip entirely.
+          - Keywords appearing exactly ONCE in context, OR present only in
+            the skills list (0 in context), get woven into one more bullet
+            as usage context, capped at 8.
         """
         from services.claude_client import claude_json, CLAUDE_FLASH
         from schemas.resume_schemas import build_resume_text
@@ -1084,40 +1088,63 @@ class ContentAugmenter:
         if not required:
             return tailored
 
-        resume_text = build_resume_text(tailored).lower()
-
-        counts: Dict[str, int] = {}
-        for skill in required:
-            all_forms = get_all_forms(skill)
-            total_count = 0
-            for form in all_forms:
+        def _count_in(text: str, skill: str) -> int:
+            total = 0
+            for form in get_all_forms(skill):
                 if len(form) <= 2:
-                    total_count += resume_text.count(form)
+                    total += text.count(form)
                 else:
-                    pattern = re.compile(r"(?<![a-zA-Z])" + re.escape(form) + r"(?![a-zA-Z])")
-                    total_count += len(pattern.findall(resume_text))
-            counts[skill] = total_count
+                    pattern = re.compile(
+                        r"(?<![a-zA-Z])" + re.escape(form) + r"(?![a-zA-Z])"
+                    )
+                    total += len(pattern.findall(text))
+            return total
 
-        present = sum(1 for c in counts.values() if c >= 1)
-        required_coverage = present / len(required)
+        # Same zones the honest scorer uses for "used, not just listed".
+        context_parts: List[str] = [tailored.get("summary") or ""]
+        for exp in tailored.get("experience") or []:
+            context_parts.extend(
+                b for b in (exp.get("bullets") or []) if isinstance(b, str)
+            )
+        for proj in tailored.get("projects") or []:
+            context_parts.extend(
+                b for b in (proj.get("bullets") or []) if isinstance(b, str)
+            )
+        context_text = "\n".join(p for p in context_parts if p).lower()
+        full_text = build_resume_text(tailored).lower()
+
+        context_counts: Dict[str, int] = {}
+        full_counts: Dict[str, int] = {}
+        for skill in required:
+            context_counts[skill] = _count_in(context_text, skill)
+            full_counts[skill] = _count_in(full_text, skill)
+
+        present_in_context = sum(1 for c in context_counts.values() if c >= 1)
+        required_coverage = present_in_context / len(required)
         if required_coverage >= 0.8:
             logger.info(
-                "ContentAugmenter ATS: required coverage %.0f%% already in the "
-                "honest band — skipping keyword hardening (anti-stuffing)",
+                "ContentAugmenter ATS: required coverage %.0f%% already in "
+                "bullets/summary — skipping keyword hardening (anti-stuffing)",
                 required_coverage * 100,
             )
             return tailored
 
-        under_represented = [s for s in required if counts[s] == 1][:8]
+        # Once in context → strengthen. In skills only → weave into a bullet.
+        # Nowhere in the resume → never invent.
+        under_represented = [
+            s for s in required
+            if context_counts[s] == 1
+            or (context_counts[s] == 0 and full_counts[s] >= 1)
+        ][:8]
         if not under_represented:
             logger.info(
-                "ContentAugmenter ATS: no single-occurrence keywords to "
-                "strengthen (absent keywords are never injected)"
+                "ContentAugmenter ATS: no single-occurrence or skills-only "
+                "keywords to strengthen (absent keywords are never injected)"
             )
             return tailored
 
         logger.info(
-            "ContentAugmenter ATS: strengthening %d single-occurrence keywords: %s",
+            "ContentAugmenter ATS: strengthening %d keywords into bullets: %s",
             len(under_represented), under_represented,
         )
 
@@ -1144,12 +1171,12 @@ class ContentAugmenter:
             "You are strengthening how existing resume keywords are evidenced — NOT adding "
             "new claims.\n\n"
             "RULES:\n"
-            "1. Each keyword below ALREADY appears once in this resume. Weave it naturally into\n"
-            "   ONE relevant bullet as usage context (what was done with it) — do NOT just\n"
-            "   append it.\n"
+            "1. Each keyword below already appears somewhere on this resume (often only in\n"
+            "   Skills). Weave it naturally into ONE relevant bullet as usage context (what\n"
+            "   was done with it) — do NOT just append it, and do NOT leave the bullet unchanged.\n"
             "2. Preserve the original meaning, structure, and EVERY NUMBER in each bullet.\n"
-            "3. NEVER invent facts, metrics, tools, or named products — you may only rephrase\n"
-            "   what the bullet already says so the keyword shows up in use.\n"
+            "3. NEVER invent facts, metrics, tools, or named products beyond the keywords listed —\n"
+            "   you may only rephrase what the bullet already says so the keyword shows up in use.\n"
             "4. Where it fits naturally, shape the bullet as 'Accomplished X, as measured by Y,\n"
             "   by doing Z' — using only numbers already present in the bullet.\n"
             f"5. {prompt_rules.BANNED_SYMBOLS_RULE}\n"
