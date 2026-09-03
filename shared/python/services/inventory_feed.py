@@ -45,9 +45,24 @@ SOURCE_CAREER = "career-pages"
 # only `career-pages` would hide every ORC/iCIMS requisition from seekers.
 CAREER_FEED_SOURCES = ("career-pages", "oracle", "icims")
 
-# How many postings the ranking stage considers. Scoring is a few microseconds
-# per row off a precomputed profile, so this is chosen for recall.
-CANDIDATE_LIMIT = int(os.getenv("FEED_INVENTORY_CANDIDATES", "1500") or 1500)
+# How many postings the ranking stage considers.
+#
+# Retrieval is `(posted_at DESC)`, so this is not a sample of the market - it
+# is a TIME SLICE of it, and the width of that slice is whatever the crawler
+# has ingested most recently. At 1,500 it was about ONE DAY of a thirty-day
+# window: measured on one live account, 1,500 candidates covered 2 days and
+# surfaced 72 Amazon requisitions out of 5,794 eligible postings. The user
+# read the result as "Amazon shows while the search runs, then disappears",
+# which is exactly what a slice that moves under you looks like.
+#
+# 4,000 covers ~7 days and 182 Amazon requisitions for the same account, at
+# ~7.0s per source against ~5.2s (the jobs Lambda's budget is 60s and the
+# three sources are fetched in parallel by the client). The cost is almost
+# entirely `_score_rows` at ~2.2 ms/row - the `_in_family` filter that runs
+# after it removes ~0%, so there is no cheaper ordering of the stages to
+# find. Raising it further is a straight latency trade: 6,000 covers 7 days
+# at ~10s, 10,000 covers 13 days at ~14.5s.
+CANDIDATE_LIMIT = int(os.getenv("FEED_INVENTORY_CANDIDATES", "4000") or 4000)
 # Below this the inventory is treated as not yet warm for the requested slice
 # and the caller falls back to the live crawl. A thin tab is a worse answer
 # than a slow one.
@@ -160,6 +175,16 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
     if not dated:
         days = None
 
+    # `<vendor>-<tenant>-<site>:<requisition>` -> `(tenant, requisition)`.
+    # Internal, stripped from the payload beside `_requirements`.
+    req_key = ""
+    tenant_raw = str(doc.get("tenant") or "").strip().lower()
+    source_job_id = str(doc.get("source_job_id") or "")
+    if tenant_raw and ":" in source_job_id:
+        requisition = source_job_id.rsplit(":", 1)[-1].strip()
+        if requisition:
+            req_key = f"req|{tenant_raw}|{requisition}"
+
     locations = doc.get("locations") or []
     first = locations[0] if isinstance(locations, list) and locations else {}
     location = str(first.get("raw") or "") if isinstance(first, dict) else str(first)
@@ -178,6 +203,7 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
         "title": str(doc.get("title_raw") or "")[:200],
         "company": str(doc.get("employer_name") or ""),
         "tenant": tenant,
+        "_req_key": req_key,
         "ats": ats,
         "industry": doc.get("industry") or "other",
         "location": location or "Not specified",
@@ -547,6 +573,19 @@ def _dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         branch every one of those rows becomes its own group on the day this
         ships, and the feed shows every duplicate it currently collapses.
         """
+        # SAME TENANT + SAME REQUISITION ID is the same job, whatever name
+        # the board printed on it. JPMorgan's Oracle instance serves one
+        # requisition (`210786394`) from three CX sites, and each copy is
+        # stamped a different employer - "JPMorgan Chase", "NUTMEG CONTAINER
+        # CORPORATION", "CHASE FAMILY LIMITED PARTNERSHIP NO. 5" - so all
+        # three carry different `dedupe_group_id`s and nothing collapsed
+        # them. Sorted by Best match they were the top THREE cards, one job
+        # shown three times. Platform-wide this is 11,837 redundant copies
+        # across 9,436 (tenant, requisition) groups, 4,216 of them wearing
+        # more than one employer name.
+        req = str(row.get("_req_key") or "")
+        if req:
+            return req
         stored = str(row.get("dedupe_group_id") or "")
         if stored:
             return stored
@@ -761,12 +800,14 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         j.get("days_ago") if j.get("days_ago") is not None else 99))
     try:
         _attach_sponsorship(rows)
+        _demote_unreachable_sponsors(rows, user_email)
     except Exception as exc:  # pragma: no cover - enrichment is best effort
         logger.warning("inventory_feed: sponsorship skipped: %s", type(exc).__name__)
 
     tenants_with_results = len({r.get("tenant") for r in rows if r.get("tenant")})
     for row in rows:
         row.pop("_requirements", None)
+        row.pop("_req_key", None)
 
     result: Dict[str, Any] = {
         "ok": True,
@@ -842,3 +883,51 @@ def _industries_for(source: str) -> List[str]:
         return list(WD_INDUSTRIES)
     except Exception:  # pragma: no cover
         return []
+
+
+#: Sponsorship verdicts a candidate who NEEDS sponsorship cannot realistically
+#: reach. `unknown` is deliberately absent - absence of evidence is not
+#: evidence, and most employers publish nothing.
+_UNREACHABLE_SPONSORSHIP = frozenset({"refused", "rare"})
+
+
+def requires_sponsorship(user_email: str) -> bool:
+    """Whether this user has declared they need visa sponsorship.
+
+    Read from `user_preferences`, which is where onboarding writes it. Any
+    failure reads as False: a feed that silently reorders itself because a
+    lookup broke is worse than one that does not reorder at all.
+    """
+    if not user_email:
+        return False
+    try:
+        from utils.db_connect import DBConnect
+        doc = DBConnect().get_db()["user_preferences"].find_one(
+            {"user_email": user_email}, {"requires_sponsorship": 1}) or {}
+        return bool(doc.get("requires_sponsorship"))
+    except Exception:  # pragma: no cover - never fail a search on a preference
+        logger.warning("inventory_feed: sponsorship preference unavailable")
+        return False
+
+
+def _demote_unreachable_sponsors(rows: List[Dict[str, Any]],
+                                 user_email: str) -> None:
+    """Flag rows an international candidate almost certainly cannot convert.
+
+    `sponsorship` already carries the verdict; nothing read it for ORDER. For
+    one live F-1 OPT account, 171 of 1,006 rows (17%) were defence and
+    clearance employers, 108 of them already marked `rare`, and two of them
+    sat in his top twenty - roles he cannot take, above roles he can.
+
+    This DEMOTES, it does not hide. The platform rule is that a filter never
+    removes a job on a signal this soft, and `rare` means "files
+    occasionally", not "never": the row stays reachable, it just stops
+    outranking employers that do sponsor. `unknown` is untouched, because most
+    postings say nothing and treating silence as refusal would hide the
+    market. `match_score` is not modified - this is `rank_score` territory.
+    """
+    if not rows or not requires_sponsorship(user_email):
+        return
+    for row in rows:
+        if str(row.get("sponsorship") or "") in _UNREACHABLE_SPONSORSHIP:
+            row["sponsorship_demoted"] = True

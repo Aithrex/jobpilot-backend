@@ -8,6 +8,7 @@ fingerprint; browsing Jobs does not.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import re
 import logging
@@ -151,6 +152,38 @@ def _display_title(phrase: str) -> str:
     return " ".join(_TITLE_CASE_FIXES.get(w, w) for w in phrase.title().split())
 
 
+@functools.lru_cache(maxsize=1)
+def _intern_phrases() -> Tuple[Tuple[str, str], ...]:
+    """`(intern phrase, its specialty)`, longest phrase first."""
+    from services import tech_taxonomy as tx
+
+    out = []
+    for spec in tx.ALL_SPECIALTIES:
+        for phrase in tx.title_phrases(specialties=[spec]):
+            low = phrase.lower()
+            if "intern" in low:
+                out.append((low, spec))
+    out.sort(key=lambda pair: len(pair[0]), reverse=True)
+    return tuple(out)
+
+
+@functools.lru_cache(maxsize=256)
+def _adult_phrase_for(specialty: str) -> Optional[str]:
+    """The first presentable NON-intern role name in a specialty, or None."""
+    from services import tech_taxonomy as tx
+
+    for phrase in tx.title_phrases(specialties=[specialty]):
+        low = phrase.lower()
+        if "intern" in low or low in _NOT_A_ROLE:
+            continue
+        if any(bad in low for bad in _NEVER_SEARCH):
+            continue
+        words = low.split()
+        if 2 <= len(words) <= 4 and words[-1] in _ROLE_NOUNS:
+            return low
+    return None
+
+
 def canonical_search_titles(titles: Sequence[Any],
                             specialties: Sequence[Any] = (),
                             *, level: Optional[str] = None,
@@ -244,17 +277,80 @@ def canonical_search_titles(titles: Sequence[Any],
         for phrase in _ALWAYS_MATCHABLE:
             _add(phrase)
 
+    if not out and not keep_intern:
+        # Every title this resume states is an INTERNSHIP, and the candidate
+        # is not an intern. Stripping intern phrases from the vocabulary is
+        # what made them match nothing, so the pass-through below would hand
+        # the intern titles straight back unfiltered - the intern filter
+        # defeating itself, and exactly the "why is an intern title in my
+        # list" the change was made to stop. Read the intern phrase, then
+        # search for the SAME specialty's ordinary role name instead: a
+        # "Data Science Intern" should be searching "Data Scientist".
+        for raw in titles or []:
+            text = re.sub(r"\s+", " ", str(raw or "")).strip().lower()
+            if not text:
+                continue
+            for phrase, spec in _intern_phrases():
+                if re.search(r"(?<![a-z0-9_])" + re.escape(phrase) + r"(?![a-z0-9_])",
+                             text):
+                    grown = _adult_phrase_for(spec)
+                    if grown:
+                        _add(_display_title(grown))
+                    break
+
+    if not out:
+        # Nothing in this resume is a technical role. `tech_taxonomy` is a
+        # TECH vocabulary and has no phrase for "Registered Nurse", so
+        # canonicalizing here would hand a nurse an empty list. Give the
+        # caller their own titles back: worse search terms than a canonical
+        # phrase, but the right occupation, which matters far more.
+        #
+        # This returns BEFORE the specialty expansion below on purpose. A
+        # non-tech resume that picks up one stray tech specialty would
+        # otherwise be handed a pure software list with its own occupation
+        # erased - measured: a nurse plus `general_software` produced eleven
+        # software titles and zero nursing ones.
+        kept: List[str] = []
+        for raw in titles or []:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            if not keep_intern:
+                # The vocabulary had no phrase for this title, so the
+                # substitution above could not run - but handing a non-intern
+                # "Data Science Intern" is still wrong, and that term matches
+                # ONLY internships. Dropping the qualifier widens it to the
+                # discipline, which is the closest honest reading available.
+                text = re.sub(r"[\s,\-/|]*\b(intern|internship)\b[\s.]*$", "",
+                              text, flags=re.IGNORECASE).strip(" ,-/|")
+            if text:
+                kept.append(text)
+        return kept[:cap]
+
     # Breadth from the SPECIALTIES the taxonomy read off the resume, not only
     # from whatever the synthesizer happened to name. A candidate classified
     # {general_software, devops, backend} should be searching every canonical
     # role name in those specialties, and the LLM reliably names only a few of
     # them - the account this was built for got 16 titles and asked, fairly,
-    # why so few. Measured: +663 postings and +22 Amazon reqs for him.
+    # why so few.
     #
     # Gated on presentability, because these are also the CHIPS a user reads.
     # `_SPEC_RULES` is a classifier vocabulary and carries forms that classify
     # well but read as broken in a filter rail - "MTS Software", "Software
     # Engr", "Development Engineer Software".
+    #
+    # And gated on FAMILY, which is the expensive lesson. `inventory_feed.
+    # _role_families` unions the family of EVERY title it is given, so one
+    # expansion title in the wrong family admits that whole family to
+    # retrieval. `classify_role` reads "Server Side Engineer" as HOSPITALITY -
+    # a restaurant server - and "Product Engineer" as hardware; measured live,
+    # those two alone made 33% of one account's career-pages feed off-domain
+    # and put "Embedded Firmware and Software Engineer" at rank 2 with a score
+    # of 89. An expansion phrase is admitted only when it reads as the same
+    # kind of work the candidate's own titles do.
+    from services import fit_score
+
+    home = {f for f in (fit_score.classify_role(t) for t in out) if f}
     for phrase in tx.title_phrases(specialties=specialties) if specialties else []:
         low = phrase.lower()
         if low in _NOT_A_ROLE or any(bad in low for bad in _NEVER_SEARCH):
@@ -264,16 +360,10 @@ def canonical_search_titles(titles: Sequence[Any],
         words = low.split()
         if not (2 <= len(words) <= 4) or words[-1] not in _ROLE_NOUNS:
             continue
+        fam = fit_score.classify_role(phrase)
+        if home and fam is not None and fam not in home:
+            continue
         _add(_display_title(low))
-
-    if not out:
-        # Nothing in this resume is a technical role. `tech_taxonomy` is a
-        # TECH vocabulary and has no phrase for "Registered Nurse", so
-        # canonicalizing here would hand a nurse an empty list - and then the
-        # software floor below would hand them a software feed. Give the
-        # caller their own titles back: worse search terms than a canonical
-        # phrase, but the right occupation, which matters far more.
-        return [str(t).strip() for t in (titles or []) if str(t or "").strip()][:cap]
 
     return out[:cap]
 
