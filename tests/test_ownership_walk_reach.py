@@ -149,10 +149,36 @@ class TestTheSafetyPropertiesSurvive:
         check, robots.txt, the pace, the timeout and the size cap live, and a
         second request path would bypass all five."""
         import inspect
+        import ast
         source = inspect.getsource(cso.walk_to_endpoints)
-        assert "requests." not in source
-        assert "urlopen" not in source
-        assert source.count("fetcher.get(") >= 1
+        # Strip the docstring so a prose mention of "network requests" is not
+        # mistaken for `import requests` / `requests.get`.
+        tree = ast.parse(source)
+        func = tree.body[0]
+        assert isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef))
+        if (func.body and isinstance(func.body[0], ast.Expr)
+                and isinstance(func.body[0].value, ast.Constant)
+                and isinstance(func.body[0].value.value, str)):
+            func.body = func.body[1:]
+        body = ast.unparse(func)
+        assert "requests." not in body
+        assert "urlopen" not in body
+        assert "playwright" not in body.lower()
+        # Plain walk uses get; browser walk uses render. Both are Fetcher
+        # methods — neither is a free-standing HTTP client.
+        assert "fetcher.get(" in source or "fetch(" in source
+        assert "fetcher.render" in source or "fetch =" in source
+
+    def test_browser_walk_still_goes_through_the_fetcher(self):
+        """render=True must not grow a second request path either."""
+        import inspect
+        source = inspect.getsource(cso.Fetcher.render)
+        # The browser is launched INSIDE Fetcher.render after the same
+        # SSRF + robots gates `get` uses. A free-standing Playwright call
+        # outside Fetcher would be the failure mode this guards against.
+        assert "_ssrf_ok(url)" in source
+        assert "self.robots.allows(url)" in source
+        assert "self._pace(" in source
 
     def test_the_page_budget_is_still_bounded(self):
         """A wider queue must not become an unbounded crawl of one employer."""

@@ -236,6 +236,13 @@ class GreenhouseProvider(_BoardProvider):
         # their board client-side.
         fp(r"https?://boards-api\.greenhouse\.io/v\d+/boards/"
            r"(?P<tenant>[A-Za-z0-9_\-]+)", confidence=95),
+        # The older public API host. JS shells (DigitalOcean and peers) XHR
+        # `api.greenhouse.io/v1/boards/<tenant>/embed/...` and never mention
+        # `boards-api` or `boards.greenhouse.io` in the HTML a plain fetcher
+        # reads — so without this fingerprint a rendered pass that captured
+        # the request still could not name the board.
+        fp(r"https?://api\.greenhouse\.io/v\d+/boards/"
+           r"(?P<tenant>[A-Za-z0-9_\-]+)", confidence=94),
         # The embed form names the tenant in a query param, so it must be
         # matched BEFORE the generic path pattern (which would capture the
         # literal "embed" as the tenant).
@@ -493,6 +500,11 @@ class AshbyProvider(_BoardProvider):
 
     api_hosts = ("api.ashbyhq.com",)
     portal_hosts = ("jobs.ashbyhq.com",)
+
+    #: `jobs.ashbyhq.com/api` is Ashby's own path, not an employer named "api".
+    #: A rendered careers page that links the host root (or an /api docs link)
+    #: otherwise registers `ashby:api` as an owner-verified board.
+    reserved_tenants = ("api", "app", "www", "docs", "help", "static", "assets")
 
     fingerprints = (
         fp(r"https?://api\.ashbyhq\.com/posting-api/job-board/"

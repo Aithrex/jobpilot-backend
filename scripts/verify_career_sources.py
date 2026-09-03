@@ -41,6 +41,16 @@ Two passes, cheapest first
     `.icims.com` into `https://icims.com/<tenant>`, a page that is nobody's
     board.
 
+`--mode browser`
+    The fifth pass. For employers with a verified domain whose careers page
+    is a JavaScript shell (the board link arrives over XHR and appears
+    nowhere in the raw HTML), render the page with Playwright via
+    `Fetcher.render` — same SSRF / robots / pace gates as every other
+    fetch — and fingerprint the RENDERED DOM plus the network requests.
+    Ownership still goes through `adjudicate_ownership`; this pass only
+    supplies URLs the HTML walk could not see. A bot challenge stays
+    `blocked`. Default concurrency is 1: one Chromium, no warm fleet.
+
 Politeness is not optional here: one global rate limit, a per-host pace, and
 robots.txt on every origin. A verification sweep that gets us blocked costs
 more coverage than it buys.
@@ -165,15 +175,18 @@ def verify_endpoint_source(row: Dict[str, Any], employer: Dict[str, Any],
 # Pass 2 — decisive: verify the domain and walk to the board
 # ---------------------------------------------------------------------------
 def verify_employer(employer: Dict[str, Any], ctx: Any,
-                    *, existing_endpoints: Sequence[Endpoint] = ()) -> List[Dict[str, Any]]:
+                    *, existing_endpoints: Sequence[Endpoint] = (),
+                    use_browser: bool = False,
+                    fetcher: Optional[cso.Fetcher] = None) -> List[Dict[str, Any]]:
     hit = ocr.lookup(domain=employer.get("canonical_domain"),
                      name=employer.get("display_name"))
     return cso.verify_employer_source(
         employer=employer,
-        fetcher=cso.Fetcher(),
+        fetcher=fetcher or cso.Fetcher(enable_browser=use_browser),
         ctx=ctx,
         candidate_endpoints=existing_endpoints,
         official_url=(hit or {}).get("career_landing_url") or "",
+        use_browser=use_browser,
     )
 
 
@@ -409,7 +422,7 @@ def main() -> int:
                     help="write the verified states (default: report only)")
     ap.add_argument("--mode",
                     choices=("endpoints", "employers", "content", "backlink",
-                             "both"),
+                             "browser", "both"),
                     default="both")
     ap.add_argument("--limit", type=int, default=4000)
     ap.add_argument("--workers", type=int, default=10)
@@ -782,6 +795,168 @@ def main() -> int:
                     employers_col.bulk_write(domain_ops[i:i + 500], ordered=False)
                 print(f"    recorded {len(domain_ops):,} verified employer "
                       f"domain(s) (no re-key - see the comment)")
+
+    # ---------------- pass 5: browser-rendered discovery ----------------
+    # JS-shell careers pages: the board link arrives over XHR and is absent
+    # from the raw HTML pass 2 reads. Render via Fetcher.render (same SSRF /
+    # robots / pace gates), fingerprint the DOM + network, feed the SAME
+    # adjudicate_ownership path. A bot challenge stays `blocked`.
+    if args.mode == "browser":
+        # Playwright sync + one shared Chromium is not thread-safe. Cap hard.
+        browser_workers = max(1, min(int(args.workers), 2))
+        if browser_workers != args.workers:
+            print(f"  browser mode: workers clamped {args.workers} -> "
+                  f"{browser_workers} (one Chromium per worker)")
+
+        covered = {r["employer_id"] for r in sources_col.find(
+            {"state": {"$in": list(css.COVERED_STATES)}}, {"employer_id": 1})}
+        # Prefer the work-queue buckets the numbers point at: Tier-A in
+        # source_no_endpoint first, then endpoint_unproven (ownership proof
+        # via a rendered domain link), then the rest of source_no_endpoint.
+        try:
+            import coverage_work_queue as cwq
+            built_q = cwq.build(db)
+            queue_rows = [r for r in built_q["queue"]
+                          if r["bucket"] in (cwq.BUCKET_SOURCE_NO_ENDPOINT,
+                                             cwq.BUCKET_ENDPOINT_UNPROVEN)]
+        except Exception as exc:
+            print(f"  work queue unavailable ({type(exc).__name__}); "
+                  f"falling back to uncovered employers with a domain")
+            queue_rows = []
+
+        if args.employer_id:
+            emps = list(employers_col.find(
+                {"employer_id": {"$in": args.employer_id}}).limit(args.limit))
+        elif queue_rows:
+            ids = [r["employer_id"] for r in queue_rows][:args.limit]
+            by_id = {e["employer_id"]: e for e in employers_col.find(
+                {"employer_id": {"$in": ids}})}
+            emps = [by_id[i] for i in ids if i in by_id]
+        else:
+            eq_b: Dict[str, Any] = {
+                "operating_status": er.STATUS_ACTIVE,
+                "canonical_domain": {"$nin": [None, ""]},
+            }
+            if covered:
+                eq_b["employer_id"] = {"$nin": sorted(covered)}
+            emps = list(employers_col.find(eq_b).sort("identity_confidence", -1)
+                        .limit(args.limit))
+
+        print(f"\npass 5 - browser-rendered discovery: {len(emps):,} employers "
+              f"(workers={browser_workers})")
+
+        endpoints_by_emp_b: Dict[str, List[Endpoint]] = collections.defaultdict(list)
+        for r in sources_col.find(
+                {"employer_id": {"$in": [e["employer_id"] for e in emps]}},
+                {"employer_id": 1, "ats_vendor": 1, "tenant": 1}):
+            if r.get("ats_vendor") and r.get("tenant"):
+                endpoints_by_emp_b[r["employer_id"]].append(
+                    Endpoint(vendor=r["ats_vendor"], tenant=r["tenant"]))
+
+        # One Fetcher (and therefore one Chromium) per worker. Sharing a
+        # sync Playwright browser across threads is undefined behaviour.
+        thread_local = threading.local()
+        fetchers_lock = threading.Lock()
+        all_fetchers: List[cso.Fetcher] = []
+
+        def _browser_fetcher() -> cso.Fetcher:
+            f = getattr(thread_local, "fetcher", None)
+            if f is None:
+                f = cso.Fetcher(enable_browser=True, min_interval=0.6)
+                thread_local.fetcher = f
+                with fetchers_lock:
+                    all_fetchers.append(f)
+            return f
+
+        produced_b: List[Dict[str, Any]] = []
+
+        def _one_browser(emp):
+            try:
+                return verify_employer(
+                    emp, ctx,
+                    existing_endpoints=endpoints_by_emp_b.get(
+                        emp["employer_id"], []),
+                    use_browser=True,
+                    fetcher=_browser_fetcher())
+            except Exception as exc:
+                return [{"__error__": type(exc).__name__,
+                         "employer_id": emp.get("employer_id")}]
+
+        done_b = 0
+        try:
+            with ThreadPoolExecutor(max_workers=browser_workers) as pool:
+                for fut in as_completed(
+                        [pool.submit(_one_browser, e) for e in emps]):
+                    recs = fut.result() or []
+                    with lock:
+                        done_b += 1
+                        for rec in recs:
+                            if rec.get("__error__"):
+                                stats[f"pass5_error:{rec['__error__']}"] += 1
+                                continue
+                            stats[f"pass5_{rec['state']}"] += 1
+                            if rec.get("ownership_verified"):
+                                stats["pass5_ownership_proven"] += 1
+                            if rec.get("ats_vendor") and rec.get("tenant"):
+                                stats["pass5_endpoint_found"] += 1
+                            if rec.get("state") == css.STATE_BLOCKED:
+                                stats["pass5_blocked"] += 1
+                            produced_b.append(rec)
+                        if done_b % 10 == 0 or done_b == len(emps):
+                            print(f"    {done_b:,}/{len(emps):,} employers "
+                                  f"({stats['pass5_ownership_proven']:,} proven, "
+                                  f"{stats['pass5_endpoint_found']:,} endpoints, "
+                                  f"{stats['pass5_blocked']:,} blocked) "
+                                  f"{time.time() - t0:.0f}s")
+        finally:
+            # Do not leave Chromium warm after the sweep.
+            for f in all_fetchers:
+                try:
+                    f.close()
+                except Exception:
+                    pass
+
+        if args.apply and produced_b:
+            existing_b = {r["source_id"]: r for r in sources_col.find(
+                {"source_id": {"$in": [p["source_id"] for p in produced_b]}})}
+            merged_b = []
+            for rec in produced_b:
+                prior = existing_b.get(rec["source_id"])
+                if prior:
+                    prior_content = [e for e in
+                                     (prior.get("content_validation_evidence") or [])
+                                     if isinstance(e, dict)]
+                    if prior_content and not rec.get("content_validation_evidence"):
+                        rec["content_validation_evidence"] = prior_content
+                    content_ok = (any(e.get("confirmed") for e in prior_content)
+                                  if prior_content else None)
+                    rec["job_count_last"] = (rec.get("job_count_last")
+                                             or int(prior.get("job_count_last") or 0))
+                    # Never overwrite a content verdict with a discovery state.
+                    if prior.get("state") in (css.STATE_VALIDATED, css.STATE_EMPTY,
+                                              css.STATE_CONTENT_VALIDATED):
+                        if not (prior.get("state") == css.STATE_CONTENT_VALIDATED
+                                and rec.get("ownership_verified")):
+                            rec["state"] = prior["state"]
+                        else:
+                            rec["state"] = css.next_state(
+                                owned=True, content_ok=True,
+                                job_count=int(rec.get("job_count_last") or 0))
+                    else:
+                        rec["state"] = css.next_state(
+                            owned=bool(rec.get("ownership_verified")),
+                            content_ok=content_ok,
+                            job_count=int(rec.get("job_count_last") or 0),
+                            failure_code=rec.get("failure_code") or "")
+                    if rec["state"] in css.COVERED_STATES:
+                        rec["last_verified_at"] = _now()
+                    rec["next_check_at"] = css.next_check_after(rec["state"])
+                merged_b.append(rec)
+            stats_write = css.bulk_upsert_sources(merged_b)
+            promoted = sum(1 for r in merged_b if r["state"] in css.COVERED_STATES)
+            print(f"    wrote {stats_write['seen']:,} sources "
+                  f"({stats_write['written']:,} inserted or changed; "
+                  f"{promoted:,} now covered)")
 
     # ---------------- pass 3: content ----------------
     # Ownership proven, content never checked. Pass 2 walks to the endpoint but

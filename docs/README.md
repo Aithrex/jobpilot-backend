@@ -67,4 +67,7 @@ the record for the canonical-employer, coverage, taxonomy and scorer work of
 the same day is
 [`2026-09-02-canonical-employer-and-scorer-acceptance.md`](coverage/reports/2026-09-02-canonical-employer-and-scorer-acceptance.md)
 — which prints the numbers where a target was NOT reached rather than the
-target.
+target. The browser-rendered discovery pass of 2026-09-03 is
+[`2026-09-03-browser-discovery-acceptance.md`](coverage/reports/2026-09-03-browser-discovery-acceptance.md)
+— coverage 36.3% / Tier-A baseline 37/94; 50% and 75/94 are not reachable
+without bot-protection bypass or first-party adapters.

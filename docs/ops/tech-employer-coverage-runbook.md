@@ -151,6 +151,21 @@ Pass 1 prints a per-vendor table. `no signal` for workday / icims / oracle /
 ukg / paylocity / bamboohr is CORRECT — those APIs publish no owner, which is
 exactly why pass 2 exists.
 
+```bash
+# Pass 5 - browser. For employers whose careers page is a JavaScript shell
+# (board link arrives over XHR, absent from raw HTML). Renders via
+# Fetcher.render — same SSRF/robots/pace gates — and fingerprints the
+# rendered DOM plus network requests into the SAME ownership path.
+# Default concurrency is clamped to 2; do not leave Chromium warm.
+# Run ONE network pass at a time. Prefer --limit 50 on Tier-A first.
+PYTHONPATH=shared/python python scripts/verify_career_sources.py \
+    --mode browser --apply --workers 1 --limit 50
+```
+
+> **Do not re-run `--mode backlink` hoping for another 25%.** Measured: 225/900
+> on the first run after `AtsProvider.board_url` landed, then 7/667, then
+> 1/657. The reachable tail is drained. Re-run only after a NEW provider fix.
+
 ## 3. Re-arm what is still uncovered
 
 ```bash

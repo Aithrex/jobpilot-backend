@@ -54,6 +54,13 @@ class TestTheObservedJunk:
         assert ("ashby", "DeepL") in found
         assert not any(t.lower() == "noindex" for _v, t in found)
 
+    def test_ashbys_api_path_is_not_a_company(self):
+        """A rendered careers page that links `jobs.ashbyhq.com/api` must not
+        register `ashby:api` as an employer board — measured on Aurora."""
+        found = _tenants(["https://jobs.ashbyhq.com/api",
+                          "https://jobs.ashbyhq.com/aurora-operations-inc"])
+        assert found == {("ashby", "aurora-operations-inc")}
+
     def test_a_slug_a_company_could_OWN_is_left_alone(self):
         """`greenhouse:css` is CloudKitchens (City Storage Systems) and
         `greenhouse:manifest` is Manifest Cyber — both live, both returning

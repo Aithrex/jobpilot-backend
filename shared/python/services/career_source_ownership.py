@@ -65,6 +65,21 @@ FETCH_TIMEOUT = 12.0
 MAX_REDIRECTS = 6
 #: Careers pages read per employer before we give up on path (a).
 MAX_CAREER_PAGES = 10
+#: Browser-rendered pages per employer. Each one launches Chromium work
+#: against a 2 GB executor budget; four is enough to try the official URL,
+#: the careers host, one homepage path and one follow-on link.
+MAX_BROWSER_PAGES = 4
+
+#: Visible text that means a bot challenge, not a careers page. Matched
+#: against title + body after a RENDER — we do not solve these; `blocked`
+#: is the honest state.
+_CHALLENGE_RE = re.compile(
+    r"(just a moment[\s.]*\.\.\.|attention required|access denied|"
+    r"verify you are (a )?human|are you a (human|robot)|"
+    r"enable javascript and cookies|cf-browser-verification|"
+    r"checking your browser|sorry,? you have been blocked|"
+    r"security check (failed|required)|unusual (traffic|activity))",
+    re.IGNORECASE)
 
 #: Paths tried on a verified domain when the employer publishes no career URL.
 #: Ordered by how often each is the real one, so the budget is spent well.
@@ -186,15 +201,27 @@ class Fetcher:
     The chain matters twice: a portal migration is only detectable from it
     (Rivian's iCIMS tenant is a 143-byte redirect), and an ownership claim of
     the form "the employer's domain leads here" is exactly a chain.
+
+    `render` is the SAME path with a browser: SSRF, robots, pace and the
+    size cap still gate every navigation, and the only extra output is the
+    rendered DOM plus the network requests the page made. An XHR to
+    `boards-api.greenhouse.io` (or `api.greenhouse.io`) names the board
+    directly and is often the only place it appears on a JS-shell careers
+    page. There is no second request path that bypasses these gates.
     """
 
     def __init__(self, *, robots: Optional[RobotsGate] = None,
-                 min_interval: float = 0.4, user_agent: str = "JobPilotIngest") -> None:
+                 min_interval: float = 0.4, user_agent: str = "JobPilotIngest",
+                 enable_browser: bool = False) -> None:
         self.robots = robots or RobotsGate(user_agent)
         self.user_agent = user_agent
         self.min_interval = float(min_interval)
+        self.enable_browser = bool(enable_browser)
         self._next_at: Dict[str, float] = {}
         self.fetches = 0
+        self.renders = 0
+        self._pw = None
+        self._browser = None
 
     def _pace(self, host: str) -> None:
         now = time.monotonic()
@@ -204,9 +231,14 @@ class Fetcher:
         self._next_at[host] = max(now, due) + self.min_interval
 
     def get(self, url: str) -> Dict[str, Any]:
-        """`{status, text, chain, final_url, error}`. Never raises."""
+        """`{status, text, chain, final_url, error, network_urls, rendered}`.
+
+        Never raises. `network_urls` is empty and `rendered` is False — the
+        browser path fills both via `render`.
+        """
         out: Dict[str, Any] = {"status": None, "text": "", "chain": [],
-                               "final_url": url, "error": ""}
+                               "final_url": url, "error": "",
+                               "network_urls": [], "rendered": False}
         ok, reason = _ssrf_ok(url)
         if not ok:
             out["error"] = f"ssrf:{reason}"
@@ -260,6 +292,137 @@ class Fetcher:
         finally:
             resp.close()
         return out
+
+    def _ensure_browser(self) -> Any:
+        """Lazy Chromium. One browser for the Fetcher's lifetime so a sweep
+        of ~50 employers does not pay a cold start each time."""
+        if self._browser is not None:
+            return self._browser
+        from playwright.sync_api import sync_playwright
+        from services.browser_executor import chromium_launch_args
+        self._pw = sync_playwright().start()
+        self._browser = self._pw.chromium.launch(
+            headless=True, args=chromium_launch_args())
+        return self._browser
+
+    def close(self) -> None:
+        """Drop the browser so a sweep does not leave Chromium warm."""
+        try:
+            if self._browser is not None:
+                self._browser.close()
+        except Exception:  # pragma: no cover
+            pass
+        self._browser = None
+        try:
+            if self._pw is not None:
+                self._pw.stop()
+        except Exception:  # pragma: no cover
+            pass
+        self._pw = None
+
+    def __del__(self):  # pragma: no cover - best-effort cleanup
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def render(self, url: str) -> Dict[str, Any]:
+        """Browser-rendered fetch. Same contract as `get`, plus `network_urls`.
+
+        A 403 / Cloudflare challenge is returned as `error: bot_challenge`
+        — never solved, never spoofed around. The network request list is
+        what makes a JS-shell careers page yield an ATS endpoint: the board
+        link often appears ONLY as an XHR.
+        """
+        out: Dict[str, Any] = {"status": None, "text": "", "chain": [],
+                               "final_url": url, "error": "",
+                               "network_urls": [], "rendered": True}
+        if not self.enable_browser:
+            out["error"] = "browser_disabled"
+            return out
+        ok, reason = _ssrf_ok(url)
+        if not ok:
+            out["error"] = f"ssrf:{reason}"
+            return out
+        if not self.robots.allows(url):
+            out["error"] = "robots"
+            return out
+
+        self._pace(urlparse(url).netloc.lower())
+        self.renders += 1
+        self.fetches += 1
+        network: List[str] = []
+        context = None
+        try:
+            from services import ssrf_guard
+            from services.browser_executor import browser_context_kwargs
+            browser = self._ensure_browser()
+            context = browser.new_context(**browser_context_kwargs())
+            ssrf_guard.install_route_guard(context)
+            page = context.new_page()
+            page.on("request", lambda req: network.append(req.url))
+            resp = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=12_000)
+            except Exception:
+                # networkidle is best-effort: a careers page that keeps a
+                # websocket open would hang forever otherwise.
+                pass
+            # Short settle for late XHRs that fire after DOMContentLoaded
+            # but before the idle signal (Greenhouse embed boards do this).
+            try:
+                page.wait_for_timeout(1_500)
+            except Exception:
+                pass
+
+            final = page.url or url
+            chain = [url]
+            if final and final != url:
+                chain.append(final)
+            out["chain"] = chain
+            out["final_url"] = final
+            out["status"] = int(resp.status) if resp is not None else None
+            for hop in chain:
+                hop_ok, hop_reason = _ssrf_ok(hop)
+                if not hop_ok:
+                    out["error"] = f"ssrf_redirect:{hop_reason}"
+                    return out
+
+            html = page.content() or ""
+            if len(html) > MAX_HTML_BYTES:
+                html = html[:MAX_HTML_BYTES]
+            out["text"] = html
+            out["network_urls"] = list(dict.fromkeys(network))[:2_000]
+
+            title = ""
+            body = ""
+            try:
+                title = page.title() or ""
+            except Exception:
+                pass
+            try:
+                body = page.inner_text("body") or ""
+            except Exception:
+                pass
+            if _CHALLENGE_RE.search(f"{title}\n{body[:4_000]}"):
+                out["error"] = "bot_challenge"
+                if out["status"] not in (403, 429):
+                    out["status"] = 403
+                return out
+            if out["status"] in (403, 429):
+                out["error"] = ("bot_challenge" if out["status"] == 403
+                                else "http_429")
+            return out
+        except Exception as exc:
+            out["error"] = f"browser:{type(exc).__name__}"
+            out["network_urls"] = list(dict.fromkeys(network))[:2_000]
+            return out
+        finally:
+            if context is not None:
+                try:
+                    context.close()
+                except Exception:
+                    pass
 
 
 # ---------------------------------------------------------------------------
@@ -438,17 +601,26 @@ def walk_to_endpoints(
     verified_domain: str,
     start_url: str = "",
     ticker: str = "",
+    render: bool = False,
 ) -> Dict[str, Any]:
     """From a verified domain, find the employer's ATS endpoints.
 
     Returns `{endpoints, career_landing_url, official_jobs_url, chain,
-    pages_read, unknown_hosts, detail}`. `chain` is the redirect chain of the
-    page that produced the endpoints — it IS the ownership evidence, so it is
-    carried out of here rather than logged and dropped.
+    pages_read, unknown_hosts, detail, blocked}`. `chain` is the redirect
+    chain of the page that produced the endpoints — it IS the ownership
+    evidence, so it is carried out of here rather than logged and dropped.
+
+    `render=True` swaps `fetcher.get` for `fetcher.render` so a JS-shell
+    careers page yields the board from its RENDERED DOM and its network
+    requests. The fingerprint and ownership rules are unchanged — only the
+    HTML source is richer. A bot challenge is recorded as `blocked` and
+    never worked around.
     """
     out: Dict[str, Any] = {"endpoints": [], "career_landing_url": "",
                            "official_jobs_url": "", "chain": [], "pages_read": 0,
-                           "unknown_hosts": {}, "detail": ""}
+                           "unknown_hosts": {}, "detail": "", "blocked": False}
+    page_budget = MAX_BROWSER_PAGES if render else MAX_CAREER_PAGES
+    fetch = fetcher.render if render else fetcher.get
     tried: Set[str] = set()
     queue: List[str] = []
     if start_url:
@@ -457,7 +629,10 @@ def walk_to_endpoints(
     # This is where a white-labelled enterprise board lives and it is usually
     # one redirect from the ATS itself.
     queue.extend(f"https://{sub}.{verified_domain}/" for sub in CAREER_SUBDOMAINS)
-    queue.extend(f"https://www.{verified_domain}{p}" for p in CAREER_PATHS[:6])
+    # Browser budget is tight: two paths plus the homepage is enough when the
+    # official URL and careers host have already been tried.
+    path_n = 2 if render else 6
+    queue.extend(f"https://www.{verified_domain}{p}" for p in CAREER_PATHS[:path_n])
     queue.append(f"https://www.{verified_domain}/")
 
     def _fingerprint(got: Dict[str, Any]) -> List[Any]:
@@ -470,34 +645,52 @@ def walk_to_endpoints(
         endpoint in its OWN address and, very often, nowhere in its body. The
         walk read that page, looked only at what it linked to, found nothing,
         and reported "no ATS fingerprint found" while standing on the board.
+
+        Under `render=True`, `network_urls` is the XHR/fetch list — often the
+        ONLY place a JS shell names its Greenhouse/Ashby/Lever board.
         """
         candidates = list(got.get("chain") or [])
         if got.get("final_url"):
             candidates.append(got["final_url"])
         candidates.extend(extract_urls(got.get("text") or "", got.get("final_url") or ""))
+        candidates.extend(got.get("network_urls") or ())
         return endpoints_from_page(candidates)
 
+    def _saw_challenge(got: Dict[str, Any]) -> bool:
+        err = str(got.get("error") or "")
+        return err in ("bot_challenge", "http_429") or got.get("status") in (403, 429)
+
     for url in queue:
-        if out["endpoints"] or out["pages_read"] >= MAX_CAREER_PAGES:
+        if out["endpoints"] or out["pages_read"] >= page_budget:
             break
         if url in tried:
             continue
         tried.add(url)
-        got = fetcher.get(url)
+        got = fetch(url)
         # A REDIRECT is evidence even when the destination refuses to answer.
         # An employer host that 301s onto `<tenant>.icims.com` has named its
         # board; whether iCIMS then served us a bot wall is a fact about our
         # request. Fingerprinting the chain before the status check is what
         # separates the two.
-        chain_eps = endpoints_from_page(list(got.get("chain") or [])
-                                        + ([got["final_url"]] if got.get("final_url") else []))
+        chain_eps = endpoints_from_page(
+            list(got.get("chain") or [])
+            + ([got["final_url"]] if got.get("final_url") else [])
+            + list(got.get("network_urls") or ()))
         if chain_eps:
             out["endpoints"] = chain_eps
             out["career_landing_url"] = got.get("final_url") or url
             out["chain"] = got.get("chain") or []
             out["detail"] = (f"{url} resolves to "
-                             f"{got.get('final_url') or 'the ATS'}")
+                             f"{got.get('final_url') or 'the ATS'}"
+                             + (" (rendered)" if render else ""))
             break
+        if _saw_challenge(got):
+            out["blocked"] = True
+            out["detail"] = f"bot challenge at {got.get('final_url') or url}"
+            # Keep looking at other URLs — a homepage challenge does not
+            # mean the careers host is also blocked — but do not read the
+            # challenge body as if it were a careers page.
+            continue
         if got["error"] or got["status"] != 200 or not got["text"]:
             continue
         out["pages_read"] += 1
@@ -508,7 +701,8 @@ def walk_to_endpoints(
             out["endpoints"] = eps
             out["career_landing_url"] = base
             out["chain"] = got["chain"]
-            out["detail"] = f"ATS endpoint linked from {base}"
+            out["detail"] = (
+                f"ATS endpoint {'from rendered page/network at' if render else 'linked from'} {base}")
             for ep in eps:
                 try:
                     prov = _provider(ep.vendor)
@@ -519,21 +713,27 @@ def walk_to_endpoints(
             break
         # No ATS fingerprint here. Follow this page's own careers links once —
         # a corporate homepage usually points at a careers microsite, which is
-        # where the board actually lives.
-        for link in career_links(html, base, limit=4):
-            if out["pages_read"] >= MAX_CAREER_PAGES or link in tried:
+        # where the board actually lives. Browser mode follows at most two
+        # (each is another Chromium navigation).
+        follow_n = 2 if render else 4
+        for link in career_links(html, base, limit=follow_n):
+            if out["pages_read"] >= page_budget or link in tried:
                 continue
             tried.add(link)
-            sub = fetcher.get(link)
+            sub = fetch(link)
             sub_chain_eps = endpoints_from_page(
                 list(sub.get("chain") or [])
-                + ([sub["final_url"]] if sub.get("final_url") else []))
+                + ([sub["final_url"]] if sub.get("final_url") else [])
+                + list(sub.get("network_urls") or ()))
             if sub_chain_eps:
                 out["endpoints"] = sub_chain_eps
                 out["career_landing_url"] = sub.get("final_url") or link
                 out["chain"] = list(got["chain"]) + list(sub.get("chain") or [])
                 out["detail"] = f"{link} resolves to {sub.get('final_url')}"
                 break
+            if _saw_challenge(sub):
+                out["blocked"] = True
+                continue
             if sub["error"] or sub["status"] != 200 or not sub["text"]:
                 continue
             out["pages_read"] += 1
@@ -554,7 +754,8 @@ def walk_to_endpoints(
                     out["unknown_hosts"][host] = out["unknown_hosts"].get(host, 0) + 1
 
     if not out["endpoints"] and not out["detail"]:
-        out["detail"] = (f"read {out['pages_read']} page(s) on {verified_domain}; "
+        kind = "rendered" if render else "read"
+        out["detail"] = (f"{kind} {out['pages_read']} page(s) on {verified_domain}; "
                          f"no ATS fingerprint found")
     return out
 
@@ -719,6 +920,7 @@ def verify_employer_source(
     candidate_endpoints: Sequence[Any] = (),
     official_url: str = "",
     ticker: str = "",
+    use_browser: bool = False,
 ) -> List[Dict[str, Any]]:
     """Verify one employer end to end. Returns `career_sources` records.
 
@@ -726,9 +928,19 @@ def verify_employer_source(
     `scripts/verify_career_sources.py` decides whether to write, and its
     default is not to. Probing is dry-run by default precisely because the
     thing being fixed is a system that wrote `validated` too eagerly.
+
+    `use_browser=True` is the fifth verification pass: render the careers
+    page, fingerprint the rendered DOM AND the network requests, then feed
+    the same evidence through `adjudicate_ownership`. It does not invent a
+    second ownership rule.
     """
     from services import employer_registry as er
-    fetcher = fetcher or Fetcher()
+    if use_browser:
+        fetcher = fetcher or Fetcher(enable_browser=True)
+        if not getattr(fetcher, "enable_browser", False):
+            fetcher.enable_browser = True
+    else:
+        fetcher = fetcher or Fetcher()
     name = employer.get("display_name") or ""
     eid = employer.get("employer_id") or ""
     domain = employer.get("canonical_domain") or ""
@@ -736,6 +948,9 @@ def verify_employer_source(
 
     # 1. Verify the domain itself. Without this, path (a) is unavailable and
     #    every "the employer's site links here" claim is unfounded.
+    #    Domain verification stays on plain HTTP — a homepage that needs a
+    #    browser to name the employer is not an independently verified domain
+    #    under the ownership rule, and burning Chromium on it would not help.
     domain_ok, domain_url, domain_ev = verify_domain(
         fetcher, display_name=name, domain=domain, ticker=ticker)
     verified_domain = er.normalize_domain(domain) if domain_ok else ""
@@ -768,7 +983,7 @@ def verify_employer_source(
     if verified_domain:
         linked = walk_to_endpoints(
             fetcher, display_name=name, verified_domain=verified_domain,
-            start_url=official_url, ticker=ticker)
+            start_url=official_url, ticker=ticker, render=use_browser)
         linked_keys = {getattr(e, "member_key", "") for e in linked.get("endpoints") or []}
 
     seen: Set[str] = set()
@@ -826,6 +1041,11 @@ def verify_employer_source(
         detail = (linked.get("detail") if linked
                   else ("domain not verified" if not verified_domain
                         else "no endpoint found"))
+        failure = css.FAIL_OWNER_UNPROVEN
+        state = css.STATE_CANDIDATE
+        if linked.get("blocked") and not linked.get("endpoints"):
+            failure = css.FAIL_CHALLENGE
+            state = css.STATE_BLOCKED
         records.append(css.build_source(
             employer_id=eid, ats_vendor="", tenant="",
             verified_domain=verified_domain,
@@ -833,8 +1053,8 @@ def verify_employer_source(
             discovery_method=css.METHOD_OFFICIAL_REGISTRY if official_url
             else css.METHOD_FINGERPRINT,
             ownership_evidence=domain_ev,
-            state=css.STATE_CANDIDATE,
-            failure_code=css.FAIL_OWNER_UNPROVEN,
+            state=state,
+            failure_code=failure,
             failure_detail=str(detail or "")[:400],
         ))
     return records
