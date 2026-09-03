@@ -7,9 +7,9 @@ Regenerate with:
 PYTHONPATH=shared/python python scripts/employer_coverage_report.py --markdown
 ```
 
-- measured at `2026-09-03T22:04:55.098755+00:00`
-- source revision `d71b01d`
-- inventory watermark `2026-09-03T22:04:18.367000`
+- measured at `2026-09-03T22:16:53.981546+00:00`
+- source revision `174d7ab`
+- inventory watermark `2026-09-03T22:15:04.061000`
 - posting-mix window: 30 days
 - versions: `taxonomy=tech-tax-1.2.0`, `adjacency=tech-adjacency-1.2.0`, `employer_registry=employer-registry-1.0.0`, `career_source=career-source-1.0.0`, `employer_classifier=employer-tech-1.0.0`, `canonical_employer=canonical-employer-1.0.0`, `official_career_registry=official-career-registry-1.0.0`
 
@@ -23,17 +23,17 @@ source only when its OWNERSHIP is proven and its content validated.
 | | value |
 |---|---:|
 | employers in the registry | 23,791 |
-| **evidence-backed technology employers** | **2,923** |
+| **evidence-backed technology employers** | **2,924** |
 | **covered technology employers** | **1,116** |
 | **employer coverage** | **38.2%** |
-| candidate technology employers (no covered source) | 1,807 |
+| candidate technology employers (no covered source) | 1,808 |
 | covered career SOURCES | 2,616 |
-| ownership-verified but unvalidated SOURCES | 259 |
+| ownership-verified but unvalidated SOURCES | 247 |
 | career sources total | 11,225 |
-| employers yielding postings | 1,147 |
-| employers yielding core-tech postings | 1,079 |
-| active postings from them | 147,385 |
-| core-tech postings | 38,786 (26.3%) |
+| employers yielding postings | 1,148 |
+| employers yielding core-tech postings | 1,080 |
+| active postings from them | 147,600 |
+| core-tech postings | 38,826 (26.3%) |
 | open employer merge reviews | 1,443 |
 | open employer board conflicts | 104 |
 
@@ -61,38 +61,38 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 
 | state | employers |
 |---|---:|
-| `candidate` | 1,436 |
+| `candidate` | 1,446 |
 | `validated` | 1,070 |
-| `content_validated` | 304 |
-| `dead` | 59 |
+| `content_validated` | 305 |
+| `dead` | 50 |
 | `empty` | 46 |
 | `blocked` | 6 |
-| `ownership_verified` | 2 |
+| `ownership_verified` | 1 |
 
 ## Coverage by cohort
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `public_tech` | 1,925 | 421 | 21.9% | 15,087 |
-| `unknown` | 468 | 357 | 76.3% | 17,097 |
-| `niche_startup` | 466 | 288 | 61.8% | 1,205 |
-| `mnc` | 63 | 34 | 54.0% | 9,670 |
-| `private_growth` | 37 | 29 | 78.4% | 1,854 |
+| `public_tech` | 1,925 | 421 | 21.9% | 15,105 |
+| `unknown` | 469 | 357 | 76.1% | 17,116 |
+| `niche_startup` | 466 | 288 | 61.8% | 1,206 |
+| `mnc` | 63 | 34 | 54.0% | 9,684 |
+| `private_growth` | 37 | 29 | 78.4% | 1,855 |
 
 ## Coverage by category
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
 | `software_saas` | 509 | 151 | 29.7% | 4,772 |
-| `it_services` | 471 | 93 | 19.8% | 4,334 |
-| `other` | 449 | 277 | 61.7% | 15,409 |
-| `healthtech` | 273 | 84 | 30.8% | 1,370 |
-| `fintech` | 261 | 130 | 49.8% | 7,042 |
-| `semiconductor` | 231 | 55 | 23.8% | 2,319 |
+| `it_services` | 471 | 93 | 19.8% | 4,337 |
+| `other` | 450 | 277 | 61.6% | 15,425 |
+| `healthtech` | 273 | 84 | 30.8% | 1,371 |
+| `fintech` | 261 | 130 | 49.8% | 7,059 |
+| `semiconductor` | 231 | 55 | 23.8% | 2,320 |
 | `cloud_data` | 224 | 82 | 36.6% | 2,471 |
 | `hardware` | 207 | 31 | 15.0% | 568 |
 | `telecom` | 134 | 31 | 23.1% | 667 |
-| `ai_ml` | 81 | 62 | 76.5% | 939 |
+| `ai_ml` | 81 | 62 | 76.5% | 941 |
 | `security` | 62 | 40 | 64.5% | 484 |
 | `automotive` | 57 | 7 | 12.3% | 39 |
 | `devtools` | 53 | 35 | 66.0% | 191 |
@@ -109,14 +109,14 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `US` | 1,891 | 410 | 21.7% | 12,736 |
-| `unknown` | 1,032 | 706 | 68.4% | 26,050 |
+| `US` | 1,891 | 410 | 21.7% | 12,754 |
+| `unknown` | 1,033 | 706 | 68.3% | 26,072 |
 
 ## Coverage by hiring country
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `unknown` | 2,717 | 910 | 33.5% | 30,757 |
+| `unknown` | 2,718 | 910 | 33.5% | 30,797 |
 | `US` | 144 | 144 | 100.0% | 6,035 |
 | `CA` | 60 | 60 | 100.0% | 3,978 |
 | `GB` | 38 | 38 | 100.0% | 4,009 |
@@ -176,12 +176,12 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 | provider | career sources | ownership verified | validated |
 |---|---:|---:|---:|
 | `unknown` | 6,515 | 0 | 0 |
-| `workday` | 1,519 | 1,053 | 916 |
+| `workday` | 1,519 | 1,046 | 916 |
 | `greenhouse` | 1,005 | 751 | 751 |
 | `icims` | 455 | 183 | 118 |
 | `ashby` | 373 | 296 | 296 |
 | `lever` | 190 | 145 | 145 |
-| `oracle_orc` | 170 | 60 | 8 |
+| `oracle_orc` | 170 | 56 | 8 |
 | `ukg` | 160 | 38 | 38 |
 | `paylocity` | 149 | 36 | 36 |
 | `smartrecruiters` | 138 | 110 | 110 |
@@ -192,7 +192,7 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 | `recruitee` | 48 | 23 | 23 |
 | `jobvite` | 42 | 16 | 16 |
 | `eightfold` | 39 | 22 | 22 |
-| `taleo` | 28 | 5 | 0 |
+| `taleo` | 28 | 4 | 0 |
 | `cornerstone` | 26 | 7 | 7 |
 | `successfactors` | 15 | 14 | 14 |
 | `neogov` | 12 | 10 | 10 |
@@ -233,12 +233,12 @@ since. A denominator that grows is not a measurement.
 
 | state | employers |
 |---|---:|
-| `candidate` | 50 |
+| `candidate` | 52 |
 | `validated` | 37 |
 | `not_in_registry` | 9 |
 | `empty` | 7 |
-| `dead` | 3 |
-| `ownership_verified` | 2 |
+| `dead` | 2 |
+| `ownership_verified` | 1 |
 | `content_validated` | 1 |
 
 | employer | domain | batch | state | sources | detail |
@@ -295,7 +295,7 @@ since. A denominator that grows is not a measurement.
 | Siemens | `siemens.com` | `baseline` | `candidate` | 1 | read 10 page(s) on siemens.com; no ATS fingerprint found |
 | Infosys | `infosys.com` | `baseline` | `candidate` | 1 | domain not verified |
 | Wipro | `wipro.com` | `baseline` | `candidate` | 1 | read 10 page(s) on wipro.com; no ATS fingerprint found |
-| Cognizant | `cognizant.com` | `baseline` | `ownership_verified` | 2 | no portal id configured (see module docstring) |
+| Cognizant | `cognizant.com` | `baseline` | `candidate` | 2 | rendered 4 page(s) on cognizant.com; no ATS fingerprint found |
 | Capgemini | `capgemini.com` | `baseline` | `empty` | 2 | verified employer domain -> endpoint (official_domain_link) |
 | Accenture | `accenture.com` | `baseline` | `validated` | 1 | verified employer domain -> endpoint (official_domain_link) |
 | Aurora Innovation | `aurora.tech` | `baseline` | `candidate` | 2 | read 5 page(s) on aurora.tech; no ATS fingerprint found |
@@ -330,7 +330,7 @@ since. A denominator that grows is not a measurement.
 | Oven (Bun) | `bun.sh` | `baseline` | `validated` | 1 | verified employer domain -> endpoint (official_domain_link) |
 | Oxide Computer | `oxide.computer` | `baseline` | `candidate` | 1 | read 4 page(s) on oxide.computer; no ATS fingerprint found |
 | Aikido Security | `aikido.dev` | `baseline` | `validated` | 1 | verified employer domain -> endpoint (official_domain_link) |
-| Protect AI | `protectai.com` | `baseline` | `dead` | 1 | no working site path (last=422) |
+| Protect AI | `protectai.com` | `baseline` | `candidate` | 1 | no ownership evidence gathered |
 | Lakera | `lakera.ai` | `baseline` | `empty` | 1 | verified employer domain -> endpoint (official_domain_link) |
 | HiddenLayer | `hiddenlayer.com` | `baseline` | `validated` | 2 | verified employer domain -> endpoint (official_domain_link) |
 | Ampere Computing | `amperecomputing.com` | `baseline` | `candidate` | 1 | bot challenge at https://careers.amperecomputing.com/ |
@@ -362,18 +362,18 @@ owner-verified boards, not against the whole inventory.
 
 | | value |
 |---|---:|
-| active postings considered | 275,410 |
-| on owner-verified boards | 222,196 |
-| **carrying a canonical employer** | **202,817** |
-| share of owner-verified postings | 91.3% |
-| attributing boards | 2,619 |
-| contested boards | 153 (77 still blocking) |
+| active postings considered | 275,623 |
+| on owner-verified boards | 221,193 |
+| **carrying a canonical employer** | **203,228** |
+| share of owner-verified postings | 91.9% |
+| attributing boards | 2,611 |
+| contested boards | 151 (75 still blocking) |
 
 | quarantine reason | postings |
 |---|---:|
-| `ownership_not_verified` | 53,214 |
-| `conflicting_owner_verified_sources` | 9,910 |
+| `ownership_not_verified` | 54,430 |
 | `marketplace_or_shared_board` | 7,488 |
+| `conflicting_owner_verified_sources` | 3,797 |
 
 ## Provider readiness
 
@@ -411,10 +411,10 @@ to `None` and nothing could ever have written another value.
 
 | source | shards | crawl lag (min) | stale | shards in backoff |
 |---|---:|---:|---|---:|
-| `career-pages` | 64 | 12 | False | 0 |
-| `icims` | 96 | 0 | False | 0 |
-| `oracle` | 48 | 8 | False | 0 |
-| `workday` | 48 | 2 | False | 0 |
+| `career-pages` | 64 | 9 | False | 0 |
+| `icims` | 96 | 12 | False | 0 |
+| `oracle` | 48 | 5 | False | 0 |
+| `workday` | 48 | 1 | False | 0 |
 
 - ingest runner heartbeat age: 0 min (healthy: True)
 
