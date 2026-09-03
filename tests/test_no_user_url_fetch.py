@@ -29,6 +29,7 @@ NEW_TECH_FEED_ROUTES = (
     "/tech-feed/company-categories",
     "/tech-feed/saved-searches",
     "/tech-feed/telemetry",
+    "/tech-feed/company-requests",
 )
 
 

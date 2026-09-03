@@ -1,7 +1,13 @@
 # Tech feed — migration, backfill, rollout and rollback
 
-**Status:** code landed and tested. Nothing is cut over. The three legacy feed
-tabs still serve every user; the new feed is dark behind a flag.
+**Status:** code landed. Staged audiences:
+
+1. Internal/admin (`isAdmin`) — feed on unless `?techfeed=0`.
+2. `VITE_TECH_FEED_BETA_PCT` (0–100) hashes the account email.
+3. Wider beta after gates in `tech-feed-rollout-gates.md`.
+4. Default-on only via `VITE_TECH_FEED=1` after measurable traffic.
+
+The link override is unchanged and still beats everything for rollback.
 
 Two steps below are **gated on explicit approval** and have NOT been run:
 the taxonomy backfill (step 3) and the discovery re-arm (step 5.2).

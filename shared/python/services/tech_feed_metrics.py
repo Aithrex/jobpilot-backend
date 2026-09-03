@@ -108,6 +108,21 @@ def inventory_metrics(db=None) -> Dict[str, Any]:
         P.count_documents({**active, "posted_at_confidence": "unknown"}),
         total_active)
 
+    missing_desc_by_ats: Dict[str, Any] = {}
+    for ats, n in (out.get("by_ats") or {}).items():
+        if not n:
+            continue
+        missing = P.count_documents({
+            **active, "ats": ats,
+            "description_ref": {"$in": [None, ""]},
+        })
+        missing_desc_by_ats[ats] = {
+            "active": n,
+            "missing_description_ref": missing,
+            "missing_rate": _pct(missing, n),
+        }
+    out["missing_description_by_ats"] = missing_desc_by_ats
+
     # Duplicate rate = EXCESS rows, not rows in a duplicated group. Two copies
     # of one job is one duplicate, not two.
     dup = list(P.aggregate([

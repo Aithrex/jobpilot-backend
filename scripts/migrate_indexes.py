@@ -1084,6 +1084,19 @@ INDEX_SPECS = [
     ("coverage_snapshots", [("measured_at", DESCENDING)],
      {"name": "coverage_snapshot_recent"}),
 
+    ("tech_feed_company_requests", [("request_id", ASCENDING)],
+     {"unique": True, "name": "company_request_id_unique"}),
+    ("tech_feed_company_requests", [("user_email", ASCENDING),
+                                    ("created_at", DESCENDING)],
+     {"name": "company_request_user_recent"}),
+    ("company_discovery_candidates", [("intake_key", ASCENDING)],
+     {"unique": True, "name": "intake_key_unique"}),
+    ("tech_feed_alert_deliveries", [("idempotency_key", ASCENDING)],
+     {"unique": True, "name": "alert_delivery_idempotency"}),
+    ("tech_feed_saved_searches", [("alerts.enabled", ASCENDING),
+                                  ("alerts.last_evaluated_at", ASCENDING)],
+     {"name": "saved_search_alerts_due"}),
+
     # === official career-URL verification events ==========================
     ("official_career_url_checks", [("domain", ASCENDING)],
      {"unique": True, "name": "url_check_domain_unique"}),

@@ -2101,6 +2101,27 @@ def list_member(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy,
 # Detail normalization - fetch a body at most once per changed posting
 # ---------------------------------------------------------------------------
 
+#: Listing teasers from these vendors are not JDs. A one-line ShortDescription
+#: must still hit the detail endpoint. Lever/Ashby listing payloads that already
+#: carry a real body are not in this set.
+_TEASER_LISTING_VENDORS = frozenset({
+    "workday", "oracle", "icims", "eightfold", "cornerstone", "taleo",
+})
+MIN_USABLE_DESCRIPTION_CHARS = 80
+
+
+def _listing_description_is_complete(row: Dict[str, Any], member: Dict[str, Any]) -> bool:
+    desc = str(row.get("description") or "")
+    if not desc:
+        return False
+    vendor = _vendor_of(member)
+    source = member.get("source")
+    if vendor in _TEASER_LISTING_VENDORS or source in (
+            SOURCE_WORKDAY, SOURCE_ORACLE, SOURCE_ICIMS):
+        return len(desc) >= MIN_USABLE_DESCRIPTION_CHARS
+    return True
+
+
 def _listing_implies_same_content(existing: Dict[str, Any], row: Dict[str, Any]) -> bool:
     """True when the LISTING fields prove `content_hash` cannot have moved.
 
@@ -2149,7 +2170,7 @@ def _needs_http_detail(row: Dict[str, Any], member: Dict[str, Any]) -> bool:
     quiet (a source silently loses ingestion throughput), so they are reviewed
     together.
     """
-    if row.get("description"):
+    if _listing_description_is_complete(row, member):
         return False
     vendor = _vendor_of(member)
     if vendor not in _LEGACY_LISTING_VENDORS:
@@ -2168,19 +2189,21 @@ def fetch_detail(row: Dict[str, Any], member: Dict[str, Any], *, policy: HostPol
     """Fetch one posting body. Returns "" when unavailable - a body-less row is
     still worth storing (title/employer/date are the freshness surface), it just
     cannot be requirement-parsed."""
-    if row.get("description"):
-        return str(row["description"])
+    listing_desc = str(row.get("description") or "")
+    if _listing_description_is_complete(row, member):
+        return listing_desc
     source = member["source"]
     vendor = _vendor_of(member)
     if USE_PROVIDERS and vendor not in _LEGACY_LISTING_VENDORS:
         body = _detail_via_provider(row, member, deadline=deadline, stop=stop)
         if body is not None:
-            return body
+            fetched = str(body).strip()
+            return fetched if len(fetched) >= len(listing_desc) else listing_desc
 
     if source == SOURCE_WORKDAY:
         path = row.get("_detail_ref") or ""
         if not path:
-            return ""
+            return listing_desc
         from services.workday_cxs_fetcher import _detail_html_to_text
 
         url = (f"https://{member['tenant']}.{member['wd_host']}.myworkdayjobs.com"
@@ -2189,8 +2212,9 @@ def fetch_detail(row: Dict[str, Any], member: Dict[str, Any], *, policy: HostPol
                              stop=stop, timeout=DETAIL_TIMEOUT)
         info = (data or {}).get("jobPostingInfo") if isinstance(data, dict) else None
         if not isinstance(info, dict):
-            return ""
-        return _detail_html_to_text(str(info.get("jobDescription") or ""))[:15000]
+            return listing_desc
+        fetched = _detail_html_to_text(str(info.get("jobDescription") or ""))[:15000]
+        return fetched if len(fetched) >= len(listing_desc) else listing_desc
 
     ats, slug = member.get("ats"), member.get("slug")
     if ats not in _ATS_WITH_DETAIL:

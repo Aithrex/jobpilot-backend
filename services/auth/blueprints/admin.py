@@ -74,6 +74,13 @@ def ops_health():
     return jsonify(ops.ops_health(hours)), 200
 
 
+@admin_bp.route("/ops/tech-feed", methods=["GET"])
+@admin_required
+def ops_tech_feed():
+    """Read-only tech-feed operations. Aggregate counts only; no PII."""
+    return jsonify(ops.tech_feed_ops()), 200
+
+
 @admin_bp.route("/ops/user-search", methods=["GET"])
 @admin_required
 def ops_user_search():

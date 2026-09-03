@@ -643,7 +643,10 @@ def test_listing_body_skips_the_detail_fetch(db, small_registry, monkeypatch):
     rows = {}
     for i, m in enumerate(members):
         rows[m["member_key"]] = [
-            _row(m, "WITH-BODY", description="Python, MongoDB and AWS required."),
+            _row(m, "WITH-BODY", description=(
+                "Python, MongoDB and AWS required. Experience with Kubernetes, "
+                "Terraform and CI/CD is expected for this backend role."
+            )),
             _row(m, "NO-BODY"),
         ]
     detail_calls = []
@@ -659,11 +662,29 @@ def test_listing_body_skips_the_detail_fetch(db, small_registry, monkeypatch):
     assert db.job_postings.count_documents({}) == 2 * len(members)
 
 
+def test_workday_teaser_listing_still_fetches_detail(db, small_registry, monkeypatch):
+    """A Workday ShortDescription is not a JD; spend the detail budget."""
+    shard = w.shard_of(w.SOURCE_WORKDAY, small_registry[0]["member_key"])
+    member = w.shard_members(w.SOURCE_WORKDAY, shard)[0]
+    others = w.shard_members(w.SOURCE_WORKDAY, shard)[1:]
+    rows = {member["member_key"]: [
+        _row(member, "TEASER", description="Join our team in Austin."),
+    ]}
+    rows.update({m["member_key"]: [] for m in others})
+    detail_calls = []
+    _patch_shard_io(monkeypatch, rows, detail_calls)
+    w.run_shard(w.SOURCE_WORKDAY, shard, now=NOW)
+    assert detail_calls == [f"{member['member_key']}:TEASER"]
+
+
 def test_detail_budget_only_counts_rows_that_would_fetch(db, small_registry, monkeypatch):
     """A shard whose rows all carry bodies must not report skipped work."""
     shard = w.shard_of(w.SOURCE_WORKDAY, small_registry[0]["member_key"])
     members = w.shard_members(w.SOURCE_WORKDAY, shard)
-    rows = {m["member_key"]: [_row(m, f"REQ-{i}", description="Python and AWS.")
+    rows = {m["member_key"]: [_row(m, f"REQ-{i}", description=(
+                "Python and AWS. Kubernetes, Terraform, observability and "
+                "on-call ownership are part of this platform role."
+            ))
                               for i in range(5)] for m in members}
     _patch_shard_io(monkeypatch, rows)
 

@@ -259,6 +259,7 @@ def build(db, *, mix_days: int) -> Dict[str, Any]:
     employers = list(db.employers.find({}, {
         "_id": 0, "employer_id": 1, "display_name": 1, "canonical_domain": 1,
         "cohorts": 1, "employer_categories": 1, "countries": 1,
+        "headquarters_country": 1, "hiring_countries": 1,
         "operating_status": 1, "id_basis": 1, "identity_confidence": 1,
         "evidence": 1, "registry_refs": 1}))
 
@@ -291,8 +292,10 @@ def build(db, *, mix_days: int) -> Dict[str, Any]:
         emp["_mix"] = emp_mix
         emp["_company"] = company
         emp["cohorts"] = cohorts_for(emp, company, emp_mix)
-        if not emp.get("countries") and (company or {}).get("state"):
-            emp["countries"] = ["US"]
+        # Headquarters is documentary. It is NOT hiring availability. A US
+        # incorporation state is not evidence the employer hires in the US.
+        if not emp.get("headquarters_country") and (company or {}).get("country"):
+            emp["headquarters_country"] = company.get("country")
         denominator.append(emp)
 
     coverage = css.coverage_by_employer([e["employer_id"] for e in denominator])
@@ -310,11 +313,19 @@ def report(db, built: Dict[str, Any], *, mix_days: int) -> Dict[str, Any]:
         (r["_coverage"].get("state") or css.STATE_CANDIDATE) for r in rows)
     covered = sum(by_state.get(s, 0) for s in css.COVERED_STATES)
 
+    def _values(row: Dict[str, Any], field: str) -> List[Any]:
+        raw = row.get(field)
+        if raw in (None, "", []):
+            return ["unknown"]
+        if isinstance(raw, list):
+            return raw or ["unknown"]
+        return [raw]
+
     def _facet(field: str) -> Dict[str, Dict[str, int]]:
         out: Dict[str, Dict[str, int]] = collections.defaultdict(
             lambda: {"employers": 0, "covered": 0, "core_postings": 0})
         for r in rows:
-            values = r.get(field) or ["unknown"]
+            values = _values(r, field)
             for v in values:
                 bucket = out[str(v)]
                 bucket["employers"] += 1
@@ -446,7 +457,10 @@ def report(db, built: Dict[str, Any], *, mix_days: int) -> Dict[str, Any]:
         "official_url_verification": _official_url_verification(db),
         "by_cohort": _facet("cohorts"),
         "by_category": _facet("employer_categories"),
-        "by_country": _facet("countries"),
+        "by_headquarters_country": _facet("headquarters_country"),
+        "by_hiring_country": _facet("hiring_countries"),
+        # Legacy field, labelled as such. Do not treat it as hiring geography.
+        "by_country_legacy": _facet("countries"),
         "by_provider": dict(by_provider),
         # The number that used to be reported AS coverage, kept beside the one
         # that is, so the difference is visible.
@@ -547,6 +561,8 @@ def snapshot_payload(summary: Dict[str, Any]) -> Dict[str, Any]:
         # --- breakdowns ------------------------------------------------
         "by_cohort": summary.get("by_cohort") or {},
         "by_category": summary.get("by_category") or {},
+        "by_headquarters_country": summary.get("by_headquarters_country") or {},
+        "by_hiring_country": summary.get("by_hiring_country") or {},
         # --- attribution ------------------------------------------------
         "canonical_attribution": {
             "attributed_postings": att.get("attributed_postings", 0),
@@ -640,7 +656,8 @@ def render_markdown(summary: Dict[str, Any]) -> str:
     a("")
     for title, key in (("Coverage by cohort", "by_cohort"),
                        ("Coverage by category", "by_category"),
-                       ("Coverage by country", "by_country")):
+                       ("Coverage by headquarters country", "by_headquarters_country"),
+                       ("Coverage by hiring country", "by_hiring_country")):
         a(f"## {title}")
         a("")
         a("| | employers | validated | % | core-tech postings |")

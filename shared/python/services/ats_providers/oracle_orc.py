@@ -261,9 +261,11 @@ class OracleOrcProvider(AtsProvider):
         location = "; ".join([x for x in locations if x][:4])
 
         desc = " ".join(x for x in [
+            str(raw.get("ExternalDescriptionStr") or ""),
             str(raw.get("ShortDescriptionStr") or ""),
             str(raw.get("ExternalResponsibilitiesStr") or ""),
             str(raw.get("ExternalQualificationsStr") or ""),
+            str(raw.get("JobDescription") or ""),
         ] if x)
 
         workplace = str(raw.get("WorkplaceType") or "").strip().lower()

@@ -1043,7 +1043,8 @@ def tech_feed_saved_searches_save():
             get_jwt_identity(),
             client_id=data.get("id"),
             name=InputSanitizer.sanitize_string(data.get("name", ""), max_length=80),
-            filters=data.get("filters"))), 200
+            filters=data.get("filters"),
+            alerts=data.get("alerts"))), 200
     except ValueError as e:
         # The per-account cap. A 409 rather than a 400: the request is
         # well-formed and the account is full, and the client should say so
@@ -1082,6 +1083,49 @@ def tech_feed_saved_searches_reconcile():
     except Exception as e:
         logger.error(f"Tech feed saved-search reconcile error: {e}", exc_info=True)
         return jsonify({"error": "Failed to reconcile saved searches"}), 500
+
+
+@jobs_bp.route("/tech-feed/company-requests", methods=["POST"])
+@jwt_required()
+def tech_feed_company_request():
+    """Queue a company for later verification. Does not fetch the URL."""
+    client_ip = get_client_ip(request)
+    limiter = get_rate_limiter()
+    email = get_jwt_identity()
+    if limiter.is_rate_limited(f"jobs_tech_feed_creq:{email or client_ip}",
+                               max_requests=8, window_seconds=3600):
+        return jsonify({"error": "Rate limit exceeded."}), 429
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Body must be a JSON object"}), 400
+    try:
+        from services import tech_feed_company_requests as reqs
+        body = reqs.submit(
+            email,
+            company_name=data.get("company_name"),
+            career_url=data.get("career_url"))
+        return jsonify(body), 200
+    except OverflowError as e:
+        return jsonify({"error": str(e)}), 429
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error("Tech feed company-request error: %s", e, exc_info=True)
+        return jsonify({"error": "Failed to submit the company request"}), 500
+
+
+@jobs_bp.route("/tech-feed/company-requests/<request_id>", methods=["GET"])
+@jwt_required()
+def tech_feed_company_request_get(request_id):
+    try:
+        from services import tech_feed_company_requests as reqs
+        row = reqs.get_for_user(get_jwt_identity(), request_id)
+        if not row:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify(row), 200
+    except Exception as e:
+        logger.error("Tech feed company-request get error: %s", e)
+        return jsonify({"error": "Failed to load the request"}), 500
 
 
 # --- Tech feed employer directory ---------------------------------------

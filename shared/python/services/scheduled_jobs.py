@@ -322,7 +322,12 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             # evening summaries; each sweep self-filters by the user's local hour.
             morning = run_morning_digests()
             evening = run_evening_summaries()
-            return {"job": name, "morning": morning, "evening": evening}
+            from services.resume_service import get_resume_service, ResumeService
+            job_id = get_resume_service().create_job(
+                "saved_search_alerts", {}, "system@internal")
+            ResumeService.invoke_async(job_id, "saved_search_alerts", {})
+            return {"job": name, "morning": morning, "evening": evening,
+                    "saved_search_alerts": job_id}
         if name == "bandit_nightly":
             return {"job": name, "result": run_bandit_nightly()}
         if name == "learning_due":

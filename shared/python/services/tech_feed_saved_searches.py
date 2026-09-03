@@ -121,11 +121,30 @@ def fingerprint(filters: Dict[str, Any]) -> str:
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
 
 
+def _public_alerts(row: Dict[str, Any]) -> Dict[str, Any]:
+    raw = row.get("alerts") if isinstance(row.get("alerts"), dict) else {}
+    return {
+        "enabled": bool(raw.get("enabled")),
+        "frequency": "daily",
+        "timezone": raw.get("timezone") or "UTC",
+        "last_evaluated_at": (
+            raw["last_evaluated_at"].isoformat()
+            if isinstance(raw.get("last_evaluated_at"), datetime)
+            else raw.get("last_evaluated_at")),
+        "last_delivered_at": (
+            raw["last_delivered_at"].isoformat()
+            if isinstance(raw.get("last_delivered_at"), datetime)
+            else raw.get("last_delivered_at")),
+        "paused_reason": raw.get("paused_reason"),
+    }
+
+
 def _public(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "id": row.get("client_id"),
         "name": row.get("name"),
         "filters": row.get("filters") or {},
+        "alerts": _public_alerts(row),
         "createdAt": (row.get("created_at").isoformat()
                       if isinstance(row.get("created_at"), datetime)
                       else row.get("created_at")),
@@ -145,7 +164,7 @@ def list_for(user_email: str, *, limit: int = MAX_PER_USER) -> Dict[str, Any]:
 
 
 def save(user_email: str, *, client_id: Any, name: Any,
-         filters: Any) -> Dict[str, Any]:
+         filters: Any, alerts: Any = None) -> Dict[str, Any]:
     """Upsert one saved search. Idempotent on `(user_email, client_id)`."""
     email = str(user_email or "")
     if not email:
@@ -162,13 +181,18 @@ def save(user_email: str, *, client_id: Any, name: Any,
     if existing >= MAX_PER_USER and not col.find_one(
             {"user_email": email, "client_id": cid}, {"_id": 1}):
         raise ValueError(f"save: at most {MAX_PER_USER} saved searches per account")
+    from services import tech_feed_alerts as alerts_mod
+    fields = {"name": _clean_name(name), "filters": normalized,
+              "fingerprint": fingerprint(normalized), "updated_at": now,
+              "saved_search_version": SAVED_SEARCH_VERSION}
+    on_insert = {"user_email": email, "client_id": cid, "created_at": now}
+    if alerts is not None:
+        fields["alerts"] = alerts_mod.normalize_alerts(alerts)
+    else:
+        on_insert["alerts"] = alerts_mod.normalize_alerts(None)
     col.update_one(
         {"user_email": email, "client_id": cid},
-        {"$set": {"name": _clean_name(name), "filters": normalized,
-                  "fingerprint": fingerprint(normalized), "updated_at": now,
-                  "saved_search_version": SAVED_SEARCH_VERSION},
-         "$setOnInsert": {"user_email": email, "client_id": cid,
-                          "created_at": now}},
+        {"$set": fields, "$setOnInsert": on_insert},
         upsert=True)
     return list_for(email)
 
@@ -178,6 +202,12 @@ def delete(user_email: str, client_id: Any) -> Dict[str, Any]:
     cid = _clean_client_id(client_id)
     if email and cid:
         _db()[SAVED_SEARCHES].delete_one({"user_email": email, "client_id": cid})
+        try:
+            from services import tech_feed_alerts as alerts_mod
+            _db()[alerts_mod.DELIVERIES].delete_many(
+                {"user_email": email, "search_id": cid})
+        except Exception:
+            pass
     return list_for(email)
 
 

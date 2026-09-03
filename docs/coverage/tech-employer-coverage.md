@@ -7,9 +7,9 @@ Regenerate with:
 PYTHONPATH=shared/python python scripts/employer_coverage_report.py --markdown
 ```
 
-- measured at `2026-09-03T05:49:32.961990+00:00`
-- source revision `1d8e500-dirty`
-- inventory watermark `2026-09-03T05:49:21.589000`
+- measured at `2026-09-03T19:28:19.827599+00:00`
+- source revision `398db6e`
+- inventory watermark `2026-09-03T19:26:18.659000`
 - posting-mix window: 30 days
 - versions: `taxonomy=tech-tax-1.2.0`, `adjacency=tech-adjacency-1.2.0`, `employer_registry=employer-registry-1.0.0`, `career_source=career-source-1.0.0`, `employer_classifier=employer-tech-1.0.0`, `canonical_employer=canonical-employer-1.0.0`, `official_career_registry=official-career-registry-1.0.0`
 
@@ -23,17 +23,17 @@ source only when its OWNERSHIP is proven and its content validated.
 | | value |
 |---|---:|
 | employers in the registry | 23,791 |
-| **evidence-backed technology employers** | **2,829** |
-| **covered technology employers** | **1,027** |
-| **employer coverage** | **36.3%** |
-| candidate technology employers (no covered source) | 1,802 |
+| **evidence-backed technology employers** | **2,913** |
+| **covered technology employers** | **1,088** |
+| **employer coverage** | **37.4%** |
+| candidate technology employers (no covered source) | 1,825 |
 | covered career SOURCES | 2,559 |
 | ownership-verified but unvalidated SOURCES | 254 |
 | career sources total | 11,220 |
-| employers yielding postings | 1,049 |
-| employers yielding core-tech postings | 964 |
-| active postings from them | 125,415 |
-| core-tech postings | 27,514 (21.9%) |
+| employers yielding postings | 1,135 |
+| employers yielding core-tech postings | 1,068 |
+| active postings from them | 143,522 |
+| core-tech postings | 37,551 (26.2%) |
 | open employer merge reviews | 1,443 |
 | open employer board conflicts | 104 |
 
@@ -61,55 +61,55 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 
 | state | employers |
 |---|---:|
-| `candidate` | 1,456 |
-| `validated` | 982 |
-| `content_validated` | 261 |
+| `candidate` | 1,459 |
+| `validated` | 1,043 |
+| `content_validated` | 278 |
 | `dead` | 65 |
 | `empty` | 45 |
-| `blocked` | 12 |
+| `blocked` | 15 |
 | `ownership_verified` | 8 |
 
 ## Coverage by cohort
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `public_tech` | 1,908 | 404 | 21.2% | 11,058 |
-| `niche_startup` | 467 | 289 | 61.9% | 1,033 |
-| `unknown` | 392 | 287 | 73.2% | 11,663 |
-| `mnc` | 62 | 33 | 53.2% | 6,901 |
-| `private_growth` | 36 | 27 | 75.0% | 1,471 |
+| `public_tech` | 1,921 | 406 | 21.1% | 14,648 |
+| `niche_startup` | 466 | 288 | 61.8% | 1,168 |
+| `unknown` | 462 | 345 | 74.7% | 16,470 |
+| `mnc` | 63 | 34 | 54.0% | 9,454 |
+| `private_growth` | 37 | 28 | 75.7% | 1,802 |
 
 ## Coverage by category
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `software_saas` | 509 | 150 | 29.5% | 3,790 |
-| `it_services` | 465 | 86 | 18.5% | 2,851 |
-| `other` | 381 | 220 | 57.7% | 10,758 |
-| `healthtech` | 267 | 78 | 29.2% | 732 |
-| `fintech` | 255 | 123 | 48.2% | 5,127 |
-| `semiconductor` | 231 | 55 | 23.8% | 1,653 |
-| `cloud_data` | 224 | 82 | 36.6% | 1,977 |
-| `hardware` | 207 | 31 | 15.0% | 461 |
-| `telecom` | 132 | 29 | 22.0% | 468 |
-| `ai_ml` | 81 | 62 | 76.5% | 750 |
-| `security` | 62 | 40 | 64.5% | 328 |
-| `automotive` | 57 | 6 | 10.5% | 32 |
-| `devtools` | 53 | 35 | 66.0% | 160 |
-| `consumer` | 50 | 28 | 56.0% | 149 |
-| `aerospace_defense` | 47 | 21 | 44.7% | 681 |
-| `robotics` | 47 | 30 | 63.8% | 618 |
-| `gaming` | 26 | 9 | 34.6% | 68 |
-| `energy` | 19 | 19 | 100.0% | 342 |
+| `software_saas` | 509 | 150 | 29.5% | 4,668 |
+| `it_services` | 470 | 91 | 19.4% | 4,222 |
+| `other` | 443 | 259 | 58.5% | 14,914 |
+| `healthtech` | 272 | 83 | 30.5% | 1,303 |
+| `fintech` | 260 | 128 | 49.2% | 6,841 |
+| `semiconductor` | 231 | 55 | 23.8% | 2,241 |
+| `cloud_data` | 224 | 82 | 36.6% | 2,415 |
+| `hardware` | 207 | 31 | 15.0% | 556 |
+| `telecom` | 134 | 31 | 23.1% | 652 |
+| `ai_ml` | 81 | 62 | 76.5% | 901 |
+| `security` | 62 | 40 | 64.5% | 461 |
+| `automotive` | 57 | 6 | 10.5% | 39 |
+| `devtools` | 53 | 35 | 66.0% | 186 |
+| `consumer` | 50 | 28 | 56.0% | 165 |
+| `aerospace_defense` | 48 | 22 | 45.8% | 811 |
+| `robotics` | 47 | 30 | 63.8% | 667 |
+| `gaming` | 27 | 10 | 37.0% | 78 |
+| `energy` | 21 | 21 | 100.0% | 561 |
 | `research` | 14 | 7 | 50.0% | 3 |
-| `media` | 9 | 8 | 88.9% | 54 |
-| `ecommerce` | 4 | 1 | 25.0% | 1,142 |
+| `media` | 10 | 9 | 90.0% | 75 |
+| `ecommerce` | 4 | 1 | 25.0% | 1,384 |
 
 ## Coverage by country
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `unknown` | 2,828 | 1,027 | 36.3% | 27,514 |
+| `unknown` | 2,912 | 1,088 | 37.4% | 37,551 |
 | `US` | 1 | 0 | 0.0% | 0 |
 
 ## Coverage by provider
@@ -299,18 +299,18 @@ owner-verified boards, not against the whole inventory.
 
 | | value |
 |---|---:|
-| active postings considered | 251,739 |
-| on owner-verified boards | 200,913 |
-| **carrying a canonical employer** | **184,901** |
-| share of owner-verified postings | 92.0% |
+| active postings considered | 269,971 |
+| on owner-verified boards | 216,121 |
+| **carrying a canonical employer** | **198,578** |
+| share of owner-verified postings | 91.9% |
 | attributing boards | 2,579 |
 | contested boards | 144 (70 still blocking) |
 
 | quarantine reason | postings |
 |---|---:|
-| `ownership_not_verified` | 50,826 |
-| `conflicting_owner_verified_sources` | 8,594 |
-| `marketplace_or_shared_board` | 6,860 |
+| `ownership_not_verified` | 53,850 |
+| `conflicting_owner_verified_sources` | 9,542 |
+| `marketplace_or_shared_board` | 7,488 |
 
 ## Provider readiness
 
@@ -348,10 +348,10 @@ to `None` and nothing could ever have written another value.
 
 | source | shards | crawl lag (min) | stale | shards in backoff |
 |---|---:|---:|---|---:|
-| `career-pages` | 64 | 11 | False | 0 |
-| `icims` | 96 | 0 | False | 0 |
-| `oracle` | 48 | 8 | False | 0 |
-| `workday` | 48 | 1 | False | 0 |
+| `career-pages` | 64 | 5 | False | 0 |
+| `icims` | 96 | 8 | False | 0 |
+| `oracle` | 48 | 2 | False | 0 |
+| `workday` | 48 | 10 | False | 2 |
 
 - ingest runner heartbeat age: 0 min (healthy: True)
 

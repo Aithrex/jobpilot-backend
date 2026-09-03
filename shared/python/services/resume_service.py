@@ -2395,6 +2395,16 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             result = apply_match_sweep.run_match_sweep()
             svc.complete_job(job_id, result)
 
+        elif job_type == "saved_search_alerts":
+            from services import tech_feed_alerts
+            result = tech_feed_alerts.run_daily_sweep()
+            svc.complete_job(job_id, result)
+
+        elif job_type == "coverage_snapshot":
+            from services import coverage_snapshot_job as csj
+            result = csj.run(persist=bool(payload.get("persist", True)))
+            svc.complete_job(job_id, result)
+
         elif job_type == "auto_apply_prepare":
             # Defect D — the REQUIRED tailored-résumé preparation phase. Reserves
             # a tailor slot, tailors + pins an immutable artifact, writes

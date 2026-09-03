@@ -148,6 +148,14 @@ def main() -> int:
     ap.add_argument("--json", default=None)
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
+    # Windows cp1252 consoles raise UnicodeEncodeError on reviewed titles
+    # that carry diacritics. Reconfigure stdio to UTF-8; titles in the
+    # dataset are not rewritten.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     summary = run(verbose=not args.quiet)
     ok = (summary["scope_accuracy"] >= MIN_SCOPE_ACCURACY
           and summary["reviewer_override_accuracy"] >= MIN_OVERRIDE_ACCURACY

@@ -55,6 +55,7 @@ REGISTRY_VERSION = "official-career-registry-1.0.0"
 #: than a number whose denominator quietly grew.
 BATCH_BASELINE = "baseline"
 BATCH_AUDIT_2026_09_02 = "audit-2026-09-02"
+BATCH_INTAKE_2026_09_03 = "intake-2026-09-03"
 
 
 def _row(display_name: str, domain: str, career_url: str, *,
@@ -387,6 +388,41 @@ OFFICIAL_CAREER_URLS: Tuple[Dict[str, Any], ...] = (
          notes="2026-09-02: careers URL 403 to our prober (bot wall). BLOCKED. "
                "Citadel Securities is a SEPARATE legal entity and is not "
                "merged with this row on the strength of a shared name."),
+
+    # --- 2026-09-03 evidence-backed intake ----------------------------------
+    # These rows are LEADS. A registry row is not coverage. Ownership still
+    # has to walk from the employer domain to the board, and content still
+    # has to validate. Do not merge any of them on a similar display name.
+    _row("Safe Superintelligence", "ssi.inc", "https://ssi.inc/",
+         cohorts=("niche_startup",), categories=("ai_ml", "research"),
+         batch=BATCH_INTAKE_2026_09_03,
+         notes="Candidate. Official page https://ssi.inc/. Candidate board "
+               "https://jobs.ashbyhq.com/ssi. Do NOT promote the Ashby "
+               "source until a first-party link/redirect from ssi.inc to "
+               "that exact board is confirmed. Category: AI/ML research."),
+    _row("Thinking Machines Lab", "thinkingmachines.ai",
+         "https://thinkingmachines.ai/",
+         cohorts=("niche_startup",), categories=("ai_ml", "research"),
+         batch=BATCH_INTAKE_2026_09_03,
+         notes="Official site was observed linking to an obsolete Greenhouse "
+               "board (moved/stale). Current candidate board "
+               "https://jobs.ashbyhq.com/thinkingmachines. Do NOT promote "
+               "Ashby without sufficient first-party or independent ownership "
+               "evidence. Record Greenhouse as moved, not as a live source."),
+    _row("Periodic Labs", "periodic.com", "https://periodic.com/",
+         cohorts=("niche_startup",), categories=("ai_ml", "research"),
+         batch=BATCH_INTAKE_2026_09_03,
+         notes="Candidate. Official site was observed linking to "
+               "https://jobs.ashbyhq.com/periodic-labs. Still needs the "
+               "ownership walk and content validation before coverage."),
+    _row("OpenEvidence", "openevidence.com", "https://www.openevidence.com/",
+         cohorts=("private_growth",), categories=("healthtech", "ai_ml"),
+         batch=BATCH_INTAKE_2026_09_03,
+         notes="KEEP candidate/blocked until ownership is corroborated. The "
+               "first-party site blocked automated inspection. Candidate "
+               "board https://jobs.ashbyhq.com/openevidence. Do NOT confuse "
+               "with open-evidence.com, a different organisation. Do not "
+               "merge on the similar name."),
 )
 
 

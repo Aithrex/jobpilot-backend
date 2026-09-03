@@ -135,6 +135,9 @@ QUARTER_HOURLY: Dict[str, int] = {
 }
 DISCOVERY_MINUTE = 2     # cron(2/15  ...) — grows the registry, not the crawl
 MAINTENANCE_UTC = (5, 20)  # cron(20 5 * * ? *) — daily retention purge
+# After maintenance, never overlapping with it. The report takes ~2 minutes and
+# is NEVER computed on an API request; this is the scheduled persist path.
+COVERAGE_SNAPSHOT_UTC = (5, 45)
 
 
 class Runner:
@@ -282,6 +285,15 @@ class Runner:
             ),
         )
 
+    def run_coverage_snapshot(self) -> None:
+        """Persist the measured coverage snapshot. Failures keep the last good one."""
+        self._submit(
+            "coverage_snapshot",
+            lambda: __import__(
+                "services.coverage_snapshot_job", fromlist=["run"]
+            ).run(persist=True),
+        )
+
     # -- heartbeat ---------------------------------------------------------
     def heartbeat(self) -> None:
         """The thing to alarm on.
@@ -337,6 +349,10 @@ class Runner:
         if self.maintenance and (now.hour, now.minute) == MAINTENANCE_UTC \
                 and self._due("maintenance", slot):
             self.run_maintenance()
+
+        if (now.hour, now.minute) == COVERAGE_SNAPSHOT_UTC \
+                and self._due("coverage_snapshot", slot):
+            self.run_coverage_snapshot()
 
     def serve(self, once: bool = False) -> int:
         logger.info("ingest runner %s starting: sources=%s discovery=%s "

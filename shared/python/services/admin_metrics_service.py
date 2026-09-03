@@ -550,3 +550,85 @@ def quota_breaches(limit: int = 200) -> Dict[str, Any]:
 
     breaches = breaches[:limit]
     return {"generated_at": _iso(now), "count": len(breaches), "breaches": breaches}
+
+
+def tech_feed_ops() -> Dict[str, Any]:
+    """Aggregate, non-PII tech-feed operations surface.
+
+    No search terms, no emails, no job titles. Snapshot age, queues, health.
+    """
+    db = _db()
+    out: Dict[str, Any] = {"generated_at": _iso(_now())}
+    try:
+        from services import coverage_snapshot as snap
+        latest = snap.latest(db=db)
+        if latest:
+            out["coverage"] = {
+                "available": True,
+                "measured_at": _iso(latest.get("measured_at")),
+                "age_hours": latest.get("age_hours"),
+                "stale": latest.get("stale"),
+                "employer_coverage_pct": latest.get("employer_coverage_pct"),
+                "technology_employer_denominator":
+                    latest.get("technology_employer_denominator"),
+                "covered_technology_employers":
+                    latest.get("covered_technology_employers"),
+            }
+        else:
+            out["coverage"] = {"available": False}
+    except Exception as e:
+        logger.warning("tech_feed_ops coverage: %s", e)
+        out["coverage"] = {"available": False}
+
+    try:
+        from services import career_source_service as css
+        out["source_states"] = css.counts()
+    except Exception:
+        out["source_states"] = {}
+
+    try:
+        out["ownership_conflicts"] = db.employer_board_conflicts.count_documents(
+            {"resolved": {"$ne": True}})
+    except Exception:
+        out["ownership_conflicts"] = None
+
+    try:
+        from services import tech_feed_metrics as m
+        out["search"] = m.search_metrics(db, hours=24)
+        inv = m.inventory_metrics(db)
+        out["metadata_completeness"] = inv.get("missing_field_rate")
+        out["duplicate_rate"] = inv.get("duplicate_rate")
+        out["missing_description_by_ats"] = inv.get("missing_description_by_ats")
+        out["provider_health"] = m.ingestion_metrics(db)
+    except Exception as e:
+        logger.warning("tech_feed_ops metrics: %s", e)
+
+    try:
+        from services import tech_feed_company_requests as reqs
+        out["company_requests"] = reqs.counts(db=db)
+    except Exception:
+        out["company_requests"] = {}
+
+    try:
+        from services import tech_feed_feedback
+        out["feedback"] = tech_feed_feedback.counts()
+    except Exception:
+        out["feedback"] = {}
+
+    try:
+        from services import coverage_snapshot_job as csj
+        out["coverage_run"] = csj.latest_run(db=db)
+    except Exception:
+        out["coverage_run"] = None
+
+    try:
+        from services import tech_feed_alerts as alerts
+        last = db[alerts.METRICS].find_one({}, {"_id": 0}, sort=[("at", -1)])
+        fails = db[alerts.FAILURES].count_documents(
+            {"at": {"$gte": _now() - timedelta(hours=24)}})
+        out["alerts"] = {"last_sweep": last, "failures_24h": fails}
+    except Exception:
+        out["alerts"] = {}
+
+    out["zero_result_rate"] = (out.get("search") or {}).get("search_zero_result_rate")
+    return out
