@@ -148,21 +148,22 @@ def _synthesize_titles_from_resume(
         "good output — IGNORE any example whose stack doesn't match this "
         "candidate's resume. Use the candidate's actual tech stack words.\n\n"
         "  1. PRIMARY domain — generate AT LEAST 10 titles for the candidate's "
-        "strongest signal. Include level variants AND stack-specific variants. "
-        "Shape examples across different domains:\n"
-        "       Frontend candidate → 'Frontend Engineer React', 'UI Engineer "
-        "TypeScript', 'Web Engineer Next.js'\n"
-        "       Backend candidate  → 'Backend Engineer Python', 'API Engineer "
-        "Go', 'Server Engineer Java'\n"
-        "       Cloud candidate    → 'Cloud Engineer AWS', 'DevOps Engineer "
-        "Kubernetes', 'Platform Engineer Terraform'\n"
-        "       Data candidate     → 'Data Engineer Spark', 'Analytics "
-        "Engineer dbt', 'Data Platform Engineer'\n"
-        "       ML/AI candidate    → 'ML Engineer PyTorch', 'Applied "
-        "Scientist NLP', 'GenAI Engineer LLM'\n"
-        "       Mobile candidate   → 'iOS Engineer Swift', 'Android Engineer "
-        "Kotlin', 'Mobile Engineer React Native'\n"
-        "       Security candidate → 'Security Engineer AppSec', 'DevSecOps "
+        "strongest signal. Each one must be a title an employer would actually "
+        "POST, exactly as it would appear on the job board — never a title "
+        "with a technology appended. Shape examples across different domains:\n"
+        "       Frontend candidate → 'Frontend Engineer', 'UI Engineer', "
+        "'Web Developer'\n"
+        "       Backend candidate  → 'Backend Engineer', 'API Engineer', "
+        "'Backend Software Engineer'\n"
+        "       Cloud candidate    → 'Cloud Engineer', 'DevOps Engineer', "
+        "'Platform Engineer', 'Site Reliability Engineer'\n"
+        "       Data candidate     → 'Data Engineer', 'Analytics Engineer', "
+        "'Data Platform Engineer'\n"
+        "       ML/AI candidate    → 'Machine Learning Engineer', 'Applied "
+        "Scientist', 'MLOps Engineer'\n"
+        "       Mobile candidate   → 'iOS Engineer', 'Android Engineer', "
+        "'Mobile Engineer'\n"
+        "       Security candidate → 'Security Engineer', 'DevSecOps "
         "Engineer', 'Cloud Security Engineer'\n"
         "    Pick the row that matches THIS candidate; the others are noise.\n"
         "  2. SECONDARY domain — if the resume shows clear evidence for a "
@@ -183,12 +184,21 @@ def _synthesize_titles_from_resume(
         '"" (no prefix) and "II"/"Mid-Level" for mid; "Senior"/"Staff"/"Lead" '
         "for senior. If the candidate is a current MS / new grad, also include "
         "new-grad variants regardless of past experience years.\n"
-        "  5. Stack-specific phrasing — bake in the candidate's actual stack "
-        "tokens (look at their skills + experience bullets + project tech). "
-        "If they show 'Postgres + Node + GraphQL', generate 'Backend Engineer "
-        "Node', 'GraphQL Engineer', 'API Engineer Postgres'. If they show "
-        "'React + TypeScript + Tailwind', generate 'Frontend Engineer React', "
-        "'UI Engineer TypeScript' — NOT generic 'Software Engineer'.\n"
+        "  5. NEVER append a technology to a title. `workday_titles` is matched "
+        "as a LITERAL, CONTIGUOUS substring against real posting titles, so "
+        "'Backend Engineer Python' matches nothing on earth — no employer "
+        "posts that string. Write 'Backend Engineer'. The candidate's stack "
+        "tokens (Postgres, Node, GraphQL, React, Terraform, ...) belong in "
+        "`custom_role_terms`, which is where the search actually reads them. "
+        "Titles carry the ROLE; custom_role_terms carry the STACK.\n"
+        "     Wrong: 'Cloud Engineer AWS Terraform', 'Software Engineer "
+        "Backend Python', 'Mid-Level Backend Engineer'\n"
+        "     Right: 'Cloud Engineer', 'Backend Engineer', 'Software Engineer' "
+        "+ custom_role_terms ['aws', 'terraform', 'python']\n"
+        "     ALWAYS include the plain generic titles the market posts under — "
+        "'Software Engineer', 'Software Developer', 'Software Development "
+        "Engineer' — for any software candidate. They carry most of the "
+        "market and omitting them is how a feed ends up empty.\n"
         "  6. Each title must be anchored to a tech engineering domain word "
         '(Engineer / Developer / Scientist / SRE / Analyst / Architect) — '
         'never just "Junior" or "Associate" alone.\n'
@@ -297,6 +307,23 @@ def _resume_signature(structured_resume: Dict[str, Any]) -> str:
         parts.append(str(exp.get("company") or ""))
     blob = "|".join(parts).lower().strip()
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
+
+
+#: Intents for which the plain titles the market posts under - "Software
+#: Engineer", "Software Developer" - are a HELP rather than noise. A data
+#: scientist searching "Software Engineer" gets a worse feed; a backend,
+#: cloud, frontend, mobile or full-stack candidate searching without it gets
+#: almost no feed at all, because that is the string most employers use.
+_SOFTWARE_INTENTS = frozenset({
+    "backend", "frontend", "fullstack", "cloud_devops", "mobile",
+})
+
+
+def _is_software_profile(profile: Dict[str, Any]) -> bool:
+    return bool(
+        {str(profile.get("primary_intent") or ""),
+         str(profile.get("secondary_intent") or "")} & _SOFTWARE_INTENTS
+    )
 
 
 def suggest_filters(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
@@ -411,10 +438,21 @@ def suggest_filters(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
             flat_skills = [str(s) for s in skills]
         custom_role_terms = [s.strip() for s in flat_skills if s and s.strip()][:8]
 
-    # Generic SWE safety net only for early-career / generalist profiles AND
-    # only when the synthesizer didn't already cover SWE titles.
-    add_generalist = is_generalist or int(profile.get("experience_years") or 0) <= 2
-    if add_generalist:
+    # Generic SWE safety net. It used to be gated on
+    # `is_generalist or experience_years <= 2`, which is backwards: the titles
+    # it adds ("Software Engineer", "Software Developer") are the ones that
+    # carry the market at EVERY level - "Software Engineer" alone matches
+    # 4,412 of 30,335 live core-tech postings - and the accounts that were
+    # denied it were the mid-level ones, whose feeds were emptiest. A 3-YOE
+    # candidate got no net at all and his 44 titles reached 70 postings.
+    #
+    # Prepended, not appended: `workday_titles` is truncated below and again
+    # at `TITLE_CAP` on the way out, and appending put the generics at
+    # positions 44-52 where the cap cut them off. Measured on two live
+    # accounts, that single ordering bug cost 15 points of recall each.
+    if _is_software_profile(profile):
+        workday_titles = _merge_preserving_order(GENERIC_SWE_TITLES, workday_titles)
+    elif is_generalist or int(profile.get("experience_years") or 0) <= 2:
         workday_titles = _merge_preserving_order(workday_titles, GENERIC_SWE_TITLES)
 
     workday_titles = workday_titles[:60]

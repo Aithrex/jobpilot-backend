@@ -9,10 +9,11 @@ fingerprint; browsing Jobs does not.
 from __future__ import annotations
 
 import hashlib
+import re
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from services import resume_access
 from utils.db_connect import DBConnect
@@ -85,6 +86,154 @@ def union_titles_from_assets(assets: List[Dict[str, Any]]) -> List[str]:
             if len(out) >= TITLE_CAP:
                 return out
     return out
+
+
+#: Titles that carry the software market and must never be cut by `TITLE_CAP`.
+#: Every one is a canonical phrase in `tech_taxonomy` and every one matches
+#: live inventory: "Software Engineer" alone matches 4,412 of 30,335 active
+#: core-tech postings, "Software Development Engineer" 445 (it is what Amazon,
+#: and only Amazon at this volume, posts under).
+_ALWAYS_MATCHABLE = (
+    "Software Engineer", "Software Developer", "Software Development Engineer",
+)
+
+
+#: Words whose natural casing `str.title()` gets wrong. The vocabulary is
+#: stored lower-case and matching is case-insensitive, so this is purely how
+#: the chip reads to the user - but a feed that offers "Devops Engineer" and
+#: "Sre" looks broken, and a user who does not trust the chips edits them.
+_TITLE_CASE_FIXES = {
+    "Devops": "DevOps", "Devsecops": "DevSecOps", "Sre": "SRE", "Ai": "AI",
+    "Ml": "ML", "Mlops": "MLOps", "Ui": "UI", "Ux": "UX", "Qa": "QA",
+    "Ios": "iOS", "Sde": "SDE", "Swe": "SWE", "Api": "API", "Sdet": "SDET",
+    "Nlp": "NLP", "Llm": "LLM", "Etl": "ETL", "Bi": "BI", "It": "IT",
+    "Cicd": "CI/CD", "Genai": "GenAI", "Gitops": "GitOps", "Mts": "MTS",
+}
+
+#: Phrases that are a DIFFERENT JOB, not a level variant of the same one. A
+#: search-title vocabulary for an individual contributor must never contain
+#: them: "software engineering manager" matches with the same word boundaries
+#: as "software engineer" and would put people-management reqs in an IC feed.
+_NEVER_SEARCH = ("manager", "director", "head of", "vp ", "vice president")
+
+#: Bare gerunds. `tech_taxonomy` carries them because they CLASSIFY a posting
+#: correctly, but they are a discipline rather than a role: as a search term
+#: "software engineering" matches "Software Engineering Manager" (and not
+#: "Software Engineer", which is a different token), so it readmits exactly
+#: what `_NEVER_SEARCH` removes.
+_NOT_A_ROLE = frozenset({
+    "software engineering", "software development", "devops", "devsecops",
+    "site reliability engineering", "platform engineering", "data engineering",
+    "machine learning", "cloud computing", "quality assurance",
+})
+
+
+def _display_title(phrase: str) -> str:
+    return " ".join(_TITLE_CASE_FIXES.get(w, w) for w in phrase.title().split())
+
+
+def canonical_search_titles(titles: Sequence[Any],
+                            specialties: Sequence[Any] = (),
+                            *, level: Optional[str] = None,
+                            cap: int = TITLE_CAP) -> List[str]:
+    """Rewrite generated titles into ones that can actually MATCH a posting.
+
+    The search side compiles a title list into
+    ``(?<![A-Za-z0-9_])(?:escaped|escaped)(?![A-Za-z0-9_])`` and runs it
+    against ``job_postings.title_raw`` - a CONTIGUOUS, literal match. The LLM
+    synthesizer was prompted to emit keyword-style strings instead ("Backend
+    Engineer Python", "Cloud Engineer AWS Terraform"), which are perfectly
+    good queries for a Workday ``titleSearch`` box and match nothing at all
+    here. Measured live: 34 of one account's 44 titles matched zero postings
+    and the whole set reached 0.29% of the eligible pool.
+
+    So this trims each title back to the longest CANONICAL phrase inside it -
+    the `tech_taxonomy` vocabulary, whose authoring rule is already "a phrase
+    belongs here only if, on its own in a job title, it is unambiguous", which
+    is exactly the property a search term needs. "Backend Engineer Python"
+    becomes "Backend Engineer"; "Software Engineer II Cloud" becomes
+    "Software Engineer". Losing the stack token loses nothing real: `fit_score`
+    ranks on skills far better than a title substring ever could, and the
+    stack words remain available to the caller as `custom_role_terms`.
+
+    A title with no canonical phrase in it is DROPPED rather than passed
+    through, because passing it through is what produced a feed of zero.
+
+    `level` is the candidate's band (`fit_score.resume_level`). Past
+    internships dominate an early-career resume's title list - three of the
+    five on the account that prompted this - and an intern search term is not
+    a level variant, it is a different job: unfiltered it made "Software
+    Engineering Intern" one of only two titles that matched anything at all.
+    Intern phrases survive only for an actual intern.
+    """
+    from services import tech_taxonomy as tx
+
+    # The FULL vocabulary, not the candidate's own specialties. Restricting it
+    # to the specialties the taxonomy inferred from the resume threw away real
+    # targets: the account this was built for classifies as
+    # {general_software, devops, backend}, so narrowing dropped the "Platform
+    # Engineer" and "Site Reliability Engineer" titles his own Cloud-Platform
+    # resume had asked for. The INPUT list is what expresses intent; this
+    # vocabulary only decides how a title is spelled so it can match.
+    # `specialties`, when given, ADDS its phrases - it never subtracts.
+    vocab = list(tx.title_phrases())
+    vocab.extend(tx.title_phrases(specialties=specialties) if specialties else [])
+    keep_intern = str(level or "").lower() == "intern"
+    usable = []
+    for phrase in {str(p).lower() for p in vocab}:
+        if phrase in _NOT_A_ROLE:
+            continue
+        if any(bad in phrase for bad in _NEVER_SEARCH):
+            continue
+        if not keep_intern and "intern" in phrase:
+            continue
+        usable.append(phrase)
+    # Longest first, so "backend software engineer" wins over "software
+    # engineer" on a title that contains both.
+    usable.sort(key=len, reverse=True)
+    patterns = [(p, re.compile(r"(?<![a-z0-9_])" + re.escape(p) + r"(?![a-z0-9_])"))
+                for p in usable]
+
+    out: List[str] = []
+    seen: set = set()
+
+    def _add(phrase: str) -> None:
+        key = phrase.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(phrase)
+
+    software_vocab = {p.lower() for p in tx.title_phrases(
+        families=["software_engineering", "cloud_platform"])}
+    matched_software = False
+
+    for raw in titles or []:
+        text = re.sub(r"\s+", " ", str(raw or "")).strip().lower()
+        if not text:
+            continue
+        for phrase, pattern in patterns:
+            if pattern.search(text):
+                _add(_display_title(phrase))
+                if phrase in software_vocab:
+                    matched_software = True
+                break
+
+    if not out:
+        # Nothing in this resume is a technical role. `tech_taxonomy` is a
+        # TECH vocabulary and has no phrase for "Registered Nurse", so
+        # canonicalizing here would hand a nurse an empty list - and then the
+        # software floor below would hand them a software feed. Give the
+        # caller their own titles back: worse search terms than a canonical
+        # phrase, but the right occupation, which matters far more.
+        return [str(t).strip() for t in (titles or []) if str(t or "").strip()][:cap]
+
+    # The software floor applies only to software candidates. It is what makes
+    # Amazon's "Software Development Engineer" reachable, and it would be
+    # noise on a data-science or non-tech feed.
+    if matched_software:
+        for phrase in _ALWAYS_MATCHABLE:
+            _add(phrase)
+    return out[:cap]
 
 
 def merge_structured_for_titles(assets: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -252,9 +401,44 @@ def public_title_seed(user_email: str) -> Dict[str, Any]:
         "fingerprint": fp,
         "resume_titles": resume_titles,
         "synth_titles": synth,
+        # The list a caller should actually SEARCH with. `resume_titles` are
+        # titles the candidate has HELD (internships included) and
+        # `synth_titles` are keyword strings; neither matches live postings.
+        # See `canonical_search_titles`.
+        "match_titles": match_titles_for(user_email, resume_titles + synth),
         "resume_count": len(assets),
         "cached": True,
     }
+
+
+def match_titles_for(user_email: str, titles: Sequence[Any]) -> List[str]:
+    """`canonical_search_titles` with this user's own specialties and level.
+
+    Degrades to the generic vocabulary on any failure rather than raising: a
+    taxonomy or profile problem must cost a user precision, never their whole
+    feed. The floor is `_ALWAYS_MATCHABLE`, which is never empty - so this
+    can return a worse list, but never the empty one that reads to a user as
+    "there are no jobs".
+    """
+    specialties: List[str] = []
+    level: Optional[str] = None
+    try:
+        from services import fit_score
+
+        seen: set = set()
+        best = -1
+        for entry in fit_score.load_profiles_for_user(user_email) or []:
+            profile = entry.get("profile") or {}
+            for spec in (profile.get("tech") or {}).get("role_specialties") or []:
+                if spec not in seen:
+                    seen.add(spec)
+                    specialties.append(str(spec))
+            rank = fit_score._LEVEL_ORDER.get(str(profile.get("level") or ""), -1)
+            if rank > best:
+                best, level = rank, profile.get("level")
+    except Exception:
+        logger.exception("match_titles_for: profile lookup failed for %s", user_email)
+    return canonical_search_titles(titles, specialties, level=level)
 
 
 def _cached_suggestions(stored: Dict[str, Any], fp: str) -> Optional[Dict[str, Any]]:

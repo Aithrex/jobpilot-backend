@@ -875,7 +875,8 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
 # Adjacent families get partial role credit; a career change inside a
 # neighbourhood is a real, defensible fit signal, a jump across it is not.
 RELATED_FAMILIES: Dict[str, Set[str]] = {
-    "software_engineering": {"data_engineering", "devops", "qa", "security", "data_science"},
+    "software_engineering": {"data_engineering", "devops", "qa", "security",
+                             "data_science", "hardware_engineering"},
     "data_engineering": {"software_engineering", "data_science", "data_analysis", "devops"},
     "data_science": {"data_engineering", "data_analysis", "software_engineering"},
     "data_analysis": {"data_science", "data_engineering", "finance", "operations"},
@@ -906,6 +907,18 @@ RELATED_FAMILIES: Dict[str, Set[str]] = {
     "retail": {"customer_support", "sales", "hospitality"},
     "social_work": {"nursing", "teaching"},
     "science_lab": {"allied_health", "data_science"},
+    # `hardware_engineering` is a family `classify_role` and
+    # `effective_role_family` can both RETURN, but it had no entry here - so
+    # `RELATED_FAMILIES.get("hardware_engineering")` was always empty, the
+    # legacy tier was always `unrelated`, and `_eligibility` turned that into
+    # a hard INELIGIBLE with the score capped at 34. It is the only producible
+    # family in `ROLE_FAMILIES` that was missing, and 150 of 7,054 live
+    # software-titled postings (2.1%) route to it - "AWS Cloud Engineering
+    # Intern", "Site Reliability Engineer (Manufacturing Infrastructure)".
+    # Embedded and firmware work is adjacent to software, not a different
+    # field; the edge is declared in both directions, as every other pair here
+    # is.
+    "hardware_engineering": {"software_engineering", "devops", "qa"},
 }
 
 
@@ -1285,23 +1298,14 @@ def level_from_signals(title: Any, *, description: Any = "",
     years = required_years
     if years is None and body:
         years = _required_years(body)
-    if years is None:
-        return None
-    try:
-        years = int(years)
-    except (TypeError, ValueError):
-        return None
-    if years < 0:
-        return None
-    for ceiling, level in _YEARS_TO_LEVEL:
-        if years <= ceiling:
-            return level
-    # Years alone top out at `staff`. "12+ years" is not evidence of an
-    # executive posting - it is evidence of a senior one - and reading it as
-    # `executive` put ordinary senior engineering roles three bands above
-    # where they belong, which is a three-band `level_gap` against every
-    # candidate who applied.
-    return "staff"
+    # `_level_from_years` is the same ladder the RESUME side reads, so a
+    # posting's "3+ years" and a candidate's three years resolve to the same
+    # word. Years alone top out at `staff` there: "12+ years" is not evidence
+    # of an executive posting - it is evidence of a senior one - and reading
+    # it as `executive` put ordinary senior engineering roles three bands
+    # above where they belong, which is a three-band `level_gap` against
+    # every candidate who applied.
+    return _level_from_years(years)
 
 
 # ---------------------------------------------------------------------------
@@ -1789,6 +1793,9 @@ def build_resume_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
             families.add(fam)
     listed = set(find_skills(skills_text))
     applied = set(find_skills(exp_text))
+    # Computed once: `level` reads it too, so a second `_resume_years` call
+    # here could silently disagree with the `years` the profile reports.
+    _years = _resume_years(resume)
     return {
         "experience_skills": applied,
         "listed_skills": listed,
@@ -1801,14 +1808,17 @@ def build_resume_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
         # Alignment scores against THIS.
         "tech": _resume_taxonomy(titles, sorted(listed | applied),
                                  resume.get("summary") or "", exp_text),
-        "years": _resume_years(resume),
-        "level": resume_level(titles),
+        "years": _years,
+        # Years as well as titles: an early-career resume whose only
+        # band-bearing titles are internships used to resolve to `intern` no
+        # matter how much dated experience sat beside it. See `resume_level`.
+        "level": resume_level(titles, _years),
         "degree_level": _degree_level(_norm(" ".join(
             str((e or {}).get("degree") or "") for e in (resume.get("education") or [])
             if isinstance(e, dict)))),
         "industries": _industries(full_norm),
         "location": _norm((resume.get("contact") or {}).get("location") or ""),
-        "has_dated_experience": _resume_years(resume) is not None,
+        "has_dated_experience": _years is not None,
     }
 
 
@@ -1873,8 +1883,9 @@ def job_taxonomy(job: Optional[Dict[str, Any]], reqs: Dict[str, Any],
                 "source": "error"}
 
 
-def resume_level(titles: Sequence[Any]) -> Optional[str]:
-    """The HIGHEST band any of a resume's titles states, or None.
+def resume_level(titles: Sequence[Any],
+                 years: Any = None) -> Optional[str]:
+    """The HIGHEST band the resume supports, from titles AND years, or None.
 
     Not "the first title that states one". That was order-dependent in a way
     that quietly mis-levels people: a resume listing
@@ -1888,6 +1899,21 @@ def resume_level(titles: Sequence[Any]) -> Optional[str]:
     something a person has ALSO done, never a ceiling on what they are. It is
     also the conservative direction for the over-qualification branch, which is
     the only place a higher band costs a candidate points.
+
+    YEARS ARE THE SECOND SIGNAL, for the same reason. Taking the max over
+    titles alone still lands on `intern` whenever the only band-BEARING titles
+    are internships - which is the normal shape of an early-career resume,
+    because "Software Engineer, Contract" and "Cloud and DevOps Engineer"
+    state no band at all and return None. A live account with three years of
+    production experience across five such titles resolved to `intern`, and
+    `_score_experience` then ranked SDE-Intern reqs (77) above SDE-III (40).
+
+    The years reading is the same ladder `level_from_signals` already applies
+    to a POSTING's stated requirement (`_YEARS_TO_LEVEL`), so the two sides of
+    the comparison are finally derived the same way. It can only ever RAISE
+    the verdict: a title that states `senior` outranks two years of dated
+    experience, because the title is the person's own claim and the years may
+    simply be undated on the page.
     """
     best: Optional[str] = None
     for title in titles or []:
@@ -1896,7 +1922,35 @@ def resume_level(titles: Sequence[Any]) -> Optional[str]:
             continue
         if best is None or _LEVEL_ORDER.get(level, -1) > _LEVEL_ORDER.get(best, -1):
             best = level
+
+    from_years = _level_from_years(years)
+    if from_years is not None and (
+            best is None
+            or _LEVEL_ORDER.get(from_years, -1) > _LEVEL_ORDER.get(best, -1)):
+        best = from_years
     return best
+
+
+def _level_from_years(years: Any) -> Optional[str]:
+    """The band a count of years supports, on `_YEARS_TO_LEVEL`, or None.
+
+    Shared with `level_from_signals` so a candidate's three years and a
+    posting's "3+ years" resolve to the same word. `None`/unparseable/negative
+    is unknown, never zero - not stating a number is not the same as stating
+    none, the rule this module applies to every other absent signal.
+    """
+    if years is None:
+        return None
+    try:
+        n = int(years)
+    except (TypeError, ValueError):
+        return None
+    if n < 0:
+        return None
+    for ceiling, level in _YEARS_TO_LEVEL:
+        if n <= ceiling:
+            return level
+    return "staff"
 
 
 def _profile_from_skills(resume_skills: Sequence[str],

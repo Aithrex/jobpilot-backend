@@ -474,6 +474,7 @@ def build_query(req: Dict[str, Any], *, now: Optional[datetime] = None
     """
     from services import job_inventory_service as inv
     from services import tech_taxonomy as tx
+    from services import us_geo
 
     now = now or _now()
     cutoff = now - timedelta(days=max(0, int(req["posted_within_days"])))
@@ -575,17 +576,29 @@ def build_query(req: Dict[str, Any], *, now: Optional[datetime] = None
         if clauses:
             _and.append({"$or": clauses} if len(clauses) > 1 else clauses[0])
     if req["cities"]:
+        # PREFIX, not equality. `locations.key` is built from whatever the
+        # board printed, so one city has many stored spellings - live, "Tempe"
+        # appears as `tempe-az-united-states` (91), `tempe-az` (61),
+        # `tempe-arizona-united-states-of-america` (18) and 12 more. A request
+        # for "Tempe, AZ" normalises to `tempe-az` and equality matched 61 of
+        # 258; 28,067 active postings carry a `-united-states` suffix that no
+        # two-part "City, ST" request could ever reach.
+        #
+        # Anchored at the start so the index is still usable, and closed with
+        # `(-|$)` so `tempe-az` cannot match a `tempe-azusa`-shaped key.
         keys = [inv.normalize_location(c)["key"] for c in req["cities"]]
         keys = [k for k in keys if k]
         if keys:
-            q["locations.key"] = {"$in": keys}
+            q["locations.key"] = {
+                "$in": [re.compile(r"^" + re.escape(k) + r"(-|$)") for k in keys]
+            }
     if req["regions"]:
-        # Normalised through the same location parser as `cities`, so
-        # "TX" and "Texas" and "tx" all reach the same stored value. It was
-        # accepted, echoed in `applied_filters`, and never applied.
-        wanted = {r.strip() for r in req["regions"] if r and r.strip()}
-        variants = sorted({v for r in wanted
-                           for v in (r, r.upper(), r.title(), r.lower())})
+        # Normalised through `us_geo.state_aliases`, so "TX" and "Texas" and
+        # "tx" all reach the same stored values. The comment here already
+        # claimed this; the code expanded only case variants of the raw
+        # string, so "Arizona" reached 361 postings and "AZ" reached 2,126.
+        variants = sorted({v for r in req["regions"]
+                           for v in us_geo.state_aliases(r)})
         if variants:
             _and.append({"locations.region": {"$in": variants}})
     if req["pay_interval"]:
@@ -2035,17 +2048,45 @@ def _canonical_variant_key_of(row: Dict[str, Any]) -> str:
 
 def _collapse_location_variants(rows: List[Dict[str, Any]]
                                 ) -> List[Dict[str, Any]]:
-    """One card per role per employer, with the other cities kept on it.
+    """One card per role per employer PER LOCATION, other cities kept on it.
 
     Distinct from `_dedupe`: these ARE different requisitions, they are just
     the same job in another city, and a feed that shows eleven of them shows
     one job. The cities are preserved on the survivor rather than dropped.
+
+    The grouping key carries no location, which is the whole point - but that
+    also meant two reqs in the SAME city collapsed, and those are not location
+    variants of each other, they are separate jobs with separate apply links.
+    Measured live on Amazon: 917 cards from 1,140 core postings, and 113 of
+    the 175 rows the feed-wide collapse removed shared their survivor's only
+    location. Five distinct "Software Development Engineer II, AWS Lambda"
+    reqs in one city rendered as one card; four of them were unreachable.
+
+    So a row only joins a group when it brings a location the group has not
+    already shown. An UNKNOWN location never joins: we cannot prove it is a
+    different city, and we cannot prove it is the same one, so it stays its
+    own card - the same "unknown is not a no" rule the filters use.
     """
     best: Dict[str, Dict[str, Any]] = {}
     order: List[str] = []
     #: Stored-key -> canonical-key, so two rows that the STORED key split
     #: still meet when the canonical id says they are one employer's one role.
     canonical_of: Dict[str, str] = {}
+    #: Group key -> the location keys that group is already showing.
+    group_locations: Dict[str, Set[str]] = {}
+
+    def _location_key(row: Dict[str, Any]) -> Optional[str]:
+        for loc in row.get("locations") or []:
+            if not isinstance(loc, dict):
+                continue
+            key = str(loc.get("key") or "").strip().lower()
+            if key:
+                return key
+            raw = str(loc.get("raw") or "").strip().lower()
+            if raw:
+                return raw
+        return None
+
     for row in rows:
         key = str(row.get("variant_group_id") or "") or _variant_key_of(row)
         canonical = _canonical_variant_key_of(row)
@@ -2055,18 +2096,32 @@ def _collapse_location_variants(rows: List[Dict[str, Any]]
             key = canonical_of.setdefault(canonical, key or canonical)
         if not key:
             key = f"_r{len(order)}"
+        loc_key = _location_key(row)
         prev = best.get(key)
         if prev is None:
             best[key] = row
             order.append(key)
+            group_locations[key] = {loc_key} if loc_key else set()
             continue
+        if loc_key is None or loc_key in group_locations[key]:
+            # Same city, or a city we cannot read: a separate requisition, so
+            # it keeps its own card and its own apply link.
+            standalone = f"{key}#{len(order)}"
+            best[standalone] = row
+            order.append(standalone)
+            group_locations[standalone] = {loc_key} if loc_key else set()
+            continue
+        group_locations[key].add(loc_key)
         variants = prev.setdefault("location_variants", [])
         locs = row.get("locations") or []
         raw = (locs[0].get("raw") if locs and isinstance(locs[0], dict) else None)
-        if raw and len(variants) < 8:
-            variants.append({"location": raw, "job_id": row.get("job_id"),
-                             "url": row.get("canonical_url")})
-        prev["duplicate_count"] = int(prev.get("duplicate_count") or 0) + 1
+        variants.append({"location": raw or loc_key, "job_id": row.get("job_id"),
+                         "url": row.get("canonical_url")})
+        # Counted from the variants actually carried, so the "+N more" on a
+        # card always has N openable links behind it. It used to increment
+        # unconditionally while `variants` stopped at 8, so a card could
+        # advertise 51 reqs it could not open.
+        prev["duplicate_count"] = len(variants)
     return [best[k] for k in order]
 
 

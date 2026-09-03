@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 __all__ = [
     "keep_us", "keep_us_row", "US_COUNTRY_OK",
@@ -614,3 +614,58 @@ def keep_us_posting(doc: Dict[str, Any], *,
                    is_remote=(doc.get("work_mode") == "remote"),
                    keep_ambiguous=keep_ambiguous,
                    defer_multi=defer_multi)
+
+
+#: Full state name -> USPS code. `_STATE_CODES` above answers "is this token a
+#: state?", which is all the US/non-US keep rules need. A SEARCH also has to
+#: answer "is 'Arizona' the same place as 'AZ'?", and nothing here did: the
+#: tech-feed region filter expanded a request only into case variants of what
+#: the user typed, so `regions:["Arizona"]` reached 361 active postings while
+#: `regions:["AZ"]` reached 2,126 - the same state, six times the inventory.
+STATE_NAME_TO_CODE: Dict[str, str] = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT",
+    "delaware": "DE", "florida": "FL", "georgia": "GA", "hawaii": "HI",
+    "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA",
+    "kansas": "KS", "kentucky": "KY", "louisiana": "LA", "maine": "ME",
+    "maryland": "MD", "massachusetts": "MA", "michigan": "MI",
+    "minnesota": "MN", "mississippi": "MS", "missouri": "MO",
+    "montana": "MT", "nebraska": "NE", "nevada": "NV",
+    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM",
+    "new york": "NY", "north carolina": "NC", "north dakota": "ND",
+    "ohio": "OH", "oklahoma": "OK", "oregon": "OR", "pennsylvania": "PA",
+    "rhode island": "RI", "south carolina": "SC", "south dakota": "SD",
+    "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT",
+    "virginia": "VA", "washington": "WA", "west virginia": "WV",
+    "wisconsin": "WI", "wyoming": "WY",
+    "district of columbia": "DC", "washington dc": "DC",
+    "puerto rico": "PR",
+}
+
+_CODE_TO_STATE_NAME: Dict[str, str] = {}
+for _name, _code in STATE_NAME_TO_CODE.items():
+    _CODE_TO_STATE_NAME.setdefault(_code, _name)
+
+
+def state_aliases(value: Any) -> List[str]:
+    """Every spelling of one US state a stored `locations.region` might use.
+
+    "AZ" and "Arizona" both return the code, the title-cased name and the
+    common case variants, so a region filter finds the same postings whichever
+    the user typed. A value that is not a US state comes back as its own case
+    variants only - the filter still works, it just cannot expand.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return []
+    folded = " ".join(text.lower().split())
+    code = STATE_NAME_TO_CODE.get(folded)
+    if code is None and len(folded) == 2 and folded in _STATE_CODES:
+        code = folded.upper()
+    out = {text, text.upper(), text.title(), text.lower()}
+    if code:
+        name = _CODE_TO_STATE_NAME.get(code, "")
+        out.update({code, code.lower()})
+        if name:
+            out.update({name, name.title(), name.upper()})
+    return sorted(out)

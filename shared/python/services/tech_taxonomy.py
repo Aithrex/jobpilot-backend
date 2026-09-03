@@ -2648,6 +2648,46 @@ def families_for_specialties(specialties: Iterable[Any]) -> List[str]:
             if wanted & set(FAMILY_SPECIALTIES.get(f, ()))]
 
 
+def title_phrases(families: Optional[Iterable[Any]] = None,
+                  specialties: Optional[Iterable[Any]] = None) -> List[str]:
+    """The canonical title phrases for these families / specialties.
+
+    This is `_SPEC_RULES` read as a VOCABULARY rather than as a classifier.
+    Same 967 phrases, same authoring rule (see `_SPEC_RULES`): a phrase is in
+    here only if, on its own in a job title, it is unambiguous. That is
+    exactly the property a phrase needs to be usable as a SEARCH term, which
+    is why the search side should generate against this list instead of
+    inventing title strings.
+
+    It exists because the LLM title synthesizer was emitting keyword-style
+    strings - "Software Engineer Backend Python", "Cloud Engineer AWS
+    Terraform" - which are matched as literal contiguous substrings against
+    `job_postings.title_raw` and therefore matched NOTHING. Measured live,
+    34 of one account's 44 generated titles hit zero postings.
+
+    Both arguments None returns every phrase. Unknown names are ignored
+    rather than raising: a caller passing a stale family must get a smaller
+    vocabulary, never an exception in the middle of a search.
+    """
+    fam_set = {str(f or "") for f in families} if families is not None else None
+    spec_set = ({str(s or "") for s in specialties}
+                if specialties is not None else None)
+    out: List[str] = []
+    seen: set = set()
+    for family, specialty, phrases in _SPEC_RULES:
+        if fam_set is not None and family not in fam_set:
+            continue
+        if spec_set is not None and specialty not in spec_set:
+            continue
+        for phrase in phrases:
+            key = phrase.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(phrase)
+    return out
+
+
 #: Legacy bridge. `job_postings.role_family` currently stores
 #: `fit_score.ROLE_FAMILIES` keys, and every existing index and read path uses
 #: them. Rather than rewrite 227k documents' primary retrieval key on day one,
