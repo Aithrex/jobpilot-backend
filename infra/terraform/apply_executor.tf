@@ -310,6 +310,54 @@ resource "aws_iam_role_policy" "resume_invoke_executor" {
   })
 }
 
+# The CI deployer also ships the EC2 ingest runner (the crawl), which is NOT a
+# Lambda -- see the `deploy-ingest-runner` job in .github/workflows/deploy.yml.
+# It stages a tarball in the deploy prefix and runs the installer over SSM.
+#
+# Scoped deliberately narrowly: PutObject on the `deploy/ingest-runner/` PREFIX
+# only, not the bucket. The bucket is `jobpilot-resumes-*` and holds user
+# résumés; a deploy identity has no business writing anywhere else in it, and
+# `s3:*` on the bucket would have handed CI exactly that.
+#
+# SendCommand is scoped to the one instance AND the one document. Without the
+# document ARN, `ssm:SendCommand` on an instance permits ANY SSM document
+# against it, which is arbitrary remote code execution on the crawler box from
+# a CI token.
+resource "aws_iam_user_policy" "ci_ingest_runner_deploy" {
+  name = "jobpilot-ci-ingest-runner-deploy"
+  user = "jobpilot-ci-deployer"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "StageIngestRunnerArtifact"
+        Effect = "Allow"
+        Action = ["s3:PutObject"]
+        Resource = [
+          "arn:aws:s3:::jobpilot-resumes-prod-032398581420/deploy/ingest-runner/*"
+        ]
+      },
+      {
+        Sid    = "RunInstallerOnTheIngestBox"
+        Effect = "Allow"
+        Action = ["ssm:SendCommand"]
+        Resource = [
+          "arn:aws:ec2:us-east-1:032398581420:instance/i-06bf0e03e60d9d409",
+          "arn:aws:ssm:us-east-1::document/AWS-RunShellScript",
+        ]
+      },
+      {
+        # Reading a command's own result carries no instance scope in IAM, so
+        # this one cannot be narrowed further. It is read-only.
+        Sid      = "ReadCommandResult"
+        Effect   = "Allow"
+        Action   = ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations"]
+        Resource = "*"
+      },
+    ]
+  })
+}
+
 # The CI (GitHub Actions) deployer needs ECR auth + push to build/push the
 # apply-executor container image (the four zip Lambdas + layer never needed ECR).
 resource "aws_iam_user_policy" "ci_ecr" {

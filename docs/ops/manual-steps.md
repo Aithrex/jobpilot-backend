@@ -78,3 +78,33 @@ approval channel's carrier plumbing is the human gate below.
 Both repos auto-deploy `main` on push. Backend deploy is path-scoped: `shared/**`
 redeploys all four Lambdas; `services/<svc>/**` redeploys that one. The only
 pre-deploy gate is an `import app; create_app()` smoke test per changed service.
+
+## 2026-09-03 — `jobpilot-ci-ingest-runner-deploy` is applied but NOT in state
+
+The `deploy-ingest-runner` CI job needs three grants the CI user did not have:
+`s3:PutObject` on `deploy/ingest-runner/*`, `ssm:SendCommand` on the one
+instance and the one document, and `ssm:GetCommandInvocation`. Its first run
+failed with `AccessDenied` on PutObject.
+
+It is **declared** in `infra/terraform/apply_executor.tf` as
+`aws_iam_user_policy.ci_ingest_runner_deploy` and was **applied by CLI**, not
+by Terraform: `terraform plan` refused with "Backend configuration block has
+changed / please run terraform init", and reinitialising a remote backend --
+which may migrate state -- is not something to do unattended on production
+infra to unblock a deploy job.
+
+**So Terraform state does not know the policy exists.** The next `apply` will
+try to CREATE it and fail with `EntityAlreadyExists`. Fix it with an import,
+not by deleting the live policy:
+
+```bash
+cd infra/terraform
+terraform init -reconfigure          # resolve the backend drift FIRST, deliberately
+terraform import aws_iam_user_policy.ci_ingest_runner_deploy \
+    jobpilot-ci-deployer:jobpilot-ci-ingest-runner-deploy
+terraform plan                       # expect: no changes to this resource
+```
+
+The policy JSON in the CLI call and the `jsonencode` block are the same
+document, so a clean import should plan empty. If it does not, trust the
+Terraform version and apply it.
