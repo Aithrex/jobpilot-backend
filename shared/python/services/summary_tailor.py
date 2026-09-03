@@ -422,11 +422,11 @@ def allocate_tech_slots(
     ordered: List[str] = []
     seen: set = set()
 
-    def _take(term: str, require_bullet: bool = True) -> None:
+    def _take(term: str) -> None:
         raw = (term or "").strip()
         if not raw or not _is_summary_tech(raw):
             return
-        if require_bullet and not term_in_text(raw, bullet_text):
+        if not term_in_text(raw, bullet_text):
             return
         key = (normalize_single(raw) or raw).lower()
         if key in seen:
@@ -437,11 +437,7 @@ def allocate_tech_slots(
     for term in must_retain:
         _take(term)
     for term in keyword_budget:
-        # JD keyword-budget terms are included even if not yet in bullets —
-        # the tailor prompt instructs the LLM to weave them in. We want these
-        # in the brief so the summary reflects the target JD, not only the
-        # candidate's existing tech stack.
-        _take(term, require_bullet=False)
+        _take(term)
     for term, _weight in sorted(weights.items(), key=lambda kv: (-kv[1], kv[0])):
         _take(term)
 

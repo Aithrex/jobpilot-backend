@@ -1964,7 +1964,11 @@ class ResumeTailor:
         allowed_labels = allowed_labels or None
 
         owned = flatten_skills(original or {}) or []
-        haystack = build_resume_text(original or {}) or ""
+        haystack = (
+            (build_resume_text(original or {}) or "")
+            + "\n"
+            + (build_resume_text(tailored or {}) or "")
+        )
 
         seen_jd = set()
         required_terms: List[str] = []
@@ -1977,7 +1981,9 @@ class ResumeTailor:
                 continue
             seen_jd.add(key)
             required_terms.append(raw.strip())
-        for raw in jd_analysis.get("keywords") or []:
+        for raw in list(jd_analysis.get("keywords") or []) + list(
+            jd_analysis.get("preferred_skills") or []
+        ):
             if _reject_term(raw):
                 continue
             key = (normalize_single(raw) or raw).strip().lower()
@@ -2086,8 +2092,10 @@ class ResumeTailor:
         return (
             "TOP PRIORITY — obey these before everything else (most-violated rules):\n"
             "  1. Output ONE complete, valid JSON object in the exact schema below — never truncate.\n"
-            "  2. NEVER fabricate: no certification/license the candidate lacks, no named product they\n"
-            "     never used, no JD skill absent from their real resume — even if the JD demands it.\n"
+            "  2. NEVER fabricate: no certification/license the candidate lacks, no named product from\n"
+            "     a different ecosystem they never used. You MAY reword existing bullets so the JD's\n"
+            "     language names work they already did (HTTP services → REST APIs; containers →\n"
+            "     Kubernetes). That is alignment, not fabrication.\n"
             "  3. Skills = real, correctly-categorized technologies/methods/tools. NEVER list a job\n"
             "     title, a bare domain, a vague catch-all ('AI Coding Tools'), or — worst of all — a\n"
             "     JD soft-trait/working-style phrase ('Ownership and Follow-Through', 'Comfort with\n"
@@ -2132,11 +2140,15 @@ class ResumeTailor:
             "         and seniority. A recruiter glancing at it should not be surprised; a hiring\n"
             "         manager asking 'tell me more about that' should get a coherent answer.\n"
             "      2. BLENDABLE — the addition reads as a natural extension of an existing bullet\n"
-            "         or skill group: same voice, same scope, same seniority. If you add a JD skill\n"
-            "         to the skills section, you should ALSO extend at least one existing bullet to\n"
-            "         use it in context — BUT ONLY for skills the candidate actually has. NEVER weave\n"
-            "         an ungrounded JD skill (absent from the original resume) into a bullet to\n"
-            "         manufacture a match; that is fabrication, not blending.\n"
+            "         or skill group: same voice, same scope, same seniority. If a JD required skill\n"
+            "         is missing from the resume, REWRITE a relevant existing bullet to use the JD's\n"
+            "         term when the candidate has done adjacent or related work. Examples: HTTP or\n"
+            "         API work → REST APIs; Docker/containers → Kubernetes; SQL stores → PostgreSQL\n"
+            "         if they used it; dashboards → Tableau/Power BI if they used a BI tool.\n"
+            "         If you add the term to skills, you MUST also use it in at least one bullet.\n"
+            "         Do NOT invent a named product or ecosystem with no analog (Azure on an AWS-only\n"
+            "         resume; Salesforce for a backend engineer). Adjacent transfer is required;\n"
+            "         leaving a missing required keyword out when adjacent work exists is a failure.\n"
             "    Examples of GOOD additions, across professions:\n"
             "      - (Engineering) Adding 'AWS Lambda' when the candidate already uses AWS EC2, AND\n"
             "        extending a deployment bullet to mention it for event-driven work.\n"
