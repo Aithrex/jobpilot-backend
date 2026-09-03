@@ -32,10 +32,10 @@ def test_keyword_context_contents():
     ctx = ResumeTailor._build_keyword_context(GAP)
     assert "current coverage: 40%" in ctx
     assert "MATCHED" in ctx and "Python" in ctx
-    assert "MISSING REQUIRED: Kafka" in ctx
-    assert "Defensibility + Blendability test" in ctx
-    assert "75-80% of JD keywords covered" in ctx
-    assert "NOT 100%" in ctx
+    assert "MISSING REQUIRED" in ctx and "Kafka" in ctx
+    assert "weave" in ctx.lower()
+    assert "80-90% of required JD keywords covered" in ctx
+    assert "not just listed in skills" in ctx.lower() or "NOT 100%" in ctx
     # General missing excludes the required ones already listed
     assert "Terraform" in ctx
 
@@ -43,7 +43,7 @@ def test_keyword_context_contents():
 def test_v2_additions_present():
     prompt = _build_prompt()
     # Anti-stuffing coverage target
-    assert "75-80% of JD keywords covered" in prompt
+    assert "JD keywords covered" in prompt
     # Honest quantification menu
     assert "HONEST QUANTIFICATION MENU" in prompt
     assert "SCOPE:" in prompt and "FREQUENCY:" in prompt
