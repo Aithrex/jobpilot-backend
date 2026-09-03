@@ -144,6 +144,27 @@ class ResumeScorer:
         """Compute deterministic ATS metrics."""
         required = normalize_keywords(jd_analysis.get("required_skills", []))
         keywords = normalize_keywords(jd_analysis.get("keywords", []))
+
+        # sanitize_jd_analysis (called at JD extraction time) parks domain/
+        # title terms in jd_context so the tailor prompt never treats them as
+        # "missing skills" the candidate should add. For ATS scoring we DO
+        # want to reward domain terms (e.g. "distributed systems", "cloud",
+        # "microservices") that appear on the resume — they're real technical
+        # signal. We exclude logistics (location, visa) and seniority
+        # (Senior, Lead) because those never appear as resume text tokens.
+        jd_context = jd_analysis.get("jd_context") or {}
+        domain_terms = normalize_keywords(list(jd_context.get("domain") or []))
+        # Restore domain terms that were parked: add them back to required and
+        # keywords so keyword_match and skills_alignment score them properly.
+        required_set = set(required)
+        keywords_set = set(keywords)
+        for t in domain_terms:
+            if t not in required_set:
+                required.append(t)
+                required_set.add(t)
+            if t not in keywords_set:
+                keywords.append(t)
+                keywords_set.add(t)
         all_kw = list(dict.fromkeys(required + keywords))
 
         resume_text = build_resume_text(tailored)

@@ -297,23 +297,27 @@ def write_summary(
             verdict.score, verdict.ok, base_verdict.score,
         )
 
-        if verdict.ok and verdict.score > base_verdict.score:
+        # Ship the JD-tailored candidate whenever it passes hard gates.
+        # The old "> base_verdict.score" guard caused the base summary to
+        # win almost every time (it's polished and dense with tech terms),
+        # so the summary never changed across JDs. The candidate is purpose-
+        # built from the settled bullets and JD keyword budget — if it passes
+        # hard gates it should always be used. Fall back to base only on
+        # hard-gate failure or an empty / malformed candidate.
+        if verdict.ok:
             chosen = candidate
             source = "candidate"
+            logger.info(
+                "Summary writer: candidate accepted (score=%.2f, base=%.2f)",
+                verdict.score, base_verdict.score,
+            )
         else:
             chosen = base
             source = "base"
-            if verdict.ok:
-                logger.warning(
-                    "Summary writer: base beat candidate (%.2f > %.2f) — "
-                    "generation prompt may be drifting",
-                    base_verdict.score, verdict.score,
-                )
-            else:
-                logger.info(
-                    "Summary writer: falling back to base (%s)",
-                    "; ".join(verdict.reasons) or "empty candidate",
-                )
+            logger.info(
+                "Summary writer: falling back to base (%s)",
+                "; ".join(verdict.reasons) or "empty candidate",
+            )
 
         tailored["summary"] = _apply_cosmetics(chosen)
         logger.info("Summary writer: shipped %s summary.", source)
