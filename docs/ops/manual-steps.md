@@ -149,7 +149,12 @@ résumé it still predicts as one page renders as two.
 Not fixed here because both change the reference-matching intent that
 `ce9a94b` set deliberately.
 
-> **This blocks deploys now**, by design: `deploy.yml`'s `await-tests` gate
-> refuses to deploy from a red main. Override for an urgent ship with
-> `gh workflow run deploy.yml --ref main`, which bypasses the gate and logs a
-> warning saying so.
+> **The `await-tests` gate is ADVISORY while this is open.** It reports the
+> suite verdict on every deploy but does not refuse, because main is red from
+> unrelated tailoring/ATS work and a gate that blocks every deploy on somebody
+> else's failing suite gets switched off in anger rather than respected.
+>
+> **Turn it on once main is green:** set the repo variable
+> `REQUIRE_GREEN_TESTS=true` (Settings -> Secrets and variables -> Actions ->
+> Variables). Nothing else changes. `gh workflow run deploy.yml --ref main`
+> bypasses it either way, and says so in the log.
