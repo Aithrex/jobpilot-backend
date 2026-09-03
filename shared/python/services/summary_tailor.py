@@ -422,11 +422,11 @@ def allocate_tech_slots(
     ordered: List[str] = []
     seen: set = set()
 
-    def _take(term: str) -> None:
+    def _take(term: str, require_bullet: bool = True) -> None:
         raw = (term or "").strip()
         if not raw or not _is_summary_tech(raw):
             return
-        if not term_in_text(raw, bullet_text):
+        if require_bullet and not term_in_text(raw, bullet_text):
             return
         key = (normalize_single(raw) or raw).lower()
         if key in seen:
@@ -437,7 +437,11 @@ def allocate_tech_slots(
     for term in must_retain:
         _take(term)
     for term in keyword_budget:
-        _take(term)
+        # JD keyword-budget terms are included even if not yet in bullets —
+        # the tailor prompt instructs the LLM to weave them in. We want these
+        # in the brief so the summary reflects the target JD, not only the
+        # candidate's existing tech stack.
+        _take(term, require_bullet=False)
     for term, _weight in sorted(weights.items(), key=lambda kv: (-kv[1], kv[0])):
         _take(term)
 
@@ -1034,8 +1038,15 @@ def _hard_gate_failures(
             f"tech-budget: {len(named)} terms (need {floor}-{_TECH_BUDGET_MAX})"
         )
 
+    # bullet-backing: every tech term in the summary must appear in a bullet
+    # OR be a JD keyword-budget term (the tailor is already told to weave
+    # those in; if a term is in the budget we trust the model's placement).
     bullet_text = "\n".join(_all_settled_bullets(tailored))
+    budget_set = {(normalize_single(t) or t).lower() for t in brief.keyword_budget}
     for term in named:
+        term_key = (normalize_single(term) or term).lower()
+        if term_key in budget_set:
+            continue  # JD-budget terms are allowed even if not yet in bullets
         if bullet_text and not term_in_text(term, bullet_text):
             reasons.append(f"bullet-backing: {term}")
 
