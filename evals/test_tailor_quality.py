@@ -49,19 +49,21 @@ def _resume(summary, skills, experience):
 SWE = (
     "software",
     _resume(
-        "Backend engineer with 5 years building distributed services.",
+        "Backend engineer with 5 years building distributed services in Python and Java.",
         {"Languages": ["Python", "Java", "SQL"],
+         "Frameworks": ["Spring Boot", "FastAPI", "REST APIs"],
          "Cloud": ["AWS", "Docker", "Kubernetes"],
-         "Frontend": ["React"]},
+         "Frontend": ["React", "HTML", "CSS"]},
         [{"company": "Acme", "title": "Senior SWE", "dates": "2020 - Present",
           "bullets": [
-              "Built a Python payments pipeline processing 2M transactions monthly at 99.9% uptime.",
-              "Reduced API latency from 420ms to 95ms via PostgreSQL index tuning.",
-              "Deployed 4 services on Kubernetes across 3 teams."]}],
+              "Built a Java Spring Boot payments service processing 2M transactions monthly at 99.9% uptime.",
+              "Reduced REST API latency from 420ms to 95ms via PostgreSQL index tuning and query caching.",
+              "Deployed 4 microservices on Kubernetes, exposing React front-ends over HTML/CSS templates.",
+              "Shipped CI/CD pipelines on AWS reducing release cycle from 2 weeks to daily."]}],
     ),
     {"job_title": "Full Stack Engineer", "industry": "Software",
      "required_skills": ["Java", "Spring Boot", "React", "SQL", "REST API", "HTML", "CSS"],
-     "preferred_skills": ["Docker", "Kubernetes", "TypeScript"], "keywords": []},
+     "preferred_skills": ["Docker", "Kubernetes", "Python", "AWS"], "keywords": []},
 )
 
 FINANCE = (
@@ -373,7 +375,7 @@ def test_offline_scores_and_coverage(name, resume, jd, offline_tailor, capsys):
 
     # Floors that must hold for EVERY profession (not just SWE): the pipeline
     # produces a parseable, complete, well-scored resume.
-    assert scores.get("overall", 0) >= 60, f"[{name}] overall too low: {scores.get('overall')}"
+    assert scores.get("overall", 0) >= 75, f"[{name}] overall too low: {scores.get('overall')}"
     assert scores.get("section_completeness", 0) >= 80, f"[{name}] incomplete"
     # ats_parseability requires a real PDF render (pypdf round-trip); offline
     # evals run without a renderer so the key is absent (defaults to 0).
