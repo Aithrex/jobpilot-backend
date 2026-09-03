@@ -392,5 +392,32 @@ class OracleOrcProvider(AtsProvider):
         return ValidationResult(STATUS_VALIDATED, total,
                                 str(rows[0].get("Title") or "") if rows else "")
 
+    def board_owner(self, endpoint: Endpoint,
+                    ctx: FetchContext) -> Optional[str]:
+        """ORC Candidate Experience pages publish og:site_name / visible brand.
+
+        Measured on Oracle's own pod (`eeho.fa.us2`): the board HTML names
+        "Oracle" even when `oracle.com` itself returns 403 to automated clients.
+        """
+        url = self.board_url(endpoint)
+        if not url or ctx is None:
+            return None
+        try:
+            status, text = ctx.get_text(url, timeout=self.policy.timeout,
+                                        vendor=self.vendor)
+        except Exception:
+            return None
+        if status != 200 or not text:
+            return None
+        import re
+        m = re.search(
+            r"""(?:og:site_name|og:title)[^>]+content\s*=\s*["']([^"']{1,120})["']""",
+            text, re.IGNORECASE)
+        if m:
+            title = re.sub(r"\s+careers?\s*$", "", m.group(1).strip(), flags=re.I)
+            if title:
+                return title[:200]
+        return None
+
 
 register(OracleOrcProvider())

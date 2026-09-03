@@ -29,6 +29,7 @@ for _p in (str(_ROOT), str(_SCRIPTS)):
 #: the employer is not in COVERED_STATES. Keep tight — guessing is not terminal.
 TERMINAL_FAILURE_CODES = frozenset({
     "blocked",
+    "bot_challenge",
     "dead",
     "moved",
     "empty",

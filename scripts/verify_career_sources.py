@@ -583,11 +583,23 @@ def main() -> int:
               f" ({args.order} order)")
 
         endpoints_by_emp: Dict[str, List[Endpoint]] = collections.defaultdict(list)
+        endpoints_by_member: Dict[str, Any] = {}
+        try:
+            for doc in db.company_ats_endpoints.find(
+                    {}, {"_id": 0, "member_key": 1, "vendor": 1, "tenant": 1,
+                         "site": 1, "host": 1, "extra": 1}):
+                mk = str(doc.get("member_key") or "")
+                if mk:
+                    endpoints_by_member[mk] = doc
+        except Exception:
+            endpoints_by_member = {}
         for r in sources_col.find({"employer_id": {"$in": [e["employer_id"] for e in emps]}},
-                                  {"employer_id": 1, "ats_vendor": 1, "tenant": 1}):
-            if r.get("ats_vendor") and r.get("tenant"):
-                endpoints_by_emp[r["employer_id"]].append(
-                    Endpoint(vendor=r["ats_vendor"], tenant=r["tenant"]))
+                                  {"employer_id": 1, "ats_vendor": 1, "tenant": 1,
+                                   "member_key": 1, "canonical_endpoint": 1}):
+            if not (r.get("ats_vendor") and r.get("tenant")):
+                continue
+            endpoints_by_emp[r["employer_id"]].append(
+                hydrate_endpoint(r, endpoints_by_member))
 
         produced: List[Dict[str, Any]] = []
 

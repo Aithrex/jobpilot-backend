@@ -430,7 +430,16 @@ class Fetcher:
 # ---------------------------------------------------------------------------
 def _name_tokens(name: Any) -> List[str]:
     toks = [t for t in re.split(r"[^a-z0-9]+", str(name or "").lower()) if t]
-    return [t for t in toks if len(t) > 2 and t not in _LEGAL_WORDS]
+    long = [t for t in toks if len(t) > 2 and t not in _LEGAL_WORDS]
+    if long:
+        return long
+    # Brands like "F5", "3M", "SAP" are the whole name and are shorter than
+    # the usual token floor. Keeping them is required for page_confirms and
+    # domain verification; dropping them made F5 permanently un-ownable.
+    compact = re.sub(r"[^a-z0-9]+", "", str(name or "").lower())
+    if 2 <= len(compact) <= 3 and compact not in _LEGAL_WORDS:
+        return [compact]
+    return [t for t in toks if t not in _LEGAL_WORDS]
 
 
 _SCRIPT_STYLE_RE = re.compile(r"<(script|style|noscript)\b.*?</\1>",
@@ -489,14 +498,22 @@ def verify_domain(
     display_name: Any,
     domain: Any,
     ticker: str = "",
+    official_url: str = "",
 ) -> Tuple[bool, str, List[Dict[str, Any]]]:
     """Is `domain` this employer's official domain? `(ok, final_url, evidence)`.
 
     Refuses outright for any domain a curated identity row has blacklisted —
     `capital.com` is a CFD trading site and will never be Capital One's,
     however convincingly its homepage reads.
+
+    When the bare homepage is bot-walled (403) but still serves identifying
+    HTML, or when an official careers URL on the same registrable domain
+    names the employer, that counts. Oracle's `oracle.com` homepage is the
+    measured case: 403 with "Oracle" in the body, while
+    `careers.oracle.com` answers 200 and links the ORC board.
     """
     from services import employer_registry as er
+    from urllib.parse import urlparse
     dom = er.normalize_domain(domain)
     ev: List[Dict[str, Any]] = []
     if not dom:
@@ -507,18 +524,54 @@ def verify_domain(
         return False, "", [evidence("domain_check", source="identity_override",
                                     value=f"{dom} is explicitly not {display_name}",
                                     confirmed=False)]
-    for scheme_host in (f"https://www.{dom}/", f"https://{dom}/"):
+
+    candidates: List[str] = []
+    if official_url:
+        try:
+            host = (urlparse(str(official_url)).hostname or "").lower()
+        except Exception:
+            host = ""
+        if host and (host == dom or host.endswith("." + dom)):
+            candidates.append(str(official_url).strip())
+    candidates.extend((
+        f"https://careers.{dom}/",
+        f"https://www.{dom}/careers",
+        f"https://{dom}/careers",
+        f"https://www.{dom}/",
+        f"https://{dom}/",
+    ))
+    seen: Set[str] = set()
+    for scheme_host in candidates:
+        if not scheme_host or scheme_host in seen:
+            continue
+        seen.add(scheme_host)
         got = fetcher.get(scheme_host)
-        if got["error"] or got["status"] != 200 or not got["text"]:
+        status = int(got.get("status") or 0)
+        text = got.get("text") or ""
+        # A 403/429 with an empty body is a wall. A 403 that still names the
+        # employer is usable evidence — common on enterprise homepages.
+        if got["error"] and not text:
             ev.append(evidence("domain_check", source=scheme_host,
-                               value=got["error"] or f"status {got['status']}",
+                               value=got["error"] or f"status {status}",
                                confirmed=False))
             continue
-        ok, why = page_confirms_employer(got["text"], display_name,
+        if status not in (200, 403) and not text:
+            ev.append(evidence("domain_check", source=scheme_host,
+                               value=got["error"] or f"status {status}",
+                               confirmed=False))
+            continue
+        if not text:
+            ev.append(evidence("domain_check", source=scheme_host,
+                               value=got["error"] or f"status {status}",
+                               confirmed=False))
+            continue
+        ok, why = page_confirms_employer(text, display_name,
                                          host=dom, ticker=ticker)
-        ev.append(evidence("domain_check", source=got["final_url"], value=why, confirmed=ok))
+        final = got.get("final_url") or scheme_host
+        note = why if status == 200 else f"status {status}; {why}"
+        ev.append(evidence("domain_check", source=final, value=note, confirmed=ok))
         if ok:
-            return True, got["final_url"], ev
+            return True, final, ev
     return False, "", ev
 
 
@@ -832,6 +885,12 @@ def curated_row_signal(endpoint: Any, *, display_name: Any) -> Optional[Dict[str
     if not curated:
         return None
     ok = ei.name_key(curated) == ei.name_key(display_name)
+    if not ok:
+        try:
+            from services.ats_providers.util import names_match
+            ok = bool(names_match(str(curated), str(display_name)))
+        except Exception:  # pragma: no cover
+            ok = False
     return evidence(css.SIGNAL_CURATED_ROW, source="python_catalog",
                     value=str(curated)[:200], confirmed=ok)
 
@@ -952,7 +1011,8 @@ def verify_employer_source(
     #    browser to name the employer is not an independently verified domain
     #    under the ownership rule, and burning Chromium on it would not help.
     domain_ok, domain_url, domain_ev = verify_domain(
-        fetcher, display_name=name, domain=domain, ticker=ticker)
+        fetcher, display_name=name, domain=domain, ticker=ticker,
+        official_url=official_url)
     verified_domain = er.normalize_domain(domain) if domain_ok else ""
 
     # 1b. No domain on record. Ask the boards we already know about what
@@ -1057,7 +1117,35 @@ def verify_employer_source(
             failure_code=failure,
             failure_detail=str(detail or "")[:400],
         ))
-    return records
+    return _collapse_by_source_id(records)
+
+
+def _collapse_by_source_id(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One row per `source_id`. Prefer ownership-proven + real endpoint.
+
+    `source_id` is (employer, vendor, tenant) and deliberately ignores site /
+    host. A walk that discovers `oracle_orc/eeho` on CX_1 and a candidate row
+    for the same tenant without a host therefore share an id. Writing both
+    in one bulk upsert lets the empty candidate overwrite the proven board —
+    measured on Oracle (313 core-tech jobs stuck as `owner_unproven`).
+    """
+    best: Dict[str, Dict[str, Any]] = {}
+
+    def _score(rec: Dict[str, Any]) -> Tuple[int, int, int]:
+        return (
+            1 if rec.get("ownership_verified") else 0,
+            1 if rec.get("canonical_endpoint") else 0,
+            len(rec.get("ownership_evidence") or []),
+        )
+
+    for rec in records:
+        sid = str(rec.get("source_id") or "")
+        if not sid:
+            continue
+        prior = best.get(sid)
+        if prior is None or _score(rec) > _score(prior):
+            best[sid] = rec
+    return list(best.values())
 
 
 def _endpoint_url(ep: Any) -> str:

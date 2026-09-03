@@ -540,6 +540,7 @@ WORKDAY_TENANT_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Thomson Reuters", "tenant": "thomsonreuters", "wd_host": "wd5", "site": "External_Career_Site", "industry": "tech"},
     {"display_name": "Trimble", "tenant": "trimble", "wd_host": "wd1", "site": "TrimbleCareers", "industry": "tech"},
     {"display_name": "Unisys", "tenant": "unisys", "wd_host": "wd5", "site": "External", "industry": "tech"},
+    {"display_name": "Unity", "tenant": "unitytech", "wd_host": "wd1", "site": "Unity", "industry": "tech"},
     {"display_name": "Visa", "tenant": "visa", "wd_host": "wd5", "site": "Visa", "industry": "tech"},
     {"display_name": "Warner Bros. Discovery", "tenant": "warnerbros", "wd_host": "wd5", "site": "global", "industry": "tech"},
     {"display_name": "Workday", "tenant": "workday", "wd_host": "wd5", "site": "Workday", "industry": "tech"},

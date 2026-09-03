@@ -595,6 +595,38 @@ class WorkdayProvider(AtsProvider):
         return ValidationResult(STATUS_DEAD,
                                 detail=f"no working site path (last={last_status})")
 
+    def board_owner(self, endpoint: Endpoint,
+                    ctx: FetchContext) -> Optional[str]:
+        """Workday rarely publishes structured owner metadata; the public
+        board HTML often does (`Careers at F5`, og:title). Returning that
+        string lets ownership corroborate without trusting the tenant slug.
+        """
+        url = self.board_url(endpoint)
+        if not url:
+            return None
+        try:
+            status, text = ctx.get_text(url, timeout=self.policy.timeout,
+                                        vendor=self.vendor)
+        except Exception:
+            return None
+        if status != 200 or not text:
+            return None
+        import re
+        m = re.search(
+            r"""(?:og:title|og:site_name)[^>]+content\s*=\s*["']([^"']{1,120})["']""",
+            text, re.IGNORECASE)
+        if m:
+            title = m.group(1).strip()
+            title = re.sub(r"^(careers?\s+(at|@)\s+)", "", title, flags=re.I).strip()
+            title = re.sub(r"\s+careers?\s*$", "", title, flags=re.I).strip()
+            if title:
+                return title[:200]
+        m = re.search(r"Careers?\s+(?:at|@)\s+([A-Za-z0-9][A-Za-z0-9 .,&'\-]{1,80})",
+                      text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()[:200]
+        return None
+
     @staticmethod
     def _total_of(payload: Dict[str, Any]) -> int:
         try:

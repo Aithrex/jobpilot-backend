@@ -430,6 +430,69 @@ class TestVerifyEmployerSourceEndToEnd:
                 "Nothing here.</body></html>")
         assert cso.page_confirms_employer(page, "Databricks")[0] is False
 
+    def test_short_brand_names_like_f5_confirm_from_visible_text(self):
+        from services import career_source_ownership as cso
+
+        page = "<html><head><title>Careers at F5</title></head>" \
+               "<body>Careers at F5</body></html>"
+        assert cso._name_tokens("F5") == ["f5"]
+        assert cso.page_confirms_employer(page, "F5")[0] is True
+
+    def test_verify_domain_accepts_careers_url_when_homepage_is_walled(self):
+        """Oracle-shaped: bare homepage 403s; careers subdomain names them."""
+        from services import career_source_ownership as cso
+
+        class WallFetcher:
+            def get(self, url, **kw):
+                if "careers.oracle.com" in url or "/careers" in url:
+                    return {"status": 200, "error": "", "text":
+                            "<html><title>Oracle Careers</title>"
+                            "<body>Oracle</body></html>",
+                            "final_url": url, "chain": [url],
+                            "network_urls": []}
+                return {"status": 403, "error": "", "text": "",
+                        "final_url": url, "chain": [url], "network_urls": []}
+
+        ok, final, ev = cso.verify_domain(
+            WallFetcher(), display_name="Oracle", domain="oracle.com",
+            official_url="https://careers.oracle.com/jobs/")
+        assert ok is True
+        assert "careers.oracle.com" in final
+
+    def test_verify_domain_accepts_403_body_that_still_names_the_employer(self):
+        from services import career_source_ownership as cso
+
+        class SoftWall:
+            def get(self, url, **kw):
+                return {"status": 403, "error": "",
+                        "text": "<html><body>Oracle</body></html>",
+                        "final_url": url, "chain": [url], "network_urls": []}
+
+        ok, final, ev = cso.verify_domain(
+            SoftWall(), display_name="Oracle", domain="oracle.com")
+        assert ok is True
+
+    def test_collapse_keeps_owned_endpoint_over_empty_twin(self):
+        from services import career_source_ownership as cso
+        from services import career_source_service as css
+
+        owned = css.build_source(
+            employer_id="emp_x", ats_vendor="oracle_orc", tenant="eeho",
+            canonical_endpoint="https://eeho.fa.us2.oraclecloud.com/hcmUI/...",
+            member_key="oracle_orc-eeho-cx_1",
+            ownership_evidence=[css.evidence(css.SIGNAL_DOMAIN_LINK, confirmed=True)],
+        )
+        empty = css.build_source(
+            employer_id="emp_x", ats_vendor="oracle_orc", tenant="eeho",
+            member_key="oracle_orc-eeho",
+            ownership_evidence=[],
+        )
+        assert owned["source_id"] == empty["source_id"]
+        out = cso._collapse_by_source_id([empty, owned])
+        assert len(out) == 1
+        assert out[0]["ownership_verified"] is True
+        assert out[0]["canonical_endpoint"]
+
     def test_a_domain_the_board_declares_is_a_candidate_not_a_conclusion(self):
         """`candidate_domains_from_board` is how an employer that exists only
         as an ATS display name gets a domain at all. It is then verified the
