@@ -106,3 +106,50 @@ terraform init -reconfigure     # safe: same bucket and key, -reconfigure never 
 terraform import aws_iam_user_policy.ci_ingest_runner_deploy \
     jobpilot-ci-deployer:jobpilot-ci-ingest-runner-deploy
 ```
+
+## 2026-09-03 — OPEN: `median_tailored` snapshot is failing on a real regression
+
+`tests/test_resume_layout.py::test_visual_snapshots` fails on
+`median_tailored`. **Do not regenerate the golden to clear it.** The test is
+correct and the render is wrong.
+
+The renderer says so itself:
+
+```
+resume_render page_mismatch solver=1 actual=2 h=277.5 avail=265.7
+```
+
+Its fit solver predicts ONE page; the actual render is TWO. The committed
+golden (from `bcab6ca`) fits EDUCATION on page 1; after `ce9a94b` the content
+overflows by ~11.8mm and EDUCATION's heading is orphaned at the foot of page 1
+with its body on page 2.
+
+**Mechanism.** `ce9a94b` raised several fixed spacing constants and, decisively,
+froze the solver's only compression lever:
+
+```
+min_post_header       0.33 -> 0.80      # both ends now 0.80: no range left
+max_post_header       0.50 -> 0.80      # commented "(frozen)"
+heading_cell_h        4.06 -> 4.70
+contact_section_gap_mm 0.88 -> 1.82
+```
+
+With `min == max` the solver cannot compress header spacing at all, so a
+résumé it still predicts as one page renders as two.
+
+**Two defensible fixes, both design calls for whoever owns the renderer:**
+
+1. give the solver a range again (keep 0.80 as the *max*, restore a smaller
+   min) so it can compress to fit, preserving the reference look when there is
+   room; or
+2. accept two pages -- but then teach the solver so `page_mismatch` stops
+   firing, and add keep-with-next for section headings so EDUCATION never
+   orphans.
+
+Not fixed here because both change the reference-matching intent that
+`ce9a94b` set deliberately.
+
+> **This blocks deploys now**, by design: `deploy.yml`'s `await-tests` gate
+> refuses to deploy from a red main. Override for an urgent ship with
+> `gh workflow run deploy.yml --ref main`, which bypasses the gate and logs a
+> warning saying so.
