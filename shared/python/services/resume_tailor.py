@@ -2755,28 +2755,30 @@ class ResumeTailor:
             )
         if req_missing:
             parts.append(
-                "- MISSING REQUIRED: "
+                "- MISSING REQUIRED (priority — weave these in): "
                 + ", ".join(req_missing)
-                + "\n  Add ONLY where the Defensibility + Blendability test (HARD CONSTRAINT B)"
-                "\n  passes; otherwise LEAVE THEM OUT.\n"
+                + "\n  For each one: if the candidate has done adjacent or related work,\n"
+                "  REWRITE a relevant bullet to weave the term in as usage context.\n"
+                "  Example: JD needs 'REST APIs' — if the candidate built any HTTP service,\n"
+                "  rewrite that bullet to name REST APIs explicitly. Do NOT fabricate\n"
+                "  a completely new skill; DO surface a real one using the JD's language.\n"
             )
         if general_missing:
             parts.append(
-                "- MISSING GENERAL: "
+                "- MISSING GENERAL (weave in where adjacent work exists): "
                 + ", ".join(general_missing[:12])
-                + "\n  Same rule: defensible or absent.\n"
+                + "\n  Same approach: reword existing bullets to surface these terms\n"
+                "  when the underlying work is already present.\n"
             )
         parts.append(
-            "- OBJECTIVE: maximize EVIDENCED relevance within an honesty budget — not\n"
-            "  keyword coverage. A term belongs on the resume only when the candidate has\n"
-            "  used it, and preferentially woven into an existing bullet rather than\n"
-            "  appended to the skills list. A resume that covers 70% of JD terms in\n"
-            "  bullets outperforms one that covers 95% in a skills block.\n"
-            "- COVERAGE TARGET: aim for roughly 75-80% of JD keywords covered IN CONTEXT\n"
-            "  — NOT 100%, and NEVER by stuffing the skills list. Skipping keywords the\n"
-            "  candidate cannot defend is CORRECT behavior, not a failure.\n"
-            "- NEVER add a skill the candidate has not demonstrated. NEVER invent white\n"
-            "  text, off-page keyword blocks, metadata stuffing, or image-alt keywords.\n\n"
+            "- OBJECTIVE: maximize JD keyword coverage IN BULLETS using the candidate's\n"
+            "  actual work — reword, reframe, and surface existing experience using JD\n"
+            "  terminology. A term woven into a bullet scores far higher than one only\n"
+            "  in the skills list.\n"
+            "- COVERAGE TARGET: aim for 80-90% of required JD keywords covered IN CONTEXT\n"
+            "  (bullets + summary), not just listed in skills.\n"
+            "- NEVER invent experience, companies, titles, or metrics. NEVER add a skill\n"
+            "  the candidate has zero connection to. Surface and reframe what is real.\n\n"
         )
         return "".join(parts)
 
