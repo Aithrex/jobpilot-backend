@@ -414,6 +414,9 @@ class ResumeService:
         validated["preferred_skills"] = normalize_keywords(validated.get("preferred_skills", []))
         validated["keywords"] = normalize_keywords(validated.get("keywords", []))
 
+        from services.term_registry import sanitize_jd_analysis
+        validated = sanitize_jd_analysis(validated)
+
         return validated
 
 
@@ -938,17 +941,15 @@ def _attach_ats_keyword_audit(result: Dict[str, Any], jd_analysis: Dict[str, Any
     tailor modal can show a "X keywords missed" badge — passive, not
     blocking. Failure here must not break the tailor pipeline.
     """
+    if isinstance(result.get("ats_keyword_audit"), dict) and (
+        "missing" in result["ats_keyword_audit"]
+        or "required_missing" in result["ats_keyword_audit"]
+    ):
+        return
     try:
-        from services.keyword_gap_engine import KeywordGapEngine
+        from services.keyword_gap_engine import KeywordGapEngine, as_audit
         audit = KeywordGapEngine().analyze(result, jd_analysis or {})
-        result["ats_keyword_audit"] = {
-            "matched": audit.get("matched_keywords", []),
-            "missing": audit.get("missing_keywords", []),
-            "partial": audit.get("partial_matches", []),
-            "coverage_percentage": audit.get("coverage_percentage", 0),
-            "required_missing": audit.get("required_missing", []),
-            "required_coverage": audit.get("required_coverage", 0),
-        }
+        result["ats_keyword_audit"] = as_audit(audit)
         missed = result["ats_keyword_audit"]["required_missing"]
         if missed:
             logger.warning(

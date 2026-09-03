@@ -161,6 +161,18 @@ def test_imperfect_parse_caps_overall(monkeypatch, fake_review):
 # Loud render failure
 # ---------------------------------------------------------------------------
 
+def test_empty_jd_does_not_give_perfect_hard_skill(monkeypatch, fake_review):
+    patch_pdf_check(monkeypatch)
+    empty = dict(JD)
+    empty["required_skills"] = []
+    empty["preferred_skills"] = []
+    empty["keywords"] = []
+    r = ResumeScorer().score(RESUME, empty, pdf_bytes=b"%PDF-fake")
+    assert r["hard_skill_unscored"] is True
+    assert r["rubric_detail"]["hard_skill_match"]["unscored"] is True
+    assert r["hard_skill_match"] == 0
+
+
 def test_missing_pdf_is_loud(fake_review):
     r = ResumeScorer().score(RESUME, JD, pdf_bytes=None, render_error="boom")
     assert r["ats_parseability"] == 0
@@ -179,8 +191,7 @@ def test_ai_review_failure_uses_proxy(monkeypatch, broken_review):
     patch_pdf_check(monkeypatch)
     r = ResumeScorer().score(RESUME, JD, pdf_bytes=b"%PDF-fake")
     assert r["ai_review_available"] is False
-    expected_proxy = round(0.5 * (r["title_alignment"] + r["hard_skill_match"]))
-    assert r["experience_relevance"] == expected_proxy
+    assert r["experience_relevance"] is None
     assert r["suggestions"]
     assert r["strengths"]
     # Overall unaffected by the LLM being down — still the weighted sum.
@@ -252,8 +263,8 @@ def test_title_missing_jd_title_scores_100():
 # Hard skill match: placement cap, stuffing, acronym pairs
 # ---------------------------------------------------------------------------
 
-def test_skills_list_only_keywords_capped():
-    """All JD keywords present ONLY in the skills list → dimension ≤ 80."""
+def test_skills_list_only_keywords_earn_zero():
+    """JD keywords present ONLY in the skills list → 0 credit."""
     stuffed = {
         "summary": "Experienced professional.",
         "skills": {"Skills": ["Python", "AWS", "Docker", "PostgreSQL", "Microservices"]},
@@ -264,9 +275,9 @@ def test_skills_list_only_keywords_capped():
         "education": [], "projects": [], "certifications": [],
     }
     score, found, missing, detail = ResumeScorer()._hard_skill_score(stuffed, JD)
-    assert not missing
-    assert detail["context_fraction"] < 50
-    assert score <= 80
+    assert found == []
+    assert detail["unevidenced_listed"] >= 1
+    assert score == 0
 
 
 def test_keywords_in_bullets_beat_skills_list():

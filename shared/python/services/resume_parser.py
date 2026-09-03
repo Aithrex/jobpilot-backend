@@ -132,16 +132,9 @@ _EXTRACTION_PROMPT = (
     "1. EXPLICIT SKILLS SECTION — a dedicated 'Skills' / 'Technical Skills' / 'Core\n"
     "   Competencies' / 'Technologies' section. EVERY item the user lists there MUST be\n"
     "   captured — NEVER drop one, even if it is not a concrete tech token:\n"
-    "     - concrete tech tokens (Python, Go, Kubernetes, PostgreSQL, Terraform) → the\n"
-    "       relevant technical category;\n"
-    "     - architectural CONCEPTS (Distributed Systems, Microservices, Event-Driven\n"
-    "       Architecture, Scalability, High Availability) → put under 'Concepts &\n"
-    "       Methodologies';\n"
-    "     - professional / soft skills (Leadership, Communication, Mentoring,\n"
-    "       Collaboration) → put under 'Professional Skills'.\n"
-    "   If an explicit item fits no technical group, use one of those catch-all categories\n"
-    "   rather than discarding it — but only as a last resort, never in place of a\n"
-    "   category that actually fits.\n"
+    "     - keep each item under the heading the author used;\n"
+    "     - do not invent a Concepts & Methodologies or Professional Skills bucket.\n"
+    "   Soft traits belong in the summary later, not as a skills heading you create.\n"
     "2. INFERRED SKILLS — technologies mentioned in the summary, experience bullets, or\n"
     "   project prose (NOT the Skills section). Here keep ATS discipline: extract ONLY\n"
     "   concrete technology/tool/framework/language/database/cloud/methodology TOKENS. Do\n"
@@ -152,16 +145,13 @@ _EXTRACTION_PROMPT = (
     "   'Amazon Web Services'). If it says 'Postgres' use 'Postgres' (not 'PostgreSQL').\n"
     "   If it says 'JS' use 'JS' (not 'JavaScript').\n"
     "E. Each skill must appear in EXACTLY ONE category — no cross-category duplicates.\n"
-    "F. Categorize into these groups when applicable: Languages, Frameworks & Libraries,\n"
-    "   AI & ML, Cloud & DevOps, Databases, Tools & Platforms, Concepts & Methodologies,\n"
-    "   Professional Skills. Add a new group only if none of these fits.\n"
-    "G. Pick the MOST SPECIFIC group, judging what KIND of thing the item is rather than\n"
-    "   what topic it belongs to. A hosted API, SDK or vendor service (Claude API, Gemini\n"
-    "   API, OpenAI, Stripe, Twilio) is a platform or an AI & ML entry — never a Framework\n"
-    "   and never a Concept. 'Concepts & Methodologies' is for practices and approaches\n"
-    "   (Agile, RAG, Prompt Engineering, Distributed Systems), not a dumping ground for\n"
-    "   anything hard to place. Use 'AI & ML' for LLM/ML tooling and techniques when the\n"
-    "   resume has enough of them to make a real group.\n\n"
+    "F. If the resume has LABELED skill groups, copy those heading names VERBATIM and keep\n"
+    "   the author's category order and item order. Do NOT rename them to a canned list\n"
+    "   (Languages / Frameworks & Libraries / AI & ML / Cloud & DevOps / Databases /\n"
+    "   Tools & Platforms / Concepts & Methodologies / Professional Skills) unless the\n"
+    "   resume itself used that exact heading.\n"
+    "G. If skills are a flat unlabeled list, put them under a single key 'Skills'. Do not\n"
+    "   invent taxonomy headings. A later pass groups unlabeled lists.\n\n"
     "CERTIFICATIONS — STRICT NO-FABRICATION RULE:\n"
     "- If the resume has a 'Certifications' / 'Certificates' / 'Licenses' section, OR if\n"
     "  certifications are explicitly named anywhere in the resume (e.g., a bullet says\n"
@@ -185,8 +175,8 @@ _EXTRACTION_PROMPT = (
     "  },\n"
     '  "summary": "Professional summary if present, otherwise empty string",\n'
     '  "skills": {\n'
-    '    "Languages": ["Python", "Go"],\n'
-    '    "Concepts & Methodologies": ["Distributed Systems", "Agile"],\n'
+    '    "Backend": ["Python", "Go"],\n'
+    '    "Practices": ["Distributed Systems", "Agile"],\n'
     '    "Professional Skills": ["Leadership", "Mentoring"]\n'
     "  },\n"
     '  "experience": [\n'
@@ -256,12 +246,9 @@ _EXTRACTION_PROMPT_SLIM = (
     "8. If a section is absent, use an empty string or empty array. Never null.\n\n"
     "SKILLS — CAPTURE RULES (ATS-critical). Two sources, treated differently:\n"
     "1. EXPLICIT 'Skills' / 'Technical Skills' / 'Core Competencies' / 'Technologies'\n"
-    "   section: capture EVERY item the user lists — NEVER drop one. Concrete tech tokens\n"
-    "   go in tech categories; architectural CONCEPTS (Distributed Systems, Microservices,\n"
-    "   Event-Driven Architecture, Scalability) go under 'Concepts & Methodologies';\n"
-    "   professional/soft skills (Leadership, Communication, Mentoring) go under\n"
-    "   'Professional Skills'. Never discard an explicitly listed item — use a catch-all\n"
-    "   category as a LAST RESORT, never in place of one that actually fits.\n"
+    "   section: capture EVERY item the user lists — NEVER drop one. Keep the author's\n"
+    "   own group headings. Do not invent Concepts & Methodologies or Professional\n"
+    "   Skills. Never discard an explicitly listed item.\n"
     "2. INFERRED from prose (summary/bullets/projects, NOT the Skills section): keep ATS\n"
     "   discipline — extract ONLY concrete tech/tool/framework/language/database/cloud/\n"
     "   methodology TOKENS ('Built microservices using Go and gRPC' → 'Go', 'gRPC'; do NOT\n"
@@ -269,14 +256,12 @@ _EXTRACTION_PROMPT_SLIM = (
     "D. PRESERVE the exact token as written ('AWS' not 'Amazon Web Services'; 'Postgres'\n"
     "   not 'PostgreSQL'; 'JS' not 'JavaScript').\n"
     "E. Each skill must appear in EXACTLY ONE category — no cross-category duplicates.\n"
-    "F. Categories: Languages, Frameworks & Libraries, AI & ML, Cloud & DevOps, Databases,\n"
-    "   Tools & Platforms, Concepts & Methodologies, Professional Skills. New group only\n"
-    "   if none fits.\n"
-    "G. Pick the MOST SPECIFIC group, by what KIND of thing the item is, not its topic. A\n"
-    "   hosted API/SDK/vendor service (Claude API, Gemini API, OpenAI, Stripe) is a\n"
-    "   platform or an AI & ML entry — never a Framework, never a Concept. 'Concepts &\n"
-    "   Methodologies' is for practices (Agile, RAG, Prompt Engineering), not a dumping\n"
-    "   ground. Use 'AI & ML' when the resume has enough LLM/ML tooling to form a group.\n\n"
+    "F. If the resume has LABELED skill groups, copy those heading names VERBATIM and keep\n"
+    "   the author's order. Do NOT rewrite them into Languages / Frameworks & Libraries /\n"
+    "   AI & ML / Cloud & DevOps / Databases / Tools & Platforms / Concepts &\n"
+    "   Methodologies / Professional Skills unless the resume used that exact heading.\n"
+    "G. If skills are a flat unlabeled list, put them under a single key 'Skills'. Do not\n"
+    "   invent taxonomy headings.\n\n"
     "CERTIFICATIONS — STRICT NO-FABRICATION RULE:\n"
     "- Extract every entry from a 'Certifications' / 'Certificates' / 'Licenses' section,\n"
     "  OR named explicitly anywhere in the resume (e.g., a bullet 'Earned AWS Certified\n"
@@ -288,7 +273,7 @@ _EXTRACTION_PROMPT_SLIM = (
     "{\n"
     '  "contact": {"name":"","email":"","phone":"","linkedin":"","github":"","location":"","portfolio":""},\n'
     '  "summary": "",\n'
-    '  "skills": {"Languages":["Python"],"Concepts & Methodologies":["Distributed Systems"],"Professional Skills":["Leadership"]},\n'
+    '  "skills": {"Languages":["Python"],"Practices":["Distributed Systems"]},\n'
     '  "experience": [{"title":"","company":"","location":"","dates":"","type":"","bullets":[]}],\n'
     '  "education": [{"degree":"","institution":"","location":"","dates":"","gpa":"","coursework":""}],\n'
     '  "projects": [{"name":"","dates":"","bullets":[],"tech":""}],\n'
@@ -665,6 +650,41 @@ class ResumeParser:
                     deduped.append(token)
                 skills[category] = deduped
             result["skills"] = skills
+        result = ResumeParser._attach_skills_layout(result)
+        return result
+
+    @staticmethod
+    def _attach_skills_layout(result: dict) -> dict:
+        """Persist verbatim groups so the tailor can PRESERVE them.
+
+        New parses: provenance is user when more than one labeled group exists
+        and they are not exclusively the old canned taxonomy. Legacy records
+        without this field are reconstructed at compose time.
+        """
+        from services.skill_layout import CANNED_HEADINGS, is_role_label
+
+        skills = result.get("skills") or {}
+        if not isinstance(skills, dict) or not skills:
+            result["skills_layout"] = []
+            return result
+        labels = [str(k).strip() for k, v in skills.items() if v]
+        only_canned = bool(labels) and all(lab in CANNED_HEADINGS for lab in labels)
+        provenance = "inferred" if only_canned and len(labels) >= 4 else "user"
+        layout = []
+        for cat, items in skills.items():
+            if not isinstance(items, list):
+                continue
+            kept = [
+                str(s).strip() for s in items
+                if isinstance(s, str) and s.strip() and not is_role_label(s)
+            ]
+            if kept:
+                layout.append({
+                    "label": str(cat),
+                    "items": kept,
+                    "provenance": provenance,
+                })
+        result["skills_layout"] = layout
         return result
 
     @staticmethod

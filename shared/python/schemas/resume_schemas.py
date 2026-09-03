@@ -32,6 +32,14 @@ PARSED_RESUME_SCHEMA = {
     },
     "summary": str,
     "skills": {"_dict_of": [str]},  # Record<string, string[]>
+    # Verbatim labeled groups from the uploaded resume. provenance is
+    # "user" or "inferred". Optional on legacy records — reconstructed
+    # from `skills` when missing.
+    "skills_layout": [{
+        "label": str,
+        "items": [str],
+        "provenance": str,
+    }],
     "experience": [{
         "title": str,
         "company": str,
@@ -85,6 +93,14 @@ JD_ANALYSIS_SCHEMA = {
     "experience_years": str,
     "industry": str,
     "keywords": [str],
+    # Non-skill JD terms parked by term_registry.sanitize_jd_analysis.
+    # Never scored as missing skills.
+    "jd_context": {
+        "domain": [str],
+        "logistics": [str],
+        "seniority": [str],
+        "title": [str],
+    },
 }
 
 # Matches ATSScores (v2 — honest rubric).
@@ -309,10 +325,10 @@ def build_resume_text(structured: dict) -> str:
         for b in exp.get("bullets", []):
             parts.append(b)
 
-    # Projects
+    # Projects — name + bullets only. `tech` is not rendered (PDF/preview)
+    # so crediting it would score invisible text.
     for proj in structured.get("projects", []):
         parts.append(proj.get("name", ""))
-        parts.append(proj.get("tech", ""))
         for b in proj.get("bullets", []):
             parts.append(b)
 
@@ -321,5 +337,10 @@ def build_resume_text(structured: dict) -> str:
         parts.append(edu.get("degree", ""))
         parts.append(edu.get("institution", ""))
         parts.append(edu.get("coursework", ""))
+
+    # Certifications render on the page; they must be searchable too.
+    for cert in structured.get("certifications") or []:
+        if str(cert).strip():
+            parts.append(str(cert).strip())
 
     return "\n".join(p for p in parts if p)

@@ -6,6 +6,9 @@ the rewrite only when it clears hard gates and scores at least as well as the
 base-resume summary. Fall back to the base summary rather than ship a
 regression.
 
+Pipeline: ``docs/specs/summary_architecture.md``.
+Content contract (what the summary says): ``docs/specs/summary_content_model.md``.
+
 No feature flag — this is the only summary writer.
 """
 from __future__ import annotations
@@ -137,6 +140,57 @@ _MUST_RETAIN_CAP = 8
 _KEYWORD_BUDGET_CAP = 6
 _EVIDENCE_CAP = 6
 _MIN_SUMMARY_CHARS = 40
+_TECH_BUDGET_MIN = 8
+_TECH_BUDGET_MAX = 11
+_S1_LANGUAGE_CAP = 2
+_S2_TECH_CAP = 6
+_S3_TECH_CAP = 2
+
+# Frameworks / data / infra — the capability sentence's inventory.
+_S2_GROUPS = frozenset({
+    "frontend", "backend", "databases", "cloud", "devops",
+    "data_engineering", "apis", "mobile", "testing",
+})
+# Differentiator area. Extra languages overflow here after S1 is full.
+_S3_GROUPS = frozenset({"ai_ml"})
+
+# Domain as a trailing qualifier, never the head noun of sentence 1.
+_DOMAIN_QUALIFIERS: Tuple[Tuple[str, str], ...] = (
+    ("regulated healthcare", "across regulated healthcare platforms"),
+    ("healthcare", "across healthcare platforms"),
+    ("health care", "across healthcare platforms"),
+    ("clinical", "across clinical platforms"),
+    ("fintech", "across fintech platforms"),
+    ("financial services", "across financial-services platforms"),
+    ("banking", "across banking platforms"),
+    ("insurance", "across insurance platforms"),
+    ("ecommerce", "across ecommerce platforms"),
+    ("e-commerce", "across ecommerce platforms"),
+    ("biotech", "across biotech platforms"),
+    ("edtech", "across education platforms"),
+)
+
+_DOMAIN_HEAD_NOUNS = frozenset({
+    "healthcare", "health-care", "fintech", "finance", "financial",
+    "clinical", "hospital", "banking", "insurance", "retail",
+    "ecommerce", "e-commerce", "government", "defense", "automotive",
+    "media", "advertising", "education", "edtech", "biotech",
+    "regulated",
+})
+
+_ADJECTIVE_OPENERS = (
+    "results-driven", "highly skilled", "detail-oriented", "motivated",
+    "passionate", "dedicated", "dynamic", "seasoned", "accomplished",
+    "innovative", "proven",
+)
+
+_SELF_ASSESSMENT = (
+    "world-class",
+    "extensive experience",
+    "proven track record",
+    "expert in",
+    "an expert",
+)
 
 _SYSTEM = guarded_system(
     "You are a professional resume writer. Follow the summary rules given in "
@@ -156,6 +210,10 @@ class SummaryBrief:
     support: float = 0.0
     jd_family_key: str = ""
     candidate_family_key: str = ""
+    tech_s1: List[str] = field(default_factory=list)
+    tech_s2: List[str] = field(default_factory=list)
+    tech_s3: List[str] = field(default_factory=list)
+    domain_qualifier: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -169,7 +227,15 @@ class SummaryBrief:
             "support": self.support,
             "jd_family_key": self.jd_family_key,
             "candidate_family_key": self.candidate_family_key,
+            "tech_s1": list(self.tech_s1),
+            "tech_s2": list(self.tech_s2),
+            "tech_s3": list(self.tech_s3),
+            "domain_qualifier": self.domain_qualifier,
         }
+
+    @property
+    def tech_budget(self) -> List[str]:
+        return list(self.tech_s1) + list(self.tech_s2) + list(self.tech_s3)
 
 
 @dataclass
@@ -298,17 +364,27 @@ def build_summary_brief(
         structured_resume, jd_label, jd_key, adopted_jd_identity,
     )
 
+    must_retain = _must_retain(structured_resume, all_bullets)
+    keyword_budget = allocate_summary_keywords(gap)
+    tech_s1, tech_s2, tech_s3 = allocate_tech_slots(
+        must_retain, keyword_budget, all_bullets,
+    )
+
     return SummaryBrief(
         role_family=role_family,
         bridge_clause=bridge_clause,
         years_phrase=_years_phrase(structured_resume, jd_analysis),
         evidence=evidence,
-        keyword_budget=allocate_summary_keywords(gap),
-        must_retain=_must_retain(structured_resume, all_bullets),
+        keyword_budget=keyword_budget,
+        must_retain=must_retain,
         forbidden=forbidden,
         support=round(support, 4),
         jd_family_key=jd_key,
         candidate_family_key=cand_key,
+        tech_s1=tech_s1,
+        tech_s2=tech_s2,
+        tech_s3=tech_s3,
+        domain_qualifier=_domain_qualifier(structured_resume, jd_analysis),
     )
 
 
@@ -324,6 +400,122 @@ def allocate_summary_keywords(gap: Dict[str, Any]) -> List[str]:
         if len(out) >= _KEYWORD_BUDGET_CAP:
             break
     return out
+
+
+def allocate_tech_slots(
+    must_retain: Sequence[str],
+    keyword_budget: Sequence[str],
+    bullets: Sequence[str],
+) -> Tuple[List[str], List[str], List[str]]:
+    """Pick 8-11 evidenced technologies and file them into S1 / S2 / S3.
+
+    Priority: must_retain, then keyword_budget, then terms that appear in
+    the most settled bullets. A term that is not in a bullet is skipped —
+    the summary may not name anything the bullets cannot prove.
+    """
+    bullet_text = "\n".join(bullets)
+    weights = _term_evidence_weights(bullets)
+    ordered: List[str] = []
+    seen: set = set()
+
+    def _take(term: str) -> None:
+        raw = (term or "").strip()
+        if not raw or not _is_summary_tech(raw):
+            return
+        if not term_in_text(raw, bullet_text):
+            return
+        key = (normalize_single(raw) or raw).lower()
+        if key in seen:
+            return
+        seen.add(key)
+        ordered.append(raw)
+
+    for term in must_retain:
+        _take(term)
+    for term in keyword_budget:
+        _take(term)
+    for term, _weight in sorted(weights.items(), key=lambda kv: (-kv[1], kv[0])):
+        _take(term)
+
+    s1: List[str] = []
+    s2: List[str] = []
+    s3: List[str] = []
+    overflow_langs: List[str] = []
+    for term in ordered:
+        slot = _tech_slot(term)
+        if slot == "s1":
+            if len(s1) < _S1_LANGUAGE_CAP:
+                s1.append(term)
+            else:
+                overflow_langs.append(term)
+        elif slot == "s3":
+            if len(s3) < _S3_TECH_CAP:
+                s3.append(term)
+        elif slot == "s2":
+            if len(s2) < _S2_TECH_CAP:
+                s2.append(term)
+
+    for term in overflow_langs:
+        if len(s3) < _S3_TECH_CAP:
+            s3.append(term)
+
+    # Prefer a coherent 8-11 band: drop lowest-priority S2 extras only when
+    # we somehow exceeded the total (should not happen with the caps).
+    while len(s1) + len(s2) + len(s3) > _TECH_BUDGET_MAX and s2:
+        s2.pop()
+    return s1, s2, s3
+
+
+def _is_summary_tech(term: str) -> bool:
+    if is_programming_language(term):
+        return True
+    return taxonomy_group(term) in _RETAIN_GROUPS
+
+
+def _tech_slot(term: str) -> str:
+    if is_programming_language(term):
+        return "s1"
+    group = taxonomy_group(term)
+    if group in _S3_GROUPS:
+        return "s3"
+    if group in _S2_GROUPS:
+        return "s2"
+    return ""
+
+
+def _term_evidence_weights(bullets: Sequence[str]) -> Dict[str, int]:
+    weights: Dict[str, int] = {}
+    for bullet in bullets:
+        for term in _known_terms_in(bullet):
+            if not _is_summary_tech(term):
+                continue
+            key = (normalize_single(term) or term)
+            weights[key] = weights.get(key, 0) + 1
+    return weights
+
+
+def _domain_qualifier(
+    structured: Dict[str, Any],
+    jd_analysis: Dict[str, Any],
+) -> str:
+    """Trailing S1 qualifier drawn from the resume, never from the JD alone."""
+    parts = [structured.get("summary") or ""]
+    for exp in structured.get("experience") or []:
+        parts.append(exp.get("title") or "")
+        for b in exp.get("bullets") or []:
+            if isinstance(b, str):
+                parts.append(b)
+    blob = " ".join(parts).lower()
+    for needle, phrase in _DOMAIN_QUALIFIERS:
+        if needle in blob:
+            return phrase
+    industry = (jd_analysis.get("industry") or "").strip().lower()
+    # JD industry only confirms a domain the resume already named.
+    if industry and industry in blob:
+        for needle, phrase in _DOMAIN_QUALIFIERS:
+            if needle in industry or industry in needle:
+                return phrase
+    return ""
 
 
 def validate_summary(
@@ -376,10 +568,13 @@ def _evidence_bullets(tailored: Dict[str, Any], limit: int = _EVIDENCE_CAP) -> L
 
 def _all_settled_bullets(tailored: Dict[str, Any]) -> List[str]:
     out: List[str] = []
-    for exp in tailored.get("experience") or []:
-        for b in exp.get("bullets") or []:
-            if isinstance(b, str) and b.strip():
-                out.append(b.strip())
+    for section in ("experience", "projects"):
+        for row in tailored.get(section) or []:
+            if not isinstance(row, dict):
+                continue
+            for b in row.get("bullets") or []:
+                if isinstance(b, str) and b.strip():
+                    out.append(b.strip())
     return out
 
 
@@ -460,6 +655,12 @@ def _bridge_support(bullets: List[str], jd_key: str) -> float:
 
 
 def _family_label(key: str, fallback_title: str) -> str:
+    if key == "cloud_devops":
+        blob = (fallback_title or "").lower()
+        if any(n in blob for n in ("platform", "infrastructure", "sre",
+                                   "site reliability")):
+            return "Platform engineer"
+        return "Cloud engineer"
     if key in _FAMILY_LABELS:
         return _FAMILY_LABELS[key]
     return _strip_seniority(fallback_title) or "Professional"
@@ -663,38 +864,62 @@ def _build_generation_prompt(
         "do NOT cite a years number — write a generic opener"
     )
     bridge = brief.bridge_clause or "Do not add a role-bridge clause."
+    s1 = ", ".join(brief.tech_s1) or "(none — omit languages rather than invent)"
+    s2 = ", ".join(brief.tech_s2) or "(none)"
+    s3 = ", ".join(brief.tech_s3) or "(none — write 2 sentences, no weak third)"
+    domain = brief.domain_qualifier or (
+        "omit a domain qualifier; do not invent one from the JD"
+    )
+    third = (
+        "Write sentence 3 as the differentiator using the S3 technologies. "
+        "Connect it back to the identity (the AI/scale/platform work uses the "
+        "same discipline as the role family), do not let it sit beside it."
+        if brief.tech_s3 else
+        "Do NOT write a third sentence. Two strong sentences beat a weak third."
+    )
 
     parts = [
         "Write ONLY the professional summary of this resume from the brief below. "
-        "The bullets are the source of truth — every claim must be evidenced there.\n\n",
+        "The bullets are the source of truth — every claim must be evidenced there. "
+        "This is not an objective and not a keyword dump.\n\n",
         f"{prompt_rules.SUMMARY_RULE}\n",
         f"{prompt_rules.VOICE_RULE}\n",
         f"{prompt_rules.METRIC_HONESTY_RULE}\n",
         f"{prompt_rules.BANNED_SYMBOLS_RULE}\n",
         f"{prompt_rules.banned_phrases_rule()}\n",
         f"{prompt_rules.TERMINAL_PUNCTUATION_RULE}\n\n",
+        "THREE-SLOT STRUCTURE — each sentence has one job:\n",
+        f"S1 IDENTITY. Open with this role family as the grammatical subject: "
+        f"{brief.role_family}. Never an adjective. Never the JD title verbatim. "
+        f"Years: {years}. Then what they build at the system level. "
+        f"Languages only in this sentence (1-2): {s1}. "
+        f"Domain qualifier, trailing, never the head noun: {domain}.\n",
+        f"S2 CAPABILITY. Present tense, delivery verb (Delivers / Designs / "
+        f"Builds / Owns / Ships — not 'Responsible for'). Group these 4-6 "
+        f"technologies as ONE coherent system story, not a comma list: {s2}. "
+        f"{bridge}\n",
+        f"S3 DIFFERENTIATOR. {third} Technologies (1-2): {s3}.\n\n",
         "HARD RULES:\n",
-        f"1. Sentence 1 MUST open with this identity: {brief.role_family}",
-    ]
-    if brief.years_phrase:
-        parts.append(f"   You MAY add this honest years phrase after the identity: {years}.")
-    else:
-        parts.append(f"   Years: {years}.")
-    parts.extend([
-        f"2. {bridge}",
-        "3. Every sentence MUST carry evidence: a must-retain term, a keyword-budget "
-        "term, a named system, or a numeric metric. A sentence with none of those "
-        "is invalid.",
-        f"4. You MUST mention every must-retain term: {must}",
-        f"5. Weave these keywords naturally (do not list): {keywords}",
-        f"6. Do NOT use any of these forbidden terms: {forbidden}",
-        "7. Do NOT write an objective / closing-pitch sentence "
-        "('Ready to bring this foundation…', 'Seeking…', 'Looking to…').",
-        "8. 2-3 sentences, max ~60 words. No 'I'. No adjective opener.\n\n",
+        f"1. Exactly 2 or 3 sentences, {prompt_rules.SUMMARY_MIN_WORDS}-"
+        f"{prompt_rules.SUMMARY_MAX_WORDS} words. Every sentence ends with a period.\n",
+        "2. Every sentence MUST contain a must-retain term, a keyword-budget "
+        "term, or a numeric metric. A sentence with none is invalid — that "
+        "is what makes objective statements structurally impossible.\n",
+        f"3. You MUST mention every must-retain term: {must}\n",
+        f"4. Weave keyword-budget terms naturally (do not list): {keywords}\n",
+        f"5. Name 8-11 technologies total, using the slot lists above. "
+        "A technology named here MUST appear in a bullet below. No exceptions.\n",
+        f"6. Do NOT use any of these forbidden terms: {forbidden}\n",
+        "7. Banned outright: ready to, seeking, looking to, eager to, hoping to, "
+        "excited to, passionate about, aiming to, bring this foundation; "
+        "adjective openers (Results-driven, Highly skilled, Detail-oriented, "
+        "Motivated); self-assessment (expert, world-class, extensive experience, "
+        "proven track record); comma-list inventory in place of a system story.\n",
+        "8. Present tense, first-person-implied, no 'I'. Do not restate the JD.\n\n",
         "=== SETTLED EXPERIENCE BULLETS (source of truth) ===\n",
         wrap_untrusted("experience_bullets", evidence),
         "\n\n",
-    ])
+    ]
     if user_feedback and user_feedback.strip():
         parts.extend([
             "=== USER FEEDBACK (style only; never a new fact) ===\n",
@@ -737,11 +962,28 @@ def _hard_gate_failures(
     reasons: List[str] = []
     sentences = _split_sentences(text)
     low = text.lower()
+    words = len(text.split())
 
-    if not (2 <= len(sentences) <= 4):
-        reasons.append(f"shape: {len(sentences)} sentences (need 2-4)")
-    if len(text) > 450:
-        reasons.append("shape: exceeds 450 characters")
+    if not (prompt_rules.SUMMARY_MIN_SENTENCES
+            <= len(sentences)
+            <= prompt_rules.SUMMARY_MAX_SENTENCES):
+        reasons.append(
+            f"shape: {len(sentences)} sentences "
+            f"(need {prompt_rules.SUMMARY_MIN_SENTENCES}-"
+            f"{prompt_rules.SUMMARY_MAX_SENTENCES})"
+        )
+    if words < prompt_rules.SUMMARY_MIN_WORDS:
+        reasons.append(
+            f"shape: {words} words (need {prompt_rules.SUMMARY_MIN_WORDS}-"
+            f"{prompt_rules.SUMMARY_MAX_WORDS})"
+        )
+    if words > prompt_rules.SUMMARY_MAX_WORDS:
+        reasons.append(
+            f"shape: {words} words (need {prompt_rules.SUMMARY_MIN_WORDS}-"
+            f"{prompt_rules.SUMMARY_MAX_WORDS})"
+        )
+    if len(text) > 500:
+        reasons.append("shape: exceeds 500 characters")
     if re.search(r"\bi\b", low):
         reasons.append("voice: contains 'I'")
     if any(p in f" {low} " for p in _THIRD_PERSON):
@@ -752,6 +994,20 @@ def _hard_gate_failures(
     for pat in _FILLER_PATTERNS:
         if pat in low:
             reasons.append(f"filler: '{pat}'")
+    for pat in _SELF_ASSESSMENT:
+        if pat in low:
+            reasons.append(f"self-assessment: '{pat}'")
+
+    first = sentences[0] if sentences else ""
+    if _opens_with_adjective(first):
+        reasons.append("identity: adjective opener")
+    if not _s1_has_role_family(first, brief.role_family):
+        reasons.append("identity: S1 must carry the role family in the first eight words")
+    if _domain_leads_s1(first):
+        reasons.append("domain: qualifier is the head noun of S1")
+    s1_langs = [t for t in _summary_tech_terms(first) if is_programming_language(t)]
+    if len(s1_langs) > _S1_LANGUAGE_CAP:
+        reasons.append(f"slot: S1 has {len(s1_langs)} languages (max {_S1_LANGUAGE_CAP})")
 
     for term in brief.must_retain:
         if not term_in_text(term, text):
@@ -759,12 +1015,25 @@ def _hard_gate_failures(
 
     for term in brief.forbidden:
         if term and term_in_text(term, text):
-            # Seniority tokens are short; require the token as a word.
             reasons.append(f"forbidden term: {term}")
 
     for i, sentence in enumerate(sentences):
         if not _sentence_has_evidence(sentence, brief):
             reasons.append(f"sentence {i} has no evidence")
+
+    named = _summary_tech_terms(text)
+    floor = min(_TECH_BUDGET_MIN, len(brief.tech_budget)) if brief.tech_budget else 0
+    if len(named) > _TECH_BUDGET_MAX:
+        reasons.append(f"tech-budget: {len(named)} terms (max {_TECH_BUDGET_MAX})")
+    elif floor and len(named) < floor:
+        reasons.append(
+            f"tech-budget: {len(named)} terms (need {floor}-{_TECH_BUDGET_MAX})"
+        )
+
+    bullet_text = "\n".join(_all_settled_bullets(tailored))
+    for term in named:
+        if bullet_text and not term_in_text(term, bullet_text):
+            reasons.append(f"bullet-backing: {term}")
 
     if _summary_introduces_ungrounded_claim(text, tailored, structured_resume, jd_analysis):
         reasons.append("grounding: ungrounded claim")
@@ -773,16 +1042,45 @@ def _hard_gate_failures(
 
 
 def _sentence_has_evidence(sentence: str, brief: SummaryBrief) -> bool:
-    pool = list(brief.must_retain) + list(brief.keyword_budget)
+    """Spec test 2: must_retain, keyword_budget, slot tech, or a metric."""
+    pool = list(brief.must_retain) + list(brief.keyword_budget) + list(brief.tech_budget)
     if any(term_in_text(t, sentence) for t in pool):
         return True
     if METRIC_PATTERN.search(sentence or ""):
         return True
-    # Named systems that made the brief's evidence but aren't in the two lists
-    # still count (e.g. a product name the writer kept).
-    if _known_terms_in(sentence):
-        return True
     return False
+
+
+def _summary_tech_terms(text: str) -> List[str]:
+    return [t for t in _known_terms_in(text) if _is_summary_tech(t)]
+
+
+def _s1_has_role_family(sentence: str, role_family: str) -> bool:
+    if not role_family or not sentence:
+        return not role_family
+    head = " ".join(sentence.split()[:8]).lower()
+    core = re.sub(
+        r"\b(engineer|manager|analyst|designer|developer)\b",
+        "",
+        role_family,
+        flags=re.IGNORECASE,
+    )
+    tokens = [t for t in re.findall(r"[a-z0-9][a-z0-9+-]*", core.lower()) if t]
+    if not tokens:
+        return role_family.lower() in head
+    return all(t in head for t in tokens)
+
+
+def _domain_leads_s1(sentence: str) -> bool:
+    words = re.findall(r"[A-Za-z][A-Za-z-]+", sentence or "")
+    if not words:
+        return False
+    return words[0].lower() in _DOMAIN_HEAD_NOUNS
+
+
+def _opens_with_adjective(sentence: str) -> bool:
+    low = (sentence or "").strip().lower()
+    return any(low.startswith(p) for p in _ADJECTIVE_OPENERS)
 
 
 def _score_summary(text: str, brief: SummaryBrief) -> float:
@@ -798,13 +1096,14 @@ def _score_summary(text: str, brief: SummaryBrief) -> float:
     else:
         score += 3.0
 
-    specifics = _known_terms_in(text)
+    named = _summary_tech_terms(text)
     if METRIC_PATTERN.search(text):
-        specifics = list(specifics) + ["__metric__"]
-    score += 3.0 * min(1.0, len(specifics) / 4.0)
+        named = list(named) + ["__metric__"]
+    # Reward the 8-11 band; a comma-list dump already fails the hard gate.
+    score += 3.0 * min(1.0, len([t for t in named if t != "__metric__"]) / 8.0)
 
     first = sentences[0] if sentences else ""
-    if brief.role_family and brief.role_family.lower() in first.lower():
+    if _s1_has_role_family(first, brief.role_family):
         score += 2.0
 
     if sentences:
@@ -812,7 +1111,7 @@ def _score_summary(text: str, brief: SummaryBrief) -> float:
         score += 2.0 * (evidenced / len(sentences))
 
     words = len(text.split())
-    if words <= prompt_rules.SUMMARY_MAX_WORDS:
+    if prompt_rules.SUMMARY_MIN_WORDS <= words <= prompt_rules.SUMMARY_MAX_WORDS:
         score += 1.0
     elif words <= prompt_rules.SUMMARY_MAX_WORDS + 15:
         score += 0.5

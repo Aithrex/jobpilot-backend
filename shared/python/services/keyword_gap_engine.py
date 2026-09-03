@@ -7,15 +7,14 @@ to identify matched, missing, and partially matched keywords.
 Uses alias-aware matching via the universal keyword normalizer so that
 "Postgres" in a JD matches "PostgreSQL" in a resume.
 """
-import re
 import logging
 from typing import Any, Dict, List, Set, Tuple
 
 from schemas.resume_schemas import build_resume_text, flatten_skills
+from services.term_registry import match_forms, sanitize_jd_analysis, text_contains
 from utils.keyword_normalizer import (
     normalize_single,
     normalize_keywords,
-    get_all_forms,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,10 +42,12 @@ class KeywordGapEngine:
         resume_text = build_resume_text(parsed_resume).lower()
         resume_skills = set(s.lower() for s in flatten_skills(parsed_resume))
 
-        # Normalize JD keyword lists
-        required = normalize_keywords(jd_analysis.get("required_skills", []))
-        preferred = normalize_keywords(jd_analysis.get("preferred_skills", []))
-        keywords = normalize_keywords(jd_analysis.get("keywords", []))
+        # Inherit extract_jd's skill-only lists; re-sanitize so stored v1 JDs
+        # that still carry logistics/titles don't re-enter the scored set.
+        jd = sanitize_jd_analysis(dict(jd_analysis or {}))
+        required = normalize_keywords(jd.get("required_skills", []))
+        preferred = normalize_keywords(jd.get("preferred_skills", []))
+        keywords = normalize_keywords(jd.get("keywords", []))
 
         # Deduplicated combined list (required first for priority)
         all_keywords = list(dict.fromkeys(required + preferred + keywords))
@@ -82,7 +83,7 @@ class KeywordGapEngine:
         req_total = len(required)
         req_coverage = round((len(req_matched) / req_total) * 100) if req_total > 0 else 100
 
-        return {
+        result = {
             "matched_keywords": matched,
             "missing_keywords": missing,
             "partial_matches": partial,
@@ -91,6 +92,18 @@ class KeywordGapEngine:
             "required_matched": req_matched,
             "required_missing": req_missing,
         }
+        if missing:
+            logger.info(
+                "keyword_gap.missing count=%d terms=%s",
+                len(missing),
+                ",".join(missing[:40]),
+            )
+        try:
+            from services.keyword_gap_stats import record_observation
+            record_observation(all_keywords, missing)
+        except Exception:
+            logger.debug("keyword_gap_stats record skipped", exc_info=True)
+        return result
 
     def _match_keywords(
         self,
@@ -108,16 +121,17 @@ class KeywordGapEngine:
 
         for kw in keywords:
             canonical = normalize_single(kw)
-            all_forms = get_all_forms(kw)
+            all_forms = match_forms(kw)
 
             found = False
             found_via_alias = False
 
-            # Check each known form of this keyword
+            # Check each known form of this keyword (aliases, parentheticals,
+            # umbrella members — one registry, same as the scorer).
             for form in all_forms:
-                if self._text_contains(resume_text, form):
+                if text_contains(resume_text, form):
                     found = True
-                    if form != canonical.lower():
+                    if form.lower() != canonical.lower():
                         found_via_alias = True
                     break
 
@@ -180,12 +194,18 @@ class KeywordGapEngine:
 
     @staticmethod
     def _text_contains(text_lower: str, keyword_lower: str) -> bool:
-        """Word-boundary-aware keyword search in lowercased text."""
-        if not keyword_lower:
-            return False
-        if len(keyword_lower) <= 2:
-            return keyword_lower in text_lower
-        pattern = re.compile(
-            r"(?<![a-zA-Z])" + re.escape(keyword_lower) + r"(?![a-zA-Z])"
-        )
-        return bool(pattern.search(text_lower))
+        """Word-boundary-aware keyword search. Delegates to term_registry."""
+        return text_contains(text_lower, keyword_lower)
+
+
+def as_audit(gap: Dict[str, Any]) -> Dict[str, Any]:
+    """Sidecar shape historically stored as `ats_keyword_audit`."""
+    gap = gap or {}
+    return {
+        "matched": list(gap.get("matched_keywords") or []),
+        "missing": list(gap.get("missing_keywords") or []),
+        "partial": list(gap.get("partial_matches") or []),
+        "coverage_percentage": int(gap.get("coverage_percentage") or 0),
+        "required_missing": list(gap.get("required_missing") or []),
+        "required_coverage": int(gap.get("required_coverage") or 0),
+    }

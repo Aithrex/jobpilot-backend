@@ -510,6 +510,23 @@ def verify_resume():
         return jsonify({"error": "Failed to start verification. Please try again."}), 500
 
 
+@resume_bp.route("/craft-event", methods=["POST"])
+@jwt_required()
+def craft_event():
+    """Fire-and-forget product event (review Accept/Remove/Edit/dismiss)."""
+    data = request.get_json(force=True) or {}
+    action = InputSanitizer.sanitize_string(str(data.get("action") or ""), max_length=64)
+    if not action:
+        return jsonify({"error": "action is required"}), 400
+    logger.info(
+        "craft_event user=%s action=%s target=%s",
+        get_jwt_identity(),
+        action,
+        InputSanitizer.sanitize_string(str(data.get("target") or ""), max_length=80),
+    )
+    return jsonify({"ok": True}), 200
+
+
 # ------------------------------------------------------------------
 # Profile facts — the enrichment confirmation surface.
 # LinkedIn-archive / GitHub facts become tailoring-eligible ONLY after the

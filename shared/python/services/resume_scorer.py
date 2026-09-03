@@ -12,8 +12,8 @@ The overall score is 100% deterministic and reproducible:
     readability            7%   bullet length/openers/verb diversity/dates
 
 An LLM pass (FLASH) contributes only advisory fields — experience_relevance,
-suggestions, strengths — and NEVER moves the overall. If it fails, the score
-still computes with a deterministic proxy.
+suggestions, strengths — and NEVER moves the overall. If it fails, those
+advisory fields are marked unavailable rather than inventing a number.
 
 What v2 deliberately removed: the six per-vendor "scanner scores" (they were
 LLM guesses coaxed into 85-95 — real ATSes don't emit scores) and the
@@ -22,9 +22,9 @@ pass/warn/fail parse checklists from `ats_vendor_checks`.
 
 Design rules:
 - Render failure is LOUD: no PDF → parseability 0, overall capped at 40.
-- Anti-stuffing: keywords sitting only in the skills list cap the keyword
-  dimension; hammering a term 5+ times is penalized. Honest target band is
-  75-80, per Jobscan's own guidance — a 100 should be nearly impossible.
+- Anti-stuffing: a skill listed with no supporting evidence earns 0 credit.
+  Hammering a term 4+ times, an unevidenced skills dump, and over-long
+  skill rows are penalized. Honest target band is 75-80.
 """
 import logging
 import re
@@ -152,6 +152,9 @@ class ResumeScorer:
         never a silent skip: a resume that can't render can't be parsed by
         any ATS, so every other metric is moot.
         """
+        from services.term_registry import sanitize_jd_analysis
+        jd_analysis = sanitize_jd_analysis(dict(jd_analysis or {}))
+
         det = self._deterministic_scores(tailored, jd_analysis)
 
         pdf_check = None
@@ -181,6 +184,18 @@ class ResumeScorer:
             "hard_skill_match": det.get("hard_skill_detail", {}),
             "title_alignment": det.get("title_detail", {}),
         }
+        combined["unevidenced_keywords"] = list(
+            (det.get("hard_skill_detail") or {}).get("unevidenced_keywords") or []
+        )
+        combined["stuffing_warnings"] = self._stuffing_warnings(tailored)
+        combined["jd_context"] = (jd_analysis or {}).get("jd_context") or {}
+        if (det.get("hard_skill_detail") or {}).get("unscored"):
+            combined["hard_skill_unscored"] = True
+        if ai.get("experience_relevance") is None:
+            combined["experience_relevance"] = None
+        kg = (det.get("hard_skill_detail") or {}).get("keyword_gap")
+        if kg:
+            combined["keyword_gap"] = kg
         if pdf_check:
             combined["pdf_parseable_score"] = pdf_check["pdf_parseable_score"]
             combined["pdf_parseable_checks"] = pdf_check["checks"]
@@ -253,11 +268,19 @@ class ResumeScorer:
         """Alias-aware, placement-aware JD keyword coverage.
 
         Returns (score, found, missing, detail). Required skills weigh 70%,
-        preferred+other keywords 30%. Keywords found only in the skills
-        list (never used in a bullet/summary) cap the dimension at 80.
-        Acronym+spelled-out pairs ("Amazon Web Services (AWS)") earn a small
-        bonus; hammering one term 5+ times is penalized.
+        preferred+other keywords 30%. A term that appears only in the skills
+        list, with no supporting evidence elsewhere, earns 0. Implied SOLID
+        coverage (from KeywordGapEngine) is credited so the scorer and gap
+        engine agree on what is matched.
         """
+        from services.keyword_gap_engine import KeywordGapEngine
+        from services.term_registry import (
+            count_occurrences,
+            evidence_weight,
+            term_in_structured,
+            text_contains,
+        )
+
         required = normalize_keywords(jd_analysis.get("required_skills", []))
         req_lower = {r.lower() for r in required}
         other = [
@@ -269,53 +292,180 @@ class ResumeScorer:
         ]
 
         if not required and not other:
-            return 100, [], [], {"note": "JD analysis contained no keywords"}
+            return 0, [], [], {
+                "note": "no JD keywords found",
+                "unscored": True,
+                "required_coverage": 0,
+                "other_coverage": 0,
+                "context_fraction": 0,
+                "acronym_pairs_satisfied": 0,
+                "stuffed_keywords": 0,
+                "unevidenced_listed": 0,
+                "unevidenced_keywords": [],
+            }
 
+        # One matcher: the gap engine (aliases, parentheticals, umbrellas,
+        # SOLID implications). The scorer only applies the evidence gradient.
+        gap = KeywordGapEngine().analyze(tailored, jd_analysis)
+        matched_set = {m.lower() for m in (gap.get("matched_keywords") or [])}
         resume_text = build_resume_text(tailored).lower()
-        context_text = self._build_context_text(tailored)
 
         found: List[str] = []
         missing: List[str] = []
-        req_found = other_found = in_context = pair_hits = stuff_hits = 0
+        unevidenced_keywords: List[str] = []
+        req_weight = other_weight = in_context = pair_hits = stuff_hits = 0.0
 
         for kw, is_req in [(k, True) for k in required] + [(k, False) for k in other]:
-            forms = get_all_forms(kw)
             canonical = normalize_single(kw)
-            if not any(self._text_contains(resume_text, f) for f in forms):
+            matched = canonical.lower() in matched_set
+            if not matched:
                 missing.append(canonical)
                 continue
+            weight = evidence_weight(kw, tailored)
+            if weight <= 0 and not term_in_structured(kw, tailored, include_skills=True):
+                # Implied by an owned parent skill — treat as evidenced coverage
+                # so the scorer and gap engine report the same matched set.
+                weight = 0.6
+            if weight <= 0:
+                unevidenced_keywords.append(canonical)
+                continue
             found.append(canonical)
-            req_found += int(is_req)
-            other_found += int(not is_req)
-            if any(self._text_contains(context_text, f) for f in forms):
+            if is_req:
+                req_weight += weight
+            else:
+                other_weight += weight
+            if weight >= 1.0:
                 in_context += 1
             pair = get_acronym_pair(kw)
-            if pair and all(self._text_contains(resume_text, p) for p in pair):
+            if pair and all(text_contains(resume_text, p) for p in pair):
                 pair_hits += 1
-            occurrences = sum(self._count_occurrences(resume_text, f) for f in forms)
-            if occurrences > 4:
+            if count_occurrences(resume_text, kw) > 3:
                 stuff_hits += 1
 
-        req_cov = req_found / len(required) if required else 1.0
-        other_cov = other_found / len(other) if other else 1.0
+        req_cov = (req_weight / len(required)) if required else 1.0
+        other_cov = (other_weight / len(other)) if other else 1.0
         base = 100 * (0.70 * req_cov + 0.30 * other_cov)
 
         context_frac = in_context / max(1, len(found))
         score = 0.75 * base + 25 * context_frac
         score += min(pair_hits * 2, 6)
         score -= min(stuff_hits * 3, 15)
-        if found and context_frac < 0.5:
-            # Most matches live only in the skills list — listed, not used.
-            score = min(score, 80)
+        score -= self._anti_stuff_penalty(tailored, found)
 
         detail = {
             "required_coverage": round(req_cov * 100),
             "other_coverage": round(other_cov * 100),
             "context_fraction": round(context_frac * 100),
             "acronym_pairs_satisfied": pair_hits,
-            "stuffed_keywords": stuff_hits,
+            "stuffed_keywords": int(stuff_hits),
+            "unevidenced_listed": len(unevidenced_keywords),
+            "unevidenced_keywords": unevidenced_keywords,
+            "keyword_gap": {
+                "matched_keywords": list(gap.get("matched_keywords") or []),
+                "missing_keywords": list(gap.get("missing_keywords") or []),
+                "partial_matches": list(gap.get("partial_matches") or []),
+                "required_matched": list(gap.get("required_matched") or []),
+                "required_missing": list(gap.get("required_missing") or []),
+                "coverage_percentage": gap.get("coverage_percentage", 0),
+                "required_coverage": gap.get("required_coverage", 0),
+            },
         }
         return int(max(0, min(100, round(score)))), found, missing, detail
+
+    @staticmethod
+    def _anti_stuff_penalty(tailored: Dict[str, Any], found: List[str]) -> int:
+        """Visible-to-user stuffing constraints. Silent numeric penalty only."""
+        from schemas.resume_schemas import flatten_skills
+        from services.term_registry import evidence_weight
+
+        skills = flatten_skills(tailored) or []
+        if not skills:
+            return 0
+        evidenced = sum(1 for s in skills if evidence_weight(s, tailored) >= 0.6)
+        ratio = evidenced / max(1, len(skills))
+        penalty = 0
+        if ratio < 0.35:
+            penalty += 12
+        elif ratio < 0.50:
+            penalty += 6
+        from services.resume_parser import ResumeParser
+        from services.term_registry import skill_term_ceiling
+        years = ResumeParser._estimate_experience_years(tailored)
+        ceiling = skill_term_ceiling(
+            years, has_roles=bool(tailored.get("experience")),
+        )
+        if len(skills) > ceiling:
+            penalty += 8
+        for items in (tailored.get("skills") or {}).values() if isinstance(
+            tailored.get("skills"), dict
+        ) else []:
+            if isinstance(items, list) and len(items) > 12:
+                penalty += 3
+                break
+        return min(penalty, 20)
+
+    @staticmethod
+    def _stuffing_warnings(tailored: Dict[str, Any]) -> List[str]:
+        """User-visible stuffing signals — not a silent penalty."""
+        from schemas.resume_schemas import flatten_skills
+        from services.term_registry import count_occurrences, evidence_weight, text_contains
+
+        warnings: List[str] = []
+        skills = [s for s in (flatten_skills(tailored) or []) if str(s).strip()]
+        if skills:
+            unevidenced = [s for s in skills if evidence_weight(s, tailored) < 0.6]
+            if unevidenced:
+                warnings.append(
+                    f"{len(unevidenced)} of your {len(skills)} listed skills do not "
+                    "appear anywhere else in the resume. Screeners notice this."
+                )
+            from services.resume_parser import ResumeParser
+            from services.term_registry import skill_term_ceiling
+            years = ResumeParser._estimate_experience_years(tailored)
+            ceiling = skill_term_ceiling(
+                years, has_roles=bool(tailored.get("experience")),
+            )
+            if len(skills) > ceiling:
+                warnings.append(
+                    f"The skills section lists {len(skills)} terms "
+                    f"(cap is {ceiling} for ~{years or 0} years of experience). "
+                    "Long inventories read as padding."
+                )
+            skills_obj = tailored.get("skills")
+            if isinstance(skills_obj, dict):
+                for heading, items in skills_obj.items():
+                    if isinstance(items, list) and len(items) > 12:
+                        warnings.append(
+                            f'"{heading}" has {len(items)} items. Keep each '
+                            "row to 12 or fewer so it stays scannable."
+                        )
+                        break
+
+        blob = build_resume_text(tailored).lower()
+        repeated = [
+            s for s in skills
+            if count_occurrences(blob, s) > 3
+        ]
+        if repeated:
+            warnings.append(
+                f"{repeated[0]} appears more than 3 times. Repeating a "
+                "keyword to raise density is visible to a reader."
+            )
+
+        dense = 0
+        for exp in tailored.get("experience") or []:
+            for b in exp.get("bullets") or []:
+                if not isinstance(b, str):
+                    continue
+                hits = sum(1 for s in skills if text_contains(b.lower(), s))
+                if hits > 4:
+                    dense += 1
+        if dense:
+            warnings.append(
+                f"{dense} bullet(s) name more than 4 technologies. "
+                "Beyond that the line becomes a list, not an accomplishment."
+            )
+        return warnings[:5]
 
     # -- title_alignment (15%) -------------------------------------------
 
@@ -586,27 +736,14 @@ class ResumeScorer:
 
     @staticmethod
     def _text_contains(text_lower: str, keyword_lower: str) -> bool:
-        """Word-boundary-aware keyword search in lowercased text."""
-        if not keyword_lower:
-            return False
-        if len(keyword_lower) <= 2:
-            return keyword_lower in text_lower
-        pattern = re.compile(
-            r"(?<![a-zA-Z])" + re.escape(keyword_lower) + r"(?![a-zA-Z])"
-        )
-        return bool(pattern.search(text_lower))
+        """Word-boundary-aware keyword search. Delegates to term_registry."""
+        from services.term_registry import text_contains
+        return text_contains(text_lower, keyword_lower)
 
     @staticmethod
     def _count_occurrences(text_lower: str, keyword_lower: str) -> int:
-        """Count occurrences of a keyword in text (word-boundary-aware)."""
-        if not keyword_lower:
-            return 0
-        if len(keyword_lower) <= 2:
-            return text_lower.count(keyword_lower)
-        pattern = re.compile(
-            r"(?<![a-zA-Z])" + re.escape(keyword_lower) + r"(?![a-zA-Z])"
-        )
-        return len(pattern.findall(text_lower))
+        from services.term_registry import count_occurrences
+        return count_occurrences(text_lower, keyword_lower)
 
     # ------------------------------------------------------------------
     # Advisory LLM review (Claude FLASH on Bedrock — never moves `overall`)
@@ -626,17 +763,14 @@ class ResumeScorer:
         try:
             return self._ai_review_call(tailored, jd_analysis, det)
         except Exception as e:
-            logger.warning("AI review failed, using deterministic proxy: %s", e)
-            proxy_relevance = round(
-                0.5 * (det["title_alignment"] + det["hard_skill_match"])
-            )
+            logger.warning("AI review failed; experience_relevance unavailable: %s", e)
             classified = _classify_missing_keywords(det.get("missing_keywords", []))
             suggestions = list(det.get("impact_suggestions", []))[:5]
             safe_missing = classified["skills"][:3]
             if safe_missing:
                 suggestions.append(
-                    "If defensible from your real experience, work these JD "
-                    f"skills into bullets: {', '.join(safe_missing)}"
+                    "If these JD skills show up in a bullet you already have, "
+                    f"name them there: {', '.join(safe_missing)}"
                 )
             strengths: List[str] = []
             if det["hard_skill_match"] >= 75:
@@ -646,7 +780,7 @@ class ResumeScorer:
             if det["quantified_impact"] >= 60:
                 strengths.append("Bullets carry concrete, quantified outcomes")
             return {
-                "experience_relevance": max(0, min(100, proxy_relevance)),
+                "experience_relevance": None,
                 "suggestions": suggestions or ["No suggestions available"],
                 "strengths": strengths or ["Resume submitted for review"],
                 "_available": False,
@@ -829,16 +963,32 @@ class ResumeScorer:
         doesn't parse can't claim a 90.
         """
         parseability = int(pdf_check["pdf_parseable_score"]) if pdf_check else 0
+        hard_unscored = bool((det.get("hard_skill_detail") or {}).get("unscored"))
 
-        overall = round(
-            det["hard_skill_match"] * 0.30
-            + det["title_alignment"] * 0.15
-            + det["quantified_impact"] * 0.15
-            + parseability * 0.15
-            + det["section_completeness"] * 0.10
-            + det["recency_relevance"] * 0.08
-            + det["readability"] * 0.07
-        )
+        if hard_unscored:
+            # No JD keywords → hard_skill is not scored. Renormalize the
+            # remaining 70% so a missing JD does not invent a 0 or a 100.
+            overall = round(
+                (
+                    det["title_alignment"] * 0.15
+                    + det["quantified_impact"] * 0.15
+                    + parseability * 0.15
+                    + det["section_completeness"] * 0.10
+                    + det["recency_relevance"] * 0.08
+                    + det["readability"] * 0.07
+                )
+                / 0.70
+            )
+        else:
+            overall = round(
+                det["hard_skill_match"] * 0.30
+                + det["title_alignment"] * 0.15
+                + det["quantified_impact"] * 0.15
+                + parseability * 0.15
+                + det["section_completeness"] * 0.10
+                + det["recency_relevance"] * 0.08
+                + det["readability"] * 0.07
+            )
         if pdf_check is None:
             overall = min(overall, 40)
         elif parseability < 100:
@@ -876,7 +1026,11 @@ class ResumeScorer:
             "section_completeness": det["section_completeness"],
             "recency_relevance": det["recency_relevance"],
             "readability": det["readability"],
-            "experience_relevance": ai.get("experience_relevance", 70),
+            "experience_relevance": (
+                int(ai["experience_relevance"])
+                if isinstance(ai.get("experience_relevance"), (int, float))
+                else 0
+            ),
             "vendor_compat": vendor_compat,
             "suggestions": final_suggestions or ["No suggestions available"],
             "strengths": ai.get("strengths", ["Resume submitted for review"]),

@@ -86,12 +86,15 @@ QUALITY_REFLECTION_GATE = _flag_enabled("QUALITY_REFLECTION_GATE")
 # Engineering and Claude API, so one bucket has to serve all four. This OPTIONAL
 # FLASH pass looks at the resume's actual headings and files the term properly.
 # Fail-open: any error and the taxonomy chain runs exactly as before.
-SKILLS_CATEGORIZER = _flag_enabled("SKILLS_CATEGORIZER")
+# FLASH placement of unplaced JD terms. Grouping is deterministic; this
+# only files unknowns into existing headings. On in every environment.
+SKILLS_CATEGORIZER = os.environ.get(
+    "SKILLS_CATEGORIZER", "true",
+).strip().lower() in ("1", "true", "yes", "on")
 
-# Preserve the base resume's skills layout: category order and within-category
-# order for original skills. JD additions are appended (required skills first)
-# instead of reordering the candidate's curated list for keyword density.
-SKILLS_PRESERVE_LAYOUT = _flag_enabled("SKILLS_PRESERVE_LAYOUT")
+# Kept so existing tests/terraform can toggle polish order. Heading
+# preservation itself is a skill_layout mode, not this flag.
+SKILLS_PRESERVE_LAYOUT = True
 
 # Overall quality score (0-100) at or above which no regeneration is attempted.
 _QUALITY_THRESHOLD = 70
@@ -175,6 +178,13 @@ class ResumeTailor:
         """
         from services.claude_client import claude_json, CLAUDE_PRO
         from services.keyword_gap_engine import KeywordGapEngine
+        from services.term_registry import sanitize_jd_analysis
+
+        # Park logistics/titles/domains so the prompt never treats them as
+        # skills the resume can be "missing."
+        jd_analysis = sanitize_jd_analysis(
+            dict(jd_analysis) if isinstance(jd_analysis, dict) else {}
+        )
 
         jd_json = json.dumps(jd_analysis, indent=2)
         resume_json = json.dumps(structured_resume, indent=2)
@@ -255,11 +265,15 @@ class ResumeTailor:
             t = self._ensure_jd_skills_coverage(
                 t, structured_resume, jd_analysis, headings=headings
             )
+            from services.skill_layout import apply_to_tailored
+            t = apply_to_tailored(t, structured_resume, jd_analysis)
             t = self._polish_skills(
                 t, jd_analysis,
                 base_labels=self._labels_with_admitted(structured_resume, headings),
-                category_order=(headings.order if headings else list(base_skills)),
+                category_order=list((t.get("skills") or {})),
                 base_skills=base_skills or None,
+                skip_recategorize=True,
+                force_preserve_order=True,
             )
             t = self._stamp_skill_headings(t, headings)
             t = self._allocate_bullets(t, jd_analysis)
@@ -269,11 +283,12 @@ class ResumeTailor:
             t = self._write_settled_summary(t, structured_resume, jd_analysis, gap)
             if target_role:
                 t["target_role"] = target_role
-            # Match-gap report: tell the user which JD requirements they
-            # genuinely lack, tiered by interview-defensibility. Computed on the
-            # cleaned/allocated resume so gaps reflect the honest document.
-            # Never raises (degrades to a safe report internally).
-            t["match_gaps"] = self._build_match_gaps(t, jd_analysis)
+            # One gap object: match_gaps (tiered UX) and ats_keyword_audit
+            # (sidecar) both consume it. Scorer reuses the same matcher.
+            from services.keyword_gap_engine import KeywordGapEngine, as_audit
+            gap_final = KeywordGapEngine().analyze(t, jd_analysis)
+            t["match_gaps"] = self._build_match_gaps(t, jd_analysis, gap=gap_final)
+            t["ats_keyword_audit"] = as_audit(gap_final)
             return t
 
         prompt = self._build_tailor_prompt(
@@ -637,15 +652,21 @@ class ResumeTailor:
         corrected = self._ensure_jd_skills_coverage(
             corrected, structured_resume, jd_analysis, headings=headings
         )
+        from services.skill_layout import apply_to_tailored
+        corrected = apply_to_tailored(
+            corrected, structured_resume, jd_analysis,
+        )
         corrected = self._polish_skills(
             corrected, jd_analysis,
             base_labels=self._labels_with_admitted(structured_resume, headings),
-            category_order=(headings.order if headings else list(base_skills)),
+            category_order=list((corrected.get("skills") or {})),
             base_skills=base_skills or None,
+            skip_recategorize=True,
+            force_preserve_order=True,
         )
         corrected = self._stamp_skill_headings(corrected, headings)
         corrected = self._allocate_bullets(corrected, jd_analysis)
-        from services.keyword_gap_engine import KeywordGapEngine
+        from services.keyword_gap_engine import KeywordGapEngine, as_audit
         gap = KeywordGapEngine().analyze(structured_resume, jd_analysis)
         corrected = self._write_settled_summary(
             corrected, structured_resume, jd_analysis, gap,
@@ -654,7 +675,11 @@ class ResumeTailor:
         target_role = (jd_analysis.get("job_title") or "").strip()
         if target_role:
             corrected["target_role"] = target_role
-        corrected["match_gaps"] = self._build_match_gaps(corrected, jd_analysis)
+        gap_final = KeywordGapEngine().analyze(corrected, jd_analysis)
+        corrected["match_gaps"] = self._build_match_gaps(
+            corrected, jd_analysis, gap=gap_final,
+        )
+        corrected["ats_keyword_audit"] = as_audit(gap_final)
         return corrected
 
     @staticmethod
@@ -902,17 +927,19 @@ class ResumeTailor:
 
     @staticmethod
     def _build_match_gaps(
-        tailored: Dict[str, Any], jd_analysis: Dict[str, Any]
+        tailored: Dict[str, Any],
+        jd_analysis: Dict[str, Any],
+        gap: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """User-facing match-gap report (tiered by interview-defensibility).
 
-        Thin wrapper over services.match_gap_reporter.build_match_gaps, which
-        runs deterministic gap detection and (only if gaps exist) a small Claude
-        call to tier them. Never raises. See services/match_gap_reporter.py.
+        Thin wrapper over services.match_gap_reporter.build_match_gaps. Pass
+        a precomputed KeywordGapEngine result to avoid a second walk.
+        Never raises. See services/match_gap_reporter.py.
         """
         from services.match_gap_reporter import build_match_gaps
 
-        return build_match_gaps(tailored, jd_analysis)
+        return build_match_gaps(tailored, jd_analysis, gap=gap)
 
     def _write_settled_summary(
         self,
@@ -955,6 +982,8 @@ class ResumeTailor:
         base_labels: Optional[set] = None,
         category_order: Optional[List[str]] = None,
         base_skills: Optional[Dict[str, List[str]]] = None,
+        skip_recategorize: bool = False,
+        force_preserve_order: bool = False,
     ) -> Dict[str, Any]:
         """Deterministic, industry-agnostic skills polish (absorbs the old
         _cap_skills_per_category). The model decides skills CONTENT (prompt);
@@ -1043,7 +1072,8 @@ class ResumeTailor:
             for cat, items in skills.items()
             if isinstance(items, list)
         }
-        cats = cls._recategorize_skills(cats, allowed_labels=base_labels)
+        if not skip_recategorize:
+            cats = cls._recategorize_skills(cats, allowed_labels=base_labels)
 
         def category_rank() -> List[str]:
             """Categories ordered most-JD-relevant first; ties keep the
@@ -1056,10 +1086,10 @@ class ResumeTailor:
                 return (sum(scores) / len(scores)) + 0.001 * sum(scores)
             return sorted(cats, key=lambda c: (-score(c), original_pos[c]))
 
-        preserve_layout = (
+        preserve_layout = bool(force_preserve_order) or (
             SKILLS_PRESERVE_LAYOUT
-            and base_skills
-            and category_order
+            and bool(base_skills)
+            and bool(category_order)
         )
         tailored.pop("_jd_added_skills", None)
 
@@ -1384,6 +1414,9 @@ class ResumeTailor:
             tail = [cat for cat in cats if cat in allowed]
             if tail:
                 return tail[-1]
+        # Do not mint a canned heading the resume never used.
+        if cats:
+            return list(cats)[-1]
         return fallback
 
     @staticmethod
@@ -2307,11 +2340,10 @@ class ResumeTailor:
             "2. Skills: if the original resume already has a skills section, you may omit\n"
             "   the skills field or echo it unchanged — a deterministic post-pass restores\n"
             "   every original skill, adds evidenced JD required_skills/keywords, and preserves\n"
-            "   the candidate's category headings and layout. Do NOT invent new categories or\n"
-            "   aggressively reorder the candidate's curated list for keyword density. When the\n"
-            "   original resume has no skills section, build one using the rules below.\n"
-            "   Most JD-relevant category FIRST applies only when there is no base layout to\n"
-            "   preserve. The skills section is read TWICE: by the ATS (which wants real keyword\n"
+            "   the candidate's category headings. Do NOT invent or rename categories. A later\n"
+            "   deterministic pass groups and names headings from the settled skill set.\n"
+            "   When the original resume has no skills section, emit a flat {\"Skills\": [...]} list.\n"
+            "   The skills section is read TWICE: by the ATS (which wants real keyword\n"
             "   overlap) and then by a HUMAN recruiter (who rejects keyword soup). Both must pass.\n"
             "   Rules for a HIGH-QUALITY skills section:\n"
             "   - THE LITMUS TEST — before listing any entry, ask: 'Is this a NAMED, teachable\n"
@@ -2336,10 +2368,7 @@ class ResumeTailor:
             "     named method/technique (e.g. 'PostgreSQL', 'Kubernetes', 'JWT auth', 'A/B testing',\n"
             "     'variance analysis', 'TDD').\n"
             "   - Put every skill in a category it GENUINELY belongs to. Do NOT place a skill in a\n"
-            "     mismatched bucket (e.g. OpenGL/CUDA are graphics/GPU, NOT 'Backend & API'; Tableau is\n"
-            "     analytics/BI, not 'Languages'; 'Full-Stack Development' is not a 'Backend & API'\n"
-            "     entry). If a category label doesn't fit the skills under it, rename the category. Every\n"
-            "     category must contain only items that truly match its label.\n"
+            "     mismatched bucket. Do NOT rename the candidate's headings.\n"
             "   - Use canonical, recruiter-recognized names ('CI/CD' not 'continuous integration and\n"
             "     continuous delivery'; 'PostgreSQL' not 'postgres db'; 'Kubernetes (EKS)' is fine).\n"
             "   - UMBRELLA GROUPING — when you list a vendor platform AND several of its sub-services or\n"
@@ -2354,9 +2383,8 @@ class ResumeTailor:
             "     write the pair once — 'Search Engine Optimization (SEO)', 'Amazon Web Services (AWS)' —\n"
             "     and use the short form everywhere else. ATS engines match literally; the pair covers\n"
             "     both phrasings.\n"
-            "   - CATEGORY NAMES are concrete and industry-appropriate: 'Backend & APIs', 'Financial\n"
-            "     Modeling & Analysis', 'Campaign & Marketing Analytics', 'Clinical Systems &\n"
-            "     Compliance'. NEVER a 'Soft Skills', 'Other', or 'Miscellaneous' bucket.\n"
+            "   - NEVER emit a 'Soft Skills', 'Other', 'Miscellaneous', or 'Concepts &\n"
+            "     Methodologies' bucket you invented. Echo the candidate's headings or omit skills.\n"
             "   - Include ALL original-resume skills relevant to the JD, experience, or projects — do NOT\n"
             "     drop a real skill just because it isn't in the JD. A skill need NOT appear in a bullet to\n"
             "     be listed, but it MUST be one the candidate genuinely has; do NOT pad with JD wishlist\n"
@@ -2731,10 +2759,16 @@ class ResumeTailor:
                 + "\n  Same rule: defensible or absent.\n"
             )
         parts.append(
-            "- COVERAGE TARGET: aim for roughly 75-80% of JD keywords covered — NOT 100%.\n"
-            "  A resume that mirrors every JD keyword reads as stuffed to both recruiters\n"
-            "  and modern ATS ranking. Skipping keywords the candidate cannot defend is\n"
-            "  CORRECT behavior, not a failure.\n\n"
+            "- OBJECTIVE: maximize EVIDENCED relevance within an honesty budget — not\n"
+            "  keyword coverage. A term belongs on the resume only when the candidate has\n"
+            "  used it, and preferentially woven into an existing bullet rather than\n"
+            "  appended to the skills list. A resume that covers 70% of JD terms in\n"
+            "  bullets outperforms one that covers 95% in a skills block.\n"
+            "- COVERAGE TARGET: aim for roughly 75-80% of JD keywords covered IN CONTEXT\n"
+            "  — NOT 100%, and NEVER by stuffing the skills list. Skipping keywords the\n"
+            "  candidate cannot defend is CORRECT behavior, not a failure.\n"
+            "- NEVER add a skill the candidate has not demonstrated. NEVER invent white\n"
+            "  text, off-page keyword blocks, metadata stuffing, or image-alt keywords.\n\n"
         )
         return "".join(parts)
 

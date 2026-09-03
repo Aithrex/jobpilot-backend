@@ -112,7 +112,8 @@ def test_summary_length_agrees_with_deferred_writer_contract():
     # locked so a later prompt cannot silently widen to 3-4 sentences.
     assert prompt_rules.SUMMARY_MIN_SENTENCES == 2
     assert prompt_rules.SUMMARY_MAX_SENTENCES == 3
-    assert prompt_rules.SUMMARY_MAX_WORDS == 60
+    assert prompt_rules.SUMMARY_MIN_WORDS == 45
+    assert prompt_rules.SUMMARY_MAX_WORDS == 70
 
 
 def test_every_bullet_is_star_defensible_in_tailor_prompt():

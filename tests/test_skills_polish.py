@@ -126,17 +126,16 @@ def test_cross_category_dedup_keeps_most_relevant_category():
         "Tools": ["Git", "Python"],
         "Backend": ["Python", "Django"],
     }, jd)
-    # Programming languages are filed under Languages, not Backend/Tools.
-    assert "Python" in out["skills"]["Languages"]
-    assert "Python" not in out["skills"].get("Tools", [])
+    flat = [s for items in out["skills"].values() for s in items]
+    assert flat.count("Python") == 1
     assert "Django" in out["skills"]["Backend"]
 
 
 def test_empty_categories_pruned():
     out = _polish({"Cloud": [], "Backend": ["Python"]})
     assert "Cloud" not in out["skills"]
-    assert out["skills"]["Languages"] == ["Python"]
-    assert "Backend" not in out["skills"]
+    flat = [s for items in out["skills"].values() for s in items]
+    assert "Python" in flat
 
 
 def test_alias_dedup_across_categories():
@@ -164,11 +163,13 @@ def test_jd_aligned_first_keeps_all_items(layout_off):
 # Base-label preservation
 # ---------------------------------------------------------------------------
 
-def test_recategorize_invents_a_heading_without_base_labels():
-    """Baseline for the test below: unconstrained, moving Python out of a
-    framework category mints a 'Languages' heading the user never wrote."""
+def test_recategorize_does_not_mint_canned_heading():
+    """Without base labels, a moved language stays on an existing heading
+    rather than inventing 'Languages'."""
     out = _polish({"Tools": ["Git"], "Backend": ["Python", "Django"]})
-    assert "Languages" in out["skills"]
+    assert "Languages" not in out["skills"]
+    flat = [s for items in out["skills"].values() for s in items]
+    assert "Python" in flat
 
 
 def test_base_labels_pin_categories_to_the_users_own_headings():

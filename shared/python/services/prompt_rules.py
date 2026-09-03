@@ -48,15 +48,19 @@ KEYWORD_COVERAGE_LOW = 75
 KEYWORD_COVERAGE_HIGH = 80
 
 # Summary length — one band, matching the deferred summary writer
-# (services.summary_tailor). Previously the augmenter alignment pass said
-# "EXACTLY 3-4 sentences", fighting the tailor's "2-3 sentences / <=60 words".
+# (services.summary_tailor) and docs/specs/summary_content_model.md.
+# Previously the augmenter said "EXACTLY 3-4 sentences" and the writer said
+# "max ~60 words"; the content contract is 2-3 sentences, 45-70 words.
 SUMMARY_MIN_SENTENCES = 2
 SUMMARY_MAX_SENTENCES = 3
-SUMMARY_MAX_WORDS = 60
+SUMMARY_MIN_WORDS = 45
+SUMMARY_MAX_WORDS = 70
 SUMMARY_RULE = (
     f"The summary is {SUMMARY_MIN_SENTENCES}-{SUMMARY_MAX_SENTENCES} clear, "
-    f"confident sentences (max ~{SUMMARY_MAX_WORDS} words) that read as the "
-    "candidate's own self-description."
+    f"confident sentences ({SUMMARY_MIN_WORDS}-{SUMMARY_MAX_WORDS} words) "
+    "that read as the candidate's own self-description. Sentence 1 is "
+    "identity, sentence 2 is capability as a system story, sentence 3 "
+    "(optional) is the differentiator."
 )
 
 # ---------------------------------------------------------------------------

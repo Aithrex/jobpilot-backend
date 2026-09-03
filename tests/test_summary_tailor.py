@@ -9,10 +9,12 @@ from services import summary_tailor
 from services.summary_tailor import (
     SummaryBrief,
     allocate_summary_keywords,
+    allocate_tech_slots,
     build_summary_brief,
     validate_summary,
     write_summary,
 )
+from utils.keyword_normalizer import is_programming_language
 
 
 _BASE_SUMMARY = (
@@ -30,7 +32,7 @@ _ORIGINAL = {
             "title": "Software Engineer",
             "dates": "2022 - Present",
             "bullets": [
-                "Built production APIs in Python and FastAPI against PostgreSQL.",
+                "Built production APIs in Python, Django, and FastAPI against PostgreSQL.",
                 "Shipped Spring Boot services in Java with Kafka pipelines.",
                 "Operated Kubernetes workloads on AWS with production observability.",
                 "Designed PostgreSQL schemas for regulated healthcare data models.",
@@ -74,8 +76,8 @@ def _good_candidate() -> str:
         "Backend engineer building production APIs and data models in Python "
         "and Java across regulated healthcare platforms. Owns features end to "
         "end, from PostgreSQL schema design through Django and FastAPI services "
-        "to React interfaces. Ships Spring Boot and Kafka pipelines to AWS and "
-        "Kubernetes."
+        "to React interfaces in the clinical UI. Ships Spring Boot and Kafka "
+        "pipelines to AWS and Kubernetes with production observability."
     )
 
 
@@ -150,7 +152,9 @@ def test_generation_prompt_uses_shared_summary_rule():
     assert prompt_rules.SUMMARY_RULE in prompt
     assert prompt_rules.VOICE_RULE in prompt
     assert "must-retain" in prompt.lower()
-    assert "Every sentence MUST carry evidence" in prompt
+    assert "THREE-SLOT STRUCTURE" in prompt
+    assert "Every sentence MUST contain" in prompt
+    assert "8-11" in prompt
 
 
 @pytest.mark.parametrize("phrase", [
@@ -206,6 +210,126 @@ def test_forbidden_fullstack_opener_rejected(stub_grounding):
     verdict = validate_summary(text, brief, _TAILORED, _ORIGINAL, _JD)
     assert not verdict.ok
     assert any("forbidden" in r for r in verdict.reasons)
+
+
+# ---------------------------------------------------------------------------
+# Content model — slot / budget / backing / domain / identity
+# ---------------------------------------------------------------------------
+
+def test_slot_conformance_s1_role_family_and_language_cap(stub_grounding):
+    brief = _brief()
+    verdict = validate_summary(_good_candidate(), brief, _TAILORED, _ORIGINAL, _JD)
+    assert verdict.ok, verdict.reasons
+    first = summary_tailor._split_sentences(_good_candidate())[0]
+    assert 2 <= len(summary_tailor._split_sentences(_good_candidate())) <= 3
+    assert summary_tailor._s1_has_role_family(first, brief.role_family)
+    langs = [
+        t for t in summary_tailor._summary_tech_terms(first)
+        if is_programming_language(t)
+    ]
+    assert len(langs) <= 2
+
+
+def test_sentence_evidence_uses_budget_or_metric(stub_grounding):
+    brief = _brief()
+    text = _good_candidate()
+    for sentence in summary_tailor._split_sentences(text):
+        assert summary_tailor._sentence_has_evidence(sentence, brief)
+
+
+def test_technology_budget_band(stub_grounding):
+    brief = _brief()
+    named = summary_tailor._summary_tech_terms(_good_candidate())
+    assert 8 <= len(named) <= 11
+    verdict = validate_summary(_good_candidate(), brief, _TAILORED, _ORIGINAL, _JD)
+    assert verdict.ok, verdict.reasons
+    dump = (
+        "Backend engineer using Python and Java. "
+        "Uses FastAPI, Spring Boot, Django, Kafka, PostgreSQL, React, AWS, "
+        "Kubernetes, Terraform, Redis, and Celery every day."
+    )
+    dumped = validate_summary(dump, brief, _TAILORED, _ORIGINAL, _JD)
+    assert not dumped.ok
+    assert any("tech-budget" in r for r in dumped.reasons)
+
+
+def test_bullet_backing_rejects_unproven_tech(stub_grounding):
+    brief = _brief()
+    text = (
+        "Backend engineer building production systems in Python and Java "
+        "across regulated healthcare platforms. Delivers FastAPI and Spring Boot "
+        "services with Kafka pipelines, PostgreSQL tuning, and Kubernetes on AWS. "
+        "Builds LangChain retrieval workflows into the same backend services."
+    )
+    verdict = validate_summary(text, brief, _TAILORED, _ORIGINAL, _JD)
+    assert not verdict.ok
+    assert any("bullet-backing" in r and "langchain" in r.lower() for r in verdict.reasons)
+
+
+def test_domain_qualifier_cannot_lead_s1(stub_grounding):
+    brief = _brief()
+    text = (
+        "Healthcare backend engineer building production APIs in Python and Java. "
+        "Delivers FastAPI and Spring Boot services with Kafka pipelines, "
+        "PostgreSQL tuning, and Kubernetes deployment on AWS, plus Django and React."
+    )
+    verdict = validate_summary(text, brief, _TAILORED, _ORIGINAL, _JD)
+    assert not verdict.ok
+    assert any("domain" in r for r in verdict.reasons)
+
+
+def test_identity_stability_same_base_three_jds():
+    backend_jd = dict(_JD, job_title="Backend Engineer")
+    fullstack_jd = _JD
+    platform_jd = dict(_JD, job_title="Platform / Infrastructure Engineer")
+
+    backend = build_summary_brief(_TAILORED, _ORIGINAL, backend_jd, _GAP)
+    fullstack = build_summary_brief(_TAILORED, _ORIGINAL, fullstack_jd, _GAP)
+    platform = build_summary_brief(_TAILORED, _ORIGINAL, platform_jd, _GAP)
+
+    def _adopted(brief, jd):
+        jd_key = summary_tailor.classify_role_family(jd["job_title"])
+        permitted = (
+            brief.jd_family_key == brief.candidate_family_key
+            or brief.support >= 0.5
+        )
+        jd_label = summary_tailor._family_label(jd_key, jd["job_title"])
+        if permitted:
+            return brief.role_family == jd_label
+        return brief.role_family != jd_label
+
+    assert _adopted(backend, backend_jd)
+    assert _adopted(fullstack, fullstack_jd)
+    assert _adopted(platform, platform_jd)
+    assert fullstack.role_family.lower().startswith("backend")
+    assert not fullstack.role_family.lower().startswith("full-stack")
+    if platform.support < 0.5:
+        assert platform.role_family.lower().startswith("backend")
+
+
+def test_allocate_tech_slots_skips_terms_missing_from_bullets():
+    bullets = [
+        "Built production APIs in Python and FastAPI against PostgreSQL.",
+        "Shipped Spring Boot services in Java with Kafka pipelines.",
+    ]
+    s1, s2, s3 = allocate_tech_slots(
+        ["Python", "Java"],
+        ["Django", "PostgreSQL", "Python"],
+        bullets,
+    )
+    assert "Python" in s1
+    assert "Java" in s1
+    assert "PostgreSQL" in s2
+    assert all(t.lower() != "django" for t in s1 + s2 + s3)
+
+
+def test_tech_slots_put_languages_in_s1():
+    brief = _brief()
+    assert brief.tech_s1
+    assert all(is_programming_language(t) for t in brief.tech_s1)
+    assert len(brief.tech_s1) <= 2
+    assert 4 <= len(brief.tech_s2) <= 6
+    assert "healthcare" in brief.domain_qualifier
 
 
 # ---------------------------------------------------------------------------

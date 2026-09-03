@@ -121,17 +121,20 @@ def _coerce_tiers(raw: Any, missing: List[str]) -> Dict[str, List[Dict[str, str]
 def build_match_gaps(
     tailored: Dict[str, Any],
     jd_analysis: Dict[str, Any],
+    gap: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Build the user-facing match-gap report for a tailored resume + JD.
 
-    Deterministic gap detection first; model tiering only when there are missing
-    required skills. Never raises — degrades to a fallback report on any error.
+    Deterministic gap detection first (or a precomputed KeywordGapEngine
+    result); model tiering only when there are missing required skills.
+    Never raises — degrades to a fallback report on any error.
     """
     try:
         from services.keyword_gap_engine import KeywordGapEngine
         from schemas.resume_schemas import build_resume_text
 
-        gap = KeywordGapEngine().analyze(tailored, jd_analysis)
+        if gap is None:
+            gap = KeywordGapEngine().analyze(tailored, jd_analysis)
         missing = list(gap.get("required_missing") or [])
         req_cov = int(gap.get("required_coverage", 100))
         cov = int(gap.get("coverage_percentage", 100))
