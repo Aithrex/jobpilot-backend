@@ -7,9 +7,9 @@ Regenerate with:
 PYTHONPATH=shared/python python scripts/employer_coverage_report.py --markdown
 ```
 
-- measured at `2026-09-03T20:31:27.609150+00:00`
-- source revision `14799c3`
-- inventory watermark `2026-09-03T20:30:12.450000`
+- measured at `2026-09-03T22:04:55.098755+00:00`
+- source revision `d71b01d`
+- inventory watermark `2026-09-03T22:04:18.367000`
 - posting-mix window: 30 days
 - versions: `taxonomy=tech-tax-1.2.0`, `adjacency=tech-adjacency-1.2.0`, `employer_registry=employer-registry-1.0.0`, `career_source=career-source-1.0.0`, `employer_classifier=employer-tech-1.0.0`, `canonical_employer=canonical-employer-1.0.0`, `official_career_registry=official-career-registry-1.0.0`
 
@@ -23,17 +23,17 @@ source only when its OWNERSHIP is proven and its content validated.
 | | value |
 |---|---:|
 | employers in the registry | 23,791 |
-| **evidence-backed technology employers** | **2,918** |
-| **covered technology employers** | **1,104** |
-| **employer coverage** | **37.8%** |
-| candidate technology employers (no covered source) | 1,814 |
-| covered career SOURCES | 2,606 |
+| **evidence-backed technology employers** | **2,923** |
+| **covered technology employers** | **1,116** |
+| **employer coverage** | **38.2%** |
+| candidate technology employers (no covered source) | 1,807 |
+| covered career SOURCES | 2,616 |
 | ownership-verified but unvalidated SOURCES | 259 |
 | career sources total | 11,225 |
-| employers yielding postings | 1,141 |
-| employers yielding core-tech postings | 1,074 |
-| active postings from them | 144,514 |
-| core-tech postings | 37,990 (26.3%) |
+| employers yielding postings | 1,147 |
+| employers yielding core-tech postings | 1,079 |
+| active postings from them | 147,385 |
+| core-tech postings | 38,786 (26.3%) |
 | open employer merge reviews | 1,443 |
 | open employer board conflicts | 104 |
 
@@ -61,115 +61,115 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 
 | state | employers |
 |---|---:|
-| `candidate` | 1,442 |
-| `validated` | 1,058 |
-| `content_validated` | 296 |
-| `dead` | 64 |
+| `candidate` | 1,436 |
+| `validated` | 1,070 |
+| `content_validated` | 304 |
+| `dead` | 59 |
 | `empty` | 46 |
-| `blocked` | 10 |
+| `blocked` | 6 |
 | `ownership_verified` | 2 |
 
 ## Coverage by cohort
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `public_tech` | 1,924 | 415 | 21.6% | 14,851 |
-| `niche_startup` | 466 | 288 | 61.8% | 1,179 |
-| `unknown` | 464 | 351 | 75.6% | 16,659 |
-| `mnc` | 63 | 34 | 54.0% | 9,524 |
-| `private_growth` | 37 | 29 | 78.4% | 1,812 |
+| `public_tech` | 1,925 | 421 | 21.9% | 15,087 |
+| `unknown` | 468 | 357 | 76.3% | 17,097 |
+| `niche_startup` | 466 | 288 | 61.8% | 1,205 |
+| `mnc` | 63 | 34 | 54.0% | 9,670 |
+| `private_growth` | 37 | 29 | 78.4% | 1,854 |
 
 ## Coverage by category
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `software_saas` | 509 | 151 | 29.7% | 4,704 |
-| `it_services` | 471 | 92 | 19.5% | 4,257 |
-| `other` | 445 | 268 | 60.2% | 15,072 |
-| `healthtech` | 273 | 84 | 30.8% | 1,327 |
-| `fintech` | 260 | 129 | 49.6% | 6,909 |
-| `semiconductor` | 231 | 55 | 23.8% | 2,272 |
-| `cloud_data` | 224 | 82 | 36.6% | 2,430 |
-| `hardware` | 207 | 31 | 15.0% | 561 |
-| `telecom` | 134 | 31 | 23.1% | 657 |
-| `ai_ml` | 81 | 62 | 76.5% | 911 |
-| `security` | 62 | 40 | 64.5% | 481 |
+| `software_saas` | 509 | 151 | 29.7% | 4,772 |
+| `it_services` | 471 | 93 | 19.8% | 4,334 |
+| `other` | 449 | 277 | 61.7% | 15,409 |
+| `healthtech` | 273 | 84 | 30.8% | 1,370 |
+| `fintech` | 261 | 130 | 49.8% | 7,042 |
+| `semiconductor` | 231 | 55 | 23.8% | 2,319 |
+| `cloud_data` | 224 | 82 | 36.6% | 2,471 |
+| `hardware` | 207 | 31 | 15.0% | 568 |
+| `telecom` | 134 | 31 | 23.1% | 667 |
+| `ai_ml` | 81 | 62 | 76.5% | 939 |
+| `security` | 62 | 40 | 64.5% | 484 |
 | `automotive` | 57 | 7 | 12.3% | 39 |
-| `devtools` | 53 | 35 | 66.0% | 188 |
-| `consumer` | 50 | 29 | 58.0% | 167 |
-| `aerospace_defense` | 48 | 22 | 45.8% | 813 |
-| `robotics` | 47 | 30 | 63.8% | 668 |
+| `devtools` | 53 | 35 | 66.0% | 191 |
+| `consumer` | 50 | 29 | 58.0% | 170 |
+| `aerospace_defense` | 48 | 23 | 47.9% | 834 |
+| `robotics` | 47 | 30 | 63.8% | 685 |
 | `gaming` | 27 | 10 | 37.0% | 79 |
-| `energy` | 22 | 22 | 100.0% | 612 |
+| `energy` | 22 | 22 | 100.0% | 647 |
 | `research` | 14 | 7 | 50.0% | 3 |
-| `media` | 10 | 9 | 90.0% | 76 |
-| `ecommerce` | 4 | 2 | 50.0% | 1,397 |
+| `media` | 10 | 9 | 90.0% | 78 |
+| `ecommerce` | 4 | 2 | 50.0% | 1,417 |
 
 ## Coverage by headquarters country
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `US` | 1,890 | 404 | 21.4% | 12,535 |
-| `unknown` | 1,028 | 700 | 68.1% | 25,455 |
+| `US` | 1,891 | 410 | 21.7% | 12,736 |
+| `unknown` | 1,032 | 706 | 68.4% | 26,050 |
 
 ## Coverage by hiring country
 
 | | employers | validated | % | core-tech postings |
 |---|---:|---:|---:|---:|
-| `unknown` | 2,714 | 900 | 33.2% | 30,176 |
-| `US` | 143 | 143 | 100.0% | 5,868 |
-| `CA` | 60 | 60 | 100.0% | 3,915 |
-| `GB` | 38 | 38 | 100.0% | 3,918 |
-| `IN` | 37 | 37 | 100.0% | 3,019 |
-| `AU` | 24 | 24 | 100.0% | 3,277 |
-| `MX` | 20 | 20 | 100.0% | 2,971 |
-| `BR` | 17 | 17 | 100.0% | 2,193 |
-| `CO` | 16 | 16 | 100.0% | 2,861 |
-| `FR` | 15 | 15 | 100.0% | 2,311 |
-| `JP` | 14 | 14 | 100.0% | 3,222 |
-| `DE` | 13 | 13 | 100.0% | 2,454 |
-| `CN` | 13 | 13 | 100.0% | 977 |
-| `IL` | 12 | 12 | 100.0% | 2,618 |
-| `MY` | 12 | 12 | 100.0% | 2,570 |
-| `PH` | 12 | 12 | 100.0% | 2,398 |
-| `ES` | 10 | 10 | 100.0% | 2,595 |
-| `CZ` | 9 | 9 | 100.0% | 2,078 |
-| `PL` | 9 | 9 | 100.0% | 2,553 |
-| `AR` | 8 | 8 | 100.0% | 1,980 |
-| `IT` | 8 | 8 | 100.0% | 1,891 |
-| `SG` | 8 | 8 | 100.0% | 704 |
-| `NL` | 7 | 7 | 100.0% | 2,486 |
-| `IE` | 6 | 6 | 100.0% | 616 |
-| `PT` | 6 | 6 | 100.0% | 581 |
-| `TH` | 6 | 6 | 100.0% | 381 |
-| `RO` | 6 | 6 | 100.0% | 648 |
-| `CR` | 5 | 5 | 100.0% | 1,896 |
+| `unknown` | 2,717 | 910 | 33.5% | 30,757 |
+| `US` | 144 | 144 | 100.0% | 6,035 |
+| `CA` | 60 | 60 | 100.0% | 3,978 |
+| `GB` | 38 | 38 | 100.0% | 4,009 |
+| `IN` | 37 | 37 | 100.0% | 3,074 |
+| `AU` | 24 | 24 | 100.0% | 3,358 |
+| `MX` | 20 | 20 | 100.0% | 3,014 |
+| `BR` | 18 | 18 | 100.0% | 2,288 |
+| `CO` | 17 | 17 | 100.0% | 2,919 |
+| `FR` | 15 | 15 | 100.0% | 2,350 |
+| `JP` | 14 | 14 | 100.0% | 3,271 |
+| `DE` | 13 | 13 | 100.0% | 2,489 |
+| `CN` | 13 | 13 | 100.0% | 993 |
+| `IL` | 12 | 12 | 100.0% | 2,652 |
+| `MY` | 12 | 12 | 100.0% | 2,600 |
+| `PH` | 12 | 12 | 100.0% | 2,435 |
+| `ES` | 10 | 10 | 100.0% | 2,634 |
+| `CZ` | 9 | 9 | 100.0% | 2,108 |
+| `PL` | 9 | 9 | 100.0% | 2,585 |
+| `AR` | 8 | 8 | 100.0% | 2,013 |
+| `IT` | 8 | 8 | 100.0% | 1,927 |
+| `SG` | 8 | 8 | 100.0% | 718 |
+| `NL` | 7 | 7 | 100.0% | 2,516 |
+| `IE` | 6 | 6 | 100.0% | 646 |
+| `PT` | 6 | 6 | 100.0% | 589 |
+| `TH` | 6 | 6 | 100.0% | 400 |
+| `RO` | 6 | 6 | 100.0% | 654 |
+| `CR` | 5 | 5 | 100.0% | 1,926 |
+| `EG` | 5 | 5 | 100.0% | 360 |
 | `VN` | 5 | 5 | 100.0% | 185 |
-| `BE` | 4 | 4 | 100.0% | 1,693 |
-| `ZA` | 4 | 4 | 100.0% | 1,799 |
-| `SA` | 4 | 4 | 100.0% | 516 |
-| `TR` | 4 | 4 | 100.0% | 511 |
-| `TW` | 4 | 4 | 100.0% | 291 |
-| `EG` | 4 | 4 | 100.0% | 297 |
-| `KR` | 4 | 4 | 100.0% | 340 |
-| `CH` | 3 | 3 | 100.0% | 1,548 |
-| `CL` | 3 | 3 | 100.0% | 1,709 |
-| `ID` | 3 | 3 | 100.0% | 1,663 |
-| `SE` | 3 | 3 | 100.0% | 1,663 |
-| `AE` | 3 | 3 | 100.0% | 277 |
-| `BG` | 3 | 3 | 100.0% | 494 |
-| `PE` | 3 | 3 | 100.0% | 272 |
-| `HU` | 3 | 3 | 100.0% | 160 |
+| `BE` | 4 | 4 | 100.0% | 1,718 |
+| `ZA` | 4 | 4 | 100.0% | 1,821 |
+| `AE` | 4 | 4 | 100.0% | 341 |
+| `SA` | 4 | 4 | 100.0% | 525 |
+| `TR` | 4 | 4 | 100.0% | 520 |
+| `TW` | 4 | 4 | 100.0% | 300 |
+| `KR` | 4 | 4 | 100.0% | 345 |
+| `CH` | 3 | 3 | 100.0% | 1,573 |
+| `CL` | 3 | 3 | 100.0% | 1,738 |
+| `ID` | 3 | 3 | 100.0% | 1,691 |
+| `SE` | 3 | 3 | 100.0% | 1,691 |
+| `BG` | 3 | 3 | 100.0% | 504 |
+| `PE` | 3 | 3 | 100.0% | 275 |
+| `HU` | 3 | 3 | 100.0% | 165 |
 | `UY` | 3 | 3 | 100.0% | 71 |
-| `HK` | 2 | 2 | 100.0% | 1,663 |
-| `DK` | 2 | 2 | 100.0% | 1,401 |
-| `FI` | 2 | 2 | 100.0% | 1,548 |
-| `NO` | 2 | 2 | 100.0% | 1,548 |
-| `NZ` | 2 | 2 | 100.0% | 252 |
+| `HK` | 2 | 2 | 100.0% | 1,684 |
+| `DK` | 2 | 2 | 100.0% | 1,421 |
+| `FI` | 2 | 2 | 100.0% | 1,573 |
+| `NO` | 2 | 2 | 100.0% | 1,573 |
+| `NZ` | 2 | 2 | 100.0% | 255 |
 | `HR` | 2 | 2 | 100.0% | 476 |
 | `RS` | 1 | 1 | 100.0% | 8 |
-| `GR` | 1 | 1 | 100.0% | 228 |
-| `AT` | 1 | 1 | 100.0% | 151 |
+| `GR` | 1 | 1 | 100.0% | 230 |
+| `AT` | 1 | 1 | 100.0% | 156 |
 
 ## Coverage by provider
 
@@ -178,7 +178,7 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 | `unknown` | 6,515 | 0 | 0 |
 | `workday` | 1,519 | 1,053 | 916 |
 | `greenhouse` | 1,005 | 751 | 751 |
-| `icims` | 455 | 177 | 112 |
+| `icims` | 455 | 183 | 118 |
 | `ashby` | 373 | 296 | 296 |
 | `lever` | 190 | 145 | 145 |
 | `oracle_orc` | 170 | 60 | 8 |
@@ -188,7 +188,7 @@ all is `candidate`, and a provider failure moves a source to `blocked`,
 | `bamboohr` | 127 | 32 | 32 |
 | `workable` | 96 | 35 | 35 |
 | `rippling` | 59 | 16 | 16 |
-| `jazzhr` | 51 | 15 | 15 |
+| `jazzhr` | 51 | 19 | 19 |
 | `recruitee` | 48 | 23 | 23 |
 | `jobvite` | 42 | 16 | 16 |
 | `eightfold` | 39 | 22 | 22 |
@@ -233,13 +233,12 @@ since. A denominator that grows is not a measurement.
 
 | state | employers |
 |---|---:|
-| `candidate` | 49 |
+| `candidate` | 50 |
 | `validated` | 37 |
 | `not_in_registry` | 9 |
 | `empty` | 7 |
 | `dead` | 3 |
 | `ownership_verified` | 2 |
-| `blocked` | 1 |
 | `content_validated` | 1 |
 
 | employer | domain | batch | state | sources | detail |
@@ -286,7 +285,7 @@ since. A denominator that grows is not a measurement.
 | Airbnb | `airbnb.com` | `baseline` | `validated` | 1 | one corroborating signal (curated_registry); the rule needs two independent classes |
 | Spotify | `spotify.com` | `baseline` | `validated` | 1 | one corroborating signal (curated_registry); the rule needs two independent classes |
 | HubSpot | `hubspot.com` | `baseline` | `validated` | 2 | two independent corroborating signals: ats_provider, curated_registry |
-| Splunk | `splunk.com` | `baseline` | `blocked` | 1 | read 4 page(s) on splunk.com; no ATS fingerprint found |
+| Splunk | `splunk.com` | `baseline` | `candidate` | 1 | read 4 page(s) on splunk.com; no ATS fingerprint found |
 | Zoom | `zoom.com` | `baseline` | `candidate` | 1 | read 1 page(s) on zoom.com; no ATS fingerprint found |
 | Intuit | `intuit.com` | `baseline` | `candidate` | 1 | read 10 page(s) on intuit.com; no ATS fingerprint found |
 | Confluent | `confluent.io` | `baseline` | `validated` | 1 | one corroborating signal (curated_registry); the rule needs two independent classes |
@@ -363,17 +362,17 @@ owner-verified boards, not against the whole inventory.
 
 | | value |
 |---|---:|
-| active postings considered | 272,236 |
-| on owner-verified boards | 219,212 |
-| **carrying a canonical employer** | **200,169** |
+| active postings considered | 275,410 |
+| on owner-verified boards | 222,196 |
+| **carrying a canonical employer** | **202,817** |
 | share of owner-verified postings | 91.3% |
-| attributing boards | 2,613 |
-| contested boards | 151 (75 still blocking) |
+| attributing boards | 2,619 |
+| contested boards | 153 (77 still blocking) |
 
 | quarantine reason | postings |
 |---|---:|
-| `ownership_not_verified` | 53,024 |
-| `conflicting_owner_verified_sources` | 9,772 |
+| `ownership_not_verified` | 53,214 |
+| `conflicting_owner_verified_sources` | 9,910 |
 | `marketplace_or_shared_board` | 7,488 |
 
 ## Provider readiness
@@ -412,10 +411,10 @@ to `None` and nothing could ever have written another value.
 
 | source | shards | crawl lag (min) | stale | shards in backoff |
 |---|---:|---:|---|---:|
-| `career-pages` | 64 | 8 | False | 0 |
-| `icims` | 96 | 11 | False | 0 |
-| `oracle` | 48 | 4 | False | 0 |
-| `workday` | 48 | 13 | False | 0 |
+| `career-pages` | 64 | 12 | False | 0 |
+| `icims` | 96 | 0 | False | 0 |
+| `oracle` | 48 | 8 | False | 0 |
+| `workday` | 48 | 2 | False | 0 |
 
 - ingest runner heartbeat age: 0 min (healthy: True)
 
