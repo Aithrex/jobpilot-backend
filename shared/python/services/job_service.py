@@ -2400,6 +2400,25 @@ class JobService:
         )
         result = self.saved_jobs.find_one({"job_id": job_id, "user_email": user_email})
         result["_id"] = str(result["_id"])
+        # PIN THE POSTING. Applying pins (application_ledger_service ->
+        # pin_posting reason="applied"); saving never did, and the retention
+        # sweep deletes any closed posting past `purge_at` that is not pinned.
+        # Measured 2026-09-03: of 342 saved job_ids, 218 were still in Mongo,
+        # ONE was pinned, and 69 were already past their purge date -- i.e. a
+        # catch-up sweep would have deleted 69 jobs users had saved, and the
+        # only reason it had not already happened is that the sweep was too far
+        # behind to reach them.
+        #
+        # Best-effort and never fatal: a save must not fail because object
+        # storage is unavailable. `pin_posting` logs loudly and the row is
+        # retained rather than deleted when the archive cannot be written.
+        try:
+            from services import job_inventory_service as _inv
+            if job_id:
+                _inv.pin_posting(job_id, reason="saved")
+        except Exception as e:      # pragma: no cover - pinning is protective
+            logger.warning("save_job: pin_posting failed for %s: %s",
+                           str(job_id)[:12], type(e).__name__)
         try:
             self.touch_pipeline(job, user_email, "saved")
         except Exception as e:

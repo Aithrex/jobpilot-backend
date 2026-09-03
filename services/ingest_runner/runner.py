@@ -256,9 +256,31 @@ class Runner:
             return
         logger.info("tick discovery: %s inflight=%d", result, self.inflight())
 
+    #: Deletions per maintenance sweep. The 5,000 default exists because
+    #: maintenance ran on Lambda under a 300-second wall; this box has no wall.
+    #:
+    #: 5,000/day could not keep up. Measured 2026-09-03: the crawl closes
+    #: 6,134 postings/day on average and 17,639 on its busiest day, so the
+    #: backlog grew ~1,100/day and had reached 172,335 rows -- 26 days
+    #: overdue at the oldest, and 80% of the whole database sat in
+    #: `job_postings` because of it. A retention window that cannot drain is
+    #: not a retention window.
+    #:
+    #: Sized to clear a bad day in one sweep with headroom, not to be
+    #: unbounded: the sweep is still bounded, still logged, and still
+    #: double-checks each doc is closed before deleting it.
+    MAINTENANCE_PURGE_LIMIT = int(os.getenv("INGEST_MAINTENANCE_PURGE_LIMIT", "50000"))
+    MAINTENANCE_EXPIRE_LIMIT = int(os.getenv("INGEST_MAINTENANCE_EXPIRE_LIMIT", "50000"))
+
     def run_maintenance(self) -> None:
         from services import job_ingest_worker as worker
-        self._submit("maintenance", worker.run_maintenance)
+        self._submit(
+            "maintenance",
+            lambda: worker.run_maintenance(
+                purge_limit=self.MAINTENANCE_PURGE_LIMIT,
+                expire_limit=self.MAINTENANCE_EXPIRE_LIMIT,
+            ),
+        )
 
     # -- heartbeat ---------------------------------------------------------
     def heartbeat(self) -> None:

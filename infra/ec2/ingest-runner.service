@@ -93,11 +93,21 @@ Environment=INGEST_EXTRA_FLAGS=--log-level=INFO
 Environment=INGEST_RUNNER_DISCOVERY_WORKERS=4
 Environment=DISCOVERY_WORKERS_PER_TICK=4
 
-# `ingest_maintenance` is a DAILY retention purge, not a 15-minute crawl, and it
-# archives pinned postings to S3 before deleting them. It stays on Lambda until
-# the four crawls are proven here.
+# `ingest_maintenance` is a DAILY retention purge that archives pinned postings
+# to S3 before deleting them. It ran on Lambda until 2026-09-03 and could not
+# keep up: bounded to 5,000 deletions by the 300s wall while the crawl closes
+# 6,134/day on average and 17,639 on a busy day, so the backlog grew ~1,100/day
+# and reached 172,335 rows -- 26 days overdue, and 80% of the database.
+#
+# This box has no wall. `--no-maintenance` is GONE and the limits are raised
+# (INGEST_MAINTENANCE_PURGE_LIMIT). Cut over in this order, so retention is
+# never owned by neither side: start the box first, THEN disable the
+# `jobpilot-ingest_maintenance-prod` EventBridge rule. Running both is safe --
+# the sweep is idempotent and deletes only what is already closed and overdue.
+Environment=INGEST_MAINTENANCE_PURGE_LIMIT=50000
+Environment=INGEST_MAINTENANCE_EXPIRE_LIMIT=50000
 ExecStart=/opt/jobpilot/venv/bin/python -m services.ingest_runner.runner \
-    --sources ${INGEST_SOURCES} ${INGEST_EXTRA_FLAGS} --no-maintenance
+    --sources ${INGEST_SOURCES} ${INGEST_EXTRA_FLAGS}
 
 # SIGTERM drains in-flight shards (INGEST_RUNNER_DRAIN=150s) before exit.
 KillSignal=SIGTERM
