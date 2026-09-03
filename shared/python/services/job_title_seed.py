@@ -128,7 +128,26 @@ _NOT_A_ROLE = frozenset({
 })
 
 
+#: A presentable role name ends in one of these. It is what separates
+#: "Backend Engineer" from "MTS Software" inside the same vocabulary.
+_ROLE_NOUNS = frozenset({
+    "engineer", "developer", "architect", "scientist", "analyst",
+    "administrator", "programmer", "sre", "specialist", "lead",
+})
+
+
+#: Whole-phrase spellings `str.title()` cannot reach, because the fix spans
+#: more than one word ("ci cd" -> "CI/CD").
+_PHRASE_CASE_FIXES = {
+    "ci cd engineer": "CI/CD Engineer",
+    "ci cd": "CI/CD",
+}
+
+
 def _display_title(phrase: str) -> str:
+    fixed = _PHRASE_CASE_FIXES.get(phrase.lower())
+    if fixed:
+        return fixed
     return " ".join(_TITLE_CASE_FIXES.get(w, w) for w in phrase.title().split())
 
 
@@ -218,6 +237,35 @@ def canonical_search_titles(titles: Sequence[Any],
                     matched_software = True
                 break
 
+    # The software floor goes in HERE, before the specialty expansion below,
+    # because `cap` truncates and these three are the titles that carry the
+    # market. Appended after the expansion they were the first to be cut.
+    if matched_software:
+        for phrase in _ALWAYS_MATCHABLE:
+            _add(phrase)
+
+    # Breadth from the SPECIALTIES the taxonomy read off the resume, not only
+    # from whatever the synthesizer happened to name. A candidate classified
+    # {general_software, devops, backend} should be searching every canonical
+    # role name in those specialties, and the LLM reliably names only a few of
+    # them - the account this was built for got 16 titles and asked, fairly,
+    # why so few. Measured: +663 postings and +22 Amazon reqs for him.
+    #
+    # Gated on presentability, because these are also the CHIPS a user reads.
+    # `_SPEC_RULES` is a classifier vocabulary and carries forms that classify
+    # well but read as broken in a filter rail - "MTS Software", "Software
+    # Engr", "Development Engineer Software".
+    for phrase in tx.title_phrases(specialties=specialties) if specialties else []:
+        low = phrase.lower()
+        if low in _NOT_A_ROLE or any(bad in low for bad in _NEVER_SEARCH):
+            continue
+        if not keep_intern and "intern" in low:
+            continue
+        words = low.split()
+        if not (2 <= len(words) <= 4) or words[-1] not in _ROLE_NOUNS:
+            continue
+        _add(_display_title(low))
+
     if not out:
         # Nothing in this resume is a technical role. `tech_taxonomy` is a
         # TECH vocabulary and has no phrase for "Registered Nurse", so
@@ -227,12 +275,6 @@ def canonical_search_titles(titles: Sequence[Any],
         # phrase, but the right occupation, which matters far more.
         return [str(t).strip() for t in (titles or []) if str(t or "").strip()][:cap]
 
-    # The software floor applies only to software candidates. It is what makes
-    # Amazon's "Software Development Engineer" reachable, and it would be
-    # noise on a data-science or non-tech feed.
-    if matched_software:
-        for phrase in _ALWAYS_MATCHABLE:
-            _add(phrase)
     return out[:cap]
 
 
