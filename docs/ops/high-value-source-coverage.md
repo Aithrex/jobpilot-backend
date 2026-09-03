@@ -2,16 +2,44 @@
 
 **Do not run `--apply` or `--persist` until an operator authorizes it.**
 
-Live queue (2026-09-03, read-only):
+## What “100%” means
 
-| Bucket | Employers | Core-tech jobs |
-|---|---:|---:|
-| content_pending | 71 | 1,543 |
-| endpoint_unproven | 384 | 4,523 |
-| Combined | 455 | 6,066 (~93% of uncovered core mass) |
-| Salesforce | source_no_endpoint | 224 core |
+Not every tech company on Earth. **100%** = every employer in the live
+**evidence-backed technology denominator** is either **covered** (ownership +
+content validated) or **evidenced-terminal** (blocked / dead / moved /
+marketplace / ownership conflict / legally unusable) with recorded evidence.
 
-Priority names: Oracle, Salesforce, Unity, F5.
+Agent prompt: `D:\Aithrex\docs\prompts\tech-employer-crawler-100-coverage.md`  
+Plan: `D:\Aithrex\docs\plans\2026-09-03-tech-employer-100-coverage.md`
+
+### Campaign (measure + ordered plan)
+
+```bash
+cd jobpilot-backend
+PYTHONPATH=shared/python python scripts/coverage_campaign.py
+PYTHONPATH=shared/python python scripts/coverage_campaign.py --execute-dry-run
+# apply is refused unless you also pass --i-authorize-live-writes, and even
+# then the script prints the per-mode apply commands instead of auto-writing.
+```
+
+### Harvest uncovered domains into intake (still candidates)
+
+```bash
+PYTHONPATH=shared/python python scripts/seed_company_discovery_candidates.py --from-queue
+# authorized:
+PYTHONPATH=shared/python python scripts/seed_company_discovery_candidates.py --from-queue --apply
+```
+
+Live queue (refresh with `coverage_work_queue.py`; do not trust stale tables):
+
+| Bucket | Role |
+|---|---|
+| content_pending | Ownership proven — cheapest coverage |
+| endpoint_unproven | Board known — ownership walk |
+| source_no_endpoint | Fingerprint careers first (Salesforce, Google, …) |
+| no_source | Real discovery |
+
+Priority names historically: Oracle, Salesforce, Unity, F5.
 
 ## 1. Content pass (ownership already proven)
 
@@ -49,12 +77,12 @@ xAI, Axonius, Tines, Cato Networks, Citadel, plus 2026-09-03 intake (SSI, Thinki
 PYTHONPATH=shared/python python scripts/backfill_employer_registry.py
 # authorized:
 PYTHONPATH=shared/python python scripts/backfill_employer_registry.py --apply
-PYTHONPATH=shared/python python scripts/seed_company_discovery_candidates.py
+PYTHONPATH=shared/python python scripts/seed_company_discovery_candidates.py --researched
 # authorized:
-PYTHONPATH=shared/python python scripts/seed_company_discovery_candidates.py --apply
+PYTHONPATH=shared/python python scripts/seed_company_discovery_candidates.py --researched --apply
 ```
 
-## 5. Canonical attribution + conflict queue (~70 boards / ~9,500 postings)
+## 5. Canonical attribution + conflict queue
 
 ```bash
 PYTHONPATH=shared/python python scripts/backfill_canonical_employer_id.py
@@ -79,9 +107,3 @@ Recovery if a scheduled persist fails: the previous snapshot remains. Re-run the
 ```bash
 PYTHONPATH=shared/python python scripts/migrate_indexes.py
 ```
-
-## Rollback
-
-- Canonical ids: `python scripts/backfill_canonical_employer_id.py --apply --unstamp`
-- Coverage snapshot: do not persist; the product keeps the last good document
-- Unified feed: `?techfeed=0` writes `localStorage['aspirely.techFeed.enabled']=0`

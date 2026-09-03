@@ -258,3 +258,81 @@ def observe_repeated_postings(*, min_postings: int = 8, db=None) -> int:
         }, db=db)
         added += 1
     return added
+
+
+def _official_by_domain() -> Dict[str, Dict[str, Any]]:
+    try:
+        from services import official_career_registry as ocr
+        return dict(ocr.by_domain())
+    except Exception as exc:  # pragma: no cover
+        logger.warning("official registry lookup failed: %s", exc)
+        return {}
+
+
+def harvest_uncovered_from_queue(
+    queue: Sequence[Dict[str, Any]],
+    *,
+    db=None,
+    limit: int = 500,
+    apply: bool = True,
+) -> Dict[str, Any]:
+    """Upsert intake leads for uncovered tech employers that already have a domain.
+
+    Domain is required. A queue row with only a display name is skipped — that
+    is not identity. Official career URLs are attached when the curated
+    registry already has the domain; we never invent a board URL.
+    """
+    db = db if db is not None else _db()
+    official = _official_by_domain()
+    would: List[Dict[str, Any]] = []
+    written: List[Dict[str, Any]] = []
+    skipped_no_domain = 0
+    for row in queue:
+        if len(would) >= int(limit):
+            break
+        domain = _norm_domain(row.get("domain") or row.get("canonical_domain"))
+        name = _norm_name(row.get("display_name") or row.get("company_name"))
+        if not domain:
+            skipped_no_domain += 1
+            continue
+        if not name:
+            name = domain
+        ocr_row = official.get(domain) or {}
+        career = str(ocr_row.get("career_landing_url") or "").strip()
+        company_url = f"https://{domain}/"
+        payload = {
+            "company_name": name,
+            "owner_domain": domain,
+            "official_company_url": company_url,
+            "official_career_url": career,
+            "candidate_ats": ",".join(row.get("vendors") or [])[:80],
+            "discovery_method": "operator_review",
+            "verification_state": STATE_CANDIDATE,
+            "verification_reason": (
+                f"Uncovered tech employer in bucket "
+                f"{row.get('bucket') or 'unknown'}; "
+                f"core_tech_postings={int(row.get('core_tech_postings') or 0)}. "
+                "Candidate only — ownership and content still required."
+            ),
+            "evidence_url": career or company_url,
+            "tech_categories": list(row.get("categories") or ()),
+            "cohort": (row.get("cohorts") or [""])[0] if row.get("cohorts") else "",
+        }
+        if row.get("employer_id"):
+            payload["canonical_employer_id"] = str(row["employer_id"])
+        would.append({
+            "company_name": name,
+            "owner_domain": domain,
+            "bucket": row.get("bucket"),
+            "core_tech_postings": int(row.get("core_tech_postings") or 0),
+            "has_official_career_url": bool(career),
+        })
+        if apply:
+            written.append(upsert_candidate(payload, db=db))
+    return {
+        "would_upsert": len(would),
+        "written": len(written),
+        "skipped_no_domain": skipped_no_domain,
+        "sample": would[:20],
+        "apply": apply,
+    }

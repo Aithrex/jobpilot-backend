@@ -34,3 +34,42 @@ def test_researched_seed_states():
     assert rows["openevidence.com"]["verification_state"] == intake.STATE_BLOCKED
     assert "not open-evidence.com" in rows["openevidence.com"]["verification_reason"].lower() or \
         "open-evidence.com" in rows["openevidence.com"]["verification_reason"]
+
+
+def test_harvest_skips_name_only_and_attaches_official_career():
+    db = current_db()
+    queue = [
+        {
+            "employer_id": "emp_pending",
+            "display_name": "Oracle",
+            "domain": "oracle.com",
+            "bucket": "endpoint_unproven",
+            "core_tech_postings": 300,
+            "vendors": ["oracle_orc"],
+            "categories": ["software_saas"],
+            "cohorts": ["mnc"],
+        },
+        {
+            "employer_id": "emp_nameless",
+            "display_name": "No Domain Corp",
+            "domain": "",
+            "bucket": "no_source",
+            "core_tech_postings": 1,
+            "vendors": [],
+            "categories": [],
+            "cohorts": [],
+        },
+    ]
+    dry = intake.harvest_uncovered_from_queue(queue, db=db, apply=False)
+    assert dry["would_upsert"] == 1
+    assert dry["skipped_no_domain"] == 1
+    assert dry["written"] == 0
+    assert db[intake.CANDIDATES].count_documents({}) == 0
+
+    written = intake.harvest_uncovered_from_queue(queue, db=db, apply=True)
+    assert written["written"] == 1
+    row = db[intake.CANDIDATES].find_one({"owner_domain": "oracle.com"})
+    assert row is not None
+    assert row["official_career_url"]  # from official registry
+    assert row.get("linked_employer_id") == "emp_pending"
+    assert "Candidate only" in row["verification_reason"]
