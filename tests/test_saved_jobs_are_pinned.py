@@ -101,3 +101,48 @@ class TestThePurgeRespectsThePin:
         out = inv.purge_expired(limit=10)
         assert out["deleted"] >= 1
         assert mock_db.job_postings.find_one({"job_id": "j-free"}) is None
+
+
+class TestUndatedPostingsStillAgeOut:
+    """`posted_at < cutoff` never matches a null, so a posting the provider
+    gave no date could only leave `active` if its board delisted it. A board
+    that lists an undated job forever kept it here forever.
+
+    Measured 2026-09-03: 18,460 active postings had no `posted_at`, 7,874 of
+    them first seen over a week earlier.
+    """
+
+    def _row(self, mock_db, jid, **extra):
+        doc = {"job_id": jid, "source": "greenhouse", "source_job_id": jid,
+               "status": "active"}
+        doc.update(extra)
+        mock_db.job_postings.insert_one(doc)
+
+    def test_an_undated_posting_ages_out_on_first_seen_at(self, mock_db):
+        from datetime import datetime, timedelta, timezone
+        old = datetime.now(timezone.utc) - timedelta(days=30)
+        self._row(mock_db, "undated", first_seen_at=old)
+        assert inv.expire_aged_postings(limit=10) == 1
+        assert mock_db.job_postings.find_one({"job_id": "undated"})["status"] != "active"
+
+    def test_a_RECENT_undated_posting_is_left_alone(self, mock_db):
+        from datetime import datetime, timezone
+        self._row(mock_db, "fresh", first_seen_at=datetime.now(timezone.utc))
+        assert inv.expire_aged_postings(limit=10) == 0
+        assert mock_db.job_postings.find_one({"job_id": "fresh"})["status"] == "active"
+
+    def test_a_DATED_posting_still_ages_on_posted_at(self, mock_db):
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        self._row(mock_db, "dated", posted_at=now - timedelta(days=30),
+                  first_seen_at=now)
+        assert inv.expire_aged_postings(limit=10) == 1
+
+    def test_a_fresh_dated_posting_survives_an_old_first_seen(self, mock_db):
+        """`posted_at` wins when present: a long-running requisition we first
+        saw weeks ago but which the board re-dated is still current."""
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        self._row(mock_db, "redated", posted_at=now,
+                  first_seen_at=now - timedelta(days=30))
+        assert inv.expire_aged_postings(limit=10) == 0

@@ -1422,9 +1422,24 @@ def expire_aged_postings(
     now = now or _now()
     limit_days = MAX_INVENTORY_AGE_DAYS if max_age_days is None else int(max_age_days)
     cutoff = now - timedelta(days=max(0, limit_days))
+    # A posting with NO `posted_at` ages out on `first_seen_at` instead.
+    #
+    # `posted_at < cutoff` never matches a null, so an undated posting could
+    # only ever leave `active` if its board stopped listing it -- and a board
+    # that lists an undated job indefinitely kept it here indefinitely.
+    # Measured 2026-09-03: 18,460 active postings carried no `posted_at`, 7,874
+    # of them first seen more than a week earlier. 96.1% of live postings state
+    # no work mode and 43.3% no seniority, so "the provider omitted a field" is
+    # the normal case here, not the exceptional one.
     rows = list(
         _postings()
-        .find({"status": STATUS_ACTIVE, "posted_at": {"$lt": cutoff}},
+        .find({"status": STATUS_ACTIVE,
+               "$or": [
+                   {"posted_at": {"$lt": cutoff}},
+                   {"posted_at": None, "first_seen_at": {"$lt": cutoff}},
+                   {"posted_at": {"$exists": False},
+                    "first_seen_at": {"$lt": cutoff}},
+               ]},
               {"_id": 0, "source": 1, "source_job_id": 1})
         .limit(max(1, int(limit)))
     )
