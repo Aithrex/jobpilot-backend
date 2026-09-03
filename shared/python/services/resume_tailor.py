@@ -278,8 +278,8 @@ class ResumeTailor:
             t = self._stamp_skill_headings(t, headings)
             t = self._allocate_bullets(t, jd_analysis)
             # Deferred summary — the only writer. Primary tailor emits no
-            # summary; this pass builds a deterministic brief from settled
-            # bullets and accepts a PRO rewrite only when it beats the base.
+            # summary; this pass builds a brief from settled bullets and ships
+            # the PRO rewrite when it passes hard gates (else keeps base).
             t = self._write_settled_summary(t, structured_resume, jd_analysis, gap)
             if target_role:
                 t["target_role"] = target_role
@@ -2190,17 +2190,19 @@ class ResumeTailor:
             "      owning a budget/P&L when no such context exists).\n"
             "    - New companies, job titles, employment dates, degrees, or certifications. These\n"
             "      are immutable (see next section).\n"
-            "    - A SPECIFIC NAMED THIRD-PARTY PRODUCT / VENDOR / SYSTEM the candidate never used —\n"
-            "      EVEN IF THE JOB DESCRIPTION LISTS IT. A named commercial product is a verifiable\n"
-            "      claim: the candidate either operated it or did not. This holds for ALL fields —\n"
-            "      e.g. Qualys, Wiz, ServiceNow, Splunk (tech); Salesforce, HubSpot, Marketo\n"
-            "      (sales/marketing); SAP, Oracle Financials, Workday, NetSuite (finance/HR); Epic,\n"
-            "      Cerner (healthcare); Tableau, Power BI (analytics). Do NOT inject such a product\n"
-            "      into skills or weave it into a bullet unless that exact product already appears\n"
-            "      in the ORIGINAL resume. By contrast, GENERIC role-standard skills anyone in the\n"
-            "      role can defend (e.g. Git/SQL/REST/Agile for engineers; Excel/forecasting/\n"
-            "      stakeholder management for analysts & business roles; charting/segmentation for\n"
-            "      marketers) remain fine to add per the Defensibility test.\n"
+            "    - A SPECIFIC NAMED THIRD-PARTY PRODUCT / VENDOR / SYSTEM with NO analog in the\n"
+            "      candidate's work — EVEN IF THE JOB DESCRIPTION LISTS IT. A named commercial\n"
+            "      product is a verifiable claim. Do NOT invent Qualys, Salesforce, SAP, Epic,\n"
+            "      etc. on a resume that never touched that product or its category.\n"
+            "      EXCEPTION — weave / list a named product when ANY of these is true:\n"
+            "        (1) it already appears in the ORIGINAL resume (skills OR bullets) — then you\n"
+            "            MUST put it in a bullet with usage context, not skills-only;\n"
+            "        (2) it is the same ecosystem / adjacent tool the candidate already uses\n"
+            "            (Kafka when they already run event-driven or message-queue work;\n"
+            "            Spring Boot when they already ship Java services; Power BI when they\n"
+            "            already build Tableau dashboards). That is alignment, not fabrication.\n"
+            "      GENERIC role-standard skills (Git/SQL/REST/Agile; Excel/forecasting; charting)\n"
+            "      remain fine to add per the Defensibility test.\n"
             "    - CERTIFICATIONS / LICENSES anywhere. Never list a certification or license the\n"
             "      candidate does not hold (e.g. PMP, CPA, AWS Certified, Six Sigma, RN license) —\n"
             "      and never smuggle one into the SKILLS section to dodge this rule (e.g.\n"

@@ -1070,10 +1070,10 @@ class ContentAugmenter:
         used to trip the >=80% skip and leave bullets untouched, which tanks
         hard_skill_match after the deferred-summary path.
 
-        Anti-stuffing alignment with the tailor prompt's 75-80% coverage
+        Anti-stuffing alignment with the tailor prompt's 80-90% coverage
         target:
-          - Keywords with ZERO occurrences anywhere are the tailor's
-            Defensibility call — never inject them here.
+          - Keywords with ZERO occurrences anywhere stay the tailor's call —
+            this pass does not invent them.
           - When required-keyword coverage in bullets/summary is already
             >= 80%, skip entirely.
           - Keywords appearing exactly ONCE in context, OR present only in
