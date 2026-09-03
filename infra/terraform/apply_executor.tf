@@ -50,13 +50,21 @@ resource "aws_ecr_lifecycle_policy" "apply_executor" {
   policy = jsonencode({
     rules = [
       {
+        # COUNT, not age. Every `docker push :prod` moves the tag and orphans
+        # the previous image as untagged, and `shared/python/**` is in this
+        # image's change filter -- so a busy day pushes dozens. Measured
+        # 2026-09-03: 46 images / 46.7 GB, of which exactly ONE was tagged and
+        # 45 were same-day orphans that a 7-day rule had not reached yet, on a
+        # Lambda with zero invocations that month.
+        #
+        # Three untagged is a rollback window (current, previous, one spare),
+        # not a graveyard.
         rulePriority = 1
-        description  = "Expire untagged images after 7 days"
+        description  = "Keep the last 3 untagged images; expire older orphans"
         selection = {
           tagStatus   = "untagged"
-          countType   = "sinceImagePushed"
-          countUnit   = "days"
-          countNumber = 7
+          countType   = "imageCountMoreThan"
+          countNumber = 3
         }
         action = { type = "expire" }
       },
