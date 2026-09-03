@@ -16,7 +16,18 @@
 # undeclared rule silently re-enables itself on the next apply and both planes
 # crawl (the Mongo lease keeps that merely wasteful, not incorrect).
 #
-# `ingest_maintenance` deliberately STAYS on Lambda: it is a daily retention
+# CUT OVER 2026-09-03: `ingest_maintenance` moved to the EC2 box too and its
+# rule is DISABLED. It stayed on Lambda until then and could not keep up --
+# the 300s wall caps the sweep at 5,000 deletions while the crawl closes
+# 6,134/day (17,639 on a busy day), so the backlog grew ~1,100/day and reached
+# 172,335 rows, 26 days overdue, with job_postings at 80% of the database.
+# The box has no wall and runs it at INGEST_MAINTENANCE_PURGE_LIMIT=50,000.
+#
+# The historical note below is kept because the REASONING for keeping it on
+# Lambda was sound -- it archives pinned postings to S3 before deleting them,
+# and that path had to be proven before it moved.
+#
+# `ingest_maintenance` deliberately STAYED on Lambda: it is a daily retention
 # purge that archives pinned postings to S3 before deleting them, which is a
 # different risk profile from a crawl and is not worth moving for cost.
 #
