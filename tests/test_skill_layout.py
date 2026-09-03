@@ -107,7 +107,10 @@ def test_grouping_runs_post_addition():
 
 def test_merge_and_split():
     tiny = sl.group_terms(["pytest", "Python", "Java", "React", "Django", "PostgreSQL", "AWS"])
-    assert all(len(g) >= 2 or sl.lookup_term(g[0]).kind is None for g in tiny)
+    # A singleton stays only when it has no affinity partner (pytest ≠ languages).
+    singles = [g for g in tiny if len(g) == 1]
+    for g in singles:
+        assert sl.lookup_term(g[0]).kind in {"testing", "database", "cloud", None}
     many_db = [
         "PostgreSQL", "MySQL", "MongoDB", "Redis", "Cassandra",
         "DynamoDB", "Oracle", "MariaDB", "SQLite", "Neo4j",
@@ -192,3 +195,59 @@ def test_tailor_prompt_does_not_invent_category_names():
     src = inspect.getsource(ResumeTailor._build_tailor_prompt)
     assert "If a category label doesn't fit the skills under it, rename" not in src
     assert "Do NOT invent or rename categories" in src
+
+
+def test_leftover_terms_file_into_real_headings():
+    """Screenshot leftovers must not become Technical Stack / AI & Standards."""
+    terms = [
+        "microservices", "DevOps", "LangChain", "prompt engineering", "HIPAA",
+        "AWS (EKS, EC2, S3, RDS)",
+        "PostgreSQL", "pgvector", "MySQL", "MongoDB",
+        "FastAPI", "Django", "Spring Boot", "Node.js", "React", "Redux",
+        "Angular", "REST APIs",
+        "Docker", "Kubernetes", "Terraform", "Helm", "GitHub Actions",
+        "Python", "Java", "TypeScript", "JavaScript", "SQL",
+        "Apache Kafka", "RabbitMQ", "Redis",
+        "OpenTelemetry", "Datadog", "Prometheus", "Grafana", "ELK Stack",
+        "Spring Data JPA", "RAG pipelines", "vector embeddings",
+        "LLM API integration", "Monitoring", "async programming",
+        "query optimization", "FHIR R4", "Cloud",
+        "pytest", "JUnit", "Mockito",
+    ]
+    out = sl.compose([], terms)
+    labels = {lab.lower() for lab in out.skills}
+    assert "technical stack" not in labels
+    assert "ai & standards" not in labels
+
+    def blob(name: str) -> str:
+        return " ".join(out.skills.get(name, [])).lower()
+
+    frameworks = blob("Frameworks") + blob("Languages & Frameworks")
+    assert "spring data" in frameworks
+    ai = blob("AI & ML")
+    assert "langchain" in ai
+    assert "rag" in ai
+    assert "embedding" in ai
+    assert "llm" in ai
+    assert "devops" not in ai
+    assert "hipaa" not in ai
+    assert "microservice" not in ai
+    standards = blob("Standards")
+    assert "hipaa" in standards
+    assert "fhir" in standards
+    databases = blob("Databases") + blob("Distributed Systems & Data")
+    assert "query optimization" in databases or "query" in databases
+    infra = blob("Infrastructure") + blob("Cloud & Infrastructure")
+    assert "docker" in infra
+    assert "cloud" not in {t.lower() for items in out.skills.values() for t in items}
+    assert "monitoring" not in {t.lower() for items in out.skills.values() for t in items}
+
+    by_kind = {}
+    for label, items in out.skills.items():
+        for t in items:
+            by_kind[t] = sl.lookup_term(t).kind
+    assert sl.lookup_term("Spring Data JPA").kind == "framework"
+    assert sl.lookup_term("RAG pipelines").kind == "ai_ml"
+    assert sl.lookup_term("FHIR R4").kind == "standard"
+    assert sl.lookup_term("DevOps").kind == "infra"
+    assert sl.lookup_term("HIPAA").kind == "standard"

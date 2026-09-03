@@ -167,6 +167,7 @@ _SYNONYM_GROUPS = {
         ["FastAPI", "fast api", "fast-api"],
         ["Spring Boot", "spring", "springboot", "spring-boot",
          "spring framework", "spring mvc"],
+        ["Spring Data JPA", "spring data", "spring jpa", "spring-data-jpa"],
         ["ASP.NET", ".net", "dotnet", "asp.net", "asp.net core", ".net core",
          "dotnet core", ".net framework", "asp.net mvc", ".net 6", ".net 7",
          ".net 8"],
@@ -221,6 +222,8 @@ _SYNONYM_GROUPS = {
         ["CockroachDB", "cockroach db", "cockroach"],
         ["ArangoDB", "arango db", "arango"],
         ["ScyllaDB", "scylla db", "scylla"],
+        ["Query Optimization", "query optimisation", "sql optimization",
+         "query tuning"],
     ],
 
     # ---------------------------------------------------------------
@@ -431,11 +434,13 @@ _SYNONYM_GROUPS = {
         ["Transformers", "transformer architecture", "transformer models",
          "attention mechanism"],
         ["RAG", "retrieval augmented generation",
-         "retrieval-augmented generation"],
+         "retrieval-augmented generation", "rag pipelines", "rag pipeline"],
         ["LangChain", "langchain", "lang chain"],
         ["LlamaIndex", "llamaindex", "llama index", "gpt index"],
         ["Vector Database", "vector db", "vectordb", "vector store",
          "vector databases"],
+        ["Vector Embeddings", "vector embeddings", "embeddings",
+         "embedding models"],
         ["Pinecone", "pinecone db"],
         ["Weaviate"],
         ["ChromaDB", "chroma", "chroma db"],
@@ -619,6 +624,8 @@ _SYNONYM_GROUPS = {
         ["DevOps", "dev ops", "devops culture", "devops practices"],
         ["Microservices", "micro-services", "microservice architecture",
          "microservice", "micro service", "microservices architecture"],
+        ["Async Programming", "asynchronous programming", "async await",
+         "async/await"],
         ["Monolithic Architecture", "monolith", "monolithic",
          "monolithic application"],
         ["Serverless", "faas", "function as a service",
@@ -873,6 +880,7 @@ _SYNONYM_GROUPS = {
          "critical care nursing"],
         # NOTE: bare "hipaa" is owned by the security group; here we only add
         # the healthcare-framed patient-privacy phrasing.
+        ["FHIR", "fhir r4", "hl7 fhir", "fhir r4 api"],
         ["Patient Privacy", "patient confidentiality", "phi protection"],
         ["Infection Control", "infection prevention", "sterile technique"],
         ["Triage", "patient triage", "emergency triage"],

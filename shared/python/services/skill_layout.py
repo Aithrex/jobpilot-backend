@@ -43,7 +43,8 @@ ROLE_LABELS = frozenset({
 BANNED_HEADINGS = frozenset({
     "tool", "tools", "concept", "concepts", "other", "miscellaneous",
     "misc", "concepts & methodologies", "professional skills",
-    "soft skills", "general",
+    "soft skills", "general", "technical stack", "tech stack",
+    "ai & standards",
 })
 
 KIND_PRIORITY = (
@@ -55,7 +56,6 @@ AFFINITY: Dict[frozenset, str] = {
     frozenset({"messaging", "database"}): "Distributed Systems & Data",
     frozenset({"testing", "observability"}): "Observability & Testing",
     frozenset({"infra", "cloud"}): "Cloud & Infrastructure",
-    frozenset({"ai_ml", "standard"}): "AI & Standards",
     frozenset({"framework", "language"}): "Languages & Frameworks",
 }
 
@@ -119,6 +119,27 @@ _KIND_BY_TERM: Dict[str, Tuple[str, Optional[str]]] = {
     "jest": ("testing", None),
     "cypress": ("testing", None),
     "selenium": ("testing", None),
+    "spring data jpa": ("framework", "backend"),
+    "spring data": ("framework", "backend"),
+    "spring jpa": ("framework", "backend"),
+    "github actions": ("infra", None),
+    "rag": ("ai_ml", None),
+    "rag pipelines": ("ai_ml", None),
+    "vector embeddings": ("ai_ml", None),
+    "embeddings": ("ai_ml", None),
+    "llm api integration": ("ai_ml", None),
+    "llm api": ("ai_ml", None),
+    "prompt engineering": ("ai_ml", None),
+    "langchain": ("ai_ml", None),
+    "fhir": ("standard", "healthcare"),
+    "fhir r4": ("standard", "healthcare"),
+    "hipaa": ("standard", "healthcare"),
+    "devops": ("infra", None),
+    "microservices": ("standard", None),
+    "async programming": ("standard", None),
+    "query optimization": ("database", None),
+    "monitoring": ("observability", None),
+    "elk": ("observability", None),
 }
 
 _VERSION_RE = re.compile(
@@ -176,9 +197,31 @@ _NAME_CACHE: Dict[str, str] = {
     "cloud+infra": "Cloud & Infrastructure",
     "database+messaging": "Distributed Systems & Data",
     "observability+testing": "Observability & Testing",
-    "ai_ml+standard": "AI & Standards",
     "framework+language": "Languages & Frameworks",
 }
+
+# Bare parent words that echo a heading. Dropped when a more specific
+# sibling of the same kind is already on the resume (AWS + "Cloud").
+GENERIC_PARENTS: Dict[str, str] = {
+    "cloud": "cloud",
+    "monitoring": "observability",
+    "devops": "infra",
+    "infrastructure": "infra",
+    "observability": "observability",
+    "ci/cd": "infra",
+    "cicd": "infra",
+}
+
+ALWAYS_DROP = frozenset({
+    "technical stack", "tech stack", "software", "tools", "platforms",
+})
+
+_DESCRIPTOR_TAIL = re.compile(
+    r"\s+(pipelines?|integration|programming|optimization|"
+    r"api(?:\s+integration)?)\s*$",
+    re.IGNORECASE,
+)
+_SPEC_REV_RE = re.compile(r"\s+r\d+\s*$", re.IGNORECASE)
 
 
 def is_role_label(term: str) -> bool:
@@ -193,18 +236,13 @@ def lookup_key(term: str) -> str:
         r"\s+(programming|language|lang)\s*$", "", raw, flags=re.I,
     ).strip()
     raw = _VERSION_RE.sub("", raw).strip()
+    raw = _SPEC_REV_RE.sub("", raw).strip()
     if not raw:
         return ""
     return (normalize_single(raw) or raw).lower()
 
 
-def lookup_term(term: str) -> TermFacts:
-    display = str(term or "").strip()
-    if is_role_label(display):
-        return TermFacts("", "soft", None, display)
-    key = lookup_key(display)
-    if not key:
-        return TermFacts("", None, None, display)
+def _classify_key(key: str, display: str) -> TermFacts:
     if key in _KIND_BY_TERM:
         kind, sub = _KIND_BY_TERM[key]
         return TermFacts(key, kind, sub, display)
@@ -222,6 +260,51 @@ def lookup_term(term: str) -> TermFacts:
                 kind, sub = "database", None
         return TermFacts(key, kind, sub, display)
     return TermFacts(key, None, None, display)
+
+
+def _lookup_candidates(key: str) -> List[str]:
+    """Full key, then drop trailing descriptors / last tokens (RAG pipelines → RAG)."""
+    out: List[str] = []
+    seen = set()
+
+    def add(item: str) -> None:
+        item = (item or "").strip()
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+
+    add(key)
+    stripped = key
+    for _ in range(4):
+        m = _DESCRIPTOR_TAIL.search(stripped)
+        if not m:
+            break
+        stripped = stripped[:m.start()].strip()
+        add(stripped)
+    parts = key.split()
+    for i in range(len(parts) - 1, 0, -1):
+        add(" ".join(parts[:i]))
+    return out
+
+
+def lookup_term(term: str) -> TermFacts:
+    display = str(term or "").strip()
+    if is_role_label(display):
+        return TermFacts("", "soft", None, display)
+    raw = _PAREN_RE.sub("", display).strip().lower()
+    key = lookup_key(display)
+    candidates = [c for c in (raw, key) if c]
+    if key:
+        candidates.extend(_lookup_candidates(key))
+    seen = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        facts = _classify_key(cand, display)
+        if facts.kind:
+            return facts
+    return TermFacts(key or raw, None, None, display)
 
 
 def index_terms(terms: Iterable[str]) -> Dict[str, TermFacts]:
@@ -434,46 +517,49 @@ def _seed_groups(terms: List[str]) -> Dict[str, List[str]]:
 
 
 def _merge_small(groups: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    """Fold tiny groups only into a real affinity partner — never a neighbor dump."""
     moved = True
     while moved:
         moved = False
         small = [k for k, v in groups.items() if k != "_unknown" and 0 < len(v) <= 2]
-        if not small:
-            break
-        key = small[0]
-        kinds_here = {lookup_term(t).kind for t in groups[key]}
-        best = None
-        for other, items in groups.items():
-            if other in (key, "_unknown") or not items:
-                continue
-            other_kind = _dominant_kind(items)
-            if _affinity_label(kinds_here | {other_kind}):
-                best = other
+        for key in small:
+            kinds_here = {lookup_term(t).kind for t in groups[key]}
+            best = None
+            for other, items in groups.items():
+                if other in (key, "_unknown") or not items:
+                    continue
+                other_kind = _dominant_kind(items)
+                if _affinity_label(kinds_here | {other_kind}):
+                    best = other
+                    break
+            if best:
+                groups[best].extend(groups.pop(key))
+                moved = True
                 break
-        if best is None:
-            # nearest sibling by KIND_PRIORITY
-            try:
-                idx = min(
-                    (KIND_PRIORITY.index(k) for k in kinds_here if k in KIND_PRIORITY),
-                    default=99,
-                )
-            except ValueError:
-                idx = 99
-            candidates = [
-                o for o in groups
-                if o not in (key, "_unknown") and groups[o]
-            ]
-            if candidates:
-                best = min(
-                    candidates,
-                    key=lambda o: abs(
-                        KIND_PRIORITY.index(_dominant_kind(groups[o]) or "tool")
-                        - idx
-                    ) if (_dominant_kind(groups[o]) or "tool") in KIND_PRIORITY else 99,
-                )
-        if best:
-            groups[best].extend(groups.pop(key))
-            moved = True
+    return groups
+
+
+def _merge_overflow(groups: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    """When we still have more than 8 headings, merge the smallest affinity pair."""
+    while True:
+        labeled = [k for k, v in groups.items() if v and k != "_unknown"]
+        if len(labeled) <= 8:
+            return groups
+        best = None
+        best_size = 10**9
+        for i, a in enumerate(labeled):
+            for b in labeled[i + 1:]:
+                kinds = {_dominant_kind(groups[a]), _dominant_kind(groups[b])}
+                if not _affinity_label(kinds):
+                    continue
+                size = len(groups[a]) + len(groups[b])
+                if size < best_size:
+                    best = (a, b)
+                    best_size = size
+        if not best:
+            return groups
+        a, b = best
+        groups[a].extend(groups.pop(b))
     return groups
 
 
@@ -502,18 +588,46 @@ def _split_large(groups: Dict[str, List[str]]) -> Dict[str, List[str]]:
     return groups
 
 
+def _drop_generic_parents(terms: List[str]) -> List[str]:
+    kinds_present = set()
+    for t in terms:
+        if is_generic_parent(t):
+            continue
+        kind = lookup_term(t).kind
+        if kind and kind != "soft":
+            kinds_present.add(kind)
+    kept: List[str] = []
+    for t in terms:
+        key = lookup_key(t) or t.strip().lower()
+        if key in ALWAYS_DROP:
+            continue
+        parent_kind = GENERIC_PARENTS.get(key)
+        if parent_kind and parent_kind in kinds_present:
+            continue
+        kept.append(t)
+    return kept
+
+
+def is_generic_parent(term: str) -> bool:
+    key = lookup_key(term) or str(term or "").strip().lower()
+    return key in GENERIC_PARENTS or key in ALWAYS_DROP
+
+
 def group_terms(terms: List[str]) -> List[List[str]]:
     """Deterministic groups for a term set. Same terms → same groups."""
     unique: List[str] = []
     seen = set()
     for t in terms:
-        if is_role_label(t):
+        if is_role_label(t) or is_generic_parent(t) and (
+            lookup_key(t) or t.strip().lower()
+        ) in ALWAYS_DROP:
             continue
         key = lookup_key(t) or t.lower()
         if key in seen:
             continue
         seen.add(key)
         unique.append(t)
+    unique = _drop_generic_parents(unique)
     groups = _seed_groups(unique)
     for _ in range(6):
         before = {k: tuple(v) for k, v in groups.items()}
@@ -532,7 +646,8 @@ def group_terms(terms: List[str]) -> List[List[str]]:
     n = len([k for k, v in groups.items() if v and k != "_unknown"])
     if n > 7:
         groups = _merge_small(groups)
-    return [list(v) for k, v in groups.items() if v]
+    groups = _merge_overflow(groups)
+    return [list(v) for k, v in groups.items() if v and k != "_unknown"]
 
 
 def _overlap(a: List[str], b: List[str]) -> float:
@@ -575,10 +690,10 @@ def name_group(
                 return proposed
         except Exception:
             logger.warning("skill_layout namer failed", exc_info=True)
-    fallback = cached or affinity or "Technical Stack"
-    if fallback.lower() in banned:
-        fallback = "Technical Stack"
-    return fallback
+    dom = _dominant_kind(items)
+    if dom and _NAME_CACHE.get(dom) and _NAME_CACHE[dom].lower() not in banned:
+        return _NAME_CACHE[dom]
+    return _NAME_CACHE.get(dom or "", "Skills")
 
 
 def order_groups(
@@ -702,6 +817,8 @@ def compose(
             key = lookup_key(term) or term.lower()
             if key in base_keys:
                 continue
+            if is_generic_parent(term):
+                continue
             facts = lookup_term(term)
             if facts.kind is None:
                 placed = None
@@ -712,15 +829,14 @@ def compose(
                 else:
                     unknown_queued.append(term)
                 continue
-            target = None
-            for row in labeled:
-                if _dominant_kind(row.items) == facts.kind:
-                    target = row
-                    break
-            if target is None and labeled:
-                target = labeled[-1]
+            target = next(
+                (row for row in labeled if _dominant_kind(row.items) == facts.kind),
+                None,
+            )
             if target:
                 target.items.append(term)
+            else:
+                unknown_queued.append(term)
         labeled = [r for r in labeled if r.items]
     elif mode == "REFINE" and base:
         passing, failing_terms = [], []
@@ -751,10 +867,20 @@ def compose(
             heading = row.label
         else:
             heading = name_group(row.items, base, used, namer=namer)
+        if heading.lower() in BANNED_HEADINGS:
+            heading = name_group(row.items, [], used, namer=None)
+        if heading.lower() in BANNED_HEADINGS:
+            unknown_queued.extend(row.items)
+            continue
         used.append(heading)
         named.append(SkillCategory(heading, row.items, row.provenance))
 
     ordered = order_groups(named, mode, jd_required, base)
+    placed_keys = {lookup_key(t) or t.lower() for r in ordered for t in r.items}
+    for t in clean:
+        key = lookup_key(t) or t.lower()
+        if key not in placed_keys and not is_generic_parent(t) and t not in unknown_queued:
+            unknown_queued.append(t)
     reasons = validate_layout(ordered, base)
     if reasons and base and mode != "DERIVE":
         logger.info("skill_layout: gates failed %s — shipping base", reasons)
