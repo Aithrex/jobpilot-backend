@@ -1,5 +1,10 @@
 terraform {
-  required_version = ">= 1.5"
+  # `use_lockfile` in the S3 backend below is Terraform >= 1.10 (native S3
+  # locking, the replacement for `dynamodb_table`). Declared ">= 1.5" until
+  # 2026-09-03, which made an old binary fail as "Backend configuration block
+  # has changed" -> "Unsupported argument: use_lockfile" -- two errors that
+  # both point at state migration when the actual problem is the binary.
+  required_version = ">= 1.10"
 
   required_providers {
     aws = {

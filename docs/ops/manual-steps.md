@@ -79,32 +79,30 @@ Both repos auto-deploy `main` on push. Backend deploy is path-scoped: `shared/**
 redeploys all four Lambdas; `services/<svc>/**` redeploys that one. The only
 pre-deploy gate is an `import app; create_app()` smoke test per changed service.
 
-## 2026-09-03 — `jobpilot-ci-ingest-runner-deploy` is applied but NOT in state
+## 2026-09-03 — `jobpilot-ci-ingest-runner-deploy` (RESOLVED, kept for the lesson)
 
 The `deploy-ingest-runner` CI job needs three grants the CI user did not have:
 `s3:PutObject` on `deploy/ingest-runner/*`, `ssm:SendCommand` on the one
 instance and the one document, and `ssm:GetCommandInvocation`. Its first run
 failed with `AccessDenied` on PutObject.
 
-It is **declared** in `infra/terraform/apply_executor.tf` as
-`aws_iam_user_policy.ci_ingest_runner_deploy` and was **applied by CLI**, not
-by Terraform: `terraform plan` refused with "Backend configuration block has
-changed / please run terraform init", and reinitialising a remote backend --
-which may migrate state -- is not something to do unattended on production
-infra to unblock a deploy job.
+Applied by CLI first, then **imported into state — `terraform plan` now reports
+no differences.** Nothing outstanding.
 
-**So Terraform state does not know the policy exists.** The next `apply` will
-try to CREATE it and fail with `EntityAlreadyExists`. Fix it with an import,
-not by deleting the live policy:
+> **The detour is the part worth keeping.** `terraform plan` first refused with
+> *"Backend configuration block has changed"*, which reads as state drift and
+> sent me looking for a migration problem. It was neither drift nor
+> permissions: `versions.tf` declared `required_version = ">= 1.5"` while the
+> S3 backend uses `use_lockfile`, which is **Terraform >= 1.10**. A 1.9.8
+> binary cannot parse it, and says so as a backend error before it ever says
+> so as a version error. The constraint is now `>= 1.10`, so the next person
+> gets one clear message instead of two misleading ones.
+
+If you ever need to re-do the import:
 
 ```bash
 cd infra/terraform
-terraform init -reconfigure          # resolve the backend drift FIRST, deliberately
+terraform init -reconfigure     # safe: same bucket and key, -reconfigure never copies state
 terraform import aws_iam_user_policy.ci_ingest_runner_deploy \
     jobpilot-ci-deployer:jobpilot-ci-ingest-runner-deploy
-terraform plan                       # expect: no changes to this resource
 ```
-
-The policy JSON in the CLI call and the `jsonencode` block are the same
-document, so a clean import should plan empty. If it does not, trust the
-Terraform version and apply it.
