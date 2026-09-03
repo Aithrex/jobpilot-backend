@@ -33,50 +33,12 @@ echo "==> uploading $SIZE to s3://$BUCKET/$KEY"
 aws s3 cp "$TMP/app.tar.gz" "s3://$BUCKET/$KEY" \
   --profile "$PROFILE" --region "$REGION" --only-show-errors
 
-cat > "$TMP/install.sh" <<'REMOTE'
-#!/usr/bin/env bash
-# Runs on the box. A FILE executed by bash, never inlined into SSM's command
-# list: AWS-RunShellScript executes under dash, where `set -o pipefail` and
-# heredocs-inside-quoting are syntax errors (the executor userdata carries the
-# same warning). Uploading the script and running `bash install.sh` sidesteps
-# the whole dialect problem.
-set -xeuo pipefail
-install -d -o jobpilot -g jobpilot /opt/jobpilot/app /var/log/jobpilot
-
-# boto3 resolves credentials from the instance profile; no keys on disk.
-sudo -u jobpilot /opt/jobpilot/venv/bin/python - <<'PY'
-import boto3
-boto3.client("s3").download_file(
-    "jobpilot-resumes-prod-032398581420",
-    "deploy/ingest-runner/app.tar.gz",
-    "/tmp/app.tar.gz")
-PY
-sudo -u jobpilot tar -xzf /tmp/app.tar.gz -C /opt/jobpilot/app
-rm -f /tmp/app.tar.gz
-
-# Install the SHARED requirements, not a hand-listed subset: the runner imports
-# the same tree the Lambda layer ships, so guessing the subset is how you find
-# a missing transitive dep at 3am on a box with no rollback.
-sudo -u jobpilot /opt/jobpilot/venv/bin/pip install -q --upgrade \
-  -r /opt/jobpilot/app/shared/python/requirements.txt
-
-# Import check BEFORE systemd ever starts: a missing dep fails here, loudly,
-# rather than as a restart loop.
-cd /opt/jobpilot/app
-sudo -u jobpilot \
-  env PYTHONPATH=/opt/jobpilot/app/shared/python:/opt/jobpilot/app \
-  /opt/jobpilot/venv/bin/python -c \
-  'import services.ingest_runner.runner as r, services.job_ingest_worker as w; print("import OK; sources:", w.SOURCES)'
-REMOTE
-
-if [ "$RESTART" = "1" ]; then
-cat >> "$TMP/install.sh" <<'REMOTE'
-systemctl daemon-reload
-systemctl restart ingest-runner
-sleep 5
-systemctl is-active ingest-runner
-REMOTE
-fi
+# ONE installer, shared with the `deploy-ingest-runner` job in
+# .github/workflows/deploy.yml. It used to be inlined here and nowhere else,
+# so CI had to reimplement it -- which is how the path an operator tests and
+# the path that runs on every push quietly stop being the same thing.
+cp "$HERE/infra/ec2/install-ingest-runner.sh" "$TMP/install.sh"
+[ "$RESTART" = "1" ] || sed -i '1a export NO_RESTART=1' "$TMP/install.sh"
 
 echo "==> uploading installer"
 aws s3 cp "$TMP/install.sh" "s3://$BUCKET/deploy/ingest-runner/install.sh" \

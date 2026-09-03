@@ -487,6 +487,37 @@ later postings out of the `MAX_ORDERED` window into date order: JPMorgan holds
 839 core-tech postings and a cap of 3 per 25-row page admits only ~240 within
 2,000.
 
+## Where the code actually runs (it is not all Lambda)
+
+**Five Lambdas and one EC2 box.** The four HTTP services and `apply_executor`
+deploy to Lambda; `services/ingest_runner` — THE CRAWL — is a systemd unit on
+an EC2 `t3.small` (`i-06bf0e03e60d9d409`), cut over 2026-09-02 with all four
+sources plus discovery and every matching EventBridge rule disabled. Lambda's
+300s wall is why: a shard could not finish its members before being starved.
+
+> **Reading `.github/workflows/deploy.yml` alone tells you the wrong thing.**
+> Until 2026-09-02 that workflow knew only about Lambda, so the crawler was
+> shipped by hand and drifted: the box was found running a build 20 hours
+> older than `main`, and because `job_inventory_service.upsert_posting` is
+> where `canonical_employer_id` is stamped and that module had never reached
+> the box, **733 postings an hour were arriving unstamped** while the backfill
+> reported 100% attribution. Nothing errored. The `deploy-ingest-runner` job
+> now ships it on every push that touches `shared/python/**`,
+> `services/ingest_runner/**` or `infra/ec2/**` — the same three trees the
+> tarball contains.
+
+Deployment is over **SSM, not SSH**: no inbound port, no key material in CI.
+`infra/ec2/install-ingest-runner.sh` is the single installer both the CI job
+and `infra/ec2/deploy-ingest-runner.sh` (the operator path) execute, so the
+path a human tests is the path that runs on every push. It IMPORT-CHECKS
+before it restarts — a missing dep fails loudly there rather than as a
+crash-loop under `Restart=always` while every EventBridge rule is already
+disabled, which is nothing crawling at all.
+
+> **Deploys do not wait for tests.** `deploy.yml` and `tests.yml` both trigger
+> on push to `main` and run in parallel with no dependency between them, so a
+> red suite does not hold back a deploy. Known, not endorsed.
+
 ## Config & data
 Config via `shared/python/utils/config.py`; secrets via **AWS SSM** in prod (`USE_SSM_SECRETS=true`), `.env` locally (see `.env.example`). Résumé collection is **`user_resumes`** (not `base_resumes`). Résumé files → **S3**. Keep cold starts lean: reuse boto3/Mongo clients at module scope, no heavy import-time work. Deploy lives in-repo: `infra/terraform/` (HTTP API + the 6 Lambdas + shared layer + IAM + KMS credential store + managed mailbox/SES + schedulers) and `scripts/build_layer.sh` + `scripts/package.sh`; see `infra/README.md`. CI: `.github/workflows/tests.yml` (offline suite) + `deploy.yml` (path-filtered per-service deploy).
 
