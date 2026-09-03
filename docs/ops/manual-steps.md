@@ -107,11 +107,15 @@ terraform import aws_iam_user_policy.ci_ingest_runner_deploy \
     jobpilot-ci-deployer:jobpilot-ci-ingest-runner-deploy
 ```
 
-## 2026-09-03 — OPEN: `median_tailored` snapshot is failing on a real regression
+## 2026-09-03 — CLOSED: `median_tailored` page_mismatch (post_header compressible again)
 
-`tests/test_resume_layout.py::test_visual_snapshots` fails on
-`median_tailored`. **Do not regenerate the golden to clear it.** The test is
-correct and the render is wrong.
+`tests/test_resume_layout.py::test_visual_snapshots` failed on
+`median_tailored` because the render spilled to two pages while the solver
+predicted one. Fixed by restoring a compressible `min_post_header` range
+(keep 0.80 max). Golden regenerated after the fit fix — do not treat that
+regeneration as permission to overwrite goldens without fixing the render.
+
+Historical notes (pre-fix):
 
 The renderer says so itself:
 
@@ -146,15 +150,12 @@ résumé it still predicts as one page renders as two.
    firing, and add keep-with-next for section headings so EDUCATION never
    orphans.
 
-Not fixed here because both change the reference-matching intent that
-`ce9a94b` set deliberately.
+Not fixed in the original note because both change the reference-matching
+intent that `ce9a94b` set deliberately. **Fix applied later:** option (1) —
+`min_post_header` restored to 0.33 with `max_post_header` 0.80; goldens
+updated for `median_tailored` and `dense_5_role`.
 
-> **The `await-tests` gate is ADVISORY while this is open.** It reports the
-> suite verdict on every deploy but does not refuse, because main is red from
-> unrelated tailoring/ATS work and a gate that blocks every deploy on somebody
-> else's failing suite gets switched off in anger rather than respected.
->
-> **Turn it on once main is green:** set the repo variable
-> `REQUIRE_GREEN_TESTS=true` (Settings -> Secrets and variables -> Actions ->
-> Variables). Nothing else changes. `gh workflow run deploy.yml --ref main`
-> bypasses it either way, and says so in the log.
+> **The `await-tests` gate was ADVISORY while this was open.** Once main is
+> green, set the repo variable `REQUIRE_GREEN_TESTS=true` (Settings ->
+> Secrets and variables -> Actions -> Variables). `gh workflow run deploy.yml
+> --ref main` bypasses it either way, and says so in the log.

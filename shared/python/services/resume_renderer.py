@@ -89,15 +89,15 @@ class LayoutSpec:
     )
 
     # Tight inside a section, wider between sections. Dense = reference.
-    # Heading chrome (cell, rule gap, post_header) is FROZEN — the density
-    # ramp may open space between sections and between jobs, never under a
-    # heading. Otherwise SUMMARY looks glued to its rule on a dense page
-    # and EXPERIENCE looks loose on a sparse one.
+    # Heading chrome prefers the reference look (max_post_header) but the
+    # solver may compress post_header toward min when content would otherwise
+    # spill a page. Freezing min==max caused median_tailored to page_mismatch
+    # (solver predicted 1 page, render was 2) — see docs/ops/manual-steps.md.
     min_section_gap: float = 1.82   # before heading
     max_section_gap: float = 3.20
     min_entry_gap: float = 1.13
     max_entry_gap: float = 2.00
-    min_post_header: float = 0.80   # after rule → first content (frozen)
+    min_post_header: float = 0.33   # after rule → first content (compressible)
     max_post_header: float = 0.80
     min_header_gap: float = 0.33    # company → role title
     max_header_gap: float = 0.50
@@ -307,7 +307,7 @@ _FLOOR_OTHER = 2
 class ResumeRenderer:
     """Generates PDF and DOCX from a structured (tailored) resume dict."""
 
-    RENDER_VERSION = "2026-09-02.5"  # frozen heading chrome; skills/projects cleanup
+    RENDER_VERSION = "2026-09-03.1"  # post_header compressible again (fit median_tailored)
 
     SKILLS_TITLES = (
         "Technical Skills",
@@ -731,7 +731,7 @@ class ResumeRenderer:
         return GapPlan(
             min(s.min_section_gap + unit * 0.5, s.max_section_gap),
             min(s.min_entry_gap + unit * 0.6, s.max_entry_gap),
-            s.min_post_header,  # frozen — same heading → rule → content on every page
+            min(s.min_post_header + unit * 0.3, s.max_post_header),
             min(s.min_header_gap + unit * 1, s.max_header_gap),
             min(s.min_skill_gap + unit * 0.3, s.max_skill_gap),
             max(self._lerp(s.margin_lr_mm, s.margin_lr_wide_mm, ramp), s.margin_lr_mm),

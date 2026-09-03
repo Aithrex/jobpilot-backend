@@ -420,19 +420,20 @@ def test_section_gap_exceeds_post_header_at_every_density():
     assert r.spec.min_section_gap > r.spec.max_post_header
 
 
-def test_heading_chrome_is_frozen_across_densities():
-    """Leftover whitespace may open between sections, never under a heading."""
+def test_heading_chrome_stays_in_range_across_densities():
+    """Leftover whitespace may open between sections. post_header may compress
+    toward min when needed to keep one page, but must stay within [min, max]."""
     r = ResumeRenderer()
     posts = []
     for key in FIXTURES:
         _w, res = r._compute_pdf_layout(FIXTURES[key])
         posts.append(res.gaps.post_header)
-        assert res.gaps.post_header == pytest.approx(r.spec.min_post_header)
-    assert max(posts) - min(posts) < 1e-9
-    assert r.spec.min_post_header == r.spec.max_post_header
+        assert res.gaps.post_header >= r.spec.min_post_header - 1e-9
+        assert res.gaps.post_header <= r.spec.max_post_header + 1e-9
+    assert r.spec.min_post_header < r.spec.max_post_header
     assert r.spec.contact_section_gap_mm == r.spec.min_section_gap
-    # Rule sits in the middle of the heading chrome, not glued to the text.
-    assert abs(r.spec.heading_rule_gap_mm - r.spec.min_post_header) <= 0.40
+    # Rule sits in the middle of the reference heading chrome, not glued to text.
+    assert abs(r.spec.heading_rule_gap_mm - r.spec.max_post_header) <= 0.40
 
 
 def test_charis_embedded_and_tinos_fallback(monkeypatch):

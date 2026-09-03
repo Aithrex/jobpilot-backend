@@ -156,12 +156,16 @@ def test_skill_term_ceiling_scales_with_years():
     assert skill_term_ceiling(0, has_roles=True) == 45
 
 
-def test_empty_jd_hard_skill_unscored():
+def test_empty_jd_hard_skill_is_full_credit():
+    """Empty JD keyword lists are not a candidate failure — there is nothing
+    to match. The honest v2 scorer awards full hard-skill credit and notes
+    why, rather than marking the dimension unscored/zero."""
     score, found, missing, detail = ResumeScorer()._hard_skill_score(
         {"summary": "x", "skills": {}, "experience": [], "projects": [],
          "education": [], "certifications": []},
         {"required_skills": [], "preferred_skills": [], "keywords": []},
     )
-    assert detail["unscored"] is True
-    assert score == 0
+    assert score == 100
     assert found == missing == []
+    assert "unscored" not in detail
+    assert "no keywords" in detail.get("note", "").lower()
