@@ -167,11 +167,13 @@ class ResumeScorer:
     # ------------------------------------------------------------------
 
     def _deterministic_scores(self, tailored: Dict[str, Any], jd_analysis: Dict[str, Any]) -> dict:
-        """Compute deterministic document-coverage diagnostics.
+        """Ledger-driven document coverage. One denominator for required groups.
 
-        Domain/preferred terms stay out of the required denominator. Repetition
-        does not increase coverage. Matching uses the shared requirement matcher.
+        Keyword/skills bars both reflect the same required-coverage ledger so
+        they cannot disagree. Term presence is retained as a separate advisory
+        diagnostic and never mixed into requirement satisfaction.
         """
+        from services.requirement_assessment import evaluate_requirements
         from services.requirement_matcher import (
             build_requirement_diagnostics,
             coverage_hits,
@@ -179,48 +181,94 @@ class ResumeScorer:
             scored_term_lists,
         )
 
-        lists = scored_term_lists(jd_analysis)
-        required = lists["required"]
-        keywords = lists["keywords"]
-        # Search-term presence (advisory) is required + keywords, not domain.
-        all_kw = list(dict.fromkeys(required + keywords))
-
         resume_text = build_resume_text(tailored)
+        ledger_out = evaluate_requirements(
+            document_text=resume_text,
+            jd=jd_analysis,
+            resume=tailored,
+            source_resume=None,
+        )
+        req_cov = ledger_out.get("required_coverage") or {}
+        pref_cov = ledger_out.get("preferred_coverage") or {}
+        coverage_pct = req_cov.get("percentage")
+        numerator = req_cov.get("numerator")
+        denominator = req_cov.get("denominator")
 
-        found_kw, missing_kw, _hits = coverage_hits(
-            resume_text, all_kw, resume=tailored,
-        )
-        kw_score = coverage_score(found_kw, missing_kw)
-        req_found, req_missing, _ = coverage_hits(
-            resume_text, required, resume=tailored,
-        )
-        skills_score = coverage_score(req_found, req_missing)
+        lists = scored_term_lists(jd_analysis)
+        all_kw = list(dict.fromkeys(lists["required"] + lists["keywords"]))
+        found_kw, missing_kw, _ = coverage_hits(resume_text, all_kw, resume=tailored)
+        term_presence = coverage_score(found_kw, missing_kw)
+
         section_score = self._section_completeness_score(tailored)
         impact_score = self._quantifiable_impact_score(tailored)
-
         from services.impact_engine import ImpactEngine
         impact_analysis = ImpactEngine().analyze(tailored)
 
-        diagnostics = [
-            d.as_dict() for d in build_requirement_diagnostics(
-                jd_analysis=jd_analysis,
-                document_text=resume_text,
-                resume=tailored,
-            )
-        ]
+        ledger_rows = (ledger_out.get("ledger") or {}).get("requirements") or []
+        if ledger_rows:
+            diagnostics = []
+            for row in ledger_rows:
+                refs = row.get("document_refs") or []
+                span = (refs[0] or {}).get("span") if refs else ""
+                section = (refs[0] or {}).get("section") if refs else ""
+                diagnostics.append({
+                    "jd_text": row.get("display_text") or row.get("requirement_id"),
+                    "classification": row.get("priority"),
+                    "canonical_identity": row.get("requirement_id"),
+                    "matched_span": span,
+                    "matched_section": section,
+                    "source_support": row.get("source_state"),
+                    "match_method": row.get("match_method"),
+                    "unmet_qualifiers": row.get("unmet_qualifiers") or [],
+                    "document_state": row.get("document_state"),
+                    "reason": row.get("reason") or "",
+                    "in_denominator": row.get("priority") == "required",
+                })
+        else:
+            diagnostics = [
+                d.as_dict() for d in build_requirement_diagnostics(
+                    jd_analysis=jd_analysis,
+                    document_text=resume_text,
+                    resume=tailored,
+                )
+            ]
+
+        not_shown = []
+        for row in ledger_rows:
+            if row.get("priority") == "required" and row.get("document_state") in {
+                "not_demonstrated", "unknown",
+            }:
+                not_shown.append(row.get("display_text") or row.get("requirement_id"))
 
         return {
-            "keyword_match": kw_score,
-            "keyword_frequency": kw_score,
-            "skills_alignment": skills_score,
+            # Both bars = same ledger required coverage (no competing math).
+            "keyword_match": coverage_pct if coverage_pct is not None else 0,
+            "keyword_frequency": coverage_pct if coverage_pct is not None else 0,
+            "skills_alignment": coverage_pct if coverage_pct is not None else 0,
             "section_completeness": section_score,
             "quantifiable_impact": impact_score,
             "format_score": None,
-            "missing_keywords": missing_kw,
+            "missing_keywords": not_shown or missing_kw,
             "found_keywords": found_kw,
-            "coverage_numerator": len(req_found),
-            "coverage_denominator": len(req_found) + len(req_missing),
-            "coverage_kind": "internal_document_coverage",
+            "coverage_numerator": numerator,
+            "coverage_denominator": denominator,
+            "coverage_kind": "required_document_coverage",
+            "coverage_status": req_cov.get("status"),
+            "coverage_provisional": bool(req_cov.get("provisional")),
+            "required_coverage": req_cov,
+            "preferred_coverage": pref_cov,
+            "term_presence": {
+                "label": "Term presence",
+                "percentage": term_presence,
+                "found": found_kw,
+                "missing": missing_kw,
+                "denominator": len(found_kw) + len(missing_kw),
+                "note": "Advisory search-term presence; separate from requirement satisfaction.",
+            },
+            "ledger": ledger_out.get("ledger"),
+            "evaluations": ledger_out.get("evaluations"),
+            "canonical_requirements": ledger_out.get("requirements"),
+            "counts": ledger_out.get("counts"),
             "requirement_diagnostics": diagnostics,
             "impact_suggestions": impact_analysis.get("suggestions", []),
             "impact_score_detail": impact_analysis.get("impact_score", 0),
@@ -622,8 +670,17 @@ class ResumeScorer:
             if len(final_suggestions) >= 8:
                 break
 
+        # When ledger has no assessable required groups, overall stays unavailable
+        # (None) rather than inventing 0% or 100%.
+        overall = coverage
+        if det.get("coverage_status") in {"unavailable", "incomplete_extraction"}:
+            overall = None
+        elif coverage is None and det.get("coverage_denominator") == 0:
+            overall = None
+
         combined = {
-            "overall": coverage,
+            "overall": overall if overall is not None else 0,
+            "overall_unavailable": overall is None,
             "keyword_match": keyword_match if keyword_match is not None else 0,
             "keyword_frequency": keyword_match if keyword_match is not None else 0,
             "skills_alignment": skills_alignment if skills_alignment is not None else 0,
@@ -636,9 +693,15 @@ class ResumeScorer:
             "missing_keywords": det["missing_keywords"],
             "found_keywords": det.get("found_keywords") or [],
             "strengths": list(ai.get("strengths") or []),
-            "coverage_kind": det.get("coverage_kind") or "internal_document_coverage",
+            "coverage_kind": det.get("coverage_kind") or "required_document_coverage",
             "coverage_numerator": det.get("coverage_numerator"),
             "coverage_denominator": det.get("coverage_denominator"),
+            "coverage_status": det.get("coverage_status"),
+            "coverage_provisional": det.get("coverage_provisional"),
+            "required_coverage": det.get("required_coverage"),
+            "preferred_coverage": det.get("preferred_coverage"),
+            "term_presence": det.get("term_presence"),
+            "ledger": det.get("ledger"),
             "requirement_diagnostics": det.get("requirement_diagnostics") or [],
             "vendor_scores_measured": False,
         }

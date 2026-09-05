@@ -243,13 +243,14 @@ def compute_assessment_stages(
         out["canonical_requirements"] = req_out.get("requirements") or []
         out["evaluations"] = req_out.get("evaluations") or []
         out["counts"] = req_out.get("counts") or {}
-        stages["source_check"] = (
-            "complete" if source_resume is not None and out["evaluations"]
-            else ("unresolved" if source_resume is None else "complete")
-        )
+        out["ledger"] = req_out.get("ledger") or {}
+        out["required_coverage"] = req_out.get("required_coverage")
+        out["preferred_coverage"] = req_out.get("preferred_coverage")
         if source_resume is None:
             stages["source_check"] = "unresolved"
         elif out["evaluations"]:
+            stages["source_check"] = "complete"
+        else:
             stages["source_check"] = "complete"
     except Exception as exc:
         logger.warning("requirement stage failed: %s", exc)

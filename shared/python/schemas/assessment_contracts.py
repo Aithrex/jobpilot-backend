@@ -381,6 +381,115 @@ def count_evaluations(
     return counts
 
 
+def document_coverage_summary(
+    requirements: Sequence[CanonicalRequirement],
+    evaluations: Sequence[RequirementEvaluation],
+    *,
+    priority: RequirementPriority = "required",
+) -> Dict[str, Any]:
+    """Transparent coverage from one ledger — document_state only.
+
+    Required coverage =
+      fully satisfied required groups / total required groups × 100
+
+    Partial groups get no full-satisfaction credit (counted separately).
+    Unknown/uncertain stay in the denominator. Incomplete extraction
+    withholds an authoritative percentage. Empty denominator → unavailable
+    (None), never 100%.
+    """
+    by_id = {e.requirement_id: e for e in evaluations}
+    groups = [r for r in requirements if r.priority == priority]
+    total = len(groups)
+    if total == 0:
+        return {
+            "priority": priority,
+            "percentage": None,
+            "satisfied": 0,
+            "partial": 0,
+            "not_demonstrated": 0,
+            "uncertain": 0,
+            "total": 0,
+            "provisional": False,
+            "incomplete_extraction": False,
+            "status": "unavailable",
+            "label": f"{priority}_document_coverage",
+        }
+
+    incomplete = any(r.extraction_state != "complete" for r in groups)
+    satisfied = partial = not_demo = uncertain = 0
+    for req in groups:
+        ev = by_id.get(req.id)
+        state = (ev.document_state if ev else "unknown") or "unknown"
+        if state == "satisfied":
+            satisfied += 1
+        elif state == "partially_supported":
+            partial += 1
+        elif state in {"unknown", "contradicted"}:
+            uncertain += 1
+        else:
+            not_demo += 1
+
+    if incomplete:
+        percentage = None
+        status = "incomplete_extraction"
+    else:
+        percentage = round((satisfied / total) * 100)
+        status = "provisional" if uncertain > 0 else "complete"
+
+    return {
+        "priority": priority,
+        "percentage": percentage,
+        "satisfied": satisfied,
+        "partial": partial,
+        "not_demonstrated": not_demo,
+        "uncertain": uncertain,
+        "total": total,
+        "provisional": uncertain > 0 and not incomplete,
+        "incomplete_extraction": incomplete,
+        "status": status,
+        "label": f"{priority}_document_coverage",
+        "numerator": satisfied,
+        "denominator": total,
+    }
+
+
+def build_requirement_ledger(
+    requirements: Sequence[CanonicalRequirement],
+    evaluations: Sequence[RequirementEvaluation],
+) -> Dict[str, Any]:
+    """Single ledger: every UI count/percentage derives from this structure."""
+    by_id = {e.requirement_id: e for e in evaluations}
+    rows: List[Dict[str, Any]] = []
+    for req in requirements:
+        ev = by_id.get(req.id)
+        rows.append({
+            "requirement_id": req.id,
+            "display_text": req.display_text,
+            "source_excerpt": req.source_excerpt,
+            "priority": req.priority,
+            "kind": req.kind,
+            "extraction_state": req.extraction_state,
+            "expression": req.expression.as_dict(),
+            "document_state": ev.document_state if ev else "unknown",
+            "source_state": ev.source_state if ev else "unknown",
+            "claim_state": ev.claim_state if ev else "unverified",
+            "match_method": ev.match_method if ev else "none",
+            "document_refs": [r.as_dict() for r in (ev.document_refs if ev else [])],
+            "source_refs": [r.as_dict() for r in (ev.source_refs if ev else [])],
+            "unmet_qualifiers": list(ev.unmet_qualifiers if ev else []),
+            "reason": ev.reason if ev else "",
+            "display_bucket": ev.display_bucket() if ev else "unknown",
+        })
+    required_cov = document_coverage_summary(requirements, evaluations, priority="required")
+    preferred_cov = document_coverage_summary(requirements, evaluations, priority="preferred")
+    return {
+        "requirements": rows,
+        "required_coverage": required_cov,
+        "preferred_coverage": preferred_cov,
+        "counts": count_evaluations(requirements, evaluations).as_dict(),
+    }
+
+
 def validate_assessment_result(payload: Dict[str, Any]) -> List[str]:
     """Lightweight structural validation. Returns error strings."""
     errors: List[str] = []

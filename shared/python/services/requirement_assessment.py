@@ -778,10 +778,15 @@ def evaluate_requirements(
         ))
 
     counts = count_evaluations(requirements, evaluations)
+    from schemas.assessment_contracts import build_requirement_ledger
+    ledger = build_requirement_ledger(requirements, evaluations)
     return {
         "requirements": [r.as_dict() for r in requirements],
         "evaluations": [e.as_dict() for e in evaluations],
         "counts": counts.as_dict(),
+        "ledger": ledger,
+        "required_coverage": ledger["required_coverage"],
+        "preferred_coverage": ledger["preferred_coverage"],
     }
 
 

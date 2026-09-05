@@ -254,6 +254,9 @@ class PageResolution:
     fill_ratio: float
     dropped: List[DroppedItem] = field(default_factory=list)
     outcome: Outcome = "fit_one"
+    # Layout warnings (sparse final page, stranded heading avoided, etc.).
+    # Advisory only — never reduce JD requirement coverage.
+    layout_warnings: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -263,6 +266,7 @@ class PageResolution:
             "dropped": [d.to_dict() for d in self.dropped],
             "body_pt": self.tier.body_pt,
             "predicted_height_mm": round(self.predicted_height_mm, 2),
+            "layout_warnings": list(self.layout_warnings),
         }
 
 
@@ -307,7 +311,7 @@ _FLOOR_OTHER = 2
 class ResumeRenderer:
     """Generates PDF and DOCX from a structured (tailored) resume dict."""
 
-    RENDER_VERSION = "2026-09-03.1"  # post_header compressible again (fit median_tailored)
+    RENDER_VERSION = "2026-09-05.1"  # keep heading with first entry; no orphan EDUCATION
 
     SKILLS_TITLES = (
         "Technical Skills",
@@ -1175,8 +1179,30 @@ class ResumeRenderer:
         pdf.ln(s.contact_section_gap_mm)
         first_section = True
 
-        def section_header(title: str):
+        def _heading_chrome_mm() -> float:
+            """Height of section gap + heading cell + rule gap + post_header."""
+            before = 0.0 if first_section else section_gap
+            return before + s.heading_cell_h + s.heading_rule_gap_mm + post_header
+
+        def _ensure_keep_with(first_block_mm: float) -> None:
+            """Page-break before a heading when heading+first block won't fit.
+
+            Prevents stranded headings (EDUCATION at foot of page 1 with the
+            school line alone on page 2). Does not keep an entire large
+            section together.
+            """
+            if measure_only:
+                return
+            need = _heading_chrome_mm() + max(0.0, first_block_mm) + 1.0
+            remaining = pdf.page_break_trigger - pdf.get_y()
+            if remaining < need:
+                pdf.add_page()
+                pdf.set_y(mt)
+
+        def section_header(title: str, *, keep_with_mm: float = 0.0):
             nonlocal first_section
+            if keep_with_mm > 0:
+                _ensure_keep_with(keep_with_mm)
             self._reset_pdf_paint(pdf)
             if first_section:
                 first_section = False
@@ -1245,7 +1271,13 @@ class ResumeRenderer:
         # EXPERIENCE
         experience = tailored.get("experience") or []
         if experience:
-            section_header(s.heading("experience"))
+            first_exp = experience[0]
+            first_need = s.entry_row_h + (
+                header_gap + job_title_h if (first_exp.get("title") or "").strip() else 0.0
+            )
+            if first_exp.get("bullets"):
+                first_need += pre_bullet_gap + lh
+            section_header(s.heading("experience"), keep_with_mm=first_need)
             for i, exp in enumerate(experience):
                 company = sanitize(exp.get("company", ""))
                 location = sanitize(exp.get("location", ""))
@@ -1273,7 +1305,11 @@ class ResumeRenderer:
         # PROJECTS
         projects = tailored.get("projects") or []
         if projects:
-            section_header(s.heading("projects"))
+            first_proj = projects[0]
+            first_need = s.entry_row_h
+            if first_proj.get("bullets"):
+                first_need += pre_bullet_gap + lh
+            section_header(s.heading("projects"), keep_with_mm=first_need)
             for i, proj in enumerate(projects):
                 proj_name = sanitize(proj.get("name", ""))
                 proj_dates = sanitize(proj.get("dates", ""))
@@ -1292,8 +1328,8 @@ class ResumeRenderer:
         skill_rows = self._prepare_skill_rows(tailored.get("skills") or {})
         if skill_rows:
             skills_heading = self._skills_title(tailored)
-            section_header(skills_heading)
             lh_skill = max(min(lh_s, s.max_skill_leading), 3.45)
+            section_header(skills_heading, keep_with_mm=lh_skill)
             for i, (category, skill_list) in enumerate(skill_rows):
                 self._draw_skill_row(
                     pdf, category, skill_list,
@@ -1319,7 +1355,15 @@ class ResumeRenderer:
                 seen_edu.add(key)
                 deduped.append(edu)
             if deduped:
-                section_header(s.heading("education"))
+                first = deduped[0]
+                first_need = s.entry_row_h
+                if sanitize(first.get("degree", "")).strip():
+                    first_need += header_gap + lh
+                if sanitize(first.get("coursework", "")).strip():
+                    first_need += lh_s
+                # Keep EDUCATION heading with its first school line — never
+                # draw the heading then page-break before the entry.
+                section_header(s.heading("education"), keep_with_mm=first_need)
                 for ei, edu in enumerate(deduped):
                     if ei > 0:
                         pdf.ln(edu_entry_gap)
@@ -1348,17 +1392,17 @@ class ResumeRenderer:
                     if gpa:
                         left_bits.append(f"GPA: {gpa}")
                     left_text = " | ".join(left_bits)
-                    need = s.entry_row_h
-                    if degree:
-                        need += header_gap + lh
-                    if coursework:
-                        need += lh_s
-                    if (
-                        not measure_only
-                        and (pdf.page_break_trigger - pdf.get_y()) < (need + 1.0)
-                    ):
-                        pdf.add_page()
-                        pdf.set_y(mt)
+                    # Subsequent entries: keep school line + degree together,
+                    # but never orphan from a heading already drawn.
+                    if ei > 0 and not measure_only:
+                        need = s.entry_row_h
+                        if degree:
+                            need += header_gap + lh
+                        if coursework:
+                            need += lh_s
+                        if (pdf.page_break_trigger - pdf.get_y()) < (need + 1.0):
+                            pdf.add_page()
+                            pdf.set_y(mt)
                     self._draw_split_row(
                         pdf, left_text, dates,
                         left_size=s.entry_pt, right_size=body_size, left_style="B",
@@ -1378,7 +1422,7 @@ class ResumeRenderer:
         # CERTIFICATIONS — last, never trimmed
         certs = [sanitize(c).strip() for c in (tailored.get("certifications") or []) if str(c).strip()]
         if certs:
-            section_header(s.heading("certifications"))
+            section_header(s.heading("certifications"), keep_with_mm=lh_s)
             joined = ", ".join(certs)
             self._assert_renderable(joined, "certifications")
             self._set_font(pdf, "", body_size, joined)
@@ -1399,7 +1443,94 @@ class ResumeRenderer:
     def generate_pdf(self, tailored: Dict[str, Any]) -> Tuple[bytes, PageResolution]:
         """Render a PDF. Never clips. Returns (bytes, PageResolution)."""
         working, resolution = self._compute_pdf_layout(tailored)
-        pdf_bytes, height = self._render_pdf(
+        pdf_bytes, height, resolution = self._render_and_reconcile_pages(
+            working, resolution,
+        )
+        logger.info(
+            "resume_render outcome=%s pages=%d fill_ratio=%.3f body_pt=%.1f dropped=%d warnings=%s",
+            resolution.outcome, resolution.pages, resolution.fill_ratio,
+            resolution.tier.body_pt, len(resolution.dropped),
+            resolution.layout_warnings,
+        )
+        return pdf_bytes or b"", resolution
+
+    def _render_and_reconcile_pages(
+        self, working: Dict[str, Any], resolution: PageResolution,
+    ) -> Tuple[bytes, float, PageResolution]:
+        """Render once; if keep-with-next forces a sparse second page, retry denser."""
+        pdf_bytes, height = self._paint_pdf(working, resolution)
+        avail = self.spec.usable_height(
+            resolution.gaps.margin_top, resolution.gaps.margin_bottom,
+        )
+        actual_pages = self._pages_from_height(height, avail)
+        if actual_pages != resolution.pages:
+            logger.error(
+                "resume_render page_mismatch solver=%d actual=%d h=%.1f avail=%.1f",
+                resolution.pages, actual_pages, height, avail,
+            )
+            resolution.pages = actual_pages
+
+        # Avoidable overflow: solver wanted 1 page but keep-with-next spilled a
+        # short final section. Retry at min gaps / no stretch before accepting
+        # a mostly empty second page.
+        if (
+            resolution.pages >= 2
+            and resolution.outcome in {"fit_one", "trimmed_to_one"}
+        ):
+            denser = PageResolution(
+                tier=resolution.tier,
+                gaps=self._min_gaps(),
+                stretch=1.0,
+                pages=1,
+                predicted_height_mm=resolution.predicted_height_mm,
+                fill_ratio=resolution.fill_ratio,
+                dropped=list(resolution.dropped),
+                outcome=resolution.outcome,
+                layout_warnings=list(resolution.layout_warnings),
+            )
+            retry_bytes, retry_h = self._paint_pdf(working, denser)
+            retry_pages = self._pages_from_height(
+                retry_h,
+                self.spec.usable_height(denser.gaps.margin_top, denser.gaps.margin_bottom),
+            )
+            if retry_pages < resolution.pages:
+                pdf_bytes, height, resolution = retry_bytes, retry_h, denser
+                resolution.pages = retry_pages
+                resolution.layout_warnings.append(
+                    "Compressed section spacing to keep a short final section on page 1."
+                )
+            elif retry_pages == resolution.pages:
+                # Keep denser layout if it still needs 2 pages — more readable.
+                pdf_bytes, height, resolution = retry_bytes, retry_h, denser
+                resolution.pages = retry_pages
+
+        avail = self.spec.usable_height(
+            resolution.gaps.margin_top, resolution.gaps.margin_bottom,
+        )
+        resolution.predicted_height_mm = height
+        if resolution.pages <= 1:
+            resolution.fill_ratio = min(height / avail, self.spec.max_fill) if avail else 0
+        else:
+            last = height - avail * (resolution.pages - 1)
+            resolution.fill_ratio = min(max(last, 0) / avail, 1.0) if avail else 0
+            # Sparse final page is a layout warning, not a coverage failure.
+            if resolution.fill_ratio < 0.25:
+                resolution.layout_warnings.append(
+                    "Final page has little content after keep-together rules; "
+                    "content was preserved rather than deleted."
+                )
+        return pdf_bytes or b"", height, resolution
+
+    @staticmethod
+    def _pages_from_height(height: float, avail: float) -> int:
+        if not avail or height <= avail + 0.5:
+            return 1
+        return max(1, int((height - 1e-6) / avail) + 1)
+
+    def _paint_pdf(
+        self, working: Dict[str, Any], resolution: PageResolution,
+    ) -> Tuple[bytes, float]:
+        return self._render_pdf(
             working,
             section_gap=resolution.gaps.section_gap,
             entry_gap=resolution.gaps.entry_gap,
@@ -1415,33 +1546,8 @@ class ResumeRenderer:
             lh=resolution.tier.lh,
             lh_s=resolution.tier.lh_s,
             stretch=resolution.stretch,
-            max_pages=resolution.pages,
+            max_pages=max(resolution.pages, 2),
         )
-        # Prefer measured height from the final render.
-        resolution.predicted_height_mm = height
-        avail = self.spec.usable_height(
-            resolution.gaps.margin_top, resolution.gaps.margin_bottom,
-        )
-        actual_pages = 1
-        if avail and height > avail + 0.5:
-            actual_pages = max(1, int((height - 1e-6) / avail) + 1)
-        if actual_pages != resolution.pages:
-            logger.error(
-                "resume_render page_mismatch solver=%d actual=%d h=%.1f avail=%.1f",
-                resolution.pages, actual_pages, height, avail,
-            )
-            resolution.pages = actual_pages
-        if resolution.pages <= 1:
-            resolution.fill_ratio = min(height / avail, self.spec.max_fill) if avail else 0
-        else:
-            last = height - avail * (resolution.pages - 1)
-            resolution.fill_ratio = min(max(last, 0) / avail, 1.0) if avail else 0
-        logger.info(
-            "resume_render outcome=%s pages=%d fill_ratio=%.3f body_pt=%.1f dropped=%d",
-            resolution.outcome, resolution.pages, resolution.fill_ratio,
-            resolution.tier.body_pt, len(resolution.dropped),
-        )
-        return pdf_bytes or b"", resolution
 
     # ------------------------------------------------------------------
     # DOCX — same LayoutSpec + same PageResolution knobs
@@ -1616,7 +1722,8 @@ class ResumeRenderer:
 
         first_section = True
 
-        def add_section_header(title: str):
+        def add_section_header(title: str, *, keep_with_next: bool = True):
+            """Section heading; keep_with_next avoids orphaned EDUCATION/etc."""
             nonlocal first_section
             p = doc.add_paragraph()
             run = p.add_run(title.upper())
@@ -1625,6 +1732,8 @@ class ResumeRenderer:
             first_section = False
             after_pt = (s.min_post_header if post_header is None else post_header) * 72 / 25.4
             tight(p, before=before * 72 / 25.4, after=after_pt)
+            if keep_with_next:
+                p.paragraph_format.keep_with_next = True
             rule_space_pt = str(int(round(s.heading_rule_gap_mm * 72 / 25.4)))
             add_bottom_border(p, size="6", space=rule_space_pt)
 
@@ -1755,8 +1864,8 @@ class ResumeRenderer:
                 seen.add(key)
                 deduped.append(edu)
             if deduped:
-                add_section_header(s.heading("education"))
-                for edu in deduped:
+                add_section_header(s.heading("education"), keep_with_next=True)
+                for edu_i, edu in enumerate(deduped):
                     inst = edu.get("institution", "") or ""
                     location = edu.get("location", "") or ""
                     degree = edu.get("degree", "") or ""
@@ -1779,7 +1888,10 @@ class ResumeRenderer:
                     left_bits = [x for x in [inst, loc_part] if x]
                     if gpa:
                         left_bits.append(f"GPA: {gpa}")
-                    header_line(" | ".join(left_bits), dates)
+                    school_p = header_line(" | ".join(left_bits), dates)
+                    # Keep school line with degree so Education does not split mid-entry.
+                    if degree and edu_i == 0:
+                        school_p.paragraph_format.keep_with_next = True
                     if degree:
                         p = doc.add_paragraph()
                         p.alignment = WD_ALIGN_PARAGRAPH.LEFT

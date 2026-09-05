@@ -288,12 +288,13 @@ def test_legacy_score_has_no_frequency_bonus_or_domain_denominator(monkeypatch):
     a = scorer.score(once, SCREENSHOT_LIKE_JD)
     b = scorer.score(many, SCREENSHOT_LIKE_JD)
     assert a["keyword_match"] == b["keyword_match"]
-    assert a.get("coverage_kind") == "internal_document_coverage"
+    assert a.get("coverage_kind") == "required_document_coverage"
     assert a.get("vendor_scores_measured") is False
     assert "scanners" not in a or not a.get("vendor_scores_measured")
     assert a.get("format_score") in (None, 0)
-    lists = scored_term_lists(SCREENSHOT_LIKE_JD)
-    assert a["coverage_denominator"] == len(lists["required"])
+    # Denominator is canonical required requirement groups, not raw JD term list.
+    assert a["coverage_denominator"] == a["required_coverage"]["denominator"]
+    assert a["keyword_match"] == a["skills_alignment"]
 
 
 def test_unavailable_ai_does_not_default_to_70(monkeypatch):
@@ -413,3 +414,153 @@ def test_build_match_gaps_without_model_marks_demonstrated(monkeypatch):
     )
     items = {d["item"] for d in report.get("already_demonstrated") or []}
     assert any("REST" in i for i in items)
+
+
+# ---------------------------------------------------------------------------
+# Canonical ledger coverage (one denominator)
+# ---------------------------------------------------------------------------
+
+def test_ledger_required_coverage_formula_and_partial_no_credit():
+    from schemas.assessment_contracts import (
+        CanonicalRequirement,
+        RequirementEvaluation,
+        atomic,
+        build_requirement_ledger,
+        document_coverage_summary,
+        group_or,
+    )
+    reqs = [
+        CanonicalRequirement(
+            id="or1", display_text="Python or Java", priority="required",
+            kind="capability",
+            expression=group_or(atomic("Python"), atomic("Java")),
+            source_excerpt="Python or Java",
+        ),
+        CanonicalRequirement(
+            id="sql", display_text="SQL", priority="required",
+            kind="capability", expression=atomic("SQL"), source_excerpt="SQL",
+        ),
+        CanonicalRequirement(
+            id="kafka", display_text="Kafka", priority="preferred",
+            kind="capability", expression=atomic("Kafka"), source_excerpt="Kafka",
+        ),
+    ]
+    evals = [
+        RequirementEvaluation(
+            requirement_id="or1", document_state="satisfied",
+            source_state="unknown", claim_state="unverified", match_method="exact",
+        ),
+        RequirementEvaluation(
+            requirement_id="sql", document_state="partially_supported",
+            source_state="unknown", claim_state="unverified", match_method="exact",
+        ),
+        RequirementEvaluation(
+            requirement_id="kafka", document_state="not_demonstrated",
+            source_state="unknown", claim_state="unverified", match_method="none",
+        ),
+    ]
+    cov = document_coverage_summary(reqs, evals, priority="required")
+    assert cov["numerator"] == 1
+    assert cov["denominator"] == 2
+    assert cov["percentage"] == 50
+    assert cov["partial"] == 1
+    pref = document_coverage_summary(reqs, evals, priority="preferred")
+    assert pref["percentage"] == 0
+    ledger = build_requirement_ledger(reqs, evals)
+    assert ledger["required_coverage"]["percentage"] == 50
+    assert len(ledger["requirements"]) == 3
+
+
+def test_empty_denominator_is_unavailable_not_100():
+    from schemas.assessment_contracts import document_coverage_summary
+    cov = document_coverage_summary([], [], priority="required")
+    assert cov["status"] == "unavailable"
+    assert cov["percentage"] is None
+
+
+def test_uncertain_stays_in_denominator_and_marks_provisional():
+    from schemas.assessment_contracts import (
+        CanonicalRequirement,
+        RequirementEvaluation,
+        atomic,
+        document_coverage_summary,
+    )
+    reqs = [
+        CanonicalRequirement(
+            id="a", display_text="A", priority="required", kind="capability",
+            expression=atomic("A"), source_excerpt="A",
+        ),
+        CanonicalRequirement(
+            id="b", display_text="B", priority="required", kind="capability",
+            expression=atomic("B"), source_excerpt="B",
+        ),
+    ]
+    evals = [
+        RequirementEvaluation(
+            requirement_id="a", document_state="satisfied",
+            source_state="unknown", claim_state="unverified", match_method="exact",
+        ),
+        RequirementEvaluation(
+            requirement_id="b", document_state="unknown",
+            source_state="unknown", claim_state="unverified", match_method="none",
+        ),
+    ]
+    cov = document_coverage_summary(reqs, evals, priority="required")
+    assert cov["denominator"] == 2
+    assert cov["uncertain"] == 1
+    assert cov["provisional"] is True
+    assert cov["percentage"] == 50
+
+
+def test_incomplete_extraction_withholds_percentage():
+    from schemas.assessment_contracts import (
+        CanonicalRequirement,
+        RequirementEvaluation,
+        atomic,
+        document_coverage_summary,
+    )
+    reqs = [
+        CanonicalRequirement(
+            id="a", display_text="A", priority="required", kind="capability",
+            expression=atomic("A"), source_excerpt="A",
+            extraction_state="partial",
+        ),
+    ]
+    evals = [
+        RequirementEvaluation(
+            requirement_id="a", document_state="satisfied",
+            source_state="unknown", claim_state="unverified", match_method="exact",
+        ),
+    ]
+    cov = document_coverage_summary(reqs, evals, priority="required")
+    assert cov["status"] == "incomplete_extraction"
+    assert cov["percentage"] is None
+
+
+def test_scorer_keyword_and_skills_bars_agree_on_ledger():
+    det = ResumeScorer()._deterministic_scores(
+        SCREENSHOT_LIKE_RESUME, SCREENSHOT_LIKE_JD,
+    )
+    assert det["keyword_match"] == det["skills_alignment"]
+    assert det["coverage_kind"] == "required_document_coverage"
+    assert det.get("ledger")
+    assert det["required_coverage"]["numerator"] == det["coverage_numerator"]
+    assert det["required_coverage"]["denominator"] == det["coverage_denominator"]
+    assert det["term_presence"]["label"] == "Term presence"
+
+
+def test_evaluate_requirements_returns_ledger():
+    out = evaluate_requirements(
+        document_text=build_resume_text(SCREENSHOT_LIKE_RESUME),
+        jd=SCREENSHOT_LIKE_JD,
+        resume=SCREENSHOT_LIKE_RESUME,
+        source_resume=SCREENSHOT_LIKE_RESUME,
+    )
+    assert "ledger" in out
+    assert out["required_coverage"]["denominator"] == out["required_coverage"]["total"]
+    req_rows = [
+        r for r in out["ledger"]["requirements"] if r["priority"] == "required"
+    ]
+    assert len(req_rows) == out["required_coverage"]["total"]
+    satisfied = sum(1 for r in req_rows if r["document_state"] == "satisfied")
+    assert satisfied == out["required_coverage"]["satisfied"]
