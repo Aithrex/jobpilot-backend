@@ -94,6 +94,10 @@ class ResumeScorer:
         `render_error` / `page_outcome` are accepted from the current caller
         and only used when a PDF is present.
         """
+        from services.tailoring_pipeline import is_result
+        if is_result(tailored):
+            from services.tailoring_assessment import score_payload
+            return score_payload(tailored, jd_analysis, pdf_bytes, render_error)
         det = self._deterministic_scores(tailored, jd_analysis)
         # Pass the deterministic results into the AI scorer so the scanner
         # scores reconcile with them rather than being independent guesses.
@@ -105,6 +109,9 @@ class ResumeScorer:
         combined = self._combine(det, ai)
         if render_error:
             combined["render_error"] = render_error
+            combined["pdf_parseable_score"] = 0
+            combined["overall"] = 0
+            combined["format_score"] = 0
 
         # Surface the classified missing keywords so the UI / API consumer
         # can render them with appropriate framing — skills the candidate

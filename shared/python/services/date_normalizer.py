@@ -44,6 +44,8 @@ def normalize_dates(tailored: Dict[str, Any]) -> Dict[str, Any]:
     Modifies the tailored dict in-place and returns it.
     If a date string cannot be parsed, it is left unchanged.
     """
+    if (tailored.get("tailoring_run") or {}).get("policy_version") == "evidence-v1":
+        return tailored
     for exp in tailored.get("experience", []):
         raw = exp.get("dates", "")
         if raw:

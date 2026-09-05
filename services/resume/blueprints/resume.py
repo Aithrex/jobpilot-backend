@@ -125,7 +125,10 @@ def extract_jd():
     if not jd_text or not isinstance(jd_text, str):
         return jsonify({"error": "job_description is required"}), 400
 
-    jd_text = InputSanitizer.sanitize_string(jd_text, max_length=10000)
+    from services.tailoring_policy import enabled
+    if enabled() and len(jd_text) > 56000:
+        return jsonify({"error": "Job description is too long (max 56000 characters)."}), 400
+    jd_text = InputSanitizer.sanitize_string(jd_text, max_length=56000 if enabled() else 10000)
     if not jd_text:
         return jsonify({"error": "Invalid job description"}), 400
 
@@ -235,7 +238,10 @@ def tailor_with_jd():
     if not jd_text or not isinstance(jd_text, str):
         return jsonify({"error": "job_description is required"}), 400
 
-    jd_text = InputSanitizer.sanitize_string(jd_text, max_length=10000)
+    from services.tailoring_policy import enabled
+    if enabled() and len(jd_text) > 56000:
+        return jsonify({"error": "Job description is too long (max 56000 characters)."}), 400
+    jd_text = InputSanitizer.sanitize_string(jd_text, max_length=56000 if enabled() else 10000)
     if not jd_text:
         return jsonify({"error": "Invalid job description"}), 400
 
@@ -328,6 +334,8 @@ def regenerate():
             )
             if rec and len(rec.get("versions") or []) >= MAX_VERSIONS_PER_RECORD:
                 return _version_limit_response()
+            if not rec:
+                return jsonify({"error": "Record not found"}), 404
 
         from services.resume_service import get_resume_service, ResumeService
 
@@ -337,6 +345,7 @@ def regenerate():
             "tailored_resume": tailored_resume,
             "user_feedback": user_feedback,
             "user_email": user_email,
+            "record_id": record_id,
         }
         # Ground regenerate in the SAME base that was tailored, not the
         # global active pointer (which may be a different uploaded file).
@@ -358,6 +367,25 @@ def regenerate():
 # ------------------------------------------------------------------
 # POST /api/resume/rewrite-bullet — Rewrite a single bullet with JD context
 # ------------------------------------------------------------------
+@resume_bp.route("/records/<record_id>/experience", methods=["POST"])
+@jwt_required()
+def confirm_tailoring_experience(record_id):
+    from services.tailoring_discovery import confirm
+    user_email = get_jwt_identity()
+    if get_rate_limiter().is_rate_limited(f"tailoring_evidence:{user_email}", max_requests=20, window_seconds=300):
+        return jsonify({"error": "Please wait before adding more experience."}), 429
+    data = request.get_json(force=True) or {}
+    if data.get("confirmed") is not True:
+        return jsonify({"error": "Confirm that this describes work you actually did."}), 400
+    try:
+        key = confirm(DBConnect().get_db(), user_email, record_id, data.get("entity"), data.get("text"))
+        return jsonify({"fact_id": key, "message": "Saved. Available on your next refinement."}), 200
+    except LookupError as e:
+        return jsonify({"error": str(e)}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
 @resume_bp.route("/rewrite-bullet", methods=["POST"])
 @jwt_required()
 def rewrite_bullet():
@@ -376,6 +404,16 @@ def rewrite_bullet():
         return jsonify({"error": "bullet is required"}), 400
     if len(bullet) > 1000:
         return jsonify({"error": "Bullet too long (max 1000 chars)"}), 400
+
+    from services.tailoring_policy import enabled
+    if enabled():
+        from services.resume_service import get_resume_service, ResumeService
+        svc = get_resume_service()
+        payload = {"bullet": bullet, "job_title": job_title, "jd_keywords": jd_keywords,
+                   "user_email": get_jwt_identity()}
+        job_id = svc.create_job("rewrite_bullet_evidence", payload, user_email=get_jwt_identity())
+        ResumeService.invoke_async(job_id, "rewrite_bullet_evidence", payload)
+        return jsonify({"job_id": job_id}), 202
 
     try:
         from services.claude_client import claude_json, CLAUDE_FLASH
@@ -1012,6 +1050,7 @@ def save_version(record_id):
             return jsonify({"error": "Record not found"}), 404
 
         versions, _ = ensure_versions(record)
+        from services.resume_versioning import StaleVersionError
         try:
             version, created = append_version(
                 versions,
@@ -1021,6 +1060,8 @@ def save_version(record_id):
                 ats_scores=ats_scores,
                 user_feedback=user_feedback,
             )
+        except StaleVersionError as e:
+            return jsonify({"error": str(e), "code": "stale_version"}), 409
         except VersionLimitError:
             # Bounded refinement (spec 1.5): the 6th distinct version is refused.
             return _version_limit_response()
@@ -1032,10 +1073,14 @@ def save_version(record_id):
         }
         if set_current:
             update["$set"]["current_version_id"] = version["version_id"]
-        db.tailoring_records.update_one(
-            {"record_id": record_id, "user_email": user_email},
+        saved = db.tailoring_records.update_one(
+            {"record_id": record_id, "user_email": user_email,
+             "updated_at": record.get("updated_at")},
             update,
         )
+        if not saved.matched_count:
+            return jsonify({"error": "The resume changed. Reload before saving.",
+                            "code": "stale_version"}), 409
         return jsonify({
             "version_id": version["version_id"],
             "version_number": version["version_number"],
@@ -2415,6 +2460,8 @@ def _attach_layout_headers(resp, layout: dict):
     resp.headers["X-Resume-Outcome"] = str(layout.get("outcome", ""))
     resp.headers["X-Resume-Fill-Ratio"] = str(layout.get("fill_ratio", ""))
     resp.headers["X-Resume-Dropped"] = json.dumps(layout.get("dropped") or [])
+    if layout.get("export_check"):
+        resp.headers["X-Resume-Export-Check"] = layout["export_check"]["status"]
     return resp
 
 
@@ -2422,10 +2469,15 @@ def _render_document(svc, tailored, fmt):
     """Return (bytes, layout_dict). Both formats share the same solver."""
     if fmt == "pdf":
         file_bytes, resolution = svc.renderer.generate_pdf(tailored)
-        return file_bytes, resolution.to_dict()
-    file_bytes = svc.renderer.generate_docx(tailored)
-    _working, resolution = svc.renderer._compute_pdf_layout(tailored)
-    return file_bytes, resolution.to_dict()
+    else:
+        file_bytes = svc.renderer.generate_docx(tailored)
+        _working, resolution = svc.renderer._compute_pdf_layout(tailored)
+    layout = resolution.to_dict()
+    from services.tailoring_pipeline import is_result
+    if is_result(tailored):
+        from services.tailoring_assessment import check_export
+        layout["export_check"], _ = check_export(file_bytes, tailored, format=fmt)
+    return file_bytes, layout
 
 
 @resume_bp.route("/layout-spec", methods=["GET"])
@@ -2517,6 +2569,13 @@ def download():
                         # the cap can't be saved — refuse rather than render
                         # an untracked variant.
                         return _version_limit_response()
+                else:
+                    # An unsaved draft must never replace an immutable saved
+                    # version's object key or cached checks.
+                    file_bytes, layout = _render_document(svc, tailored, fmt)
+                    resp = send_file(io.BytesIO(file_bytes), mimetype=mimetype,
+                                     as_attachment=True, download_name=filename)
+                    return _attach_layout_headers(resp, layout)
 
             # Cache hit? Serve from S3, no new row, no re-render.
             # The render_version guard ensures a format change in the renderer
@@ -2583,10 +2642,13 @@ def download():
             }
             if not record.get("current_version_id"):
                 update_set["current_version_id"] = target.get("version_id")
-            db.tailoring_records.update_one(
-                {"record_id": record_id, "user_email": user_email},
+            saved = db.tailoring_records.update_one(
+                {"record_id": record_id, "user_email": user_email,
+                 "updated_at": record.get("updated_at")},
                 {"$set": update_set},
             )
+            if not saved.matched_count:
+                return jsonify({"error": "The resume changed. Download the current version again.", "code": "stale_version"}), 409
 
             resp = send_file(
                 io.BytesIO(file_bytes),
@@ -2610,6 +2672,9 @@ def download():
         return _attach_layout_headers(resp, layout)
     except Exception as e:
         from services.resume_renderer import UnrenderableTextError
+        from services.resume_versioning import StaleVersionError
+        if isinstance(e, StaleVersionError):
+            return jsonify({"error": str(e), "code": "stale_version"}), 409
         if isinstance(e, UnrenderableTextError):
             return jsonify({"error": str(e)}), 422
         logger.exception(f"Resume download error: {e}")

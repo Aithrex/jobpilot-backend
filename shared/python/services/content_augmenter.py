@@ -116,6 +116,11 @@ class ContentAugmenter:
         Returns:
             The augmented tailored resume dict.
         """
+        from services.tailoring_pipeline import is_result
+        if is_result(tailored):
+            # Frozen new-pipeline content must never enter the legacy semantic
+            # writers, even when a legacy adapter still calls augment().
+            return tailored
         pipeline_start = time.time()
 
         # Diagnostic — populated through the pipeline; consumed by

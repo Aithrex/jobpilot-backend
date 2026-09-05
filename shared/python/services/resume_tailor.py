@@ -123,6 +123,10 @@ SIDECAR_KEYS = (
     "match_gaps",
     "ats_keyword_audit",
     "target_role",
+    "summary_write",
+    "tailoring_run",
+    "tailoring_preferences",
+    "document_assessment",
     "_diagnostics",
     "_skill_headings",
 )
@@ -176,6 +180,11 @@ class ResumeTailor:
           2. IntegrityGuard.enforce (immutable fields, hallucination, project rules)
           3. If hallucinated experience detected: one correction retry
         """
+        from services.tailoring_policy import enabled
+        if enabled():
+            from services.tailoring_pipeline import run
+            return run(structured_resume, jd_analysis, fact_store=fact_store,
+                       past_edits=past_edits or "")
         from services.claude_client import claude_json, CLAUDE_PRO
         from services.keyword_gap_engine import KeywordGapEngine
         from services.term_registry import sanitize_jd_analysis
@@ -565,6 +574,7 @@ class ResumeTailor:
         current_tailored: Dict[str, Any],
         jd_analysis: Dict[str, Any],
         user_feedback: str,
+        fact_store: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Regenerate a tailored resume incorporating user feedback.
 
@@ -584,6 +594,11 @@ class ResumeTailor:
         Returns:
             Regenerated tailored resume dict conforming to TAILORED_RESUME_SCHEMA.
         """
+        from services.tailoring_policy import enabled
+        if enabled() or (current_tailored.get("tailoring_run") or {}).get("policy_version") == "evidence-v1":
+            from services.tailoring_pipeline import run
+            return run(structured_resume, jd_analysis, current=current_tailored,
+                       feedback=user_feedback, fact_store=fact_store)
         from services.claude_client import claude_json, CLAUDE_PRO
         # Lazy import avoids a circular import (prompt_rules imports
         # BANNED_PHRASES from this module).
@@ -2709,7 +2724,7 @@ class ResumeTailor:
             exp["bullets"] = bullets
 
         result = json.dumps(data, indent=2)
-        return result[:max_chars]  # final safety net
+        return result  # Never cut JSON in the middle of a field.
 
     @staticmethod
     def _build_market_signal_hint(jd_analysis: Dict[str, Any]) -> str:

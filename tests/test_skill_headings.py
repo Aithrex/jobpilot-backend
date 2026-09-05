@@ -270,9 +270,15 @@ def test_sidecar_absent_when_there_is_nothing_to_say():
 
 def test_sidecar_is_stripped_before_reentering_a_prompt():
     from services.resume_tailor import strip_sidecar_keys
-    assert "_skill_headings" not in strip_sidecar_keys(
-        {"summary": "x", "_skill_headings": {"map": {}, "order": []}}
+    stripped = strip_sidecar_keys(
+        {
+            "summary": "x",
+            "_skill_headings": {"map": {}, "order": []},
+            "summary_write": {"source": "base", "reasons": ["shape"]},
+        }
     )
+    assert "_skill_headings" not in stripped
+    assert "summary_write" not in stripped
 
 
 # ---------------------------------------------------------------------------

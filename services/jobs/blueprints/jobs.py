@@ -1411,7 +1411,10 @@ def tailor_resume():
     if not job_description or not isinstance(job_description, str):
         return jsonify({"error": "job_description is required"}), 400
 
-    job_description = InputSanitizer.sanitize_string(job_description, max_length=6000)
+    from services.tailoring_policy import enabled
+    if enabled() and len(job_description) > 56000:
+        return jsonify({"error": "Job description is too long (max 56000 characters)."}), 400
+    job_description = InputSanitizer.sanitize_string(job_description, max_length=56000 if enabled() else 6000)
     if not job_description:
         return jsonify({"error": "Invalid job description"}), 400
 
@@ -1420,6 +1423,23 @@ def tailor_resume():
     try:
         from services.resume_service import get_resume_service
         svc = get_resume_service()
+        from services.tailoring_policy import enabled
+        if enabled():
+            from services import quota_ledger_service as ledger
+            from services.resume_service import ResumeService
+            allowed, entries, usage = ledger.reserve_tailor(user_email, idempotency_key=data.get("idempotency_key"))
+            if not allowed:
+                return jsonify({"error": "daily_quota_exceeded", "usage": usage}), 429
+            payload = {"job_description": job_description, "user_email": user_email,
+                       "quota_entry_id": entries[0], "selection_mode": "auto"}
+            try:
+                job_id = svc.create_job("extract_and_tailor", payload, user_email=user_email)
+                ledger.attach_job(entries[0], job_id)
+                ResumeService.invoke_async(job_id, "extract_and_tailor", payload)
+            except Exception:
+                ledger.refund_entry(entries[0])
+                raise
+            return jsonify({"job_id": job_id, "usage": usage}), 202
 
         # Extract JD → get structured resume → tailor
         jd_analysis = svc.extract_jd(job_description)

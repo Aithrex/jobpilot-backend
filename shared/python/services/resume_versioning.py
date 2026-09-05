@@ -65,6 +65,10 @@ def canonical_content_hash(tailored: Dict[str, Any]) -> str:
     Uses sorted-keys JSON so two logically equal resumes always hash the same
     regardless of dict insertion order.
     """
+    # Versioned hashing leaves every historical legacy hash untouched.
+    if (tailored.get("tailoring_run") or {}).get("policy_version") == "evidence-v1":
+        from services.tailoring_policy import content_hash
+        return content_hash(tailored)[:16]
     canonical = json.dumps(tailored or {}, sort_keys=True, separators=(",", ":"),
                            ensure_ascii=False, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
@@ -142,7 +146,17 @@ def append_version(
     """
     new_hash = canonical_content_hash(tailored)
     last = latest_version(versions)
+    if parent_version_id and last and last.get("version_id") != parent_version_id:
+        raise StaleVersionError("The resume changed. Reload the current version before saving.")
+    from services.tailoring_policy import content_hash
+    if (tailored.get("document_assessment") or {}).get("content_hash") not in {None, content_hash(tailored)}:
+        tailored = dict(tailored)
+        tailored.pop("document_assessment", None)
+        ats_scores = None
     if last and last.get("content_hash") == new_hash:
+        if "tailoring_preferences" in tailored:
+            import copy
+            last["tailored_resume"]["tailoring_preferences"] = copy.deepcopy(tailored["tailoring_preferences"])
         # Same content — treat as a no-op. Optionally update ats_scores on the
         # existing version if the caller supplied fresher ones.
         if ats_scores and not last.get("ats_scores"):
@@ -169,6 +183,10 @@ def append_version(
     return version, True
 
 
+class StaleVersionError(ValueError):
+    """An edit was based on an older revision than the current saved content."""
+
+
 def serialize_record(record: Dict[str, Any], include_full: bool = False) -> Dict[str, Any]:
     """Serialize a record for the API, converting datetimes to ISO strings.
 
@@ -177,6 +195,7 @@ def serialize_record(record: Dict[str, Any], include_full: bool = False) -> Dict
     """
     out = dict(record)
     out.pop("_id", None)
+    out.pop("tailoring_source_snapshot", None)
 
     for key in ("created_at", "updated_at", "ats_scored_at"):
         if key in out:

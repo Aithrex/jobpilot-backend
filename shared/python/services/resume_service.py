@@ -375,6 +375,10 @@ class ResumeService:
         Returns:
             Validated dict conforming to JD_ANALYSIS_SCHEMA.
         """
+        from services.tailoring_policy import enabled
+        if enabled():
+            from services.tailoring_jd import extract
+            return extract(jd_text)
         from services.claude_client import claude_json, CLAUDE_PRO
         from schemas.resume_schemas import JD_ANALYSIS_SCHEMA, validate_and_coerce
         from utils.llm_safety import redact_pii_for_model, wrap_untrusted, guarded_system
@@ -560,6 +564,10 @@ def _project_policy(
     GitHub", and generating them reads as filler. The page budget goes to their
     real experience instead (the experience-first path already handles this).
     """
+    from services.tailoring_policy import enabled
+    if enabled():
+        return {"allow": False, "evidence_only": True, "github_evidence": [],
+                "reason": "evidence-led selection uses existing confirmed projects"}
     from services.project_generator import project_generation_policy
 
     gh_evidence = [
@@ -604,6 +612,12 @@ def _finalize_tailored_result(
     + entailment verification → keyword audit. Progress markers are emitted
     at each real stage when a job_id is provided.
     """
+    from services.tailoring_pipeline import is_result
+    if is_result(result):
+        # Composition/grounding is already complete. Export checks and reader
+        # review are read-only and describe precisely this revision.
+        from services.tailoring_assessment import finalize
+        return finalize(result, jd_analysis, svc.renderer)
     result_contact = result.get("contact", {})
     if result_contact.get("name"):
         from services.resume_parser import ResumeParser as _RP
@@ -627,6 +641,13 @@ def _finalize_tailored_result(
 
     result = normalize_dates(result)
     result = normalize_titles(result)
+
+    from services.keyword_gap_engine import KeywordGapEngine
+    from services import summary_tailor
+    gap_final = KeywordGapEngine().analyze(result, jd_analysis)
+    result = summary_tailor.refresh_summary_if_stale(
+        result, structured, jd_analysis, gap_final,
+    )
 
     if job_id:
         svc.update_job_progress(job_id, "verifying", 80)
@@ -665,6 +686,9 @@ def _base_persist_fields(
         or "",
         "base_resume_s3_key": (resume or {}).get("s3_key") or "",
     }
+    from services.tailoring_policy import enabled, content
+    if enabled() and (resume or {}).get("structured"):
+        fields["tailoring_source_snapshot"] = content(resume["structured"])
     if selection:
         fields["base_resume_id"] = selection.get("resume_id") or ""
         fields["base_selection"] = selection
@@ -919,7 +943,13 @@ def prepare_tailored_artifact(user_email: str, jd_text: str) -> Dict[str, Any]:
     structured = resume["structured"]
 
     jd_analysis = svc.extract_jd(jd_text or "")
-    result = svc.tailor.tailor(structured, jd_analysis)
+    from services.profile_facts import build_fact_store
+    facts = build_fact_store(user_email=user_email, structured_resume=structured)
+    result = svc.tailor.tailor(structured, jd_analysis, fact_store=facts)
+
+    from services.tailoring_pipeline import is_result
+    if is_result(result) and not (result.get("document_assessment") or {}).get("ready"):
+        raise ValueError("tailored_artifact_requires_review")
 
     record_id = _persist_tailoring_record(
         user_email, resume, jd_text or "", jd_analysis, result, "auto_apply_prepare"
@@ -941,6 +971,9 @@ def _attach_ats_keyword_audit(result: Dict[str, Any], jd_analysis: Dict[str, Any
     tailor modal can show a "X keywords missed" badge — passive, not
     blocking. Failure here must not break the tailor pipeline.
     """
+    from services.tailoring_pipeline import is_result
+    if is_result(result):
+        return
     if isinstance(result.get("ats_keyword_audit"), dict) and (
         "missing" in result["ats_keyword_audit"]
         or "required_missing" in result["ats_keyword_audit"]
@@ -1637,9 +1670,21 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 out["base_selection"] = base_selection
             svc.complete_job(job_id, out)
 
+        elif job_type == "rewrite_bullet_evidence":
+            from services.tailoring_pipeline import rewrite_bullet
+            svc.complete_job(job_id, {"rewritten": rewrite_bullet(
+                payload["bullet"], payload.get("job_title", ""), payload.get("jd_keywords", []))})
+
         elif job_type == "regenerate":
             user_email = payload.get("user_email", "")
-            resume = svc.parser.ensure_structured_resume(
+            snapshot = None
+            if payload.get("record_id"):
+                from utils.db_connect import DBConnect
+                saved_record = DBConnect().get_db().tailoring_records.find_one({
+                    "record_id": payload["record_id"], "user_email": user_email,
+                }) or {}
+                snapshot = saved_record.get("tailoring_source_snapshot")
+            resume = {"structured": snapshot} if snapshot else svc.parser.ensure_structured_resume(
                 user_email=user_email,
                 resume_id=(payload.get("resume_id") or ""),
             )
@@ -1654,11 +1699,14 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 svc.fail_job(job_id, "No structured resume found. Please re-upload.")
                 return
 
+            from services.profile_facts import build_fact_store
+            fact_store = build_fact_store(user_email=user_email, structured_resume=structured)
             result = svc.tailor.regenerate(
                 structured,
                 payload["tailored_resume"],
                 payload["jd_analysis"],
                 payload["user_feedback"],
+                fact_store=fact_store,
             )
             # Same post-tailor pipeline as initial tailor (augment refills the
             # page after feedback that shrinks content; verification re-runs
@@ -1882,7 +1930,8 @@ def _process_job(job_id: str, job_type: str, payload: dict):
 
                 # Wait for tailor (the longer call). Fail loudly if tailor errors.
                 try:
-                    result = future_tailor.result(timeout=120)
+                    from services.tailoring_policy import enabled
+                    result = future_tailor.result(timeout=300 if enabled() else 120)
                 except Exception as e:
                     logger.error("extract_and_tailor: tailor failed: %s", e)
                     svc.fail_job(job_id, f"Tailoring failed: {e}")
@@ -1985,7 +2034,9 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             structured = resume["structured"]
 
             # Step 3: Tailor
-            result = svc.tailor.tailor(structured, jd_analysis)
+            from services.profile_facts import build_fact_store
+            facts = build_fact_store(user_email=user_email, structured_resume=structured)
+            result = svc.tailor.tailor(structured, jd_analysis, fact_store=facts)
 
             # Step 4: Augment
             result = svc.augmenter.augment(result, structured, jd_analysis)
@@ -1997,6 +2048,13 @@ def _process_job(job_id: str, job_type: str, payload: dict):
 
             result = normalize_dates(result)
             result = normalize_titles(result)
+
+            from services.keyword_gap_engine import KeywordGapEngine
+            from services import summary_tailor
+            gap_final = KeywordGapEngine().analyze(result, jd_analysis)
+            result = summary_tailor.refresh_summary_if_stale(
+                result, structured, jd_analysis, gap_final,
+            )
 
             _attach_ats_keyword_audit(result, jd_analysis)
 

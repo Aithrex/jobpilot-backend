@@ -1,13 +1,13 @@
 """Deferred professional-summary writer.
 
 The primary tailor produces bullets and skills only. After those settle, this
-module builds a deterministic ``SummaryBrief``, makes one PRO call, and accepts
-the rewrite only when it clears hard gates and scores at least as well as the
-base-resume summary. Fall back to the base summary rather than ship a
-regression.
+module builds a deterministic ``SummaryBrief``, makes one PRO call, and ships
+the rewrite when it clears hard gates. Fall back to the base summary rather
+than ship an invalid draft. A later service pass may refresh the summary
+once if augmentation invalidates its evidence.
 
 Pipeline: ``docs/specs/summary_architecture.md``.
-Content contract (what the summary says): ``docs/specs/summary_content_model.md``.
+Content contract: ``docs/specs/summary_content_model.md``.
 
 No feature flag — this is the only summary writer.
 """
@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from services import prompt_rules
+from services.tailoring_policy import enabled as evidence_policy_enabled
 from services.impact_engine import METRIC_PATTERN
 from utils.keyword_normalizer import (
     ALIAS_TO_GROUP,
@@ -34,7 +35,9 @@ from utils.llm_safety import guarded_system, redact_pii_for_model, wrap_untruste
 
 logger = logging.getLogger(__name__)
 
-# Groups that count as language / framework / platform for must-retain.
+WRITER_REVISION = "2026-09-05.1"
+
+# Groups that count as language / framework / platform for term selection.
 _RETAIN_GROUPS = frozenset({
     "programming_languages",
     "frontend",
@@ -48,9 +51,6 @@ _RETAIN_GROUPS = frozenset({
     "apis",
 })
 
-# Objective-statement / filler family — a sentence matching any of these is
-# structurally invalid (the trailing "Ready to bring this foundation to…"
-# defect).
 _FILLER_PATTERNS = (
     "ready to",
     "seeking",
@@ -72,11 +72,11 @@ _THIRD_PERSON = (
 
 _SENIORITY_TOKENS = (
     "senior", "sr", "sr.", "staff", "principal", "lead", "director",
-    "distinguished", "junior", "jr", "jr.", "intern", "entry-level",
+    "manager", "distinguished", "junior", "jr", "jr.", "intern", "entry-level",
 )
 
 _SENIORITY_STRIP_RE = re.compile(
-    r"\b(senior|sr\.?|staff|principal|lead|director|distinguished|"
+    r"\b(senior|sr\.?|staff|principal|lead|director|manager|distinguished|"
     r"junior|jr\.?|intern|entry[- ]level|i{1,3}|iv)\b",
     re.IGNORECASE,
 )
@@ -136,25 +136,24 @@ _ENGINEERING_FAMILIES = frozenset({
     "data_ml", "data_eng", "security", "swe",
 })
 
-_MUST_RETAIN_CAP = 8
+_SELECTED_TERMS_CAP = 8
 _KEYWORD_BUDGET_CAP = 6
-_EVIDENCE_CAP = 6
+_EVIDENCE_CAP = 8
 _MIN_SUMMARY_CHARS = 40
-_TECH_BUDGET_MIN = 8
+_TECH_BUDGET_FLOOR = 3
 _TECH_BUDGET_MAX = 11
 _S1_LANGUAGE_CAP = 2
 _S2_TECH_CAP = 6
 _S3_TECH_CAP = 2
 
-# Frameworks / data / infra — the capability sentence's inventory.
 _S2_GROUPS = frozenset({
     "frontend", "backend", "databases", "cloud", "devops",
     "data_engineering", "apis", "mobile", "testing",
 })
-# Differentiator area. Extra languages overflow here after S1 is full.
 _S3_GROUPS = frozenset({"ai_ml"})
 
-# Domain as a trailing qualifier, never the head noun of sentence 1.
+# Resume-supported domain phrases. Selection is JD-ranked; this is not a
+# preferred default for any user.
 _DOMAIN_QUALIFIERS: Tuple[Tuple[str, str], ...] = (
     ("regulated healthcare", "across regulated healthcare platforms"),
     ("healthcare", "across healthcare platforms"),
@@ -178,6 +177,29 @@ _DOMAIN_HEAD_NOUNS = frozenset({
     "regulated",
 })
 
+_CAPABILITY_PATTERNS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("reliability", (
+        "on-call", "incident", "uptime", "slo", "availability", "p95",
+        "latency", "observability", "reliability",
+    )),
+    ("product delivery", (
+        "shipped", "delivered", "end to end", "end-to-end", "owned features",
+        "release", "launched",
+    )),
+    ("testing", (
+        "pytest", "unit test", "integration test", "test coverage",
+        "qa", "regression test",
+    )),
+    ("scale", (
+        "throughput", "high-throughput", "scale", "qps", "msgs/sec",
+        "high volume", "high-volume",
+    )),
+    ("platform ownership", (
+        "terraform", "helm", "infrastructure", "platform", "deployment pipeline",
+        "ci/cd",
+    )),
+)
+
 _ADJECTIVE_OPENERS = (
     "results-driven", "highly skilled", "detail-oriented", "motivated",
     "passionate", "dedicated", "dynamic", "seasoned", "accomplished",
@@ -190,6 +212,24 @@ _SELF_ASSESSMENT = (
     "proven track record",
     "expert in",
     "an expert",
+)
+
+_REASON_CODE_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("empty", ("empty or too short", "rewrite too short", "malformed")),
+    ("generation_error", ("generation error", "unexpected error")),
+    ("shape", ("shape:",)),
+    ("tech_budget", ("tech-budget",)),
+    ("bullet_backing", ("bullet-backing",)),
+    ("grounding", ("grounding:",)),
+    ("must_retain", ("must-retain",)),
+    ("identity", ("identity:",)),
+    ("forbidden", ("forbidden term",)),
+    ("filler", ("filler:",)),
+    ("voice", ("voice:",)),
+    ("domain", ("domain:",)),
+    ("slot", ("slot:",)),
+    ("self_assessment", ("self-assessment",)),
+    ("evidence", ("no evidence",)),
 )
 
 _SYSTEM = guarded_system(
@@ -205,7 +245,7 @@ class SummaryBrief:
     years_phrase: str
     evidence: List[str]
     keyword_budget: List[str]
-    must_retain: List[str]
+    selected_terms: List[str]
     forbidden: List[str]
     support: float = 0.0
     jd_family_key: str = ""
@@ -214,6 +254,13 @@ class SummaryBrief:
     tech_s2: List[str] = field(default_factory=list)
     tech_s3: List[str] = field(default_factory=list)
     domain_qualifier: str = ""
+    target_title: str = ""
+    responsibilities: List[str] = field(default_factory=list)
+    qualifications: List[str] = field(default_factory=list)
+    prioritized_capabilities: List[str] = field(default_factory=list)
+    evidence_refs: List[str] = field(default_factory=list)
+    role_rationale: str = ""
+    include_s3: bool = False
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -222,7 +269,7 @@ class SummaryBrief:
             "years_phrase": self.years_phrase,
             "evidence": list(self.evidence),
             "keyword_budget": list(self.keyword_budget),
-            "must_retain": list(self.must_retain),
+            "selected_terms": list(self.selected_terms),
             "forbidden": list(self.forbidden),
             "support": self.support,
             "jd_family_key": self.jd_family_key,
@@ -231,11 +278,23 @@ class SummaryBrief:
             "tech_s2": list(self.tech_s2),
             "tech_s3": list(self.tech_s3),
             "domain_qualifier": self.domain_qualifier,
+            "target_title": self.target_title,
+            "responsibilities": list(self.responsibilities),
+            "qualifications": list(self.qualifications),
+            "prioritized_capabilities": list(self.prioritized_capabilities),
+            "evidence_refs": list(self.evidence_refs),
+            "role_rationale": self.role_rationale,
+            "include_s3": self.include_s3,
         }
 
     @property
     def tech_budget(self) -> List[str]:
         return list(self.tech_s1) + list(self.tech_s2) + list(self.tech_s3)
+
+    @property
+    def must_retain(self) -> List[str]:
+        """Compatibility alias — selected terms are JD-ranked, not mandatory."""
+        return list(self.selected_terms)
 
 
 @dataclass
@@ -258,32 +317,55 @@ def write_summary(
 ) -> Dict[str, Any]:
     """Write ``tailored["summary"]`` from settled bullets. Never raises.
 
-    On any failure or a candidate that loses the comparative score, the
-    base-resume summary is kept (then cosmetics are applied).
+    Ships a valid tailored draft. Falls back to the cosmetic-cleaned base
+    summary on generation error, gate failure, or an unexpected exception.
+    Always attaches a non-sensitive ``summary_write`` sidecar.
     """
     base = (structured_resume.get("summary") or "").strip()
+    brief: Optional[SummaryBrief] = None
+    attempts = 0
+    last_reasons: List[str] = []
     try:
         if gap is None:
             from services.keyword_gap_engine import KeywordGapEngine
             gap = KeywordGapEngine().analyze(structured_resume, jd_analysis)
 
         brief = build_summary_brief(tailored, structured_resume, jd_analysis, gap)
-        logger.info("SummaryBrief: %s", brief.as_dict())
+        logger.info(
+            "SummaryBrief: revision=%s role=%s rationale=%s jd=%s cand=%s "
+            "support=%.4f terms=%s caps=%s include_s3=%s",
+            WRITER_REVISION,
+            brief.role_family,
+            brief.role_rationale,
+            brief.jd_family_key,
+            brief.candidate_family_key,
+            brief.support,
+            brief.selected_terms,
+            brief.prioritized_capabilities,
+            brief.include_s3,
+        )
 
-        candidate, reasons = _generate(brief, user_feedback=user_feedback)
+        candidate, gen_reasons = _generate(brief, user_feedback=user_feedback)
+        attempts = 1
+        if gen_reasons:
+            last_reasons = gen_reasons
         verdict = validate_summary(
             candidate, brief, tailored, structured_resume, jd_analysis,
         )
         if not verdict.ok:
+            last_reasons = verdict.reasons or last_reasons or ["empty"]
             logger.info(
                 "Summary writer: attempt 1 failed (%s) — retrying",
                 "; ".join(verdict.reasons),
             )
-            candidate, _ = _generate(
+            candidate, gen_reasons = _generate(
                 brief,
                 user_feedback=user_feedback,
                 failure_reasons=verdict.reasons,
             )
+            attempts = 2
+            if gen_reasons:
+                last_reasons = gen_reasons
             verdict = validate_summary(
                 candidate, brief, tailored, structured_resume, jd_analysis,
             )
@@ -297,16 +379,10 @@ def write_summary(
             verdict.score, verdict.ok, base_verdict.score,
         )
 
-        # Ship the JD-tailored candidate whenever it passes hard gates.
-        # The old "> base_verdict.score" guard caused the base summary to
-        # win almost every time (it's polished and dense with tech terms),
-        # so the summary never changed across JDs. The candidate is purpose-
-        # built from the settled bullets and JD keyword budget — if it passes
-        # hard gates it should always be used. Fall back to base only on
-        # hard-gate failure or an empty / malformed candidate.
         if verdict.ok:
             chosen = candidate
-            source = "candidate"
+            source = "generated"
+            last_reasons = []
             logger.info(
                 "Summary writer: candidate accepted (score=%.2f, base=%.2f)",
                 verdict.score, base_verdict.score,
@@ -314,17 +390,63 @@ def write_summary(
         else:
             chosen = base
             source = "base"
+            last_reasons = verdict.reasons or last_reasons or ["empty"]
             logger.info(
                 "Summary writer: falling back to base (%s)",
-                "; ".join(verdict.reasons) or "empty candidate",
+                "; ".join(last_reasons),
             )
 
         tailored["summary"] = _apply_cosmetics(chosen)
-        logger.info("Summary writer: shipped %s summary.", source)
+        _attach_summary_write(
+            tailored, brief, source=source, attempts=attempts,
+            reasons=last_reasons,
+        )
+        logger.info(
+            "Summary writer: shipped %s summary (revision=%s attempts=%s).",
+            source, WRITER_REVISION, attempts,
+        )
         return tailored
     except Exception as e:
         logger.warning("Summary writer: unexpected error (%s) — keeping base.", e)
         tailored["summary"] = _apply_cosmetics(base)
+        _attach_summary_write(
+            tailored, brief, source="base", attempts=attempts,
+            reasons=[f"unexpected error: {e}"],
+        )
+        return tailored
+
+
+def refresh_summary_if_stale(
+    tailored: Dict[str, Any],
+    structured_resume: Dict[str, Any],
+    jd_analysis: Dict[str, Any],
+    gap: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Rewrite the summary once when final bullets no longer back it.
+
+    Recomputes the gap on the current resume when ``gap`` is omitted.
+    Never forces a change merely to make the text different.
+    """
+    from services.tailoring_pipeline import is_result
+    if is_result(tailored):
+        return tailored  # The new pipeline owns semantic revisions and checks.
+    try:
+        if gap is None:
+            from services.keyword_gap_engine import KeywordGapEngine
+            gap = KeywordGapEngine().analyze(tailored, jd_analysis)
+        brief = build_summary_brief(tailored, structured_resume, jd_analysis, gap)
+        current = (tailored.get("summary") or "").strip()
+        if current and not _backing_failures(current, brief, tailored):
+            return tailored
+        rewritten = write_summary(
+            tailored, structured_resume, jd_analysis, gap,
+        )
+        sidecar = rewritten.get("summary_write")
+        if isinstance(sidecar, dict):
+            sidecar["refreshed_after_augment"] = True
+        return rewritten
+    except Exception as e:
+        logger.warning("Summary refresh: unexpected error (%s) — leaving text.", e)
         return tailored
 
 
@@ -336,43 +458,48 @@ def build_summary_brief(
 ) -> SummaryBrief:
     """Deterministic brief. No model call. Same inputs → identical brief."""
     gap = gap or {}
-    evidence = _evidence_bullets(tailored)
-    all_bullets = _all_settled_bullets(tailored)
+    all_items = _settled_bullet_items(tailored)
+    all_bullets = [text for _addr, text in all_items]
 
-    jd_title = (jd_analysis.get("job_title") or "").strip()
-    jd_key = classify_role_family(jd_title)
+    target_title = (jd_analysis.get("job_title") or "").strip()
+    responsibilities = _string_list(jd_analysis.get("responsibilities"))
+    qualifications = _string_list(jd_analysis.get("qualifications"))
+    jd_key = _classify_target_family(jd_analysis)
     cand_key = _candidate_family_key(structured_resume, all_bullets)
     support = _bridge_support(all_bullets, jd_key)
 
-    jd_label = _family_label(jd_key, jd_title)
+    jd_label = _family_label(jd_key, target_title)
     cand_label = _family_label(
         cand_key,
-        _first_title(structured_resume) or jd_title,
+        _first_title(structured_resume) or target_title,
     )
 
-    if jd_key == cand_key or support >= 0.5:
-        role_family = jd_label
-        bridge_clause = None
-    elif support >= 0.2:
-        role_family = cand_label
-        bridge_clause = (
-            f"In one clause, connect this {cand_label} background to "
-            f"{jd_label} work without claiming the {jd_label} title."
+    role_family, bridge_clause, role_rationale, adopted_jd_identity = (
+        _resolve_role_identity(
+            jd_key, cand_key, jd_label, cand_label, support, all_bullets,
         )
-    else:
-        role_family = cand_label
-        bridge_clause = None
+    )
 
-    adopted_jd_identity = role_family == jd_label
     forbidden = _forbidden_terms(
         structured_resume, jd_label, jd_key, adopted_jd_identity,
     )
 
-    must_retain = _must_retain(structured_resume, all_bullets)
     keyword_budget = allocate_summary_keywords(gap)
-    tech_s1, tech_s2, tech_s3 = allocate_tech_slots(
-        must_retain, keyword_budget, all_bullets,
+    selected_terms = _select_terms(
+        structured_resume, keyword_budget, all_bullets, jd_analysis,
     )
+    evidence, evidence_refs = _ranked_evidence(
+        all_items, jd_analysis, selected_terms,
+    )
+    capabilities = _prioritized_capabilities(
+        all_bullets, jd_analysis, selected_terms,
+    )
+    include_s3 = bool(capabilities)
+    tech_s1, tech_s2, tech_s3 = allocate_tech_slots(
+        selected_terms, keyword_budget, all_bullets, include_s3=include_s3,
+    )
+    if not include_s3:
+        tech_s3 = []
 
     return SummaryBrief(
         role_family=role_family,
@@ -380,7 +507,7 @@ def build_summary_brief(
         years_phrase=_years_phrase(structured_resume, jd_analysis),
         evidence=evidence,
         keyword_budget=keyword_budget,
-        must_retain=must_retain,
+        selected_terms=selected_terms,
         forbidden=forbidden,
         support=round(support, 4),
         jd_family_key=jd_key,
@@ -389,6 +516,13 @@ def build_summary_brief(
         tech_s2=tech_s2,
         tech_s3=tech_s3,
         domain_qualifier=_domain_qualifier(structured_resume, jd_analysis),
+        target_title=target_title,
+        responsibilities=responsibilities,
+        qualifications=qualifications,
+        prioritized_capabilities=capabilities,
+        evidence_refs=evidence_refs,
+        role_rationale=role_rationale,
+        include_s3=include_s3,
     )
 
 
@@ -407,15 +541,16 @@ def allocate_summary_keywords(gap: Dict[str, Any]) -> List[str]:
 
 
 def allocate_tech_slots(
-    must_retain: Sequence[str],
+    selected_terms: Sequence[str],
     keyword_budget: Sequence[str],
     bullets: Sequence[str],
+    include_s3: bool = True,
 ) -> Tuple[List[str], List[str], List[str]]:
-    """Pick 8-11 evidenced technologies and file them into S1 / S2 / S3.
+    """File evidenced technologies into S1 / S2 / S3.
 
-    Priority: must_retain, then keyword_budget, then terms that appear in
-    the most settled bullets. A term that is not in a bullet is skipped —
-    the summary may not name anything the bullets cannot prove.
+    Priority: JD-ranked selected terms, then keyword budget, then terms that
+    appear in the most settled bullets. A term that is not in a bullet is
+    skipped. S3 stays empty unless ``include_s3`` is true.
     """
     bullet_text = "\n".join(bullets)
     weights = _term_evidence_weights(bullets)
@@ -434,7 +569,7 @@ def allocate_tech_slots(
         seen.add(key)
         ordered.append(raw)
 
-    for term in must_retain:
+    for term in selected_terms:
         _take(term)
     for term in keyword_budget:
         _take(term)
@@ -453,18 +588,17 @@ def allocate_tech_slots(
             else:
                 overflow_langs.append(term)
         elif slot == "s3":
-            if len(s3) < _S3_TECH_CAP:
+            if include_s3 and len(s3) < _S3_TECH_CAP:
                 s3.append(term)
         elif slot == "s2":
             if len(s2) < _S2_TECH_CAP:
                 s2.append(term)
 
-    for term in overflow_langs:
-        if len(s3) < _S3_TECH_CAP:
-            s3.append(term)
+    if include_s3:
+        for term in overflow_langs:
+            if len(s3) < _S3_TECH_CAP:
+                s3.append(term)
 
-    # Prefer a coherent 8-11 band: drop lowest-priority S2 extras only when
-    # we somehow exceeded the total (should not happen with the caps).
     while len(s1) + len(s2) + len(s3) > _TECH_BUDGET_MAX and s2:
         s2.pop()
     return s1, s2, s3
@@ -502,24 +636,36 @@ def _domain_qualifier(
     structured: Dict[str, Any],
     jd_analysis: Dict[str, Any],
 ) -> str:
-    """Trailing S1 qualifier drawn from the resume, never from the JD alone."""
+    """Trailing S1 qualifier when the resume and the JD share a domain."""
     parts = [structured.get("summary") or ""]
     for exp in structured.get("experience") or []:
         parts.append(exp.get("title") or "")
         for b in exp.get("bullets") or []:
             if isinstance(b, str):
                 parts.append(b)
-    blob = " ".join(parts).lower()
+    resume_blob = " ".join(parts).lower()
+    jd_blob = " ".join([
+        jd_analysis.get("industry") or "",
+        jd_analysis.get("job_title") or "",
+        " ".join(_string_list(jd_analysis.get("responsibilities"))),
+        " ".join(_string_list(jd_analysis.get("qualifications"))),
+        " ".join(_string_list(jd_analysis.get("keywords"))),
+    ]).lower()
+
+    ranked: List[Tuple[int, str]] = []
     for needle, phrase in _DOMAIN_QUALIFIERS:
-        if needle in blob:
-            return phrase
-    industry = (jd_analysis.get("industry") or "").strip().lower()
-    # JD industry only confirms a domain the resume already named.
-    if industry and industry in blob:
-        for needle, phrase in _DOMAIN_QUALIFIERS:
-            if needle in industry or industry in needle:
-                return phrase
-    return ""
+        if needle not in resume_blob:
+            continue
+        score = 2 if needle in jd_blob else 0
+        industry = (jd_analysis.get("industry") or "").strip().lower()
+        if industry and (needle in industry or industry in needle):
+            score += 3
+        if score > 0:
+            ranked.append((score, phrase))
+    if not ranked:
+        return ""
+    ranked.sort(key=lambda kv: (-kv[0], kv[1]))
+    return ranked[0][1]
 
 
 def validate_summary(
@@ -530,11 +676,10 @@ def validate_summary(
     jd_analysis: Dict[str, Any],
     require_hard_gates: bool = True,
 ) -> ValidationResult:
-    """Hard gates (optional) then a comparative score.
+    """Hard gates (optional) then an informational score.
 
-    ``require_hard_gates=False`` is used to score the base summary so a
-    failing candidate can still lose to it. Gate failures on the candidate
-    always reject.
+    ``require_hard_gates=False`` scores the base summary for logs only.
+    A valid candidate ships regardless of that score.
     """
     text = (summary or "").strip()
     reasons: List[str] = []
@@ -559,27 +704,242 @@ def classify_role_family(title: str) -> str:
 # Brief internals
 # ------------------------------------------------------------------
 
-def _evidence_bullets(tailored: Dict[str, Any], limit: int = _EVIDENCE_CAP) -> List[str]:
+def _string_list(value: Any) -> List[str]:
     out: List[str] = []
-    for exp in tailored.get("experience") or []:
-        for b in exp.get("bullets") or []:
-            if isinstance(b, str) and b.strip():
-                out.append(b.strip())
-            if len(out) >= limit:
-                return out
+    for item in value or []:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip())
+    return out
+
+
+def _classify_target_family(jd_analysis: Dict[str, Any]) -> str:
+    title = (jd_analysis.get("job_title") or "").strip()
+    key = classify_role_family(title)
+    if key != "other":
+        return key
+    blob = " ".join(
+        [title]
+        + _string_list(jd_analysis.get("responsibilities"))
+        + _string_list(jd_analysis.get("required_skills"))
+        + _string_list(jd_analysis.get("qualifications"))
+    )
+    return classify_role_family(blob)
+
+
+def _has_engineering_evidence(bullets: Sequence[str], cand_key: str) -> bool:
+    if cand_key in _ENGINEERING_FAMILIES:
+        return True
+    return any(_bullet_supports_family(b, "swe") for b in bullets)
+
+
+def _resolve_role_identity(
+    jd_key: str,
+    cand_key: str,
+    jd_label: str,
+    cand_label: str,
+    support: float,
+    bullets: Sequence[str],
+) -> Tuple[str, Optional[str], str, bool]:
+    """Return (display_label, bridge, rationale, adopted_jd_identity)."""
+    has_eng = _has_engineering_evidence(bullets, cand_key)
+
+    if jd_key == "swe" and has_eng:
+        return "Software engineer", None, "adopt_broad_swe", True
+
+    if jd_key in ("other", "") or not jd_label or jd_label == "Professional":
+        if has_eng:
+            return "Software engineer", None, "neutral_fallback", False
+        return cand_label or "Professional", None, "neutral_fallback", False
+
+    if jd_key not in ("other", "") and (jd_key == cand_key or support >= 0.5):
+        return jd_label, None, "adopt_specialist", True
+
+    if support >= 0.2:
+        bridge = (
+            f"In one clause, connect this {cand_label} background to "
+            f"{jd_label} work without claiming the {jd_label} title."
+        )
+        return cand_label, bridge, "bridge", False
+
+    return cand_label, None, "keep_candidate", False
+
+
+def _select_terms(
+    structured: Dict[str, Any],
+    keyword_budget: Sequence[str],
+    bullets: Sequence[str],
+    jd_analysis: Dict[str, Any],
+) -> List[str]:
+    """JD-ranked evidenced terms. Base-summary vocabulary is a pool, not a floor."""
+    bullet_text = "\n".join(bullets)
+    weights = _term_evidence_weights(bullets)
+    ordered: List[str] = []
+    seen: set = set()
+
+    def _take(term: str) -> None:
+        raw = (term or "").strip()
+        if not raw or not _is_summary_tech(raw):
+            return
+        if not term_in_text(raw, bullet_text):
+            return
+        key = (normalize_single(raw) or raw).lower()
+        if key in seen:
+            return
+        seen.add(key)
+        ordered.append(raw)
+
+    for term in keyword_budget:
+        _take(term)
+    for field in ("required_skills", "preferred_skills", "keywords"):
+        for term in _string_list(jd_analysis.get(field)):
+            _take(term)
+    for term in _base_summary_terms(structured, bullets):
+        _take(term)
+    for term, _weight in sorted(weights.items(), key=lambda kv: (-kv[1], kv[0])):
+        _take(term)
+    return ordered[:_SELECTED_TERMS_CAP]
+
+
+def _base_summary_terms(structured: Dict[str, Any], bullets: Sequence[str]) -> List[str]:
+    """Base-summary tech that also appears in a settled bullet."""
+    base = structured.get("summary") or ""
+    if not base.strip():
+        return []
+    bullet_text = "\n".join(bullets)
+    retained: List[str] = []
+    seen: set = set()
+    for term in _known_terms_in(base):
+        if not _is_summary_tech(term):
+            continue
+        if not term_in_text(term, bullet_text):
+            continue
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        retained.append(term)
+    retained.sort(key=lambda t: (0 if is_programming_language(t) else 1, t.lower()))
+    return retained
+
+
+def _ranked_evidence(
+    items: Sequence[Tuple[str, str]],
+    jd_analysis: Dict[str, Any],
+    selected_terms: Sequence[str],
+    limit: int = _EVIDENCE_CAP,
+) -> Tuple[List[str], List[str]]:
+    if not items:
+        return [], []
+
+    scored = [
+        (addr, text, _evidence_score(text, jd_analysis, selected_terms))
+        for addr, text in items
+    ]
+    ranked = sorted(scored, key=lambda row: (-row[2], row[0]))
+
+    chosen: List[Tuple[str, str]] = []
+    seen: set = set()
+
+    def _add(addr: str, text: str) -> None:
+        if addr in seen or len(chosen) >= limit:
+            return
+        seen.add(addr)
+        chosen.append((addr, text))
+
+    for term in selected_terms:
+        for addr, text, _score in ranked:
+            if term_in_text(term, text):
+                _add(addr, text)
+                break
+
+    for addr, text, _score in ranked:
+        _add(addr, text)
+        if len(chosen) >= limit:
+            break
+
+    return [text for _addr, text in chosen], [addr for addr, _text in chosen]
+
+
+def _evidence_score(
+    text: str,
+    jd_analysis: Dict[str, Any],
+    selected_terms: Sequence[str],
+) -> float:
+    score = 0.0
+    for resp in _string_list(jd_analysis.get("responsibilities")):
+        score += 2.0 * _token_overlap(text, resp)
+    for skill in _string_list(jd_analysis.get("required_skills")):
+        if term_in_text(skill, text):
+            score += 3.0
+    for skill in _string_list(jd_analysis.get("preferred_skills")):
+        if term_in_text(skill, text):
+            score += 1.5
+    for term in selected_terms:
+        if term_in_text(term, text):
+            score += 2.0
+    if METRIC_PATTERN.search(text or ""):
+        score += 1.5
+    return score
+
+
+def _token_overlap(left: str, right: str) -> float:
+    stop = {
+        "the", "and", "for", "with", "from", "that", "this", "into", "onto",
+        "a", "an", "of", "to", "in", "on", "or", "by", "as", "at",
+    }
+    left_toks = {
+        t for t in re.findall(r"[a-z0-9][a-z0-9+#/-]*", (left or "").lower())
+        if t not in stop and len(t) > 2
+    }
+    right_toks = {
+        t for t in re.findall(r"[a-z0-9][a-z0-9+#/-]*", (right or "").lower())
+        if t not in stop and len(t) > 2
+    }
+    if not left_toks or not right_toks:
+        return 0.0
+    return len(left_toks & right_toks) / len(right_toks)
+
+
+def _prioritized_capabilities(
+    bullets: Sequence[str],
+    jd_analysis: Dict[str, Any],
+    selected_terms: Sequence[str],
+) -> List[str]:
+    jd_blob = " ".join(
+        [jd_analysis.get("job_title") or ""]
+        + _string_list(jd_analysis.get("responsibilities"))
+        + _string_list(jd_analysis.get("qualifications"))
+        + _string_list(jd_analysis.get("required_skills"))
+        + list(selected_terms)
+    ).lower()
+    bullet_blob = "\n".join(bullets).lower()
+    ranked: List[Tuple[float, str]] = []
+    for name, needles in _CAPABILITY_PATTERNS:
+        evidenced = sum(1 for n in needles if n in bullet_blob)
+        if not evidenced:
+            continue
+        relevant = 1.0 if any(n in jd_blob for n in needles) or name in jd_blob else 0.0
+        if relevant <= 0 and evidenced < 2:
+            continue
+        ranked.append((evidenced + 2.0 * relevant, name))
+    ranked.sort(key=lambda kv: (-kv[0], kv[1]))
+    return [name for _score, name in ranked[:3]]
+
+
+def _settled_bullet_items(tailored: Dict[str, Any]) -> List[Tuple[str, str]]:
+    out: List[Tuple[str, str]] = []
+    for section in ("experience", "projects"):
+        for i, row in enumerate(tailored.get(section) or []):
+            if not isinstance(row, dict):
+                continue
+            for j, b in enumerate(row.get("bullets") or []):
+                if isinstance(b, str) and b.strip():
+                    out.append((f"{section}.{i}.bullets.{j}", b.strip()))
     return out
 
 
 def _all_settled_bullets(tailored: Dict[str, Any]) -> List[str]:
-    out: List[str] = []
-    for section in ("experience", "projects"):
-        for row in tailored.get(section) or []:
-            if not isinstance(row, dict):
-                continue
-            for b in row.get("bullets") or []:
-                if isinstance(b, str) and b.strip():
-                    out.append(b.strip())
-    return out
+    return [text for _addr, text in _settled_bullet_items(tailored)]
 
 
 def _first_title(structured: Dict[str, Any]) -> str:
@@ -710,31 +1070,6 @@ def _jd_required_years(jd_analysis: Dict[str, Any]) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
-def _must_retain(structured: Dict[str, Any], bullets: List[str]) -> List[str]:
-    """Base-summary terms that also appear in a settled bullet and are tech."""
-    base = structured.get("summary") or ""
-    if not base.strip():
-        return []
-    in_summary = _known_terms_in(base)
-    bullet_text = "\n".join(bullets)
-    retained: List[str] = []
-    seen: set = set()
-    for term in in_summary:
-        group = taxonomy_group(term)
-        if group not in _RETAIN_GROUPS and not is_programming_language(term):
-            continue
-        if not term_in_text(term, bullet_text):
-            continue
-        key = term.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        retained.append(term)
-
-    retained.sort(key=lambda t: (0 if is_programming_language(t) else 1, t.lower()))
-    return retained[:_MUST_RETAIN_CAP]
-
-
 def _forbidden_terms(
     structured: Dict[str, Any],
     jd_label: str,
@@ -746,6 +1081,10 @@ def _forbidden_terms(
     for token in _SENIORITY_TOKENS:
         needle = token.rstrip(".")
         if re.search(rf"\b{re.escape(needle)}\b", titles_blob):
+            continue
+        if adopted_jd_identity and re.search(
+            rf"\b{re.escape(needle)}\b", (jd_label or "").lower(),
+        ):
             continue
         label = token.rstrip(".").title() if token not in ("sr", "sr.", "jr", "jr.") else token
         if label not in forbidden:
@@ -860,8 +1199,14 @@ def _build_generation_prompt(
     user_feedback: Optional[str] = None,
     failure_reasons: Optional[List[str]] = None,
 ) -> str:
-    evidence = "\n".join(f"- {b}" for b in brief.evidence) or "(no bullets)"
-    must = ", ".join(brief.must_retain) or "(none)"
+    evidence = "\n".join(
+        f"- [{addr}] {text}" if addr else f"- {text}"
+        for addr, text in zip(
+            brief.evidence_refs or [""] * len(brief.evidence),
+            brief.evidence,
+        )
+    ) or "(no bullets)"
+    selected = ", ".join(brief.selected_terms) or "(none — do not invent technologies)"
     keywords = ", ".join(brief.keyword_budget) or "(none — do not force keywords)"
     forbidden = ", ".join(brief.forbidden) or "(none)"
     years = brief.years_phrase or (
@@ -870,16 +1215,39 @@ def _build_generation_prompt(
     bridge = brief.bridge_clause or "Do not add a role-bridge clause."
     s1 = ", ".join(brief.tech_s1) or "(none — omit languages rather than invent)"
     s2 = ", ".join(brief.tech_s2) or "(none)"
-    s3 = ", ".join(brief.tech_s3) or "(none — write 2 sentences, no weak third)"
+    capabilities = ", ".join(brief.prioritized_capabilities) or (
+        "(none — write capability from the evidenced work, not a keyword list)"
+    )
+    responsibilities = "\n".join(
+        f"- {r}" for r in brief.responsibilities[:6]
+    ) or "(none provided)"
+    qualifications = "\n".join(
+        f"- {q}" for q in brief.qualifications[:4]
+    ) or "(none provided)"
     domain = brief.domain_qualifier or (
         "omit a domain qualifier; do not invent one from the JD"
     )
-    third = (
-        "Write sentence 3 as the differentiator using the S3 technologies. "
-        "Connect it back to the identity (the AI/scale/platform work uses the "
-        "same discipline as the role family), do not let it sit beside it."
-        if brief.tech_s3 else
-        "Do NOT write a third sentence. Two strong sentences beat a weak third."
+    if brief.include_s3:
+        s3 = ", ".join(brief.tech_s3) or "(optional — prefer a capability over leftover tech)"
+        third = (
+            "Write sentence 3 as the differentiator using a prioritized "
+            f"capability ({capabilities}) and only these optional technologies: {s3}. "
+            "Connect it back to the identity. Do not invent a specialty."
+        )
+    else:
+        third = (
+            "Do NOT write a third sentence unless a prioritized capability "
+            "clearly needs it. Two strong sentences beat a weak third."
+        )
+
+    tech_floor = _tech_floor(brief)
+    tech_rule = (
+        f"Name at most {_TECH_BUDGET_MAX} technologies, preferring the "
+        f"selected terms. Aim for about {tech_floor} when they are evidenced "
+        "and relevant."
+        if tech_floor else
+        "There is no technology quota. Name a technology only when a bullet "
+        "backs it and it helps this job. Capability language is enough."
     )
 
     parts = [
@@ -887,32 +1255,45 @@ def _build_generation_prompt(
         "The bullets are the source of truth — every claim must be evidenced there. "
         "This is not an objective and not a keyword dump.\n\n",
         f"{prompt_rules.SUMMARY_RULE}\n",
-        f"{prompt_rules.VOICE_RULE}\n",
+        ("Use natural, direct professional language. Keep concrete work visible; no forced vocabulary.\n"
+         if evidence_policy_enabled()
+         else f"{prompt_rules.VOICE_RULE}\n"),
         f"{prompt_rules.METRIC_HONESTY_RULE}\n",
         f"{prompt_rules.BANNED_SYMBOLS_RULE}\n",
         f"{prompt_rules.banned_phrases_rule()}\n",
         f"{prompt_rules.TERMINAL_PUNCTUATION_RULE}\n\n",
+        "TARGET ROLE\n",
+        f"Title: {brief.target_title or '(not specified)'}\n",
+        f"Resolved display label: {brief.role_family} "
+        f"(rationale: {brief.role_rationale or 'n/a'}).\n",
+        "Never copy the JD title verbatim. Never copy unsupported seniority.\n\n",
+        "ROLE RESPONSIBILITIES (use these to choose emphasis, not to invent facts)\n",
+        f"{responsibilities}\n\n",
+        "QUALIFICATIONS (context only; do not claim unmet credentials)\n",
+        f"{qualifications}\n\n",
+        "PRIORITIZED CAPABILITIES (supported by the bullets)\n",
+        f"{capabilities}\n\n",
         "THREE-SLOT STRUCTURE — each sentence has one job:\n",
         f"S1 IDENTITY. Open with this role family as the grammatical subject: "
         f"{brief.role_family}. Never an adjective. Never the JD title verbatim. "
-        f"Years: {years}. Then what they build at the system level. "
-        f"Languages only in this sentence (1-2): {s1}. "
+        f"Years: {years}. Then what they build or deliver at the system level. "
+        f"Languages only in this sentence (0-2): {s1}. "
         f"Domain qualifier, trailing, never the head noun: {domain}.\n",
         f"S2 CAPABILITY. Present tense, delivery verb (Delivers / Designs / "
-        f"Builds / Owns / Ships — not 'Responsible for'). Group these 4-6 "
-        f"technologies as ONE coherent system story, not a comma list: {s2}. "
+        f"Builds / Owns / Ships — not 'Responsible for'). Tell one coherent "
+        f"story from the prioritized capabilities and these technologies: {s2}. "
         f"{bridge}\n",
-        f"S3 DIFFERENTIATOR. {third} Technologies (1-2): {s3}.\n\n",
+        f"S3 DIFFERENTIATOR. {third}\n\n",
         "HARD RULES:\n",
         f"1. Exactly 2 or 3 sentences, {prompt_rules.SUMMARY_MIN_WORDS}-"
         f"{prompt_rules.SUMMARY_MAX_WORDS} words. Every sentence ends with a period.\n",
-        "2. Every sentence MUST contain a must-retain term, a keyword-budget "
-        "term, or a numeric metric. A sentence with none is invalid — that "
-        "is what makes objective statements structurally impossible.\n",
-        f"3. You MUST mention every must-retain term: {must}\n",
-        f"4. Weave keyword-budget terms naturally (do not list): {keywords}\n",
-        f"5. Name 8-11 technologies total, using the slot lists above. "
-        "A technology named here MUST appear in a bullet below. No exceptions.\n",
+        "2. Every sentence MUST contain a selected term, a keyword-budget "
+        "term, a prioritized capability, or a numeric metric. A sentence with "
+        "none is invalid.\n",
+        f"3. Prefer these JD-ranked evidenced terms; do not invent others: {selected}\n",
+        f"4. Weave keyword-budget terms naturally when they are evidenced: {keywords}\n",
+        f"5. {tech_rule} A technology named here MUST appear in a bullet below. "
+        "No exceptions.\n",
         f"6. Do NOT use any of these forbidden terms: {forbidden}\n",
         "7. Banned outright: ready to, seeking, looking to, eager to, hoping to, "
         "excited to, passionate about, aiming to, bring this foundation; "
@@ -920,7 +1301,7 @@ def _build_generation_prompt(
         "Motivated); self-assessment (expert, world-class, extensive experience, "
         "proven track record); comma-list inventory in place of a system story.\n",
         "8. Present tense, first-person-implied, no 'I'. Do not restate the JD.\n\n",
-        "=== SETTLED EXPERIENCE BULLETS (source of truth) ===\n",
+        "=== SETTLED EVIDENCE BULLETS (source of truth) ===\n",
         wrap_untrusted("experience_bullets", evidence),
         "\n\n",
     ]
@@ -951,6 +1332,22 @@ def _build_generation_prompt(
 
 def _split_sentences(summary: str) -> List[str]:
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+", summary.strip()) if s.strip()]
+
+
+def _is_engineering_brief(brief: SummaryBrief) -> bool:
+    return (
+        brief.jd_family_key in _ENGINEERING_FAMILIES
+        or brief.candidate_family_key in _ENGINEERING_FAMILIES
+    )
+
+
+def _tech_floor(brief: SummaryBrief) -> int:
+    from services.tailoring_policy import enabled
+    if enabled():
+        return 0
+    if not _is_engineering_brief(brief) or not brief.tech_budget:
+        return 0
+    return min(_TECH_BUDGET_FLOOR, len(brief.tech_budget))
 
 
 def _hard_gate_failures(
@@ -986,8 +1383,6 @@ def _hard_gate_failures(
             f"shape: {words} words (need {prompt_rules.SUMMARY_MIN_WORDS}-"
             f"{prompt_rules.SUMMARY_MAX_WORDS})"
         )
-    if len(text) > 500:
-        reasons.append("shape: exceeds 500 characters")
     if re.search(r"\bi\b", low):
         reasons.append("voice: contains 'I'")
     if any(p in f" {low} " for p in _THIRD_PERSON):
@@ -1013,10 +1408,6 @@ def _hard_gate_failures(
     if len(s1_langs) > _S1_LANGUAGE_CAP:
         reasons.append(f"slot: S1 has {len(s1_langs)} languages (max {_S1_LANGUAGE_CAP})")
 
-    for term in brief.must_retain:
-        if not term_in_text(term, text):
-            reasons.append(f"must-retain missing: {term}")
-
     for term in brief.forbidden:
         if term and term_in_text(term, text):
             reasons.append(f"forbidden term: {term}")
@@ -1026,7 +1417,7 @@ def _hard_gate_failures(
             reasons.append(f"sentence {i} has no evidence")
 
     named = _summary_tech_terms(text)
-    floor = min(_TECH_BUDGET_MIN, len(brief.tech_budget)) if brief.tech_budget else 0
+    floor = _tech_floor(brief)
     if len(named) > _TECH_BUDGET_MAX:
         reasons.append(f"tech-budget: {len(named)} terms (max {_TECH_BUDGET_MAX})")
     elif floor and len(named) < floor:
@@ -1034,29 +1425,44 @@ def _hard_gate_failures(
             f"tech-budget: {len(named)} terms (need {floor}-{_TECH_BUDGET_MAX})"
         )
 
-    # bullet-backing: every tech term in the summary must appear in a bullet
-    # OR be a JD keyword-budget term (the tailor is already told to weave
-    # those in; if a term is in the budget we trust the model's placement).
-    bullet_text = "\n".join(_all_settled_bullets(tailored))
-    budget_set = {(normalize_single(t) or t).lower() for t in brief.keyword_budget}
-    for term in named:
-        term_key = (normalize_single(term) or term).lower()
-        if term_key in budget_set:
-            continue  # JD-budget terms are allowed even if not yet in bullets
-        if bullet_text and not term_in_text(term, bullet_text):
-            reasons.append(f"bullet-backing: {term}")
-
+    reasons.extend(_backing_failures(text, brief, tailored, check_grounding=False))
     if _summary_introduces_ungrounded_claim(text, tailored, structured_resume, jd_analysis):
         reasons.append("grounding: ungrounded claim")
 
     return reasons
 
 
+def _backing_failures(
+    text: str,
+    brief: SummaryBrief,
+    tailored: Dict[str, Any],
+    check_grounding: bool = False,
+) -> List[str]:
+    reasons: List[str] = []
+    bullet_text = "\n".join(_all_settled_bullets(tailored))
+    for term in _summary_tech_terms(text):
+        if bullet_text and not term_in_text(term, bullet_text):
+            reasons.append(f"bullet-backing: {term}")
+    if check_grounding:
+        # Reserved for refresh callers that already ran the full gate.
+        pass
+    return reasons
+
+
 def _sentence_has_evidence(sentence: str, brief: SummaryBrief) -> bool:
-    """Spec test 2: must_retain, keyword_budget, slot tech, or a metric."""
-    pool = list(brief.must_retain) + list(brief.keyword_budget) + list(brief.tech_budget)
-    if any(term_in_text(t, sentence) for t in pool):
+    """A selected term, keyword, slot tech, capability, or a metric."""
+    pool = (
+        list(brief.selected_terms)
+        + list(brief.keyword_budget)
+        + list(brief.tech_budget)
+        + list(brief.prioritized_capabilities)
+    )
+    if any(term_in_text(t, sentence) for t in pool if t):
         return True
+    low = (sentence or "").lower()
+    for cap, needles in _CAPABILITY_PATTERNS:
+        if cap in (brief.prioritized_capabilities or []) and any(n in low for n in needles):
+            return True
     if METRIC_PATTERN.search(sentence or ""):
         return True
     return False
@@ -1100,7 +1506,7 @@ def _score_summary(text: str, brief: SummaryBrief) -> float:
     sentences = _split_sentences(text)
     score = 0.0
 
-    budget = brief.keyword_budget
+    budget = brief.keyword_budget or brief.selected_terms
     if budget:
         hits = sum(1 for t in budget if term_in_text(t, text))
         score += 3.0 * (hits / len(budget))
@@ -1108,10 +1514,8 @@ def _score_summary(text: str, brief: SummaryBrief) -> float:
         score += 3.0
 
     named = _summary_tech_terms(text)
-    if METRIC_PATTERN.search(text):
-        named = list(named) + ["__metric__"]
-    # Reward the 8-11 band; a comma-list dump already fails the hard gate.
-    score += 3.0 * min(1.0, len([t for t in named if t != "__metric__"]) / 8.0)
+    denom = max(1, _tech_floor(brief) or 3)
+    score += 3.0 * min(1.0, len(named) / denom)
 
     first = sentences[0] if sentences else ""
     if _s1_has_role_family(first, brief.role_family):
@@ -1173,3 +1577,42 @@ def _apply_cosmetics(summary: str) -> str:
     payload, _ = g.fix_ai_tell_symbols(payload)
     payload, _ = g.fix_terminal_periods(payload)
     return payload.get("summary") or ""
+
+
+def _reason_codes(reasons: Sequence[str]) -> List[str]:
+    codes: List[str] = []
+    seen: set = set()
+    for raw in reasons:
+        text = (raw or "").strip().lower()
+        if not text:
+            continue
+        code = "other"
+        for name, needles in _REASON_CODE_RULES:
+            if any(n in text for n in needles):
+                code = name
+                break
+        if code not in seen:
+            seen.add(code)
+            codes.append(code)
+    return codes
+
+
+def _attach_summary_write(
+    tailored: Dict[str, Any],
+    brief: Optional[SummaryBrief],
+    source: str,
+    attempts: int,
+    reasons: Sequence[str],
+    refreshed_after_augment: bool = False,
+) -> None:
+    tailored["summary_write"] = {
+        "writer_revision": WRITER_REVISION,
+        "role_label": (brief.role_family if brief else ""),
+        "jd_family_key": (brief.jd_family_key if brief else ""),
+        "candidate_family_key": (brief.candidate_family_key if brief else ""),
+        "support": (brief.support if brief else 0.0),
+        "source": source,
+        "attempts": attempts,
+        "reasons": _reason_codes(reasons),
+        "refreshed_after_augment": refreshed_after_augment,
+    }

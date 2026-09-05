@@ -116,6 +116,8 @@ def normalize_titles(resume: Dict[str, Any]) -> Dict[str, Any]:
       - experience[].title
       - projects[].name
     """
+    if (resume.get("tailoring_run") or {}).get("policy_version") == "evidence-v1":
+        return resume
     # Experience titles
     for exp in resume.get("experience", []):
         if exp.get("title"):

@@ -72,6 +72,15 @@ def build_fact_store(
     if include_enrichment and user_email:
         try:
             enriched = _confirmed_enrichment_facts(user_email)
+            from services.tailoring_policy import content_hash
+            confirmed = _db()["tailoring_evidence"].find_one({
+                "user_email": user_email, "source_hash": content_hash(structured_resume),
+            }) or {}
+            enriched += [{"fact_id": "user:" + key, "source": "user", "type": "bullet",
+                          "display": row["text"], "text": row["text"], "entity": row["entity"],
+                          "source_hash": confirmed["source_hash"]}
+                         for key, row in (confirmed.get("facts") or {}).items()
+                         if isinstance(row, dict) and row.get("text") and row.get("entity")]
             for fact in enriched:
                 facts.append(fact)
                 sources[fact["source"]] = True
