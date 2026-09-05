@@ -98,6 +98,31 @@ class ResumeScorer:
         if is_result(tailored):
             from services.tailoring_assessment import score_payload
             return score_payload(tailored, jd_analysis, pdf_bytes, render_error)
+        # assessment-v2 empty-stage path (Package 2). Broad UI exposure is Package 6;
+        # when the flag is on and the job carries ownership identity, return v2 shape.
+        try:
+            from services import assessment_service as _assess
+            if _assess.enabled():
+                meta = {}
+                if isinstance(jd_analysis, dict):
+                    meta = jd_analysis.get("_assessment_meta") or {}
+                return _assess.score_payload_v2(
+                    user_email=str(meta.get("user_email") or ""),
+                    guest_id=str(meta.get("guest_id") or ""),
+                    record_id=str(meta.get("record_id") or ""),
+                    version_id=str(meta.get("version_id") or ""),
+                    tailored_resume=tailored,
+                    jd_analysis={k: v for k, v in (jd_analysis or {}).items()
+                                 if k != "_assessment_meta"},
+                    fmt=str(meta.get("format") or "pdf"),
+                    idempotency_key=str(meta.get("idempotency_key") or ""),
+                    artifact_bytes=pdf_bytes,
+                    render_error=render_error,
+                    source_resume=meta.get("source_resume")
+                    if isinstance(meta.get("source_resume"), dict) else None,
+                )
+        except Exception as e:
+            logger.warning("assessment-v2 path failed, using legacy hybrid: %s", e)
         det = self._deterministic_scores(tailored, jd_analysis)
         # Pass the deterministic results into the AI scorer so the scanner
         # scores reconcile with them rather than being independent guesses.

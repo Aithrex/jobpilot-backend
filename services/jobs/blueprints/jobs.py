@@ -1411,10 +1411,14 @@ def tailor_resume():
     if not job_description or not isinstance(job_description, str):
         return jsonify({"error": "job_description is required"}), 400
 
-    from services.tailoring_policy import enabled
-    if enabled() and len(job_description) > 56000:
+    from services.tailoring_policy import enabled as evidence_enabled
+    from services import assessment_service as _assess
+    use_async_pipeline = evidence_enabled() or _assess.enabled()
+    if use_async_pipeline and len(job_description) > 56000:
         return jsonify({"error": "Job description is too long (max 56000 characters)."}), 400
-    job_description = InputSanitizer.sanitize_string(job_description, max_length=56000 if enabled() else 6000)
+    job_description = InputSanitizer.sanitize_string(
+        job_description, max_length=56000 if use_async_pipeline else 6000,
+    )
     if not job_description:
         return jsonify({"error": "Invalid job description"}), 400
 
@@ -1423,8 +1427,7 @@ def tailor_resume():
     try:
         from services.resume_service import get_resume_service
         svc = get_resume_service()
-        from services.tailoring_policy import enabled
-        if enabled():
+        if use_async_pipeline:
             from services import quota_ledger_service as ledger
             from services.resume_service import ResumeService
             allowed, entries, usage = ledger.reserve_tailor(user_email, idempotency_key=data.get("idempotency_key"))
@@ -1432,6 +1435,8 @@ def tailor_resume():
                 return jsonify({"error": "daily_quota_exceeded", "usage": usage}), 429
             payload = {"job_description": job_description, "user_email": user_email,
                        "quota_entry_id": entries[0], "selection_mode": "auto"}
+            if _assess.enabled():
+                payload = _assess.adapt_ats_scores_job_payload(payload)
             try:
                 job_id = svc.create_job("extract_and_tailor", payload, user_email=user_email)
                 ledger.attach_job(entries[0], job_id)

@@ -6,6 +6,8 @@ This is the single execution checklist for the approved work. It consolidates th
 
 ## Outcome
 
+Follow-up measurement design: [ATS measurement audit and plan](2026-09-05-ats-measurement-audit-and-plan.md). This audits both the legacy scorer and the newly implemented assessment and refines the measurement work packages below; it does not change the writing policy or introduce another candidate/job match formula.
+
 Generate a meaningfully JD-aligned resume that makes the user's strongest relevant experience easy to recognize, remains natural to read, and exports correctly. Support all professions and experience levels. Automatically interpret demonstrated capabilities; do not ask users for proof of ordinary rewording. Ask only optional, focused questions when a material new fact is unknown.
 
 Success is clearer supported fit, not more keywords or a claimed probability of passing a particular ATS.

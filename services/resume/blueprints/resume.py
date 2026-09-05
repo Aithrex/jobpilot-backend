@@ -485,8 +485,32 @@ def ats_scores():
 
         svc = get_resume_service()
         user_email = get_jwt_identity()
-        payload = {"tailored_resume": tailored, "jd_analysis": jd_analysis}
-        job_id = svc.create_job("ats_scores", payload, user_email=user_email)
+        # Package 6: pass ownership identity so assessment-v2 can bind when enabled.
+        jd_payload = dict(jd_analysis)
+        meta = {
+            "user_email": user_email,
+            "record_id": str(data.get("record_id") or ""),
+            "version_id": str(data.get("version_id") or ""),
+            "format": str(data.get("format") or "pdf"),
+            "idempotency_key": str(data.get("idempotency_key") or ""),
+        }
+        jd_payload["_assessment_meta"] = meta
+        payload = {
+            "tailored_resume": tailored,
+            "jd_analysis": jd_payload,
+            "record_id": meta["record_id"],
+            "version_id": meta["version_id"],
+        }
+        try:
+            from services import assessment_service as _assess
+            if _assess.enabled():
+                payload = _assess.adapt_ats_scores_job_payload(payload)
+        except Exception:
+            pass
+        job_id = svc.create_job(
+            "ats_scores", payload, user_email=user_email,
+            idempotency_key=meta["idempotency_key"] or None,
+        )
         ResumeService.invoke_async(job_id, "ats_scores", payload)
         return jsonify({"job_id": job_id}), 202
 
@@ -1033,6 +1057,7 @@ def save_version(record_id):
     source = data.get("source", "edited")
     user_feedback = data.get("user_feedback")
     ats_scores = data.get("ats_scores")
+    assessment_id = str(data.get("assessment_id") or "").strip()
     parent_version_id = data.get("parent_version_id")
     set_current = bool(data.get("set_current", True))
 
@@ -1048,6 +1073,35 @@ def save_version(record_id):
         )
         if not record:
             return jsonify({"error": "Record not found"}), 404
+
+        # Package 6: bind server assessment by ID; do not trust client score bodies
+        # as factual support when assessment-v2 is enabled.
+        bound_assessment = None
+        try:
+            from services import assessment_service as _assess
+            if assessment_id and _assess.enabled():
+                bound_assessment = _assess.get_assessment(
+                    assessment_id, user_email=user_email,
+                )
+                # Prefer server result over client-authored scores.
+                ats_scores = bound_assessment.get("result") or {
+                    "schema_version": 4,
+                    "assessment_version": "assessment-v2",
+                    "assessment_id": assessment_id,
+                    "overall": None,
+                }
+                ats_scores = dict(ats_scores)
+                ats_scores["assessment_id"] = assessment_id
+                ats_scores["overall"] = None
+            elif _assess.enabled() and ats_scores and (
+                ats_scores.get("schema_version") == 4
+                or ats_scores.get("assessment_version") == "assessment-v2"
+            ):
+                # Client may not forge a v2 result without a bound assessment_id.
+                if not assessment_id:
+                    ats_scores = None
+        except Exception as bind_err:
+            logger.warning("assessment bind skipped: %s", bind_err)
 
         versions, _ = ensure_versions(record)
         from services.resume_versioning import StaleVersionError
@@ -1065,6 +1119,19 @@ def save_version(record_id):
         except VersionLimitError:
             # Bounded refinement (spec 1.5): the 6th distinct version is refused.
             return _version_limit_response()
+        if assessment_id and bound_assessment is not None:
+            version["assessment_id"] = assessment_id
+            try:
+                from services import assessment_service as _assess
+                _assess.attach_assessment_to_version(
+                    record_id=record_id,
+                    version_id=version["version_id"],
+                    assessment_id=assessment_id,
+                    user_email=user_email,
+                    expected_content_hash=version.get("content_hash") or "",
+                )
+            except Exception as attach_err:
+                logger.warning("assessment attach failed: %s", attach_err)
         update = {
             "$set": {
                 "versions": versions,
@@ -1073,6 +1140,8 @@ def save_version(record_id):
         }
         if set_current:
             update["$set"]["current_version_id"] = version["version_id"]
+            if assessment_id:
+                update["$set"]["current_assessment_id"] = assessment_id
         saved = db.tailoring_records.update_one(
             {"record_id": record_id, "user_email": user_email,
              "updated_at": record.get("updated_at")},
@@ -1085,6 +1154,7 @@ def save_version(record_id):
             "version_id": version["version_id"],
             "version_number": version["version_number"],
             "content_hash": version["content_hash"],
+            "assessment_id": assessment_id or version.get("assessment_id"),
             "created": created,
         }), 201 if created else 200
     except Exception as e:

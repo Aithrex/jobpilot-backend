@@ -605,6 +605,7 @@ def _finalize_tailored_result(
     fact_store: Dict[str, Any] | None = None,
     preserve_project_names: set | None = None,
     allow_project_generation: bool = True,
+    guest_id: str = "",
 ) -> Dict[str, Any]:
     """Shared post-tailor pipeline for tailor / regenerate / extract_and_tailor.
 
@@ -616,6 +617,25 @@ def _finalize_tailored_result(
     if is_result(result):
         # Composition/grounding is already complete. Export checks and reader
         # review are read-only and describe precisely this revision.
+        from services import assessment_service as _assess
+        if _assess.enabled():
+            from services.tailoring_assessment import finalize
+            result = finalize(result, jd_analysis, svc.renderer)
+            try:
+                v2 = _assess.assess_resume_revision(
+                    tailored_resume=result,
+                    jd_analysis=jd_analysis or {},
+                    renderer=svc.renderer,
+                    user_email=user_email or "",
+                    guest_id=guest_id or "",
+                    source_resume=structured if isinstance(structured, dict) else None,
+                )
+                result["ats_scores"] = v2
+                if v2.get("assessment_id"):
+                    result["assessment_id"] = v2["assessment_id"]
+            except Exception as exc:
+                logger.warning("assessment-v2 finalize overlay failed: %s", exc)
+            return result
         from services.tailoring_assessment import finalize
         return finalize(result, jd_analysis, svc.renderer)
     result_contact = result.get("contact", {})
@@ -1492,6 +1512,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 result = _finalize_tailored_result(
                     svc, job_id, result, structured, jd_analysis,
                     user_email="", fact_store=fact_store,
+                    guest_id=guest_id or "",
                     allow_project_generation=(
                         gen_policy["allow"] and not gen_policy["evidence_only"]
                     ),
@@ -1507,11 +1528,16 @@ def _process_job(job_id: str, job_type: str, payload: dict):
 
                     _db = _DBC().get_db()
                     record_id = str(_uuid.uuid4())
-                    initial = build_initial_version(result, source="initial", ats_scores=None)
+                    ats = result.get("ats_scores")
+                    initial = build_initial_version(result, source="initial", ats_scores=ats)
+                    if result.get("assessment_id"):
+                        initial["assessment_id"] = result["assessment_id"]
                     _db.tailoring_records.insert_one({
                         "record_id": record_id,
                         "user_email": None,
                         "guest_id": guest_id,
+                        "ats_scores": ats,
+                        "current_assessment_id": result.get("assessment_id"),
                         "base_resume_filename": (session.get("resume") or {}).get("filename") or "",
                         "base_resume_s3_key": "",
                         "jd_text": jd_text[:15000],
@@ -1519,7 +1545,6 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                         "tailored_resume": result,
                         "versions": [initial],
                         "current_version_id": initial["version_id"],
-                        "ats_scores": None,
                         "created_at": datetime.now(timezone.utc),
                         "updated_at": datetime.now(timezone.utc),
                         "source": "guest_tailor",
@@ -2033,30 +2058,17 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 return
             structured = resume["structured"]
 
-            # Step 3: Tailor
+            # Step 3: Tailor + shared finalize (assessment-v2 when flag on; verification; export)
             from services.profile_facts import build_fact_store
             facts = build_fact_store(user_email=user_email, structured_resume=structured)
             result = svc.tailor.tailor(structured, jd_analysis, fact_store=facts)
-
-            # Step 4: Augment
-            result = svc.augmenter.augment(result, structured, jd_analysis)
-            _consume_projects_diagnostic(result)
-
-            # Step 5: Date + title normalization
-            from services.date_normalizer import normalize_dates
-            from services.title_normalizer import normalize_titles
-
-            result = normalize_dates(result)
-            result = normalize_titles(result)
-
-            from services.keyword_gap_engine import KeywordGapEngine
-            from services import summary_tailor
-            gap_final = KeywordGapEngine().analyze(result, jd_analysis)
-            result = summary_tailor.refresh_summary_if_stale(
-                result, structured, jd_analysis, gap_final,
+            result = _finalize_tailored_result(
+                svc, job_id, result, structured, jd_analysis,
+                user_email=user_email, fact_store=facts,
             )
-
-            _attach_ats_keyword_audit(result, jd_analysis)
+            # If finalize did not attach ats_scores (legacy path), keep keyword audit.
+            if not result.get("ats_scores"):
+                _attach_ats_keyword_audit(result, jd_analysis)
 
             # ── Wire the batch result into the same lifecycle as a single-row
             # tailor — create a tailoring_record (so it surfaces in My Resumes /
@@ -2071,7 +2083,10 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 from utils.db_connect import DBConnect
                 _db = DBConnect().get_db()
                 rid = str(_uuid.uuid4())
-                initial = build_initial_version(result, source="initial", ats_scores=None)
+                ats = result.get("ats_scores")
+                initial = build_initial_version(result, source="initial", ats_scores=ats)
+                if result.get("assessment_id"):
+                    initial["assessment_id"] = result["assessment_id"]
                 # Batch tailoring no longer auto-marks as "applied" — that was
                 # too presumptuous. The user might tailor 10 jobs in one batch
                 # but only actually submit 3. Status starts at "interested"
@@ -2086,7 +2101,8 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                     "tailored_resume": result,
                     "versions": [initial],
                     "current_version_id": initial["version_id"],
-                    "ats_scores": None,
+                    "ats_scores": ats,
+                    "current_assessment_id": result.get("assessment_id"),
                     "created_at": datetime.now(timezone.utc),
                     "updated_at": datetime.now(timezone.utc),
                     "source": "batch_tailor",
@@ -2142,13 +2158,24 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             except Exception as e:
                 logger.warning("ATS scoring: PDF render failed: %s", e)
                 render_error = f"PDF render failed: {e}"
-            result = svc.scorer.score(
-                payload["tailored_resume"],
-                payload["jd_analysis"],
-                pdf_bytes=pdf_bytes,
-                render_error=render_error,
-                page_outcome=None if resolution is None else resolution.outcome,
-            )
+
+            def _run_score(p: dict):
+                return svc.scorer.score(
+                    p["tailored_resume"],
+                    p["jd_analysis"],
+                    pdf_bytes=pdf_bytes,
+                    render_error=render_error,
+                    page_outcome=None if resolution is None else resolution.outcome,
+                )
+
+            # Package 2: pin assessment-v2 policy on this job when enabled so a
+            # mid-flight flag flip cannot change the rubric for this run.
+            from services import assessment_service as _assess
+            if _assess.enabled() or payload.get("assessment_policy_version"):
+                payload = _assess.adapt_ats_scores_job_payload(payload)
+                result = _assess.policy_context(_run_score)(payload)
+            else:
+                result = _run_score(payload)
             svc.complete_job(job_id, {"ats_scores": result})
 
         elif job_type == "job_search":

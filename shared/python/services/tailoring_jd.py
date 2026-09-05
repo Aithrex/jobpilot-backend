@@ -71,4 +71,10 @@ responsibilities, qualifications, experience_years, industry, keywords, and requ
     # the same four chunks; source offsets are relative to this exact text.
     merged["source_text"] = text[:56000]
     merged["analysis_completeness"] = "complete" if complete and successes == len(chunks) else "partial"
+    # Package 4: attach AND/OR expression trees without changing flat alternatives.
+    try:
+        from services.requirement_assessment import attach_expressions
+        merged = attach_expressions(merged)
+    except Exception:
+        pass
     return merged

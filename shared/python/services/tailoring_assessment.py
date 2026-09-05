@@ -11,57 +11,27 @@ from services.tailoring_planner import contains, semantic_support
 from utils.llm_safety import guarded_system, wrap_untrusted, redact_pii_for_model
 
 
-def _normalized(text: str) -> str:
-    return re.sub(r"\s+", "", text).casefold().replace("\u2013", "-").replace("\u2014", "-")
-
-
 def check_export(data: bytes | None, resume: dict, *, error: str | None = None,
                  format: str = "pdf") -> tuple[dict, str]:
-    artifact = {"format": format, "content_hash": content_hash(resume), "status": "unchecked",
-                "bytes_hash": None, "checks": {}, "issues": []}
-    if error:
-        artifact.update(status="failed", issues=["Document could not be rendered."])
-        return artifact, ""
-    if not data:
-        return artifact, ""
-    artifact["bytes_hash"] = hashlib.sha256(data).hexdigest()
-    try:
-        if format == "docx":
-            import io
-            from docx import Document
-            doc = Document(io.BytesIO(data))
-            text = "\n".join([p.text for p in doc.paragraphs] +
-                             [c.text for t in doc.tables for r in t.rows for c in r.cells])
-        else:
-            from services.pdf_ats_check import extract_pdf_text
-            text, _ = extract_pdf_text(data)
-        norm = _normalized(text)
-        checks = {"text_extracted": bool(text.strip()), "no_replacement_glyphs": "\ufffd" not in text}
-        targets = []
-        for key, val in (resume.get("contact") or {}).items():
-            if isinstance(val, str) and val.strip() and key in {"name", "email", "phone"}:
-                targets.append(("contact." + key, val))
-        for section in ("experience", "education", "projects"):
-            for i, row in enumerate(resume.get(section) or []):
-                for field in ("company", "title", "dates", "institution", "degree", "name"):
-                    if row.get(field):
-                        targets.append((f"{section}.{i}.{field}", row[field]))
-                for j, b in enumerate(row.get("bullets") or []):
-                    targets.append((f"{section}.{i}.bullets.{j}", b))
-        if resume.get("summary"):
-            targets.append(("summary", resume["summary"]))
-        from schemas.resume_schemas import flatten_skills
-        targets.extend((f"skills.{i}", s) for i, s in enumerate(flatten_skills(resume)))
-        targets.extend((f"certifications.{i}", c) for i, c in enumerate(resume.get("certifications") or []))
-        for label, value in targets:
-            checks[label] = _normalized(str(value)) in norm
-        artifact["checks"] = checks
-        artifact["issues"] = [f"Export check failed: {k}" for k, ok in checks.items() if not ok]
-        artifact["status"] = "passed" if all(checks.values()) else "issues"
-        return artifact, text
-    except Exception:
-        artifact.update(status="failed", issues=["Document text could not be extracted."])
-        return artifact, ""
+    """Compatibility facade — delegates ordered extraction to artifact_assessment."""
+    from services.artifact_assessment import assess_artifact
+    art = assess_artifact(data, resume, fmt=format, error=error)
+    text = art.get("raw_text") or ""
+    # Preserve legacy artifact keys expected by evidence-v1 consumers.
+    artifact = {
+        "format": art.get("format") or format,
+        "content_hash": art.get("content_hash"),
+        "status": art.get("status") or "unchecked",
+        "bytes_hash": art.get("bytes_hash"),
+        "checks": art.get("checks") or {},
+        "issues": art.get("issues") or [],
+    }
+    return artifact, text
+
+
+def _normalized(text: str) -> str:
+    """Legacy helper retained for reader quote checks; prefer word-boundary match."""
+    return re.sub(r"\s+", "", text).casefold().replace("\u2013", "-").replace("\u2014", "-")
 
 
 def reader_review(visible_text: str, jd: dict) -> dict:

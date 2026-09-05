@@ -119,6 +119,25 @@ INDEX_SPECS = [
     ("resume_jobs", [("idempotency_key", ASCENDING)],
      {"unique": True, "sparse": True, "name": "idempotency_key_unique"}),
 
+    # === resume_assessments (assessment-v2 authoritative store) ============
+    # assessment_service.ensure_indexes — unique assessment_id; owner-scoped
+    # idempotency; retrieval by record/version/format; dependency reuse.
+    # No TTL: assessments referenced by saved versions must remain retrievable.
+    ("resume_assessments", [("assessment_id", ASCENDING)],
+     {"unique": True, "name": "assessment_id_unique"}),
+    ("resume_assessments", [("owner_scope", ASCENDING), ("idempotency_key", ASCENDING)],
+     {"unique": True, "name": "owner_idempotency_unique",
+      "partialFilterExpression": {"idempotency_key": {"$type": "string"}}}),
+    ("resume_assessments",
+     [("owner_scope", ASCENDING), ("record_id", ASCENDING), ("version_id", ASCENDING),
+      ("format", ASCENDING), ("created_at", DESCENDING)],
+     {"name": "owner_record_version_format_created"}),
+    ("resume_assessments", [("dependency_fingerprint", ASCENDING)],
+     {"sparse": True, "name": "dependency_fingerprint_idx"}),
+    ("resume_assessments",
+     [("owner_scope", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)],
+     {"name": "owner_status_created"}),
+
     # === usage counters (atomic $inc upserts) =============================
     # usage_service:65 tailor_usage.find_one({email, date}); :90 $inc upsert on it.
     ("tailor_usage", [("email", ASCENDING), ("date", ASCENDING)],

@@ -1,0 +1,111 @@
+{
+  "generated_at": "2026-09-05T14:18:27.256855+00:00",
+  "flag_default": "RESUME_ASSESSMENT_V2_ENABLED=false",
+  "summary": {
+    "n": 4,
+    "ok": 4,
+    "errors": [],
+    "all_overall_null": true,
+    "professions": [
+      "early_career",
+      "operations",
+      "sales",
+      "software"
+    ],
+    "splits": {
+      "calibration": 2,
+      "holdout": 2
+    },
+    "p95_latency_ms": 1.5106000028026756,
+    "mean_latency_ms": 4.367999999885797
+  },
+  "results": [
+    {
+      "sample_id": "sw-1",
+      "profession": "software",
+      "split": "calibration",
+      "latency_ms": 14.006199999130331,
+      "schema_version": 4,
+      "overall_is_null": true,
+      "required_counts": {
+        "supported_and_satisfied": 1,
+        "partial_or_related": 0,
+        "not_demonstrated": 0,
+        "conflict": 0,
+        "unknown": 0
+      },
+      "stage_processing": "partial",
+      "stage_reader": "completed",
+      "error": "",
+      "findings_count": 0
+    },
+    {
+      "sample_id": "hc-1",
+      "profession": "operations",
+      "split": "calibration",
+      "latency_ms": 1.5106000028026756,
+      "schema_version": 4,
+      "overall_is_null": true,
+      "required_counts": {
+        "supported_and_satisfied": 1,
+        "partial_or_related": 0,
+        "not_demonstrated": 0,
+        "conflict": 0,
+        "unknown": 0
+      },
+      "stage_processing": "partial",
+      "stage_reader": "completed",
+      "error": "",
+      "findings_count": 0
+    },
+    {
+      "sample_id": "sl-1",
+      "profession": "sales",
+      "split": "holdout",
+      "latency_ms": 1.077400000212947,
+      "schema_version": 4,
+      "overall_is_null": true,
+      "required_counts": {
+        "supported_and_satisfied": 1,
+        "partial_or_related": 0,
+        "not_demonstrated": 0,
+        "conflict": 0,
+        "unknown": 0
+      },
+      "stage_processing": "partial",
+      "stage_reader": "completed",
+      "error": "",
+      "findings_count": 0
+    },
+    {
+      "sample_id": "ec-1",
+      "profession": "early_career",
+      "split": "holdout",
+      "latency_ms": 0.8777999973972328,
+      "schema_version": 4,
+      "overall_is_null": true,
+      "required_counts": {
+        "supported_and_satisfied": 1,
+        "partial_or_related": 0,
+        "not_demonstrated": 0,
+        "conflict": 0,
+        "unknown": 0
+      },
+      "stage_processing": "partial",
+      "stage_reader": "completed",
+      "error": "",
+      "findings_count": 0
+    }
+  ],
+  "go_nogo": {
+    "decision": "no-go",
+    "reasons": [
+      "Offline integrity checks passed on builtin cohort"
+    ],
+    "blockers": [
+      "Multi-profession live \u226560-pair pilot with two blinded human reviewers was NOT run in this environment.",
+      "EVAL_LIVE_LLM is off; no paid Bedrock shadow comparison was executed."
+    ],
+    "staging_recommendation": "Offline cohort OK for continued staging with flag still default-off; do not expand production cohort until live/human gates clear."
+  }
+}
