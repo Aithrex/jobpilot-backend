@@ -115,7 +115,7 @@ def test_hybrid_shape_is_internal_coverage(monkeypatch, fake_review):
 
     assert "schema_version" not in result
     assert "hard_skill_match" not in result
-    assert result.get("coverage_kind") == "internal_document_coverage"
+    assert result.get("coverage_kind") == "required_document_coverage"
     assert result.get("vendor_scores_measured") is False
     assert isinstance(result["keyword_match"], int)
     assert isinstance(result["skills_alignment"], int)

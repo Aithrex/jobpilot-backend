@@ -24,7 +24,7 @@ def test_legacy_score_emits_numeric_overall(offline_scorer):
     result = offline_scorer.score(SQL_NOSQL_RESUME, SQL_NOSQL_JD, pdf_bytes=None)
     assert result.get("schema_version") != 4
     assert "keyword_match" in result or "skills_alignment" in result
-    assert result.get("coverage_kind") == "internal_document_coverage"
+    assert result.get("coverage_kind") == "required_document_coverage"
     # SQL is required; NoSQL on the resume must not satisfy it.
     assert result.get("skills_alignment") == 0
 
