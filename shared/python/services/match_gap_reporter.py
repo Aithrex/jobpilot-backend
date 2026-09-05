@@ -29,26 +29,32 @@ separate task).
 """
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
 
-def _empty_report(req_coverage: int = 100, coverage: int = 100) -> Dict[str, Any]:
+def _empty_report(
+    req_coverage: int | None = None,
+    coverage: int | None = None,
+    *,
+    incomplete: bool = False,
+) -> Dict[str, Any]:
     return {
         "required_coverage": req_coverage,
         "coverage_percentage": coverage,
         "defensible": [],
         "learnable": [],
         "stretch": [],
+        "already_demonstrated": [],
+        "incomplete": incomplete,
     }
 
 
-def _fallback_report(missing: List[str], req_coverage: int, coverage: int) -> Dict[str, Any]:
-    """When the model can't classify, list every missing item as learnable."""
-    rep = _empty_report(req_coverage, coverage)
-    rep["learnable"] = [{"item": m, "why": "JD requirement not found in resume."}
-                        for m in missing]
+def _fallback_report(missing: List[str], req_coverage: int | None, coverage: int | None) -> Dict[str, Any]:
+    """Classification failure is incomplete — not a candidate gap and not 100 coverage."""
+    rep = _empty_report(req_coverage, coverage, incomplete=True)
+    rep["learnable"] = []
     return rep
 
 
@@ -65,10 +71,14 @@ def _build_prompt(resume_text: str, job_title: str, missing: List[str]) -> str:
         "JD REQUIREMENTS THE RESUME DOES NOT CLEARLY SHOW:\n"
         f"{missing_block}\n\n"
         "Classify EACH missing requirement into exactly one tier:\n"
+        "  - \"already_demonstrated\": the resume ALREADY shows this requirement with explicit\n"
+        "    or clearly equivalent wording (including aliases such as Postgres/PostgreSQL, or\n"
+        "    \"developed REST endpoints\" for \"REST API Development\"). Use this when your own\n"
+        "    explanation would otherwise say the candidate already has the experience.\n"
         "  - \"defensible\": an adjacent skill whose CORE CONCEPTS TRANSFER from what the\n"
         "    candidate already does, so they could credibly speak to it (e.g. missing C# but\n"
         "    has strong Python/Java; missing Angular but has React; missing MySQL but has\n"
-        "    PostgreSQL). The bridge must be real, not wishful.\n"
+        "    PostgreSQL). The bridge must be real, not wishful. Related tools are not the same.\n"
         "  - \"learnable\": a genuine in-domain gap with no direct bridge, but within reach for\n"
         "    someone with this background (e.g. a backend engineer missing a specific message\n"
         "    broker or cloud service they haven't used).\n"
@@ -78,22 +88,35 @@ def _build_prompt(resume_text: str, job_title: str, missing: List[str]) -> str:
         "Return ONLY JSON with this exact shape (one entry per missing item, each with a short\n"
         "one-sentence 'why'):\n"
         "{\n"
+        '  "already_demonstrated": [{"item": "...", "why": "..."}],\n'
         '  "defensible": [{"item": "...", "why": "..."}],\n'
         '  "learnable":  [{"item": "...", "why": "..."}],\n'
         '  "stretch":    [{"item": "...", "why": "..."}]\n'
         "}\n"
-        "Every missing requirement listed above must appear in exactly one tier. Be honest: do\n"
-        "not mark a certification or a different-discipline requirement as defensible."
+        "Every missing requirement listed above must appear in exactly one tier. If the resume\n"
+        "already shows the work, use already_demonstrated — do not call it missing."
     )
 
 
-def _coerce_tiers(raw: Any, missing: List[str]) -> Dict[str, List[Dict[str, str]]]:
-    """Normalize model output to the three-tier shape, dropping malformed items.
+_ALREADY_HINT = (
+    "already", "explicit", "resume shows", "demonstrat", "present on the resume",
+    "clearly shown", "already has",
+)
 
-    Guarantees every `missing` item lands somewhere: anything the model omitted
-    or mis-shaped is swept into 'learnable' so the report stays complete.
-    """
-    tiers = {"defensible": [], "learnable": [], "stretch": []}
+
+def _looks_demonstrated(why: str) -> bool:
+    low = (why or "").lower()
+    return any(h in low for h in _ALREADY_HINT)
+
+
+def _coerce_tiers(raw: Any, missing: List[str]) -> Dict[str, List[Dict[str, str]]]:
+    """Normalize model output. Already-demonstrated is a first-class correction."""
+    tiers = {
+        "already_demonstrated": [],
+        "defensible": [],
+        "learnable": [],
+        "stretch": [],
+    }
     seen = set()
     if isinstance(raw, dict):
         for tier in tiers:
@@ -106,9 +129,14 @@ def _coerce_tiers(raw: Any, missing: List[str]) -> Dict[str, List[Dict[str, str]
                 else:
                     continue
                 if item and item.lower() not in seen:
-                    tiers[tier].append({"item": item, "why": why})
+                    dest = "already_demonstrated" if (
+                        tier != "already_demonstrated" and _looks_demonstrated(why)
+                    ) else tier
+                    payload = {"item": item, "why": why}
+                    if dest == "already_demonstrated":
+                        payload["match_method"] = "semantic"
+                    tiers[dest].append(payload)
                     seen.add(item.lower())
-    # Sweep any missing item the model didn't place into learnable.
     for m in missing:
         if m.lower() not in seen:
             tiers["learnable"].append(
@@ -116,6 +144,30 @@ def _coerce_tiers(raw: Any, missing: List[str]) -> Dict[str, List[Dict[str, str]
             )
             seen.add(m.lower())
     return tiers
+
+
+def _correct_already_demonstrated(
+    tailored: Dict[str, Any],
+    missing: List[str],
+) -> Tuple[List[str], List[Dict[str, str]]]:
+    """Move canonically matched terms out of the missing list."""
+    from services.requirement_matcher import locate_term_in_resume
+
+    still: List[str] = []
+    demonstrated: List[Dict[str, str]] = []
+    for item in missing:
+        hit = locate_term_in_resume(tailored, item)
+        if hit.found:
+            demonstrated.append({
+                "item": item,
+                "why": "Already shown on the final resume.",
+                "span": hit.span,
+                "section": hit.section,
+                "match_method": hit.method,
+            })
+        else:
+            still.append(item)
+    return still, demonstrated
 
 
 def build_match_gaps(
@@ -136,11 +188,22 @@ def build_match_gaps(
         if gap is None:
             gap = KeywordGapEngine().analyze(tailored, jd_analysis)
         missing = list(gap.get("required_missing") or [])
-        req_cov = int(gap.get("required_coverage", 100))
-        cov = int(gap.get("coverage_percentage", 100))
+        req_cov = gap.get("required_coverage")
+        cov = gap.get("coverage_percentage")
+        try:
+            req_cov = int(req_cov) if req_cov is not None else None
+        except (TypeError, ValueError):
+            req_cov = None
+        try:
+            cov = int(cov) if cov is not None else None
+        except (TypeError, ValueError):
+            cov = None
 
+        missing, demonstrated = _correct_already_demonstrated(tailored, missing)
         if not missing:
-            return _empty_report(req_cov, cov)
+            rep = _empty_report(req_cov, cov)
+            rep["already_demonstrated"] = demonstrated
+            return rep
 
         # Model tiering: FLASH (Haiku on Bedrock) is enough for gap tiering.
         try:
@@ -159,18 +222,31 @@ def build_match_gaps(
                 temperature=0.2,
             )
             tiers = _coerce_tiers(raw, missing)
+            if demonstrated:
+                existing = {
+                    str(e.get("item") or "").lower()
+                    for e in tiers.get("already_demonstrated") or []
+                }
+                for row in demonstrated:
+                    if row["item"].lower() not in existing:
+                        tiers.setdefault("already_demonstrated", []).append(row)
             return {
                 "required_coverage": req_cov,
                 "coverage_percentage": cov,
+                "incomplete": False,
                 **tiers,
             }
         except LLMRetriesExhaustedError:
             logger.warning("match_gaps: model tiering exhausted retries — fallback")
-            return _fallback_report(missing, req_cov, cov)
+            fb = _fallback_report(missing, req_cov, cov)
+            fb["already_demonstrated"] = demonstrated
+            return fb
         except Exception:  # noqa: BLE001 — never block the tailor result
             logger.exception("match_gaps: model tiering failed — fallback")
-            return _fallback_report(missing, req_cov, cov)
+            fb = _fallback_report(missing, req_cov, cov)
+            fb["already_demonstrated"] = demonstrated
+            return fb
 
     except Exception:  # noqa: BLE001 — gap detection itself failed; stay safe
-        logger.exception("match_gaps: gap detection failed — empty report")
-        return _empty_report()
+        logger.exception("match_gaps: gap detection failed — incomplete report")
+        return _empty_report(incomplete=True)

@@ -224,4 +224,4 @@ def test_score_payload_v2_detached_runs_evaluations(monkeypatch):
     assert result["schema_version"] == 4
     assert result["overall"] is None
     assert result.get("evaluations")
-    assert result["stages"]["source_check"] == "complete"
+    assert result["stages"]["source_check"] == "unresolved"

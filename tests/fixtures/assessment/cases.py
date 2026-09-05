@@ -176,3 +176,69 @@ FIXTURE_CASES = [
         "package": 3,
     },
 ]
+
+
+# Representative tailor pair for the keyword-mismatch audit. Synthetic — the
+# screenshot's exact saved record was not available in this workspace.
+SCREENSHOT_LIKE_RESUME = {
+    "contact": {"name": "Alex Rivera", "email": "a@example.com", "phone": "555-0100"},
+    "summary": "Backend engineer who developed REST endpoints and documented them with OpenAPI.",
+    "skills": {
+        "Languages": ["Python", "Java"],
+        "Data": ["PostgreSQL"],
+        "APIs": ["OpenAPI"],
+    },
+    "experience": [{
+        "company": "DataCo",
+        "title": "Software Engineer",
+        "dates": "2022 - Present",
+        "bullets": [
+            "Developed REST endpoints for billing and account services.",
+            "Published OpenAPI specifications for those services.",
+            "Tuned PostgreSQL queries for the reporting warehouse.",
+        ],
+    }],
+    "projects": [{
+        "name": "Payments sandbox",
+        "bullets": ["Certified AWS practitioner coursework applied to a sandbox API."],
+    }],
+    "education": [{
+        "degree": "BS Computer Science", "institution": "State University",
+        "location": "", "dates": "2020", "gpa": "", "coursework": "",
+    }],
+    "certifications": ["AWS Certified Cloud Practitioner"],
+}
+
+SCREENSHOT_LIKE_JD = {
+    "job_title": "Backend Engineer",
+    "company": "Example",
+    "required_skills": [
+        "REST API Development",
+        "OpenAPI/Swagger",
+        "PostgreSQL",
+        "Java",
+    ],
+    "preferred_skills": ["Kafka"],
+    "keywords": ["microservices"],
+    "jd_context": {"domain": ["fintech", "distributed systems"]},
+    "requirements": [
+        {
+            "text": "REST API Development",
+            "priority": "required",
+            "kind": "capability",
+            "source_excerpt": "REST API Development",
+        },
+        {
+            "text": "OpenAPI/Swagger",
+            "priority": "required",
+            "kind": "capability",
+            "source_excerpt": "OpenAPI/Swagger",
+        },
+        {
+            "text": "PostgreSQL",
+            "priority": "required",
+            "kind": "capability",
+            "source_excerpt": "PostgreSQL",
+        },
+    ],
+}

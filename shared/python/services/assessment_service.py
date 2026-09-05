@@ -16,7 +16,7 @@ import uuid
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from functools import wraps
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from schemas.assessment_contracts import (
     ASSESSMENT_VERSION,
@@ -123,6 +123,212 @@ def _digest(value: Any) -> str:
     ).hexdigest()
 
 
+def document_text_from_resume(resume: Optional[Dict[str, Any]]) -> str:
+    """Full visible resume text: summary, skills, experience, projects, education, certs."""
+    if not resume:
+        return ""
+    from schemas.resume_schemas import build_resume_text
+    return build_resume_text(resume)
+
+
+def document_content_hash(resume: Optional[Dict[str, Any]]) -> str:
+    """Hash every visible section so a bullet-only edit invalidates the assessment."""
+    if not resume:
+        return ""
+    from services.tailoring_policy import content_hash
+    return content_hash(resume)
+
+
+def render_revision_bytes(renderer, resume: Dict[str, Any], fmt: str) -> Tuple[Optional[bytes], Optional[str]]:
+    """Dispatch PDF vs DOCX. Never render PDF when the requested format is Word."""
+    fmt_n = (fmt or "pdf").strip().lower()
+    if renderer is None:
+        return None, None
+    try:
+        if fmt_n == "docx":
+            return renderer.generate_docx(resume), None
+        data, _resolution = renderer.generate_pdf(resume)
+        return data, None
+    except Exception as exc:
+        return None, f"{fmt_n.upper()} render failed: {exc}"
+
+
+def _evaluations_from_payload(rows: Sequence[Any]) -> List[Any]:
+    from schemas.assessment_contracts import RequirementEvaluation
+    evals = []
+    for e in rows or []:
+        if not isinstance(e, dict):
+            continue
+        try:
+            evals.append(RequirementEvaluation(
+                requirement_id=e["requirement_id"],
+                document_state=e["document_state"],
+                source_state=e["source_state"],
+                claim_state=e["claim_state"],
+                match_method=e.get("match_method") or "none",
+                unmet_qualifiers=list(e.get("unmet_qualifiers") or []),
+            ))
+        except Exception:
+            continue
+    return evals
+
+
+def compute_assessment_stages(
+    *,
+    resume: Optional[Dict[str, Any]] = None,
+    jd_analysis: Optional[Dict[str, Any]] = None,
+    fmt: str = "pdf",
+    artifact_bytes: bytes | None = None,
+    render_error: str | None = None,
+    source_resume: Optional[Dict[str, Any]] = None,
+    previous_result: Optional[Dict[str, Any]] = None,
+    run_claude: bool = True,
+) -> Dict[str, Any]:
+    """Shared stage runner for owned records and detached drafts.
+
+    Source is passed through only when the caller supplied an independent
+    source resume. Generated content is never used as its own evidence.
+    """
+    from services.artifact_assessment import assess_artifact
+    from services.requirement_assessment import evaluate_requirements
+    from services.assessment_comparison import compare_assessments
+    from services.assessment_reader import reader_pass_v2
+
+    resume = resume or {}
+    jd = jd_analysis if jd_analysis is not None else {}
+    stages: Dict[str, Any] = {
+        "processing": "running",
+        "artifact": "unchecked",
+        "source_check": "unresolved",
+        "reader": "unavailable",
+        "comparison": "unavailable",
+    }
+    out: Dict[str, Any] = {"stages": stages, "overall": None, "text_basis": "draft"}
+    document_text = ""
+
+    if artifact_bytes is not None or render_error:
+        try:
+            artifact_payload = assess_artifact(
+                artifact_bytes, resume, fmt=fmt, error=render_error,
+            )
+            document_text = artifact_payload.get("raw_text") or ""
+            status = artifact_payload.get("status") or "unchecked"
+            stages["artifact"] = {
+                "passed": "passed", "failed": "failed", "issues": "issues",
+            }.get(status, "unchecked")
+            out["artifact"] = {
+                k: artifact_payload[k]
+                for k in ("format", "status", "issues", "bytes_hash", "content_hash",
+                          "cache_key", "extractor_version", "page_count",
+                          "extraction_complete")
+                if k in artifact_payload
+            }
+            if document_text:
+                out["text_basis"] = "artifact"
+        except Exception as exc:
+            logger.warning("artifact stage failed: %s", exc)
+            stages["artifact"] = "failed"
+
+    if not document_text and resume:
+        document_text = document_text_from_resume(resume)
+        out["text_basis"] = "draft"
+
+    try:
+        req_out = evaluate_requirements(
+            document_text=document_text,
+            jd=jd,
+            resume=resume,
+            source_resume=source_resume,
+        )
+        out["canonical_requirements"] = req_out.get("requirements") or []
+        out["evaluations"] = req_out.get("evaluations") or []
+        out["counts"] = req_out.get("counts") or {}
+        stages["source_check"] = (
+            "complete" if source_resume is not None and out["evaluations"]
+            else ("unresolved" if source_resume is None else "complete")
+        )
+        if source_resume is None:
+            stages["source_check"] = "unresolved"
+        elif out["evaluations"]:
+            stages["source_check"] = "complete"
+    except Exception as exc:
+        logger.warning("requirement stage failed: %s", exc)
+        stages["source_check"] = "partial"
+
+    try:
+        evals = _evaluations_from_payload(out.get("evaluations") or [])
+        base_text = ""
+        if isinstance(previous_result, dict):
+            base_text = str((previous_result.get("artifact") or {}).get("raw_text") or "")
+        reader = reader_pass_v2(
+            document_text,
+            jd,
+            evals,
+            out.get("canonical_requirements") or [],
+            base_text=base_text,
+            run_claude=run_claude,
+        )
+        out["findings"] = reader.get("findings") or []
+        out["top_actions"] = reader.get("top_actions") or []
+        stages["reader"] = reader.get("status") or "unavailable"
+        comparison = compare_assessments(
+            previous_result, out,
+            before_text=base_text,
+            after_text=document_text,
+        )
+        out["comparison"] = comparison
+        stages["comparison"] = comparison.get("status") or "unavailable"
+    except Exception as exc:
+        logger.warning("reader/comparison stage failed: %s", exc)
+        stages["reader"] = "partial"
+        stages["comparison"] = "unavailable"
+
+    stages["processing"] = "complete" if stages.get("artifact") in {
+        "passed", "issues",
+    } and stages.get("source_check") in {"complete", "unresolved"} else "partial"
+    if stages.get("reader") in {"partial", "unavailable"} and stages["processing"] == "complete":
+        # Reader failure stays v2 partial — never invent success.
+        if not document_text:
+            stages["processing"] = "partial"
+    out["stages"] = stages
+    out["overall"] = None
+    return out
+
+
+def unavailable_v2_result(
+    *,
+    reason: str,
+    assessment_id: str = "",
+    fmt: str = "pdf",
+) -> Dict[str, Any]:
+    """Honest v2 failure payload. Never a legacy hybrid score."""
+    aid = assessment_id or f"unavailable-{uuid.uuid4()}"
+    snap = AssessmentSnapshot(
+        owner_scope="draft:unavailable",
+        record_id="",
+        version_id="",
+        format=fmt if fmt in {"pdf", "docx"} else "pdf",
+        policy_version=POLICY_VERSION,
+    )
+    result = empty_stage_result(aid, snap).as_dict()
+    result["stages"] = {
+        "processing": "failed",
+        "artifact": "unchecked",
+        "source_check": "unresolved",
+        "reader": "unavailable",
+        "comparison": "unavailable",
+    }
+    result["overall"] = None
+    result["schema_version"] = SCHEMA_VERSION
+    result["assessment_version"] = ASSESSMENT_VERSION
+    result["assessment_id"] = aid
+    result["top_actions"] = [
+        "Assessment checks could not be completed. This is not a legacy ATS score.",
+    ]
+    result["failure_reason"] = reason
+    return result
+
+
 def owner_scope_for(*, user_email: str = "", guest_id: str = "") -> str:
     email = (user_email or "").strip().lower()
     gid = (guest_id or "").strip()
@@ -199,9 +405,9 @@ def build_snapshot(
         raise AssessmentError(ERR_INVALID, "format must be pdf or docx")
     resume = version.get("tailored_resume") or record.get("tailored_resume") or {}
     jd = jd_analysis if jd_analysis is not None else (record.get("jd_analysis") or {})
-    from services.tailoring_policy import content_hash, digest
+    from services.tailoring_policy import digest
 
-    doc_hash = version.get("content_hash") or content_hash(resume) if resume else ""
+    doc_hash = version.get("content_hash") or document_content_hash(resume)
     source_hash = str(record.get("source_hash") or resume.get("tailoring_run", {}).get("source_hash") or "")
     return AssessmentSnapshot(
         owner_scope=owner_scope,
@@ -378,6 +584,7 @@ def run_assessment_stages(
     resume: Optional[Dict[str, Any]] = None,
     jd_analysis: Optional[Dict[str, Any]] = None,
     previous_result: Optional[Dict[str, Any]] = None,
+    source_resume: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Run Packages 3–5 stages when inputs are available; honest partial otherwise."""
     col = _col()
@@ -393,111 +600,23 @@ def run_assessment_stages(
     fmt = snap.get("format") or "pdf"
     resume = resume or {}
     jd = jd_analysis if jd_analysis is not None else {}
-    document_text = ""
-    text_for_req = ""
 
-    # --- Artifact (Package 3) ---
-    if artifact_bytes is not None or render_error:
-        try:
-            from services.artifact_assessment import assess_artifact
-            artifact_payload = assess_artifact(
-                artifact_bytes, resume, fmt=fmt, error=render_error,
-            )
-            document_text = artifact_payload.get("raw_text") or ""
-            status = artifact_payload.get("status") or "unchecked"
-            stages["artifact"] = {
-                "passed": "passed", "failed": "failed", "issues": "issues",
-            }.get(status, "unchecked")
-            result["artifact"] = {
-                k: artifact_payload[k]
-                for k in ("format", "status", "issues", "bytes_hash", "content_hash",
-                          "cache_key", "extractor_version", "page_count",
-                          "extraction_complete")
-                if k in artifact_payload
-            }
-        except Exception as exc:
-            logger.warning("artifact stage failed: %s", exc)
-            stages["artifact"] = "failed"
-    else:
-        stages["artifact"] = stages.get("artifact") or "unchecked"
-
-    # --- Requirements (Package 4) ---
-    try:
-        from services.requirement_assessment import evaluate_requirements
-        text_for_req = document_text
-        if not text_for_req and resume:
-            # Detached draft: observe structured resume text when no bytes.
-            parts = [str(resume.get("summary") or "")]
-            for exp in resume.get("experience") or []:
-                parts.extend(exp.get("bullets") or [])
-                parts.append(str(exp.get("title") or ""))
-            from schemas.resume_schemas import flatten_skills
-            parts.extend(flatten_skills(resume))
-            text_for_req = "\n".join(str(p) for p in parts if p)
-        req_out = evaluate_requirements(
-            document_text=text_for_req,
-            jd=jd,
-            resume=resume,
-        )
-        result["canonical_requirements"] = req_out.get("requirements") or []
-        result["evaluations"] = req_out.get("evaluations") or []
-        result["counts"] = req_out.get("counts") or {}
-        stages["source_check"] = "complete" if result["evaluations"] else "unresolved"
-    except Exception as exc:
-        logger.warning("requirement stage failed: %s", exc)
-        stages["source_check"] = "partial"
-
-    # --- Reader + comparison (Package 5) ---
-    try:
-        from schemas.assessment_contracts import RequirementEvaluation
-        from services.assessment_comparison import compare_assessments
-        from services.assessment_reader import reader_pass_v2
-        evals = []
-        for e in result.get("evaluations") or []:
-            try:
-                evals.append(RequirementEvaluation(
-                    requirement_id=e["requirement_id"],
-                    document_state=e["document_state"],
-                    source_state=e["source_state"],
-                    claim_state=e["claim_state"],
-                    match_method=e.get("match_method") or "none",
-                    unmet_qualifiers=list(e.get("unmet_qualifiers") or []),
-                ))
-            except Exception:
-                continue
-        base_text = ""
-        if isinstance(previous_result, dict):
-            base_text = str((previous_result.get("artifact") or {}).get("raw_text") or "")
-        reader = reader_pass_v2(
-            document_text or text_for_req,
-            jd,
-            evals,
-            result.get("canonical_requirements") or [],
-            base_text=base_text,
-            run_claude=True,
-        )
-        result["findings"] = reader.get("findings") or []
-        result["top_actions"] = reader.get("top_actions") or []
-        stages["reader"] = reader.get("status") or "unavailable"
-        comparison = compare_assessments(
-            previous_result, result,
-            before_text=base_text,
-            after_text=document_text or text_for_req,
-        )
-        result["comparison"] = comparison
-        stages["comparison"] = comparison.get("status") or "unavailable"
-    except Exception as exc:
-        logger.warning("reader/comparison stage failed: %s", exc)
-        stages["reader"] = "partial"
-        stages["comparison"] = "unavailable"
-
-    stages["processing"] = "complete" if stages.get("artifact") in {
-        "passed", "issues",
-    } and stages.get("source_check") == "complete" else "partial"
+    computed = compute_assessment_stages(
+        resume=resume,
+        jd_analysis=jd,
+        fmt=fmt,
+        artifact_bytes=artifact_bytes,
+        render_error=render_error,
+        source_resume=source_resume,
+        previous_result=previous_result,
+        run_claude=True,
+    )
+    result.update(computed)
+    stages = dict(computed.get("stages") or stages)
     result["stages"] = stages
     result["overall"] = None
     now = _now()
-    status = "complete" if stages["processing"] == "complete" else "partial"
+    status = "complete" if stages.get("processing") == "complete" else "partial"
     col.update_one(
         {"assessment_id": assessment_id, "status": {"$in": ["running", "pending", "partial"]}},
         {"$set": {
@@ -725,38 +844,17 @@ def score_payload_v2(
                 resume=resume,
                 jd_analysis=jd,
                 previous_result=previous_result,
+                source_resume=source_resume,
             )
-            # Re-run requirement stage with source_resume if provided
             result = copy.deepcopy(finished.get("result") or {})
-            if source_resume is not None:
-                try:
-                    from services.requirement_assessment import evaluate_requirements
-                    text = (result.get("artifact") or {}).get("raw_text") or ""
-                    if not text:
-                        parts = [str(resume.get("summary") or "")]
-                        for exp in resume.get("experience") or []:
-                            parts.extend(exp.get("bullets") or [])
-                        from schemas.resume_schemas import flatten_skills
-                        parts.extend(flatten_skills(resume))
-                        text = "\n".join(str(p) for p in parts if p)
-                    req_out = evaluate_requirements(
-                        document_text=text, jd=jd, resume=resume,
-                        source_resume=source_resume,
-                    )
-                    result["canonical_requirements"] = req_out.get("requirements") or []
-                    result["evaluations"] = req_out.get("evaluations") or []
-                    result["counts"] = req_out.get("counts") or {}
-                except Exception as exc:
-                    logger.warning("source_resume re-eval failed: %s", exc)
             result["overall"] = None
             result["schema_version"] = SCHEMA_VERSION
             result["assessment_version"] = ASSESSMENT_VERSION
             result["assessment_id"] = finished.get("assessment_id")
-            # Do not auto-attach here — save_version binds assessment_id atomically
-            # after the content hash is confirmed (Package 6).
             return result
 
-    # Detached draft: evaluate in-memory without ownership persistence.
+    # Detached draft: same stage implementation, no ownership persistence.
+    # Never treat the generated resume as its own independent source.
     assessment_id = f"draft-{uuid.uuid4()}"
     snap = AssessmentSnapshot(
         owner_scope=owner_scope_for(user_email=user_email, guest_id=guest_id)
@@ -765,71 +863,22 @@ def score_payload_v2(
         version_id=version_id or "",
         format=fmt,
         jd_hash=_digest(jd),
-        document_content_hash=_digest(resume.get("summary") if resume else ""),
+        document_content_hash=document_content_hash(resume),
         policy_version=POLICY_VERSION,
     )
     result = empty_stage_result(assessment_id, snap).as_dict()
     try:
-        from services.artifact_assessment import assess_artifact
-        from services.requirement_assessment import evaluate_requirements
-        from services.assessment_comparison import reader_pass_deterministic
-        from schemas.assessment_contracts import RequirementEvaluation
-
-        art = assess_artifact(artifact_bytes, resume, fmt=fmt, error=render_error)
-        document_text = art.get("raw_text") or ""
-        if not document_text and resume:
-            parts = [str(resume.get("summary") or "")]
-            for exp in resume.get("experience") or []:
-                parts.extend(exp.get("bullets") or [])
-                parts.append(str(exp.get("title") or ""))
-            from schemas.resume_schemas import flatten_skills
-            parts.extend(flatten_skills(resume))
-            document_text = "\n".join(str(p) for p in parts if p)
-        result["artifact"] = {
-            k: art[k] for k in (
-                "format", "status", "issues", "bytes_hash", "content_hash",
-                "cache_key", "extractor_version", "page_count", "extraction_complete",
-            ) if k in art
-        }
-        result["stages"]["artifact"] = {
-            "passed": "passed", "failed": "failed", "issues": "issues",
-        }.get(art.get("status") or "", "unchecked")
-
-        req_out = evaluate_requirements(
-            document_text=document_text, jd=jd, resume=resume,
-            source_resume=source_resume or resume,
+        computed = compute_assessment_stages(
+            resume=resume,
+            jd_analysis=jd,
+            fmt=fmt,
+            artifact_bytes=artifact_bytes,
+            render_error=render_error,
+            source_resume=source_resume,
+            previous_result=previous_result,
+            run_claude=True,
         )
-        result["canonical_requirements"] = req_out.get("requirements") or []
-        result["evaluations"] = req_out.get("evaluations") or []
-        result["counts"] = req_out.get("counts") or {}
-        result["stages"]["source_check"] = (
-            "complete" if result["evaluations"] else "unresolved"
-        )
-
-        evals = []
-        for e in result["evaluations"]:
-            try:
-                evals.append(RequirementEvaluation(
-                    requirement_id=e["requirement_id"],
-                    document_state=e["document_state"],
-                    source_state=e["source_state"],
-                    claim_state=e["claim_state"],
-                    match_method=e.get("match_method") or "none",
-                    unmet_qualifiers=list(e.get("unmet_qualifiers") or []),
-                ))
-            except Exception:
-                continue
-        reader = reader_pass_deterministic(
-            document_text, jd, evals, result["canonical_requirements"],
-        )
-        result["findings"] = reader.get("findings") or []
-        result["top_actions"] = reader.get("top_actions") or []
-        result["stages"]["reader"] = reader.get("status") or "unavailable"
-        result["stages"]["processing"] = (
-            "complete" if result["stages"]["artifact"] in {"passed", "issues"}
-            and result["stages"]["source_check"] == "complete"
-            else "partial"
-        )
+        result.update(computed)
     except Exception as exc:
         logger.warning("detached assessment-v2 failed: %s", exc)
         result["stages"]["processing"] = "partial"
@@ -840,6 +889,7 @@ def score_payload_v2(
     result["schema_version"] = SCHEMA_VERSION
     result["assessment_version"] = ASSESSMENT_VERSION
     result["assessment_id"] = assessment_id
+    result["snapshot"] = snap.as_dict()
     return result
 
 
@@ -873,14 +923,8 @@ def assess_resume_revision(
     fmt: str = "pdf",
     source_resume: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Canonical finalize helper: render + score_payload_v2 when flag/pin active."""
-    pdf_bytes = None
-    render_error = None
-    if renderer is not None:
-        try:
-            pdf_bytes, _resolution = renderer.generate_pdf(tailored_resume)
-        except Exception as exc:
-            render_error = f"PDF render failed: {exc}"
+    """Canonical finalize helper: render the requested format + score_payload_v2."""
+    artifact_bytes, render_error = render_revision_bytes(renderer, tailored_resume, fmt)
     return score_payload_v2(
         user_email=user_email,
         guest_id=guest_id,
@@ -889,7 +933,7 @@ def assess_resume_revision(
         tailored_resume=tailored_resume,
         jd_analysis=jd_analysis,
         fmt=fmt,
-        artifact_bytes=pdf_bytes,
+        artifact_bytes=artifact_bytes,
         render_error=render_error,
         source_resume=source_resume,
     )

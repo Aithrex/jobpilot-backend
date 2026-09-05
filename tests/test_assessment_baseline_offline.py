@@ -22,9 +22,11 @@ def offline_scorer(monkeypatch):
 def test_legacy_score_emits_numeric_overall(offline_scorer):
     """Non-evidence resume → hybrid path with numeric overall."""
     result = offline_scorer.score(SQL_NOSQL_RESUME, SQL_NOSQL_JD, pdf_bytes=None)
-    assert isinstance(result.get("overall"), (int, float))
     assert result.get("schema_version") != 4
     assert "keyword_match" in result or "skills_alignment" in result
+    assert result.get("coverage_kind") == "internal_document_coverage"
+    # SQL is required; NoSQL on the resume must not satisfy it.
+    assert result.get("skills_alignment") == 0
 
 
 def test_evidence_score_payload_is_schema_3_null_overall(monkeypatch):

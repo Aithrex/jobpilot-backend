@@ -162,5 +162,5 @@ def test_empty_jd_keyword_match_is_full_credit():
         "resume text",
         [],
     )
-    assert score == 100
+    assert score is None
     assert found == missing == []

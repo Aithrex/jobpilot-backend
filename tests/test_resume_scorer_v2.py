@@ -109,41 +109,26 @@ def patch_pdf_check(monkeypatch, score=100, **check_overrides):
     )
 
 
-def test_hybrid_shape_emits_scanners(monkeypatch, fake_review):
+def test_hybrid_shape_is_internal_coverage(monkeypatch, fake_review):
     patch_pdf_check(monkeypatch)
     result = ResumeScorer().score(RESUME, JD, pdf_bytes=b"%PDF-fake")
 
     assert "schema_version" not in result
     assert "hard_skill_match" not in result
-    for dim in (
-        "keyword_match", "keyword_frequency", "skills_alignment",
-        "experience_relevance", "quantifiable_impact", "bullet_quality",
-        "format_score", "section_completeness",
-    ):
-        assert isinstance(result[dim], int), dim
-    assert set(result["scanners"]) == {
-        "workday", "greenhouse", "lever", "icims", "taleo", "smartrecruiters"
-    }
-    assert result["ai_screener"]["overall"] == 84
+    assert result.get("coverage_kind") == "internal_document_coverage"
+    assert result.get("vendor_scores_measured") is False
+    assert isinstance(result["keyword_match"], int)
+    assert isinstance(result["skills_alignment"], int)
     assert result["experience_relevance"] == 82
     assert result["pdf_parseable_score"] == 100
+    assert not result.get("scanners")
 
 
-def test_overall_uses_hybrid_weights(monkeypatch, fake_review):
+def test_overall_is_required_term_coverage(monkeypatch, fake_review):
     patch_pdf_check(monkeypatch, score=100)
     r = ResumeScorer().score(RESUME, JD, pdf_bytes=b"%PDF-fake")
-    expected = round(
-        r["keyword_match"] * 0.25
-        + r["keyword_frequency"] * 0.05
-        + r["skills_alignment"] * 0.20
-        + r["experience_relevance"] * 0.15
-        + r["ai_screener"]["overall"] * 0.10
-        + r["quantifiable_impact"] * 0.10
-        + r["bullet_quality"] * 0.05
-        + r["format_score"] * 0.05
-        + r["section_completeness"] * 0.05
-    )
-    assert r["overall"] == min(100, max(0, expected))
+    assert r["overall"] == r["skills_alignment"]
+    assert r["coverage_denominator"] == 3  # Python, AWS, Docker
 
 
 def test_imperfect_parse_caps_overall(monkeypatch, fake_review):
@@ -160,15 +145,16 @@ def test_empty_jd_keyword_match_is_complete(monkeypatch, fake_review):
     empty["preferred_skills"] = []
     empty["keywords"] = []
     r = ResumeScorer().score(RESUME, empty, pdf_bytes=b"%PDF-fake")
-    assert r["keyword_match"] == 100
+    assert r["keyword_match"] == 0 or r.get("coverage_denominator") == 0
+    assert r["overall"] in (None, 0)
 
 
 def test_ai_failure_still_scores(monkeypatch, broken_review):
     patch_pdf_check(monkeypatch)
     r = ResumeScorer().score(RESUME, JD, pdf_bytes=b"%PDF-fake")
-    assert isinstance(r["overall"], int)
-    assert r["experience_relevance"] == 70
     assert r["keyword_match"] > 0
+    assert r.get("experience_relevance") in (None, 0)
+    assert r.get("vendor_scores_measured") is False
 
 
 def test_jd_keywords_in_resume_are_found():

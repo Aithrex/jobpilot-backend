@@ -619,8 +619,6 @@ def _finalize_tailored_result(
         # review are read-only and describe precisely this revision.
         from services import assessment_service as _assess
         if _assess.enabled():
-            from services.tailoring_assessment import finalize
-            result = finalize(result, jd_analysis, svc.renderer)
             try:
                 v2 = _assess.assess_resume_revision(
                     tailored_resume=result,
@@ -634,7 +632,8 @@ def _finalize_tailored_result(
                 if v2.get("assessment_id"):
                     result["assessment_id"] = v2["assessment_id"]
             except Exception as exc:
-                logger.warning("assessment-v2 finalize overlay failed: %s", exc)
+                logger.warning("assessment-v2 finalize failed, returning partial v2: %s", exc)
+                result["ats_scores"] = _assess.unavailable_v2_result(reason=str(exc))
             return result
         from services.tailoring_assessment import finalize
         return finalize(result, jd_analysis, svc.renderer)

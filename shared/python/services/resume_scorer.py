@@ -18,8 +18,6 @@ from schemas.resume_schemas import (
 )
 from utils.keyword_normalizer import (
     normalize_single,
-    normalize_keywords,
-    get_all_forms,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,15 +92,9 @@ class ResumeScorer:
         `render_error` / `page_outcome` are accepted from the current caller
         and only used when a PDF is present.
         """
-        from services.tailoring_pipeline import is_result
-        if is_result(tailored):
-            from services.tailoring_assessment import score_payload
-            return score_payload(tailored, jd_analysis, pdf_bytes, render_error)
-        # assessment-v2 empty-stage path (Package 2). Broad UI exposure is Package 6;
-        # when the flag is on and the job carries ownership identity, return v2 shape.
-        try:
-            from services import assessment_service as _assess
-            if _assess.enabled():
+        from services import assessment_service as _assess
+        if _assess.enabled():
+            try:
                 meta = {}
                 if isinstance(jd_analysis, dict):
                     meta = jd_analysis.get("_assessment_meta") or {}
@@ -121,21 +113,25 @@ class ResumeScorer:
                     source_resume=meta.get("source_resume")
                     if isinstance(meta.get("source_resume"), dict) else None,
                 )
-        except Exception as e:
-            logger.warning("assessment-v2 path failed, using legacy hybrid: %s", e)
+            except Exception as e:
+                logger.warning("assessment-v2 path failed, returning partial v2: %s", e)
+                return _assess.unavailable_v2_result(reason=str(e))
+        from services.tailoring_pipeline import is_result
+        if is_result(tailored):
+            from services.tailoring_assessment import score_payload
+            return score_payload(tailored, jd_analysis, pdf_bytes, render_error)
         det = self._deterministic_scores(tailored, jd_analysis)
         # Pass the deterministic results into the AI scorer so the scanner
         # scores reconcile with them rather than being independent guesses.
         try:
             ai = self._ai_scores(tailored, jd_analysis, det_facts=det)
         except Exception as e:
-            logger.warning("AI scanner pass failed, using defaults: %s", e)
+            logger.warning("AI review pass failed; leaving those checks unavailable: %s", e)
             ai = {}
-        combined = self._combine(det, ai)
+        combined = self._combine(det, ai, pdf_checked=bool(pdf_bytes))
         if render_error:
             combined["render_error"] = render_error
             combined["pdf_parseable_score"] = 0
-            combined["overall"] = 0
             combined["format_score"] = 0
 
         # Surface the classified missing keywords so the UI / API consumer
@@ -158,9 +154,7 @@ class ResumeScorer:
                 # Fold parseability into overall — heavy weight because a
                 # PDF that doesn't parse means EVERY other ATS metric is
                 # moot (the parser never gets to keyword matching).
-                if pdf_check["pdf_parseable_score"] < 100:
-                    # Cap overall at min(overall, parseable+5) so a 60-parse
-                    # resume can't claim a 90 overall.
+                if pdf_check["pdf_parseable_score"] < 100 and isinstance(combined.get("overall"), (int, float)):
                     overall_cap = pdf_check["pdf_parseable_score"] + 5
                     combined["overall"] = min(combined["overall"], overall_cap)
             except Exception as e:
@@ -173,118 +167,82 @@ class ResumeScorer:
     # ------------------------------------------------------------------
 
     def _deterministic_scores(self, tailored: Dict[str, Any], jd_analysis: Dict[str, Any]) -> dict:
-        """Compute deterministic ATS metrics."""
-        required = normalize_keywords(jd_analysis.get("required_skills", []))
-        keywords = normalize_keywords(jd_analysis.get("keywords", []))
+        """Compute deterministic document-coverage diagnostics.
 
-        # sanitize_jd_analysis (called at JD extraction time) parks domain/
-        # title terms in jd_context so the tailor prompt never treats them as
-        # "missing skills" the candidate should add. For ATS scoring we DO
-        # want to reward domain terms (e.g. "distributed systems", "cloud",
-        # "microservices") that appear on the resume — they're real technical
-        # signal. We exclude logistics (location, visa) and seniority
-        # (Senior, Lead) because those never appear as resume text tokens.
-        jd_context = jd_analysis.get("jd_context") or {}
-        domain_terms = normalize_keywords(list(jd_context.get("domain") or []))
-        # Restore domain terms that were parked: add them back to required and
-        # keywords so keyword_match and skills_alignment score them properly.
-        required_set = set(required)
-        keywords_set = set(keywords)
-        for t in domain_terms:
-            if t not in required_set:
-                required.append(t)
-                required_set.add(t)
-            if t not in keywords_set:
-                keywords.append(t)
-                keywords_set.add(t)
+        Domain/preferred terms stay out of the required denominator. Repetition
+        does not increase coverage. Matching uses the shared requirement matcher.
+        """
+        from services.requirement_matcher import (
+            build_requirement_diagnostics,
+            coverage_hits,
+            coverage_score,
+            scored_term_lists,
+        )
+
+        lists = scored_term_lists(jd_analysis)
+        required = lists["required"]
+        keywords = lists["keywords"]
+        # Search-term presence (advisory) is required + keywords, not domain.
         all_kw = list(dict.fromkeys(required + keywords))
 
         resume_text = build_resume_text(tailored)
 
-        kw_score, found_kw, missing_kw = self._keyword_match_score(resume_text, all_kw)
-        kw_freq_score = self._keyword_frequency_score(resume_text, all_kw)
-        skills_score = self._skills_alignment_score(
-            tailored.get("skills", {}), required, resume_text
+        found_kw, missing_kw, _hits = coverage_hits(
+            resume_text, all_kw, resume=tailored,
         )
+        kw_score = coverage_score(found_kw, missing_kw)
+        req_found, req_missing, _ = coverage_hits(
+            resume_text, required, resume=tailored,
+        )
+        skills_score = coverage_score(req_found, req_missing)
         section_score = self._section_completeness_score(tailored)
         impact_score = self._quantifiable_impact_score(tailored)
-        format_score = 95  # We control the format — always ATS-friendly
 
-        # Impact engine analysis (deterministic bullet quality)
         from services.impact_engine import ImpactEngine
         impact_analysis = ImpactEngine().analyze(tailored)
 
+        diagnostics = [
+            d.as_dict() for d in build_requirement_diagnostics(
+                jd_analysis=jd_analysis,
+                document_text=resume_text,
+                resume=tailored,
+            )
+        ]
+
         return {
             "keyword_match": kw_score,
-            "keyword_frequency": kw_freq_score,
+            "keyword_frequency": kw_score,
             "skills_alignment": skills_score,
             "section_completeness": section_score,
             "quantifiable_impact": impact_score,
-            "format_score": format_score,
+            "format_score": None,
             "missing_keywords": missing_kw,
             "found_keywords": found_kw,
+            "coverage_numerator": len(req_found),
+            "coverage_denominator": len(req_found) + len(req_missing),
+            "coverage_kind": "internal_document_coverage",
+            "requirement_diagnostics": diagnostics,
             "impact_suggestions": impact_analysis.get("suggestions", []),
             "impact_score_detail": impact_analysis.get("impact_score", 0),
         }
 
     def _keyword_match_score(
         self, resume_text: str, keywords: List[str]
-    ) -> Tuple[int, List[str], List[str]]:
-        """Alias-aware keyword matching with word-boundary awareness.
+    ) -> Tuple[int | None, List[str], List[str]]:
+        """Canonical presence matching. Repetition does not change the score."""
+        from services.requirement_matcher import (
+            coverage_hits,
+            coverage_score,
+            dedupe_synonym_terms,
+        )
+        terms = dedupe_synonym_terms(keywords)
+        found, missing, _ = coverage_hits(resume_text, terms)
+        return coverage_score(found, missing), found, missing
 
-        Uses get_all_forms() to check if ANY known alias of a keyword
-        appears in the resume text, so "Postgres" in JD matches
-        "PostgreSQL" in resume.
-
-        Returns (score_0_100, found_keywords, missing_keywords).
-        """
-        if not keywords:
-            return 100, [], []
-
-        text_lower = resume_text.lower()
-        found: List[str] = []
-        missing: List[str] = []
-
-        for kw in keywords:
-            canonical = normalize_single(kw)
-            all_forms = get_all_forms(kw)
-
-            kw_found = False
-            for form in all_forms:
-                if self._text_contains(text_lower, form):
-                    kw_found = True
-                    break
-
-            if kw_found:
-                found.append(canonical)
-            else:
-                missing.append(canonical)
-
-        total = len(found) + len(missing)
-        score = round((len(found) / total) * 100) if total > 0 else 100
-        return score, found, missing
-
-    def _keyword_frequency_score(self, resume_text: str, keywords: List[str]) -> int:
-        """Score based on keyword frequency — keywords appearing 2+ times score higher.
-
-        Ideal: each keyword appears at least twice (once in skills, once in bullets).
-        Cap at 3 per keyword to prevent gaming.
-        """
-        if not keywords:
-            return 100
-
-        text_lower = resume_text.lower()
-        total_freq = 0
-
-        for kw in keywords:
-            all_forms = get_all_forms(kw)
-            kw_count = 0
-            for form in all_forms:
-                kw_count += self._count_occurrences(text_lower, form)
-            total_freq += min(kw_count, 3)  # Cap at 3 per keyword
-
-        max_possible = len(keywords) * 2  # 2 per keyword is ideal
-        return min(100, round((total_freq / max_possible) * 100)) if max_possible > 0 else 100
+    def _keyword_frequency_score(self, resume_text: str, keywords: List[str]) -> int | None:
+        """Presence-only. Repeating a term does not increase coverage."""
+        score, _, _ = self._keyword_match_score(resume_text, keywords)
+        return score
 
     def _skills_alignment_score(
         self,
@@ -324,16 +282,13 @@ class ResumeScorer:
 
         text_lower = (resume_text or "").lower()
 
+        from services.requirement_matcher import match_term_in_text
+
         def _is_backed(skill: str) -> bool:
-            # 1) exact normalized presence in the structured skills section
             if normalize_single(skill).lower() in flat_skills:
                 return True
-            # 2) any alias of the skill present anywhere in the resume text
-            #    (bullets / summary / skills), word-boundary aware
-            if text_lower:
-                for form in get_all_forms(skill):
-                    if self._text_contains(text_lower, form):
-                        return True
+            if text_lower and match_term_in_text(resume_text, skill).found:
+                return True
             return False
 
         found = sum(1 for skill in required_skills if _is_backed(skill))
@@ -638,48 +593,28 @@ class ResumeScorer:
     # Combine deterministic + AI scores
     # ------------------------------------------------------------------
 
-    def _combine(self, det: dict, ai: dict) -> dict:
-        """Merge deterministic and AI scores into the full ATS_SCORES_SCHEMA.
+    def _combine(self, det: dict, ai: dict, *, pdf_checked: bool = False) -> dict:
+        """Document-coverage diagnostic. Not an ATS pass probability.
 
-        Overall score weights:
-          keyword_match (det):       25%
-          keyword_frequency (det):    5%
-          skills_alignment (det):    20%
-          experience_relevance (ai): 15%
-          ai_screener.overall (ai):  10%
-          quantifiable_impact (det): 10%
-          bullet_quality (det):       5%
-          format_score (det):         5%
-          section_completeness (det): 5%
+        Overall is required-term coverage when the denominator is known.
+        Frequency is not a scoring factor. Unavailable checks stay null —
+        they are not defaulted to 70 or format 95. Vendor scanner numbers are
+        not treated as measured results.
         """
-        # Extract AI values with safe defaults
-        ai_screener = ai.get("ai_screener", {})
-        scanners = ai.get("scanners", {})
-        experience_relevance = ai.get("experience_relevance", 70)
-        ai_overall = ai_screener.get("overall", 70)
-        bullet_quality = det.get("impact_score_detail", 70)
+        coverage = det.get("skills_alignment")
+        if coverage is None:
+            coverage = det.get("keyword_match")
+        keyword_match = det.get("keyword_match")
+        skills_alignment = det.get("skills_alignment")
 
-        # Compute weighted overall
-        overall = round(
-            det["keyword_match"] * 0.25
-            + det.get("keyword_frequency", 70) * 0.05
-            + det["skills_alignment"] * 0.20
-            + experience_relevance * 0.15
-            + ai_overall * 0.10
-            + det["quantifiable_impact"] * 0.10
-            + bullet_quality * 0.05
-            + det["format_score"] * 0.05
-            + det["section_completeness"] * 0.05
-        )
-
-        # Merge suggestions: deterministic impact suggestions first, then AI
-        ai_suggestions = ai.get("suggestions", ["No suggestions available"])
+        ai_suggestions = list(ai.get("suggestions") or [])
         impact_suggestions = det.get("impact_suggestions", [])
         all_suggestions = impact_suggestions + ai_suggestions
-        # Deduplicate and cap at 8
         seen: set = set()
         final_suggestions: List[str] = []
         for s in all_suggestions:
+            if not isinstance(s, str):
+                continue
             s_lower = s.lower()
             if s_lower not in seen:
                 seen.add(s_lower)
@@ -688,20 +623,34 @@ class ResumeScorer:
                 break
 
         combined = {
-            "overall": max(0, min(100, overall)),
-            "keyword_match": det["keyword_match"],
-            "keyword_frequency": det.get("keyword_frequency", 0),
-            "skills_alignment": det["skills_alignment"],
-            "experience_relevance": experience_relevance,
+            "overall": coverage,
+            "keyword_match": keyword_match if keyword_match is not None else 0,
+            "keyword_frequency": keyword_match if keyword_match is not None else 0,
+            "skills_alignment": skills_alignment if skills_alignment is not None else 0,
+            "experience_relevance": ai.get("experience_relevance"),
             "quantifiable_impact": det["quantifiable_impact"],
-            "bullet_quality": bullet_quality,
-            "format_score": det["format_score"],
+            "bullet_quality": det.get("impact_score_detail"),
+            "format_score": det.get("format_score") if pdf_checked else None,
             "section_completeness": det["section_completeness"],
-            "scanners": scanners,
-            "ai_screener": ai_screener,
-            "suggestions": final_suggestions,
+            "suggestions": final_suggestions or ["No suggestions available"],
             "missing_keywords": det["missing_keywords"],
-            "strengths": ai.get("strengths", ["Resume submitted for review"]),
+            "found_keywords": det.get("found_keywords") or [],
+            "strengths": list(ai.get("strengths") or []),
+            "coverage_kind": det.get("coverage_kind") or "internal_document_coverage",
+            "coverage_numerator": det.get("coverage_numerator"),
+            "coverage_denominator": det.get("coverage_denominator"),
+            "requirement_diagnostics": det.get("requirement_diagnostics") or [],
+            "vendor_scores_measured": False,
         }
-
-        return validate_and_coerce(combined, ATS_SCORES_SCHEMA)
+        # Preserve schema ints for stored records, but do not invent vendor scores.
+        if isinstance(ai.get("scanners"), dict) and ai["scanners"]:
+            combined["scanners_simulated"] = ai["scanners"]
+        if isinstance(ai.get("ai_screener"), dict) and ai["ai_screener"]:
+            combined["ai_screener_simulated"] = ai["ai_screener"]
+        # Coerce only the historical int fields that are present.
+        coerced = validate_and_coerce(
+            {k: v for k, v in combined.items() if k in ATS_SCORES_SCHEMA and v is not None},
+            {k: v for k, v in ATS_SCORES_SCHEMA.items() if k in combined and combined[k] is not None},
+        )
+        coerced.update({k: v for k, v in combined.items() if k not in coerced})
+        return coerced

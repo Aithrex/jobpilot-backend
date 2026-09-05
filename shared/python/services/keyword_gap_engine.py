@@ -11,10 +11,10 @@ import logging
 from typing import Any, Dict, List, Set, Tuple
 
 from schemas.resume_schemas import build_resume_text, flatten_skills
-from services.term_registry import match_forms, sanitize_jd_analysis, text_contains
+from services.requirement_matcher import coverage_hits, scored_term_lists
+from services.term_registry import sanitize_jd_analysis, text_contains
 from utils.keyword_normalizer import (
     normalize_single,
-    normalize_keywords,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,12 +44,13 @@ class KeywordGapEngine:
 
         # Inherit extract_jd's skill-only lists; re-sanitize so stored v1 JDs
         # that still carry logistics/titles don't re-enter the scored set.
+        # Preferred and domain context are not promoted into required.
         jd = sanitize_jd_analysis(dict(jd_analysis or {}))
-        required = normalize_keywords(jd.get("required_skills", []))
-        preferred = normalize_keywords(jd.get("preferred_skills", []))
-        keywords = normalize_keywords(jd.get("keywords", []))
+        lists = scored_term_lists(jd)
+        required = lists["required"]
+        preferred = lists["preferred"]
+        keywords = lists["keywords"]
 
-        # Deduplicated combined list (required first for priority)
         all_keywords = list(dict.fromkeys(required + preferred + keywords))
 
         # Analyze all keywords
@@ -119,29 +120,12 @@ class KeywordGapEngine:
         missing: List[str] = []
         partial: List[str] = []
 
-        for kw in keywords:
+        _found, _missing, hits = coverage_hits(resume_text, keywords)
+        for kw, hit in zip(keywords, hits):
             canonical = normalize_single(kw)
-            all_forms = match_forms(kw)
-
-            found = False
-            found_via_alias = False
-
-            # Check each known form of this keyword (aliases, parentheticals,
-            # umbrella members — one registry, same as the scorer).
-            for form in all_forms:
-                if text_contains(resume_text, form):
-                    found = True
-                    if form.lower() != canonical.lower():
-                        found_via_alias = True
-                    break
-
-            # Also check in the skills set (exact match after normalization)
-            if not found and canonical.lower() in resume_skills:
-                found = True
-
-            if found:
+            if hit.found or canonical.lower() in resume_skills:
                 matched.append(canonical)
-                if found_via_alias:
+                if hit.method == "recognized_alias":
                     partial.append(canonical)
             else:
                 missing.append(canonical)

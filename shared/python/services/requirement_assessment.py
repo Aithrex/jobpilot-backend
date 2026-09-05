@@ -29,8 +29,14 @@ from schemas.assessment_contracts import (
 )
 from services.assessment_policy import LeafObservation, reduce_expression
 from services.artifact_assessment import text_contains_capability, token_boundary_match
+from services.requirement_matcher import (
+    accepted_aliases,
+    locate_term_in_resume,
+    match_term_in_text,
+    predicate_identity,
+    slash_alternatives,
+)
 from services.tailoring_policy import digest
-from utils.keyword_normalizer import get_all_forms
 
 
 _PLUS_SPLIT = re.compile(
@@ -134,6 +140,10 @@ def parse_expression_from_text(
 
     if alts and len(alts) >= 2:
         return group_or(*[_atom(a) for a in alts])
+
+    slash_parts = slash_alternatives(raw)
+    if len(slash_parts) >= 2:
+        return group_or(*[_atom(p) for p in slash_parts])
 
     or_parts = [p.strip() for p in _OR_SPLIT.split(raw) if p.strip()]
     if len(or_parts) >= 2:
@@ -353,18 +363,14 @@ def _atomic_nodes(expr: RequirementExpression) -> List[AtomicPredicate]:
 
 
 def _capability_aliases(cap: str) -> List[str]:
-    forms = list(get_all_forms(cap) or [])
-    if cap and cap not in forms:
-        forms.insert(0, cap)
-    return forms
+    return accepted_aliases(cap)
 
 
 def _find_capability_span(document_text: str, capability: str) -> Tuple[bool, MatchMethod, str]:
     """Return (found, method, matched_form)."""
-    for form in _capability_aliases(capability):
-        if token_boundary_match(document_text, form):
-            method: MatchMethod = "exact" if form.casefold() == capability.casefold() else "recognized_alias"
-            return True, method, form
+    hit = match_term_in_text(document_text, capability)
+    if hit.found:
+        return True, hit.method, hit.matched_form or capability
     return False, "none", ""
 
 
@@ -467,7 +473,7 @@ def observe_document(
             continue
         for pred in _atomic_nodes(req.expression):
             state, unmet, _method, _span = observe_predicate(document_text, pred)
-            key = pred.capability.strip().lower()
+            key = _pred_key(pred)
             if not key:
                 continue
             # Keep strongest observation if duplicate keys appear.
@@ -478,7 +484,7 @@ def observe_document(
                 leaf = LeafObservation(capability=pred.capability, document_state=state)
                 obs[key] = leaf
                 obs[pred.capability] = leaf
-            # Stash unmet on a side channel via capability|meta keys for evaluate
+                obs[pred.capability.strip().lower()] = leaf
             obs[f"__unmet__{key}"] = LeafObservation(
                 capability="|".join(unmet), document_state=state,
             )
@@ -559,6 +565,66 @@ def _document_entity_for_span(resume: Optional[Dict[str, Any]], span: str) -> st
     return ""
 
 
+def _pred_key(pred: AtomicPredicate) -> str:
+    return predicate_identity(
+        pred.capability,
+        action=pred.action,
+        context=pred.context,
+        ownership_required=pred.ownership_required,
+        duration_required=pred.duration_required,
+        currency_required=pred.currency_required,
+        evidence_expectation=pred.evidence_expectation,
+    )
+
+
+def _facts_from_resume(resume: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not isinstance(resume, dict):
+        return []
+    from services.tailoring_planner import source_facts as _sf
+    return [
+        (f.__dict__ if hasattr(f, "__dict__") else dict(f))
+        for f in _sf(resume)
+    ]
+
+
+def _source_support_for_predicate(
+    *,
+    pred: AtomicPredicate,
+    facts: Sequence[Dict[str, Any]],
+    source_available: bool,
+) -> Tuple[SourceState, ClaimState, List[SourceRef], MatchMethod]:
+    """Independent source check — never uses the generated resume as evidence."""
+    if not source_available:
+        return "unknown", "unverified", [], "none"
+    cap = pred.capability
+    matches: List[Dict[str, Any]] = []
+    method: MatchMethod = "none"
+    for fact in facts:
+        text = str(fact.get("text") or "").strip()
+        if not text:
+            continue
+        hit = match_term_in_text(text, cap)
+        if hit.found:
+            matches.append(fact)
+            if hit.method != "none":
+                method = hit.method
+    if not matches:
+        return "not_evidenced", "unverified", [], "none"
+    best = matches[0]
+    refs = [SourceRef(
+        fact_id=str(best.get("id") or ""),
+        entity=str(best.get("entity") or ""),
+        text=str(best.get("text") or "")[:200],
+    )]
+    kind = str(best.get("kind") or "accomplishment")
+    if kind == "skill":
+        return "listed_only", "supported_explicit", refs, method or "exact"
+    claim: ClaimState = (
+        "supported_semantic" if method == "semantic" else "supported_explicit"
+    )
+    return "supported", claim, refs, method or "exact"
+
+
 def evaluate_requirements(
     *,
     document_text: str,
@@ -567,32 +633,33 @@ def evaluate_requirements(
     resume: Optional[Dict[str, Any]] = None,
     source_resume: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Full Package 4 evaluation: expressions → observations → reducer → counts."""
+    """Full Package 4 evaluation: expressions → observations → reducer → counts.
+
+    Source is checked independently of document coverage. Generated resume
+    content is never used as its own source evidence. Missing source stays
+    unknown.
+    """
     requirements = canonicalize_requirements(jd)
-    # Deduplicate acronym+expansion as one group: if two reqs share same core, keep one.
     requirements = _dedupe_acronym_groups(requirements)
 
-    facts = list(source_facts or [])
-    fact_source = source_resume or resume
-    if not facts and fact_source:
-        from services.tailoring_planner import source_facts as _sf
-        facts = [
-            (f.__dict__ if hasattr(f, "__dict__") else dict(f))
-            for f in _sf(fact_source)
-        ]
+    source_explicit = source_facts is not None or source_resume is not None
+    facts: List[Dict[str, Any]] = list(source_facts or [])
+    if source_resume is not None and not facts:
+        facts = _facts_from_resume(source_resume)
+    # Never fall back to the generated `resume` as an independent source.
 
-    # Build observations using qualifier-aware predicate observer, then reduce.
     leaf_obs: Dict[str, LeafObservation] = {}
-    pred_meta: Dict[str, Dict[str, Any]] = {}  # capability.lower → meta
+    pred_meta: Dict[str, Dict[str, Any]] = {}
 
     for req in requirements:
         if req.expression.kind == "unresolved":
             continue
         for pred in _atomic_nodes(req.expression):
             state, unmet, method, span = observe_predicate(document_text, pred)
-            key = pred.capability.strip().lower()
+            key = _pred_key(pred)
             leaf_obs[key] = LeafObservation(capability=pred.capability, document_state=state)
             leaf_obs[pred.capability] = leaf_obs[key]
+            leaf_obs[pred.capability.strip().lower()] = leaf_obs[key]
             pred_meta[key] = {
                 "unmet": unmet, "method": method, "span": span, "pred": pred,
             }
@@ -618,103 +685,86 @@ def evaluate_requirements(
         doc_refs: List[DocumentRef] = []
         unmet: List[str] = []
 
-        if doc_state == "not_demonstrated":
-            source_state = "not_evidenced"
-        elif doc_state in {"satisfied", "partially_supported"}:
-            any_supported = False
-            any_listed = False
-            any_contradicted = False
-            for pred in _atomic_nodes(req.expression):
-                key = pred.capability.strip().lower()
-                meta = pred_meta.get(key) or {}
-                for u in meta.get("unmet") or []:
-                    if u not in unmet:
-                        unmet.append(u)
-                span = meta.get("span") or pred.capability
-                if meta.get("span"):
-                    doc_refs.append(DocumentRef(
-                        span=str(meta["span"])[:240],
-                        section="document",
-                        entity=_document_entity_for_span(resume, pred.capability),
-                    ))
-                if not text_contains_capability(document_text, pred.capability) and not meta.get("span"):
-                    continue
+        any_supported = False
+        any_listed = False
+        any_contradicted = False
+        for pred in _atomic_nodes(req.expression):
+            key = _pred_key(pred)
+            meta = pred_meta.get(key) or {}
+            for u in meta.get("unmet") or []:
+                if u not in unmet:
+                    unmet.append(u)
+            span = meta.get("span") or ""
+            section = "document"
+            if resume and pred.capability:
+                located = locate_term_in_resume(resume, pred.capability)
+                if located.found and located.section:
+                    section = located.section
+            if span:
+                doc_refs.append(DocumentRef(
+                    span=str(span)[:240],
+                    section=section,
+                    entity=_document_entity_for_span(resume, pred.capability),
+                ))
+                if meta.get("method") and meta["method"] != "none":
+                    match_method = meta["method"]
+
+            # Source is always checked independently of document presence.
+            ss, cs, refs, mm = _source_support_for_predicate(
+                pred=pred, facts=facts, source_available=source_explicit,
+            )
+            if source_explicit and doc_state in {"satisfied", "partially_supported"}:
                 entity = _document_entity_for_span(resume, pred.capability)
-                # For wrong-employer: if document places claim under entity A but
-                # only entity B has the source fact with same text, contradict.
-                ss, cs, refs, mm = reconcile_source(
+                claim = span if len(str(span)) > len(pred.capability) else pred.capability
+                rec_ss, rec_cs, rec_refs, rec_mm = reconcile_source(
                     document_text=document_text,
                     document_refs=[],
                     source_facts=facts,
-                    claim_text=span if len(str(span)) > len(pred.capability) else pred.capability,
+                    claim_text=claim,
                     document_entity=entity,
                     expected_entity=entity,
                 )
-                # Also try matching accomplishment bullets that contain the capability
-                if ss == "not_evidenced" and entity:
-                    for fact in facts:
-                        if str(fact.get("entity") or "") != entity:
-                            continue
-                        if token_boundary_match(str(fact.get("text") or ""), pred.capability):
-                            ss, cs, refs, mm = "supported", "supported_explicit", [
-                                SourceRef(
-                                    fact_id=str(fact.get("id") or ""),
-                                    entity=entity,
-                                    text=str(fact.get("text") or "")[:200],
-                                )
-                            ], meta.get("method") or "exact"
-                            break
-                # Wrong employer: capability text exists only under a different entity in source
-                if ss in {"supported", "listed_only"} and entity:
-                    pass
-                elif ss == "not_evidenced":
-                    # Check if an identical bullet exists under another employer
-                    for fact in facts:
-                        ft = str(fact.get("text") or "")
-                        if token_boundary_match(ft, pred.capability) or (
-                            span and span.casefold() in ft.casefold()
-                        ):
-                            if entity and str(fact.get("entity") or "") != entity:
-                                # Document claims at entity but source support is elsewhere
-                                # only contradict when document attributes to a specific entity
-                                if entity:
-                                    ss, cs = "contradicted", "contradicted"
-                                    refs = [SourceRef(
-                                        fact_id=str(fact.get("id") or ""),
-                                        entity=str(fact.get("entity") or ""),
-                                        text=ft[:200],
-                                    )]
-                                    break
-                source_refs.extend(refs)
-                if mm != "none":
-                    match_method = mm  # type: ignore[assignment]
-                if ss == "contradicted":
-                    any_contradicted = True
-                    claim_state = "contradicted"
-                elif ss == "supported":
-                    any_supported = True
+                if rec_ss == "contradicted":
+                    ss, cs, refs, mm = rec_ss, rec_cs, rec_refs, rec_mm
+                elif rec_ss in {"supported", "listed_only"} and ss == "not_evidenced":
+                    ss, cs, refs, mm = rec_ss, rec_cs, rec_refs, rec_mm
+            source_refs.extend(refs)
+            if mm != "none":
+                match_method = mm
+            if ss == "contradicted":
+                any_contradicted = True
+                claim_state = "contradicted"
+            elif ss == "supported":
+                any_supported = True
+                if claim_state != "contradicted":
                     claim_state = cs
-                elif ss == "listed_only":
-                    any_listed = True
+            elif ss == "listed_only":
+                any_listed = True
+                if claim_state not in {"contradicted", "supported_explicit", "supported_semantic"}:
                     claim_state = cs
-            if any_contradicted:
-                source_state = "contradicted"
-            elif any_supported:
-                source_state = "supported"
-            elif any_listed:
-                source_state = "listed_only"
-            else:
-                source_state = "not_evidenced"
+
+        if not source_explicit:
+            source_state = "unknown"
+            claim_state = "unverified"
+        elif any_contradicted:
+            source_state = "contradicted"
+        elif any_supported:
+            source_state = "supported"
+        elif any_listed:
+            source_state = "listed_only"
+        else:
+            source_state = "not_evidenced"
+            if claim_state != "contradicted":
                 claim_state = "unverified"
-            # Skills-only cannot satisfy ownership/production expectations.
-            if source_state == "listed_only" and any(
-                p.ownership_required or p.evidence_expectation in {"ownership", "production_use"}
-                for p in _atomic_nodes(req.expression)
-            ):
-                if "ownership" not in unmet and "production_use" not in unmet:
-                    unmet.append("work_context")
-                if doc_state == "satisfied":
-                    doc_state = "partially_supported"
+
+        if source_state == "listed_only" and any(
+            p.ownership_required or p.evidence_expectation in {"ownership", "production_use"}
+            for p in _atomic_nodes(req.expression)
+        ):
+            if "ownership" not in unmet and "production_use" not in unmet:
+                unmet.append("work_context")
+            if doc_state == "satisfied":
+                doc_state = "partially_supported"
 
         evaluations.append(RequirementEvaluation(
             requirement_id=req.id,
@@ -750,6 +800,8 @@ def _dedupe_acronym_groups(
         ("machine learning", "ml"),
         ("natural language processing", "nlp"),
         ("application programming interface", "api"),
+        ("postgresql", "postgres"),
+        ("openapi", "swagger"),
     ]
     texts = {r.display_text.strip().lower(): r for r in requirements}
     drop: set[str] = set()
