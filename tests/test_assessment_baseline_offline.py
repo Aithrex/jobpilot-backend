@@ -8,7 +8,7 @@ import pytest
 
 from services.resume_scorer import ResumeScorer
 from services import tailoring_assessment as assessment
-from tests.fixtures.assessment.cases import SQL_NOSQL_JD, SQL_NOSQL_RESUME
+from fixtures.assessment.cases import SQL_NOSQL_JD, SQL_NOSQL_RESUME
 
 
 @pytest.fixture

@@ -14,7 +14,7 @@ from services.artifact_assessment import (
     normalize_preserve_boundaries,
     token_boundary_match,
 )
-from tests.fixtures.assessment.cases import SQL_NOSQL_JD, SQL_NOSQL_RESUME
+from fixtures.assessment.cases import SQL_NOSQL_JD, SQL_NOSQL_RESUME
 
 
 def test_sql_does_not_match_nosql():

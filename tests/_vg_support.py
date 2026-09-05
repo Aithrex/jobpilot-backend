@@ -29,7 +29,9 @@ from pathlib import Path
 _TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = _TESTS_DIR.parent
 _SHARED = REPO_ROOT / "shared" / "python"
-for _p in (str(_SHARED), str(_TESTS_DIR)):
+# Repo root first so ``tests.*`` / ``evals.*`` resolve under CI's
+# PYTHONPATH=shared/python (cwd is not guaranteed on sys.path).
+for _p in (str(REPO_ROOT), str(_SHARED), str(_TESTS_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 

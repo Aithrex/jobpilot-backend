@@ -10,7 +10,7 @@ from services.requirement_assessment import (
     reconcile_source,
 )
 from services.assessment_policy import reduce_expression, observations_from_pairs
-from tests.fixtures.assessment.cases import (
+from fixtures.assessment.cases import (
     AND_OR_JD,
     SQL_NOSQL_JD,
     SQL_NOSQL_RESUME,

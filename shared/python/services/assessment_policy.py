@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Literal, Optional, Sequence
 
-from shared.python.schemas.assessment_contracts import (
+from schemas.assessment_contracts import (
     ASSESSMENT_VERSION,
     DocumentState,
     RequirementExpression,

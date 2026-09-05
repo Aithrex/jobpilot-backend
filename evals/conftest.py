@@ -9,7 +9,11 @@ import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-for _p in (str(_REPO_ROOT / "shared" / "python"), str(_REPO_ROOT / "tests")):
+for _p in (
+    str(_REPO_ROOT),
+    str(_REPO_ROOT / "shared" / "python"),
+    str(_REPO_ROOT / "tests"),
+):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
