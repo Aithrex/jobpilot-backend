@@ -128,20 +128,22 @@ def test_no_clipping_ever(key):
     assert res.predicted_height_mm <= _usable(r, res.pages, res) + 0.75
     assert len(PdfReader(io.BytesIO(pdf)).pages) == res.pages
     assert res.pages >= 1
-    assert res.outcome in ("fit_one", "fit_two", "trimmed_to_one", "trimmed_to_two")
+    assert res.outcome in ("fit_one", "fit_two", "trimmed_to_one", "trimmed_to_two",
+                           "one_page_not_possible", "needs_shortening_choice")
 
 
 def test_eight_by_six_does_not_clip_to_one_page():
     r = ResumeRenderer()
     pdf, res = r.generate_pdf(_eight_by_six())
-    assert res.pages == 2
-    assert res.outcome in ("fit_two", "trimmed_to_two")
-    assert res.predicted_height_mm <= _usable(r, 2, res) + 0.75
+    # Without silent truncation, dense content may need 2+ pages.
+    assert res.pages >= 2
+    assert res.outcome in ("fit_two", "trimmed_to_two", "needs_shortening_choice")
+    assert res.predicted_height_mm <= _usable(r, res.pages, res) + 0.75
     text, pages = extract_pdf_text(pdf)
-    assert pages == 2
-    # First and last roles survive (or are recorded as dropped).
-    if not any(d.kind == "experience" and d.index >= 7 for d in res.dropped):
-        assert "Company 0" in text or "Company 7" in text or "Engineer 0" in text
+    assert pages == res.pages
+    # Content is preserved (no silent drop of late roles).
+    assert "Company 0" in text or "Engineer 0" in text
+    assert "Company 7" in text or "Engineer 7" in text
 
 
 @pytest.mark.parametrize("key", list(FIXTURES))

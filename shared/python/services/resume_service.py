@@ -615,6 +615,22 @@ def _finalize_tailored_result(
     """
     from services.tailoring_pipeline import is_result
     if is_result(result):
+        # Layout prep (selection) before read-only assessment on this revision.
+        try:
+            from services.content_selection import page_budget_for_resume, select_resume_content
+            result = select_resume_content(
+                result,
+                jd_analysis=jd_analysis,
+                renderer=getattr(svc, "renderer", None),
+                preferences=result.get("tailoring_preferences")
+                if isinstance(result, dict) else None,
+                max_pages=page_budget_for_resume(
+                    result if isinstance(result, dict) else None,
+                    result.get("tailoring_preferences") if isinstance(result, dict) else None,
+                ),
+            )
+        except Exception as exc:
+            logger.warning("content_selection (evidence path) failed: %s", exc)
         # Composition/grounding is already complete. Export checks and reader
         # review are read-only and describe precisely this revision.
         from services import assessment_service as _assess
@@ -676,6 +692,23 @@ def _finalize_tailored_result(
 
     if job_id:
         svc.update_job_progress(job_id, "finalizing", 95)
+    # One explicit final revision for preview + export (relevance-aware).
+    # Assessment/Recheck paths return earlier and never reach this mutation.
+    try:
+        from services.content_selection import page_budget_for_resume, select_resume_content
+        result = select_resume_content(
+            result,
+            jd_analysis=jd_analysis,
+            renderer=getattr(svc, "renderer", None),
+            preferences=result.get("tailoring_preferences")
+            if isinstance(result, dict) else None,
+            max_pages=page_budget_for_resume(
+                result if isinstance(result, dict) else None,
+                result.get("tailoring_preferences") if isinstance(result, dict) else None,
+            ),
+        )
+    except Exception as exc:
+        logger.warning("content_selection failed; keeping unselected resume: %s", exc)
     _attach_ats_keyword_audit(result, jd_analysis)
     return result
 

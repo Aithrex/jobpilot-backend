@@ -311,7 +311,7 @@ _FLOOR_OTHER = 2
 class ResumeRenderer:
     """Generates PDF and DOCX from a structured (tailored) resume dict."""
 
-    RENDER_VERSION = "2026-09-05.1"  # keep heading with first entry; no orphan EDUCATION
+    RENDER_VERSION = "2026-09-05.2"  # faithful renderer; content_selection owns bullet drops
 
     SKILLS_TITLES = (
         "Technical Skills",
@@ -888,97 +888,82 @@ class ResumeRenderer:
             dropped=list(dropped), outcome=outcome,
         )
 
-    def _trim_to_fit(self, tailored: Dict[str, Any], max_pages: int = 1
-                     ) -> Tuple[Dict[str, Any], List[DroppedItem]]:
-        """Deterministic trim. Deep-copies. Never touches summary/skills/edu/certs."""
-        working = copy.deepcopy(tailored)
-        dropped: List[DroppedItem] = []
-        avail = self._AVAIL_H * max(1, max_pages)
-
-        def fits() -> bool:
-            t = _TWO_PAGE_FLOOR if max_pages >= 2 else _TIER_90
-            return self._measure_min(working, t.body_pt, t.lh, t.lh_s) <= avail
-
-        if fits():
-            return working, dropped
-
-        # 1. Project bullets beyond a 2-bullet floor (last project first).
-        projects = list(working.get("projects") or [])
-        for pi in range(len(projects) - 1, -1, -1):
-            bullets = list(projects[pi].get("bullets") or [])
-            while len(bullets) > 2 and not fits():
-                gone = bullets.pop()
-                dropped.append(DroppedItem("project_bullet", pi, str(gone)[:80]))
-            projects[pi]["bullets"] = bullets
-        working["projects"] = projects
-        if fits():
-            return working, dropped
-
-        # 2. Whole projects beyond the first (last first).
-        while len(working.get("projects") or []) > 1 and not fits():
-            gone = working["projects"].pop()
-            dropped.append(DroppedItem(
-                "project", len(working["projects"]),
-                str(gone.get("name") or "project")[:80],
-            ))
-        if fits():
-            return working, dropped
-
-        # 3. Oldest-role bullets down to the floor (never recent role below 3).
-        experience = list(working.get("experience") or [])
-        for ei in range(len(experience) - 1, -1, -1):
-            floor = _FLOOR_RECENT if ei == 0 else _FLOOR_OTHER
-            bullets = list(experience[ei].get("bullets") or [])
-            while len(bullets) > floor and not fits():
-                gone = bullets.pop()
-                dropped.append(DroppedItem("experience_bullet", ei, str(gone)[:80]))
-            experience[ei]["bullets"] = bullets
-        working["experience"] = experience
-        if fits():
-            return working, dropped
-
-        # 4. Oldest role entirely (keep at least the most recent).
-        while len(working.get("experience") or []) > 1 and not fits():
-            gone = working["experience"].pop()
-            dropped.append(DroppedItem(
-                "experience", len(working["experience"]),
-                str(gone.get("company") or gone.get("title") or "role")[:80],
-            ))
-        return working, dropped
-
     def _compute_pdf_layout(self, tailored: Dict[str, Any]) -> Tuple[Dict[str, Any], PageResolution]:
-        """Solve layout. Returns (possibly-trimmed resume, resolution)."""
+        """Solve typography/gaps only. Prefer one page; two pages only when needed.
+
+        Content selection already packed for one page. This layer never drops
+        bullets — if the selected set still overflows readable one-page limits,
+        render two pages (rare) instead of silent truncation.
+        """
         working = tailored
         dropped: List[DroppedItem] = []
+        warnings: List[str] = []
 
-        found = self._try_one_page_cascade(working)
-        if found:
-            tier, height = found
-            res = self._finish_one_page(working, tier, height, dropped, "fit_one")
-            return working, res
+        pref = str(
+            (tailored or {}).get("page_length")
+            or ((tailored or {}).get("tailoring_preferences") or {}).get("page_length")
+            or "auto"
+        ).strip().lower()
+        want_two = pref in {"two", "2", "two_page"}
 
-        # Overflow at the 9.0 floor.
+        if not want_two:
+            found = self._try_one_page_cascade(working)
+            if found:
+                tier, height = found
+                res = self._finish_one_page(working, tier, height, dropped, "fit_one")
+                res.layout_warnings = list(warnings)
+                return working, res
+
         h9 = self._measure_min(working, _TIER_90.body_pt, _TIER_90.lh, _TIER_90.lh_s)
         overflow_frac = (h9 - self._AVAIL_H) / self._AVAIL_H if self._AVAIL_H else 1.0
+        sel = (tailored or {}).get("content_selection") or {}
 
-        if overflow_frac >= self.spec.min_second_page_fill:
-            res = self._finish_two_page(working, dropped, "fit_two")
-            if res.predicted_height_mm <= self._AVAIL_H * 2 + 0.5:
-                return working, res
-            working, dropped = self._trim_to_fit(working, max_pages=2)
-            outcome: Outcome = "trimmed_to_two" if dropped else "fit_two"
-            return working, self._finish_two_page(working, dropped, outcome)
-
-        working, dropped = self._trim_to_fit(working, max_pages=1)
-        found = self._try_one_page_cascade(working)
-        if found:
-            tier, height = found
-            res = self._finish_one_page(working, tier, height, dropped, "trimmed_to_one")
+        # Second page only when explicitly requested, or overflow is large enough
+        # that a sparse second page is justified, or selection already reported
+        # one-page impossible. Tiny overflows after a failed cascade still go to
+        # two pages rather than clipping — selection should have made that rare.
+        go_two = (
+            want_two
+            or overflow_frac >= self.spec.min_second_page_fill
+            or sel.get("page_outcome") in {
+                "one_page_not_possible", "needs_shortening_choice", "fit_two",
+            }
+            or overflow_frac > 0.0  # cannot clip; last resort after cascade miss
+        )
+        if go_two:
+            outcome: Outcome = "fit_two"
+            if sel.get("page_outcome") == "one_page_not_possible":
+                warnings.append(
+                    "Could not keep one readable page without dropping content; "
+                    "used two pages."
+                )
+            elif sel.get("page_outcome") == "needs_shortening_choice":
+                warnings.append(
+                    "Content exceeds readable page budget; optional shortening available."
+                )
+            elif not want_two and overflow_frac < self.spec.min_second_page_fill:
+                warnings.append(
+                    "Slight one-page overflow after selection; used two pages "
+                    "instead of truncating bullets."
+                )
+            res = self._finish_two_page(working, dropped, outcome)
+            res.layout_warnings = list(warnings) + list(res.layout_warnings)
             return working, res
 
-        # Trim exhausted — two pages, never clip.
-        outcome: Outcome = "trimmed_to_two" if dropped else "fit_two"
-        return working, self._finish_two_page(working, dropped, outcome)
+        res = self._finish_two_page(working, dropped, "fit_two")
+        res.layout_warnings = list(warnings)
+        return working, res
+
+    def _trim_to_fit(self, tailored: Dict[str, Any], max_pages: int = 1
+                     ) -> Tuple[Dict[str, Any], List[DroppedItem]]:
+        """Deprecated: content selection owns page budget. No silent drops.
+
+        Kept as a no-op so older callers/tests that invoke it do not truncate.
+        """
+        logger.info(
+            "resume_render _trim_to_fit is a no-op; use content_selection.select_resume_content"
+        )
+        return tailored, []
 
     # ------------------------------------------------------------------
     # PDF drawing

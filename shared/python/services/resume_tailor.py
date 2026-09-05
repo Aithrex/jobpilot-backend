@@ -927,14 +927,16 @@ class ResumeTailor:
         of 2 bullets per entry. See services/bullet_allocator.py.
         """
         from services.bullet_allocator import allocate_bullets
-        from services.resume_renderer import ResumeRenderer, ALLOW_TWO_PAGE
+        from services.resume_renderer import ResumeRenderer
 
-        # Phase 5: when two-page rendering is enabled, give the allocator a
-        # two-page budget so it doesn't evict the bullets a dense senior resume
-        # needs. A resume that fits one page still fills only one page — the
-        # allocator keeps extra bullets ONLY when there's content to justify
-        # them, so normal resumes are unaffected.
-        max_pages = 2 if ALLOW_TWO_PAGE else 1
+        # Pack for one page by default. Two-page budget only when the resume
+        # explicitly requests two pages — second page should be uncommon.
+        pref = str(
+            (tailored or {}).get("page_length")
+            or ((tailored or {}).get("tailoring_preferences") or {}).get("page_length")
+            or "auto"
+        ).strip().lower()
+        max_pages = 2 if pref in {"two", "2", "two_page"} else 1
         return allocate_bullets(
             tailored, ResumeRenderer(), jd_analysis=jd_analysis,
             max_pages=max_pages,

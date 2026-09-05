@@ -229,14 +229,34 @@ def allocate_bullets(
 ) -> Dict[str, Any]:
     """Select the page-fitting subset of model-proposed bullets by relevance.
 
-    Greedy fill: seed every entry with its floor (top-ranked bullets), then add
-    the next-highest-scored remaining candidate, re-measuring after each add,
-    stopping before the first overflow. Deterministic and order-stable.
-
-    The 10pt densest tier (lh 3.10) is used as the capacity yardstick so we
-    never select a set that would force the renderer below 10pt. The renderer's
-    own two-pass logic then relaxes line-height to spread the final layout.
+    Delegates to content_selection.select_resume_content so preview and export
+    share one revision. The optional `scorer` hook is retained for callers but
+    complementarity-aware selection is the canonical policy.
     """
+    if scorer is not None:
+        # Legacy custom-scorer path (tests): keep prior greedy algorithm below.
+        return _allocate_bullets_legacy(
+            tailored, renderer, jd_analysis=jd_analysis, scorer=scorer,
+            max_pages=max_pages,
+        )
+    from services.content_selection import select_resume_content
+    return select_resume_content(
+        tailored,
+        jd_analysis=jd_analysis,
+        renderer=renderer,
+        max_pages=max_pages,
+    )
+
+
+def _allocate_bullets_legacy(
+    tailored: Dict[str, Any],
+    renderer,
+    *,
+    jd_analysis: Optional[Dict[str, Any]] = None,
+    scorer: Optional[Scorer] = None,
+    max_pages: int = 1,
+) -> Dict[str, Any]:
+    """Previous greedy allocator retained for custom scorer hooks."""
     jd = jd_analysis or {}
     score_fn = scorer or _default_scorer
     # Precompute alias-expanded JD terms once; the scorer reads them per call.

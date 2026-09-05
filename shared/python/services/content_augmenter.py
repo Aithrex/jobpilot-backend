@@ -985,57 +985,19 @@ class ContentAugmenter:
             fill * 100, fill_at_9pt * 100,
         )
 
-        # Estimate: each bullet ≈ 1.5-2% of page fill
-        _EST_BULLET_FILL = 0.018
+        # Content selection owns page-budget bullet choices. Do not silently
+        # pop project/experience bullets here — that caused preview/export drift
+        # and discarded uniquely covering third project bullets.
+        if fill_at_9pt > 1.0:
+            logger.warning(
+                "ContentAugmenter Phase 4: still overflowing at 9pt (%.1f%%) — "
+                "deferring to content_selection / two-page layout (no silent trim).",
+                fill_at_9pt * 100,
+            )
+        return tailored
 
-        # Strategy 1: trim oldest experience bullets to 3 per role
-        experience = tailored.get("experience", [])
-        estimated_fill = fill
-        for exp in reversed(experience):
-            bullets = exp.get("bullets", [])
-            while len(bullets) > 3 and estimated_fill > _OVERFLOW_SOFT:
-                bullets.pop()
-                estimated_fill -= _EST_BULLET_FILL
-
-        # Re-measure
-        fill = self._measure_fill(tailored)
-
-        # Strategy 2: trim project bullets (3 → 2)
-        if fill > _OVERFLOW_SOFT:
-            for proj in tailored.get("projects", []):
-                bullets = proj.get("bullets", [])
-                while len(bullets) > 2 and estimated_fill > _OVERFLOW_SOFT:
-                    bullets.pop()
-                    estimated_fill -= _EST_BULLET_FILL
-            fill = self._measure_fill(tailored)
-
-        # Strategy 3: trim ONLY the oldest experience role down to 2
-        # bullets if still overflowing. Don't strip recent/prior roles
-        # below 3 — that's where ATS and recruiters spend the most
-        # attention, and an earlier version of this code dropped EVERY
-        # role to 2 bullets which produced a sparse, undersized resume.
-        if fill > _OVERFLOW_SOFT and len(experience) > 0:
-            oldest = experience[-1]
-            bullets = oldest.get("bullets", [])
-            while len(bullets) > 2 and self._measure_fill(tailored) > _OVERFLOW_SOFT:
-                bullets.pop()
-                logger.warning(
-                    "ContentAugmenter: trimmed oldest-role bullet on %s (now %d)",
-                    oldest.get("company", "?"), len(bullets),
-                )
-            fill = self._measure_fill(tailored)
-
-        # Strategy 4: last resort — remove projects if STILL overflowing.
-        # Keeps at least 1 project.
-        projects = tailored.get("projects", [])
-        if fill > _OVERFLOW_SOFT and len(projects) > 1:
-            while len(projects) > 1 and self._measure_fill(tailored) > _OVERFLOW_SOFT:
-                removed = projects.pop()
-                logger.warning(
-                    "ContentAugmenter: removed project '%s' (last-resort trim)",
-                    removed.get("name", "?"),
-                )
-
+    def _overflow_trim_legacy_disabled(self, tailored: Dict[str, Any], fill: float) -> Dict[str, Any]:
+        """Retained for reference; silent first-N truncation removed."""
         return tailored
 
     # ------------------------------------------------------------------
