@@ -73,20 +73,11 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
-  # Deploys used to race the suite. `deploy.yml` and `tests.yml` both trigger
-  # on push to main and ran in PARALLEL with nothing between them, so a red
-  # suite never held anything back -- on 2026-09-02 a commit whose tests were
-  # failing deployed to all four Lambdas, and so did the two after it.
-  #
-  # `needs:` cannot cross workflows, so this waits on the tests RUN for this
-  # exact SHA. Not "the latest run on main": that would let a green run from a
-  # different commit wave this one through, which is the failure mode a naive
-  # gate has.
-  #
-  # ADVISORY until someone sets the repo variable REQUIRE_GREEN_TESTS=true. It
-  # reports the verdict on every deploy either way, so the signal is there from
-  # day one; flipping the variable is what turns a report into a refusal. Ship
-  # it enforcing on a red main and it gets disabled in anger instead.
+  # Deploys used to race the suite. `needs:` cannot cross workflows, so this
+  # waits on the tests RUN for this exact SHA. Not "the latest run on main":
+  # that would let a green run from a different commit wave this one through.
+  # A failed, cancelled, timed-out, or missing suite refuses to deploy.
+  # workflow_dispatch is not a bypass — the same SHA must be green.
   await-tests:
     name: Wait for the offline suite
     runs-on: ubuntu-latest
@@ -96,13 +87,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # workflow_dispatch is the documented escape hatch: a human asking
-          # for a deploy has, by asking, taken the decision the gate exists to
-          # force. It is logged either way.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "::warning::Manual dispatch - the test gate is bypassed by design."
-            exit 0
-          fi
 
           API="repos/${GITHUB_REPOSITORY}/actions/workflows/tests.yml/runs"
           for attempt in $(seq 1 60); do
@@ -117,38 +101,23 @@ jobs:
                 echo "Offline suite is green for ${GITHUB_SHA:0:7}."
                 exit 0 ;;
               failure|cancelled|timed_out)
-                # ADVISORY BY DEFAULT. The gate is only worth enforcing once
-                # main is actually green: main was red on 2026-09-03 from
-                # unrelated tailoring/ATS work, and a gate that blocks every
-                # deploy on somebody else's failing suite gets switched off in
-                # anger rather than respected. Set the repo variable
-                # REQUIRE_GREEN_TESTS=true to make it enforce.
-                if [ "${{ vars.REQUIRE_GREEN_TESTS }}" = "true" ]; then
-                  echo "::error::Offline suite concluded '${CONCLUSION}' for ${GITHUB_SHA:0:7}; refusing to deploy."
-                  exit 1
-                fi
-                echo "::warning::Offline suite concluded '${CONCLUSION}' for ${GITHUB_SHA:0:7}. Deploying anyway because REQUIRE_GREEN_TESTS is not 'true'."
-                exit 0 ;;
+                echo "::error::Offline suite concluded '${CONCLUSION}' for ${GITHUB_SHA:0:7}; refusing to deploy."
+                exit 1 ;;
             esac
             sleep 20
           done
 
-          # A suite that never reports is NOT a pass. Twenty minutes is well
-          # past the ~4 minute suite; something is wrong and a human should
-          # look rather than have prod updated on no evidence.
-          if [ "${{ vars.REQUIRE_GREEN_TESTS }}" = "true" ]; then
-            echo "::error::No conclusive tests run for ${GITHUB_SHA:0:7} after 20 minutes; refusing to deploy."
-            exit 1
-          fi
-          echo "::warning::No conclusive tests run for ${GITHUB_SHA:0:7} after 20 minutes; deploying anyway (REQUIRE_GREEN_TESTS is not 'true')."
-          exit 0
+          echo "::error::No conclusive tests run for ${GITHUB_SHA:0:7} after 20 minutes; refusing to deploy."
+          exit 1
 
   # ---------------------------------------------------------------------------
   deploy-layer:
     name: Build & publish shared layer
     runs-on: ubuntu-latest
     needs: [detect-changes, await-tests]
-    if: needs.detect-changes.outputs.shared == 'true' || github.event_name == 'workflow_dispatch'
+    if: >-
+      (needs.detect-changes.outputs.shared == 'true' || github.event_name == 'workflow_dispatch')
+      && needs.await-tests.result == 'success'
     outputs:
       layer_arn: ${{ steps.publish.outputs.layer_arn }}
     steps:
@@ -243,7 +212,9 @@ jobs:
     name: Build & deploy apply-executor image
     runs-on: ubuntu-latest
     needs: [detect-changes, await-tests]
-    if: needs.detect-changes.outputs.executor == 'true' || github.event_name == 'workflow_dispatch'
+    if: >-
+      (needs.detect-changes.outputs.executor == 'true' || github.event_name == 'workflow_dispatch')
+      && needs.await-tests.result == 'success'
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -288,7 +259,9 @@ jobs:
     name: Deploy ingest runner (EC2)
     runs-on: ubuntu-latest
     needs: [detect-changes, await-tests]
-    if: needs.detect-changes.outputs.ingest == 'true' || github.event_name == 'workflow_dispatch'
+    if: >-
+      (needs.detect-changes.outputs.ingest == 'true' || github.event_name == 'workflow_dispatch')
+      && needs.await-tests.result == 'success'
     env:
       INSTANCE_ID: ${{ vars.INGEST_INSTANCE_ID || 'i-06bf0e03e60d9d409' }}
       DEPLOY_BUCKET: jobpilot-resumes-prod-032398581420

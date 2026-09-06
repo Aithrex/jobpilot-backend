@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Repository-local pre-push hook. Install with:
+#   python scripts/install_pre_push_hook.py
+# Does not touch global Git config. CI remains authoritative.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+if [[ -x ".venv/bin/python" ]]; then
+  PY=".venv/bin/python"
+elif [[ -x ".venv/Scripts/python.exe" ]]; then
+  PY=".venv/Scripts/python.exe"
+else
+  PY="${PYTHON:-python}"
+fi
+
+echo "pre-push: $PY scripts/verify.py --full --cache"
+exec "$PY" scripts/verify.py --full --cache

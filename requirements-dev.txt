@@ -11,3 +11,8 @@ openpyxl>=3.1
 # Resume visual snapshots (tests/snapshots/resume/*.png)
 pypdfium2>=4.30
 Pillow>=10.0
+
+# IANA zones for applied_date tests. Ubuntu CI has system tzdata; Windows
+# zoneinfo raises ZoneInfoNotFoundError without this package and the civil-day
+# tests fall back to UTC (off-by-one vs America/Los_Angeles).
+tzdata>=2024.1

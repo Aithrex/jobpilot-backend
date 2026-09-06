@@ -12,7 +12,7 @@ Only `README.md` and `CLAUDE.md` live at the repo root.
 | [`specs/`](specs/) | What a feature is meant to do, before it exists | You are implementing or reviewing a feature |
 | [`ops/`](ops/) | Runbooks, rollout/rollback, setup, and the human steps. [`tech-feed-rollout-gates.md`](ops/tech-feed-rollout-gates.md) is the one to read before widening the flag — every gate names the command that produces its number | Something is on fire, or you are deploying |
 | [`security/`](security/) | Threat model, dataflow, audit | You are touching untrusted input, credentials, or the browser fleet |
-| [`qa/`](qa/) | Acceptance criteria | You are deciding whether something is done |
+| [`qa/`](qa/) | Acceptance criteria and the [verification gate](qa/verification.md) | You are deciding whether something is done, or which command CI and pre-push run |
 | [`coverage/`](coverage/) | **The measured numbers**, and the definitions behind them | You want to quote a figure — never quote one from anywhere else |
 | [`sourcing/`](sourcing/) | Catalog-expansion findings, validated but not yet pasted in | You are adding employers or boards |
 | [`product/`](product/) | Product positions that constrain the code | You are changing generated output or user-visible copy |

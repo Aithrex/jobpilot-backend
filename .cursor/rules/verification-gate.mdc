@@ -1,0 +1,20 @@
+---
+description: Run focused checks while coding and the full CI gate before declaring work ready
+alwaysApply: true
+---
+
+# Verification gate
+
+One entry point: `python scripts/verify.py`. Local hooks are optional;
+CI (`tests.yml`) is authoritative. Do not skip, weaken, or suppress
+checks to obtain a green result.
+
+- While implementing: `python scripts/verify.py --fast` or
+  `python scripts/verify.py --fast -- tests/test_foo.py`
+- Before ready: `python scripts/verify.py --full` (same as CI)
+- Fix regressions this change caused. A later edit that affects checked
+  behavior invalidates an earlier green run — rerun.
+- Report exact commands and results. Never claim “all tests pass” from
+  a subset. Name any check you could not run.
+- Opt-in hook: `python scripts/install_pre_push_hook.py`
+- Details: `docs/qa/verification.md`

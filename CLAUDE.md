@@ -8,7 +8,9 @@ Flask API for the **Aspirely** AI career platform (`jobpilot` is the repo/intern
 
 ## Commands (run from this directory)
 - `python local.py` — local gateway: runs the four HTTP services as ONE Flask app on port 5000. Health: `GET /api/health`. **Needs MongoDB + AWS creds / Bedrock access** (without AWS creds, DB/search/career-pages work but every AI action fails).
-- `PYTHONPATH=shared/python pytest tests evals -q` — **the offline test + eval suite** (~117 test modules + 11 evals). Fully deterministic: **mongomock** for Mongo, a **FakeLLM** for Bedrock — no AWS creds, no secrets, no network. This is exactly what `.github/workflows/tests.yml` runs. Single test: append `tests/test_foo.py::test_name`.
+- `python scripts/verify.py --fast` — change-focused offline checks (renderer/pagination/selection by default). Pass extra pytest selectors after `--`.
+- `python scripts/verify.py --full` — **the offline test + eval suite** (`PYTHONPATH=shared/python pytest tests evals -q`). Fully deterministic: **mongomock** for Mongo, a **FakeLLM** for Bedrock — no AWS creds, no secrets, no network. This is exactly what `.github/workflows/tests.yml` and the optional pre-push hook run. See [`docs/qa/verification.md`](docs/qa/verification.md).
+- `python scripts/install_pre_push_hook.py` — repository-local pre-push hook (does not change global Git config). CI remains authoritative.
 - `pip install -r requirements-dev.txt` — pytest + mongomock + openpyxl (dev/CI only; **not** installed by the runtime requirements, so a fresh venv has no pytest).
 - `pip install -r shared/python/requirements.txt` — layer deps (Flask/pymongo/boto3/google-genai/fpdf2/docx/pypdf/crypto/PyJWT/lxml/requests…). **All runtime deps live here** — there are no per-service requirements files.
 - `python scripts/check_bedrock.py` — verify Bedrock creds + Claude model access (run before first use).
@@ -514,9 +516,11 @@ before it restarts — a missing dep fails loudly there rather than as a
 crash-loop under `Restart=always` while every EventBridge rule is already
 disabled, which is nothing crawling at all.
 
-> **Deploys do not wait for tests.** `deploy.yml` and `tests.yml` both trigger
-> on push to `main` and run in parallel with no dependency between them, so a
-> red suite does not hold back a deploy. Known, not endorsed.
+> **Deploys wait for the offline suite on this SHA.** `deploy.yml` polls
+> `tests.yml` for `GITHUB_SHA` and refuses on failure, cancel, timeout, or a
+> missing run. An older green run cannot authorize a newer commit. Local
+> pre-push is optional (`python scripts/install_pre_push_hook.py`); CI is
+> the authority. See [`docs/qa/verification.md`](docs/qa/verification.md).
 
 ## Config & data
 Config via `shared/python/utils/config.py`; secrets via **AWS SSM** in prod (`USE_SSM_SECRETS=true`), `.env` locally (see `.env.example`). Résumé collection is **`user_resumes`** (not `base_resumes`). Résumé files → **S3**. Keep cold starts lean: reuse boto3/Mongo clients at module scope, no heavy import-time work. Deploy lives in-repo: `infra/terraform/` (HTTP API + the 6 Lambdas + shared layer + IAM + KMS credential store + managed mailbox/SES + schedulers) and `scripts/build_layer.sh` + `scripts/package.sh`; see `infra/README.md`. CI: `.github/workflows/tests.yml` (offline suite) + `deploy.yml` (path-filtered per-service deploy).
@@ -536,3 +540,12 @@ truth.
 
 ## Agents & skills
 `.claude/agents/` holds a scoped subagent suite (`orchestrator`, `backend-engineer`, `database-engineer`, `data-scientist`, `security-engineer`, `performance-engineer`, `staff-engineer`, `qa-test-engineer`, `devops-engineer`). Start with **`orchestrator`** for fuzzy asks; see `.claude/agents/README.md`. `.claude/skills/` adds `api-design-principles`, `python-testing-patterns`.
+
+## Agent verification (required)
+
+While implementing: `python scripts/verify.py --fast` (or `--fast -- <selectors>`).
+Before declaring ready: `python scripts/verify.py --full`. Fix regressions
+this change caused. A later edit that affects checked behavior invalidates
+an earlier green run — rerun. Report exact commands and results. Never
+claim “all tests pass” from a subset. Never skip, weaken, or suppress
+checks to obtain a green result. See [`docs/qa/verification.md`](docs/qa/verification.md).

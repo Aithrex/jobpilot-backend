@@ -44,4 +44,5 @@ jobs:
           pip install -r shared/python/requirements.txt -r requirements-dev.txt
 
       - name: Run test + eval suite
-        run: PYTHONPATH=shared/python pytest tests evals -q
+        # Same entry point as local / pre-push: scripts/verify.py --full
+        run: python scripts/verify.py --full

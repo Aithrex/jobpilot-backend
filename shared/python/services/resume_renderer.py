@@ -28,7 +28,13 @@ def _two_page_enabled() -> bool:
 
 ALLOW_TWO_PAGE = _two_page_enabled()
 
-Outcome = Literal["fit_one", "fit_two", "trimmed_to_one", "trimmed_to_two"]
+Outcome = Literal[
+    "fit_one",
+    "fit_two",
+    "trimmed_to_one",
+    "trimmed_to_two",
+    "needs_shortening_choice",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +317,7 @@ _FLOOR_OTHER = 2
 class ResumeRenderer:
     """Generates PDF and DOCX from a structured (tailored) resume dict."""
 
-    RENDER_VERSION = "2026-09-05.2"  # faithful renderer; content_selection owns bullet drops
+    RENDER_VERSION = "2026-09-05.3"  # keep bullet marker+text together; metadata from PDF
 
     SKILLS_TITLES = (
         "Technical Skills",
@@ -865,22 +871,30 @@ class ResumeRenderer:
 
     def _finish_two_page(self, tailored: Dict[str, Any], dropped: List[DroppedItem],
                          outcome: Outcome) -> PageResolution:
-        """Comfortable two-page density: start at 10pt, never below the 9.4 floor."""
+        """Comfortable two-page density: start at 10pt, never below the 9.4 floor.
+
+        Page count is computed from measured height, not hardcoded to 2 — a
+        three-page measure must not be reported as fit_two. generate_pdf
+        overwrites pages/outcome from the actual PDF bytes.
+        """
         s = self.spec
         avail = s.usable_height()
-        budget = avail * 2
-        chosen = _body_tier(10.0)
+        budget = avail * 2 + 0.5
+        chosen = _TWO_PAGE_FLOOR
         height = self._measure_min(tailored, chosen.body_pt, chosen.lh, chosen.lh_s)
-        if height > budget:
-            chosen = _TWO_PAGE_FLOOR
-            height = self._measure_min(tailored, chosen.body_pt, chosen.lh, chosen.lh_s)
+        for tier in (_body_tier(10.0), _body_tier(9.7), _TWO_PAGE_FLOOR):
+            h = self._measure_min(tailored, tier.body_pt, tier.lh, tier.lh_s)
+            chosen, height = tier, h
+            if h <= budget:
+                break
         gaps = self._min_gaps()
-        # No leading stretch across a page break.
         predicted = height
-        pages = 2
-        if avail and predicted > avail * 2 + 0.5:
-            pages = max(2, int((predicted - 1e-6) / avail) + 1)
-        last = predicted - avail * (pages - 1)
+        pages = self._pages_from_height(predicted, avail)
+        if pages >= 3:
+            outcome = "needs_shortening_choice"
+        elif pages == 2 and outcome not in {"trimmed_to_two", "needs_shortening_choice"}:
+            outcome = "fit_two"
+        last = predicted - avail * max(pages - 1, 0)
         fill = max(0.0, last / avail) if avail else 0
         return PageResolution(
             tier=chosen, gaps=gaps, stretch=1.0, pages=pages,
@@ -934,8 +948,7 @@ class ResumeRenderer:
             outcome: Outcome = "fit_two"
             if sel.get("page_outcome") == "one_page_not_possible":
                 warnings.append(
-                    "Could not keep one readable page without dropping content; "
-                    "used two pages."
+                    "Could not keep one readable page without dropping content."
                 )
             elif sel.get("page_outcome") == "needs_shortening_choice":
                 warnings.append(
@@ -943,7 +956,7 @@ class ResumeRenderer:
                 )
             elif not want_two and overflow_frac < self.spec.min_second_page_fill:
                 warnings.append(
-                    "Slight one-page overflow after selection; used two pages "
+                    "Slight one-page overflow after selection; paginated "
                     "instead of truncating bullets."
                 )
             res = self._finish_two_page(working, dropped, outcome)
@@ -1203,10 +1216,20 @@ class ResumeRenderer:
             pdf.ln(post_header)
 
         def bullet(text: str, is_first: bool = False):
-            if is_first:
-                pdf.ln(pre_bullet_gap)
+            gap = pre_bullet_gap if is_first else resolved_bullet_gap
+            # Keep marker + first text line on the same page. Drawing the
+            # glyph then multi_cell at a stale Y produced a ghost page that
+            # contained only "•" while the sentence jumped to the next page.
+            need = gap + lh + 0.2
+            remaining = pdf.page_break_trigger - pdf.get_y()
+            if remaining < need:
+                pdf.add_page()
+                pdf.set_y(mt)
             else:
-                pdf.ln(resolved_bullet_gap)
+                pdf.ln(gap)
+                if (pdf.page_break_trigger - pdf.get_y()) < (lh + 0.2):
+                    pdf.add_page()
+                    pdf.set_y(mt)
             safe = sanitize(text)
             self._assert_renderable(safe, "bullet")
             glyph = s.bullet_glyph
@@ -1224,11 +1247,16 @@ class ResumeRenderer:
             marker_x = ml + text_indent - marker_gap
             text_x = ml + text_indent
             y0 = pdf.get_y()
+            page0 = pdf.page
             pdf.set_xy(marker_x, y0)
             self._set_font(pdf, "", body_size, glyph)
             pdf.cell(marker_gap, lh, glyph)
-            self._set_font(pdf, "", body_size, safe)
+            if pdf.page != page0:
+                y0 = pdf.get_y() - lh
+                if y0 < mt:
+                    y0 = mt
             pdf.set_xy(text_x, y0)
+            self._set_font(pdf, "", body_size, safe)
             pdf.multi_cell(w - text_indent, lh, safe, align=align,
                            new_x="LMARGIN", new_y="NEXT")
 
@@ -1442,24 +1470,24 @@ class ResumeRenderer:
     def _render_and_reconcile_pages(
         self, working: Dict[str, Any], resolution: PageResolution,
     ) -> Tuple[bytes, float, PageResolution]:
-        """Render once; if keep-with-next forces a sparse second page, retry denser."""
+        """Render once; if keep-with-next forces a sparse second page, retry denser.
+
+        Page count, outcome, and warnings always come from the painted PDF,
+        never from a solver guess that can claim fit_two for a 3-page file.
+        """
         pdf_bytes, height = self._paint_pdf(working, resolution)
-        avail = self.spec.usable_height(
-            resolution.gaps.margin_top, resolution.gaps.margin_bottom,
-        )
-        actual_pages = self._pages_from_height(height, avail)
-        if actual_pages != resolution.pages:
+        artifact_pages = self._pdf_page_count(pdf_bytes)
+        if artifact_pages != resolution.pages:
             logger.error(
-                "resume_render page_mismatch solver=%d actual=%d h=%.1f avail=%.1f",
-                resolution.pages, actual_pages, height, avail,
+                "resume_render page_mismatch solver=%d actual=%d h=%.1f",
+                resolution.pages, artifact_pages, height,
             )
-            resolution.pages = actual_pages
 
         # Avoidable overflow: solver wanted 1 page but keep-with-next spilled a
         # short final section. Retry at min gaps / no stretch before accepting
         # a mostly empty second page.
         if (
-            resolution.pages >= 2
+            artifact_pages >= 2
             and resolution.outcome in {"fit_one", "trimmed_to_one"}
         ):
             denser = PageResolution(
@@ -1474,37 +1502,94 @@ class ResumeRenderer:
                 layout_warnings=list(resolution.layout_warnings),
             )
             retry_bytes, retry_h = self._paint_pdf(working, denser)
-            retry_pages = self._pages_from_height(
-                retry_h,
-                self.spec.usable_height(denser.gaps.margin_top, denser.gaps.margin_bottom),
-            )
-            if retry_pages < resolution.pages:
+            retry_pages = self._pdf_page_count(retry_bytes)
+            if retry_pages < artifact_pages:
                 pdf_bytes, height, resolution = retry_bytes, retry_h, denser
-                resolution.pages = retry_pages
+                artifact_pages = retry_pages
                 resolution.layout_warnings.append(
                     "Compressed section spacing to keep a short final section on page 1."
                 )
-            elif retry_pages == resolution.pages:
-                # Keep denser layout if it still needs 2 pages — more readable.
+            elif retry_pages == artifact_pages:
                 pdf_bytes, height, resolution = retry_bytes, retry_h, denser
-                resolution.pages = retry_pages
+                artifact_pages = retry_pages
 
+        # Two-page path painted 3+ pages at a comfortable tier — step down to
+        # the readable 9.4pt floor before accepting overflow.
+        if artifact_pages >= 3 and resolution.tier.body_pt > _TWO_PAGE_FLOOR.body_pt + 1e-9:
+            floor = PageResolution(
+                tier=_TWO_PAGE_FLOOR,
+                gaps=self._min_gaps(),
+                stretch=1.0,
+                pages=2,
+                predicted_height_mm=resolution.predicted_height_mm,
+                fill_ratio=resolution.fill_ratio,
+                dropped=list(resolution.dropped),
+                outcome=resolution.outcome,
+                layout_warnings=list(resolution.layout_warnings),
+            )
+            retry_bytes, retry_h = self._paint_pdf(working, floor)
+            retry_pages = self._pdf_page_count(retry_bytes)
+            if retry_pages < artifact_pages:
+                pdf_bytes, height, resolution = retry_bytes, retry_h, floor
+                artifact_pages = retry_pages
+
+        self._apply_artifact_metadata(resolution, pdf_bytes, height)
+        return pdf_bytes or b"", height, resolution
+
+    @staticmethod
+    def _pdf_page_count(pdf_bytes: Optional[bytes]) -> int:
+        if not pdf_bytes:
+            return 1
+        from pypdf import PdfReader
+        return max(1, len(PdfReader(io.BytesIO(pdf_bytes)).pages))
+
+    @staticmethod
+    def _outcome_from_pages(pages: int, dropped: List[DroppedItem]) -> Outcome:
+        if dropped:
+            return "trimmed_to_one" if pages <= 1 else "trimmed_to_two"
+        if pages <= 1:
+            return "fit_one"
+        if pages == 2:
+            return "fit_two"
+        return "needs_shortening_choice"
+
+    def _apply_artifact_metadata(
+        self,
+        resolution: PageResolution,
+        pdf_bytes: Optional[bytes],
+        height: float,
+    ) -> None:
+        """Overwrite pages/outcome/warnings from the rendered bytes."""
+        actual = self._pdf_page_count(pdf_bytes)
+        resolution.pages = actual
+        resolution.predicted_height_mm = height
+        resolution.outcome = self._outcome_from_pages(actual, resolution.dropped)
+
+        cleaned: List[str] = []
+        for warning in resolution.layout_warnings:
+            lower = warning.lower()
+            if "used two pages" in lower and actual != 2:
+                continue
+            cleaned.append(warning)
+        if actual >= 3:
+            cleaned.append(
+                "Selected content needs more than two readable pages; "
+                "optional shortening is available without silent truncation."
+            )
         avail = self.spec.usable_height(
             resolution.gaps.margin_top, resolution.gaps.margin_bottom,
         )
-        resolution.predicted_height_mm = height
-        if resolution.pages <= 1:
+        if actual <= 1:
             resolution.fill_ratio = min(height / avail, self.spec.max_fill) if avail else 0
         else:
-            last = height - avail * (resolution.pages - 1)
+            last = height - avail * (actual - 1)
             resolution.fill_ratio = min(max(last, 0) / avail, 1.0) if avail else 0
-            # Sparse final page is a layout warning, not a coverage failure.
             if resolution.fill_ratio < 0.25:
-                resolution.layout_warnings.append(
+                cleaned.append(
                     "Final page has little content after keep-together rules; "
                     "content was preserved rather than deleted."
                 )
-        return pdf_bytes or b"", height, resolution
+        resolution.layout_warnings = cleaned
 
     @staticmethod
     def _pages_from_height(height: float, avail: float) -> int:

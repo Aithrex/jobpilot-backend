@@ -148,6 +148,13 @@ def test_render_stays_parseable(resume, max_pages):
     assert check["checks"]["no_glyph_corruption"] is True
     if res.outcome == "fit_one":
         assert check["pdf_parseable_score"] >= 85
+    if res.pages == 1:
+        assert res.outcome == "fit_one"
+    elif res.pages == 2:
+        assert res.outcome == "fit_two"
+    else:
+        assert res.outcome != "fit_two"
+        assert "used two pages" not in " ".join(res.layout_warnings).lower()
 
 
 def test_docx_renders_with_spec_font(tmp_path):
@@ -338,6 +345,62 @@ def test_skills_leading_capped_against_the_stretch():
 # ---------------------------------------------------------------------------
 # Adaptive skills-section title
 # ---------------------------------------------------------------------------
+
+def test_stress_bullet_keep_together_no_ghost_page():
+    """Regression: at 9.4/10pt the stress fixture painted a blank page that
+    held only the bullet glyph while the sentence started on the next page.
+
+    After keep-together, the selected 3×6 + 3×4 content fits two readable
+    pages, every bullet is present, and metadata matches the PDF.
+    """
+    import io
+    import re
+    from pypdf import PdfReader
+    from services.pdf_ats_check import extract_pdf_text
+
+    pdf_bytes, res = ResumeRenderer().generate_pdf(DENSITY_STRESS)
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    assert len(reader.pages) == res.pages
+    assert res.pages == 2
+    assert res.outcome == "fit_two"
+    assert "used two pages" not in " ".join(res.layout_warnings).lower() or res.pages == 2
+    for i, page in enumerate(reader.pages, 1):
+        text = (page.extract_text() or "").strip()
+        assert len(text) > 40, f"page {i} is a ghost page: {text!r}"
+        assert text not in {"•", "-", "·"}, f"page {i} is only a bullet marker"
+
+    extracted, pages = extract_pdf_text(pdf_bytes)
+    assert pages == res.pages
+    collapsed = re.sub(r"\s+", " ", extracted)
+    for exp in DENSITY_STRESS["experience"]:
+        for bullet in exp["bullets"]:
+            assert re.sub(r"\s+", " ", bullet[:40]) in collapsed
+    for proj in DENSITY_STRESS["projects"]:
+        assert proj["name"] in collapsed
+        for bullet in proj["bullets"]:
+            assert re.sub(r"\s+", " ", bullet[:40]) in collapsed
+    assert res.dropped == []
+    assert res.tier.body_pt >= 9.4
+
+
+def test_page_metadata_matches_pdf_artifact_not_solver_guess():
+    """A 3-page artifact must never be labeled fit_two / 'used two pages'."""
+    import io
+    from pypdf import PdfReader
+
+    huge = _resume(n_roles=12, bullets_per_role=8, n_projects=4, bullets_per_project=5)
+    pdf_bytes, res = ResumeRenderer().generate_pdf(huge)
+    actual = len(PdfReader(io.BytesIO(pdf_bytes)).pages)
+    assert res.pages == actual
+    if actual <= 1:
+        assert res.outcome == "fit_one"
+    elif actual == 2:
+        assert res.outcome == "fit_two"
+    else:
+        assert res.outcome == "needs_shortening_choice"
+        assert "used two pages" not in " ".join(res.layout_warnings).lower()
+        assert any("more than two" in w.lower() for w in res.layout_warnings)
+
 
 def test_skills_title_whitelist():
     from services.pdf_ats_check import extract_pdf_text
