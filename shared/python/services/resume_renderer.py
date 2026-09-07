@@ -317,7 +317,7 @@ _FLOOR_OTHER = 2
 class ResumeRenderer:
     """Generates PDF and DOCX from a structured (tailored) resume dict."""
 
-    RENDER_VERSION = "2026-09-05.3"  # keep bullet marker+text together; metadata from PDF
+    RENDER_VERSION = "2026-09-07.1"  # wrapped skill categories stay bold
 
     SKILLS_TITLES = (
         "Technical Skills",
@@ -989,6 +989,29 @@ class ResumeRenderer:
         pdf.set_text_color(0, 0, 0)
         pdf.set_line_width(self.spec.section_hr_width)
 
+    def _fit_prefix_width(self, pdf, text: str, width: float) -> tuple[str, str]:
+        """Split `text` into (prefix that fits in `width`, remainder).
+
+        Font must already be set. Prefers breaks on spaces so skill lists
+        wrap on comma-space boundaries. Returns `("", text)` when the first
+        token alone exceeds `width`.
+        """
+        if not text or width <= 0:
+            return "", text
+        if pdf.get_string_width(text) <= width:
+            return text, ""
+        words = text.split(" ")
+        fitted: list[str] = []
+        for i, word in enumerate(words):
+            trial = word if not fitted else f"{' '.join(fitted)} {word}"
+            if pdf.get_string_width(trial) <= width:
+                fitted.append(word)
+                continue
+            if not fitted:
+                return "", text
+            return " ".join(fitted), " ".join(words[i:])
+        return " ".join(fitted), ""
+
     def _draw_skill_row(
         self, pdf, category: str, items, *,
         lh: float, w: float, ml: float, body_size: float,
@@ -999,6 +1022,9 @@ class ResumeRenderer:
         Height must stay a multiple of `lh` (the density tests difference
         two category counts). `write()` does not advance Y reliably after
         a section rule, so this uses cell / multi_cell only.
+
+        Wrapped rows keep the category bold: label on the first line, body
+        filling the remainder, then full-width continuation lines.
         """
         sanitize = self._sanitize_text
         align = self.spec.text_align
@@ -1017,9 +1043,34 @@ class ResumeRenderer:
             self._set_font(pdf, "", body_size, body)
             pdf.cell(w - lw, lh, body, new_x="LMARGIN", new_y="NEXT")
             return
-        self._set_font(pdf, "", body_size, label + body)
-        pdf.multi_cell(w, lh, label + body, align=align,
-                       new_x="LMARGIN", new_y="NEXT")
+
+        # Wrap path — never drop the category to regular weight.
+        if lw >= w:
+            self._set_font(pdf, "B", body_size, label)
+            pdf.multi_cell(w, lh, label.rstrip(), align=align,
+                           new_x="LMARGIN", new_y="NEXT")
+            if body:
+                self._set_font(pdf, "", body_size, body)
+                pdf.set_x(ml)
+                pdf.multi_cell(w, lh, body, align=align,
+                               new_x="LMARGIN", new_y="NEXT")
+            return
+
+        first_w = w - lw
+        self._set_font(pdf, "", body_size, body)
+        first, rest = self._fit_prefix_width(pdf, body, first_w)
+        y0 = pdf.get_y()
+        self._set_font(pdf, "B", body_size, label)
+        pdf.cell(lw, lh, label)
+        self._set_font(pdf, "", body_size, body)
+        if first:
+            pdf.cell(first_w, lh, first, new_x="LMARGIN", new_y="NEXT")
+        else:
+            pdf.set_xy(ml, y0 + lh)
+        if rest:
+            pdf.set_x(ml)
+            pdf.multi_cell(w, lh, rest, align=align,
+                           new_x="LMARGIN", new_y="NEXT")
 
     def _draw_split_row(self, pdf, left: str, right: str, *,
                         left_size: float, right_size: float, left_style: str,

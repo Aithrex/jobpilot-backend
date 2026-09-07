@@ -538,6 +538,86 @@ def test_skills_markdown_does_not_print_unknown():
     assert "Full-Stack" not in collapsed
 
 
+def test_wrapped_skill_categories_stay_bold(monkeypatch):
+    """Long category + long skill list must keep the sideheading bold.
+
+    The old wrap fallback drew label+body with regular weight, so only short
+    categories (Languages, Frontend) looked bold in the PDF.
+    """
+    from fpdf import FPDF
+
+    draws: list[tuple[str, str, str]] = []
+    _cell = FPDF.cell
+    _multi = FPDF.multi_cell
+
+    def _text_arg(args, kwargs, positional_index: int) -> str:
+        if len(args) > positional_index:
+            return str(args[positional_index] or "")
+        return str(kwargs.get("text") or kwargs.get("txt") or "")
+
+    def cell(self, *args, **kwargs):
+        text = _text_arg(args, kwargs, 2)
+        draws.append(("cell", getattr(self, "font_style", "") or "", text))
+        return _cell(self, *args, **kwargs)
+
+    def multi_cell(self, *args, **kwargs):
+        text = _text_arg(args, kwargs, 2)
+        draws.append(("multi_cell", getattr(self, "font_style", "") or "", text))
+        return _multi(self, *args, **kwargs)
+
+    monkeypatch.setattr(FPDF, "cell", cell)
+    monkeypatch.setattr(FPDF, "multi_cell", multi_cell)
+
+    r = ResumeRenderer()
+    resume = _resume(n_roles=1, bullets_per_role=2, n_projects=0)
+    resume["skills"] = {
+        "Distributed Systems & Data": [
+            "Apache Kafka", "RabbitMQ", "Redis", "PostgreSQL", "pgvector",
+            "MySQL", "MongoDB", "idempotency", "query optimization", "data modeling",
+        ],
+        "AI, Security & Standards": [
+            "LangChain", "RAG pipelines", "hybrid retrieval", "vector embeddings",
+            "LLM API integration", "prompt engineering", "grounding & guardrails",
+            "JWT", "RBAC", "FHIR R4", "HIPAA",
+        ],
+        "Cloud & Infrastructure": [
+            "AWS (EKS, EC2, S3, RDS, VPC, IAM, Lambda, Bedrock)", "Linux",
+            "Docker", "Kubernetes", "Terraform", "Helm", "Git", "GitHub Actions",
+        ],
+        "Languages": ["Python", "Java", "TypeScript"],
+    }
+    pdf, _ = r.generate_pdf(resume)
+    text, _ = extract_pdf_text(pdf)
+    assert "UNKNOWN" not in text
+
+    bold_labels = [
+        text for (_op, style, text) in draws
+        if style == "B" and text.endswith(": ")
+    ]
+    for cat in (
+        "Distributed Systems & Data: ",
+        "AI, Security & Standards: ",
+        "Cloud & Infrastructure: ",
+        "Languages: ",
+    ):
+        assert cat in bold_labels, f"missing bold draw for {cat!r}; got {bold_labels!r}"
+
+    # Regression: wrap path must not dump label+skills as one regular multi_cell.
+    regular_full_rows = [
+        text for (op, style, text) in draws
+        if op == "multi_cell" and style == "" and ": " in text
+        and any(
+            text.startswith(prefix)
+            for prefix in (
+                "Distributed Systems & Data: ",
+                "AI, Security & Standards: ",
+                "Cloud & Infrastructure: ",
+            )
+        )
+    ]
+    assert regular_full_rows == [], regular_full_rows
+
+
 def test_visual_snapshots():
     """Render three fixtures to PNG. Compared against committed goldens when
     pypdfium2 is installed; otherwise skipped so CI still runs."""
