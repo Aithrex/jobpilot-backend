@@ -169,7 +169,7 @@ def run(source: dict, jd: dict, *, current: dict | None = None,
         result["skills"] = {category: sorted(values, key=relevance)
                             for category, values in result["skills"].items()}
     result.setdefault("skills_section_title", "Skills")
-    for field in ("contact", "education"):
+    for field in ("contact", "education", "additional_sections", "certifications"):
         if field in source:
             result[field] = copy.deepcopy(source[field])
     feedback = str(feedback or "")
@@ -197,6 +197,7 @@ def run(source: dict, jd: dict, *, current: dict | None = None,
         "Choose the strongest relevant accomplishments. Return patches in preferred order within each role.",
         "Every patch id is an existing fact id. Each text is backed by that fact; do not merge unrelated events.",
         "omitted_ids may contain low-value bullets to omit, but preserve at least one bullet per existing role.",
+        "Never omit an entire nonempty source section (projects, research, volunteer, credentials, custom) unless the user omitted it.",
         "For regeneration keep unrelated existing edits and exclusions. Return only requested changes.",
         wrap_untrusted("job", redact_pii_for_model(json.dumps(jd))),
         wrap_untrusted("plan", json.dumps([asdict(r) for r in plan.requirements])),

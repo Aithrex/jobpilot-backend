@@ -11,6 +11,27 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
+# Sidecars that must survive schema coerce. Not in PARSED_RESUME_SCHEMA because
+# they are pipeline metadata, not LLM-extracted resume fields.
+_PASSTHROUGH_KEYS = (
+    "content_manifest",
+    "content_selection",
+    "tailoring_run",
+    "tailoring_preferences",
+    "document_assessment",
+    "ats_keyword_audit",
+    "ats_scores",
+    "match_gaps",
+    "summary_write",
+    "verification",
+    "skills_section_title",
+    "_skill_headings",
+    "target_role",
+    "page_length",
+    "parse_diagnostics",
+    "assessment_id",
+)
+
 
 # ---------------------------------------------------------------------------
 # Schema definitions
@@ -41,6 +62,7 @@ PARSED_RESUME_SCHEMA = {
         "provenance": str,
     }],
     "experience": [{
+        "content_id": str,
         "title": str,
         "company": str,
         "location": str,
@@ -49,6 +71,7 @@ PARSED_RESUME_SCHEMA = {
         "bullets": [str],
     }],
     "education": [{
+        "content_id": str,
         "degree": str,
         "institution": str,
         "location": str,
@@ -57,6 +80,7 @@ PARSED_RESUME_SCHEMA = {
         "coursework": str,
     }],
     "projects": [{
+        "content_id": str,
         "name": str,
         "dates": str,
         "bullets": [str],
@@ -68,6 +92,29 @@ PARSED_RESUME_SCHEMA = {
     # this list instead of forcing it empty — IntegrityGuard mirrors
     # original.certifications onto tailored.certifications.
     "certifications": [str],
+    # Non-canonical labeled sections (volunteer, research, publications,
+    # licenses-as-entries, teaching, clinical, awards, custom, unresolved
+    # parse failures). Never fold these into experience/projects.
+    "additional_sections": [{
+        "content_id": str,
+        "heading": str,
+        "original_heading": str,
+        "semantic_type": str,
+        "layout_supported": str,
+        "parse_status": str,
+        "raw_text": str,
+        "reason": str,
+        "entries": [{
+            "content_id": str,
+            "title": str,
+            "organization": str,
+            "location": str,
+            "dates": str,
+            "url": str,
+            "bullets": [str],
+            "body": str,
+        }],
+    }],
 }
 
 # TailoredFullResume mirrors the parsed schema 1:1...
@@ -237,7 +284,18 @@ def validate_and_coerce(data: Any, schema: dict) -> dict:
     if not isinstance(data, dict):
         raise ValueError(f"Expected dict, got {type(data).__name__}")
 
+    if "additional_sections" in schema:
+        try:
+            from services.content_manifest import lift_unknown_sections
+            data = lift_unknown_sections(dict(data))
+        except Exception:
+            data = dict(data)
+
     result = _validate_object(data, schema)
+
+    for key in _PASSTHROUGH_KEYS:
+        if key in data and key not in result:
+            result[key] = data[key]
 
     # Log any keys that were missing or coerced
     missing = [k for k in schema if k not in data]
@@ -330,5 +388,20 @@ def build_resume_text(structured: dict) -> str:
     for cert in structured.get("certifications") or []:
         if str(cert).strip():
             parts.append(str(cert).strip())
+
+    for sec in structured.get("additional_sections") or []:
+        if not isinstance(sec, dict):
+            continue
+        parts.append(str(sec.get("heading") or sec.get("original_heading") or ""))
+        if str(sec.get("raw_text") or "").strip():
+            parts.append(str(sec.get("raw_text")).strip())
+        for entry in sec.get("entries") or []:
+            if not isinstance(entry, dict):
+                continue
+            parts.append(str(entry.get("title") or ""))
+            parts.append(str(entry.get("organization") or ""))
+            parts.append(str(entry.get("body") or ""))
+            for b in entry.get("bullets") or []:
+                parts.append(b if isinstance(b, str) else str((b or {}).get("text") or ""))
 
     return "\n".join(p for p in parts if p)

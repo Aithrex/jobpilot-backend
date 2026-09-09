@@ -42,6 +42,8 @@ DEFAULT_FAST = [
     "tests/test_resume_layout.py",
     "tests/test_pagination_education_orphan.py",
     "tests/test_content_selection.py",
+    "tests/test_content_preservation.py",
+    "tests/test_content_manifest.py",
 ]
 CACHE_NAME = "verify-full.stamp"
 REQUIRED_MAJOR, REQUIRED_MINOR = 3, 12

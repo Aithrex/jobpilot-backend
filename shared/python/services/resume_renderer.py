@@ -317,7 +317,7 @@ _FLOOR_OTHER = 2
 class ResumeRenderer:
     """Generates PDF and DOCX from a structured (tailored) resume dict."""
 
-    RENDER_VERSION = "2026-09-07.1"  # wrapped skill categories stay bold
+    RENDER_VERSION = "2026-09-08.1"  # section preservation; employer grouping
 
     SKILLS_TITLES = (
         "Technical Skills",
@@ -560,6 +560,35 @@ class ResumeRenderer:
         for char, repl in replacements.items():
             text = text.replace(char, repl)
         return re.sub(r"  +", " ", text)
+
+    @staticmethod
+    def _employer_key(entry: Dict[str, Any]) -> str:
+        from services.content_manifest import employer_key
+        return employer_key(entry or {})
+
+    @classmethod
+    def _grouped_with_previous(cls, prev: Optional[Dict[str, Any]], curr: Dict[str, Any]) -> bool:
+        if not prev or not curr:
+            return False
+        a, b = cls._employer_key(prev), cls._employer_key(curr)
+        return bool(a) and a == b
+
+    @staticmethod
+    def _iter_additional_sections(tailored: Dict[str, Any]):
+        for sec in tailored.get("additional_sections") or []:
+            if not isinstance(sec, dict):
+                continue
+            if str(sec.get("parse_status") or "") == "empty":
+                continue
+            heading = (
+                str(sec.get("original_heading") or sec.get("heading")
+                    or sec.get("semantic_type") or "ADDITIONAL")
+            ).strip()
+            entries = [e for e in (sec.get("entries") or []) if isinstance(e, dict)]
+            raw = str(sec.get("raw_text") or "").strip()
+            if not entries and not raw and str(sec.get("parse_status") or "") != "unresolved":
+                continue
+            yield sec, heading, entries, raw
 
     def _assert_renderable(self, text: str, context: str = "") -> None:
         """Fail loudly if a codepoint cannot be drawn by any loaded font."""
@@ -1342,29 +1371,49 @@ class ResumeRenderer:
             if first_exp.get("bullets"):
                 first_need += pre_bullet_gap + lh
             section_header(s.heading("experience"), keep_with_mm=first_need)
+            prev_exp: Optional[Dict[str, Any]] = None
             for i, exp in enumerate(experience):
+                grouped = self._grouped_with_previous(prev_exp, exp)
                 company = sanitize(exp.get("company", ""))
                 location = sanitize(exp.get("location", ""))
                 dates = sanitize(exp.get("dates", ""))
-                company_line = f"{company}, {location}" if location else company
-                self._draw_split_row(
-                    pdf, company_line, dates,
-                    left_size=s.entry_pt, right_size=body_size, left_style="B",
-                    row_h=s.entry_row_h, w=w, ml=ml,
-                )
                 title = sanitize(exp.get("title", ""))
                 role_type = sanitize(exp.get("type", "")).strip()
                 title_line = f"{title} · {role_type}" if title and role_type else title
-                if title_line:
-                    pdf.ln(header_gap)
-                    self._assert_renderable(title_line, "title")
-                    self._set_font(pdf, "I", body_size, title_line)
-                    pdf.cell(w, job_title_h, title_line, new_x="LMARGIN", new_y="NEXT")
+                if grouped:
+                    # Continuation role under the same employer: keep each
+                    # role's title and dates; do not reprint the company.
+                    if title_line:
+                        self._draw_split_row(
+                            pdf, title_line, dates,
+                            left_size=body_size, right_size=body_size,
+                            left_style="I",
+                            row_h=job_title_h, w=w, ml=ml,
+                        )
+                    elif dates:
+                        self._draw_split_row(
+                            pdf, "", dates,
+                            left_size=body_size, right_size=body_size, left_style="",
+                            row_h=s.entry_row_h, w=w, ml=ml,
+                        )
+                else:
+                    company_line = f"{company}, {location}" if location else company
+                    self._draw_split_row(
+                        pdf, company_line, dates,
+                        left_size=s.entry_pt, right_size=body_size, left_style="B",
+                        row_h=s.entry_row_h, w=w, ml=ml,
+                    )
+                    if title_line:
+                        pdf.ln(header_gap)
+                        self._assert_renderable(title_line, "title")
+                        self._set_font(pdf, "I", body_size, title_line)
+                        pdf.cell(w, job_title_h, title_line, new_x="LMARGIN", new_y="NEXT")
                 exp_bullets = exp.get("bullets") or []
                 for bi, b in enumerate(exp_bullets):
                     bullet(b, is_first=(bi == 0))
                 if i < len(experience) - 1:
                     pdf.ln(entry_gap)
+                prev_exp = exp
 
         # PROJECTS
         projects = tailored.get("projects") or []
@@ -1495,6 +1544,46 @@ class ResumeRenderer:
             else:
                 for c in certs:
                     pdf.multi_cell(w, lh_s, c, align=align, new_x="LMARGIN", new_y="NEXT")
+
+        # Additional labeled sections — generic entry layout; never dropped here.
+        for _sec, heading, entries, raw in self._iter_additional_sections(tailored):
+            paint_heading = sanitize(heading).upper() if heading else "ADDITIONAL"
+            first_need = lh_s
+            if entries:
+                first_need = s.entry_row_h
+                if entries[0].get("bullets") or entries[0].get("body"):
+                    first_need += pre_bullet_gap + lh
+            section_header(paint_heading, keep_with_mm=first_need)
+            if raw and not entries:
+                safe_raw = sanitize(raw)
+                self._assert_renderable(safe_raw, "additional")
+                self._set_font(pdf, "", body_size, safe_raw)
+                pdf.multi_cell(w, lh, safe_raw, align=align, new_x="LMARGIN", new_y="NEXT")
+            for ei, entry in enumerate(entries):
+                left = sanitize(
+                    entry.get("title") or entry.get("name") or entry.get("organization") or ""
+                )
+                org = sanitize(entry.get("organization") or "")
+                if org and org.lower() not in left.lower():
+                    left = f"{left} | {org}" if left else org
+                loc = sanitize(entry.get("location") or "")
+                if loc and loc.lower() not in left.lower():
+                    left = f"{left}, {loc}" if left else loc
+                dates = sanitize(entry.get("dates") or "")
+                if left or dates:
+                    self._draw_split_row(
+                        pdf, left, dates,
+                        left_size=s.entry_pt, right_size=body_size, left_style="B",
+                        row_h=s.entry_row_h, w=w, ml=ml,
+                    )
+                body = sanitize(entry.get("body") or "")
+                if body:
+                    self._set_font(pdf, "", body_size, body)
+                    pdf.multi_cell(w, lh, body, align=align, new_x="LMARGIN", new_y="NEXT")
+                for bi, b in enumerate(entry.get("bullets") or []):
+                    bullet(b, is_first=(bi == 0 and not body))
+                if ei < len(entries) - 1:
+                    pdf.ln(entry_gap)
 
         if getattr(pdf, "page", 1) > 1:
             content_h = (pdf.page - 1) * avail + (pdf.get_y() - mt)
@@ -1764,6 +1853,18 @@ class ResumeRenderer:
         if certs:
             h += section("CERTIFICATIONS")
             h += para(", ".join(str(c) for c in certs))
+        for _sec, heading, entries, raw in self._iter_additional_sections(tailored):
+            h += section((heading or "ADDITIONAL").upper())
+            if raw and not entries:
+                h += para(raw)
+            for i, entry in enumerate(entries):
+                h += max(s.entry_pt * 1.15, body_size * 1.15)
+                if entry.get("body"):
+                    h += para(str(entry.get("body")))
+                for b in entry.get("bullets") or []:
+                    h += para(b, bullet=True)
+                if i < len(entries) - 1:
+                    h += entry_gap * mm_pt
         return h
 
     def _render_docx(
@@ -1924,26 +2025,35 @@ class ResumeRenderer:
         experience = tailored.get("experience") or []
         if experience:
             add_section_header(s.heading("experience"))
+            prev_exp: Optional[Dict[str, Any]] = None
             for i, exp in enumerate(experience):
+                grouped = self._grouped_with_previous(prev_exp, exp)
                 company = exp.get("company", "")
                 location = exp.get("location", "")
                 dates = exp.get("dates", "")
-                company_line = f"{company}, {location}" if location else company
-                header_line(company_line, dates)
                 title = exp.get("title", "")
                 role_type = (exp.get("type") or "").strip()
                 title_line = f"{title} · {role_type}" if title and role_type else title
-                if title_line:
-                    p2 = doc.add_paragraph()
-                    p2.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                    r = p2.add_run(title_line)
-                    set_run_font(r, body_size, italic=True)
-                    tight(p2, before=header_gap * 72 / 25.4, after=0)
+                if grouped:
+                    if title_line:
+                        header_line(title_line, dates)
+                    elif dates:
+                        header_line("", dates)
+                else:
+                    company_line = f"{company}, {location}" if location else company
+                    header_line(company_line, dates)
+                    if title_line:
+                        p2 = doc.add_paragraph()
+                        p2.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                        r = p2.add_run(title_line)
+                        set_run_font(r, body_size, italic=True)
+                        tight(p2, before=header_gap * 72 / 25.4, after=0)
                 for bi, b in enumerate(exp.get("bullets") or []):
                     add_bullet(b, is_first=(bi == 0))
                 if i < len(experience) - 1:
                     spacer = doc.add_paragraph()
                     tight(spacer, before=entry_gap, after=0)
+                prev_exp = exp
 
         projects = tailored.get("projects") or []
         if projects:
@@ -2034,6 +2144,36 @@ class ResumeRenderer:
             r = p.add_run(", ".join(certs))
             set_run_font(r, body_size)
             tight(p, before=0, after=0)
+
+        for _sec, heading, entries, raw in self._iter_additional_sections(tailored):
+            add_section_header((heading or "ADDITIONAL").upper())
+            if raw and not entries:
+                p = doc.add_paragraph()
+                r = p.add_run(raw)
+                set_run_font(r, body_size)
+                tight(p, before=0, after=0)
+            for ei, entry in enumerate(entries):
+                left = (
+                    entry.get("title") or entry.get("name") or entry.get("organization") or ""
+                )
+                org = entry.get("organization") or ""
+                if org and str(org).lower() not in str(left).lower():
+                    left = f"{left} | {org}" if left else org
+                loc = entry.get("location") or ""
+                if loc and str(loc).lower() not in str(left).lower():
+                    left = f"{left}, {loc}" if left else loc
+                header_line(left, entry.get("dates") or "")
+                body = (entry.get("body") or "").strip()
+                if body:
+                    p = doc.add_paragraph()
+                    r = p.add_run(body)
+                    set_run_font(r, body_size)
+                    tight(p, before=0, after=0)
+                for bi, b in enumerate(entry.get("bullets") or []):
+                    add_bullet(b, is_first=(bi == 0 and not body))
+                if ei < len(entries) - 1:
+                    spacer = doc.add_paragraph()
+                    tight(spacer, before=entry_gap, after=0)
 
         buf = io.BytesIO()
         doc.save(buf)

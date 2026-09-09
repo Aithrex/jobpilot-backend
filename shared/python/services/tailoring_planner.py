@@ -56,6 +56,31 @@ def source_facts(source: dict) -> list[CandidateFact]:
         if isinstance(education, dict) and education.get("degree"):
             text = ", ".join(str(education[k]) for k in ("degree", "institution", "dates") if education.get(k))
             facts.append(CandidateFact(f"{snapshot}:education:{i}", f"education.{i}", f"education.{i}", text, "credential"))
+    for si, sec in enumerate(source.get("additional_sections") or []):
+        if not isinstance(sec, dict):
+            continue
+        kind = "credential" if str(sec.get("semantic_type") or "") in {
+            "licenses", "certifications", "awards",
+        } else "accomplishment"
+        entity = f"additional.{si}"
+        for ei, entry in enumerate(sec.get("entries") or []):
+            if not isinstance(entry, dict):
+                continue
+            for j, bullet in enumerate(entry.get("bullets") or []):
+                text = bullet if isinstance(bullet, str) else str((bullet or {}).get("text") or "")
+                if text.strip():
+                    address = f"{entity}.{ei}.bullets.{j}"
+                    facts.append(CandidateFact(f"{snapshot}:{address}", address, entity, text.strip(), kind))
+            body = str(entry.get("body") or "").strip()
+            if body:
+                address = f"{entity}.{ei}.body"
+                facts.append(CandidateFact(f"{snapshot}:{address}", address, entity, body, kind))
+        raw = str(sec.get("raw_text") or "").strip()
+        if raw and not (sec.get("entries") or []):
+            facts.append(CandidateFact(
+                f"{snapshot}:additional.{si}.raw", f"additional.{si}.raw",
+                entity, raw, kind,
+            ))
     return facts
 
 

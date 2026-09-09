@@ -181,6 +181,22 @@ class IntegrityGuard:
             c for c in original_certs if isinstance(c, str) and c.strip()
         ]
 
+        # Preserve additional labeled sections (volunteer, research, etc.).
+        orig_extra = original.get("additional_sections") or []
+        if orig_extra:
+            tail_extra = tailored.get("additional_sections") or []
+            by_id = {
+                str(s.get("content_id") or s.get("semantic_type") or s.get("heading")): s
+                for s in tail_extra if isinstance(s, dict)
+            }
+            restored = []
+            for sec in orig_extra:
+                if not isinstance(sec, dict):
+                    continue
+                key = str(sec.get("content_id") or sec.get("semantic_type") or sec.get("heading"))
+                restored.append(copy.deepcopy(by_id.get(key) or sec))
+            tailored["additional_sections"] = restored
+
         # Step 4b: Strip fabricated certifications the LLM placed in the skills
         # section (the back door around the certifications field). This is the
         # ONLY fabrication we block deterministically — a cert is binary (held or
@@ -379,11 +395,13 @@ class IntegrityGuard:
             orig_exp, tail_exp, _exp_key
         )
 
-        # Rebuild experience list: matched entries (tailored version) + re-injected missing
-        rebuilt_exp = [t_entry for _, t_entry in matched]
-        for missing in missing_exp:
-            rebuilt_exp.append(copy.deepcopy(missing))
-
+        # Rebuild in ORIGINAL chronology. Appending missing roles at the end
+        # ungrouped internships and broke employer grouping.
+        tailored_by_orig_id = {id(o): t for o, t in matched}
+        rebuilt_exp = []
+        for o_entry in orig_exp:
+            t_entry = tailored_by_orig_id.get(id(o_entry))
+            rebuilt_exp.append(t_entry if t_entry is not None else copy.deepcopy(o_entry))
         tailored["experience"] = rebuilt_exp
 
         # --- Projects: ALWAYS strip projects whose name doesn't match a name
@@ -434,11 +452,25 @@ class IntegrityGuard:
         cap_enforced = False
 
         if orig_projects:
-            # Re-inject any original projects that were dropped
-            tail_proj_keys = {_proj_key(p) for p in tail_projects}
+            # Re-inject dropped originals in source order, then keep generated extras.
+            by_key = {}
+            for p in tail_projects:
+                by_key.setdefault(_proj_key(p), []).append(p)
+            ordered = []
+            seen = set()
             for op in orig_projects:
-                if _proj_key(op) not in tail_proj_keys:
-                    tail_projects.append(copy.deepcopy(op))
+                k = _proj_key(op)
+                if k in by_key and by_key[k]:
+                    ordered.append(by_key[k].pop(0))
+                else:
+                    ordered.append(copy.deepcopy(op))
+                seen.add(k)
+            for p in tail_projects:
+                k = _proj_key(p)
+                if k in seen:
+                    continue
+                ordered.append(p)
+            tail_projects = ordered
 
         # Universal cap: max 3 total projects (original + generated)
         if len(tail_projects) > 3:

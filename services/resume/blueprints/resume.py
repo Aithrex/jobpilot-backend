@@ -2537,12 +2537,50 @@ def _attach_layout_headers(resp, layout: dict):
 
 def _render_document(svc, tailored, fmt):
     """Return (bytes, layout_dict). Both formats share the same solver."""
+    from services.content_preservation import (
+        PreservationExportError,
+        PreservationResult,
+        assert_preservation,
+    )
+    sel = (tailored or {}).get("content_selection") or {}
+    pres = sel.get("preservation") or {}
+    if sel.get("page_outcome") == "preservation_failed" or pres.get("ok") is False:
+        raise PreservationExportError(PreservationResult(
+            ok=False,
+            errors=list(pres.get("errors") or ["Content preservation failed."]),
+            warnings=list(pres.get("warnings") or []),
+        ))
     if fmt == "pdf":
         file_bytes, resolution = svc.renderer.generate_pdf(tailored)
     else:
         file_bytes = svc.renderer.generate_docx(tailored)
         _working, resolution = svc.renderer._compute_pdf_layout(tailored)
     layout = resolution.to_dict()
+    snapshot = ((tailored or {}).get("content_manifest") or {}).get("source_snapshot")
+    if snapshot:
+        export_text = ""
+        try:
+            if fmt == "pdf":
+                from pypdf import PdfReader
+                import io as _io
+                export_text = "\n".join(
+                    (p.extract_text() or "") for p in PdfReader(_io.BytesIO(file_bytes)).pages
+                )
+            else:
+                from docx import Document
+                import io as _io
+                export_text = "\n".join(
+                    p.text for p in Document(_io.BytesIO(file_bytes)).paragraphs
+                )
+        except Exception:
+            export_text = ""
+        check = assert_preservation(
+            snapshot, tailored, export_text=export_text,
+            preferences=(tailored or {}).get("tailoring_preferences"),
+        )
+        layout["preservation"] = check.as_dict()
+        if not check.ok:
+            raise PreservationExportError(check)
     from services.tailoring_pipeline import is_result
     if is_result(tailored):
         from services.tailoring_assessment import check_export
@@ -2743,10 +2781,17 @@ def download():
     except Exception as e:
         from services.resume_renderer import UnrenderableTextError
         from services.resume_versioning import StaleVersionError
+        from services.content_preservation import PreservationExportError
         if isinstance(e, StaleVersionError):
             return jsonify({"error": str(e), "code": "stale_version"}), 409
         if isinstance(e, UnrenderableTextError):
             return jsonify({"error": str(e)}), 422
+        if isinstance(e, PreservationExportError):
+            return jsonify({
+                "error": str(e),
+                "code": "preservation_failed",
+                "preservation": e.result.as_dict(),
+            }), 409
         logger.exception(f"Resume download error: {e}")
         return jsonify({"error": "Failed to generate document"}), 500
 

@@ -153,15 +153,30 @@ _EXTRACTION_PROMPT = (
     "G. If skills are a flat unlabeled list, put them under a single key 'Skills'. Do not\n"
     "   invent taxonomy headings. A later pass groups unlabeled lists.\n\n"
     "CERTIFICATIONS — STRICT NO-FABRICATION RULE:\n"
-    "- If the resume has a 'Certifications' / 'Certificates' / 'Licenses' section, OR if\n"
-    "  certifications are explicitly named anywhere in the resume (e.g., a bullet says\n"
-    "  'AWS Certified Solutions Architect – Associate (2023)'), extract every entry as a\n"
-    "  string in the certifications array.\n"
+    "- If the resume has a 'Certifications' / 'Certificates' / 'Licenses' section of simple\n"
+    "  names, OR if certifications are explicitly named anywhere in the resume (e.g., a\n"
+    "  bullet says 'AWS Certified Solutions Architect – Associate (2023)'), extract every\n"
+    "  entry as a string in the certifications array.\n"
     "- Preserve the EXACT name as written, including issuer/year if shown\n"
     "  (e.g., 'AWS Certified Solutions Architect – Associate (2023)').\n"
     "- If NO certifications are mentioned anywhere in the resume, return an EMPTY ARRAY [].\n"
     "- NEVER invent or infer certifications based on skills, education, or job titles.\n"
     "  ('AWS' as a skill is NOT evidence of any AWS certification.)\n\n"
+    "ADDITIONAL SECTIONS — DO NOT DROP OR FOLD:\n"
+    "- Extract every other labeled section that is not Contact/Summary/Experience/Projects/\n"
+    "  Skills/Education/Certifications. Examples: Volunteer, Research, Publications, Awards,\n"
+    "  Teaching, Clinical Rotations, Portfolio, Presentations, Licenses (when they have\n"
+    "  issuer/dates as entries rather than a flat name list), and any custom heading.\n"
+    "- Do NOT fold these into experience or projects. Do NOT invent entries.\n"
+    "- Entries may be bullet lists OR paragraph bodies. Preserve both. Keep the author's\n"
+    "  heading in original_heading.\n"
+    "- semantic_type is one of: volunteer, research, publications, awards, licenses,\n"
+    "  teaching, clinical, portfolio, presentations, affiliations, languages, custom.\n"
+    "- If a heading is visible but the body cannot be parsed (tables, columns, garbled\n"
+    "  PDF extraction), still emit the section with parse_status='unresolved' and put\n"
+    "  whatever text you captured in raw_text. Do NOT emit an empty section that pretends\n"
+    "  the author had no such content.\n"
+    "- Truly absent sections: omit them from additional_sections (do not invent empty ones).\n\n"
     "Return a JSON object with EXACTLY this structure (ALL top-level keys are REQUIRED):\n"
     "{\n"
     '  "contact": {\n'
@@ -208,6 +223,20 @@ _EXTRACTION_PROMPT = (
     "    }\n"
     "  ],\n"
     '  "certifications": ["AWS Certified Solutions Architect – Associate (2023)", "..."],\n'
+    '  "additional_sections": [\n'
+    "    {\n"
+    '      "heading": "Volunteer Experience",\n'
+    '      "original_heading": "VOLUNTEER EXPERIENCE",\n'
+    '      "semantic_type": "volunteer",\n'
+    '      "layout_supported": "generic",\n'
+    '      "parse_status": "ok",\n'
+    '      "raw_text": "",\n'
+    '      "entries": [{\n'
+    '        "title": "Tutor", "organization": "City Library", "location": "",\n'
+    '        "dates": "2022 - 2023", "url": "", "bullets": ["Tutored students."], "body": ""\n'
+    "      }]\n"
+    "    }\n"
+    "  ],\n"
     '  "raw_text": "Full verbatim plain-text transcription of all visible text in the document, '
     'preserving line breaks. Include ALL text from every page/section.",\n'
     '  "extracted_urls": ["https://linkedin.com/in/...", "https://github.com/...", "...all '
@@ -263,12 +292,23 @@ _EXTRACTION_PROMPT_SLIM = (
     "G. If skills are a flat unlabeled list, put them under a single key 'Skills'. Do not\n"
     "   invent taxonomy headings.\n\n"
     "CERTIFICATIONS — STRICT NO-FABRICATION RULE:\n"
-    "- Extract every entry from a 'Certifications' / 'Certificates' / 'Licenses' section,\n"
-    "  OR named explicitly anywhere in the resume (e.g., a bullet 'Earned AWS Certified\n"
-    "  Solutions Architect – Associate (2023)').\n"
+    "- Extract every entry from a 'Certifications' / 'Certificates' / 'Licenses' section of\n"
+    "  simple names, OR named explicitly anywhere in the resume (e.g., a bullet 'Earned AWS\n"
+    "  Certified Solutions Architect – Associate (2023)').\n"
     "- Preserve the EXACT name as written, including issuer/year if shown.\n"
     "- If NO certifications are mentioned anywhere, return an EMPTY ARRAY [].\n"
     "- NEVER invent or infer certifications from skills, education, or job titles.\n\n"
+    "ADDITIONAL SECTIONS — DO NOT DROP OR FOLD:\n"
+    "- Extract every other labeled section (Volunteer, Research, Publications, Awards,\n"
+    "  Teaching, Clinical Rotations, Portfolio, Presentations, structured Licenses, custom\n"
+    "  headings). Do NOT fold them into experience or projects. Do NOT invent entries.\n"
+    "- Preserve bullet lists and paragraph bodies. Keep original_heading verbatim.\n"
+    "- semantic_type: volunteer|research|publications|awards|licenses|teaching|clinical|\n"
+    "  portfolio|presentations|affiliations|languages|custom.\n"
+    "- Visible heading but unparseable body (tables/columns/garbled extract): emit the\n"
+    "  section with parse_status='unresolved' and captured text in raw_text. Never pretend\n"
+    "  that section was empty.\n"
+    "- Truly absent sections: omit from additional_sections.\n\n"
     "Return a JSON object with EXACTLY this structure (ALL top-level keys REQUIRED):\n"
     "{\n"
     '  "contact": {"name":"","email":"","phone":"","linkedin":"","github":"","location":"","portfolio":""},\n'
@@ -277,7 +317,10 @@ _EXTRACTION_PROMPT_SLIM = (
     '  "experience": [{"title":"","company":"","location":"","dates":"","type":"","bullets":[]}],\n'
     '  "education": [{"degree":"","institution":"","location":"","dates":"","gpa":"","coursework":""}],\n'
     '  "projects": [{"name":"","dates":"","bullets":[],"tech":""}],\n'
-    '  "certifications": []\n'
+    '  "certifications": [],\n'
+    '  "additional_sections": [{"heading":"","original_heading":"","semantic_type":"custom",'
+    '"layout_supported":"generic","parse_status":"ok","raw_text":"",'
+    '"entries":[{"title":"","organization":"","location":"","dates":"","url":"","bullets":[],"body":""}]}]\n'
     "}\n\n"
     "Do NOT include a raw_text field. Do NOT include an extracted_urls field. Return ONLY the "
     "structured JSON above.\n\n"
@@ -500,10 +543,50 @@ class ResumeParser:
         # Log warnings for any remaining missing critical fields
         self._validate_critical_fields(result)
 
+        # Lift volunteer/research/custom keys the model emitted as siblings
+        # so validate_and_coerce cannot silently drop them.
+        from services.content_manifest import (
+            build_manifest,
+            lift_unknown_sections,
+            stamp_resume_ids,
+        )
+        result = lift_unknown_sections(result)
+
         # Schema validation: ensure all required keys exist with correct types
         from schemas.resume_schemas import PARSED_RESUME_SCHEMA, validate_and_coerce
 
         result = validate_and_coerce(result, PARSED_RESUME_SCHEMA)
+        stamp_resume_ids(result)
+        manifest = build_manifest(result, raw_text=effective_raw_text, stage="parse")
+        # Persist unresolved headings that were in the source text but not extracted.
+        if manifest.parse_unresolved:
+            extras = list(result.get("additional_sections") or [])
+            have = {str(s.get("content_id")) for s in extras if isinstance(s, dict)}
+            for sid in manifest.parse_unresolved:
+                item = manifest.get(sid)
+                if not item or sid in have:
+                    continue
+                extras.append({
+                    "content_id": item.content_id,
+                    "heading": item.original_heading or item.semantic_type,
+                    "original_heading": item.original_heading,
+                    "semantic_type": item.semantic_type,
+                    "layout_supported": "generic",
+                    "parse_status": "unresolved",
+                    "raw_text": item.text or "",
+                    "reason": item.reason,
+                    "entries": [],
+                })
+            result["additional_sections"] = extras
+        result["content_manifest"] = manifest.to_dict()
+        if manifest.parse_unresolved or manifest.layout_warnings:
+            result["parse_diagnostics"] = {
+                "unresolved_sections": [
+                    manifest.items[i].original_heading or manifest.items[i].semantic_type
+                    for i in manifest.parse_unresolved if i in manifest.items
+                ],
+                "layout_warnings": list(manifest.layout_warnings),
+            }
 
         # Normalize experience titles and project names to Title Case
         from services.title_normalizer import normalize_titles
