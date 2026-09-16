@@ -43,6 +43,21 @@ from utils.db_connect import DBConnect
 logger = logging.getLogger(__name__)
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(str(os.getenv(name, "")).strip() or default)
+    except (TypeError, ValueError):
+        return default
+
+
+#: Job types whose stored ``result`` is a whole page of job cards rather than a
+#: user work product, and is therefore reclaimable once the client has polled
+#: it. See `ResumeService.slim_settled_jobs`. A type belongs here only if its
+#: result is RECOMPUTABLE from the inventory and is never re-read by the client
+#: after the submitting action finishes.
+_SLIM_JOB_TYPES = ("career_pages", "workday_jobs", "mnc_jobs")
+
+
 class ResumeService:
     """Central orchestrator for resume processing.
 
@@ -186,6 +201,10 @@ class ResumeService:
         the payload via the invoke event/thread args, pollers only see
         status/result), and keeping it is what once filled the Atlas tier.
 
+        The stored RESULT is the same shape of problem for the job-feed types;
+        it is not dropped here (the client still has to poll for it) but it is
+        reclaimed shortly afterwards by ``slim_settled_jobs``.
+
         Quota (spec 1.6): a tailor-family payload carries ``quota_entry_id``;
         completion settles the ledger entry reserved -> completed (idempotent
         state transition — a Lambda retry can't double-settle).
@@ -214,6 +233,54 @@ class ResumeService:
                 )
             except Exception as e:  # pragma: no cover - never fail completion
                 logger.warning("quota complete settle failed for %s: %s", job_id, e)
+
+    def slim_settled_jobs(self, *, older_than_hours: int = None,
+                          limit: int = 2000) -> Dict[str, int]:
+        """Drop the bulky ``result`` from settled job-feed rows.
+
+        A `career_pages` / `workday_jobs` / `mnc_jobs` result embeds the whole
+        rendered page of job cards. Measured 2026-09-15: 4.87 MiB for 1,500
+        cards, and 393 MiB of `resume_jobs` spread across just 336 documents -
+        the second-largest collection in the cluster, behind only the inventory
+        itself, at an average of 1.2 MiB per document.
+
+        Those bytes are an answer nobody can still ask for. The client calls
+        `pollJob` inside the same user action that submitted the search, with a
+        poll budget measured in seconds, and holds the rows in component state
+        before the loop exits; it never re-polls a day-old `job_id`. Keeping
+        the cards for the full seven-day TTL stores a page of search results
+        against the chance of a request the client does not make.
+
+        The ROW is deliberately kept, and keeps its original `expire_at`. Two
+        readers depend on that: `admin_metrics_service` aggregates job health
+        and LLM spend over `created_at` / `job_type` / `status` (it never
+        projects `result`), and a late poll still finds the job and learns it
+        completed rather than getting a bare 404 it cannot distinguish from a
+        job that never existed. `result_slimmed` marks why the cards are gone.
+
+        Deliberately scoped to `_SLIM_JOB_TYPES`. A tailor or parse result is
+        small, is the user's own work product, and is re-read from the record
+        rather than recomputed - none of the reasoning above applies to it.
+        """
+        hours = _env_int("RESUME_JOBS_SLIM_AFTER_HOURS", 6) \
+            if older_than_hours is None else int(older_than_hours)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max(0, hours))
+        filt = {
+            "job_type": {"$in": sorted(_SLIM_JOB_TYPES)},
+            "status": {"$in": ["completed", "failed"]},
+            "completed_at": {"$lte": cutoff},
+            "result": {"$exists": True},
+            "result_slimmed": {"$ne": True},
+        }
+        ids = [d["_id"] for d in
+               self.resume_jobs.find(filt, {"_id": 1}).limit(max(1, int(limit)))]
+        if not ids:
+            return {"slimmed": 0}
+        res = self.resume_jobs.update_many(
+            {"$and": [{"_id": {"$in": ids}}, filt]},
+            {"$set": {"result_slimmed": True}, "$unset": {"result": ""}},
+        )
+        return {"slimmed": int(res.modified_count or 0)}
 
     def update_job_partial(self, job_id: str, partial_result: dict) -> None:
         """Write an in-progress partial result for streaming polls.
@@ -2494,6 +2561,14 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 probe_limit=int(payload.get("probe_limit") or 0),
                 probe_budget_seconds=float(payload.get("probe_budget_seconds") or 60.0),
             )
+            # Rides this tick rather than earning its own EventBridge rule:
+            # the schedules live in external Terraform (CLAUDE.md), so a new
+            # one is a cross-repo change, and this is the same daily
+            # keep-storage-bounded concern the tick already exists to serve.
+            try:
+                result["resume_jobs"] = svc.slim_settled_jobs()
+            except Exception as e:  # never fail the inventory sweep over this
+                logger.warning("slim_settled_jobs failed: %s", e)
             svc.complete_job(job_id, result)
 
         elif job_type == "apply_match_sweep":

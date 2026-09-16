@@ -159,3 +159,65 @@ updated for `median_tailored` and `dense_5_role`.
 > green, set the repo variable `REQUIRE_GREEN_TESTS=true` (Settings ->
 > Secrets and variables -> Actions -> Variables). `gh workflow run deploy.yml
 > --ref main` bypasses it either way, and says so in the log.
+
+## Job-inventory retention — verify the EC2 sweep is running CURRENT code
+
+**2026-09-15.** The cluster reached ~4 GB. `job_postings` held 512,057 rows —
+2,510 MiB of documents plus 814 MiB of indexes, 82% of the database — of which
+**344,235 were active and already past the 7-day window** and 14,281 more were
+closed, past `purge_at`, and had never been deleted.
+
+The retention code was never the problem. `job_inventory_service` implements
+the 7-day window, `pin_posting` archives anything a user applied to / saved /
+tailored, and `purge_expired` refuses to delete a pinned row whose S3 archive
+it cannot verify. None of it was draining.
+
+**The sweep does NOT run on EventBridge.** It is `Runner.run_maintenance` in
+`services/ingest_runner/runner.py`, daily at **05:20 UTC** on the EC2 box
+(`MAINTENANCE_UTC`), calling `job_ingest_worker.run_maintenance` directly — so
+it writes **no `resume_jobs` row**, and an empty
+`{job_type: "job_ingest_maintenance"}` query proves nothing. The EventBridge
+rules were deliberately disabled at the 2026-09-02 EC2 cutover.
+
+The runner is alive: heartbeat `ip-172-31-6-99` was current and all four
+sources were dispatching. So the sweep is scheduled and the box is up, yet the
+backlog still grew.
+
+**Most likely cause — stale code on the box.** `Runner.MAINTENANCE_PURGE_LIMIT`
+/ `MAINTENANCE_EXPIRE_LIMIT` were raised to 50,000 on 2026-09-03 for exactly
+this reason (the constant's own comment records the backlog at 172,335 rows
+then). The runner passes those explicitly, so they override the callee's
+defaults. If the box is running a build from before that change it is still
+passing **5,000**, which the same comment measures as losing ~1,100 rows a day
+against an average of 6,134 closures. That is the observed shape. This repo has
+had this exact failure before: a build 20 hours older than `main` left 733
+postings an hour arriving unstamped while the backfill reported 100%.
+
+| Step | What | Status |
+|---|---|---|
+| Confirm the deployed revision | On the box, check the unit's build against `main`. The `deploy-ingest-runner` job ships on any push touching `shared/python/**`, `services/ingest_runner/**`, `infra/ec2/**` — confirm it ran and succeeded for the 2026-09-03 limit change and for this one. | **Check first** |
+| Confirm the sweep executes | `journalctl -u ingest-runner` around 05:20 UTC. `_guard` logs `maintenance finished in Ns` on success and `maintenance FAILED after Ns` with a traceback on failure. Neither line means it never fired. | Check |
+| Watch `retained_unarchived` | Non-zero in the result means pinned postings could not be archived to S3 and were retained. Retention will not shrink further until object storage recovers. Logged at ERROR. | Ongoing |
+| `RESUME_S3_BUCKET` | Must be set wherever the sweep runs or pinned rows are never archived and never purged. It is EMPTY in the local `.env`, so a sweep run from a laptop retains rather than archives. | Verify on the EC2 box |
+
+**Fixed in code alongside this note.** `expire_aged_postings` closed rows one
+`update_one` at a time, so a 50,000-row limit meant 50,000 sequential
+round-trips and the bound could not safely be raised further. It now closes in
+one bulk `update_many` per batch, writing the identical field set under the
+identical still-ACTIVE filter, so `purge_at` keeps its single-writer property.
+`job_ingest_worker.run_maintenance`'s own defaults are now 50,000 to match the
+runner (`JOB_INGEST_EXPIRE_LIMIT` / `JOB_INGEST_PURGE_LIMIT`), so the Lambda
+path is no longer the odd one out at 5,000.
+
+The one-off backlog drain is `scripts/purge_job_inventory_backlog.py` (dry run
+by default). It refuses to run while any user-attached posting is unpinned;
+`scripts/backfill_pins.py --apply` fixes that first. Neither replaces the
+scheduled sweep — they exist to get the collection back inside the window once
+it has already escaped.
+
+> **Pins were silently missing.** `pin_posting` is best-effort on both live
+> paths and never raises, and tailoring never pinned at all. 65 of the 214
+> postings users were attached to carried no `pinned` flag, **32 of them
+> already older than 7 days** — the purge would have deleted exactly the rows
+> the policy exists to protect. Re-run `scripts/backfill_pins.py` after any
+> S3 outage, and before any manual drain.

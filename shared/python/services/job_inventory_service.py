@@ -160,7 +160,17 @@ LEASE_TTL_SECONDS = 900           # 15 min: > the 110s fetch budget, < a schedul
 # grace so a board that flickers does not lose its rows, then go too.
 MAX_INVENTORY_AGE_DAYS = _env_int("JOB_INVENTORY_MAX_AGE_DAYS", 7)
 RETENTION_DAYS_AFTER_CLOSE = _env_int("JOB_INVENTORY_RETENTION_DAYS", 2)
-RUN_RETENTION_DAYS = 30           # job_ingestion_runs log retention
+#: Rows closed per `update_many` in `expire_aged_postings`. Bounded so one
+#: statement cannot sit on the collection for an unbounded stretch; the sweep
+#: loops until its own `limit` is reached.
+_EXPIRE_BATCH = 5000
+# `job_ingestion_runs` log retention. One row per shard run, and the shard
+# count is high enough (48 Workday + 64 career-pages + 48 Oracle + 96 iCIMS)
+# that 30 days accumulated 172,414 rows / 78 MiB purely to answer "what did the
+# crawler do". Two weeks still covers every debugging question anyone has
+# actually asked of it - a shard that has been failing longer than that is a
+# standing problem, not something reconstructed from a run log.
+RUN_RETENTION_DAYS = _env_int("JOB_INGEST_RUN_RETENTION_DAYS", 14)
 # How much JD text stays in Mongo once the body is safely in S3. Zero by
 # default: the scorer reads `requirements`, and tailoring resolves the body
 # from object storage, so an inline copy buys nothing and costs a lot.
@@ -1412,12 +1422,29 @@ def expire_aged_postings(
 
     Distinct from `close_unseen`, which handles "the board no longer lists it".
     This handles "it is still listed, but it is older than anything we will ever
-    show". Both funnel into `close_posting`, so `purge_at` still has exactly one
-    writer and the active-doc guard still holds.
+    show".
 
     Retention days are 0 here: an aged-out posting has no audit value that the
     S3 archive does not already cover, and holding it for a grace period is what
     makes the collection grow without bound.
+
+    Why this closes in ONE update_many
+    ----------------------------------
+    This used to call `close_posting` per row so that `purge_at` had exactly one
+    writer. The guarantee was real; the cost was a round-trip per posting, and
+    with ingest adding ~21,000 postings a day a sweep that closes rows one at a
+    time cannot be given a limit big enough to keep pace inside a Lambda budget.
+    Measured 2026-09-15, that is not hypothetical: 344,235 active postings had
+    aged out and were still being served storage, because a 5,000-row-per-day
+    ceiling fell 16,000 rows further behind every day it ran.
+
+    The single-writer property is preserved, not traded away. This update writes
+    exactly the field set `close_posting` writes, under a filter that likewise
+    requires the doc to still be ACTIVE - so there is still no window in which a
+    doc is active-with-purge_at, a repeated sweep is still a no-op rather than
+    pushing `purge_at` further out, and `purge_at` is still stamped only as part
+    of a transition out of `active`. What changed is the number of round-trips,
+    not the invariant.
     """
     now = now or _now()
     limit_days = MAX_INVENTORY_AGE_DAYS if max_age_days is None else int(max_age_days)
@@ -1431,24 +1458,43 @@ def expire_aged_postings(
     # of them first seen more than a week earlier. 96.1% of live postings state
     # no work mode and 43.3% no seniority, so "the provider omitted a field" is
     # the normal case here, not the exceptional one.
-    rows = list(
-        _postings()
-        .find({"status": STATUS_ACTIVE,
-               "$or": [
-                   {"posted_at": {"$lt": cutoff}},
-                   {"posted_at": None, "first_seen_at": {"$lt": cutoff}},
-                   {"posted_at": {"$exists": False},
-                    "first_seen_at": {"$lt": cutoff}},
-               ]},
-              {"_id": 0, "source": 1, "source_job_id": 1})
-        .limit(max(1, int(limit)))
-    )
+    aged = {"status": STATUS_ACTIVE,
+            "$or": [
+                {"posted_at": {"$lt": cutoff}},
+                {"posted_at": None, "first_seen_at": {"$lt": cutoff}},
+                {"posted_at": {"$exists": False},
+                 "first_seen_at": {"$lt": cutoff}},
+            ]}
+    closure = {"$set": {
+        "status": STATUS_CLOSED,
+        "active": False,
+        "closed_at": now,
+        "closed_reason": CLOSED_REASON_AGED_OUT,
+        # retention_days=0 - purge-eligible in the SAME sweep, which is what
+        # keeps this a true rolling window instead of a window plus a tail.
+        "purge_at": now,
+        "updated_at": now,
+    }}
+
+    # `update_many` takes no limit, so the bound is applied by selecting a
+    # bounded slice of _ids first. The aged predicate is re-applied in the
+    # update filter rather than trusting the ids: a posting re-observed as live
+    # between the two calls has had `purge_at` unset by `upsert_posting`, and
+    # closing it here on the strength of a stale read would take a live row out
+    # of the feed.
     closed = 0
-    for row in rows:
-        if close_posting(row["source"], row["source_job_id"],
-                         reason=CLOSED_REASON_AGED_OUT,
-                         retention_days=0, now=now):
-            closed += 1
+    remaining = max(1, int(limit))
+    while remaining > 0:
+        ids = [d["_id"] for d in _postings().find(aged, {"_id": 1})
+               .limit(min(_EXPIRE_BATCH, remaining))]
+        if not ids:
+            break
+        res = _postings().update_many({"$and": [{"_id": {"$in": ids}}, aged]},
+                                      closure)
+        closed += int(res.modified_count or 0)
+        remaining -= len(ids)
+        if len(ids) < _EXPIRE_BATCH:
+            break
     return closed
 
 

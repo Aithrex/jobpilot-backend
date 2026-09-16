@@ -2712,9 +2712,33 @@ def _persist_requirements(source: str, source_job_id: str, content_hash: str,
         return False
 
 
+#: Rows one maintenance tick may expire / purge.
+#:
+#: These were 5,000 each, which is LESS THAN A DAY of ingest: the crawl adds
+#: ~21,000 postings a day, so a daily sweep at 5,000 fell ~16,000 rows behind
+#: every time it ran and the collection grew without bound no matter how
+#: reliably it fired. Measured 2026-09-15, the backlog that produced was
+#: 344,235 aged-out active postings and 14,281 closed-but-never-purged rows -
+#: 2.5 GiB of documents and 814 MiB of indexes, the whole of the cluster's 4 GB.
+#:
+#: 50,000 is ~2.5 days of ingest, so a single missed tick is recovered by the
+#: next one instead of becoming permanent debt. It is affordable now because
+#: `expire_aged_postings` closes in bulk rather than one `update_one` per row,
+#: and `purge_expired` already deletes in chunks of 500.
+#:
+#: The EC2 runner does not read these: `Runner.MAINTENANCE_*_LIMIT` passes its
+#: own 50,000 explicitly and wins. These are the numbers every OTHER caller
+#: gets - the Lambda `job_ingest_maintenance` branch, a script, a REPL - and
+#: they were the odd ones out at 5,000. Keep the two in step; a caller that
+#: passes nothing should not sweep an order of magnitude less than the one
+#: that does.
+MAINTENANCE_EXPIRE_LIMIT = _env_int("JOB_INGEST_EXPIRE_LIMIT", 50_000)
+MAINTENANCE_PURGE_LIMIT = _env_int("JOB_INGEST_PURGE_LIMIT", 50_000)
+
+
 def run_maintenance(*, now: Optional[datetime] = None,
-                    purge_limit: int = 5000,
-                    expire_limit: int = 5000,
+                    purge_limit: int = MAINTENANCE_PURGE_LIMIT,
+                    expire_limit: int = MAINTENANCE_EXPIRE_LIMIT,
                     verify_limit: int = 0,
                     probe_limit: int = 0,
                     probe_budget_seconds: float = 60.0) -> Dict[str, Any]:
