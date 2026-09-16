@@ -109,7 +109,19 @@ NORMALIZATION_VERSION = 4
 # keep being pulled into a software candidate's feed forever without a bump.
 # The re-parse is pure regex over the JD body (no Bedrock spend) and is picked
 # up per shard by `needs_requirements_parse` on the next crawl.
-EXTRACTOR_VERSION = 3
+#
+# v4: `fit_score._CLEARANCE_JD` and `_WORKAUTH_JD` were widened (fit-v2.2).
+# Measured over 4,000 live JD bodies, `clearance_required` goes 410 -> 475 and
+# `work_authorization_restricted` 261 -> 503 (+93%), with nothing lost. Those
+# two flags are STORED on the posting, and `work_authorization.py` is the feed
+# policy that reads them to demote postings an employer has said it will not
+# sponsor — so without this bump that feature runs against 261 postings instead
+# of 503 and silently under-protects exactly the candidates it exists for.
+# The widened patterns are also narrower where it counts: a bare "clearance
+# required" is a FORM LABEL more often than a statement ("government clearance
+# required? no"), and that alternative was removed after it produced 97 false
+# flags from one employer. Re-extraction is what applies both directions.
+EXTRACTOR_VERSION = 4
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1
