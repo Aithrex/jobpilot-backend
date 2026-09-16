@@ -22,7 +22,35 @@ from services import job_content_store as store
 from services import job_inventory_service as inv
 from services import tech_feed_service as tfs
 
-NOW = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+#: The seeding clock. It TRACKS the wall clock, and that is load-bearing.
+#:
+#: `tech_feed_service.build_query` computes its freshness cutoff from
+#: `_now()` — the real clock — because a freshness window is a fact about the
+#: present, not about the fixture. A frozen `NOW` therefore does not freeze the
+#: window; it only moves the seeded postings backwards through it, one day per
+#: real day, until rows the test believes it seeded "2 days ago" fall outside
+#: the 30-day search it runs.
+#:
+#: This constant WAS `datetime(2026, 9, 1, 12, 0)`, and it rotted exactly as
+#: described. `TestPagination` seeds `days = (i % 20) + 1`, so it needs day 20
+#: inside a 30-day window and broke the moment drift reached 11 days — on
+#: 2026-09-12, four days BEFORE commit 91ac4c8 ("make the 7-day retention
+#: window actually drain"), which is why that commit is not the cause. With the
+#: same code and nothing but the clock moved:
+#:
+#:     clock = NOW + 10 days (2026-09-11)  ->  total=30 walked=30   PASS
+#:     clock = NOW + 11 days (2026-09-12)  ->  total=29 walked=29   FAIL
+#:     clock = NOW + 15 days (2026-09-16)  ->  total=25 walked=25   FAIL
+#:
+#: The product was right in every one of those runs: `total` equalled the real
+#: match count and paging walked every matching row with no duplicates and no
+#: omissions, which is precisely what the two assertions check. Only the
+#: fixture was wrong.
+#:
+#: Midnight-anchored (not `now()` to the microsecond) so that `days_ago`
+#: arithmetic is exact and a test cannot straddle a day boundary mid-run.
+NOW = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0,
+                                         microsecond=0)
 COLLECTIONS = ("job_postings", "job_source_state", "job_ingestion_runs",
                "tech_feed_searches", "ingest_runner_heartbeat", "companies",
                "company_ats_endpoints")
@@ -610,6 +638,30 @@ class TestPagination:
         for i in range(n):
             seed(sjid=f"p{i:03d}", title=f"Backend Engineer {i}",
                  company=f"Co {i}", tenant=f"co{i}", days=(i % 20) + 1)
+
+    def test_the_fixture_seeds_inside_the_window_it_then_searches(self, db):
+        """The guard for the rot that broke the two tests below.
+
+        They assert "all 30" against a corpus the FIXTURE promises is 30, and
+        with a frozen `NOW` that promise silently decayed one row at a time as
+        the wall clock advanced past the freshness window. The failure then
+        reads as a paging bug — "walked 25 of 30" — when the product was
+        returning every row that matched.
+
+        This pins the premise separately from the conclusion, so a future clock
+        drift fails HERE, naming the fixture, instead of over there, accusing
+        the pager.
+        """
+        self._seed_many(30)
+        query = tfs.build_query(tfs.normalize_request(
+            {"tech_scope": ["core"], "personalize": False,
+             "posted_within_days": 30}))
+        matching = db.job_postings.count_documents(query)
+        assert db.job_postings.count_documents({}) == 30
+        assert matching == 30, (
+            f"the fixture seeded 30 postings but only {matching} fall inside "
+            f"the 30-day window the test searches — the seeding clock has "
+            f"drifted away from the clock `build_query` reads")
 
     def test_pages_have_no_duplicates_and_no_omissions(self, db):
         self._seed_many(30)
