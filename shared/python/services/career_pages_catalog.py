@@ -9,9 +9,6 @@ from __future__ import annotations
 from typing import Dict, List
 
 CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
-    # Found by `PortalDiscovery.discover("Palantir", domain="palantir.com")` and
-    # re-validated through `LeverProvider.validate` on 2026-08-27.
-    {"display_name": "Palantir Technologies", "ats": "lever", "slug": "palantir", "industry": "tech"},
     {"display_name": "Abridge", "ats": "ashby", "slug": "abridge", "industry": "healthtech"},
     {"display_name": "Alchemy", "ats": "ashby", "slug": "alchemy", "industry": "tech"},
     {"display_name": "Ambience Healthcare", "ats": "ashby", "slug": "ambiencehealthcare", "industry": "healthtech"},
@@ -429,6 +426,10 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Nium", "ats": "lever", "slug": "nium", "industry": "fintech"},
     {"display_name": "OpenX", "ats": "lever", "slug": "openx", "industry": "tech"},
     {"display_name": "Outreach", "ats": "lever", "slug": "outreach", "industry": "tech"},
+    # Found by `PortalDiscovery.discover("Palantir", domain="palantir.com")` and
+    # re-validated through `LeverProvider.validate` on 2026-08-27. The board is
+    # live and `career_sources` holds it `validated`, but the crawl carries 0
+    # postings from it — it has never been swept. See docs/ops/.
     {"display_name": "Palantir Technologies", "ats": "lever", "slug": "palantir", "industry": "tech"},
     {"display_name": "Peerspace", "ats": "lever", "slug": "peerspace", "industry": "tech"},
     {"display_name": "Plaid", "ats": "ashby", "slug": "plaid", "industry": "fintech"},
