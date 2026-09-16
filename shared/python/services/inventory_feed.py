@@ -894,17 +894,27 @@ _UNREACHABLE_SPONSORSHIP = frozenset({"refused", "rare"})
 def requires_sponsorship(user_email: str) -> bool:
     """Whether this user has declared they need visa sponsorship.
 
-    Read from `user_preferences`, which is where onboarding writes it. Any
-    failure reads as False: a feed that silently reorders itself because a
-    lookup broke is worse than one that does not reorder at all.
+    Delegates to `work_authorization.get_profile`, which is now THE reader for
+    this fact: `visa_profiles.work_authorization` first, the visa-timeline
+    status second (an F-1 on OPT has effectively answered this question), and
+    the legacy `user_preferences.requires_sponsorship` boolean this function
+    used to read on its own, third.
+
+    That legacy read is exactly why this delegates rather than duplicates. The
+    boolean is set by an onboarding question most accounts never saw — the live
+    account this work started from had `user_preferences` holding only an
+    experience level, a remote preference and six target roles — so reading it
+    alone answered `False` for a student on OPT and the whole demotion below
+    never fired.
+
+    Any failure still reads as False: a feed that silently reorders itself
+    because a lookup broke is worse than one that does not reorder at all.
     """
     if not user_email:
         return False
     try:
-        from utils.db_connect import DBConnect
-        doc = DBConnect().get_db()["user_preferences"].find_one(
-            {"user_email": user_email}, {"requires_sponsorship": 1}) or {}
-        return bool(doc.get("requires_sponsorship"))
+        from services import work_authorization as wa
+        return bool(wa.get_profile(user_email).get("needs_sponsorship"))
     except Exception:  # pragma: no cover - never fail a search on a preference
         logger.warning("inventory_feed: sponsorship preference unavailable")
         return False

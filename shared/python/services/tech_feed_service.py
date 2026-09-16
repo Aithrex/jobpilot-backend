@@ -101,6 +101,21 @@ EMPLOYER_KIND_MARKETPLACE = "marketplace"
 EMPLOYER_KINDS = (EMPLOYER_KIND_ANY, EMPLOYER_KIND_DIRECT,
                   EMPLOYER_KIND_STAFFING, EMPLOYER_KIND_MARKETPLACE)
 
+#: Occupation SECTOR — which slice of the technical market leads the feed when
+#: the user has not named a role family.
+#:
+#: `software` is the product default and covers software engineering, data,
+#: AI/ML and cloud/platform. It is an ORDERING preference, never a filter: a
+#: security or silicon role still appears, it simply does not lead a default
+#: software feed. Making it a filter would hide 8,000+ live core postings from
+#: a user who never chose a sector.
+SECTOR_SOFTWARE = "software"
+SECTOR_ANY = "any"
+SECTORS = (SECTOR_SOFTWARE, SECTOR_ANY)
+SECTOR_FAMILIES: Dict[str, Tuple[str, ...]] = {
+    SECTOR_SOFTWARE: ("software_engineering", "ai_ml", "data", "cloud_platform"),
+}
+
 
 def _db():
     from utils.db_connect import DBConnect
@@ -229,6 +244,18 @@ def normalize_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     if employer_kind not in EMPLOYER_KINDS:
         employer_kind = EMPLOYER_KIND_ANY
 
+    sector = str(p.get("sector") or SECTOR_SOFTWARE).strip().lower()
+    if sector not in SECTORS:
+        sector = SECTOR_SOFTWARE
+
+    # The user's OWN work authorization, when the client wants to override what
+    # we have on file (a saved search, a "show me everything" toggle). Absent
+    # means "resolve it from the profile" — which is the normal case and is
+    # done once per search in `_work_auth_context`, not per row.
+    from services import work_authorization as wa
+    wa_override = str(p.get("work_authorization_status") or "").strip().lower()
+    wa_override = wa.normalize_status(wa_override) if wa_override else ""
+
     work_modes = [w for w in _str_list(p.get("work_modes"), limit=4, lower=True)
                   if w in ("remote", "hybrid", "onsite", "unknown")]
     seniorities = [s for s in _str_list(p.get("seniority"), limit=8, lower=True)
@@ -283,6 +310,8 @@ def normalize_request(payload: Dict[str, Any]) -> Dict[str, Any]:
         # --- employer ------------------------------------------------------------
         "employer_scope": employer_scope,
         "employer_kind": employer_kind,
+        # --- sector (ordering preference, not a filter) ---------------------------
+        "sector": sector,
         "company_ids": _str_list(p.get("company_ids"), limit=200, max_len=120,
                                  lower=True),
         "company_categories": _str_list(p.get("company_categories"), limit=20,
@@ -292,6 +321,19 @@ def normalize_request(payload: Dict[str, Any]) -> Dict[str, Any]:
             str(p.get("sponsorship_preference") or "any").strip().lower()[:20]),
         "work_authorization": _str_list(p.get("work_authorization"), limit=6,
                                         max_len=40, lower=True),
+        # The declared status that drives DEMOTION (never a silent filter).
+        # "" means "use the saved profile"; an explicit value overrides it for
+        # this search only and is never written back.
+        "work_authorization_status": wa_override,
+        # The two OPT-IN hard filters. `None` means "use the saved toggle", so
+        # a client that sends neither still honours what the user chose on the
+        # preferences screen. Neither is ever on by default.
+        "hide_sponsorship_restricted": (
+            None if p.get("hide_sponsorship_restricted") is None
+            else bool(p.get("hide_sponsorship_restricted"))),
+        "hide_clearance_required": (
+            None if p.get("hide_clearance_required") is None
+            else bool(p.get("hide_clearance_required"))),
         "requires_clearance": (None if p.get("requires_clearance") is None
                                else bool(p.get("requires_clearance"))),
         # --- freshness / apply -------------------------------------------------------
@@ -1237,9 +1279,152 @@ def _days_ago(when: Optional[datetime], now: datetime) -> Optional[int]:
 _SOURCE_RANK = {"free": 1.0, "paid": 0.4}
 
 
+# ---------------------------------------------------------------------------
+# Work authorization: ONE resolution per search, then a pure per-row verdict.
+# ---------------------------------------------------------------------------
+
+def _work_auth_context(req: Dict[str, Any]) -> Dict[str, Any]:
+    """The user's work-auth state for THIS search. One Mongo read, not per row.
+
+    Resolution order: an explicit `work_authorization_status` on the request
+    (a saved search or a "show me everything" toggle), else the saved profile
+    (`work_authorization.get_profile` -> `visa_profiles`, then the legacy
+    `user_preferences.requires_sponsorship` boolean), else `unknown`.
+
+    The two hide-toggles resolve the same way: `None` on the request means
+    "whatever the user saved", an explicit bool overrides for this search.
+    Nothing here is ever written back — a search must not mutate a preference.
+    """
+    from services import work_authorization as wa
+
+    override = str(req.get("work_authorization_status") or "")
+    if override:
+        profile = dict(wa.blank_profile())
+        profile["work_authorization"] = wa.normalize_status(override)
+        profile["source"] = "request"
+    elif req.get("user_email"):
+        profile = wa.get_profile(req["user_email"])
+    else:
+        profile = dict(wa.blank_profile())
+
+    status = profile["work_authorization"]
+    hide_sponsor = req.get("hide_sponsorship_restricted")
+    hide_clear = req.get("hide_clearance_required")
+    ctx = {
+        "status": status,
+        "source": profile.get("source"),
+        "needs_sponsorship": wa.needs_sponsorship(status),
+        "clearance_eligible": wa.clearance_eligible(status),
+        "is_us_person": wa.is_us_person(status),
+        "hide_sponsorship_restricted": (
+            bool(profile.get("hide_sponsorship_restricted"))
+            if hide_sponsor is None else bool(hide_sponsor)),
+        "hide_clearance_required": (
+            bool(profile.get("hide_clearance_required"))
+            if hide_clear is None else bool(hide_clear)),
+        # True when the user has never answered. The client uses this to ask
+        # the question ONCE, in context, instead of in a settings screen nobody
+        # opens — which is why this user had no `visa_profiles` row at all.
+        "declared": status != wa.UNKNOWN,
+        "version": wa.WORK_AUTH_VERSION,
+    }
+    # Whether any of this changes the result at all. Used to decide whether the
+    # `requirements` hydration (where both flags live) is worth paying for on
+    # an UNPERSONALIZED search.
+    ctx["active"] = bool(ctx["needs_sponsorship"]
+                         or ctx["hide_sponsorship_restricted"]
+                         or ctx["hide_clearance_required"])
+    return ctx
+
+
+def assess_work_auth(row: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach and return this row's work-auth verdict. Idempotent.
+
+    Reads `requirements.clearance_required` and
+    `requirements.work_authorization_restricted` through the same two helpers
+    the card already uses, so the badge on the card and the demotion in the
+    order can never disagree.
+    """
+    from services import work_authorization as wa
+    cached = row.get("_work_auth")
+    if isinstance(cached, dict):
+        return cached
+    verdict = wa.assess(status=ctx.get("status"),
+                        clearance_required=_clearance_of(row),
+                        sponsorship=_sponsorship_of(row))
+    row["_work_auth"] = verdict
+    return verdict
+
+
+def filter_work_authorization(rows: List[Dict[str, Any]], ctx: Dict[str, Any]
+                              ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """The OPT-IN hide filters. Returns `(kept, drops)`; a no-op by default.
+
+    Runs AFTER `hydrate_requirements`, because both flags live in
+    `requirements` and the retrieval projection deliberately omits it (it is
+    76% of the wall clock and only the survivors need it). A row we could not
+    hydrate is KEPT — the unknown-is-not-a-no rule this module applies to
+    dates, seniority and skills applies here too, and it matters most here.
+    """
+    from services import work_authorization as wa
+    if not rows or not (ctx.get("hide_sponsorship_restricted")
+                        or ctx.get("hide_clearance_required")):
+        return rows, {}
+    kept: List[Dict[str, Any]] = []
+    drops: Dict[str, int] = {}
+    for row in rows:
+        verdict = assess_work_auth(row, ctx)
+        if wa.should_hide(
+                assessment=verdict,
+                hide_sponsorship_restricted=bool(ctx.get("hide_sponsorship_restricted")),
+                hide_clearance_required=bool(ctx.get("hide_clearance_required"))):
+            keys = set(verdict.get("badge_keys") or ())
+            reason = ("hidden_no_sponsorship"
+                      if wa.BADGE_NO_SPONSORSHIP in keys
+                      and ctx.get("hide_sponsorship_restricted")
+                      else "hidden_clearance_required")
+            drops[reason] = drops.get(reason, 0) + 1
+            continue
+        kept.append(row)
+    return kept, drops
+
+
+def _work_auth_tier(row: Dict[str, Any]) -> int:
+    """0 / 1 — is this row relegated below everything the user can reach?
+
+    A SORT KEY, not arithmetic. `-0.6` on a 0.15-weighted component moves a row
+    by 0.09 of `rank_score`, which is precisely why the marketplace penalty
+    that has been in this file all along never actually kept Jobgether off page
+    one. A relegation has to be a tier to be a relegation.
+
+    Only ever 1 when the user DECLARED a sponsorship need and the posting
+    STATES the opposite (or states a clearance requirement). Silence on either
+    side scores 0.
+    """
+    return int((row.get("_work_auth") or {}).get("tier") or 0)
+
+
+def _marketplace_tier(row: Dict[str, Any]) -> int:
+    """0 for a direct/staffing employer board, 1 for a marketplace aggregator.
+
+    `career_pages_service._rank` has pinned marketplace boards below
+    first-party postings "even when match_score is higher" since the legacy
+    tab shipped; the tech feed carried only the arithmetic penalty, and on live
+    inventory Jobgether was the single largest employer of active core-tech
+    postings (4,157 rows) and led the unfiltered feed. This is the same rule,
+    finally in force on the surface that replaced that tab.
+
+    Relevance sort only. Under an explicit `newest` or `salary` sort the user
+    asked for a date or a number, and pinning 4,157 rows behind everything
+    would make that ordering mean nothing.
+    """
+    return 1 if _employer_kind_of(row) == EMPLOYER_KIND_MARKETPLACE else 0
+
+
 def rank(rows: List[Dict[str, Any]], req: Dict[str, Any],
          profile: Optional[Dict[str, Any]], skills: Sequence[str], years: int,
-         *, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+         *, now: Optional[datetime] = None,
+         work_auth: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Attach `match_score` (fit_score, THE score) and `rank_score` (ordering).
 
     They are deliberately separate fields with separate meanings:
@@ -1248,11 +1433,20 @@ def rank(rows: List[Dict[str, Any]], req: Dict[str, Any],
       `fit_score` and nothing else, versioned by `fit_score_version`, and it
       is 0 with no version marker when there is no parsed resume.
     * `rank_score` answers "in what order should these be shown?" and folds in
-      freshness, source directness, and how many of the user's own filters the
-      row satisfies. It is presentation, it is not a match claim, and no
-      surface may display it as one.
+      freshness, source directness, sector preference, how many of the user's
+      own filters the row satisfies, and — added 2026-09-15 — whether the
+      posting states a requirement this user's declared work authorization
+      cannot meet. It is presentation, it is not a match claim, and no surface
+      may display it as one.
+
+    `work_auth` is the once-per-search context from `_work_auth_context`. It is
+    optional so every existing caller and test keeps working: without it every
+    row assesses against `unknown`, which is the conservative-but-not-punitive
+    default and changes no ordering except on postings that state "no
+    sponsorship" or "clearance required" in their own words.
     """
     now = now or _now()
+    work_auth = work_auth or _work_auth_context(req)
     from services import fit_score
     from services import inventory_feed
 
@@ -1278,6 +1472,13 @@ def rank(rows: List[Dict[str, Any]], req: Dict[str, Any],
     wanted_specialties = set(req["role_specialties"])
     wanted_skills = {s.lower() for s in req["skills_required"]} | \
                     {s.lower() for s in req["skills_preferred"]}
+    # SECTOR. Applied only when the user named no role family of their own —
+    # an explicit family choice is a stronger statement than a sector default
+    # and must not be diluted by it.
+    sector_families: Set[str] = set()
+    if not req.get("role_families") and not req.get("role_specialties"):
+        sector_families = set(SECTOR_FAMILIES.get(
+            str(req.get("sector") or SECTOR_SOFTWARE), ()))
 
     for row in rows:
         tech = row.get("_tech") or {}
@@ -1333,17 +1534,54 @@ def rank(rows: List[Dict[str, Any]], req: Dict[str, Any],
             why.append("Skills: " + ", ".join(sorted(overlap)[:5]))
         if req["work_modes"] and row.get("work_mode") in req["work_modes"]:
             preference += 0.2
+        row_families = set(tech.get("role_families") or [])
+        if tech.get("role_family"):
+            row_families.add(str(tech["role_family"]))
+        if sector_families and (row_families & sector_families):
+            # The DEFAULT sector is software (incl. data / AI-ML / cloud), so a
+            # user who has chosen nothing leads with software-family roles
+            # rather than with whatever the freshest core-tech posting happens
+            # to be. Ordering only — a security or silicon role is still in the
+            # result set, still counted, still reachable by paging.
+            preference += 0.35
         conf = float(tech.get("classification_confidence") or 0.0)
+
+        # === work authorization (rank_score ONLY; NEVER match_score) ========
+        verdict = assess_work_auth(row, work_auth)
+        if verdict["reachability"] == "likely" and \
+                "sponsorship_offered" in (verdict.get("badge_keys") or ()) and \
+                work_auth.get("needs_sponsorship"):
+            # An employer who SAYS they sponsor is worth surfacing to someone
+            # who needs it. A positive statement, priced as a preference rather
+            # than as a penalty on everyone else.
+            preference += 0.4
+            why.append("Employer states visa sponsorship is available")
+        # === END work authorization =========================================
 
         # Weights are stated here rather than tuned: this is an ordering
         # heuristic over an already-filtered set, and every component is
         # reported in `why_matched` so a user can see what moved a row up.
-        row["rank_score"] = round(
+        base = (
             0.45 * (match / 100.0)
             + 0.20 * freshness
             + 0.15 * max(0.0, min(1.0, source))
             + 0.15 * min(1.0, preference)
-            + 0.05 * conf, 4)
+            + 0.05 * conf)
+        # MULTIPLICATIVE, and applied last. It cannot drive the score negative
+        # and it preserves the relative order WITHIN the demoted class, so the
+        # best of the rows a user probably cannot reach is still the first one
+        # they meet when they page down to them.
+        row["rank_score"] = round(base * float(verdict["penalty"]), 4)
+        row["work_authorization"] = {
+            "reachability": verdict["reachability"],
+            "badges": verdict["badges"],
+            "reasons": verdict["reasons"],
+            "demoted": bool(verdict["tier"]) or verdict["penalty"] < 1.0,
+            "penalty": verdict["penalty"],
+            "evaluated_against": work_auth.get("status"),
+        }
+        for reason in verdict["reasons"]:
+            mismatches.append(reason)
 
         if req["min_salary"] and not (row.get("compensation") or {}).get("annual_min"):
             mismatches.append("salary not published")
@@ -1356,8 +1594,14 @@ def rank(rows: List[Dict[str, Any]], req: Dict[str, Any],
         row["_days_ago"] = days
         row["_seen_days_ago"] = seen_days
 
+    # Sort keys, in order of authority:
+    #   1. `_ineligible`      fit_score's POSITIVE ineligible verdict
+    #   2. `_work_auth_tier`  the user DECLARED a need the posting refuses
+    #   3. `_marketplace_tier` an aggregator repost (relevance sort only)
+    # Two and three are relegations, not arithmetic, because arithmetic did not
+    # work: the -0.6 marketplace source penalty moves `rank_score` by 0.09.
     if req["sort"] == SORT_NEWEST:
-        rows.sort(key=lambda r: (_ineligible(r),
+        rows.sort(key=lambda r: (_ineligible(r), _work_auth_tier(r),
                                  r["_days_ago"] if r["_days_ago"] is not None else 10 ** 6,
                                  -(r.get("rank_score") or 0),
                                  str(r.get("job_id") or "")))
@@ -1370,11 +1614,12 @@ def rank(rows: List[Dict[str, Any]], req: Dict[str, Any],
             # not first. It is not a high-paying job; it is a job we cannot
             # price.
             return float(top) if top is not None else -1.0
-        rows.sort(key=lambda r: (_ineligible(r), -_pay(r),
+        rows.sort(key=lambda r: (_ineligible(r), _work_auth_tier(r), -_pay(r),
                                  -(r.get("rank_score") or 0),
                                  str(r.get("job_id") or "")))
     else:
-        rows.sort(key=lambda r: (_ineligible(r),
+        rows.sort(key=lambda r: (_ineligible(r), _work_auth_tier(r),
+                                 _marketplace_tier(r),
                                  -(r.get("rank_score") or 0),
                                  -(r.get("match_score") or 0),
                                  str(r.get("job_id") or "")))
@@ -1530,6 +1775,17 @@ def _card(row: Dict[str, Any], *, now: datetime) -> Dict[str, Any]:
         # absence is preserved, it is just no longer manufactured.
         "sponsorship": _sponsorship_of(row),
         "clearance_required": _clearance_of(row),
+        # What the posting's stated sponsorship / clearance requirements mean
+        # FOR THIS READER: `reachability` (`likely` / `unlikely` / `unknown`),
+        # the badges to render, the reasons in plain English, and whether the
+        # row was demoted for it. Absent `evaluated_against` means the search
+        # was not personalized. NOTHING here touches `match_score`.
+        "work_authorization": row.get("work_authorization"),
+        # Employer-level H-1B disclosure intel (`sponsorship_service`), when we
+        # hold any. `None` is the normal answer and means "no data", never
+        # "this employer does not sponsor". Carries its own source, vintage and
+        # DISCLAIMER; it is a trust feature, never a prediction.
+        "sponsorship_signal": row.get("_sponsorship_signal"),
         "employment_type_normalized": row.get("employment_type_normalized"),
         "source": row.get("source"),
         "ats": row.get("ats"),
@@ -1892,6 +2148,31 @@ def _resolve_employers(rows: List[Dict[str, Any]]) -> None:
         # groups by the OLD name while the card shows the new one.
         row["company"] = row.get("employer_name")
 
+    # === BEGIN display-name repair (employer_display) =======================
+    # `build_resolution_map` pools candidates from the ROWS ON THIS PAGE, so a
+    # page holding only "NUTMEG CONTAINER CORPORATION" offers one candidate,
+    # resolves `sole_candidate`, and CONFIRMS the junk name rather than fixing
+    # it. Measured live: 681 core postings shown under three JPMorgan/Boeing
+    # legal-entity shells. `employer_display` applies the curated
+    # `employer_registry.wrong_names` corrections (an in-process dict, no
+    # query) and then prefers `canonical_employer_id -> employers.display_name`
+    # per the CLAUDE.md contract. `employer_id` is never touched — three
+    # production indexes key on it.
+    #
+    # The registry read is `employer_display.registry_display_names`, NOT
+    # `_registry_rows_for`: it projects `display_name` alone and caches it for
+    # the process. Measured on a 2,000-row live candidate set, the full
+    # registry projection cost 499 ms per search (3 ms server-side; the rest is
+    # round-trip) and it ran on EVERY search. Names move on a backfill cadence,
+    # so a warm process pays it once.
+    try:
+        from services import employer_display
+        employer_display.apply_display_names(rows)
+    except Exception as exc:      # pragma: no cover - a name repair must not 500
+        logger.warning("tech_feed: display-name repair skipped (%s)",
+                       type(exc).__name__)
+    # === END display-name repair ===========================================
+
 
 def employer_categories_for(rows: Sequence[Dict[str, Any]]
                             ) -> Dict[str, List[str]]:
@@ -2139,6 +2420,15 @@ EMPLOYER_PAGE_CAP = int(os.getenv("TECH_FEED_EMPLOYER_PAGE_CAP", "3") or 3)
 EMPLOYER_DIVERSITY_DEPTH = int(
     os.getenv("TECH_FEED_EMPLOYER_DIVERSITY_DEPTH", "250") or 250)
 
+#: A TIGHTER cap for marketplace aggregators, applied by the same mechanism.
+#:
+#: A marketplace "employer" is not an employer — Jobgether carries 4,157 active
+#: postings from thousands of unrelated companies under one name, so three of
+#: its cards on a page is not three employers, it is one aggregator three
+#: times. The cap runs on the same `(ats, tenant)` key the rest of diversity
+#: uses; nothing is dropped, the rest simply lands on a later page.
+MARKETPLACE_PAGE_CAP = int(os.getenv("TECH_FEED_MARKETPLACE_PAGE_CAP", "1") or 1)
+
 
 def _diversify_employers(rows: List[Dict[str, Any]], page_size: int
                          ) -> Tuple[List[Dict[str, Any]], int]:
@@ -2195,7 +2485,13 @@ def _diversify_employers(rows: List[Dict[str, Any]], page_size: int
                 held.append(row)
                 continue
             k = _key(row)
-            if k and used.get(k, 0) >= cap:
+            # Marketplace rows get their own, tighter cap on the SAME key.
+            # Employer diversity was only ever applied to real employers, and
+            # the one "employer" that most needs capping is the aggregator.
+            row_cap = (max(1, MARKETPLACE_PAGE_CAP)
+                       if _employer_kind_of(row) == EMPLOYER_KIND_MARKETPLACE
+                       else cap)
+            if k and used.get(k, 0) >= row_cap:
                 held.append(row)
                 moved += 1
                 continue
@@ -2242,6 +2538,10 @@ def search(payload: Dict[str, Any]) -> Dict[str, Any]:
 def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
     now = _now()
     warnings: List[str] = []
+
+    # ONE read of the user's work authorization per search, reused by `rank`,
+    # by the opt-in hide filters and by the response envelope. Never per row.
+    wa_ctx = _work_auth_context(req)
 
     docs, diagnostics = retrieve(req, now=now)
     watermark = _watermark(docs)
@@ -2329,14 +2629,35 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
     # when they did every row was scored with NO requirements: the
     # `insufficient_job_requirements` cap pinned the whole page at 40 and
     # every hard constraint vanished, on a search that looked like it worked.
-    if req["personalize"] and req["user_email"]:
-        t_hydrate = time.perf_counter()
-        diagnostics["hydrated"] = hydrate_requirements(kept)
-        diagnostics["hydrate_ms"] = round(
-            (time.perf_counter() - t_hydrate) * 1000, 1)
+    #
+    # No longer gated on personalization at all. Both
+    # `requirements.clearance_required` and
+    # `requirements.work_authorization_restricted` live in `requirements`, and
+    # they drive a BADGE that every reader gets — "this posting does not
+    # sponsor" is a fact about the posting, not a personalization. Gated, an
+    # undeclared user saw no badge at all, which is the state the live account
+    # that prompted this work was in.
+    #
+    # This costs nothing in production: the route is `@jwt_required()`, always
+    # sets `user_email`, and `personalize` defaults to True, so every real
+    # search already paid for this. It is the `personalize: false` callers
+    # (evals, internal tools) that change, and they change by getting a correct
+    # answer instead of a silent one.
+    t_hydrate = time.perf_counter()
+    diagnostics["hydrated"] = hydrate_requirements(kept)
+    diagnostics["hydrate_ms"] = round(
+        (time.perf_counter() - t_hydrate) * 1000, 1)
 
     t = time.perf_counter()
-    rank(kept, req, profile, skills, years, now=now)
+    rank(kept, req, profile, skills, years, now=now, work_auth=wa_ctx)
+    # The OPT-IN hide filters, after `rank` because that is where the verdict
+    # is computed and after hydration because that is where the flags arrive.
+    # A no-op unless the user asked for them.
+    kept, wa_drops = filter_work_authorization(kept, wa_ctx)
+    if wa_drops:
+        drops.update(wa_drops)
+        diagnostics["filtered_out"] = dict(sorted(drops.items(),
+                                                  key=lambda kv: -kv[1]))
     kept, moved = _diversify_employers(kept, req["page_size"])
     diagnostics["employer_diversity_moved"] = moved
     diagnostics["rank_ms"] = round((time.perf_counter() - t) * 1000, 1)
@@ -2375,6 +2696,13 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
                             "slice yet. See `coverage`.")
 
     page = kept[:req["page_size"]]
+    _intel = attach_sponsorship_signals(page)
+    diagnostics["sponsorship_attached"] = _intel["attached"]
+    if _intel["suppressed"]:
+        # Visible, not silent. The block is withheld because the stored data
+        # window contradicts the window `sponsorship_service` claims in its
+        # copy; see `attach_sponsorship_signals`.
+        diagnostics["sponsorship_suppressed_window"] = _intel["suppressed"]
     more_in_order = len(order) > req["page_size"]
     # The ranked window is exhausted but the match set is not: hand straight
     # to the keyset phase rather than reporting the end of results.
@@ -2392,7 +2720,7 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
         has_more=has_more, total=int(total_matched or len(order)),
         facets=facets, watermark=watermark,
         coverage=coverage, source_health=health, warnings=warnings,
-        diagnostics=diagnostics, started=started)
+        diagnostics=diagnostics, started=started, work_auth=wa_ctx)
 
 
 def _position_of(doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -2487,6 +2815,7 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
         suppressed = tech_feed_feedback.suppressed_for(stored_req["user_email"])
 
     profile, skills, years = _load_profile(stored_req)
+    wa_ctx = _work_auth_context(stored_req)
 
     kept: List[Dict[str, Any]] = []
     scanned = 0
@@ -2523,6 +2852,12 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
         kept, _dropped = _apply_employer_scope(kept)
     kept = inventory_feed._dedupe(kept)
     kept = _collapse_location_variants(kept)
+    if wa_ctx["hide_sponsorship_restricted"] or wa_ctx["hide_clearance_required"]:
+        # Hydrated BEFORE the verdict is cached, or the assessment would be
+        # made against a `requirements` block that has not arrived. Paid for
+        # only when the user actually asked for the filter.
+        hydrate_requirements(kept)
+        kept, _wa_drops = filter_work_authorization(kept, wa_ctx)
     # Index order, explicitly, before slicing. Every stage above preserves
     # input order, but the cursor for the next page is derived from the LAST
     # ROW OF THIS PAGE, so "in order" has to be a guarantee rather than a
@@ -2530,14 +2865,17 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
     kept.sort(key=_index_position_key)
     page = kept[:page_size]
 
-    if profile is not None:
-        hydrate_requirements(page)
-        rank(page, stored_req, profile, skills, years, now=now)
-        # `rank` re-sorts by relevance; index order is what the cursor
-        # promised, so restore it. The per-page scores are still attached and
-        # still true - they simply do not reorder a page whose position in the
-        # traversal is fixed.
-        page.sort(key=_index_position_key)
+    # Hydrated and ranked unconditionally. Without this a keyset page carried
+    # no work-auth badge and no demotion, so the same posting read differently
+    # depending on how deep the user had scrolled. It is one `$in` over at most
+    # `page_size` rows.
+    hydrate_requirements(page)
+    rank(page, stored_req, profile, skills, years, now=now, work_auth=wa_ctx)
+    # `rank` re-sorts by relevance; index order is what the cursor promised, so
+    # restore it. The per-page scores are still attached and still true - they
+    # simply do not reorder a page whose position in the traversal is fixed.
+    page.sort(key=_index_position_key)
+    attach_sponsorship_signals(page)
 
     # A hop can over-fetch: 80 raw rows can survive into 40 kept when the page
     # is 10. Serving 10 and reporting "exhausted" threw the other 30 away and
@@ -2566,7 +2904,80 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
                      "scanned": scanned, "kept": len(kept),
                      "exhausted": exhausted,
                      "keyset_ms": round((time.perf_counter() - t) * 1000, 1)},
-        started=started)
+        started=started, work_auth=wa_ctx)
+
+
+def attach_sponsorship_signals(rows: Sequence[Dict[str, Any]]) -> Dict[str, int]:
+    """Attach `_sponsorship_signal` to the rows on ONE page.
+
+    Returns `{"attached": n, "suppressed": n}` — the second is the honest half
+    and the caller publishes it in `diagnostics`.
+
+    Batched: exactly one indexed `$in` on `sponsorship_signals` for the ~20
+    distinct employers a page carries, never one lookup per row. Called on the
+    PAGE being serialized, not on the 2,000-row candidate set — the intel is
+    display-only and nothing ranks on it.
+
+    `sponsorship_service` owns the framing and the DISCLAIMER and this module
+    reproduces neither: the whole scored object is passed through verbatim so
+    there is exactly one place the copy can be wrong. It is a TRUST feature and
+    never a prediction — see that module's docstring.
+
+    THE PROVENANCE GUARD. `sponsorship_signals` holds 43,561 rows from the USCIS
+    H-1B Employer Data Hub covering ONE fiscal year (FY2026), and
+    `sponsorship-ingest-2.0.0` made the service read each row's own
+    `data_window` / `source_label` instead of a module constant — so a card now
+    says "Sponsored 13,069 people in similar roles in FY2026", sourced to
+    "USCIS H-1B Employer Data Hub", with a disclaimer naming FY2026. That is the
+    honest framing and it is passed through untouched.
+
+    What is still possible is a row written BEFORE provenance existed, for which
+    `window_of` falls back to `DATA_WINDOW_YEARS = 5` and a `SOURCE_LABEL`
+    naming DOL. Measured on such a row the object reads "Sponsored 10 people in
+    similar roles in the last 5 fiscal years" from "DOL OFLC LCA Disclosure Data
+    + USCIS H-1B Employer Data Hub" — five years of two datasets we do not have,
+    and this feed will not put that in front of a candidate deciding where to
+    spend an application. So a signal is served only when it carries a window it
+    can SUBSTANTIATE from its own row.
+
+    The check reads the scored object and costs NO extra query, and it is
+    self-healing in both directions: a re-ingest that stamps provenance lights
+    the row up by itself, and nothing has to be flipped. Suppression is counted
+    and returned, never silent — `_run_search` publishes it as
+    `diagnostics.sponsorship_suppressed_window`.
+    """
+    if not rows:
+        return {"attached": 0, "suppressed": 0}
+    try:
+        from services import sponsorship_service as ss
+        names = [str(r.get("employer_name") or "") for r in rows]
+        cache = ss.bulk_signals([n for n in names if n])
+    except Exception as exc:      # pragma: no cover - intel must never 500 a page
+        logger.debug("tech_feed: sponsorship intel unavailable (%s)",
+                     type(exc).__name__)
+        return {"attached": 0, "suppressed": 0}
+
+    n = 0
+    suppressed = 0
+    for row in rows:
+        signal = cache.get(str(row.get("employer_name") or ""))
+        if not signal:
+            continue
+        # `data_window` is the ONLY row-derived provenance field: the service
+        # sets it to `None` when the row has none, and then `data_vintage`
+        # still reads "the last 5 fiscal years" and `source` still names DOL,
+        # from the fallback constants. So this must key on `data_window` and
+        # nothing else — measured on a bare row, `data_vintage` is populated
+        # and is exactly the claim we are refusing to make.
+        if not isinstance(signal.get("data_window"), dict):
+            suppressed += 1
+            continue
+        row["_sponsorship_signal"] = signal
+        n += 1
+    if suppressed:
+        logger.info("tech_feed: withheld %d sponsorship signal(s) carrying no "
+                    "row-level data window", suppressed)
+    return {"attached": n, "suppressed": suppressed}
 
 
 def _sponsorship_of(row: Dict[str, Any]) -> Optional[str]:
@@ -2635,7 +3046,8 @@ def _serve_page(search_id: str, offset: int, req: Dict[str, Any],
             coverage=session.get("coverage") or {},
             source_health=session.get("source_health") or {},
             warnings=session.get("warnings") or [],
-            diagnostics={"served_from": "session"}, started=started)
+            diagnostics={"served_from": "session"}, started=started,
+            work_auth=_work_auth_context(req))
 
     from services import job_inventory_service as inv
     docs = list(inv._postings().find({"job_id": {"$in": slice_ids}},
@@ -2654,12 +3066,15 @@ def _serve_page(search_id: str, offset: int, req: Dict[str, Any],
         doc["_tech"] = _read_time_tech(doc)
     _resolve_employers(ordered)
     profile, skills, years = _load_profile(stored_req)
-    if profile is not None:
-        hydrate_requirements(ordered)
-    rank(ordered, stored_req, profile, skills, years, now=now)
+    wa_ctx = _work_auth_context(stored_req)
+    # Unconditional: the work-auth badge is not a personalization, and a page
+    # served from the session must carry the same badges page one did.
+    hydrate_requirements(ordered)
+    rank(ordered, stored_req, profile, skills, years, now=now, work_auth=wa_ctx)
     # `rank` re-sorts; the session order is authoritative, so restore it.
     pos = {jid: i for i, jid in enumerate(slice_ids)}
     ordered.sort(key=lambda d: pos.get(d.get("job_id"), 10 ** 6))
+    attach_sponsorship_signals(ordered)
 
     warnings = list(session.get("warnings") or [])
     if missing:
@@ -2693,7 +3108,7 @@ def _serve_page(search_id: str, offset: int, req: Dict[str, Any],
         source_health=session.get("source_health") or {},
         warnings=warnings,
         diagnostics={"served_from": "session", "page_offset": offset},
-        started=started)
+        started=started, work_auth=wa_ctx)
 
 
 def _company_docs_for(names: Iterable[str]) -> Dict[str, Dict[str, Any]]:
@@ -2990,8 +3405,15 @@ INERT_FILTERS: Dict[str, str] = {
                                   "its remote role is open to; 96.1% state no "
                                   "work mode at all"),
     "timezone_overlap_hours": "needs a stated timezone on the posting",
+    # The LIST form (`work_authorization: ["h1b", "opt"]`) is still inert — it
+    # would need the posting's ACCEPTED statuses, which no board publishes. The
+    # single declared status (`work_authorization_status`) is a different field
+    # and it IS applied; see `unapplied_filters` below, which reports it as
+    # partial rather than as unapplied.
     "work_authorization": ("needs the posting's accepted statuses; only an "
-                           "explicit no-sponsorship statement is parsed today"),
+                           "explicit no-sponsorship statement is parsed today. "
+                           "Use `work_authorization_status` instead — that one "
+                           "is applied"),
     "resume_id": "the scorer uses every parsed resume and reports the best",
 }
 
@@ -3032,6 +3454,25 @@ def unapplied_filters(req: Dict[str, Any]) -> List[Dict[str, str]]:
                                "sponsorship position; most do not, and those "
                                "are kept rather than excluded"),
                     "status": FILTER_PARTIAL})
+    if req.get("work_authorization_status"):
+        out.append({"filter": "work_authorization_status",
+                    "reason": ("reorders the feed (rank_score) — it never "
+                               "removes a posting. Applied only to postings "
+                               "that STATE a clearance requirement or a "
+                               "sponsorship position; silence is not a no"),
+                    "status": FILTER_PARTIAL})
+    for key in ("hide_sponsorship_restricted", "hide_clearance_required"):
+        if req.get(key):
+            out.append({"filter": key,
+                        "reason": ("removes only the postings that STATE it. "
+                                   "A posting we could not parse is kept "
+                                   "rather than hidden on a test it never got"),
+                        "status": FILTER_PARTIAL})
+    # `sector` is deliberately ABSENT from this list. It is not a filter the
+    # user set and failed to get — it is a default ORDERING preference that
+    # removes nothing, and reporting it on every default search would put a
+    # permanent "this did not work" row in front of every user.
+    # `applied_filters.sector` echoes it; the docs explain it.
     if req.get("company_categories"):
         out.append({"filter": "company_categories",
                     "reason": ("applied only to employers the registry has "
@@ -3063,12 +3504,38 @@ def unapplied_filters(req: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
+def work_authorization_block(ctx: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """What the feed used, and whether it had to guess. Served on every page.
+
+    `declared: false` is the signal the client needs to ASK the question, in
+    context, once — the live user this work started from had no `visa_profiles`
+    row at all because onboarding never asked, so a feature that depends on the
+    answer has to be able to say the answer is missing.
+    """
+    from services import work_authorization as wa
+    ctx = ctx or {}
+    status = ctx.get("status") or wa.UNKNOWN
+    return {
+        "status": status,
+        "source": ctx.get("source") or wa.SOURCE_NONE,
+        "declared": bool(ctx.get("declared")),
+        "needs_sponsorship": bool(ctx.get("needs_sponsorship")),
+        "clearance_eligible": ctx.get("clearance_eligible"),
+        "hide_sponsorship_restricted": bool(ctx.get("hide_sponsorship_restricted")),
+        "hide_clearance_required": bool(ctx.get("hide_clearance_required")),
+        "question": wa.WORK_AUTH_QUESTION,
+        "options": [dict(o) for o in wa.WORK_AUTH_OPTIONS],
+        "version": wa.WORK_AUTH_VERSION,
+    }
+
+
 def _envelope(*, search_id: str, req: Dict[str, Any], jobs: List[Dict[str, Any]],
               next_cursor: Optional[str], has_more: bool, total: int,
               facets: Dict[str, Any], watermark: Optional[datetime],
               coverage: Dict[str, Any], source_health: Dict[str, Any],
               warnings: List[str], diagnostics: Dict[str, Any],
-              started: float) -> Dict[str, Any]:
+              started: float,
+              work_auth: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from services import fit_score
     from services import tech_taxonomy as tx
     diagnostics = dict(diagnostics)
@@ -3086,6 +3553,10 @@ def _envelope(*, search_id: str, req: Dict[str, Any], jobs: List[Dict[str, Any]]
         # the user their filter narrowed the results when it did not. This
         # names those, so the gap is visible rather than convincing.
         "unapplied_filters": unapplied_filters(req),
+        # The work-auth state this page was ORDERED against, plus the one
+        # question to ask when it is undeclared. Carried on every page so a
+        # cursor page and page one can never disagree about it.
+        "work_authorization": work_authorization_block(work_auth),
         "taxonomy_version": tx.TAXONOMY_VERSION,
         "fit_score_version": getattr(fit_score, "SCORE_VERSION", "fit-v2.0"),
         "feed_version": FEED_VERSION,

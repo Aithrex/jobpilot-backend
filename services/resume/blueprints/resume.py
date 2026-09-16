@@ -4303,7 +4303,13 @@ def get_visa_profile():
         db = DBConnect().get_db()
         doc = db.visa_profiles.find_one({"user_email": user_email}) or {}
         profile = normalize_profile(doc)
-        return jsonify({"profile": profile}), 200
+        # `normalize_profile` drops keys it does not model, and work
+        # authorization is deliberately NOT in its schema — it is a separate,
+        # simpler fact with its own owner. Merged onto the same response so the
+        # client has one place to read the whole profile.
+        from services import work_authorization as wa
+        return jsonify({"profile": profile,
+                        "work_authorization": wa.get_profile(user_email)}), 200
     except Exception as e:
         logger.exception("visa profile GET error: %s", e)
         return jsonify({"error": "Failed to load profile"}), 500
@@ -4324,10 +4330,88 @@ def update_visa_profile():
             {"$set": {**profile, "user_email": user_email, "updated_at": datetime.utcnow()}},
             upsert=True,
         )
-        return jsonify({"ok": True, "profile": profile}), 200
+        # Work authorization rides on the same body when the client sends it —
+        # `normalize_profile` would otherwise silently DROP it, since it is not
+        # in the visa-timeline schema. Written through its own owner so the
+        # normalization and the allowed values live in exactly one place.
+        from services import work_authorization as wa
+        if any(k in body for k in ("work_authorization",
+                                   "hide_sponsorship_restricted",
+                                   "hide_clearance_required")):
+            work_auth = wa.set_profile(user_email, body)
+        else:
+            work_auth = wa.get_profile(user_email)
+        return jsonify({"ok": True, "profile": profile,
+                        "work_authorization": work_auth}), 200
     except Exception as e:
         logger.exception("visa profile PUT error: %s", e)
         return jsonify({"error": "Failed to save profile"}), 500
+
+
+# ------------------------------------------------------------------
+# Work authorization — ONE question, five honest answers, `unknown` by
+# default. Persisted on `visa_profiles` (the collection that already models
+# this user's immigration state) rather than in a third home, so the feed,
+# the auto-apply answer bank and the Visa Timeline Copilot all read one fact.
+#
+# Mounted under the EXISTING /api/resume prefix, so no Terraform edge route is
+# needed (CLAUDE.md invariant 6).
+# ------------------------------------------------------------------
+@resume_bp.route("/visa/work-authorization", methods=["GET"])
+@jwt_required()
+def get_work_authorization():
+    """The user's declared work authorization, plus the question to ask.
+
+    200 {work_authorization, source, declared, needs_sponsorship,
+         clearance_eligible, hide_sponsorship_restricted,
+         hide_clearance_required, question, options[], version}
+
+    `declared: false` is a real answer and the reason this endpoint serves the
+    question and its options: the client should ask ONCE, in context, and it
+    must not invent an option the backend does not model.
+    """
+    user_email = get_jwt_identity()
+    try:
+        from services import work_authorization as wa
+        profile = wa.get_profile(user_email)
+        return jsonify({
+            **profile,
+            "declared": profile.get("work_authorization") != wa.UNKNOWN,
+            "question": wa.WORK_AUTH_QUESTION,
+            "options": [dict(o) for o in wa.WORK_AUTH_OPTIONS],
+        }), 200
+    except Exception as e:
+        logger.exception("work authorization GET error: %s", e)
+        return jsonify({"error": "Failed to load work authorization"}), 500
+
+
+@resume_bp.route("/visa/work-authorization", methods=["PUT"])
+@jwt_required()
+def update_work_authorization():
+    """Save the declared status and the two opt-in hide toggles.
+
+    Body: {work_authorization?, hide_sponsorship_restricted?,
+           hide_clearance_required?}
+
+    An unrecognised `work_authorization` normalizes to `unknown` rather than
+    400: the safe wrong answer here is "we do not know", never a status the
+    user did not pick. Keys that are absent are left untouched, so a client
+    can save one toggle without clearing the answer.
+    """
+    user_email = get_jwt_identity()
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"error": "Body must be a JSON object"}), 400
+    try:
+        from services import work_authorization as wa
+        profile = wa.set_profile(user_email, body)
+        return jsonify({
+            "ok": True, **profile,
+            "declared": profile.get("work_authorization") != wa.UNKNOWN,
+        }), 200
+    except Exception as e:
+        logger.exception("work authorization PUT error: %s", e)
+        return jsonify({"error": "Failed to save work authorization"}), 500
 
 
 @resume_bp.route("/visa/timeline", methods=["GET"])

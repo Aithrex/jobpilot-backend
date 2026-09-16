@@ -245,6 +245,59 @@ CORPUS: Tuple[Dict[str, Any], ...] = (
          ats="smartrecruiters", tenant="zalando", loc="Berlin, Germany",
          days=6, families=["cloud_platform"], specialties=["sre"]),
 
+    # ---- work authorization, clearance, aggregators, employer display ------
+    #
+    # Added 2026-09-15 with the retrieval work that made the feed read
+    # `requirements.clearance_required` and
+    # `requirements.work_authorization_restricted`. Every one of these is a
+    # posting shape the live inventory carries in volume: 3,004 active core
+    # postings state a clearance requirement and 2,076 state that they do not
+    # sponsor, and before this change NOTHING in retrieval or ranking read
+    # either flag.
+    dict(key="wa-no-sponsor", title="Backend Engineer",
+         desc=("Python, Go and PostgreSQL. We are unable to sponsor visas for "
+               "this position; applicants must be authorized to work in the "
+               "United States without sponsorship now or in the future."),
+         company="Contoso Systems", cohort="public_tech", source="career-pages",
+         ats="greenhouse", tenant="contoso", loc="Dallas, TX, USA", days=2,
+         families=["software_engineering"], specialties=["backend"],
+         no_sponsorship=True),
+    dict(key="wa-clearance", title="Software Engineer, Mission Systems",
+         desc=("Build software for classified programs. An active TS/SCI "
+               "clearance with polygraph is required. U.S. citizenship "
+               "required. Java, C++ and Linux."),
+         company="RTX", cohort="mnc", source="workday", ats="workday",
+         tenant="rtx", loc="Aurora, CO, USA", days=3,
+         families=["software_engineering"], specialties=["general_software"],
+         clearance=True, no_sponsorship=True),
+    dict(key="wa-sponsors", title="Backend Engineer, Platform",
+         desc=("Python, Go and PostgreSQL. Visa sponsorship is available for "
+               "this role and we support H-1B transfers."),
+         company="Fabrikam Labs", cohort="private_growth",
+         source="career-pages", ats="lever", tenant="fabrikam",
+         loc="Seattle, WA, USA", days=2,
+         families=["software_engineering"], specialties=["backend"],
+         sponsors=True),
+    # An aggregator repost. `board_kind` is not set by this seed path, which is
+    # exactly the live situation on rows ingested before that field existed —
+    # `_employer_kind_of` has to reach the name/catalog fallback.
+    dict(key="mkt-repost", title="Backend Engineer (Remote)",
+         desc="Python and Go. Posted via our partner network.",
+         company="Jobgether", cohort="unknown", source="career-pages",
+         ats="lever", tenant="jobgether", loc="Remote, USA", days=1,
+         families=["software_engineering"], specialties=["backend"],
+         marketplace=True),
+    # The JPMorgan Oracle-instance slug bug, on a page thin enough that
+    # `employer_identity`'s page-local candidate pool cannot adjudicate it —
+    # which is the case that leaked three legal-entity shells into the live
+    # feed as employer names.
+    dict(key="emp-shell", title="Software Engineer III",
+         desc="Java, Spring Boot and Kafka for core banking services.",
+         company="NUTMEG CONTAINER CORPORATION", cohort="mnc", source="oracle",
+         ats="oracle-orc", tenant="jpmc", loc="Columbus, OH, USA", days=4,
+         families=["software_engineering"], specialties=["general_software"],
+         display_name="JPMorgan Chase"),
+
     # ---- negatives: must never be retrieved by a core-scope search ---------
     dict(key="neg-nurse", title="Registered Nurse, ICU",
          desc="Direct patient care and medication administration.",
@@ -398,6 +451,103 @@ def build_cases() -> List[Dict[str, Any]]:
     return cases
 
 
+def _position(result: Dict[str, Any], key: str) -> Optional[int]:
+    """1-based position of a corpus row in a result set, or None if absent."""
+    keys = _keys(result)
+    return (keys.index(key) + 1) if key in keys else None
+
+
+def run_ordering() -> Dict[str, Any]:
+    """The ORDERING questions retrieval precision/recall cannot answer.
+
+    Precision and recall say whether a posting is REACHABLE. They say nothing
+    about whether a job the candidate cannot legally hold is sitting at the top
+    of their feed, which is the defect this section exists for: on the live
+    feed for one F-1 account, four of the first twenty-five cards stated a
+    clearance requirement or "no sponsorship", including the first one.
+
+    Every number here is a POSITION, because that is what the user experiences.
+    Nothing is asserted here; `test_tech_feed_retrieval.py` holds the gates.
+    """
+    from services import employer_display
+    from services import tech_feed_service as tfs
+
+    employer_display.reset_name_cache()
+    base = dict(tech_scope=["core", "adjacent"], page_size=100,
+                personalize=False, posted_within_days=90)
+
+    needs = _search(**base, work_authorization_status="needs_sponsorship_future")
+    unknown = _search(**base, work_authorization_status="unknown")
+    citizen = _search(**base, work_authorization_status="us_citizen")
+    hidden = _search(**base, work_authorization_status="needs_sponsorship_future",
+                     hide_sponsorship_restricted=True,
+                     hide_clearance_required=True)
+    software = _search(**base, sector="software")
+
+    def card(result: Dict[str, Any], key: str) -> Optional[Dict[str, Any]]:
+        by_url = {f"https://example.test/{r['tenant']}/{r['key']}": r["key"]
+                  for r in CORPUS}
+        for job in result.get("jobs") or []:
+            if by_url.get(job.get("canonical_url")) == key:
+                return job
+        return None
+
+    reachable = [r["key"] for r in CORPUS
+                 if _classifiable(r) and not r.get("no_sponsorship")
+                 and not r.get("clearance") and not r.get("marketplace")]
+    needs_keys = _keys(needs)
+    worst_reachable = max((needs_keys.index(k) for k in reachable
+                           if k in needs_keys), default=-1) + 1
+
+    out = {
+        # Where the two blocked rows land for a candidate who declared a
+        # sponsorship need, versus for a citizen, versus for `unknown`.
+        "no_sponsor_pos_needs": _position(needs, "wa-no-sponsor"),
+        "no_sponsor_pos_unknown": _position(unknown, "wa-no-sponsor"),
+        "no_sponsor_pos_citizen": _position(citizen, "wa-no-sponsor"),
+        "clearance_pos_needs": _position(needs, "wa-clearance"),
+        "clearance_pos_citizen": _position(citizen, "wa-clearance"),
+        "sponsors_pos_needs": _position(needs, "wa-sponsors"),
+        # Nothing is ever DROPPED by the demotion.
+        "no_sponsor_present_for_needs": _position(needs, "wa-no-sponsor") is not None,
+        "clearance_present_for_needs": _position(needs, "wa-clearance") is not None,
+        # The last reachable row, so "every blocked row is below every
+        # reachable one" is checkable rather than asserted.
+        "last_reachable_pos_needs": worst_reachable,
+        # The opt-in filter, which is the only thing that removes them.
+        "no_sponsor_present_when_hidden": _position(hidden, "wa-no-sponsor") is not None,
+        "clearance_present_when_hidden": _position(hidden, "wa-clearance") is not None,
+        # Aggregator versus direct board.
+        "marketplace_pos": _position(unknown, "mkt-repost"),
+        "direct_backend_pos": _position(unknown, "swe-backend"),
+        # The badge and the reachability verdict on the card.
+        "badges_no_sponsor_needs": [b["key"] for b in
+                                    ((card(needs, "wa-no-sponsor") or {})
+                                     .get("work_authorization") or {})
+                                    .get("badges", [])],
+        "badges_no_sponsor_unknown": [b["key"] for b in
+                                      ((card(unknown, "wa-no-sponsor") or {})
+                                       .get("work_authorization") or {})
+                                      .get("badges", [])],
+        "reach_no_sponsor_needs": ((card(needs, "wa-no-sponsor") or {})
+                                   .get("work_authorization") or {}).get("reachability"),
+        "reach_no_sponsor_citizen": ((card(citizen, "wa-no-sponsor") or {})
+                                     .get("work_authorization") or {}).get("reachability"),
+        # Employer display name.
+        "shell_display_name": (card(unknown, "emp-shell") or {}).get("employer_name"),
+        # Sector: how many of the first ten rows of a DEFAULT software feed are
+        # in a software-sector family.
+        "software_families_in_top10": sum(
+            1 for j in (software.get("jobs") or [])[:10]
+            if set(j.get("role_families") or ())
+            & set(tfs.SECTOR_FAMILIES["software"])),
+        "envelope_declares_status": (needs.get("work_authorization") or {}).get("status"),
+        "envelope_asks_when_unknown": bool(
+            (unknown.get("work_authorization") or {}).get("options")),
+    }
+    return out
+
+
 def run(verbose: bool = True) -> Dict[str, Any]:
     """Seed, run every stratum, report precision/recall per dimension."""
     seed_corpus()
@@ -459,6 +609,8 @@ def run(verbose: bool = True) -> Dict[str, Any]:
         "precision": (total_tp / (total_tp + total_fp)) if (total_tp + total_fp) else 1.0,
     }
 
+    ordering = run_ordering()
+
     if verbose:
         from services import tech_feed_service as tfs
         from services import tech_taxonomy as tx
@@ -483,7 +635,27 @@ def run(verbose: bool = True) -> Dict[str, Any]:
             for r in misses:
                 print(f"  {r['dimension']}/{r['label']}: "
                       f"missing={r['missing']} leaked={r['leaked']}")
+        print("-" * 78)
+        print("ORDERING (positions, not recall - what the user actually meets)")
+        print(f"  no-sponsorship posting at #{ordering['no_sponsor_pos_needs']} "
+              f"for a sponsorship-needing candidate, "
+              f"#{ordering['no_sponsor_pos_unknown']} for an undeclared one, "
+              f"#{ordering['no_sponsor_pos_citizen']} for a citizen "
+              f"(last reachable row is #{ordering['last_reachable_pos_needs']})")
+        print(f"  clearance posting at #{ordering['clearance_pos_needs']} "
+              f"vs #{ordering['clearance_pos_citizen']} for a citizen")
+        print(f"  marketplace repost at #{ordering['marketplace_pos']}, "
+              f"direct board at #{ordering['direct_backend_pos']}")
+        print(f"  neither is DROPPED: no_sponsor present="
+              f"{ordering['no_sponsor_present_for_needs']}, clearance present="
+              f"{ordering['clearance_present_for_needs']}; with the opt-in "
+              f"filter on they are gone "
+              f"({ordering['no_sponsor_present_when_hidden']}/"
+              f"{ordering['clearance_present_when_hidden']})")
+        print(f"  employer shell renders as {ordering['shell_display_name']!r}")
+        print(f"  software-family rows in the first 10 of a default feed: "
+              f"{ordering['software_families_in_top10']}/10")
         print("=" * 78)
 
     return {"rows": rows, "by_dimension": summary, "overall": overall,
-            "corpus": len(CORPUS)}
+            "corpus": len(CORPUS), "ordering": ordering}
