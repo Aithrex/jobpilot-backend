@@ -48,6 +48,8 @@ these are the documents people quote.
 | [`employer-coverage-definition.md`](coverage/employer-coverage-definition.md) | What "covered" means, and why an endpoint that merely answers does not count |
 | [`fit-score-v21-distribution.md`](coverage/fit-score-v21-distribution.md) | What each scoring change did to the live distribution, measured per account |
 | [`ats-vendor-coverage.md`](coverage/ats-vendor-coverage.md) · [`source-provider-priority.md`](coverage/source-provider-priority.md) · [`state-registry-coverage.md`](coverage/state-registry-coverage.md) · [`tech-employers-and-their-career-pages.md`](coverage/tech-employers-and-their-career-pages.md) | Vendor, provider, registry and employer breakdowns |
+| [`h1b-sponsorship-ingest.md`](coverage/h1b-sponsorship-ingest.md) | What is in `sponsorship_signals`, how subsidiary entities were rolled up, what a USCIS-only row bands as — and the fact that the data is ONE fiscal year while `sponsorship_service` still says five |
+| [`h1b-sponsor-coverage.md`](coverage/h1b-sponsor-coverage.md) + [`h1b-sponsor-gaps.csv`](coverage/h1b-sponsor-gaps.csv)/[`.json`](coverage/h1b-sponsor-gaps.json) | **Generated.** `python scripts/sponsorship_gap_report.py` — H-1B demand (approvals) joined against `employers`/`career_sources`/`company_ats_endpoints`/`job_postings`, bucketed by WHY we carry nothing, ranked by approvals x software-likelihood. The work queue for board discovery |
 
 > **Four of the documents in `coverage/` now open with a HISTORICAL banner**
 > (`ats-vendor-coverage.md`, `source-provider-priority.md`,
