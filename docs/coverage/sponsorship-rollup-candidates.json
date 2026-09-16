@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-09-16T06:52:28.114351+00:00",
+  "generated_at": "2026-09-16T17:45:17.087399+00:00",
   "ingest_version": "sponsorship-ingest-2.0.0",
   "rollup_version": "sponsorship-rollup-1.0.0",
   "note": "Names sharing a leading token with a rolled-up employer that were NOT merged, because a name resemblance is not evidence. Promote one by adding it to scripts/data/sponsorship_rollups.py.",
-  "count": 2636,
+  "count": 2639,
   "candidates": [
     {
       "employer_norm": "boston consulting",
@@ -132,19 +132,6 @@
       "state": "FL",
       "naics": "61",
       "would_join": "university of vermont and state agricultural college",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "state street bank and trust",
-      "employer_display": "STATE STREET BANK AND TRUST COMPANY",
-      "approvals": 170,
-      "denials": 7,
-      "tax_id_last4": "7445",
-      "city": "BOSTON",
-      "state": "MA",
-      "naics": "52",
-      "would_join": "state of new hampshire new hampshire lottery commission",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -1007,19 +994,6 @@
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
     {
-      "employer_norm": "magna electronics",
-      "employer_display": "MAGNA ELECTRONICS, LLC",
-      "approvals": 44,
-      "denials": 1,
-      "tax_id_last4": "2576",
-      "city": "AUBURN HILLS",
-      "state": "MI",
-      "naics": "31-33",
-      "would_join": "magna services of america inc d b a magna new mobility",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
       "employer_norm": "university of california riverside",
       "employer_display": "UNIVERSITY OF CALIFORNIA-RIVERSIDE",
       "approvals": 43,
@@ -1319,6 +1293,19 @@
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
     {
+      "employer_norm": "johnson controls",
+      "employer_display": "JOHNSON CONTROLS INC",
+      "approvals": 32,
+      "denials": 3,
+      "tax_id_last4": "0010",
+      "city": "MILWAUKEE",
+      "state": "WI",
+      "naics": "31-33",
+      "would_join": "johnson and johnson",
+      "refused_by": "johnson and johnson",
+      "reason": "curated_exclusion"
+    },
+    {
       "employer_norm": "university of louisville",
       "employer_display": "UNIVERSITY OF LOUISVILLE",
       "approvals": 31,
@@ -1548,7 +1535,7 @@
       "city": "BLOOMINGTON",
       "state": "IL",
       "naics": "52",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -1744,6 +1731,19 @@
       "state": "AZ",
       "naics": "52",
       "would_join": "western digital",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "dollar general",
+      "employer_display": "DOLLAR GENERAL CORPORATION",
+      "approvals": 23,
+      "denials": 0,
+      "tax_id_last4": "2302",
+      "city": "GOODLETTSVILLE",
+      "state": "TN",
+      "naics": "44-45",
+      "would_join": "dollar tree",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -3165,19 +3165,6 @@
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
     {
-      "employer_norm": "magna powertrain of america",
-      "employer_display": "MAGNA POWERTRAIN OF AMERICA INC",
-      "approvals": 12,
-      "denials": 0,
-      "tax_id_last4": "8421",
-      "city": "TROY",
-      "state": "MI",
-      "naics": "31-33",
-      "would_join": "magna services of america inc d b a magna new mobility",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
       "employer_norm": "memorial hermann health system",
       "employer_display": "MEMORIAL HERMANN HEALTH SYSTEM",
       "approvals": 12,
@@ -3771,7 +3758,7 @@
       "city": "SANTA FE",
       "state": "NM",
       "naics": "92",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -4504,19 +4491,6 @@
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
     {
-      "employer_norm": "disney worldwide services",
-      "employer_display": "DISNEY WORLDWIDE SERVICES INC",
-      "approvals": 8,
-      "denials": 0,
-      "tax_id_last4": "5682",
-      "city": "BURBANK",
-      "state": "CA",
-      "naics": "92",
-      "would_join": "disney entertainment and sports llc fka disney streaming technology",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
       "employer_norm": "east tennessee state university",
       "employer_display": "EAST TENNESSEE STATE UNIVERSITY",
       "approvals": 8,
@@ -5102,30 +5076,17 @@
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
     {
-      "employer_norm": "magna exteriors america holdings inc exterior systems engineering",
-      "employer_display": "MAGNA EXTERIORS AMERICA HOLDINGS INC EXTERIOR SYSTEMS ENGINEERING",
+      "employer_norm": "johnson mirmiran and thompson",
+      "employer_display": "JOHNSON MIRMIRAN AND THOMPSON INC",
       "approvals": 7,
       "denials": 0,
-      "tax_id_last4": "6197",
-      "city": "TROY",
-      "state": "MI",
-      "naics": "31-33",
-      "would_join": "magna services of america inc d b a magna new mobility",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "magna seating of america",
-      "employer_display": "MAGNA SEATING OF AMERICA, INC.",
-      "approvals": 7,
-      "denials": 0,
-      "tax_id_last4": "8294",
-      "city": "NOVI",
-      "state": "MI",
-      "naics": "31-33",
-      "would_join": "magna services of america inc d b a magna new mobility",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
+      "tax_id_last4": "3531",
+      "city": "HUNT VALLEY",
+      "state": "MD",
+      "naics": "54",
+      "would_join": "johnson and johnson",
+      "refused_by": "johnson and johnson",
+      "reason": "curated_exclusion"
     },
     {
       "employer_norm": "marvel technology solutions",
@@ -5882,6 +5843,19 @@
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
     {
+      "employer_norm": "johnson matthey",
+      "employer_display": "JOHNSON MATTHEY INC",
+      "approvals": 6,
+      "denials": 0,
+      "tax_id_last4": "1710",
+      "city": "WEST CHESTER",
+      "state": "PA",
+      "naics": "31-33",
+      "would_join": "johnson and johnson",
+      "refused_by": "johnson and johnson",
+      "reason": "curated_exclusion"
+    },
+    {
       "employer_norm": "loma linda university",
       "employer_display": "LOMA LINDA UNIVERSITY",
       "approvals": 6,
@@ -6137,7 +6111,7 @@
       "city": "LINCOLN",
       "state": "NE",
       "naics": "92",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -7815,32 +7789,6 @@
       "state": "OR",
       "naics": "51",
       "would_join": "epiq ediscovery solutions",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "eurofins electrical and electronic testing",
-      "employer_display": "EUROFINS ELECTRICAL AND ELECTRONIC TESTING NA LLC",
-      "approvals": 4,
-      "denials": 0,
-      "tax_id_last4": "2529",
-      "city": "BALTIMORE",
-      "state": "MD",
-      "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "eurofins lancaster laboratories",
-      "employer_display": "EUROFINS LANCASTER LABORATORIES LLC",
-      "approvals": 4,
-      "denials": 0,
-      "tax_id_last4": "2923",
-      "city": "LANCASTER",
-      "state": "PA",
-      "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -9665,19 +9613,6 @@
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
     {
-      "employer_norm": "disney streaming enterprises services",
-      "employer_display": "DISNEY STREAMING ENTERPRISES SERVICES CO LLC",
-      "approvals": 3,
-      "denials": 0,
-      "tax_id_last4": "4078",
-      "city": "BURBANK",
-      "state": "CA",
-      "naics": "51",
-      "would_join": "disney entertainment and sports llc fka disney streaming technology",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
       "employer_norm": "dynamed solutions",
       "employer_display": "DYNAMED SOLUTIONS, LLC",
       "approvals": 3,
@@ -10168,6 +10103,19 @@
       "state": "MI",
       "naics": "31-33",
       "would_join": "hutchinson and bloodgood llp dba h and b",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "johnson controls fire protection",
+      "employer_display": "JOHNSON CONTROLS FIRE PROTECTION LP",
+      "approvals": 3,
+      "denials": 0,
+      "tax_id_last4": "8861",
+      "city": "MILWAUKEE",
+      "state": "WI",
+      "naics": "92",
+      "would_join": "johnson and johnson",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -10674,7 +10622,7 @@
       "city": "LACEY",
       "state": "WA",
       "naics": "92",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -12850,15 +12798,15 @@
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
     {
-      "employer_norm": "disney parks technology services co llc fka walt disney attractions t",
-      "employer_display": "DISNEY PARKS TECHNOLOGY SERVICES CO LLC FKA WALT DISNEY ATTRACTIONS T",
+      "employer_norm": "dollar bank federal savings bank",
+      "employer_display": "DOLLAR BANK FEDERAL SAVINGS BANK",
       "approvals": 2,
       "denials": 0,
-      "tax_id_last4": "1860",
-      "city": "BURBANK",
-      "state": "CA",
-      "naics": "54",
-      "would_join": "disney entertainment and sports llc fka disney streaming technology",
+      "tax_id_last4": "4380",
+      "city": "PITTSBURGH",
+      "state": "PA",
+      "naics": "52",
+      "would_join": "dollar tree",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -12989,32 +12937,6 @@
       "state": "TX",
       "naics": "22",
       "would_join": "engie insight services inc dba engie impact",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "eurofins microbiology laboratories",
-      "employer_display": "EUROFINS MICROBIOLOGY LABORATORIES INC",
-      "approvals": 2,
-      "denials": 0,
-      "tax_id_last4": "2092",
-      "city": "DES MOINES",
-      "state": "IA",
-      "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "eurofins professional scientific services new england",
-      "employer_display": "EUROFINS PROFESSIONAL SCIENTIFIC SERVICES NEW ENGLAND LLC",
-      "approvals": 2,
-      "denials": 0,
-      "tax_id_last4": "0017",
-      "city": "LANCASTER",
-      "state": "PA",
-      "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -13812,6 +13734,19 @@
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
     {
+      "employer_norm": "johnson electric north america",
+      "employer_display": "JOHNSON ELECTRIC NORTH AMERICA INC",
+      "approvals": 2,
+      "denials": 0,
+      "tax_id_last4": "1778",
+      "city": "PLYMOUTH",
+      "state": "MI",
+      "naics": "42",
+      "would_join": "johnson and johnson",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
       "employer_norm": "kettering independent medical",
       "employer_display": "KETTERING INDEPENDENT MEDICAL GROUP INC",
       "approvals": 2,
@@ -13873,19 +13808,6 @@
       "state": "CO",
       "naics": "62",
       "would_join": "lutheran university association inc d b a valparaiso university",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "magna steyr",
-      "employer_display": "MAGNA STEYR USA INC",
-      "approvals": 2,
-      "denials": 0,
-      "tax_id_last4": "7257",
-      "city": "MESA",
-      "state": "AZ",
-      "naics": "31-33",
-      "would_join": "magna services of america inc d b a magna new mobility",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -14691,7 +14613,7 @@
       "city": "ANN ARBOR",
       "state": "MI",
       "naics": "44-45",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -14704,7 +14626,7 @@
       "city": "COLUMBUS",
       "state": "OH",
       "naics": "92",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -14717,7 +14639,7 @@
       "city": "MADISON",
       "state": "WI",
       "naics": "52",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -15055,7 +14977,7 @@
       "city": "SAN FRANCISCO",
       "state": "CA",
       "naics": "81",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -15472,6 +15394,45 @@
       "state": "IL",
       "naics": "31-33",
       "would_join": "william beaumont hospital",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "abbott construction",
+      "employer_display": "ABBOTT CONSTRUCTION LLC",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "3959",
+      "city": "SEATTLE",
+      "state": "WA",
+      "naics": "23",
+      "would_join": "abbott",
+      "refused_by": "abbott",
+      "reason": "curated_exclusion"
+    },
+    {
+      "employer_norm": "abbott rapid diagnostic informatics inc an abbott laboratories",
+      "employer_display": "ABBOTT RAPID DIAGNOSTIC INFORMATICS INC AN ABBOTT LABORATORIES COMPANY",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "8417",
+      "city": "CHICAGO",
+      "state": "IL",
+      "naics": "31-33",
+      "would_join": "abbott",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "abbott rapid dx north america llc an abbott laboratories",
+      "employer_display": "ABBOTT RAPID DX NORTH AMERICA LLC AN ABBOTT LABORATORIES COMPANY",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "4559",
+      "city": "CHICAGO",
+      "state": "IL",
+      "naics": "31-33",
+      "would_join": "abbott",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -22556,33 +22517,20 @@
       "city": "BURLINGAME",
       "state": "CA",
       "naics": "23",
-      "would_join": "disney entertainment and sports llc fka disney streaming technology",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
+      "would_join": "disney",
+      "refused_by": "disney",
+      "reason": "curated_exclusion"
     },
     {
-      "employer_norm": "disney global product development and creative inc indirect subsidiar",
-      "employer_display": "DISNEY GLOBAL PRODUCT DEVELOPMENT AND CREATIVE INC INDIRECT SUBSIDIAR",
+      "employer_norm": "dollar shave club",
+      "employer_display": "DOLLAR SHAVE CLUB INC",
       "approvals": 1,
       "denials": 0,
-      "tax_id_last4": "8766",
-      "city": "BURBANK",
-      "state": "CA",
-      "naics": "56",
-      "would_join": "disney entertainment and sports llc fka disney streaming technology",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "disney streaming services",
-      "employer_display": "DISNEY STREAMING SERVICES LLC",
-      "approvals": 1,
-      "denials": 0,
-      "tax_id_last4": "4494",
-      "city": "BURBANK",
-      "state": "CA",
-      "naics": "51",
-      "would_join": "disney entertainment and sports llc fka disney streaming technology",
+      "tax_id_last4": "0533",
+      "city": "DURHAM",
+      "state": "NC",
+      "naics": "44-45",
+      "would_join": "dollar tree",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -23133,45 +23081,6 @@
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
     {
-      "employer_norm": "eurofins analytics",
-      "employer_display": "EUROFINS ANALYTICS LLC",
-      "approvals": 1,
-      "denials": 0,
-      "tax_id_last4": "5395",
-      "city": "ASHLAND",
-      "state": "VA",
-      "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "eurofins central laboratory",
-      "employer_display": "EUROFINS CENTRAL LABORATORY LLC",
-      "approvals": 1,
-      "denials": 0,
-      "tax_id_last4": "8571",
-      "city": "LANCASTER",
-      "state": "PA",
-      "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "eurofins diatherix laboratories",
-      "employer_display": "EUROFINS DIATHERIX LABORATORIES LLC",
-      "approvals": 1,
-      "denials": 0,
-      "tax_id_last4": "0495",
-      "city": "HUNTSVILLE",
-      "state": "AL",
-      "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
       "employer_norm": "eurofins discoverx products",
       "employer_display": "EUROFINS DISCOVERX PRODUCTS LLC",
       "approvals": 1,
@@ -23180,7 +23089,7 @@
       "city": "FREMONT",
       "state": "CA",
       "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
+      "would_join": "eurofins",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -23193,7 +23102,7 @@
       "city": "MOUNDS VIEW",
       "state": "MN",
       "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
+      "would_join": "eurofins",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -23206,7 +23115,7 @@
       "city": "LANCASTER",
       "state": "PA",
       "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
+      "would_join": "eurofins",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -23219,7 +23128,7 @@
       "city": "SAN DIEGO",
       "state": "CA",
       "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
+      "would_join": "eurofins",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -23232,7 +23141,7 @@
       "city": "SAINT CHARLES",
       "state": "MO",
       "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
+      "would_join": "eurofins",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -23245,7 +23154,7 @@
       "city": "LANCASTER",
       "state": "PA",
       "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
+      "would_join": "eurofins",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -23258,7 +23167,7 @@
       "city": "STAFFORD",
       "state": "TX",
       "naics": "54",
-      "would_join": "eurofins lancaster laboratories professional scientific services",
+      "would_join": "eurofins",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -23519,6 +23428,32 @@
       "state": "GA",
       "naics": "54",
       "would_join": "field operations llc dba field operations",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "fifth generation distilled spirits",
+      "employer_display": "FIFTH GENERATION DISTILLED SPIRITS INC",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "8103",
+      "city": "AUSTIN",
+      "state": "TX",
+      "naics": "42",
+      "would_join": "fifth third bank",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "fifth lane capital",
+      "employer_display": "FIFTH LANE CAPITAL LP",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "1927",
+      "city": "AUSTIN",
+      "state": "TX",
+      "naics": "52",
+      "would_join": "fifth third bank",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -26292,6 +26227,123 @@
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
     {
+      "employer_norm": "johnson and associates",
+      "employer_display": "JOHNSON AND ASSOCIATES, LLC",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "9502",
+      "city": "OKLAHOMA CITY",
+      "state": "OK",
+      "naics": "92",
+      "would_join": "johnson and johnson",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "johnson and sekin",
+      "employer_display": "JOHNSON AND SEKIN LLC",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "4473",
+      "city": "DALLAS",
+      "state": "TX",
+      "naics": "54",
+      "would_join": "johnson and johnson",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "johnson brothers corporation a southland",
+      "employer_display": "JOHNSON BROTHERS CORPORATION A SOUTHLAND COMPANY",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "6395",
+      "city": "GRAPEVINE",
+      "state": "TX",
+      "naics": "23",
+      "would_join": "johnson and johnson",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "johnson county clin trials",
+      "employer_display": "JOHNSON COUNTY CLIN-TRIALS",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "7541",
+      "city": "LENEXA",
+      "state": "KS",
+      "naics": "54",
+      "would_join": "johnson and johnson",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "johnson county kansas",
+      "employer_display": "JOHNSON COUNTY, KANSAS",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "4760",
+      "city": "OLATHE",
+      "state": "KS",
+      "naics": "92",
+      "would_join": "johnson and johnson",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "johnson electric coil",
+      "employer_display": "JOHNSON ELECTRIC COIL COMPANY, INC.",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "5286",
+      "city": "ANTIGO",
+      "state": "WI",
+      "naics": "31-33",
+      "would_join": "johnson and johnson",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "johnson health tech north america",
+      "employer_display": "JOHNSON HEALTH TECH NORTH AMERICA, INC.",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "2291",
+      "city": "COTTAGE GROVE",
+      "state": "WI",
+      "naics": "42",
+      "would_join": "johnson and johnson",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "johnson matthey stationary emissions control",
+      "employer_display": "JOHNSON MATTHEY STATIONARY EMISSIONS CONTROL LLC",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "5702",
+      "city": "WEST CHESTER",
+      "state": "PA",
+      "naics": "31-33",
+      "would_join": "johnson and johnson",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "johnson service group inc d b a johnson service",
+      "employer_display": "JOHNSON SERVICE GROUP INC D B A JOHNSON SERVICE GROUP",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "1537",
+      "city": "WESTMONT",
+      "state": "IL",
+      "naics": "56",
+      "would_join": "johnson and johnson",
+      "refused_by": "",
+      "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
       "employer_norm": "joon llc doing business as ajin",
       "employer_display": "JOON, LLC DOING BUSINESS AS AJIN USA",
       "approvals": 1,
@@ -26444,32 +26496,6 @@
       "state": "MD",
       "naics": "62",
       "would_join": "lutheran university association inc d b a valparaiso university",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "magna closures of america",
-      "employer_display": "MAGNA CLOSURES OF AMERICA, INC.",
-      "approvals": 1,
-      "denials": 0,
-      "tax_id_last4": "7895",
-      "city": "NOVI",
-      "state": "MI",
-      "naics": "31-33",
-      "would_join": "magna services of america inc d b a magna new mobility",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "magna electric vehicle structures michigan",
-      "employer_display": "MAGNA ELECTRIC VEHICLE STRUCTURES - MICHIGAN, INC.",
-      "approvals": 1,
-      "denials": 0,
-      "tax_id_last4": "2796",
-      "city": "ST CLAIR",
-      "state": "MI",
-      "naics": "31-33",
-      "would_join": "magna services of america inc d b a magna new mobility",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -30473,7 +30499,7 @@
       "city": "BRADENTON",
       "state": "FL",
       "naics": "61",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -30486,7 +30512,7 @@
       "city": "SACRAMENTO",
       "state": "CA",
       "naics": "52",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -30499,7 +30525,7 @@
       "city": "PHOENIX",
       "state": "AZ",
       "naics": "92",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -30512,7 +30538,7 @@
       "city": "PHOENIX",
       "state": "AZ",
       "naics": "92",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -30525,7 +30551,7 @@
       "city": "TRENTON",
       "state": "NJ",
       "naics": "92",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -30538,7 +30564,7 @@
       "city": "NASHVILLE",
       "state": "TN",
       "naics": "92",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -30551,20 +30577,7 @@
       "city": "CHARLESTON",
       "state": "WV",
       "naics": "92",
-      "would_join": "state of new hampshire new hampshire lottery commission",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "state street financial services",
-      "employer_display": "STATE STREET FINANCIAL SERVICES INC",
-      "approvals": 1,
-      "denials": 0,
-      "tax_id_last4": "5718",
-      "city": "BOSTON",
-      "state": "MA",
-      "naics": "52",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -30577,7 +30590,7 @@
       "city": "SACRAMENTO",
       "state": "CA",
       "naics": "92",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -30590,33 +30603,7 @@
       "city": "PUEBLO",
       "state": "CO",
       "naics": "62",
-      "would_join": "steel warehouse cleveland llc dba chesterfield steel",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "steel dynamics sales",
-      "employer_display": "STEEL DYNAMICS SALES NA, INC.",
-      "approvals": 1,
-      "denials": 0,
-      "tax_id_last4": "2039",
-      "city": "FORT WAYNE",
-      "state": "IN",
-      "naics": "42",
-      "would_join": "steel warehouse cleveland llc dba chesterfield steel",
-      "refused_by": "",
-      "reason": "name_prefix_only_no_corroborating_evidence"
-    },
-    {
-      "employer_norm": "steel dynamics southwest",
-      "employer_display": "STEEL DYNAMICS SOUTHWEST LLC",
-      "approvals": 1,
-      "denials": 0,
-      "tax_id_last4": "5972",
-      "city": "SINTON",
-      "state": "TX",
-      "naics": "31-33",
-      "would_join": "steel warehouse cleveland llc dba chesterfield steel",
+      "would_join": "steel dynamics",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -30629,7 +30616,7 @@
       "city": "SOUTH BEND",
       "state": "IN",
       "naics": "31-33",
-      "would_join": "steel warehouse cleveland llc dba chesterfield steel",
+      "would_join": "steel dynamics",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },
@@ -30736,6 +30723,58 @@
       "would_join": "sutter bay hospitals dba sutter santa rosa regional hospital",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
+    },
+    {
+      "employer_norm": "target builders",
+      "employer_display": "TARGET BUILDERS LLC",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "6275",
+      "city": "DALLAS",
+      "state": "TX",
+      "naics": "53",
+      "would_join": "target",
+      "refused_by": "target",
+      "reason": "curated_exclusion"
+    },
+    {
+      "employer_norm": "target integration",
+      "employer_display": "TARGET INTEGRATION INC",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "6631",
+      "city": "SAN JOSE",
+      "state": "CA",
+      "naics": "51",
+      "would_join": "target",
+      "refused_by": "target",
+      "reason": "curated_exclusion"
+    },
+    {
+      "employer_norm": "target labs",
+      "employer_display": "TARGET LABS INC",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "5892",
+      "city": "VIENNA",
+      "state": "VA",
+      "naics": "54",
+      "would_join": "target",
+      "refused_by": "target",
+      "reason": "curated_exclusion"
+    },
+    {
+      "employer_norm": "target market consultants",
+      "employer_display": "TARGET MARKET CONSULTANTS INC",
+      "approvals": 1,
+      "denials": 0,
+      "tax_id_last4": "8031",
+      "city": "AVENTURA",
+      "state": "FL",
+      "naics": "61",
+      "would_join": "target",
+      "refused_by": "target",
+      "reason": "curated_exclusion"
     },
     {
       "employer_norm": "tata steel international americas",
@@ -31591,7 +31630,7 @@
       "city": "DENVER",
       "state": "CO",
       "naics": "71",
-      "would_join": "state of new hampshire new hampshire lottery commission",
+      "would_join": "state street",
       "refused_by": "",
       "reason": "name_prefix_only_no_corroborating_evidence"
     },

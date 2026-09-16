@@ -75,12 +75,74 @@ REPORT_VERSION = "sponsor-gap-1.0.0"
 COVERING_STATES = ("validated", "empty")
 
 BUCKET_COVERED = "covered"
+# "Covered but under-read" is a THIRD answer, and it has to exist because the
+# alternative is filing a fetch bug as a discovery gap. Eightfold declared
+# page_size=20 against an API that returns 10 and ignores `num`, so every tenant
+# stopped after page one: Microsoft read 29 postings instead of 1,178, Qualcomm
+# 4 instead of 741, Lockheed 19 instead of 1,500+. Every one of those would have
+# landed in a discovery queue that could not have fixed any of them.
+BUCKET_UNDER_READ = "covered_under_read"
+BUCKET_BOARD_HAS_JOBS = "board_publishes_jobs_we_hold_none"
 BUCKET_VALIDATED_ZERO = "validated_but_zero_postings"
 BUCKET_UNVALIDATED = "source_unvalidated"
 BUCKET_NO_SOURCE = "no_career_source"
 BUCKET_NO_EMPLOYER = "no_employer_row"
-BUCKET_ORDER = [BUCKET_COVERED, BUCKET_VALIDATED_ZERO, BUCKET_UNVALIDATED,
+BUCKET_ORDER = [BUCKET_COVERED, BUCKET_UNDER_READ, BUCKET_BOARD_HAS_JOBS,
+                BUCKET_VALIDATED_ZERO, BUCKET_UNVALIDATED,
                 BUCKET_NO_SOURCE, BUCKET_NO_EMPLOYER]
+
+#: We hold fewer than 1/2 of what the board last published, and the board
+#: published at least this many — below it the ratio is noise (a board that
+#: published 3 and we hold 1 is not a finding).
+UNDER_READ_RATIO = 2.0
+UNDER_READ_MIN_BOARD = 25
+
+# ---------------------------------------------------------------------------
+# Approvals are DEMAND. Postings we could show are SUPPLY, and for one cohort
+# the two barely relate.
+# ---------------------------------------------------------------------------
+# Measured: LTIMindtree's board is reachable, owned and fully readable, and it
+# publishes 54 jobs, NONE of them in the US — against 1,289 H-1B approvals. The
+# staffing/IT-services model hires against client requisitions that never reach
+# a careers site, so approvals do not convert into inventory we can carry. This
+# cohort is 14,421 approvals, more than Apple, Microsoft and Google combined, so
+# left unweighted it takes the whole head of a queue that is supposed to unlock
+# postings. The discount is applied to the RANK only; `demand_score` keeps the
+# unadjusted figure and every row states which basis was used.
+CLIENT_SITE_STAFFING = frozenset({
+    "infosys", "tata consultancy services", "cognizant", "wipro", "hcltech",
+    "capgemini", "ltimindtree", "tech mahindra", "mphasis", "ust",
+    "virtusa", "hexaware technologies", "coforge", "zensar technologies",
+    "persistent systems", "birlasoft", "synechron", "genpact", "exlservice",
+    "compunnel software", "infinite computer solutions", "htc global services",
+    "innova solutions", "brillio", "atos syntel", "citiustech", "slk america",
+    "v soft consulting", "intellectt", "tiger analytics", "erp analysts",
+    "quadrant technologies", "randstad digital", "kforce", "insight",
+    "populus", "cgi technologies and solutions", "ntt data", "l and t technology services",
+    "globallogic", "nagarro", "iris software", "mastech digital", "collabera",
+    "apex systems", "tek systems", "teksystems", "artech", "diverse lynx",
+    "photon interactive", "sonata software", "happiest minds",
+})
+#: What we assume converts when we have no board reading at all for such a firm.
+STAFFING_CONVERSION = 0.25
+#: Floor, so a real employer never ranks at zero purely for a thin board day.
+MIN_CONVERSION = 0.05
+
+
+def conversion_factor(employer_norm, approvals, board_published):
+    """How much of this employer's DEMAND could become inventory we can show.
+
+    Evidence first: when our own crawl has read the employer's board, the number
+    it published is the best available estimate of what we could carry, and no
+    network request is needed to ask again. Only when we have never read a board
+    does the cohort prior apply.
+    """
+    if board_published > 0 and approvals > 0:
+        ratio = board_published / float(approvals)
+        return round(max(MIN_CONVERSION, min(1.0, ratio)), 3), "board_published_last"
+    if employer_norm in CLIENT_SITE_STAFFING:
+        return STAFFING_CONVERSION, "client_site_staffing_cohort"
+    return 1.0, "unadjusted"
 
 # ---------------------------------------------------------------------------
 # Software likelihood.
@@ -301,13 +363,17 @@ def load_ats_endpoints(db):
 
 
 def load_posting_counts(db):
-    """Active postings per canonical employer id AND per normalized employer name.
+    """Active postings by canonical employer id, by (ats, tenant) BOARD, and by name.
 
-    Two paths because a posting only carries ``canonical_employer_id`` when its
-    board is owner-verified (see CLAUDE.md), and the sponsors we most want to
-    measure are exactly the ones whose boards we have not proven. The name path
-    catches those; the canonical path is the trustworthy one, and the row
-    records which answered.
+    THE PRECEDENCE IS THE POINT, and it is the feed's own
+    (`tech_feed_service.employer_key_of`): canonical id, then the board, then a
+    name. `employer_name` still carries whatever the board printed — a Boeing
+    posting carries `employer_name: "M.J. WILLIAMS COMPANY"`, the same slug bug
+    that gives JPMorgan three names — so counting on names reads a
+    well-covered employer as zero and, worse, can credit one employer with
+    another's postings. The name path survives only as the LAST resort, for
+    sponsors whose boards we have never proven and which therefore carry no
+    canonical id at all.
     """
     t0 = time.time()
     core = {"$sum": {"$cond": [{"$eq": ["$tech.tech_scope", "core"]}, 1, 0]}}
@@ -317,6 +383,16 @@ def load_posting_counts(db):
         {"$group": {"_id": "$canonical_employer_id", "active": {"$sum": 1}, "core": core}},
     ], allowDiskUse=True):
         by_canonical[row["_id"]] = {"active": row["active"], "core": row["core"]}
+    by_board = {}
+    for row in db.job_postings.aggregate([
+        {"$match": {"status": "active"}},
+        {"$group": {"_id": {"ats": "$ats", "tenant": "$tenant"},
+                    "active": {"$sum": 1}, "core": core}},
+    ], allowDiskUse=True):
+        ats = str((row["_id"] or {}).get("ats") or "").strip().lower()
+        tenant = str((row["_id"] or {}).get("tenant") or "").strip().lower()
+        if ats and tenant:
+            by_board[(ats, tenant)] = {"active": row["active"], "core": row["core"]}
     by_name = defaultdict(lambda: {"active": 0, "core": 0})
     for row in db.job_postings.aggregate([
         {"$match": {"status": "active"}},
@@ -327,9 +403,24 @@ def load_posting_counts(db):
             continue
         by_name[key]["active"] += row["active"]
         by_name[key]["core"] += row["core"]
-    logger.info("job_postings: %d canonical employers, %d distinct normalized names (%.1fs)",
-                len(by_canonical), len(by_name), time.time() - t0)
-    return by_canonical, dict(by_name)
+    logger.info("job_postings: %d canonical employers, %d boards, %d names (%.1fs)",
+                len(by_canonical), len(by_board), len(by_name), time.time() - t0)
+    return by_canonical, by_board, dict(by_name)
+
+
+def load_census_absent(db):
+    """The INVERSE finding: employers we carry that provably filed nothing.
+
+    They are not gaps — we already have their postings — but they are the other
+    half of the same question, and the one the user's complaint is about: a feed
+    dominated by employers who sponsor nobody.
+    """
+    rows = list(db.sponsorship_signals.find(
+        {"census_absent": True},
+        {"_id": 0, "employer_norm": 1, "employer_display": 1, "census": 1}))
+    rows.sort(key=lambda r: -int((r.get("census") or {}).get(
+        "inventory_active_postings") or 0))
+    return rows
 
 
 def load_sponsors(db, min_approvals):
@@ -433,7 +524,7 @@ def registry_hint(sponsor, by_name, by_first_token, alias_keys):
 
 def build_rows(sponsors, by_id, by_name, by_first_token, alias_keys,
                sources_by_employer, ats_by_member,
-               postings_by_canonical, postings_by_name):
+               postings_by_canonical, postings_by_board=None, postings_by_name=None):
     rows = []
     for sponsor in sponsors:
         norm = sponsor["employer_norm"]
@@ -454,30 +545,65 @@ def build_rows(sponsors, by_id, by_name, by_first_token, alias_keys,
             s.get("member_key") in ats_by_member or s.get("canonical_endpoint")
             for s in srcs)
 
-        canonical_counts = postings_by_canonical.get(employer_id) if employer_id else None
+        postings_by_board = postings_by_board or {}
+        postings_by_name = postings_by_name or {}
+
+        # PRECEDENCE, not a maximum: canonical id, then the board, then a name.
+        # `employer_name` carries whatever the board printed (a Boeing posting
+        # says "M.J. WILLIAMS COMPANY"), so a name can both miss an employer we
+        # cover and credit us with someone else's postings. Each level is taken
+        # ONLY when the one above it has nothing.
+        boards = sorted({(str(src.get("ats_vendor") or "").strip().lower(),
+                          str(src.get("tenant") or "").strip().lower())
+                         for src in srcs
+                         if src.get("ats_vendor") and src.get("tenant")})
+        board_counts = {"active": 0, "core": 0}
+        for board in boards:
+            hit = postings_by_board.get(board)
+            if hit:
+                board_counts["active"] += hit["active"]
+                board_counts["core"] += hit["core"]
         name_counts = {"active": 0, "core": 0}
         # Deduped, and the "&" variants are included: "ELI LILLY AND COMPANY"
-        # files as `eli lilly and` while its postings say "Eli Lilly". Measured
-        # on live inventory this recovers 1,404 postings across 8 employers
-        # (JPMorgan Chase, Morgan Stanley, Eli Lilly, Piper Sandler) and
-        # collides with nothing.
+        # files as `eli lilly and` while its postings say "Eli Lilly".
         for key in sponsor_keys(sponsor, alias_keys):
             hit = postings_by_name.get(key)
             if hit:
                 name_counts["active"] += hit["active"]
                 name_counts["core"] += hit["core"]
-        # Take the larger of the two measurements rather than the sum: the same
-        # posting can be counted by both paths, and over-counting inventory is
-        # the error that makes a gap list say "covered" about a gap.
-        if canonical_counts and canonical_counts["active"] >= name_counts["active"]:
-            active, core, count_basis = canonical_counts["active"], canonical_counts["core"], "canonical_employer_id"
+
+        canonical_counts = postings_by_canonical.get(employer_id) if employer_id else None
+        if canonical_counts:
+            active, core, count_basis = (canonical_counts["active"],
+                                         canonical_counts["core"],
+                                         "canonical_employer_id")
+        elif board_counts["active"]:
+            active, core, count_basis = (board_counts["active"], board_counts["core"],
+                                         "ats_tenant")
         elif name_counts["active"]:
-            active, core, count_basis = name_counts["active"], name_counts["core"], "employer_name"
+            active, core, count_basis = (name_counts["active"], name_counts["core"],
+                                         "employer_name")
         else:
             active, core, count_basis = 0, 0, "none"
 
-        if active > 0:
+        # What the BOARD itself last reported, from our own crawl — no network.
+        # An employer whose proven board published 1,500 jobs while we hold 19
+        # is not a discovery gap, it is an under-read (the Eightfold pagination
+        # bug did exactly this to Microsoft, Qualcomm, Lockheed and Netflix).
+        board_published = 0
+        for src in srcs:
+            board_published = max(board_published, int(src.get("job_count_last") or 0))
+            hit = ats_by_member.get(src.get("member_key"))
+            if hit:
+                board_published = max(board_published, int(hit.get("job_count_last") or 0))
+
+        if (active > 0 and board_published >= UNDER_READ_MIN_BOARD
+                and board_published >= active * UNDER_READ_RATIO):
+            bucket = BUCKET_UNDER_READ
+        elif active > 0:
             bucket = BUCKET_COVERED
+        elif covering and board_published > 0:
+            bucket = BUCKET_BOARD_HAS_JOBS
         elif covering:
             bucket = BUCKET_VALIDATED_ZERO
         elif srcs:
@@ -486,6 +612,8 @@ def build_rows(sponsors, by_id, by_name, by_first_token, alias_keys,
             bucket = BUCKET_NO_SOURCE
         else:
             bucket = BUCKET_NO_EMPLOYER
+
+        conversion, conversion_basis = conversion_factor(norm, approvals, board_published)
 
         domain = ""
         domain_source = "none"
@@ -503,10 +631,20 @@ def build_rows(sponsors, by_id, by_name, by_first_token, alias_keys,
             "approvals": approvals,
             "denials": int(sponsor.get("denials_5y") or 0),
             "software_likelihood": weight,
-            "priority_score": round(approvals * weight, 1),
+            "demand_score": round(approvals * weight, 1),
+            "conversion": conversion,
+            "conversion_basis": conversion_basis,
+            "priority_score": round(approvals * weight * conversion, 1),
             "bucket": bucket,
             "naics_code": naics.get("primary") or "",
             "naics_label": naics.get("label") or "",
+            # The PRIMARY code alone is not a sufficient signal and the file
+            # proves it: Amazon's most-approved sector is "44-45 Retail Trade"
+            # with "51 Information" second. The weight above is computed from
+            # this MIX, so the mix is emitted beside the code rather than left
+            # in the database where nobody reading the CSV would see it.
+            "naics_mix": "|".join(f"{m.get('code')}:{m.get('approvals')}"
+                                  for m in (naics.get("mix") or [])[:5]),
             "city": (sponsor.get("location") or {}).get("city") or "",
             "state": (sponsor.get("location") or {}).get("state") or "",
             "employer_id": employer_id,
@@ -526,6 +664,10 @@ def build_rows(sponsors, by_id, by_name, by_first_token, alias_keys,
             "active_postings": active,
             "core_tech_postings": core,
             "posting_count_basis": count_basis,
+            "postings_by_canonical_id": (canonical_counts or {}).get("active", 0),
+            "postings_by_board": board_counts["active"],
+            "postings_by_name": name_counts["active"],
+            "board_published_last": board_published,
             "rollup_basis": (sponsor.get("rollup") or {}).get("basis", ""),
             "rollup_entity_count": (sponsor.get("rollup") or {}).get("entity_count", 1),
             "software_evidence": evidence,
@@ -536,6 +678,12 @@ def build_rows(sponsors, by_id, by_name, by_first_token, alias_keys,
 
 GAP_REASON = {
     BUCKET_COVERED: "already carrying active postings",
+    BUCKET_UNDER_READ: "we hold postings but the board last published at least "
+                       "twice as many — a fetch/pagination problem, not a "
+                       "discovery one",
+    BUCKET_BOARD_HAS_JOBS: "the board is proven ours and last published jobs, "
+                           "and we hold none of them — re-read the endpoint "
+                           "before discovering anything",
     BUCKET_VALIDATED_ZERO: "board proven ours and returns nothing right now — "
                            "re-check the endpoint before discovering a new one",
     BUCKET_UNVALIDATED: "a board is registered but not proven to be theirs "
@@ -590,7 +738,8 @@ def summarize(rows):
         buckets[bucket] = {
             "employers": len(members),
             "approvals": sum(r["approvals"] for r in members),
-            "software_weighted_approvals": round(sum(r["priority_score"] for r in members), 1),
+            "software_weighted_approvals": round(sum(r["demand_score"] for r in members), 1),
+            "ranked_score": round(sum(r["priority_score"] for r in members), 1),
             "active_postings_today": sum(r["active_postings"] for r in members),
             "core_tech_postings_today": sum(r["core_tech_postings"] for r in members),
             "estimated_postings_if_covered": estimate,
@@ -604,11 +753,13 @@ def summarize(rows):
 
 
 CSV_FIELDS = ["rank", "employer_display", "employer_norm", "approvals", "denials",
-              "software_likelihood", "priority_score", "bucket", "gap_reason",
-              "naics_code", "naics_label", "city", "state", "domain", "domain_source",
+              "software_likelihood", "demand_score", "conversion",
+              "conversion_basis", "priority_score", "bucket", "gap_reason",
+              "naics_code", "naics_mix", "naics_label", "city", "state",
+              "domain", "domain_source",
               "employer_id", "employer_match", "career_source_count",
-              "career_source_states", "ats_endpoint_known", "active_postings",
-              "registry_hint_unverified",
+              "career_source_states", "ats_endpoint_known", "ats_boards",
+              "active_postings", "board_published_last", "registry_hint_unverified",
               "core_tech_postings", "posting_count_basis", "rollup_basis",
               "rollup_entity_count"]
 
@@ -625,8 +776,14 @@ def write_outputs(out_dir, rows, gaps, summary, meta, top):
         "data_window": meta["data_window"],
         "source": meta["source"],
         "totals": meta["totals"],
+        "census_absent": meta["census_absent"],
         "summary": summary,
-        "ranking": "approvals x software_likelihood, employers we do NOT already cover",
+        "ranking": "approvals x software_likelihood x conversion, restricted to "
+                   "employers we do not already cover. `demand_score` is the "
+                   "unadjusted approvals x software_likelihood; `conversion` is "
+                   "how much of that demand could become postings we can show, "
+                   "from the employer's own last-published board size where we "
+                   "have read it.",
         "count": len(gaps),
         "gaps": gaps[:top],
     }, indent=2, default=str), encoding="utf-8")
@@ -640,6 +797,7 @@ def write_outputs(out_dir, rows, gaps, summary, meta, top):
         for row in gaps[:top]:
             flat = dict(row)
             flat["career_source_states"] = "|".join(row["career_source_states"])
+            flat["ats_boards"] = "|".join(row["ats_boards"])
             writer.writerow(flat)
 
     md_path.write_text(render_markdown(rows, gaps, summary, meta, top), encoding="utf-8")
@@ -709,26 +867,45 @@ def render_markdown(rows, gaps, summary, meta, top):
         "bucket worth a week?\" and nothing finer.",
         "",
         f"## The ranked gap list — {len(gaps):,} uncovered sponsors by "
-        "`approvals x software_likelihood`",
+        "`approvals x software_likelihood x conversion`",
         "",
         f"The first {min(100, len(gaps))} are below. "
         f"`h1b-sponsor-gaps.csv` and `.json` carry the top "
         f"{min(top, len(gaps)):,}.",
         "",
-        "| # | employer | approvals | sw | score | bucket | NAICS | where | postings |",
-        "|---:|---|---:|---:|---:|---|---|---|---:|",
+        "| # | employer | approvals | sw | conv | score | bucket | NAICS | where | postings |",
+        "|---:|---|---:|---:|---:|---:|---|---|---|---:|",
     ]
     for row in gaps[:min(top, 100)]:
         where = ", ".join(x for x in [row["city"].title(), row["state"]] if x)
         lines.append(
             f"| {row['rank']} | {row['employer_display'][:42]} | {row['approvals']:,} | "
-            f"{row['software_likelihood']:.2f} | {row['priority_score']:,.0f} | "
+            f"{row['software_likelihood']:.2f} | {row['conversion']:.2f} | "
+            f"{row['priority_score']:,.0f} | "
             f"`{row['bucket']}` | {row['naics_code']} | {where} | "
             f"{row['active_postings']} |")
     if len(gaps) > 100:
         lines.append(f"| … | _{min(top, len(gaps)) - 100:,} more rows in "
-                     "`h1b-sponsor-gaps.csv` / `.json`_ | | | | | | | |")
+                     "`h1b-sponsor-gaps.csv` / `.json`_ | | | | | | | | |")
     lines += [
+        "",
+        "## The inverse: employers we carry who sponsor nobody",
+        "",
+        f"{meta['census_absent']['employers']:,} employers we already hold "
+        f"**{meta['census_absent']['active_postings']:,} active postings** for "
+        f"({meta['census_absent']['core_tech_postings']:,} core-tech) filed **no "
+        f"H-1B petition at all** in this window. The USCIS Data Hub lists every "
+        f"employer that filed, so this is a measurement, not an absence of data — "
+        f"`sponsorship_signals` carries an explicit `census_absent` row for each so "
+        f"the badge can say it.",
+        "",
+        "| employer | active postings | core-tech |",
+        "|---|---:|---:|",
+    ] + [
+        f"| {c['employer_display'][:48]} | {c['active_postings']:,} | "
+        f"{c['core_tech_postings']:,} |"
+        for c in meta["census_absent"]["top"][:15]
+    ] + [
         "",
         "## How to use this",
         "",
@@ -739,16 +916,34 @@ def render_markdown(rows, gaps, summary, meta, top):
         "means we do not know it, never that it does not exist. Do not derive "
         "one from the name; that is the mistake ADR-006 exists to stop.",
         "",
-        "Work the buckets in this order, which is cheapest-proof-first:",
+        "Work the buckets in this order, which is cheapest-proof-first. The "
+        "first three are NOT discovery work and must not be sent to a discovery "
+        "pass:",
         "",
-        f"1. `{BUCKET_VALIDATED_ZERO}` — we already proved the board. A zero here "
-        "is a fetch problem, not a discovery problem.",
-        f"2. `{BUCKET_UNVALIDATED}` — the board is known and unproven. This is "
+        f"1. `{BUCKET_UNDER_READ}` — we have the board and read part of it. "
+        "Eightfold's `page_size=20` against a 10-row API cost Microsoft 1,149 "
+        "postings, Qualcomm 737 and Lockheed ~1,480; no amount of discovery "
+        "would have found them.",
+        f"2. `{BUCKET_BOARD_HAS_JOBS}` — the board is proven ours and last "
+        "published jobs we hold none of. Re-read the endpoint.",
+        f"3. `{BUCKET_VALIDATED_ZERO}` — proven board, and it published nothing "
+        "either. Believe it, or check the endpoint address (CLAUDE.md: asking "
+        "the wrong URL reads as a broken board).",
+        f"4. `{BUCKET_UNVALIDATED}` — the board is known and unproven. This is "
         "`verify_career_sources.py --mode backlink`, not a new network sweep.",
-        f"3. `{BUCKET_NO_SOURCE}` — the employer is known, the board is not. "
+        f"5. `{BUCKET_NO_SOURCE}` — the employer is known, the board is not. "
         "Discovery, one employer at a time.",
-        f"4. `{BUCKET_NO_EMPLOYER}` — we have never heard of them. Cheapest to "
+        f"6. `{BUCKET_NO_EMPLOYER}` — we have never heard of them. Cheapest to "
         "add a registry row, longest path to a posting.",
+        "",
+        "**Read `conversion` before you spend a day on a row.** Approvals are "
+        "demand; `conversion` is how much of it could become inventory. The "
+        "client-site staffing cohort (Infosys, TCS, Cognizant, Wipro, HCLTech, "
+        "Capgemini, LTIMindtree, Tech Mahindra, Mphasis — 14,421 approvals "
+        "between them, more than Apple, Microsoft and Google combined) hires "
+        "against client requisitions that never reach a careers site. "
+        "LTIMindtree is the proof: its board is reachable, owned and fully "
+        "readable, and it publishes 54 jobs, none of them in the US.",
         "",
         "Run ONE network pass at a time (CLAUDE.md: a content pass beside two "
         "others turned 830 sources `blocked` in one sweep).",
@@ -775,18 +970,19 @@ def main():
         logger.error("sponsorship_signals is empty — run scripts/ingest_sponsorship.py first")
         return 1
     sponsors_all = db.sponsorship_signals.count_documents({"rollup.is_alias": False})
+    census_absent = load_census_absent(db)
     window = (sponsors[0].get("data_window") or {})
 
     by_id, by_name, by_first_token = load_employers(db)
     alias_keys = load_alias_keys(db)
     sources_by_employer = load_career_sources(db)
     ats_by_member = load_ats_endpoints(db)
-    postings_by_canonical, postings_by_name = load_posting_counts(db)
+    postings_by_canonical, postings_by_board, postings_by_name = load_posting_counts(db)
 
     t0 = time.time()
     rows = build_rows(sponsors, by_id, by_name, by_first_token, alias_keys,
                       sources_by_employer, ats_by_member,
-                      postings_by_canonical, postings_by_name)
+                      postings_by_canonical, postings_by_board, postings_by_name)
     logger.info("joined %d sponsors in %.1fs", len(rows), time.time() - t0)
 
     summary = summarize(rows)
@@ -801,6 +997,22 @@ def main():
         "source": " + ".join(s.get("label", "") for s in
                              ((sponsors[0].get("provenance") or {}).get("sources") or
                               [{"label": "USCIS H-1B Employer Data Hub"}])),
+        "census_absent": {
+            "employers": len(census_absent),
+            "active_postings": sum(int((c.get("census") or {}).get(
+                "inventory_active_postings") or 0) for c in census_absent),
+            "core_tech_postings": sum(int((c.get("census") or {}).get(
+                "inventory_core_tech_postings") or 0) for c in census_absent),
+            "note": "employers we ALREADY carry postings for that filed no H-1B "
+                    "petition in the window — the inverse of this list",
+            "top": [{"employer_display": c.get("employer_display"),
+                     "employer_norm": c.get("employer_norm"),
+                     "active_postings": (c.get("census") or {}).get(
+                         "inventory_active_postings"),
+                     "core_tech_postings": (c.get("census") or {}).get(
+                         "inventory_core_tech_postings")}
+                    for c in census_absent[:50]],
+        },
         "totals": {
             "sponsors": len(rows),
             "sponsors_all": sponsors_all,
@@ -811,6 +1023,9 @@ def main():
         },
     }
     paths = write_outputs(Path(args.out), rows, gaps, summary, meta, args.top)
+    print(f"\n  inverse finding: {meta['census_absent']['employers']:,} employers we "
+          f"already carry {meta['census_absent']['active_postings']:,} active postings "
+          f"for filed NOTHING in the window")
 
     print("\n== Sponsor coverage ==")
     for bucket in BUCKET_ORDER:

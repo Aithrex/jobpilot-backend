@@ -998,6 +998,145 @@ def build_documents(groups, *, sources, window, run_id, now=None) -> list:
 # ---------------------------------------------------------------------------
 # Write.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Census absence — "they filed nothing" is an ANSWER, and it is not "no data".
+# ---------------------------------------------------------------------------
+# Tokens too common to prove anything by their absence. A name made only of
+# these ("Health Services Group") cannot be shown absent, so it is left alone.
+_COMMON_TOKENS = {
+    "services", "service", "solutions", "technologies", "technology", "group",
+    "global", "systems", "system", "company", "corporation", "america",
+    "american", "international", "holdings", "health", "bank", "associates",
+    "partners", "consulting", "enterprises", "industries", "medical", "center",
+    "centre", "national", "management", "capital", "first", "united", "north",
+    "south", "east", "west", "general", "advanced", "digital", "data", "cloud",
+    "software", "labs", "laboratories", "research", "institute", "university",
+    "college", "school", "hospital", "clinic", "insurance", "financial",
+    "industrial", "regional", "community", "central", "corp", "brands",
+    "products", "network", "networks", "resources", "logistics", "energy",
+}
+_MIN_DISTINCTIVE_LEN = 5
+
+
+def distinctive_tokens(norm: str) -> list:
+    """The tokens of a name that could prove its absence from a census."""
+    return [t for t in str(norm or "").split()
+            if len(t) >= _MIN_DISTINCTIVE_LEN and t not in _COMMON_TOKENS]
+
+
+def census_token_set(entities: dict) -> set:
+    """Every token appearing in ANY petitioner name in the source file."""
+    tokens = set()
+    for key in entities:
+        tokens.update(key.split())
+    return tokens
+
+
+def census_absent_documents(entities, doc_keys, inventory, *, sources, window,
+                            run_id, now=None, min_postings=1):
+    """Rows for employers we CARRY that provably filed nothing, with the proof.
+
+    The USCIS Data Hub is a census: it lists every employer that filed at least
+    one petition. So an employer's absence from it is a finding — "they
+    sponsored nobody" — and until now it was indistinguishable from "we have
+    never looked", because both produced no row and ``get_signal`` returned
+    ``None`` for both. Northrop Grumman is the case that matters: 833 active
+    postings in our inventory and not one petition in FY2026.
+
+    The claim is only made where it can be PROVEN, which is the same standard
+    the rollup uses in the other direction: every distinctive token of the
+    employer's name must be absent from every petitioner name in the file. If
+    any token appears anywhere, the employer may simply have filed under a
+    legal name we did not match (Fiserv filed as FISERV SOLUTIONS LLC), and
+    that is a curation task, not a zero. ``inventory`` is
+    {normalized name: {"active": n, "display": str}} from live job_postings,
+    so we only ever speak about employers a user can actually see.
+    """
+    now = now or datetime.now(timezone.utc)
+    tokens = census_token_set(entities)
+    docs, skipped = [], []
+    for norm, info in sorted(inventory.items()):
+        if norm in doc_keys:
+            continue
+        if int(info.get("active") or 0) < min_postings:
+            continue
+        distinctive = distinctive_tokens(norm)
+        row = {"employer_norm": norm, "employer_display": info.get("display") or "",
+               "active_postings": int(info.get("active") or 0),
+               "core_tech_postings": int(info.get("core") or 0)}
+        if rollups.is_not_an_employer(norm):
+            # A job aggregator republishing other employers' postings, or an ATS
+            # tenant slug that reached the employer field. "They filed nothing"
+            # is a claim ABOUT AN EMPLOYER, and there is no employer here.
+            skipped.append(dict(row, reason="not_an_employer"))
+            continue
+        if not distinctive:
+            # "JLL", "PACS", "TD Bank" — every token is too common for absence
+            # to prove anything. Silence, not a zero.
+            skipped.append(dict(row, reason="no_distinctive_token"))
+            continue
+        present = [t for t in distinctive if t in tokens]
+        if present:
+            skipped.append(dict(row, reason="token_present_in_census",
+                                tokens=present))
+            continue
+        docs.append({
+            "employer_norm": norm,
+            "employer_display": info.get("display") or norm.title(),
+            "approvals_5y": 0,
+            "denials_5y": 0,
+            "census_absent": True,
+            "computed_at": now,
+            "ingested_at": now,
+            "ingest_run_id": run_id,
+            "ingest_version": INGEST_VERSION,
+            "data_window": window,
+            "source_label": " + ".join(s["label"] for s in sources),
+            "provenance": {"ingest_version": INGEST_VERSION,
+                           "rollup_version": rollups.ROLLUP_VERSION,
+                           "run_id": run_id, "sources": sources},
+            "rollup": {"basis": "census_absent", "is_alias": False,
+                       "entity_count": 0, "entities": [], "refused": [],
+                       "note": "no petitioner in the source file carries any of "
+                               "this employer's distinctive name tokens"},
+            "census": {
+                "absent": True,
+                "basis": "no_petitioner_name_contains_any_distinctive_token",
+                "tokens_checked": distinctive,
+                "inventory_active_postings": int(info.get("active") or 0),
+                "inventory_core_tech_postings": int(info.get("core") or 0),
+            },
+        })
+    return docs, skipped
+
+
+def live_inventory_employers():
+    """{normalized employer name: {active, core, display}} from active postings.
+
+    Read-only. This is the set of employers a user can see a badge for, which
+    is the only set we are entitled to make a census claim about.
+    """
+    from utils.db_connect import DBConnect
+
+    db = DBConnect().get_db()
+    core = {"$sum": {"$cond": [{"$eq": ["$tech.tech_scope", "core"]}, 1, 0]}}
+    out = {}
+    for row in db.job_postings.aggregate([
+        {"$match": {"status": "active"}},
+        {"$group": {"_id": "$employer_name", "active": {"$sum": 1}, "core": core}},
+    ], allowDiskUse=True):
+        key = normalize_employer(row["_id"])
+        if not key:
+            continue
+        hit = out.setdefault(key, {"active": 0, "core": 0, "display": ""})
+        hit["active"] += row["active"]
+        hit["core"] += row["core"]
+        name = _text(row["_id"])
+        if name and (not hit["display"] or len(name) > len(hit["display"])):
+            hit["display"] = name
+    return out
+
+
 def ensure_index(db):
     """The one index this collection needs: the unique upsert/lookup key.
 
@@ -1076,6 +1215,14 @@ def main():
                         help="Skip the Tax-ID+brand+state rollup basis")
     parser.add_argument("--candidates", default="",
                         help="Write the un-merged near-miss review queue to this JSON path")
+    parser.add_argument("--census-absent", action="store_true",
+                        help="Also write a row for every employer we carry active "
+                             "postings for that PROVABLY filed nothing (no petitioner "
+                             "name in the file shares any of its distinctive tokens). "
+                             "Reads job_postings; writes only sponsorship_signals")
+    parser.add_argument("--unmatched", default="",
+                        help="With --census-absent: write the inventory employers we "
+                             "could NOT resolve either way to this JSON path")
     parser.add_argument("--sample", type=int, default=20, help="Employers to print (default 20)")
     args = parser.parse_args()
 
@@ -1135,6 +1282,23 @@ def main():
     window = window_block(fiscal_years, has_lca)
     docs = build_documents(groups, sources=sources, window=window, run_id=run_id, now=now)
 
+    census_docs, unresolved = [], []
+    if args.census_absent:
+        if args.limit:
+            parser.error("--census-absent with --limit would call an employer a "
+                         "non-filer on a partial read of the census")
+        try:
+            inventory = live_inventory_employers()
+        except Exception as exc:
+            parser.error(f"--census-absent needs a live MongoDB connection: {exc}")
+        doc_keys = {d["employer_norm"] for d in docs}
+        census_docs, unresolved = census_absent_documents(
+            entities, doc_keys, inventory, sources=sources, window=window,
+            run_id=run_id, now=now)
+        docs.extend(census_docs)
+        logger.info("census: %d inventory employers, %d provably filed nothing, "
+                    "%d unresolved", len(inventory), len(census_docs), len(unresolved))
+
     print("\n== Ingest summary ==")
     for src in sources:
         print(f"  source   : {src['file']} ({src['label']}) rows={src['rows']:,} "
@@ -1156,20 +1320,27 @@ def main():
               if not d["rollup"]["is_alias"] and d["approvals_5y"] == 0 and d["denials_5y"] > 0]
     print(f"  denial-only employers: {len(absent):,} (they band 'none' — 0 approvals is "
           f"an answer, not a gap)")
+    if args.census_absent:
+        carried = sum(d["census"]["inventory_active_postings"] for d in census_docs)
+        print(f"  census-absent rows  : {len(census_docs):,} employers we carry "
+              f"{carried:,} active postings for filed NOTHING in {window['label']}")
+        print(f"  unresolved          : {len(unresolved):,} inventory employers we can "
+              f"neither match nor prove absent (a curation queue, never a zero)")
 
     if window["service_claim_mismatch"]:
         logger.warning(
-            "WINDOW MISMATCH: this data covers %s, but sponsorship_service."
-            "DATA_WINDOW_YEARS is %d and every headline it renders says 'in the last "
-            "%d years'. Every document carries data_window.service_claim_mismatch=true. "
-            "Fix the SERVICE copy (it is owned elsewhere) before this is shown to users.",
-            window["label"], DATA_WINDOW_YEARS, DATA_WINDOW_YEARS)
+            "WINDOW: this data covers %s, not the %d-year default the module "
+            "constants describe. sponsorship_service derives the window, source, "
+            "vintage and disclaimer FROM THE ROW, so the badge will say %r — but "
+            "band thresholds are per-year, so a later multi-year load will move "
+            "scores. Every document carries data_window.service_claim_mismatch.",
+            window["label"], DATA_WINDOW_YEARS, window["label"])
     if not has_lca:
         logger.warning(
             "NO DOL LCA FILE: lca_filings_5y / median_wage / top_titles / "
-            "last_filed_at are ABSENT from every document (not zero). "
-            "sponsorship_service.SOURCE_LABEL still names both datasets (%r) — it "
-            "over-states the source for these rows.", SOURCE_LABEL)
+            "last_filed_at are ABSENT from every document (not zero), and each "
+            "row's source_label names USCIS alone rather than the module default "
+            "(%r). Pass --lca to fill them.", SOURCE_LABEL)
 
     print_sample(docs, args.sample)
 
@@ -1187,6 +1358,28 @@ def main():
             "candidates": candidates,
         }, indent=2), encoding="utf-8")
         print(f"\nWrote {len(candidates)} rollup candidates -> {out}")
+
+    if args.unmatched and args.census_absent:
+        out = Path(args.unmatched)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        ranked = sorted(unresolved,
+                        key=lambda u: -int(u.get("active_postings") or 0))
+        out.write_text(json.dumps({
+            "generated_at": now.isoformat(),
+            "ingest_version": INGEST_VERSION,
+            "note": "Employers we carry active postings for that have NO sponsorship "
+                    "row and cannot be proven absent from the census, because a "
+                    "petitioner name shares one of their distinctive tokens. Each is "
+                    "either a spelling we have not aliased (Fiserv -> FISERV SOLUTIONS "
+                    "LLC) or a coincidence. Curate the top of this list into "
+                    "scripts/data/sponsorship_rollups.py; never resolve it in bulk.",
+            "refused_lookalikes": [
+                {"inventory_name": a, "uscis_name": b, "reason": why}
+                for a, b, why in rollups.REFUSED_LOOKALIKES],
+            "count": len(ranked),
+            "unresolved": ranked[:2000],
+        }, indent=2), encoding="utf-8")
+        print(f"Wrote {len(ranked)} unresolved inventory employers -> {out}")
 
     if not args.apply:
         print("\n(dry run — nothing written. Re-run with --apply to write "

@@ -467,6 +467,313 @@ GROUPS: List[Dict[str, Any]] = [
      "aliases": [], "excluded": [], "note": "All Basking Ridge NJ."},
     {"key": "at and t", "display": "AT&T",
      "members": ["at and t services", "at and t"], "aliases": ["att"], "excluded": []},
+
+    # --- Brands our FEED spells one way and USCIS spells another -----------
+    # Every entry below was found by the same measurement: an employer we
+    # carry active postings for, whose normalized name is a PREFIX of a name
+    # that filed. A prefix is not evidence (see REFUSED_LOOKALIKES for the
+    # ones that relation got wrong), so each was reviewed by hand and the
+    # refusals are recorded next to the merges.
+    {
+        "key": "gdit", "display": "GDIT (General Dynamics IT)",
+        "members": ["general dynamics information technology"],
+        "aliases": ["general dynamics information technology"],
+        "excluded": ["general dynamics", "general dynamics mission systems",
+                     "general dynamics electric boat"],
+        "note": "Our registry, our postings and our feed all say 'GDIT' (335 "
+                "active postings under emp_f79fd2cc4167); USCIS says GENERAL "
+                "DYNAMICS INFORMATION TECHNOLOGY, INC. The parent General "
+                "Dynamics Corp is a different employers row and is refused.",
+    },
+    {
+        "key": "rtx", "display": "RTX (formerly Raytheon Technologies)",
+        "members": ["rtx", "rtx bbn technologies", "rtx fintech and research"],
+        "aliases": ["raytheon", "raytheon technologies"],
+        "excluded": ["rockwell collins inc d b a collins aerospace"],
+        "note": "RTX Corporation IS the renamed Raytheon Technologies — a rename, "
+                "which employer_registry models as operating_status 'renamed' rather "
+                "than a second employer, so a posting that says 'Raytheon' resolves "
+                "here. Our feed carries 1,260 postings as 'RTX' and the three RTX "
+                "entities filed six petitions between them in FY2026, which is "
+                "exactly the fact a candidate needs. Collins Aerospace is an RTX "
+                "division that files separately and runs its own board.",
+    },
+    {
+        "key": 'fiserv', "display": 'Fiserv',
+        "members": ['fiserv solutions'],
+        "aliases": [], "excluded": [],
+        "note": "Our feed carries 201 postings as 'Fiserv'; the petitioner is FISERV SOLUTIONS LLC (Brookfield WI). One alias, 232 approvals.",
+    },
+    {
+        "key": 'u s bank', "display": 'U.S. Bank',
+        "members": ['u s bank national association'],
+        "aliases": ['us bank', 'usbank'], "excluded": [],
+    },
+    {
+        "key": 'barclays', "display": 'Barclays',
+        "members": ['barclays services', 'barclays capital', 'barclays bank delaware', 'barclays bank'],
+        "aliases": [], "excluded": [],
+        "note": 'Four NY-filing Barclays entities.',
+    },
+    {
+        "key": 'truist', "display": 'Truist',
+        "members": ['truist bank'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'state street', "display": 'State Street',
+        "members": ['state street bank and trust', 'state street financial services'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'nordstrom', "display": 'Nordstrom',
+        "members": ['nordstrom inc d b a nordstrom', 'nordstrom'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'td bank', "display": 'TD Bank',
+        "members": ['td bank national association', 'td bank national association dba td bank americas most convenient ban'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'deutsche bank', "display": 'Deutsche Bank',
+        "members": ['deutsche bank securities', 'deutsche bank new york branch', 'deutsche bank trust company americas'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'astrazeneca', "display": 'AstraZeneca',
+        "members": ['astrazeneca pharmaceuticals', 'astrazeneca'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'novartis', "display": 'Novartis',
+        "members": ['novartis pharmaceuticals', 'novartis institutes for biomedical research', 'novartis services', 'novartis gene therapies'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'sanofi', "display": 'Sanofi',
+        "members": ['sanofi us services', 'sanofi vaccines', 'sanofi aventis'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'philips', "display": 'Philips',
+        "members": ['philips north america', 'philips ultrasound', 'philips rs north america', 'philips healthcare informatics', 'philips ds north america', 'philips image guided therapy', 'philips medical systems mr'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'abbott', "display": 'Abbott',
+        "members": ['abbott laboratories', 'abbott diabetes care inc an abbott laboratories', 'abbott cardiovascular systems inc an abbott laboratories', 'abbott diagnostics scarborough inc an abbott laboratories', 'abbott diabetes care sales corporation an abbott laboratories', 'abbott molecular inc an abbott laboratories', 'abbott laboratories inc an abbott laboratories'],
+        "aliases": [], "excluded": ['abbott construction'],
+        "note": "The subsidiaries name their parent in their own filed name ('... AN ABBOTT LABORATORIES COMPANY'), which is the employer's own statement. ABBOTT CONSTRUCTION (WA) is a builder.",
+    },
+    {
+        "key": 'cigna', "display": 'Cigna',
+        "members": ['cigna evernorth services', 'cigna health and life insurance'],
+        "aliases": ['evernorth'], "excluded": [],
+    },
+    {
+        "key": 'ntt data', "display": 'NTT DATA',
+        "members": ['ntt data americas', 'ntt data services', 'ntt data business solutions', 'ntt data aivista', 'ntt data europe and latam branch in', 'ntt data services federal government'],
+        "aliases": [], "excluded": ['ntt'],
+        "note": "NTT DATA only. Our feed's 198 'NTT' postings are probably NTT DATA's board and 'probably' is not evidence, so the bare parent brand is refused.",
+    },
+    {
+        "key": 'exlservice', "display": 'EXL',
+        "members": ['exlservice com', 'exlservice technology solutions'],
+        "aliases": ['exl'], "excluded": [],
+    },
+    {
+        "key": 'concentrix', "display": 'Concentrix',
+        "members": ['concentrix cvg customer management', 'concentrix solutions', 'concentrix cvg', 'concentrix services'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'dxc technology', "display": 'DXC Technology',
+        "members": ['dxc technology services'],
+        "aliases": ['dxc'], "excluded": [],
+    },
+    {
+        "key": 'relx', "display": 'RELX (LexisNexis)',
+        "members": ['relx inc d b a lexisnexis'],
+        "aliases": ['lexisnexis'], "excluded": [],
+        "note": 'The DBA is in the filed name.',
+    },
+    {
+        "key": 'centene', "display": 'Centene',
+        "members": ['centene management'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'keybank', "display": 'KeyBank',
+        "members": ['keybank national association'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'fifth third bank', "display": 'Fifth Third Bank',
+        "members": ['fifth third bank national association'],
+        "aliases": ['fifth third'], "excluded": [],
+    },
+    {
+        "key": 'bmo', "display": 'BMO',
+        "members": ['bmo bank n a', 'bmo capital markets'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'cibc', "display": 'CIBC',
+        "members": ['cibc bank', 'cibc world markets'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'caci', "display": 'CACI',
+        "members": ['caci inc federal'],
+        "aliases": [], "excluded": ['cacique foods'],
+        "note": 'CACIQUE FOODS (TX) is a cheese manufacturer.',
+    },
+    {
+        "key": 'kbr', "display": 'KBR',
+        "members": ['kbr technical services', 'kbr wyle services'],
+        "aliases": [], "excluded": ['kbra'],
+        "note": 'KBRA is Kroll Bond Rating Agency.',
+    },
+    {
+        "key": 'magna', "display": 'Magna',
+        "members": ['magna electronics', 'magna services of america inc d b a magna new mobility', 'magna powertrain of america', 'magna exteriors america holdings inc exterior systems engineering', 'magna seating of america', 'magna steyr', 'magna closures of america', 'magna electric vehicle structures michigan'],
+        "aliases": [], "excluded": [],
+        "note": 'All Michigan/Arizona Magna International operating units.',
+    },
+    {
+        "key": 'ryder', "display": 'Ryder',
+        "members": ['ryder system'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'allstate', "display": 'Allstate',
+        "members": ['allstate insurance'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'labcorp', "display": 'Labcorp',
+        "members": ['labcorp early development laboratories', 'labcorp central laboratory services'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'meijer', "display": 'Meijer',
+        "members": ['meijer great lakes limited partnership', 'meijer stores limited partnership'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'airbus', "display": 'Airbus',
+        "members": ['airbus americas', 'airbus helicopters'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'cushman and wakefield', "display": 'Cushman & Wakefield',
+        "members": ['cushman and wakefield u s'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'hilton', "display": 'Hilton',
+        "members": ['hilton domestic operating'],
+        "aliases": [], "excluded": ['hilton resorts corporation dba hilton grand vacations'],
+        "note": 'Hilton Grand Vacations was spun off in 2017 and is a separate public company with its own board.',
+    },
+    {
+        "key": 'johnson and johnson', "display": 'Johnson & Johnson',
+        "members": ['johnson and johnson services', 'johnson and johnson vision care'],
+        "aliases": ['jnj'], "excluded": ['johnson controls', 'johnson matthey', 'johnson mirmiran and thompson'],
+        "note": "'Johnson & Johnson' normalizes to 'johnson and johnson'; the registry writes 'johnson johnson', which is why the gap report indexes both spellings.",
+    },
+    {
+        "key": 'target', "display": 'Target',
+        "members": ['target enterprise'],
+        "aliases": [], "excluded": ['target builders', 'target integration', 'target labs', 'target market consultants', 'targetbase', 'targeted victory'],
+        "note": 'TARGET ENTERPRISE INC (Brooklyn Park MN) is the retailer; the six refusals are unrelated firms that begin with the word.',
+    },
+    {
+        "key": 'disney', "display": 'Disney',
+        "members": ['disney worldwide services', 'disney entertainment and sports llc fka disney streaming technology', 'disney streaming enterprises services', 'disney parks technology services co llc fka walt disney attractions t', 'disney global product development and creative inc indirect subsidiar', 'disney streaming services'],
+        "aliases": ['walt disney'], "excluded": ['disney construction'],
+    },
+    {
+        "key": 'mgm resorts', "display": 'MGM Resorts',
+        "members": ['mgm resorts satellite', 'mgm resorts international operations'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'eurofins', "display": 'Eurofins',
+        "members": ['eurofins lancaster laboratories professional scientific services', 'eurofins electrical and electronic testing', 'eurofins lancaster laboratories', 'eurofins microbiology laboratories', 'eurofins professional scientific services new england', 'eurofins analytics', 'eurofins central laboratory', 'eurofins diatherix laboratories'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'dollar tree', "display": 'Dollar Tree',
+        "members": ['dollar tree distribution'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'steel dynamics', "display": 'Steel Dynamics',
+        "members": ['steel dynamics sales', 'steel dynamics southwest'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'oshkosh', "display": 'Oshkosh',
+        "members": ['oshkosh defense'],
+        "aliases": [], "excluded": [],
+    },
+    {
+        "key": 'autonation', "display": 'AutoNation',
+        "members": ['autonation inc d b a autonation corporate management'],
+        "aliases": [], "excluded": [],
+    },
+]
+
+
+#: Names that reach our inventory's ``employer_name`` but are NOT employers, so
+#: no claim — not even "they filed nothing" — may be made about them. Two kinds:
+#: job aggregators that republish other employers' postings, and ATS tenant
+#: slugs that leaked into the name field. Keyed on ``normalize_employer`` output.
+NOT_EMPLOYERS = frozenset({
+    "jobgether", "lensa", "ziprecruiter", "adzuna", "jooble", "talent com",
+    "get it recruit", "recruiting from scratch", "jobs via dice",
+    "jobleads", "energy jobline",
+})
+
+#: An ATS tenant slug is not an employer name either. ``uscareers-oslrs`` and
+#: ``uscareers-kellerna`` are iCIMS tenants that arrived in the employer field.
+NOT_EMPLOYER_PREFIXES = ("uscareers ",)
+
+
+def is_not_an_employer(norm: Any) -> bool:
+    """True when a name in our inventory cannot carry an employer-level claim."""
+    key = str(norm or "").strip()
+    if not key:
+        return True
+    if key in NOT_EMPLOYERS:
+        return True
+    return any(key.startswith(p) for p in NOT_EMPLOYER_PREFIXES)
+
+
+#: Lookalikes the prefix relation proposed and a human REFUSED, with the reason.
+#: They are listed rather than silently dropped because the next person to run
+#: the scan will see the same pairs and deserves the earlier answer.
+REFUSED_LOOKALIKES = [
+    ("gsk", "gsk solutions", "GSK SOLUTIONS INC (Sugar Land TX) is an IT "
+     "staffing firm, not GlaxoSmithKline."),
+    ("flex", "flex consulting", "Flex Ltd (the EMS manufacturer) is not FLEX "
+     "CONSULTING GROUP INC (NJ)."),
+    ("pilot", "pilot technologies", "Pilot (the accounting startup) is not "
+     "PILOT TECHNOLOGIES LLC, nor PILOT TRAVEL CENTERS."),
+    ("kci", "kci technologies", "KCI USA (3M/Solventum wound care) is not KCI "
+     "TECHNOLOGIES INC (an engineering consultancy)."),
+    ("latham", "latham and watkins", "Latham Inc makes swimming pools; Latham "
+     "& Watkins is a law firm."),
+    ("asm", "asm america", "ASM Global (venue management) is not ASM America "
+     "(semiconductor deposition equipment)."),
+    ("kemper", "kemper county school district", "An insurer is not a Mississippi "
+     "school district."),
+    ("ntt", "ntt data americas", "NTT is the parent; NTT DATA is the IT "
+     "subsidiary that hires here. Probable is not proven."),
+    ("hilton", "hilton resorts corporation dba hilton grand vacations",
+     "Hilton Grand Vacations has been a separate public company since 2017."),
 ]
 
 

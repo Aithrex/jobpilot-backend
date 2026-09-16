@@ -49,10 +49,12 @@ def _index(employers):
     return gap.build_name_index(list(employers))
 
 
-def _rows(sponsors, employers=(), sources=None, ats=None, canonical=None, names=None):
+def _rows(sponsors, employers=(), sources=None, ats=None, canonical=None,
+          boards=None, names=None):
     by_id, by_name, by_token = _index(employers)
     return gap.build_rows(sponsors, by_id, by_name, by_token, {},
-                          sources or {}, ats or {}, canonical or {}, names or {})
+                          sources or {}, ats or {}, canonical or {},
+                          boards or {}, names or {})
 
 
 class TestTheJoinFindsTheEmployerWeAlreadyKnow:
@@ -124,13 +126,26 @@ class TestTheBucketIsTheHonestOne:
         assert rows[0]["bucket"] == gap.BUCKET_UNVALIDATED
         assert rows[0]["career_source_covering"] == 0
 
-    def test_postings_are_counted_once_when_both_paths_answer(self):
-        """The same posting reached by both joins must not be counted twice."""
+    def test_the_canonical_id_wins_and_the_name_is_never_added_to_it(self):
+        """A Boeing posting carries `employer_name: "M.J. WILLIAMS COMPANY"`, so
+        a name is both incomplete and capable of crediting the wrong employer.
+        The canonical id answers alone when it answers at all."""
         rows = _rows([_sponsor("widget", entities=("widget",))],
                      employers=[_employer("emp_w", "widget")],
-                     canonical={"emp_w": {"active": 10, "core": 3}},
-                     names={"widget": {"active": 10, "core": 3}})
-        assert rows[0]["active_postings"] == 10
+                     canonical={"emp_w": {"active": 402, "core": 200}},
+                     names={"widget": {"active": 0, "core": 0}})
+        assert rows[0]["active_postings"] == 402
+        assert rows[0]["posting_count_basis"] == "canonical_employer_id"
+
+    def test_the_board_answers_before_a_name_does(self):
+        rows = _rows([_sponsor("widget")],
+                     employers=[_employer("emp_w", "widget")],
+                     sources={"emp_w": [{"state": "validated", "ats_vendor": "greenhouse",
+                                         "tenant": "widgetco", "member_key": "gh-widgetco"}]},
+                     boards={("greenhouse", "widgetco"): {"active": 33, "core": 20}},
+                     names={"widget": {"active": 1, "core": 0}})
+        assert rows[0]["active_postings"] == 33
+        assert rows[0]["posting_count_basis"] == "ats_tenant"
 
     def test_a_posting_the_canonical_join_cannot_see_is_still_found_by_name(self):
         rows = _rows([_sponsor("widget")],
@@ -138,6 +153,43 @@ class TestTheBucketIsTheHonestOne:
         assert rows[0]["active_postings"] == 4
         assert rows[0]["posting_count_basis"] == "employer_name"
         assert rows[0]["bucket"] == gap.BUCKET_COVERED
+
+
+class TestUnderReadIsNotADiscoveryGap:
+    """Eightfold's page_size bug read 29 Microsoft postings instead of 1,178.
+    A row like that must not be filed as something discovery can fix."""
+
+    def _board(self, published, held):
+        return _rows(
+            [_sponsor("widget")],
+            employers=[_employer("emp_w", "widget")],
+            sources={"emp_w": [{"state": "validated", "ats_vendor": "eightfold",
+                                "tenant": "widgetco", "member_key": "ef-widgetco",
+                                "job_count_last": published}]},
+            canonical={"emp_w": {"active": held, "core": 0}} if held else None,
+        )[0]
+
+    def test_holding_far_fewer_than_the_board_publishes_is_under_read(self):
+        row = self._board(published=1178, held=29)
+        assert row["bucket"] == gap.BUCKET_UNDER_READ
+        assert row["board_published_last"] == 1178
+        assert "fetch" in row["gap_reason"]
+
+    def test_holding_what_the_board_publishes_is_simply_covered(self):
+        assert self._board(published=30, held=29)["bucket"] == gap.BUCKET_COVERED
+
+    def test_a_tiny_board_is_not_judged_by_the_ratio(self):
+        # 3 published, 1 held: a ratio, but not a finding.
+        assert self._board(published=3, held=1)["bucket"] == gap.BUCKET_COVERED
+
+    def test_a_board_publishing_jobs_we_hold_none_of_is_its_own_bucket(self):
+        row = self._board(published=54, held=0)
+        assert row["bucket"] == gap.BUCKET_BOARD_HAS_JOBS
+        assert "re-read the endpoint" in row["gap_reason"]
+
+    def test_a_proven_board_publishing_nothing_is_still_validated_but_zero(self):
+        row = self._board(published=0, held=0)
+        assert row["bucket"] == gap.BUCKET_VALIDATED_ZERO
 
 
 class TestSoftwareLikelihoodIsEvidenceNotVibes:
@@ -176,6 +228,33 @@ class TestSoftwareLikelihoodIsEvidenceNotVibes:
         weight, evidence = gap.software_likelihood("ACME", [])
         assert weight == gap.NAICS_WEIGHT_UNKNOWN
         assert evidence["basis"] == "naics_unknown"
+
+    def test_demand_and_rank_are_separate_numbers(self):
+        """The discount is applied to the QUEUE, never to the measurement."""
+        rows = _rows([_sponsor("infosys", approvals=4152, naics="54")])
+        row = rows[0]
+        assert row["demand_score"] == round(4152 * row["software_likelihood"], 1)
+        assert row["conversion"] == gap.STAFFING_CONVERSION
+        assert row["conversion_basis"] == "client_site_staffing_cohort"
+        assert row["priority_score"] < row["demand_score"]
+
+    def test_a_board_we_have_read_outranks_the_cohort_prior(self):
+        """LTIMindtree: 1,289 approvals, a readable board publishing 54 jobs."""
+        rows = _rows([_sponsor("ltimindtree", approvals=1289)],
+                     employers=[_employer("emp_l", "ltimindtree")],
+                     sources={"emp_l": [{"state": "validated", "ats_vendor": "smartrecruiters",
+                                         "tenant": "ltimindtree", "member_key": "sr-lti",
+                                         "job_count_last": 54}]})
+        row = rows[0]
+        assert row["conversion_basis"] == "board_published_last"
+        # 54/1289 is below the floor: a real employer never ranks at exactly
+        # zero, but it ranks far below the cohort prior it would otherwise get.
+        assert row["conversion"] == gap.MIN_CONVERSION < gap.STAFFING_CONVERSION
+
+    def test_an_ordinary_employer_is_not_discounted(self):
+        row = _rows([_sponsor("acme labs", approvals=100)])[0]
+        assert row["conversion"] == 1.0
+        assert row["priority_score"] == row["demand_score"]
 
     def test_the_ranking_is_approvals_times_likelihood(self):
         rows = _rows([

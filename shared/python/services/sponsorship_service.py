@@ -3,10 +3,28 @@
 This is a TRUST feature, not a prediction engine. It surfaces what an employer has
 *actually done* in public government disclosure data — nothing about the individual
 user's odds. Copy is always of the form
-    "Sponsored 63 people in similar roles in the last 5 years"
+    "Sponsored 63 people in similar roles in FY2026"
 and is ALWAYS shown with its source and data vintage. We NEVER phrase it as a
 prediction of the applicant's outcome, eligibility, or any guarantee (see
-``DISCLAIMER`` below), and we return ``None`` — never a guess — when we have no data.
+``build_disclaimer`` below), and we return ``None`` — never a guess — when we have
+no data.
+
+**THE PROVENANCE COMES FROM THE ROW.** The window, the source label, the
+disclaimer and the vintage are all derived from the document that was ingested
+(``data_window``, ``source_label``), never from a module constant describing a
+window we hope we loaded. ``DATA_WINDOW_YEARS`` / ``SOURCE_LABEL`` survive only
+as the fallback for a legacy row that carries neither. This mattered on live
+data: with FY2026-only USCIS rows loaded, every badge said "in the last 5 years"
+from "DOL OFLC LCA Disclosure Data + USCIS", i.e. it claimed five years of two
+datasets when we had one year of one. ``data_vintage`` is now the fiscal PERIOD
+("FY2026"); when we imported it is ``data_imported_at``.
+
+**A MISS AND A ZERO ARE DIFFERENT FACTS.** No row at all means we have not
+looked at this employer — ``get_signal`` returns ``None`` and says so through
+``lookup_status``. A row with ``census_absent: true`` means the opposite: the
+USCIS Data Hub lists every employer that filed, we checked, and this employer is
+not among them. Northrop Grumman is the worked example — 833 active postings in
+our inventory, zero H-1B petitions in the FY2026 census.
 
 Data comes from two public federal datasets, joined per employer by a normalized
 name (see ``normalize_employer``) and pre-aggregated into the ``sponsorship_signals``
@@ -25,7 +43,20 @@ Mongo collection by the human-run ``scripts/ingest_sponsorship.py``:
       "top_titles":      [str, ...],
       "last_filed_at":   datetime|str|None,  # most recent LCA decision/received date
       "computed_at":     datetime|str|None,  # when the ingest aggregated this row
+      "data_window":     {                   # THE PROVENANCE. Read, not assumed.
+          "fiscal_years": [int, ...],        #   what the file actually covered
+          "years":        int,               #   len(fiscal_years), normally
+          "label":        str,               #   the sentence a human should read
+          "dol_lca_included": bool,
+      },
+      "source_label":    str,                # the dataset(s) this row came from
+      "census_absent":   bool,               # optional: filed NOTHING (a finding)
+      "naics"/"location"/"rollup":           # context, passed through to fit_score
     }
+
+Only ``employer_norm`` is required. Every other field defaults on read, which is
+how a USCIS-only row (no DOL half) scores on approvals alone instead of being
+penalised for the wage and title fields nobody wrote.
 
 This module is PURE + lazy: it does NO work at import time and opens NO Mongo
 connection until a ``get_signal``/``bulk_signals`` call actually reads. That keeps
@@ -42,16 +73,37 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Presentation constants (single source of truth for the honest framing).
+# Presentation constants.
+#
+# THESE ARE FALLBACKS, NOT THE ANSWER. The window, the source and the vintage
+# are properties of the ROW that was ingested, not of this module: a run that
+# loaded one fiscal year of USCIS data must not be described with a sentence
+# that says five years of DOL and USCIS. ``_score_doc`` therefore derives all
+# three from ``doc["data_window"]`` / ``doc["source_label"]`` (written by
+# ``scripts/ingest_sponsorship.py``) and falls back to the constants below only
+# for a legacy row that carries neither.
+#
+# The failure this prevents was live: with FY2026-only rows loaded, every badge
+# said "in the last 5 years" and "Source: DOL OFLC LCA Disclosure Data + USCIS"
+# for data that is one year of USCIS with no DOL component at all.
 # ---------------------------------------------------------------------------
 DATA_WINDOW_YEARS = 5
 SOURCE_LABEL = "DOL OFLC LCA Disclosure Data + USCIS H-1B Employer Data Hub"
-DISCLAIMER = (
-    "This reflects the employer's historical H-1B activity from public DOL and "
-    "USCIS disclosure data over the last {years} fiscal years. It is NOT a "
-    "prediction of your individual outcome, is not legal or immigration advice, "
-    "and is not a guarantee of sponsorship or eligibility."
-).format(years=DATA_WINDOW_YEARS)
+
+
+def build_disclaimer(period_phrase: str, source: str) -> str:
+    """The mandated framing, stated over the period and source we ACTUALLY have."""
+    return (
+        f"This reflects the employer's historical H-1B activity from public "
+        f"government disclosure data ({source}) covering {period_phrase}. It is "
+        f"NOT a prediction of your individual outcome, is not legal or "
+        f"immigration advice, and is not a guarantee of sponsorship or "
+        f"eligibility."
+    )
+
+
+DISCLAIMER = build_disclaimer(f"the last {DATA_WINDOW_YEARS} fiscal years",
+                              SOURCE_LABEL)
 
 # Bands are derived from the honest 0..100 score below. "none" means we have a row
 # but the employer shows no real sponsorship track record in the window.
@@ -68,7 +120,26 @@ _LOW_MIN = 1
 # Volume saturation for the log-scaled volume term: an employer with this many
 # approvals in the window maps to a full volume score of 1.0. Chosen so a few
 # thousand approvals reads as "strong" and a handful reads as "low".
+#
+# SATURATION IS PER YEAR, and that is a correctness fix, not a tuning knob. The
+# constant was calibrated against a five-fiscal-year window. Held fixed, the
+# same employer's band would change with how many years we happened to import —
+# on the FY2026-only load "strong" started at 204 approvals IN ONE YEAR (the
+# five-year equivalent of ~1,000), so the band silently measured a different
+# thing than it was calibrated to mean. Scaling the saturation by the window
+# makes a band a statement about the employer's RATE of sponsorship, which is
+# stable across vintages: a 5-year file scores exactly as it always did
+# (5 x 400 = 2000), and a 1-year file now reads "strong" from ~68 approvals.
 _VOLUME_SATURATION = 2000
+_VOLUME_SATURATION_PER_YEAR = _VOLUME_SATURATION / DATA_WINDOW_YEARS
+
+
+def _saturation_for(window_years: Any) -> float:
+    try:
+        years = int(window_years)
+    except (TypeError, ValueError):
+        years = DATA_WINDOW_YEARS
+    return _VOLUME_SATURATION_PER_YEAR * max(1, years)
 
 # ---------------------------------------------------------------------------
 # Employer-name normalization (matching key). Deterministic + injection-safe:
@@ -201,8 +272,50 @@ def _band_for_score(score: int, has_activity: bool) -> str:
     return BAND_NONE
 
 
+def window_of(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """The window THIS ROW was built from: {years, fiscal_years, label, source}.
+
+    Everything the public object says about provenance comes from here. A row
+    written before ``data_window`` existed falls back to the module constants,
+    which is the only place they are still used.
+    """
+    raw = doc.get("data_window")
+    raw = raw if isinstance(raw, dict) else {}
+    years_out: List[int] = []
+    for value in (raw.get("fiscal_years") or []):
+        try:
+            years_out.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    fiscal_years = sorted(set(years_out))
+    try:
+        years = int(raw.get("years") or 0)
+    except (TypeError, ValueError):
+        years = 0
+    if years <= 0:
+        years = len(fiscal_years) or DATA_WINDOW_YEARS
+    return {
+        "years": years,
+        "fiscal_years": fiscal_years,
+        "label": str(raw.get("label") or ""),
+        "source": str(doc.get("source_label") or SOURCE_LABEL),
+        "measured": bool(raw),
+    }
+
+
+def _period_phrase(window: Dict[str, Any]) -> str:
+    """"FY2026" / "FY2022-FY2026" / "the last 5 fiscal years" — never a guess."""
+    fiscal_years = window.get("fiscal_years") or []
+    if len(fiscal_years) == 1:
+        return f"FY{fiscal_years[0]}"
+    if fiscal_years:
+        return f"FY{fiscal_years[0]}-FY{fiscal_years[-1]}"
+    years = int(window.get("years") or DATA_WINDOW_YEARS)
+    return f"the last {years} fiscal year{'s' if years != 1 else ''}"
+
+
 def _score_signal(approvals: int, lca_filings: int, denials: int,
-                  last_filed_at: Any) -> int:
+                  last_filed_at: Any, window_years: Any = DATA_WINDOW_YEARS) -> int:
     """Honest 0..100 sponsorship signal.
 
     volume  : log10-scaled on the stronger of USCIS approvals / DOL filings,
@@ -214,7 +327,8 @@ def _score_signal(approvals: int, lca_filings: int, denials: int,
     volume_basis = max(approvals, lca_filings)
     if volume_basis <= 0:
         return 0
-    volume = math.log10(1 + volume_basis) / math.log10(1 + _VOLUME_SATURATION)
+    saturation = _saturation_for(window_years)
+    volume = math.log10(1 + volume_basis) / math.log10(1 + saturation)
     volume = max(0.0, min(1.0, volume))
 
     decided = approvals + denials
@@ -226,41 +340,46 @@ def _score_signal(approvals: int, lca_filings: int, denials: int,
 
 
 def _build_summary(display: str, approvals: int, lca_filings: int,
-                   vintage: Optional[str]) -> str:
-    """Honest, numbers-first summary. Always carries the source + vintage."""
+                   window: Dict[str, Any], census_absent: bool = False) -> str:
+    """Honest, numbers-first summary. Always carries the source + the PERIOD.
+
+    The period is the fiscal span the row was built from, not the moment we
+    imported it: "data through 2026-09-16" described our cron job, not the
+    government's data.
+    """
     who = display or "This employer"
+    period = _period_phrase(window)
+    source = window.get("source") or SOURCE_LABEL
     if approvals > 0:
-        head = (
-            f"{who} had {approvals:,} H-1B approval(s) in the last "
-            f"{DATA_WINDOW_YEARS} fiscal years"
-        )
+        head = f"{who} had {approvals:,} H-1B approval(s) in {period}"
         if lca_filings > 0:
             head += f" across {lca_filings:,} LCA filing(s)"
     elif lca_filings > 0:
-        head = (
-            f"{who} filed {lca_filings:,} labor condition application(s) "
-            f"in the last {DATA_WINDOW_YEARS} fiscal years"
-        )
+        head = (f"{who} filed {lca_filings:,} labor condition application(s) "
+                f"in {period}")
+    elif census_absent:
+        # The Data Hub is a CENSUS of employers who filed, so absence from it
+        # is a finding, not a gap. Saying so is the whole point of writing the
+        # row: "no data" and "they filed nothing" look identical otherwise.
+        head = (f"{who} filed no H-1B petitions in {period} — the source lists "
+                f"every employer that filed, and they are not among them")
     else:
-        head = (
-            f"{who} shows no H-1B sponsorship activity in the last "
-            f"{DATA_WINDOW_YEARS} fiscal years"
-        )
-    vintage_txt = f" (data through {vintage[:10]})" if vintage else ""
-    return f"{head}. Source: {SOURCE_LABEL}{vintage_txt}."
+        head = f"{who} shows no H-1B sponsorship activity in {period}"
+    return f"{head}. Source: {source} ({period})."
 
 
-def _build_headline(approvals: int, top_titles: List[str]) -> str:
+def _build_headline(approvals: int, top_titles: List[str],
+                    window: Dict[str, Any], census_absent: bool = False) -> str:
     """Short badge line mirroring the Compass copy pattern."""
+    period = _period_phrase(window)
     if approvals <= 0:
-        return f"No H-1B sponsorships on record in the last {DATA_WINDOW_YEARS} years"
+        if census_absent:
+            return f"Filed no H-1B petitions in {period}"
+        return f"No H-1B sponsorships on record in {period}"
     roles = "similar roles"
     if top_titles:
         roles = top_titles[0] if len(top_titles) == 1 else "similar roles"
-    return (
-        f"Sponsored {approvals:,} people in {roles} in the last "
-        f"{DATA_WINDOW_YEARS} years"
-    )
+    return f"Sponsored {approvals:,} people in {roles} in {period}"
 
 
 def _score_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -274,11 +393,23 @@ def _score_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
     last_filed_at = _iso(doc.get("last_filed_at"))
     computed_at = _iso(doc.get("computed_at"))
 
+    window = window_of(doc)
+    census_absent = bool(doc.get("census_absent"))
     has_activity = (approvals + lca_filings) > 0
-    score = _score_signal(approvals, lca_filings, denials, doc.get("last_filed_at"))
+    score = _score_signal(approvals, lca_filings, denials, doc.get("last_filed_at"),
+                          window_years=window["years"])
     band = _band_for_score(score, has_activity)
     decided = approvals + denials
     approval_rate = round(approvals / decided, 3) if decided > 0 else None
+    period = _period_phrase(window)
+    source = window["source"]
+
+    if has_activity:
+        evidence = "filed_in_window"
+    elif census_absent:
+        evidence = "absent_from_filing_census"
+    else:
+        evidence = "row_with_no_activity"
 
     return {
         "employer_display": display or None,
@@ -291,15 +422,28 @@ def _score_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
         "top_titles": top_titles,
         "last_filed_at": last_filed_at,
         "computed_at": computed_at,
-        "data_vintage": last_filed_at or computed_at,
-        "data_window_years": DATA_WINDOW_YEARS,
+        # The VINTAGE is the fiscal period the data covers. It used to be
+        # `computed_at`, i.e. when our ingest ran, which told a user when we
+        # imported a file and nothing at all about the evidence.
+        "data_vintage": period,
+        "data_imported_at": _iso(doc.get("ingested_at")) or computed_at,
+        "data_window_years": window["years"],
+        "data_window_label": window["label"] or None,
+        "fiscal_years": window["fiscal_years"],
+        # Passed through for `fit_score._employer_sponsorship`, which states the
+        # MEASURED window next to any advertised one.
+        "data_window": doc.get("data_window") if isinstance(
+            doc.get("data_window"), dict) else None,
+        "naics": doc.get("naics"),
+        "location": doc.get("location"),
+        "evidence": evidence,
         "score": score,
         "band": band,
-        "headline": _build_headline(approvals, top_titles),
-        "summary": _build_summary(display, approvals, lca_filings,
-                                  last_filed_at or computed_at),
-        "source": SOURCE_LABEL,
-        "disclaimer": DISCLAIMER,
+        "headline": _build_headline(approvals, top_titles, window, census_absent),
+        "summary": _build_summary(display, approvals, lca_filings, window,
+                                  census_absent),
+        "source": source,
+        "disclaimer": build_disclaimer(period, source),
     }
 
 
@@ -322,12 +466,51 @@ def get_signal(company_name: Any) -> Optional[Dict[str, Any]]:
         logger.warning("sponsorship get_signal lookup failed for %r: %s", norm, e)
         return None
     if not doc:
+        # A miss and a zero are DIFFERENT facts that look the same to a user,
+        # so a miss is logged rather than silently swallowed. The durable fix
+        # is upstream: `scripts/ingest_sponsorship.py` writes an explicit
+        # `census_absent` row for employers we carry that provably filed
+        # nothing, and an alias row for every spelling our feed uses, so this
+        # branch should mean "we have never looked at this employer".
+        logger.debug("sponsorship: no row for %r", norm)
         return None
     try:
         return _score_doc(doc)
     except Exception as e:
         logger.warning("sponsorship scoring failed for %r: %s", norm, e)
         return None
+
+
+def lookup_status(company_name: Any) -> Dict[str, Any]:
+    """Why a lookup answered the way it did. Diagnostics for scripts, not a route.
+
+    ``matched`` false with ``reason == "no_row"`` means WE HAVE NOT LOOKED at
+    this employer, which is not the same as the employer not sponsoring —
+    `reason == "census_absent"` is that second answer, and it is a finding.
+    """
+    norm = _safe_norm_for_query(company_name)
+    if not norm:
+        return {"company": company_name, "normalized": "", "matched": False,
+                "reason": "unnormalizable_name"}
+    try:
+        doc = _collection().find_one({"employer_norm": norm}, {"_id": 0})
+    except Exception as e:
+        return {"company": company_name, "normalized": norm, "matched": False,
+                "reason": "lookup_failed", "detail": str(e)}
+    if not doc:
+        return {"company": company_name, "normalized": norm, "matched": False,
+                "reason": "no_row"}
+    rollup = doc.get("rollup") or {}
+    return {
+        "company": company_name,
+        "normalized": norm,
+        "matched": True,
+        "reason": ("census_absent" if doc.get("census_absent")
+                   else "alias_of_" + str(rollup.get("canonical_norm"))
+                   if rollup.get("is_alias") else "employer_row"),
+        "employer_display": doc.get("employer_display"),
+        "approvals": _to_int(doc.get("approvals_5y")),
+    }
 
 
 def bulk_signals(company_names: List[Any]) -> Dict[str, Optional[Dict[str, Any]]]:

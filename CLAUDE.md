@@ -295,6 +295,42 @@ Scripts, all **dry-run by default**:
   arrival. A queue of 1,443 rows sorted by `created_at` is a queue nobody
   finishes.
 
+## H-1B sponsorship intel (`sponsorship-ingest-2.0.0`, 2026-09-16)
+
+`sponsorship_signals` was EMPTY until 2026-09-16 — the feature shipped and was
+never run, so every badge returned `None`. It now holds 43,561 rows built by
+`scripts/ingest_sponsorship.py` from the USCIS H-1B Employer Data Hub (FY2026),
+and `services/sponsorship_service.py` serves them to `/api/jobs/sponsorship`,
+search, guest cards and the digests. See
+[`docs/coverage/h1b-sponsorship-ingest.md`](docs/coverage/h1b-sponsorship-ingest.md).
+
+- **The provenance comes from the ROW, never from a module constant.** The
+  window, source label, disclaimer and vintage are read off `data_window` /
+  `source_label`. They used to be `DATA_WINDOW_YEARS = 5` and a label naming
+  DOL+USCIS, so one fiscal year of USCIS rendered as "in the last 5 years" from
+  "DOL OFLC LCA Disclosure Data + USCIS" — five years of two datasets we did not
+  have. `data_vintage` is the fiscal PERIOD ("FY2026"); when we imported is
+  `data_imported_at`.
+- **Volume saturation is PER YEAR.** The constant was calibrated on a five-year
+  window; held fixed, a one-year file put "strong" at 204 approvals in one year
+  and a band would move when we imported more history rather than when the
+  employer changed. A five-year file still scores identically.
+- **A miss and a zero are different facts.** No row = we never looked
+  (`lookup_status` says `no_row`). `census_absent: true` = the Data Hub lists
+  every employer that filed, we checked every distinctive token of the name, and
+  they are not in it. Northrop Grumman: 833 active postings, zero petitions.
+  454 such employers hold 12,478 of our active postings.
+- **Rollup merges on evidence only** (`scripts/data/sponsorship_rollups.py`):
+  curated exact-name whitelist, `employers` registry at confidence >= 0.80, or
+  Tax-ID last-4 + first token + state. USCIS prints four EIN digits, so that
+  field is never probative alone. The file contains a Delray Beach stone
+  importer named "AMAZON USA ENTERPRISE …" and an IT staffing firm named "GSK
+  SOLUTIONS" — refusals are recorded next to the merges, and the 2,639 near
+  misses go to a review artifact, never to a guess.
+- `scripts/sponsorship_gap_report.py` is read-only and joins that demand against
+  `employers`/`career_sources`/`company_ats_endpoints`/`job_postings` →
+  `docs/coverage/h1b-sponsor-gaps.{json,csv}`.
+
 ## Job sourcing
 Jobs come from JSearch **plus direct employer ATS portals** — the differentiator. Catalogs + engines live in the shared layer: `workday_tenant_catalog.py` / `workday_jobs_service.py` / `workday_cxs_fetcher.py` (Workday CXS) · `career_pages_catalog.py` / `career_pages_service.py` (**`FETCHERS`** greenhouse/lever/ashby/smartrecruiters/workable/recruitee; **`ENTERPRISE_FETCHERS`** amazon/eightfold/phenom/orc/uber) · `mnc_catalog.py` / `mnc_jobs_service.py`. Routes in `services/jobs/blueprints/jobs.py` (`/workday/*`, `/career-pages/*`, `/mnc/*`). Adding companies = catalog rows, validated live via `scripts/discover_workday_tenants.py` / `scripts/discover_career_pages.py`; a new ATS = a `_fetch_<ats>()` registered in `FETCHERS`. **Apify is disabled** (reversible — every edit tagged `APIFY DISABLED (temporary)`).
 

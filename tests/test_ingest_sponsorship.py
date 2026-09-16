@@ -377,13 +377,15 @@ class TestTheServiceScoresAUscisOnlyRowSanely:
     These thresholds are a CONSEQUENCE of that choice, not an independent
     decision, and a change to either side should show up here."""
 
+    # One fiscal year of data, judged at the same per-year rate a five-year
+    # file is judged at (see tests/test_sponsorship_service.py).
     @pytest.mark.parametrize("approvals,band", [
         (0, sponsorship_service.BAND_NONE),
         (1, sponsorship_service.BAND_LOW),
-        (12, sponsorship_service.BAND_LOW),
-        (13, sponsorship_service.BAND_MODERATE),
-        (203, sponsorship_service.BAND_MODERATE),
-        (204, sponsorship_service.BAND_STRONG),
+        (7, sponsorship_service.BAND_LOW),
+        (8, sponsorship_service.BAND_MODERATE),
+        (65, sponsorship_service.BAND_MODERATE),
+        (66, sponsorship_service.BAND_STRONG),
         (13069, sponsorship_service.BAND_STRONG),
     ])
     def test_band_boundaries(self, approvals, band):
@@ -391,8 +393,8 @@ class TestTheServiceScoresAUscisOnlyRowSanely:
         assert sponsorship_service._score_doc(doc)["band"] == band
 
     def test_denials_temper_the_signal_without_erasing_it(self):
-        clean = sponsorship_service._score_doc(_docs({"x": _entity("x", "X", 210)})[0])
-        heavy = sponsorship_service._score_doc(_docs({"x": _entity("x", "X", 210, 200)})[0])
+        clean = sponsorship_service._score_doc(_docs({"x": _entity("x", "X", 70)})[0])
+        heavy = sponsorship_service._score_doc(_docs({"x": _entity("x", "X", 70, 70)})[0])
         assert clean["band"] == sponsorship_service.BAND_STRONG
         assert heavy["score"] < clean["score"]
         assert heavy["band"] == sponsorship_service.BAND_MODERATE
@@ -404,3 +406,70 @@ class TestTheServiceScoresAUscisOnlyRowSanely:
         assert scored["last_filed_at"] is None
         # The vintage still has to render: computed_at is the fallback.
         assert scored["data_vintage"] is not None
+
+
+class TestFilingNothingIsAnAnswerAndIsNotNoData:
+    """The USCIS Data Hub lists every employer that filed, so absence from it is
+    evidence. Northrop Grumman holds 833 active postings in our inventory and
+    filed zero petitions in FY2026 — until now that was indistinguishable from
+    an employer we had simply never looked at."""
+
+    WINDOW = {"fiscal_years": [2026], "years": 1, "label": "FY2026"}
+
+    def _run(self, inventory, entities=None):
+        entities = entities or {
+            "fiserv solutions": _entity("fiserv solutions", "FISERV SOLUTIONS LLC", 232),
+            "acme widgets": _entity("acme widgets", "ACME WIDGETS INC", 5),
+        }
+        return ingest.census_absent_documents(
+            entities, set(entities), inventory, sources=SOURCES,
+            window=self.WINDOW, run_id="r")
+
+    def test_an_employer_with_no_token_in_the_census_filed_nothing(self):
+        docs, _ = self._run({"northrop grumman": {"active": 833, "core": 408,
+                                                  "display": "Northrop Grumman"}})
+        assert len(docs) == 1
+        doc = docs[0]
+        assert doc["employer_norm"] == "northrop grumman"
+        assert doc["approvals_5y"] == 0 and doc["census_absent"] is True
+        assert doc["census"]["tokens_checked"] == ["northrop", "grumman"]
+        assert doc["census"]["inventory_active_postings"] == 833
+        scored = sponsorship_service._score_doc(doc)
+        assert scored["band"] == sponsorship_service.BAND_NONE
+        assert scored["evidence"] == "absent_from_filing_census"
+
+    def test_a_token_present_in_the_census_is_a_curation_task_not_a_zero(self):
+        """Fiserv filed as FISERV SOLUTIONS LLC. Claiming it filed nothing
+        because our feed spells it 'Fiserv' would be a false negative."""
+        docs, skipped = self._run({"fiserv": {"active": 201, "core": 93,
+                                              "display": "Fiserv"}})
+        assert docs == []
+        assert skipped[0]["reason"] == "token_present_in_census"
+        assert skipped[0]["tokens"] == ["fiserv"]
+
+    def test_a_name_of_only_common_words_proves_nothing(self):
+        docs, skipped = self._run({"td bank": {"active": 877, "core": 181,
+                                               "display": "TD Bank"}})
+        assert docs == []
+        assert skipped[0]["reason"] == "no_distinctive_token"
+
+    def test_an_aggregator_is_not_an_employer_and_gets_no_claim(self):
+        docs, skipped = self._run({"jobgether": {"active": 4478, "core": 2151,
+                                                 "display": "Jobgether"},
+                                   "uscareers oslrs": {"active": 180, "core": 0,
+                                                       "display": "uscareers-oslrs"}})
+        assert docs == []
+        assert {s["reason"] for s in skipped} == {"not_an_employer"}
+
+    def test_an_employer_we_already_have_a_row_for_is_left_alone(self):
+        entities = {"acme widgets": _entity("acme widgets", "ACME WIDGETS INC", 5)}
+        docs, _ = ingest.census_absent_documents(
+            entities, {"acme widgets"},
+            {"acme widgets": {"active": 10, "core": 2, "display": "Acme Widgets"}},
+            sources=SOURCES, window=self.WINDOW, run_id="r")
+        assert docs == []
+
+    def test_we_only_speak_about_employers_we_carry_postings_for(self):
+        docs, _ = self._run({"northrop grumman": {"active": 0, "core": 0,
+                                                  "display": "Northrop Grumman"}})
+        assert docs == []
