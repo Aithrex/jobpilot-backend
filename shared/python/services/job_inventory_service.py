@@ -1619,6 +1619,13 @@ _CARD_PROJECTION = {
     # queried.
     "tech": 1,
     "dedupe_group_id": 1, "variant_group_id": 1, "canonical_url_key": 1,
+    # The canonical employer, so a card can be shown under the employer's name
+    # rather than whatever legal entity the board stamped on the requisition.
+    # `employer_id` is a SLUG of the printed name and differs across JPMorgan's
+    # three CX sites ("JPMorgan Chase", "NUTMEG CONTAINER CORPORATION", "CHASE
+    # FAMILY LIMITED PARTNERSHIP NO. 5"); the canonical id is the same for all
+    # three. Not projected, it may as well not exist for any read path.
+    "canonical_employer_id": 1,
 }
 
 

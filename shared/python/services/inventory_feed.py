@@ -202,6 +202,12 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
         "job_id": doc.get("job_id"),
         "title": str(doc.get("title_raw") or "")[:200],
         "company": str(doc.get("employer_name") or ""),
+        # The same value under the key `employer_display` reads, plus the
+        # canonical id it resolves against. Both are needed for a card to be
+        # shown under the EMPLOYER's name instead of the legal entity the
+        # board printed — see `apply_display_names` below.
+        "employer_name": str(doc.get("employer_name") or ""),
+        "canonical_employer_id": str(doc.get("canonical_employer_id") or ""),
         "tenant": tenant,
         "_req_key": req_key,
         "ats": ats,
@@ -750,6 +756,28 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
                 continue
         rows.append(row)
     rows = _dedupe(rows)
+    # Show the EMPLOYER, not the legal entity the board stamped on the
+    # requisition. `_dedupe` already collapses JPMorgan's three CX copies of
+    # one requisition into a single card (`_req_key`), but which of the three
+    # SURVIVES is whichever arrived first — measured across all six input
+    # orders, the kept name was "JPMorgan Chase", "CHASE FAMILY LIMITED
+    # PARTNERSHIP NO. 5" and "NUTMEG CONTAINER CORPORATION" in two orders
+    # each. So the duplicate was already gone and the name was still a coin
+    # flip, which is worse than it sounds: a card showing "NUTMEG CONTAINER
+    # CORPORATION" also looks its sponsorship up under that name and finds
+    # nothing.
+    #
+    # `employer_display` is the existing, curated answer and was simply never
+    # wired into this path. Its first rung is a name-level correction that
+    # needs no registry read (NUTMEG / CHASE FAMILY -> JPMorgan Chase,
+    # M.J. WILLIAMS COMPANY -> Boeing); the canonical-registry rung is
+    # available now that the id is projected. The original is preserved on
+    # `employer_name_original` so a card can still say "also listed as".
+    try:
+        from services import employer_display
+        employer_display.apply_display_names(rows)
+    except Exception as exc:  # pragma: no cover - display polish is best effort
+        logger.warning("inventory_feed: display names skipped: %s", type(exc).__name__)
 
     if len(rows) < MIN_ROWS:
         logger.info("inventory_feed: %s slice too thin (%d < %d) - deferring to crawl",
