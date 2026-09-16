@@ -1,13 +1,36 @@
 # Rollout — Apple + the Eightfold page-size fix
 
-**Status:** code on `feat/h1b-sponsor-source-discovery`, **not deployed, not
-started.** Every ingest source and every matching EventBridge rule is still
-disabled (see [`ingest-runner-migration.md`](ingest-runner-migration.md)).
-**Date:** 2026-09-15
+**Status:** code on `h1b-sponsorship-ingest-and-gap-list`, **not deployed.**
+**Date:** 2026-09-15, corrected against production 2026-09-16
 **Evidence:** [`docs/sourcing/h1b-sponsor-board-discovery.md`](../sourcing/h1b-sponsor-board-discovery.md)
 
-Turning the crawler on is a deploy and an operations decision. This file is the
-exact sequence and the numbers to check it against — it does not perform it.
+> **THE CRAWLER IS ALREADY RUNNING. There is no source to enable.** An earlier
+> revision of this file said "every ingest source and every matching
+> EventBridge rule is still disabled", and the second half of that is true in a
+> way that makes the first half read as false. Measured on the box and on live
+> Mongo, 2026-09-16:
+>
+> ```
+> systemctl is-active ingest-runner  -> active
+> INGEST_SOURCES = icims,oracle,career-pages,workday      <- all four, on
+> runs in the last 24h: workday 1536 · career-pages 1536 · oracle 1536 · icims 1536
+> fetched in the same window: 2,477,777 · 552,972 · 619,592 · 227,518
+> ```
+>
+> The EventBridge rules are disabled because the **EC2 systemd unit replaced
+> them** at the 2026-09-02 cutover — that is the migration, not an off switch.
+> `ingest_runner_heartbeat` also misleads: its newest row is 2026-09-02,
+> because it was written by the PRE-cutover runner and nothing writes it now.
+> Reading either signal alone says "dormant" about a crawler fetching ~3.9M
+> rows a day.
+>
+> So this rollout is a **deploy and nothing else**. `career-pages` is already
+> sweeping Apple's and the four Eightfold members' shard every ~15 minutes and
+> reading ONE page of each — live, right now: `microsoft` 19, `netflix` 13,
+> `qualcomm` 3, `lockheedmartin` 3, `apple` 0. Once `deploy-ingest-runner`
+> ships this branch to the box, the next sweep picks the full boards up on its
+> own. Steps 3 and 4 below are therefore OPTIONAL verification, not required
+> actions.
 
 ---
 
@@ -78,13 +101,18 @@ PY
 # adapter row still carries request.preflight. 200-with-zero-rows is this
 # board's failure mode and it looks exactly like "Apple is not hiring".
 
-# 4. only then, widen the crawl the normal way
-#    (career-pages is the shard that carries BOTH Apple and the four Eightfold
-#     members, so one source flip covers this whole change)
-INGEST_SOURCES=...,career-pages    # on the unit, then:
-sudo systemctl restart ingest-runner
-aws events disable-rule --profile aithrex --region us-east-1 \
-    --name jobpilot-ingest_career-pages-prod
+# 4. NOTHING TO DO. `career-pages` is already in INGEST_SOURCES on the unit
+#    and already sweeping every ~15 min; it is the shard carrying BOTH Apple
+#    and the four Eightfold members, so the deploy in step 1 is the whole
+#    change. An earlier revision told you to edit INGEST_SOURCES, restart, and
+#    then run `aws events disable-rule --name jobpilot-ingest_career-pages-prod`.
+#    That instruction was wrong three times over: the source is already set,
+#    `disable-rule` is the opposite of widening a crawl, and the rule is named
+#    `jobpilot-ingest_career_pages-prod` — UNDERSCORE, not hyphen — so the
+#    command would have errored even if it had been the right one. Verified
+#    against `aws events list-rules --name-prefix jobpilot-ingest`; all five
+#    rules are DISABLED and stay that way, because the systemd unit replaced
+#    them.
 ```
 
 ---
