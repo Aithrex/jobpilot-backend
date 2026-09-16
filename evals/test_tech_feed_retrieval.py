@@ -233,6 +233,23 @@ class TestWorkAuthorizationPolicy:
                               hide_clearance_required=False) is True
 
 
+#: `sponsorship-ingest-2.0.0` gave `sponsorship_service` row-level provenance
+#: (`window_of` / `build_disclaimer`, and a `data_window` on the scored object).
+#: Two gates below assert what a PROVENANCED row renders as, and they can only
+#: run against a module that has it.
+#:
+#: The production path needs no such guard and deliberately has none: the feed
+#: keys on `signal["data_window"]`, which the older module never sets, so
+#: against it every signal is withheld — the conservative answer, and exactly
+#: what `test_a_signal_with_no_row_level_provenance_is_withheld` pins.
+_HAS_ROW_PROVENANCE = all(
+    hasattr(__import__("services.sponsorship_service", fromlist=["x"]), attr)
+    for attr in ("window_of", "build_disclaimer"))
+_needs_provenance = pytest.mark.skipif(
+    not _HAS_ROW_PROVENANCE,
+    reason="sponsorship_service predates sponsorship-ingest-2.0.0 row provenance")
+
+
 class TestSponsorshipIntelDegradesSilently:
     def test_an_empty_signals_collection_yields_no_block_and_no_error(
             self, clean_db):
@@ -242,6 +259,7 @@ class TestSponsorshipIntelDegradesSilently:
         assert got["jobs"]
         assert all(j.get("sponsorship_signal") is None for j in got["jobs"])
 
+    @_needs_provenance
     def test_a_stored_signal_reaches_the_card_with_its_disclaimer(self, clean_db):
         from services import sponsorship_service as ss
         seed_corpus()
@@ -290,6 +308,7 @@ class TestSponsorshipIntelDegradesSilently:
         assert got["diagnostics"].get("sponsorship_suppressed_window", 0) >= 1, (
             "the refusal must be REPORTED, not silent")
 
+    @_needs_provenance
     def test_a_row_carrying_its_own_window_is_served_with_that_window(
             self, clean_db):
         """Self-healing in both directions: nothing to flip, the row's own

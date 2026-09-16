@@ -2320,6 +2320,80 @@ def _split_requirement_sections(description: str) -> Tuple[str, str]:
     return description[:m.start()], description[m.start():]
 
 
+#: Tokens that `_TECH_EVIDENCE_RE` matches and that are NOT evidence of
+#: technical WORK. They are still extracted (several of them are real
+#: technologies and belong in `skills_required`); they simply may not PROMOTE
+#: an otherwise-unrecognised posting to `core`. Same discipline as
+#: `fit_score._GENERIC_SKILLS`: the bar is on DISCRIMINATING evidence, not on
+#: raw count.
+#:
+#: Every entry was measured. Over 6,000 live active `core` postings carrying a
+#: readable body, token frequency was compared between the 4,458 that resolve
+#: to a FAMILY (genuinely technical) and the 1,542 that do not (the suspect
+#: class). The lift of each token in the second group against the first:
+#:
+#:     eiffel 4.0   routes 3.9   smartsheet 3.5   facebook 2.9   ada 2.9
+#:     linkedin 2.7 sharepoint 2.7 route 2.6  zoom 2.6  slack 2.5
+#:     sas 2.3      youtube 2.2  salesforce 1.9  scheme 1.8
+#:     power automate 1.7  dig 1.6  power apps 1.5  go 1.5  chef 1.2
+#:
+#: Three kinds, and the reason is different for each:
+#:
+#: * BOILERPLATE BRANDS - `linkedin` appears in 11.8% of the no-family bodies
+#:   and 4.1% of the technical ones, because every JD ends with "follow us on
+#:   LinkedIn". Finding it says nothing about the work.
+#: * FALSE FRIENDS - ordinary words that collide with a technology's name.
+#:   `go` is the biggest by volume (20.4% vs 13.2%) and is usually the English
+#:   verb; `ada` is the Americans with Disabilities Act in the EEO paragraph;
+#:   `scheme`/`schemes` is a benefits scheme; `routes` is a delivery route;
+#:   `sas` is the French corporate form in a company name; `vite` and `rapide`
+#:   are French adverbs; `forth`, `dig`, `chef`, `tempo`, `magic`, `enclave`,
+#:   `bedrock` and `eiffel` are all just words.
+#: * BUSINESS-APPLICATION PLATFORMS used AS a business tool. `salesforce`,
+#:   `power apps`, `power automate` and `smartsheet` in a sales or operations
+#:   body describe the system the team USES. This costs a real Salesforce or
+#:   Power Platform developer nothing, because `_TITLE_TECH_TOKEN_RE` already
+#:   admits `salesforce`, `sap`, `oracle`, `workday`, `erp` and `crm` from the
+#:   TITLE, which is where that job announces itself.
+#:
+#: NOT here, deliberately, and each was checked: `sql`, `python`, `tableau`,
+#: `matlab`, `agile`, `jira`, `servicenow`, `abap`, `spark`, `verilog`,
+#: `asic`, `perl`, `algorithms`, `machine learning`. Several of them lift
+#: slightly toward the no-family class, and every one of them is a thing a
+#: genuinely technical Analyst or Specialist posting would name about its own
+#: work. Removing evidence is how a reachable job disappears.
+_WEAK_TECH_TERMS: frozenset = frozenset({
+    # boilerplate brands
+    "linkedin", "facebook", "youtube", "twitter", "instagram", "tiktok",
+    "zoom", "slack", "sharepoint", "teams",
+    # false friends
+    "go", "ada", "scheme", "route", "dig", "chef", "forth", "tempo",
+    "magic", "vite", "rapide", "enclave", "bedrock", "eiffel", "sas",
+    # business-application platforms, as a business tool
+    "salesforce", "power apps", "powerapps", "power automate", "smartsheet",
+})
+
+
+def discriminating_terms(terms: Iterable[Any]) -> List[str]:
+    """The subset of `_skills_in` output that may PROMOTE a posting to core.
+
+    Plural surfaces are folded, because `_compile_alternation` absorbs a
+    trailing `s`/`es` into the match and "schemes"/"routes" would otherwise
+    walk straight past the set that names "scheme"/"route".
+    """
+    out: List[str] = []
+    for raw in terms or ():
+        t = re.sub(r"[\s\-/]+", " ", str(raw or "").lower()).strip()
+        if not t or t in _WEAK_TECH_TERMS:
+            continue
+        if t.endswith("es") and t[:-2] in _WEAK_TECH_TERMS:
+            continue
+        if t.endswith("s") and t[:-1] in _WEAK_TECH_TERMS:
+            continue
+        out.append(str(raw))
+    return out
+
+
 def _skills_in(text: str, limit: int = 40) -> List[str]:
     if not text:
         return []
@@ -2669,9 +2743,12 @@ def classify(
     body_hits = _dedupe_overlapping(body_spanned)
 
     tech_terms = _skills_in(corpus, limit=12)
+    # What may PROMOTE is narrower than what is EXTRACTED. See
+    # `_WEAK_TECH_TERMS` for the measurement behind the difference.
+    strong_terms = discriminating_terms(tech_terms)
     dept_hit = _TECH_DEPARTMENT_RE.search(dept_blob)
 
-    if not ambiguous and not body_hits and not tech_terms:
+    if not ambiguous and not body_hits and not strong_terms:
         # Not a title we recognise at all, and no evidence anywhere. Unknown -
         # NEVER software. This is the branch that keeps a Store Manager we
         # forgot to enumerate out of the core-tech result set.
@@ -2738,15 +2815,15 @@ def classify(
         # is still sufficient alone: that is a named discipline, not loose
         # vocabulary. What is required now is that the TITLE be at least
         # recognisable as possibly-technical before body words may promote it.
-        or (len(tech_terms) >= 3 and (ambiguous or onet_title or onet_token))
+        or (len(strong_terms) >= 3 and (ambiguous or onet_title or onet_token))
         or onet_sufficient
         or token_role
         # An O*NET title WITHOUT a technical token still corroborates: paired
         # with a technical department or two technical skill terms it clears
         # the same bar an ambiguous title does. What it may no longer do is
         # clear it alone.
-        or (onet_title and (bool(dept_hit) or len(tech_terms) >= 2))
-        or (ambiguous and (bool(dept_hit) or len(tech_terms) >= 2))
+        or (onet_title and (bool(dept_hit) or len(strong_terms) >= 2))
+        or (ambiguous and (bool(dept_hit) or len(strong_terms) >= 2))
     )
     if not strong_enough:
         result.tech_scope = SCOPE_UNKNOWN
@@ -2758,13 +2835,18 @@ def classify(
                     "domain; the posting itself must say something technical")]
         elif tech_terms:
             result.classification_evidence = [
-                _ev("weak_body_signal", "description", ", ".join(tech_terms))]
+                _ev("weak_body_signal", "description",
+                    ", ".join(strong_terms or tech_terms))]
         return result
 
     if dept_hit:
         evidence.append(_ev("department", "department", dept_hit.group(0)))
-    if tech_terms:
-        evidence.append(_ev("skills", "description", ", ".join(tech_terms[:8])))
+    if strong_terms:
+        # The evidence names the DISCRIMINATING terms. Printing `linkedin,
+        # youtube, salesforce` as the reason a posting is technical is how
+        # this defect stayed invisible: the verdict carried its own refutation
+        # and nobody read it.
+        evidence.append(_ev("skills", "description", ", ".join(strong_terms[:8])))
 
     if not body_hits:
         for pattern, fam, spec in _AMBIGUOUS_FAMILY_HINTS:
