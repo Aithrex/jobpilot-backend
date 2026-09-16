@@ -63,7 +63,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
-TAXONOMY_VERSION = "tech-tax-1.2.0"
+TAXONOMY_VERSION = "tech-tax-1.3.0"
 
 # ---------------------------------------------------------------------------
 # Scopes
@@ -239,6 +239,12 @@ _SPEC_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
         "machine learning engineer", "ml engineer", "mle",
         "machine learning software engineer", "deep learning engineer",
         "machine learning developer",
+        # The bare discipline, for the same reason as "data science": the
+        # phrase table could read "Machine Learning Engineer" and not
+        # "Machine Learning Intern", "Machine Learning Co-op" or "Machine
+        # Learning, Ads". Longest-first alternation means every enumerated
+        # phrase above still wins where it applies.
+        "machine learning", "deep learning",
     )),
     (F_AI_ML, "applied_ai", (
         # "Applied AI" alone: real live titles interleave a level word
@@ -341,6 +347,13 @@ _SPEC_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
         "data scientist", "decision scientist", "quantitative researcher",
         "quantitative analyst", "statistician", "biostatistician",
         "product data scientist",
+        # The BARE discipline noun. "Data Science Intern", "Data Science
+        # Co-op", "Data Science Associate" and "Data Science, Fraud" all name
+        # the discipline and none of them contains "data scientist", so the
+        # whole set read `unknown` — which is what produced a live résumé
+        # whose two titles were "Data Science Intern" and "Data Quality
+        # Specialist Intern" and whose taxonomy came back EMPTY.
+        "data science",
     )),
     (F_DATA, "business_intelligence", (
         "business intelligence engineer", "bi engineer", "bi developer",
@@ -364,6 +377,11 @@ _SPEC_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
         "data governance engineer", "data governance analyst",
         "data quality engineer", "master data management",
         "data steward", "metadata engineer",
+        # `specialist` is not a STACK role noun (see `_STACK_ROLE_NOUNS`) and
+        # it never will be, but "Data Quality Specialist" and "Data Quality
+        # Analyst" are the two commonest spellings of this job on live
+        # inventory and both were unreadable. Enumerated, not generalised.
+        "data quality specialist", "data quality analyst", "data quality lead",
     )),
     (F_DATA, "ml_data", (
         "data annotation engineer", "training data engineer",
@@ -1918,6 +1936,23 @@ _AMBIGUOUS_FAMILY_HINTS: Tuple[Tuple[re.Pattern, str, str], ...] = (
      F_TECHNICAL_PRODUCT, "tpm"),
     (_compile_alternation(("technologist", "technician")),
      F_IT_SUPPORT, "it_support"),
+    # "Member of Technical Staff" is the canonical IC engineering title at
+    # OpenAI, Anthropic, VMware, AMD, Oracle and Bell Labs' descendants, and
+    # it named NO specialty at all — `unknown`, confidence 0.25, so a
+    # résumé carrying it contributed nothing to role alignment.
+    #
+    # It is a HINT and not a phrase-table row on purpose. The reviewed golden
+    # set labels a bare "Member of Technical Staff" with no corroboration
+    # `unknown`, and it is right to: the title says the person is staff, not
+    # what they do, and "Member of Technical Staff (TPM, Inference)" is a
+    # program-management role. As a hint it resolves to software exactly when
+    # something else on the posting or résumé is technical, and stays unknown
+    # when nothing is. Listed LAST so the TPM and consultant hints above win
+    # a title that names both.
+    (_compile_alternation(("member of technical staff",
+                           "member of the technical staff",
+                           "members of technical staff")),
+     F_SOFTWARE, "general_software"),
 )
 
 # A physical/plant qualifier vetoes a software reading of a role NOUN. Mirrors
@@ -2071,6 +2106,138 @@ def normalize_title(title: Any, *, max_length: int = 160) -> str:
     return s[:max_length]
 
 
+# ---------------------------------------------------------------------------
+# Role-title normalisation (for PHRASE MATCHING, not for display)
+#
+# The phrase table names DISCIPLINES: "data scientist", "backend engineer",
+# "site reliability engineer". A real title carries a discipline wrapped in
+# employment modifiers - "Data Science Intern", "SDE II", "Sr. Software
+# Engineer (Payments), Seattle" - and the modifier is what made the phrase
+# unreachable. Measured on the live account this was written for, BOTH résumé
+# titles ("Data Science Intern", "Data Quality Specialist Intern") classified
+# to no family at all, so `classify_resume` returned tech_scope=unknown, so
+# `fit_score`'s largest component (role_alignment, 25/100) was `unknown` for
+# EVERY posting and the score collapsed to skill-overlap noise.
+#
+# The modifier is NOT thrown away. `_seniority_of` still reads the ORIGINAL
+# title, so "Data Science Intern" keeps `seniority="intern"`; this only stops
+# the intern suffix from destroying family detection. Two separate questions,
+# two separate readings of the same string.
+# ---------------------------------------------------------------------------
+
+#: Employment-shape and seniority modifiers, stripped from either end of a
+#: title. Every one of these describes the EMPLOYMENT, not the discipline.
+#: Ordered longest-first inside the pattern by `_compile_alternation`.
+_TITLE_MODIFIER_PHRASES: Tuple[str, ...] = (
+    # employment shape
+    "intern", "internship", "interns", "co-op", "coop", "co op",
+    "co-op student", "coop student", "student worker", "working student",
+    "student", "trainee", "traineeship", "apprentice", "apprenticeship",
+    "graduate trainee", "industrial placement", "placement",
+    "summer analyst", "summer associate", "summer", "winter", "fall", "spring",
+    "part time", "part-time", "full time", "full-time", "contract",
+    "contractor", "temporary", "temp", "seasonal", "casual", "volunteer",
+    "freelance", "consultant intern", "returnship",
+    # seniority / rank words
+    "senior", "sr", "sr.", "junior", "jr", "jr.", "lead", "principal",
+    "staff", "senior staff", "distinguished", "chief", "head of", "head",
+    "associate", "assistant", "entry level", "entry-level", "entry",
+    "new grad", "new graduate", "graduate", "grad", "early career",
+    "experienced", "mid level", "mid-level", "advanced", "expert",
+    "apprentice engineer",
+)
+_TITLE_MODIFIER_RE = _compile_alternation(_TITLE_MODIFIER_PHRASES)
+
+#: Level codes: roman numerals, bare digits, and the vendor ladders
+#: ("L3", "SDE-1" handled by the digit rule after the stack token, "T4",
+#: "E5", "IC3", "P4", "G7", "Grade 12", "Level II").
+_TITLE_LEVEL_CODE_RE = re.compile(
+    r"(?<![a-z0-9])(?:"
+    r"level\s*[-#]?\s*(?:[ivx]{1,4}|\d{1,2})"
+    r"|grade\s*[-#]?\s*\d{1,2}"
+    r"|[ivx]{1,4}"                       # I, II, III, IV, V, VI ...
+    r"|[lteipg]\s*-?\s*\d{1,2}"          # L3, T4, E5, IC3 (below), P4, G7
+    r"|ic\s*-?\s*\d{1,2}"
+    r"|\d{1,2}"                          # bare "2" in "Software Engineer 2"
+    r")(?![a-z0-9])", re.IGNORECASE)
+
+#: A roman-numeral-looking token that is a real word. `[ivx]{1,4}` matches
+#: "i", "v", "x", "ii", "vi", "xi", "ivi"... and also "civil"? No - the
+#: boundary prevents that - but it DOES match the standalone word "I" and the
+#: Roman numeral "V", which are the only English words in the class. Listed so
+#: the intent is visible rather than implied by a regex.
+_ROMAN_OK = frozenset({"i", "ii", "iii", "iv", "v", "vi", "vii", "viii",
+                       "ix", "x", "xi", "xii"})
+
+#: Segment separators. Everything after the FIRST one is a qualifier, a
+#: department, a location or a programme name - "Data Scientist - Fraud,
+#: Chicago", "Software Engineer | Payments", "Analyst, Risk Technology".
+_TITLE_SEGMENT_RE = re.compile(r"\s*[|;/]\s*|\s+[-–—]\s+|\s*,\s*")
+
+_PARENTHETICAL_RE = re.compile(r"\s*[\(\[\{][^)\]\}]*[\)\]\}]")
+
+#: A stripped title has to still SAY something. "Intern", "Senior", "II" strip
+#: to nothing; a one-character residue is noise, not a discipline.
+_MIN_STRIPPED_LEN = 3
+
+
+def strip_title_modifiers(title: Any) -> str:
+    """A title with employment/seniority modifiers and level codes removed.
+
+    "Data Science Intern" -> "data science"; "SDE II" -> "sde";
+    "Sr. Software Engineer" -> "software engineer";
+    "Associate Data Analyst (Contract)" -> "data analyst".
+
+    Returns "" when nothing survives, which the caller must read as "this
+    title was ONLY a modifier" and not as a classification.
+    """
+    s = _norm(title)
+    if not s:
+        return ""
+    s = _TITLE_MODIFIER_RE.sub(" ", s)
+    s = _TITLE_LEVEL_CODE_RE.sub(" ", s)
+    s = re.sub(r"[\s\-./]+", " ", s).strip()
+    if len(s) < _MIN_STRIPPED_LEN:
+        return ""
+    return s
+
+
+def title_variants(title: Any) -> List[str]:
+    """Progressively simpler readings of one title, best first.
+
+    The RAW title is always index 0, so a caller that tries them in order can
+    never be moved off an answer the unmodified title already supports. Each
+    later entry removes one more layer of packaging:
+
+        0. the title as written
+        1. parentheticals removed          "SWE (Payments)"      -> "swe"
+        2. modifiers + level codes removed "Data Science Intern" -> "data science"
+        3. 1 and 2 together
+        4. the FIRST segment only          "Analyst, Risk Tech"  -> "analyst"
+        5. the first segment, stripped
+
+    Duplicates and empties are dropped, so a title with no packaging yields a
+    single-entry list and costs one extra `_norm`.
+    """
+    # Punctuation is what marks the layers, and `_norm` deletes it, so the
+    # splitting happens on the ORIGINAL string and `_norm` runs afterwards.
+    original = str(title or "")
+    raw = _norm(original)
+    if not raw:
+        return []
+    no_paren = _norm(_PARENTHETICAL_RE.sub(" ", original))
+    head = _norm((_TITLE_SEGMENT_RE.split(
+        _PARENTHETICAL_RE.sub(" ", original)) or [""])[0])
+    out: List[str] = []
+    for cand in (raw, no_paren, strip_title_modifiers(raw),
+                 strip_title_modifiers(no_paren), head,
+                 strip_title_modifiers(head)):
+        c = (cand or "").strip()
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
 def _seniority_of(title_blob: str, body_blob: str,
                   years_min: Optional[int]) -> str:
     """Highest band the title claims; years only break a tie of silence.
@@ -2174,6 +2341,51 @@ def _ev(kind: str, field_name: str, value: str) -> Dict[str, str]:
     return {"kind": kind, "field": field_name, "value": str(value)[:120]}
 
 
+#: Phrases that name a DISCIPLINE rather than a role. They earn a family on
+#: their own ("Data Science Intern") and they yield to a role noun from an
+#: adjacent family ("TPM, Machine Learning Infrastructure"). See rule 1c.
+_BARE_DISCIPLINE_PHRASES = frozenset({
+    "data science", "machine learning", "deep learning",
+})
+
+#: A stripped title is one inference step further from what the employer
+#: wrote, and the confidence says so. Small on purpose: "Data Science Intern"
+#: really is a data-science role, it was just wearing a suffix.
+_VARIANT_CONFIDENCE_PENALTY = 0.04
+
+#: How many stripped readings to try. `title_variants` returns at most six and
+#: the raw one is index 0; three retries covers parenthetical, modifier and
+#: first-segment stripping without turning one classification into six.
+_MAX_TITLE_VARIANTS = 3
+
+
+def _classify_stripped_title(raw_title: Any, *, description: Any = "",
+                             department: Any = "",
+                             skills: Optional[Sequence[Any]] = None,
+                             requirements: Optional[Dict[str, Any]] = None
+                             ) -> Optional[TechClassification]:
+    """The first stripped reading of `raw_title` that names a family, or None.
+
+    Returns None — never a guess — when no stripped form classifies. See
+    `title_variants` for the ladder and `strip_title_modifiers` for why the
+    modifier is removed for MATCHING and kept for SENIORITY.
+    """
+    variants = title_variants(raw_title)[1:_MAX_TITLE_VARIANTS + 1]
+    for cand in variants:
+        got = classify(cand, description=description, department=department,
+                       skills=skills, requirements=requirements, _variant=True)
+        if got.tech_scope in (SCOPE_CORE, SCOPE_ADJACENT) and got.role_families:
+            got.classification_confidence = round(
+                max(0.0, got.classification_confidence
+                    - _VARIANT_CONFIDENCE_PENALTY), 3)
+            got.classification_evidence = (
+                [_ev("title_modifiers_stripped", "title",
+                     f"{_norm(raw_title)} -> {cand}")]
+                + list(got.classification_evidence))[:8]
+            return got
+    return None
+
+
 def classify(
     title: Any,
     *,
@@ -2181,6 +2393,7 @@ def classify(
     department: Any = "",
     skills: Optional[Sequence[Any]] = None,
     requirements: Optional[Dict[str, Any]] = None,
+    _variant: bool = False,
 ) -> TechClassification:
     """Classify one posting's OCCUPATION. Employer identity is not an input.
 
@@ -2236,6 +2449,54 @@ def classify(
         if m:
             spanned.append((fam, spec, m.group(0), m.start(), m.end()))
     title_hits = _dedupe_overlapping(spanned)
+
+    # ---- 1b. the same title with its packaging removed ---------------------
+    #
+    # Only when the title AS WRITTEN named nothing. The raw form always wins,
+    # so this can never move a title off an answer it already had; it can only
+    # reach a title the phrase table could not see through an intern suffix, a
+    # level code or a department tail. The re-read is a full `classify` on the
+    # stripped string (never a span transplant, which would make the
+    # overlap/veto arithmetic below compare offsets from two different
+    # strings), and only a CORE/ADJACENT verdict that names a family is
+    # adopted — a `non_tech` reading of a stripped title is a weaker claim
+    # than the raw title's silence and is discarded.
+    if not title_hits and not _variant:
+        alt = _classify_stripped_title(
+            raw_title, description=desc_text, department=department,
+            skills=skills, requirements=requirements)
+        if alt is not None:
+            # Seniority, years and skills are read from the ORIGINAL title and
+            # body. Stripping "Intern" must cost the intern signal nothing.
+            alt.normalized_title = result.normalized_title
+            alt.seniority = result.seniority
+            alt.required_years_min = result.required_years_min
+            alt.required_years_max = result.required_years_max
+            alt.skills_required = result.skills_required
+            alt.skills_preferred = result.skills_preferred
+            return alt
+
+    # ---- 1c. a bare DISCIPLINE noun qualifies a role, it does not replace it -
+    #
+    # "data science", "machine learning" and "deep learning" were added to the
+    # phrase table so "Data Science Intern" and "Machine Learning Co-op" stop
+    # reading as nothing. They are domain words, not role nouns, and when the
+    # title ALSO names an adjacent-family role the role is the job and the
+    # discipline is the subject matter: "Senior Technical Program Manager,
+    # Machine Learning Infrastructure" is a TPM, and "Principal Forward
+    # Deployed Engineer - Data Science" is a forward-deployed engineer. Both
+    # are labelled `adjacent` by the reviewer in `eval_live_titles`, and
+    # without this the core discipline label captured the scope.
+    if len(title_hits) > 1:
+        bare = [h for h in title_hits
+                if re.sub(r"[\s\-/]+", " ", h[2].lower()).strip()
+                in _BARE_DISCIPLINE_PHRASES]
+        if bare and len(bare) < len(title_hits) and any(
+                FAMILY_SCOPE.get(f) == SCOPE_ADJACENT for f, _s, _p in title_hits):
+            evidence.append(_ev("discipline_qualifies_adjacent_role", "title",
+                                f"{bare[0][2]} qualifies "
+                                f"{[h[2] for h in title_hits if h not in bare][0]}"))
+            title_hits = [h for h in title_hits if h not in bare]
 
     physical = bool(_PHYSICAL_QUALIFIER_RE.search(title_blob))
     hardware_ctx = bool(_HARDWARE_CONTEXT_RE.search(title_blob)
@@ -2448,7 +2709,36 @@ def classify(
                       and not _is_bare_ambiguous(title_blob))
     strong_enough = (
         bool(body_hits)
-        or len(tech_terms) >= 3
+        # LOOSE BODY VOCABULARY IS CORROBORATION, NOT EVIDENCE (1.3.0).
+        #
+        # This clause used to read `len(tech_terms) >= 3` with no condition on
+        # the title at all, which is the same mistake `onet_title_without_
+        # technical_token` and the department rule below were both written to
+        # stop, made one layer further in. `_TECH_EVIDENCE_RE` is mostly the
+        # IMPORTED O*NET/overlay vocabulary, and that vocabulary contains
+        # consumer brands and ordinary words: `linkedin`, `youtube`,
+        # `facebook`, `salesforce`, `chef`, `spark`, `go`, `magic`, `scheme`,
+        # `eiffel`, `vite`, `tempo`, `bedrock`, `enclave`, `transformer`.
+        # Three of those appear in almost any corporate job description.
+        #
+        # Measured on 4,000 live active postings already stored as
+        # `tech_scope: core`: 925 carried NO family, and 798 of the 925 were
+        # promoted by exactly this clause. The evidence strings are what they
+        # look like - "Growth Marketer" -> `linkedin, youtube, salesforce,
+        # sql`; "Manager Sales - Key Accounts" -> `enclave, eiffel, bedrock`;
+        # "Tecnico Elettrico ed Elettronico di Manutenzione" -> `vite, tempo,
+        # agile`. Those rows then score on a THIN frame (no family means
+        # `role_alignment` is excluded from `_normalized_score`) against a
+        # two-or-three-skill requirement list, which is easy to cover, so they
+        # land at the TOP of several different users' feeds. "Sanofi VMI
+        # Intern" and "Santander GERENCIA JR. DATA ANALYST ALM" were in the
+        # top five for three unrelated accounts.
+        #
+        # A specialty phrase found in the BODY (`body_hits`) is unaffected and
+        # is still sufficient alone: that is a named discipline, not loose
+        # vocabulary. What is required now is that the TITLE be at least
+        # recognisable as possibly-technical before body words may promote it.
+        or (len(tech_terms) >= 3 and (ambiguous or onet_title or onet_token))
         or onet_sufficient
         or token_role
         # An O*NET title WITHOUT a technical token still corroborates: paired
@@ -2765,7 +3055,7 @@ LEGACY_TECH_CANDIDATE_FAMILIES: Tuple[str, ...] = (
 # Declaring it means it is reviewable and versioned; deriving it would mean
 # it silently changes whenever a phrase list does.
 
-ADJACENCY_VERSION = "tech-adjacency-1.2.0"
+ADJACENCY_VERSION = "tech-adjacency-1.3.0"
 
 #: Declared once, applied symmetrically. Each pair is "a team hiring for A
 #: would seriously consider a strong B", which is a narrower claim than
@@ -2842,6 +3132,16 @@ _ADJACENT_PAIRS: Tuple[Tuple[str, str], ...] = (
     ("analytics_engineering", "business_intelligence"),
     ("analytics_engineering", "data_science"),
     ("data_science", "business_intelligence"),
+    # 1.3.0. A data scientist and an ML engineer were `adjacent_family`
+    # (0.46) — a claim that the two disciplines barely reach each other, when
+    # in practice they are the same hiring pool and the same résumés. Measured
+    # on the live account that produced this bug (MS Data Science, PyTorch /
+    # scikit-learn / NLP / CV), every ML Engineer and AI Engineer posting in
+    # the feed sat two rungs below where it belongs. `applied_ai` is included
+    # for the same reason and no further: `nlp`, `computer_vision` and
+    # `genai_llm` remain a family hop away, because hiring for those does ask
+    # for the specialism.
+    ("data_science", "ml_engineering"), ("data_science", "applied_ai"),
     ("database_engineering", "sre"),
     ("data_governance", "privacy_engineering"), ("data_governance", "grc"),
 
@@ -3259,6 +3559,228 @@ def role_alignment(
 #: coordinator" stint made every backend role look reachable.
 RESUME_FAMILY_MIN_SHARE = 0.20
 
+# ---------------------------------------------------------------------------
+# Technology evidence: what a person's TOOLS say about their discipline
+#
+# Why this exists
+# ---------------
+# `classify_resume` read TITLES and nothing else. Its "if the titles said
+# nothing, read the summary and the bodies" fallback called
+# `classify("", description=blob)`, and `classify` returns immediately on an
+# empty title — so that branch could never return anything but `unknown`. The
+# fallback was dead code, and the consequence was measured on a live account:
+# an MS Data Science candidate listing PyTorch, TensorFlow, scikit-learn, NLP,
+# computer vision, LLM/RAG, Spark and SQL classified to NO family at all,
+# because neither of her two job titles ("Data Science Intern", "Data Quality
+# Specialist Intern") was in the phrase table. `fit_score.role_alignment` —
+# 25 of 100 points, the largest component — was therefore `unknown` for every
+# one of 4,000 live postings.
+#
+# What this is NOT
+# ----------------
+# It is not a keyword bag. Every entry names a tool, framework or technique
+# that belongs to ONE discipline; nothing generic (Excel, PowerPoint, Word,
+# email, "communication", Jira, Slack) appears, because a teacher who lists
+# Google Classroom must keep reading as a teacher. And it never overrides the
+# non-tech veto: a confidently non-technical TITLE history still wins, so the
+# people the veto exists for are unaffected. See `classify_resume`.
+# ---------------------------------------------------------------------------
+
+#: (family, specialty, tools). Matched case-insensitively with the same
+#: word-boundary/alternation rules as every other phrase table here.
+_SKILL_SPECIALTY_RULES: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
+    (F_AI_ML, "ml_engineering", (
+        "pytorch", "tensorflow", "keras", "scikit learn", "scikit-learn",
+        "sklearn", "xgboost", "lightgbm", "catboost", "\\bjax\\b",
+        "random forest", "gradient boosting", "neural network",
+        "convolutional neural network", "\\bcnn\\b", "\\brnn\\b", "\\blstm\\b",
+        "deep learning", "machine learning", "model training",
+        "feature engineering", "hyperparameter tuning", "transfer learning",
+        "supervised learning", "unsupervised learning", "reinforcement learning",
+    )),
+    (F_AI_ML, "genai_llm", (
+        "large language model", "\\bllms?\\b", "\\brag\\b",
+        "retrieval augmented generation", "retrieval-augmented generation",
+        "prompt engineering", "fine tuning", "fine-tuning", "langchain",
+        "llamaindex", "hugging face", "huggingface", "transformers library",
+        "generative ai", "\\bgenai\\b", "vector search", "vector database",
+        "embeddings", "openai api", "anthropic api",
+    )),
+    (F_AI_ML, "nlp", (
+        "natural language processing", "\\bnlp\\b", "spacy", "\\bnltk\\b",
+        "\\bbert\\b", "named entity recognition", "text classification",
+        "topic modeling", "sentiment analysis", "tokenization",
+    )),
+    (F_AI_ML, "computer_vision", (
+        "computer vision", "opencv", "\\byolo\\b", "image segmentation",
+        "object detection", "image classification", "image processing",
+        "\\bocr\\b", "optical character recognition",
+    )),
+    (F_AI_ML, "speech", (
+        "speech recognition", "\\basr\\b", "text to speech", "\\btts\\b",
+        "whisper", "speech synthesis", "audio processing",
+    )),
+    (F_AI_ML, "mlops_llmops", (
+        "mlops", "mlflow", "kubeflow", "sagemaker", "vertex ai",
+        "model deployment", "model monitoring", "model registry",
+        "feature store", "weights and biases", "\\bwandb\\b",
+    )),
+    (F_AI_ML, "robotics_autonomy", (
+        "\\bros2?\\b", "robot operating system", "\\bslam\\b",
+        "motion planning", "path planning", "sensor fusion",
+    )),
+    (F_DATA, "data_engineering", (
+        "apache spark", "pyspark", "databricks", "airflow", "apache kafka",
+        "\\bkafka\\b", "\\bdbt\\b", "snowflake", "redshift", "bigquery",
+        "hadoop", "\\bhive\\b", "data pipeline", "\\betl\\b", "\\belt\\b",
+        "data warehouse", "data lake", "delta lake", "informatica",
+        "data ingestion", "data modeling",
+    )),
+    (F_DATA, "data_science", (
+        "pandas", "numpy", "scipy", "statsmodels", "matplotlib", "seaborn",
+        "jupyter", "statistical analysis", "statistical modeling",
+        "hypothesis testing", "a/b testing", "ab testing",
+        "time series forecasting", "time-series", "regression analysis",
+        "experimental design", "\\banova\\b", "bayesian",
+        "exploratory data analysis", "\\beda\\b", "predictive modeling",
+    )),
+    (F_DATA, "business_intelligence", (
+        "tableau", "power bi", "powerbi", "looker", "qlik", "\\bdax\\b",
+        "data visualization", "google data studio", "microstrategy",
+        "dashboarding",
+    )),
+    (F_DATA, "database_engineering", (
+        "postgresql", "postgres", "mysql", "\\bmongodb\\b", "cassandra",
+        "dynamodb", "\\bt-sql\\b", "pl/sql", "query optimization",
+        "database design", "\\bsql\\b", "\\bnosql\\b", "redis",
+    )),
+    (F_DATA, "data_governance", (
+        "data governance", "data quality", "data stewardship",
+        "master data management", "data lineage", "data catalog",
+        "annotation", "data validation",
+    )),
+    (F_CLOUD, "cloud_engineering", (
+        "\\baws\\b", "amazon web services", "\\bazure\\b",
+        "google cloud platform", "\\bgcp\\b", "cloudformation",
+        "\\bec2\\b", "\\bs3\\b", "cloud architecture",
+    )),
+    (F_CLOUD, "kubernetes_containers", (
+        "kubernetes", "\\bk8s\\b", "docker", "\\bhelm\\b", "openshift",
+        "containerization",
+    )),
+    (F_CLOUD, "devops", (
+        "\\bci/cd\\b", "\\bcicd\\b", "ci cd", "jenkins", "github actions",
+        "gitlab ci", "terraform", "ansible", "circleci", "argocd",
+        "infrastructure as code",
+    )),
+    (F_CLOUD, "networking", (
+        "\\btcp/ip\\b", "\\bbgp\\b", "load balancing", "\\bvpc\\b",
+        "network security", "\\bdns\\b",
+    )),
+    (F_SOFTWARE, "backend", (
+        "django", "flask", "fastapi", "spring boot", "node.js", "nodejs",
+        "express.js", "rest api", "restful api", "graphql", "grpc",
+        "microservice", "\\brabbitmq\\b", "celery",
+    )),
+    (F_SOFTWARE, "frontend", (
+        "react.js", "reactjs", "\\breact\\b", "angular", "vue.js", "vuejs",
+        "next.js", "tailwind", "redux", "\\bhtml5?\\b", "\\bcss3?\\b",
+        "webpack", "svelte",
+    )),
+    (F_SOFTWARE, "mobile", (
+        "android sdk", "\\bios\\b", "swiftui", "react native", "flutter",
+        "\\bxcode\\b", "jetpack compose", "kotlin",
+    )),
+    (F_SOFTWARE, "general_software", (
+        "object oriented", "data structures", "design patterns",
+        "\\bgit\\b", "unit testing", "code review", "\\bagile\\b",
+        "\\bscrum\\b", "\\bjava\\b", "\\bc\\+\\+", "\\bc#", "golang",
+        "\\btypescript\\b",
+    )),
+    (F_SECURITY, "penetration_testing", (
+        "penetration testing", "burp suite", "metasploit", "nessus",
+        "\\bowasp\\b", "vulnerability assessment", "ethical hacking",
+    )),
+    (F_SECURITY, "secops", (
+        "\\bsiem\\b", "incident response", "threat detection",
+        "security monitoring", "threat hunting", "\\bsoar\\b",
+    )),
+    (F_SEMICONDUCTOR, "fpga_rtl", (
+        "verilog", "systemverilog", "\\bvhdl\\b", "\\buvm\\b",
+        "\\brtl\\b", "\\bfpga\\b", "timing closure", "synthesis",
+    )),
+    (F_SOFTWARE, "embedded", (
+        "\\brtos\\b", "freertos", "bare metal", "\\bi2c\\b", "\\bspi\\b",
+        "\\bcan bus\\b", "arm cortex", "microcontroller", "firmware",
+        "embedded c",
+    )),
+    (F_QUALITY, "qa_automation", (
+        "selenium", "cypress", "playwright", "appium", "test automation",
+        "\\bjunit\\b", "\\btestng\\b",
+    )),
+)
+
+_SKILL_SPECIALTY_PATTERNS: Tuple[Tuple[str, str, re.Pattern], ...] = tuple(
+    (fam, spec, _compile_alternation(tools))
+    for fam, spec, tools in _SKILL_SPECIALTY_RULES)
+
+#: How many DISTINCT tools a specialty needs before it counts. One shared tool
+#: ("SQL", "Git", "AWS") is not a discipline; two that belong to the same one
+#: is the smallest honest claim.
+SKILL_SPECIALTY_MIN = 2
+#: And how many across a family, so a family never rests on one specialty's
+#: bare minimum.
+SKILL_FAMILY_MIN = 3
+
+
+def classify_skills(skills: Sequence[Any] = (), text: Any = "") -> Dict[str, Any]:
+    """What a person's TOOLS say about their discipline.
+
+    `{families: {family: n_tools}, specialties: {specialty: n_tools},
+      matched: [tool, ...]}` where `n_tools` counts DISTINCT tools. Families
+    and specialties below `SKILL_FAMILY_MIN` / `SKILL_SPECIALTY_MIN` are not
+    reported at all — the thresholds are applied here so no caller can
+    accidentally read one tool as a career.
+
+    Deterministic, no DB, no model. Safe to call on untrusted résumé text: it
+    only ever runs fixed regexes over it.
+    """
+    blob = _norm(" ".join([str(s) for s in (skills or ())] + [str(text or "")]))
+    if not blob:
+        return {"families": {}, "specialties": {}, "matched": []}
+    spec_hits: Dict[str, Set[str]] = {}
+    spec_family: Dict[str, str] = {}
+    for fam, spec, pattern in _SKILL_SPECIALTY_PATTERNS:
+        found = {re.sub(r"[\s\-/]+", " ", m.group(0).lower()).strip()
+                 for m in pattern.finditer(blob)}
+        if not found:
+            continue
+        # `_compile_alternation` absorbs a trailing `s`/`es` into the match, so
+        # "annotation" and "annotations" arrive as two surface forms of one
+        # tool and would count as two. Fold a plural back onto its singular
+        # only when the singular was ALSO seen - "kubernetes" has no singular
+        # and must not become "kubernete".
+        found = {t for t in found
+                 if not ((t.endswith("s") and t[:-1] in found)
+                         or (t.endswith("es") and t[:-2] in found))}
+        spec_hits.setdefault(spec, set()).update(found)
+        spec_family[spec] = fam
+    specialties = {s: len(v) for s, v in spec_hits.items()
+                   if len(v) >= SKILL_SPECIALTY_MIN}
+    families: Dict[str, int] = {}
+    for spec, n in specialties.items():
+        fam = spec_family[spec]
+        families[fam] = families.get(fam, 0) + n
+    families = {f: n for f, n in families.items() if n >= SKILL_FAMILY_MIN}
+    # A specialty whose family did not clear its own bar is dropped with it:
+    # reporting `nlp` while refusing `ai_ml` would be an incoherent pair.
+    specialties = {s: n for s, n in specialties.items()
+                   if spec_family[s] in families}
+    matched = sorted({t for s, v in spec_hits.items() if s in specialties
+                      for t in v})
+    return {"families": families, "specialties": specialties,
+            "matched": matched[:40]}
+
 #: A cross-domain veto is a REFUSAL TO RANK, so the evidence bar is high: most
 #: of the résumé's titles must name the same non-tech occupation, and there
 #: must be more than one of them. One "Barista" on an otherwise-software
@@ -3269,12 +3791,61 @@ RESUME_MAX_FAMILIES = 4
 RESUME_MAX_SPECIALTIES = 8
 
 
+#: Weight of one résumé JOB TITLE that names a discipline. The unit everything
+#: else is expressed in.
+TITLE_EVIDENCE_WEIGHT = 1.0
+
+#: Weight of one specialty established by the person's TOOLS
+#: (`classify_skills`), plus a little for each tool beyond the minimum, capped
+#: so a long list cannot outvote a career.
+SKILL_EVIDENCE_WEIGHT = 0.6
+SKILL_EVIDENCE_PER_EXTRA_TOOL = 0.1
+SKILL_EVIDENCE_SPECIALTY_MAX = 1.0
+SKILL_EVIDENCE_FAMILY_MAX = 2.0
+
+#: Weight of one DECLARED target role from onboarding. Aspiration is real
+#: evidence about what a person is applying for and it is not evidence that
+#: they have done it, so it is worth about a third of a job title.
+TARGET_ROLE_WEIGHT = 0.35
+TARGET_ROLE_FAMILY_MAX = 1.0
+
+#: Confidence ceilings per evidence source. `classification_confidence` gates
+#: `fit_score._eligibility`'s cross-domain veto at 0.70, so neither tools nor
+#: declared targets may ever reach it: nothing a person LISTS or WANTS may
+#: make them ineligible for anything.
+SKILLS_ONLY_MAX_CONFIDENCE = 0.68
+TARGET_ONLY_MAX_CONFIDENCE = 0.55
+
+
+def _target_role_families(target_roles: Sequence[Any]
+                          ) -> Tuple[Dict[str, float], Dict[str, float], List[str]]:
+    """`(family_weight, specialty_weight, roles_read)` for declared targets."""
+    fams: Dict[str, float] = {}
+    specs: Dict[str, float] = {}
+    read: List[str] = []
+    for role in target_roles or ():
+        text = str(role or "").strip()
+        if not text:
+            continue
+        got = classify(text)
+        if got.tech_scope not in (SCOPE_CORE, SCOPE_ADJACENT) or not got.role_families:
+            continue
+        read.append(text)
+        for f in got.role_families:
+            fams[f] = min(TARGET_ROLE_FAMILY_MAX,
+                          fams.get(f, 0.0) + TARGET_ROLE_WEIGHT)
+        for s in got.role_specialties:
+            specs[s] = specs.get(s, 0.0) + TARGET_ROLE_WEIGHT
+    return fams, specs, read
+
+
 def classify_resume(
     *,
     titles: Sequence[Any] = (),
     skills: Sequence[Any] = (),
     summary: Any = "",
     descriptions: Sequence[Any] = (),
+    target_roles: Sequence[Any] = (),
 ) -> Dict[str, Any]:
     """A résumé's own families and specialties, on the same 14/101 tree.
 
@@ -3287,9 +3858,41 @@ def classify_resume(
     Titles are weighted by RECENCY-neutral count, not by position: a résumé's
     ordering is a formatting choice, and inferring seniority of interest from
     it would be reading the layout, not the career.
+
+    Three sources, in a DECLARED order of authority
+    ----------------------------------------------
+    1. **Job titles** (`TITLE_EVIDENCE_WEIGHT`, 1.0) — what the person has
+       been paid to be. Strongest, and the only source that may license a
+       cross-domain veto.
+    2. **Tools and techniques** (`SKILL_EVIDENCE_WEIGHT`, 0.6 per specialty,
+       capped per family) — what they have demonstrably worked with, read from
+       the skills block AND the experience/project bodies by
+       `classify_skills`. This exists because a real résumé's titles are
+       routinely non-canonical: a live MS Data Science candidate whose two
+       titles were "Data Science Intern" and "Data Quality Specialist Intern"
+       classified to NOTHING, while listing PyTorch, TensorFlow,
+       scikit-learn, NLP, computer vision, LLM/RAG and Spark. "No evidence"
+       has to mean no evidence, not "the title string was not in our table".
+    3. **Declared target roles** (`TARGET_ROLE_WEIGHT`, 0.35) — what
+       onboarding says they are applying for (`user_preferences.target_roles`).
+       Weakest, and FENCED: when the résumé already demonstrates something, a
+       declared target only counts where it is corroborated by, or adjacent
+       to, what was demonstrated. A target in an unrelated family is reported
+       in `target_families_unsupported` and contributes nothing — wanting a
+       job must never look like having done it. When the résumé demonstrates
+       NOTHING, declared targets are the only evidence there is and are used
+       in full, at `TARGET_ONLY_MAX_CONFIDENCE`.
+
+    A confidently NON-TECH title history outranks all three. The veto is
+    evaluated on titles alone, before tools or targets are admitted, so a
+    nurse who lists SQL and a teacher who declares "Data Analyst" are read
+    exactly as they were before this change.
+
+    `unknown` still means unknown: with no title, no recognised tool and no
+    declared target, the result is `tech_scope="unknown"` at confidence 0.0.
     """
-    counts: Dict[str, int] = {}
-    spec_counts: Dict[str, int] = {}
+    counts: Dict[str, float] = {}
+    spec_counts: Dict[str, float] = {}
     evidence_titles: List[str] = []
     non_tech_domains: Dict[str, int] = {}
     total = 0
@@ -3305,9 +3908,9 @@ def classify_resume(
             total += 1
             evidence_titles.append(text)
             for f in got.role_families:
-                counts[f] = counts.get(f, 0) + 1
+                counts[f] = counts.get(f, 0.0) + TITLE_EVIDENCE_WEIGHT
             for s in got.role_specialties:
-                spec_counts[s] = spec_counts.get(s, 0) + 1
+                spec_counts[s] = spec_counts.get(s, 0.0) + TITLE_EVIDENCE_WEIGHT
         elif got.tech_scope == SCOPE_NON_TECH:
             # WHICH non-tech domain matters. "we found no tech evidence" is an
             # absence; "every title on this resume is a classroom teaching
@@ -3316,26 +3919,13 @@ def classify_resume(
             dom = non_tech_domain_of(text) or "other"
             non_tech_domains[dom] = non_tech_domains.get(dom, 0) + 1
 
-    # Only if the titles said nothing: the summary and the bodies. A title is
-    # a claim about what the person IS; a body is a claim about what they have
-    # touched, and the two are not interchangeable evidence.
+    # ---- the non-tech veto, decided on TITLES ALONE ------------------------
+    #
+    # Checked BEFORE tools and targets are admitted, and it returns. That
+    # ordering is the whole safety property of this function: every résumé
+    # that was vetoed before this change is vetoed identically after it, no
+    # matter what its skills block says or what onboarding it completed.
     if not counts:
-        blob = " ".join([str(summary or "")] + [str(d or "") for d in (descriptions or ())])
-        if blob.strip():
-            got = classify("", description=blob, skills=skills)
-            if got.tech_scope in (SCOPE_CORE, SCOPE_ADJACENT):
-                for f in got.role_families:
-                    counts[f] = counts.get(f, 0) + 1
-                for s in got.role_specialties:
-                    spec_counts[s] = spec_counts.get(s, 0) + 1
-                total = max(total, 1)
-
-    if not counts:
-        # A confidently non-tech career is a POSITIVE classification, and the
-        # only thing that may license a cross-domain veto. The bar is high on
-        # purpose: most of the résumé's titles must name the same non-tech
-        # domain, because a software engineer who waited tables for a summer
-        # must not be vetoed out of software.
         nt_total = sum(non_tech_domains.values())
         classified = nt_total + total
         share = (nt_total / classified) if classified else 0.0
@@ -3358,30 +3948,111 @@ def classify_resume(
                             + (0.10 if share >= 1.0 else 0.0)), 3),
                     "evidence_titles": [], "tech_scope": SCOPE_NON_TECH,
                     "non_tech_domain": domain,
-                    "non_tech_titles": nt_total, "titles_seen": seen_titles}
+                    "non_tech_titles": nt_total, "titles_seen": seen_titles,
+                    "evidence_sources": ["titles"], "skill_evidence": [],
+                    "target_roles_read": [], "target_families_unsupported": []}
+
+    # ---- 2. tools and techniques ------------------------------------------
+    title_families = set(counts)
+    body_blob = " ".join([str(summary or "")]
+                         + [str(d or "") for d in (descriptions or ())])
+    tools = classify_skills(skills, text=body_blob)
+    skill_families = dict(tools.get("families") or {})
+    skill_specialties = dict(tools.get("specialties") or {})
+    for spec, n_tools in skill_specialties.items():
+        w = min(SKILL_EVIDENCE_SPECIALTY_MAX,
+                SKILL_EVIDENCE_WEIGHT
+                + SKILL_EVIDENCE_PER_EXTRA_TOOL * max(0, n_tools - SKILL_SPECIALTY_MIN))
+        spec_counts[spec] = spec_counts.get(spec, 0.0) + w
+    for fam in skill_families:
+        fam_specs = [s for s in skill_specialties
+                     if s in FAMILY_SPECIALTIES.get(fam, ())]
+        w = min(SKILL_EVIDENCE_FAMILY_MAX, sum(
+            min(SKILL_EVIDENCE_SPECIALTY_MAX,
+                SKILL_EVIDENCE_WEIGHT + SKILL_EVIDENCE_PER_EXTRA_TOOL
+                * max(0, skill_specialties[s] - SKILL_SPECIALTY_MIN))
+            for s in fam_specs))
+        if w > 0:
+            counts[fam] = counts.get(fam, 0.0) + w
+
+    demonstrated = set(counts)
+
+    # ---- 3. declared target roles -----------------------------------------
+    tgt_fams, tgt_specs, roles_read = _target_role_families(target_roles)
+    unsupported: List[str] = []
+    for fam, w in tgt_fams.items():
+        if demonstrated and not (
+                fam in demonstrated
+                or any(families_are_adjacent(fam, d) for d in demonstrated)):
+            unsupported.append(fam)
+            continue
+        counts[fam] = counts.get(fam, 0.0) + w
+    admitted_targets = {f for f in tgt_fams if f not in unsupported}
+    for spec, w in tgt_specs.items():
+        fam_of = families_for_specialties([spec])
+        if not any(f in admitted_targets or f in demonstrated for f in fam_of):
+            continue
+        spec_counts[spec] = spec_counts.get(spec, 0.0) + w
+
+    if not counts:
         return {"role_families": [], "role_specialties": [],
                 "taxonomy_version": TAXONOMY_VERSION,
                 "classification_confidence": 0.0,
                 "evidence_titles": [], "tech_scope": SCOPE_UNKNOWN,
                 "non_tech_domain": None,
-                "non_tech_titles": nt_total, "titles_seen": seen_titles}
+                "non_tech_titles": sum(non_tech_domains.values()),
+                "titles_seen": seen_titles, "evidence_sources": [],
+                "skill_evidence": [], "target_roles_read": roles_read,
+                "target_families_unsupported": sorted(unsupported)}
 
-    threshold = max(1, int(round(total * RESUME_FAMILY_MIN_SHARE)))
-    families = [f for f, n in sorted(counts.items(), key=lambda kv: -kv[1])
+    total_weight = sum(counts.values())
+    # The floor is one declared target role, not one job title: a résumé whose
+    # ONLY evidence is onboarding must still yield the families it named.
+    threshold = max(TARGET_ROLE_WEIGHT, total_weight * RESUME_FAMILY_MIN_SHARE)
+    families = [f for f, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
                 if n >= threshold][:RESUME_MAX_FAMILIES]
-    if not families:                       # pragma: no cover - threshold floor is 1
+    if not families:                       # pragma: no cover - threshold floor
         families = [max(counts, key=lambda k: counts[k])]
-    specialties = [s for s, _ in sorted(spec_counts.items(), key=lambda kv: -kv[1])
+    # A specialty whose family did not survive is dropped with it. Reporting
+    # `kubernetes_containers` while refusing `cloud_platform` would put a
+    # specialty on the alignment ladder that the résumé's own family list
+    # contradicts.
+    fam_set = set(families)
+    specialties = [s for s, _ in sorted(spec_counts.items(),
+                                        key=lambda kv: (-kv[1], kv[0]))
+                   if any(f in fam_set for f in families_for_specialties([s]))
                    ][:RESUME_MAX_SPECIALTIES]
     scope = (SCOPE_CORE if any(FAMILY_SCOPE.get(f) == SCOPE_CORE for f in families)
              else SCOPE_ADJACENT)
-    # Confidence rises with corroboration: one matching title is a hint, four
-    # are a discipline.
-    conf = min(0.95, 0.45 + 0.12 * min(total, 4))
+
+    # ---- confidence: the STRONGEST source present, capped by that source ---
+    sources: List[str] = []
+    conf = 0.0
+    if total:
+        sources.append("titles")
+        # Confidence rises with corroboration: one matching title is a hint,
+        # four are a discipline.
+        conf = max(conf, min(0.95, 0.45 + 0.12 * min(total, 4)))
+    if skill_families:
+        sources.append("skills")
+        conf = max(conf, min(SKILLS_ONLY_MAX_CONFIDENCE,
+                             0.30 + 0.05 * len(tools.get("matched") or ())))
+    if roles_read and admitted_targets:
+        sources.append("target_roles")
+        conf = max(conf, min(TARGET_ONLY_MAX_CONFIDENCE,
+                             0.30 + 0.05 * len(roles_read)))
+
     return {"role_families": families, "role_specialties": specialties,
             "taxonomy_version": TAXONOMY_VERSION,
             "classification_confidence": round(conf, 3),
             "evidence_titles": evidence_titles[:6], "tech_scope": scope,
             "non_tech_domain": None,
             "non_tech_titles": sum(non_tech_domains.values()),
-            "titles_seen": seen_titles}
+            "titles_seen": seen_titles,
+            # Explainability: which of the three sources actually spoke, the
+            # tools that were read, and any declared target the demonstrated
+            # evidence did not support.
+            "evidence_sources": sources,
+            "skill_evidence": list(tools.get("matched") or ())[:20],
+            "target_roles_read": roles_read,
+            "target_families_unsupported": sorted(unsupported)}

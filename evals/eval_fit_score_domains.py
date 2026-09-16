@@ -70,6 +70,21 @@ MIN_GRADE_SEPARATION = 5.0
 #: The brief's own criterion: relevant matches must score MEASURABLY above
 #: irrelevant ones on the experience component, not merely on the total.
 MIN_EXPERIENCE_SEPARATION = 6.0
+#: `role_alignment` is the LARGEST component (25/100) and `_normalized_score`
+#: EXCLUDES it when either side carries no taxonomy signal. That exclusion is
+#: correct - not knowing must not cost what being wrong costs - and it is also
+#: how a résumé-classification bug becomes INVISIBLE: the component silently
+#: leaves the average, the score collapses onto skill overlap, and every
+#: headline metric here stays green because they are all pool-relative.
+#:
+#: Measured live on 2026-09-15: for an account whose two job titles were
+#: "Data Science Intern" and "Data Quality Specialist Intern",
+#: `role_alignment` was `unknown` on 4,000 of 4,000 active core-tech postings.
+#: Every résumé in this fixture is unambiguously in one of the fourteen
+#: domains, so a rate below this floor means the RÉSUMÉ side stopped
+#: classifying - which is the defect, stated directly, rather than inferred
+#: from a ranking metric that cannot see it.
+MIN_ROLE_ALIGNMENT_KNOWN = 0.95
 #: A stated hard requirement must be SURFACED even when it cannot be
 #: adjudicated. Silence in a résumé is `unknown`, not a mismatch — but a
 #: posting that names a clearance must still say so on the card, or the rule
@@ -171,6 +186,21 @@ def run(verbose: bool = True) -> Dict[str, Any]:
             if meta.get("known"):
                 known_counts[comp][0] += 1
 
+    # Role alignment, PER RÉSUMÉ. The aggregate hides the failure mode: one
+    # résumé the taxonomy cannot read is `unknown` on every posting it meets,
+    # and inside a 140-row aggregate that is a couple of points off a number
+    # nobody is watching. Named, it is unmissable.
+    align_by_resume: Dict[str, List[int]] = collections.defaultdict(lambda: [0, 0])
+    for (rid, _jid), v in verdicts.items():
+        align_by_resume[rid][1] += 1
+        if (v.get("components") or {}).get("role_alignment", {}).get("known"):
+            align_by_resume[rid][0] += 1
+    resume_alignment_known = {
+        rid: round(c[0] / c[1], 3) for rid, c in sorted(align_by_resume.items())}
+    unreadable_resumes = sorted(
+        rid for rid, rate in resume_alignment_known.items()
+        if rate < MIN_ROLE_ALIGNMENT_KNOWN)
+
     components: Dict[str, Any] = {}
     for comp, grades in sorted(comp_by_grade.items()):
         hi = statistics.mean(grades.get(3) or [0.0])
@@ -228,6 +258,11 @@ def run(verbose: bool = True) -> Dict[str, Any]:
         "components": components,
         "experience_separation": exp_sep,
         "hard_requirements_not_surfaced": surfaced_missing,
+        "role_alignment_known": round(
+            known_counts["role_alignment"][0]
+            / max(1, known_counts["role_alignment"][1]), 4),
+        "resume_alignment_known": resume_alignment_known,
+        "unreadable_resumes": unreadable_resumes,
     }
 
     if verbose:
@@ -257,6 +292,13 @@ def run(verbose: bool = True) -> Dict[str, Any]:
             print(f"      {row['resume']:<24} NDCG {row['ndcg_at_k']:.3f} "
                   f"P@{K} {row['precision_at_k']:.3f}  top: "
                   + ", ".join(f"{j}({s},g{g})" for j, s, g in row["top"]))
+        print(f"\nrole alignment KNOWN    {summary['role_alignment_known']:.3f}   "
+              f"(target >= {MIN_ROLE_ALIGNMENT_KNOWN})")
+        if summary["unreadable_resumes"]:
+            print("  RÉSUMÉS THE TAXONOMY COULD NOT READ:")
+            for rid in summary["unreadable_resumes"]:
+                print(f"      {rid:<28} alignment known "
+                      f"{summary['resume_alignment_known'][rid]:.3f}")
         c = summary["calibration"]
         print(f"\ncalibration             mean score by grade "
               + "  ".join(f"g{g}={m}" for g, m in c["mean_score_by_grade"].items()))
@@ -305,6 +347,8 @@ def gates(summary: Dict[str, Any]) -> List[str]:
         bad.append("experience_separation")
     if summary["hard_requirements_not_surfaced"]:
         bad.append("hard_requirements_surfaced")
+    if summary["unreadable_resumes"]:
+        bad.append("role_alignment_known")
     return bad
 
 

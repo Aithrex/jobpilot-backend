@@ -95,6 +95,21 @@ class TestFitScoreAcrossDomains:
         assert (fit["experience_separation"]
                 >= fit_eval.MIN_EXPERIENCE_SEPARATION)
 
+    def test_every_resume_is_classifiable(self, fit):
+        """The bug this gate exists for, stated as a test.
+
+        A résumé whose titles the phrase table cannot read scores
+        `role_alignment: unknown` against EVERY posting. `_normalized_score`
+        excludes unknown - correctly - so the largest component silently
+        leaves the average and the score becomes skill-overlap noise. Nothing
+        errors, and every other metric in this file stays green, because they
+        are all pool-relative. Measured live: 4,000 postings, 4,000 unknowns,
+        and not one Data Scientist role in the candidate's top 25.
+        """
+        assert fit["unreadable_resumes"] == [], fit["resume_alignment_known"]
+        assert (fit["role_alignment_known"]
+                >= fit_eval.MIN_ROLE_ALIGNMENT_KNOWN)
+
     def test_no_component_is_inverted(self, fit):
         """A component that scores irrelevant matches HIGHER than relevant
         ones is worse than absent, and invisible in the total."""

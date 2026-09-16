@@ -121,7 +121,24 @@ class TestTheDeclaredMatrixIsVersioned:
         # / quantum_control / cryogenic_systems and the 17 edges that connect
         # them to each other and to the specialties people actually move
         # between (systems programming, FPGA/RTL, analog, HPC, photonics).
-        assert tx.ADJACENCY_VERSION == "tech-adjacency-1.2.0"
+        #
+        # 1.3.0 added two: (data_science, ml_engineering) and (data_science,
+        # applied_ai). A data scientist and an ML engineer were reading
+        # `adjacent_family` (0.46) — a claim that the two disciplines barely
+        # reach each other, when they are the same hiring pool and the same
+        # résumés. `nlp`, `computer_vision` and `genai_llm` are deliberately
+        # NOT included: hiring for those does ask for the specialism.
+        assert tx.ADJACENCY_VERSION == "tech-adjacency-1.3.0"
+        for pair in (("data_science", "ml_engineering"),
+                     ("data_science", "applied_ai")):
+            assert tx.specialties_are_adjacent(*pair), pair
+            assert tx.specialties_are_adjacent(*reversed(pair)), pair
+        # And the ones 1.3.0 refused, so the boundary is asserted and not
+        # merely intended.
+        for pair in (("data_science", "nlp"),
+                     ("data_science", "computer_vision"),
+                     ("data_science", "genai_llm")):
+            assert not tx.specialties_are_adjacent(*pair), pair
 
     def test_every_declared_pair_names_real_specialties(self):
         known = set(tx.SPECIALTY_LABELS)

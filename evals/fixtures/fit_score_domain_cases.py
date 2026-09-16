@@ -358,6 +358,166 @@ RESUMES["r_security_cleared"]["certifications"] = [
 
 
 # ---------------------------------------------------------------------------
+# REAL-SHAPED RÉSUMÉS: the four ways a résumé fails to look like a résumé
+#
+# Every `_resume()` above is a synthetic ideal - a canonical title, a matching
+# skill list, dated senior experience. The live bug this section exists for
+# was in the gap between that and an actual résumé, and NONE of the 115
+# scenarios above could see it: a candidate whose job titles are non-canonical
+# scored `role_alignment: unknown` against every posting, which
+# `_normalized_score` excludes, which collapsed the whole score onto skill
+# overlap. Measured live on 4,000 active core-tech postings for one account:
+# role_alignment was `unknown` 4,000 times out of 4,000, and not one Data
+# Scientist / ML Engineer / AI Engineer role reached the top 25.
+# ---------------------------------------------------------------------------
+
+#: 1. The live bug, reproduced. Two internship titles that name a discipline
+#: the phrase table could not see through the suffix, an unmistakable AI/ML +
+#: data skill set, and four PORTFOLIO PROJECTS in clinical, therapy and
+#: university domains - which is also the industry-inference bug: this person
+#: has never worked in healthcare, education, law or the nonprofit sector.
+RESUMES["r_newgrad_intern_titles"] = {
+    "contact": {"name": "Candidate new-grad", "email": "ng@example.invalid",
+                "location": "Tempe, Arizona"},
+    "summary": "",
+    "skills": {
+        "Programming & Data": ["Python", "SQL", "R", "Pandas", "NumPy",
+                               "SciPy", "PostgreSQL", "MongoDB"],
+        "ML & Deep Learning": ["Scikit-learn", "XGBoost", "PyTorch",
+                               "TensorFlow", "Keras", "Feature Engineering",
+                               "Time-Series Forecasting"],
+        "GenAI, NLP & Vision": ["LLMs", "RAG", "Prompt Engineering",
+                                "Hugging Face", "LangChain", "NLP",
+                                "Computer Vision"],
+        "Data Engineering": ["Apache Spark", "Databricks", "ETL", "Docker"],
+        "Analytics": ["Statistical Analysis", "A/B Testing",
+                      "Hypothesis Testing", "Tableau", "Power BI"],
+    },
+    "experience": [
+        {"title": "Data Quality Specialist Intern", "company": "Scalpel Inc.",
+         "dates": "March 2026 - May 2026",
+         "bullets": [
+             "Led dataset validation and governance for computer vision "
+             "training pipelines, auditing annotation integrity and metadata "
+             "consistency.",
+             "Investigated model predictions and dataset drift alongside ML "
+             "engineers.",
+         ]},
+        {"title": "Data Science Intern", "company": "BrainOvision Solutions",
+         "dates": "May 2023 - June 2023",
+         "bullets": [
+             "Built a Python ETL pipeline over 500+ unstructured documents "
+             "into PostgreSQL.",
+             "Engineered NLP document classification across 10+ categories.",
+         ]},
+    ],
+    "education": [{"degree": "M.S. in Data Science, Engineering and Analytics",
+                   "institution": "Arizona State University",
+                   "dates": "Aug 2024 - May 2026"},
+                  {"degree": "B.Tech in Data Science",
+                   "institution": "GITAM University",
+                   "dates": "Aug 2020 - May 2024"}],
+    # The industry trap. Every one of these is a PROJECT, not an employer.
+    "projects": [
+        {"name": "Hybrid Multimodal Clinical Decision Support System",
+         "tech": "PyTorch, LLM, RAG",
+         "bullets": ["Fused clinical notes and imaging for a hospital triage "
+                     "prototype used in a university course."]},
+        {"name": "Talking Personal AI Model for Counseling Therapy",
+         "tech": "Speech, LLM",
+         "bullets": ["Built a therapy-style conversational agent; evaluated "
+                     "with a nonprofit counseling service's public dataset."]},
+    ],
+    "certifications": [],
+    "target_roles": ["Data Scientist", "Data Analyst",
+                     "Machine Learning Engineer", "AI Engineer",
+                     "Data Engineer", "Software Engineer"],
+}
+
+#: 2. Level codes and vendor ladders. Every title is software and not one of
+#: them was reachable before `strip_title_modifiers`.
+RESUMES["r_backend_level_codes"] = {
+    "contact": {"name": "Candidate SDE", "email": "sde@example.invalid",
+                "location": "Seattle, WA"},
+    "summary": "",
+    "skills": {"core": ["Java", "Python", "Spring Boot", "REST API",
+                        "PostgreSQL", "Kafka", "Docker", "Kubernetes",
+                        "microservices", "distributed systems", "AWS"]},
+    "experience": [
+        {"title": "SDE II", "company": "Employer A",
+         "dates": "Jan 2023 - Present",
+         "bullets": ["Owned a payments service in Java and Spring Boot.",
+                     "Designed idempotent REST APIs over PostgreSQL and Kafka."]},
+        {"title": "Software Development Engineer I", "company": "Employer B",
+         "dates": "Jan 2021 - Dec 2022",
+         "bullets": ["Built internal microservices and their deployment "
+                     "pipelines on AWS."]},
+    ],
+    "education": [{"degree": "BS Computer Science",
+                   "institution": "State University", "dates": "2017 - 2021"}],
+    "projects": [], "certifications": [],
+}
+
+#: 3. Titles that say nothing at all, and a skill list that says everything.
+#: This is the "no evidence must mean NO evidence" case: before 2.2 the
+#: taxonomy read the titles, found nothing and reported `unknown`, while the
+#: résumé named Terraform, Kubernetes, Prometheus and six AWS services.
+RESUMES["r_skills_only_unhelpful_titles"] = {
+    "contact": {"name": "Candidate consultant", "email": "c@example.invalid",
+                "location": "Austin, TX"},
+    "summary": "",
+    "skills": {"core": ["Terraform", "Kubernetes", "Docker", "AWS",
+                        "CI/CD", "Jenkins", "Ansible", "Helm",
+                        "GitHub Actions", "infrastructure as code"]},
+    "experience": [
+        {"title": "Technical Associate", "company": "Employer A",
+         "dates": "Jan 2021 - Present",
+         "bullets": ["Ran the Terraform estate and the Kubernetes clusters "
+                     "behind three product teams.",
+                     "Owned CI/CD on GitHub Actions and Jenkins."]},
+        {"title": "Analyst", "company": "Employer B",
+         "dates": "Jan 2019 - Dec 2020",
+         "bullets": ["Automated cloud provisioning with Ansible and Helm."]},
+    ],
+    "education": [{"degree": "BS Information Systems",
+                   "institution": "State University", "dates": "2015 - 2019"}],
+    "projects": [], "certifications": [],
+}
+
+#: 4. NO EMPLOYMENT AT ALL - a new graduate with coursework, projects and the
+#: target roles they typed into onboarding. `classify_resume` sees no titles,
+#: so this row is scored on tools plus declared targets alone, which is the
+#: whole of goal 5.
+#:
+#: The stricter case - declared targets and NOTHING else, no skills either -
+#: is deliberately NOT here. It must return `not_scored`, because a declared
+#: target is not evidence that anything can be COMPARED against a posting's
+#: requirements, and a ranking fixture is the wrong place to assert an absence.
+#: `evals/test_resume_evidence.py::TestDeclaredTargetRoles` asserts it
+#: directly.
+RESUMES["r_newgrad_targets_and_tools"] = {
+    "contact": {"name": "Candidate declared", "email": "d@example.invalid",
+                "location": "Remote, US"},
+    "summary": "",
+    "skills": {"core": ["Python", "PyTorch", "scikit-learn", "NumPy",
+                        "Pandas", "SQL", "machine learning",
+                        "feature engineering", "statistical analysis"]},
+    "experience": [],
+    "education": [{"degree": "BS Computer Science",
+                   "institution": "State University", "dates": "2022 - 2026"}],
+    "projects": [
+        {"name": "Course capstone: churn prediction",
+         "tech": "PyTorch, scikit-learn",
+         "bullets": ["Trained and evaluated gradient-boosted and neural "
+                     "models on a public churn dataset."]},
+    ],
+    "certifications": [],
+    "target_roles": ["Machine Learning Engineer", "AI Engineer",
+                     "Data Scientist"],
+}
+
+
+# ---------------------------------------------------------------------------
 # The labelled scenarios
 # ---------------------------------------------------------------------------
 E = "eligible"
@@ -464,6 +624,43 @@ SCENARIOS.extend([
     ("r_backend_senior", "j_backend_mid", 2, E),
     ("r_cloud_senior", "j_cloud_mid", 2, E),
     ("r_ai_ml_senior", "j_ai_ml_mid", 2, E),
+
+    # --- the four real-shaped résumés --------------------------------------
+    # Graded as a recruiter would: the discipline is what makes a row
+    # relevant, and the seniority gap is what keeps a new grad's match to a
+    # mid-level requisition at 2 rather than 3.
+    ("r_newgrad_intern_titles", "j_data_mid", 2, E),
+    ("r_newgrad_intern_titles", "j_ai_ml_mid", 2, E),
+    ("r_newgrad_intern_titles", "j_data_senior", 1, E),
+    ("r_newgrad_intern_titles", "j_ai_ml_senior", 1, E),
+    ("r_newgrad_intern_titles", "j_frontend_senior", 0, E),
+    ("r_newgrad_intern_titles", "j_semiconductor_senior", 0, E),
+    ("r_newgrad_intern_titles", "j_gaming_senior", 0, E),
+
+    ("r_backend_level_codes", "j_backend_mid", 3, E),
+    ("r_backend_level_codes", "j_full_stack_senior", 2, E),
+    ("r_backend_level_codes", "j_backend_senior", 2, E),
+    ("r_backend_level_codes", "j_cloud_mid", 1, E),
+    ("r_backend_level_codes", "j_gaming_senior", 0, E),
+    ("r_backend_level_codes", "j_semiconductor_senior", 0, E),
+
+    ("r_skills_only_unhelpful_titles", "j_devops_sre_senior", 2, E),
+    ("r_skills_only_unhelpful_titles", "j_cloud_mid", 2, E),
+    ("r_skills_only_unhelpful_titles", "j_cloud_senior", 2, E),
+    ("r_skills_only_unhelpful_titles", "j_frontend_senior", 0, E),
+    ("r_skills_only_unhelpful_titles", "j_quantum_senior", 0, E),
+    ("r_skills_only_unhelpful_titles", "j_gaming_senior", 0, E),
+
+    # Declared targets are the WEAKEST evidence and they are still evidence.
+    # Grade 2 rather than 3 everywhere: this person has demonstrated nothing,
+    # and a feed that ranked them equal to someone who has would be lying in
+    # the other direction.
+    ("r_newgrad_targets_and_tools", "j_ai_ml_mid", 2, E),
+    ("r_newgrad_targets_and_tools", "j_data_mid", 2, E),
+    ("r_newgrad_targets_and_tools", "j_ai_ml_senior", 1, E),
+    ("r_newgrad_targets_and_tools", "j_semiconductor_senior", 0, E),
+    ("r_newgrad_targets_and_tools", "j_frontend_senior", 0, E),
+    ("r_newgrad_targets_and_tools", "j_gaming_senior", 0, E),
 ])
 
 #: `{resume_id: {job_id: grade}}`, for the ranking metrics.

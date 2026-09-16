@@ -57,7 +57,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.1"
+FIT_SCORE_VERSION = "fit-v2.2"
 
 # The cliff described below is REAL, and this is how 2.1 crosses it.
 #
@@ -80,7 +80,20 @@ FIT_SCORE_VERSION = "fit-v2.1"
 # extraction CONTRACT is unchanged; change
 # `job_inventory_service.EXTRACTOR_VERSION` (which drives a re-parse through
 # the normal crawl) when it is not.
-_COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset({"fit-v2.0", "fit-v2.1"})
+# 2.2 keeps the same contract again. `extract_requirements` still returns the
+# identical dict, field for field, so every stored profile remains VALID input
+# and nothing becomes unscorable at deploy time.
+#
+# It is not, however, identical OUTPUT. 2.2 widens `_CLEARANCE_JD` and
+# `_WORKAUTH_JD` (see those patterns), so a posting re-extracted under 2.2 can
+# set `clearance_required` / `work_authorization_restricted` where the stored
+# 2.0/2.1 profile left them False. That is a VALUE change, not a shape change:
+# the two flags get MORE accurate on re-extraction and are merely
+# under-reported until then, which is the safe direction — a missing flag
+# surfaces as "not stated", never as a penalty. A re-extraction backfill is
+# therefore worth running and is not required for correctness.
+_COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset(
+    {"fit-v2.0", "fit-v2.1", "fit-v2.2"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
@@ -1419,19 +1432,98 @@ LICENSE_RULES: Sequence[Dict[str, Any]] = (
     },
 )
 
+# Widened in 2.2. The 2.1 pattern read only the phrasings that name a
+# clearance the candidate ALREADY holds, and the defence-and-federal half of
+# the inventory does not write it that way: "must be able to obtain and
+# maintain a security clearance", "clearance eligible", "US Person as defined
+# by ITAR", "subject to export control regulations (EAR/ITAR)", "position
+# requires the ability to obtain a Public Trust". Every one of those is a
+# stated requirement a reader needs to see, and every one of them was silent.
+#
+# This flag never penalises anyone: `_hard_constraints` records an unstated
+# clearance as `status: "unknown"` with NO cap (a résumé cannot contradict a
+# clearance requirement). Widening it therefore only ever SURFACES a
+# requirement earlier, which is the whole purpose of the field.
 _CLEARANCE_JD = re.compile(
-    r"(security clearance|ts/sci|top secret|secret clearance|active clearance|"
-    r"public trust|polygraph|dod clearance|q clearance|l clearance)")
+    r"(security clearance|ts/sci|top[ -]secret|secret clearance|"
+    r"active clearance|public trust|polygraph|dod clearance|"
+    r"q clearance|l clearance|"
+    r"(?:obtain|acquire|qualify for|be eligible for)\s+(?:and maintain\s+)?"
+    r"(?:a|an|the)?\s*(?:u\.?s\.?\s+)?(?:government|dod|federal)?\s*"
+    r"(?:security\s+)?clearance|"
+    r"clearance[ -]eligible|eligible for (?:a )?clearance|"
+    # A BARE "clearance required" IS DELIBERATELY NOT HERE. Measured on 4,000
+    # live bodies, it is a FORM LABEL far more often than a requirement:
+    # "government clearance required? no", "government clearance required?"
+    # with no answer at all, and "minimum clearance required to start: none".
+    # Every genuine statement carries a qualifier that one of the other
+    # alternatives already reads ("security clearance", "TS/SCI", "active
+    # clearance", "public trust", "obtain a clearance", "clearance eligible"),
+    # so dropping it costs recall nothing measurable and removes 100% of the
+    # false positives it produced.
+    r"must (?:be able to )?(?:hold|obtain) a clearance|"
+    # Left boundary is load-bearing: without it "indigenous persons" matches
+    # "us persons".
+    r"(?<![a-z])u\.?s\.? person(?:s)?(?: as defined)?|(?<![a-z])us person(?:s)?|"
+    # `\bear\b` on its own would match the English word. Only the paired or
+    # qualified forms of the Export Administration Regulations are read.
+    r"export[ -]control(?:led|s)?|\bitar\b|itar\s*/\s*ear|ear\s*/\s*itar|"
+    r"\bear\b\s+(?:regulation|requirement|restriction)|"
+    r"government contract requires|federal contract requires|"
+    r"national agency check|suitability determination)")
 _CLEARANCE_RESUME = re.compile(
-    r"(security clearance|ts/sci|top secret|secret clearance|active clearance|"
-    r"public trust|polygraph|cleared to)")
+    r"(security clearance|ts/sci|top[ -]secret|secret clearance|"
+    r"active clearance|public trust|polygraph|cleared to|"
+    r"clearance[ -]eligible|dod clearance|q clearance|l clearance)")
 
+# Widened in 2.2 for the same reason: the 2.1 pattern missed the spellings
+# employers and staffing firms actually use. "must be authorized to work in the
+# US without sponsorship now or in the future", "no C2C", "no third party
+# candidates", "OPT/CPT candidates are not eligible", "must be a Green Card
+# holder or US Citizen", "permanent work authorization required". All of these
+# are the employer STATING a restriction, which is exactly what this flag
+# means.
+#
+# Note the asymmetry this preserves: the flag alone never costs a candidate
+# anything. `_hard_constraints` caps the score ONLY when the flag meets a
+# résumé that states it needs sponsorship (`_WORKAUTH_RESUME_NEEDS`);
+# otherwise it records `status: "unknown"` with no cap. Silence is never a
+# mismatch.
 _WORKAUTH_JD = re.compile(
     r"(no visa sponsorship|not (?:able|willing) to sponsor|"
     r"un(?:able|willing) to (?:provide |offer )?(?:visa )?sponsor|"
-    r"without sponsorship|does not (?:provide|offer) sponsorship|"
-    r"cannot sponsor|no sponsorship|must be a u\.?s\.? citizen|"
-    r"u\.?s\.? citizenship (?:is )?required|citizens? only)")
+    # The sponsorship noun is MANDATORY here. An earlier draft allowed
+    # "does not (provide|offer)" with an optional object, which matched "does
+    # not provide relocation assistance" and would have flagged thousands of
+    # postings that say nothing about work authorization at all.
+    r"without sponsorship|does not (?:provide|offer|sponsor)\s+"
+    r"(?:visa\s+|employment\s+|immigration\s+)?sponsorship|"
+    r"does not sponsor\b|"
+    # The negation and the noun in the same clause, with the object allowed to
+    # sit between them ("we do not offer relocation or sponsorship"). Bounded
+    # to 40 characters and stopped at a sentence break so the negation cannot
+    # reach across into an unrelated sentence.
+    r"(?:do(?:es)? not|will not|cannot|can ?not|are unable to|is unable to)\s+"
+    r"(?:provide|offer|consider|support)[^.\n]{0,40}?sponsorship|"
+    r"will not (?:provide|offer|consider)\s+(?:visa\s+)?sponsorship|"
+    r"cannot sponsor|no sponsorship|not sponsor(?:ing)?|"
+    r"sponsorship (?:is )?not (?:available|offered|provided)|"
+    r"must be a u\.?s\.? citizen|"
+    r"u\.?s\.? citizenship (?:is )?required|citizens? only|"
+    r"(?:us|u\.?s\.?) citizen(?:ship)? or (?:permanent resident|green card)|"
+    r"green[ -]card holder|permanent resident(?:s)? only|"
+    r"authorized to work in the (?:u\.?s\.?|united states)"
+    r"(?:[^.\n]{0,60}?)(?:without (?:the need for )?(?:visa )?sponsorship|"
+    r"now or in the future)|"
+    r"permanent (?:us |u\.?s\.? )?work authorization|"
+    r"no (?:c2c|corp[ -]to[ -]corp|third[ -]part(?:y|ies))|"
+    r"third[ -]party (?:candidates|resumes|agencies) (?:are )?not|"
+    r"no (?:opt|cpt|h1b|h-1b)|"
+    r"(?:opt|cpt)(?:/(?:opt|cpt))? (?:candidates )?(?:are )?not eligible|"
+    r"not eligible for (?:opt|cpt|visa sponsorship)|"
+    r"(?:w2|w-2) only|"
+    r"government contract requires|"
+    r"must be a (?:green[ -]card holder|lawful permanent resident))")
 _WORKAUTH_RESUME_NEEDS = re.compile(
     r"(require[sd]? sponsorship|need sponsorship|visa sponsorship required|"
     r"f-1 opt|f1 opt|(?<![a-z])opt(?![a-z])|(?<![a-z])cpt(?![a-z])|"
@@ -1523,12 +1615,93 @@ def _degree_level(blob: str) -> int:
 
 
 def _industries(blob: str) -> Set[str]:
+    """Industries named anywhere in a blob. Used for the JOB side only.
+
+    A posting IS about one employer's line of business, so every word in it is
+    evidence about that business. A résumé is not - see `_resume_industries`.
+    """
     out: Set[str] = set()
     for name, cues in INDUSTRIES.items():
         for cue in cues:
             if cue in blob:
                 out.add(name)
                 break
+    return out
+
+
+#: An EMPLOYER or a JOB TITLE naming an industry is direct evidence; a bullet
+#: mentioning an industry word is weak evidence and needs corroboration.
+#: One word-boundary alternation per industry, longest cue first, so
+#: "clinical" and "clinic" are ONE match at ONE position rather than two
+#: independent pieces of evidence for the same four letters.
+_INDUSTRY_PATTERNS: Dict[str, re.Pattern] = {
+    name: re.compile(
+        r"(?<![a-z0-9])(?:"
+        + "|".join(re.escape(c).replace(r"\ ", r"[\s\-]+")
+                   for c in sorted(set(cues), key=len, reverse=True))
+        + r")(?:es|s)?(?![a-z0-9])")
+    for name, cues in INDUSTRIES.items()
+}
+
+_INDUSTRY_EMPLOYER_WEIGHT = 2
+_INDUSTRY_BULLET_WEIGHT = 1
+_INDUSTRY_MIN_WEIGHT = 2
+
+
+def _resume_industries(resume: Dict[str, Any]) -> Set[str]:
+    """The industries a résumé's EMPLOYMENT evidences. Employers first.
+
+    The 2.1 reading ran `_industries` over the whole résumé - summary, skills,
+    education AND project descriptions - and any noun anywhere set an
+    industry. Measured on a live account: an MS Data Science new grad whose
+    four PORTFOLIO PROJECTS included a clinical decision-support system, a
+    counselling-therapy chatbot and a university course project was recorded
+    as working in {education, healthcare, nonprofit, legal}. She has never
+    worked in any of them, and the `domain` component then scored her against
+    every posting on four industries she does not have.
+
+    Industry is a fact about WHERE SOMEONE HAS WORKED, so it is read from the
+    experience section and nowhere else:
+
+    * a company name or job title naming an industry counts 2 (an employer
+      called "Mercy Hospital" IS healthcare, and that is the case the
+      component exists for);
+    * an industry word inside a work bullet counts 1, so two independent
+      mentions are needed - one incidental "clinical" in a bullet is not a
+      career in healthcare;
+    * projects, education, coursework, the summary and the skills block are
+      NOT read at all. A project is something a person BUILT, often
+      deliberately in a domain they have never been paid to work in.
+
+    The failure mode this trades into is `unknown`, which is free:
+    `_score_domain` returns `known=False` when either side is empty, so the
+    component leaves the average entirely. Being wrong costs 4 of 5 points on
+    every posting; knowing nothing costs zero. That is the right trade.
+    """
+    strong: List[str] = []
+    bullets: List[str] = []
+    for entry in (resume or {}).get("experience") or []:
+        if not isinstance(entry, dict):
+            continue
+        strong.append(str(entry.get("company") or ""))
+        strong.append(str(entry.get("title") or ""))
+        for b in (entry.get("bullets") or []):
+            bullets.append(str(b))
+    strong_blob = _norm("\n".join(strong))
+    bullet_blob = _norm("\n".join(bullets))
+    if not strong_blob and not bullet_blob:
+        return set()
+    out: Set[str] = set()
+    for name, rx in _INDUSTRY_PATTERNS.items():
+        weight = _INDUSTRY_EMPLOYER_WEIGHT if rx.search(strong_blob) else 0
+        # DISTINCT MENTIONS, by position. A plain substring scan counts
+        # "clinical" twice, because `clinic` is inside it, and two cues that
+        # are the same word corroborate nothing - which is exactly how one
+        # incidental "clinical data feed" bullet became a healthcare career.
+        weight += _INDUSTRY_BULLET_WEIGHT * len(
+            {m.start() for m in rx.finditer(bullet_blob)})
+        if weight >= _INDUSTRY_MIN_WEIGHT:
+            out.add(name)
     return out
 
 
@@ -1748,14 +1921,34 @@ def _resume_text_parts(resume: Dict[str, Any]) -> Tuple[str, str]:
     return "\n".join(exp_bits), "\n".join(skills_bits)
 
 
-def _resume_years(resume: Dict[str, Any]) -> Optional[int]:
-    """Total years from DATED evidence only. No dates means None (unknown),
-    never a guess: inventing a duration is a resume fact the candidate did
-    not state."""
-    explicit = resume.get("experience_years")
+def _resume_months(resume: Dict[str, Any]) -> Optional[int]:
+    """Total MONTHS of dated experience, or None when nothing is dated.
+
+    Months, not years, is the honest unit for the early-career résumés this
+    engine gets most of. `_resume_years` floors to whole years, so five months
+    of internships and zero months of anything both read `0` - the two
+    candidates then scored identically against every posting, and a résumé
+    WITH dated evidence scored WORSE than one with none (a `None` falls
+    through to the seniority-band branch of `_score_experience`, which is
+    kinder than a zero-year gap). `has_dated_experience: True` beside
+    `years: 0` was the visible symptom of that.
+
+    Internship and co-op months COUNT, at full calendar weight. A dated,
+    supervised, paid engagement is professional experience; the thing that
+    makes it junior is its LENGTH and the seniority band the title carries,
+    and both of those are already modelled. Discounting it a second time here
+    would be pricing the same fact twice.
+    """
+    explicit = resume.get("experience_months")
     if explicit is not None:
         try:
             return max(0, int(explicit))
+        except (TypeError, ValueError):
+            pass
+    explicit_years = resume.get("experience_years")
+    if explicit_years is not None:
+        try:
+            return max(0, int(explicit_years)) * 12
         except (TypeError, ValueError):
             pass
     entries = resume.get("experience") or []
@@ -1767,13 +1960,44 @@ def _resume_years(resume: Dict[str, Any]) -> Optional[int]:
         months = ResumeParser._experience_intervals_months(resume)
     except Exception:  # pragma: no cover - parser import is optional here
         return None
-    return months // 12 if months > 0 else 0
+    return max(0, int(months or 0))
 
 
-def build_resume_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
+def _resume_years(resume: Dict[str, Any]) -> Optional[int]:
+    """Total WHOLE years from DATED evidence only. No dates means None
+    (unknown), never a guess: inventing a duration is a resume fact the
+    candidate did not state.
+
+    Still the floor, deliberately: five months is not one year and this number
+    is displayed. The sub-year detail lives in `_resume_months`, which is what
+    `_score_experience` actually compares.
+    """
+    months = _resume_months(resume)
+    if months is None:
+        return None
+    return months // 12
+
+
+def build_resume_profile(resume: Dict[str, Any],
+                         target_roles: Sequence[Any] = ()) -> Dict[str, Any]:
     """Everything the scorer needs from one parsed resume, computed once and
-    reused across every posting in a batch."""
+    reused across every posting in a batch.
+
+    `target_roles` is the caller's DECLARED targets from onboarding
+    (`user_preferences.target_roles`). Nothing in the scoring path read them
+    before 2.2 - six canonical titles a user typed into onboarding were
+    visible to career_paths, differentiation, trend_signal and career_readiness
+    and invisible to the one number the feed ranks on. They are passed to
+    `tech_taxonomy.classify_resume`, which fences them: see that function's
+    docstring for the precedence (titles > tools > declared targets) and for
+    why a declared target can never make somebody INELIGIBLE for anything.
+
+    They also fall back to `resume["target_roles"]`, so a caller holding the
+    preferences document can supply them without threading a second argument.
+    """
     resume = resume or {}
+    if not target_roles:
+        target_roles = resume.get("target_roles") or ()
     exp_text, skills_text = _resume_text_parts(resume)
     full = "\n".join([
         str(resume.get("summary") or ""), exp_text, skills_text,
@@ -1795,7 +2019,8 @@ def build_resume_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
     applied = set(find_skills(exp_text))
     # Computed once: `level` reads it too, so a second `_resume_years` call
     # here could silently disagree with the `years` the profile reports.
-    _years = _resume_years(resume)
+    _months = _resume_months(resume)
+    _years = None if _months is None else _months // 12
     return {
         "experience_skills": applied,
         "listed_skills": listed,
@@ -1807,8 +2032,14 @@ def build_resume_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
         # reading, kept because `job_postings.role_family` is written from it.
         # Alignment scores against THIS.
         "tech": _resume_taxonomy(titles, sorted(listed | applied),
-                                 resume.get("summary") or "", exp_text),
+                                 resume.get("summary") or "", exp_text,
+                                 target_roles),
         "years": _years,
+        # Months as well as years. `years` is floored and is what the product
+        # SHOWS; `experience_months` is what `_score_experience` compares, so
+        # eleven months of dated work is no longer indistinguishable from
+        # never having worked. See `_resume_months`.
+        "experience_months": _months,
         # Years as well as titles: an early-career resume whose only
         # band-bearing titles are internships used to resolve to `intern` no
         # matter how much dated experience sat beside it. See `resume_level`.
@@ -1816,9 +2047,12 @@ def build_resume_profile(resume: Dict[str, Any]) -> Dict[str, Any]:
         "degree_level": _degree_level(_norm(" ".join(
             str((e or {}).get("degree") or "") for e in (resume.get("education") or [])
             if isinstance(e, dict)))),
-        "industries": _industries(full_norm),
+        # Employment evidence only - NOT projects, education or the summary.
+        # See `_resume_industries` for the live résumé this was measured on.
+        "industries": _resume_industries(resume),
         "location": _norm((resume.get("contact") or {}).get("location") or ""),
-        "has_dated_experience": _years is not None,
+        "has_dated_experience": _months is not None,
+        "declared_target_roles": [str(t) for t in (target_roles or ()) if str(t or "").strip()],
     }
 
 
@@ -1830,7 +2064,8 @@ RESUME_TAXONOMY_KEYS = ("role_families", "role_specialties", "taxonomy_version",
 
 
 def _resume_taxonomy(titles: Sequence[Any], skills: Sequence[Any],
-                     summary: Any = "", exp_text: Any = "") -> Dict[str, Any]:
+                     summary: Any = "", exp_text: Any = "",
+                     target_roles: Sequence[Any] = ()) -> Dict[str, Any]:
     """The résumé's own families/specialties on the canonical tree.
 
     Degrades to an empty, `unknown`-scoped result on any failure: a taxonomy
@@ -1839,7 +2074,8 @@ def _resume_taxonomy(titles: Sequence[Any], skills: Sequence[Any],
     try:
         from services import tech_taxonomy as tx
         return tx.classify_resume(titles=titles, skills=skills,
-                                  summary=summary, descriptions=[exp_text])
+                                  summary=summary, descriptions=[exp_text],
+                                  target_roles=target_roles)
     except Exception as exc:  # pragma: no cover - never break scoring
         logger.debug("fit_score._resume_taxonomy: %s", exc)
         return {"role_families": [], "role_specialties": [],
@@ -1972,12 +2208,19 @@ def _profile_from_skills(resume_skills: Sequence[str],
         "all_text": _norm("\n".join(list(resume_skills or []) + title_list)),
         "titles": title_list,
         "families": {f for f in (classify_role(t) for t in title_list) if f},
+        # 2.2: this path had NO `tech` key at all, so `_score_role` read an
+        # empty taxonomy and every skills-only caller got `role_alignment:
+        # unknown` on every posting - the same 25-point blind spot the résumé
+        # path had, in the pipeline that feeds the guest and inventory flows.
+        "tech": _resume_taxonomy(title_list, sorted(canon)),
         "years": years,
-        "level": resume_level(title_list),
+        "experience_months": None if years is None else int(years) * 12,
+        "level": resume_level(title_list, years),
         "degree_level": 0,
         "industries": set(),
         "location": "",
         "has_dated_experience": years is not None,
+        "declared_target_roles": [],
     }
 
 
@@ -2256,6 +2499,44 @@ _EXPERIENCE_RELEVANCE: Dict[str, float] = {
 }
 
 
+def _band_only_experience(mx: int, level_gap: Optional[int],
+                          job_level: Any, res_level: Any
+                          ) -> Optional[Tuple[float, str, bool, bool]]:
+    """The seniority-BAND reading of experience, or None when the bands are
+    not known on both sides.
+
+    Used twice, which is the point. It is the answer when years are unknown on
+    either side, and it is a FLOOR under the years answer when both are known
+    - because a résumé that DELETES its dates must never score higher than the
+    same résumé with them. Measured: five months of dated internships against
+    a "2+ years" posting scored 12.35/20, and the identical résumé with the
+    date strings blanked scored 14.40/20, because a `None` falls through to
+    this branch and this branch is gentler. Dated evidence was a liability.
+    """
+    if level_gap is None:
+        return None
+    # A clear two-plus-band under-level for a senior+ posting is a real signal
+    # - the TITLES said it, which is evidence, not absence.
+    if level_gap >= 2 and job_level in _SENIOR_PLUS:
+        return (mx * 0.30, "Your job titles read below the seniority this role "
+                "asks for.", True, True)
+    if level_gap <= 0:
+        return (mx, f"Your seniority ({res_level}) meets this "
+                f"{job_level} role.", False, True)
+    if level_gap == 1:
+        return (mx * 0.72, f"One seniority band below this {job_level} "
+                f"role.", False, True)
+    return (mx * 0.40, f"Below the seniority this {job_level} role asks "
+            f"for.", False, True)
+
+
+def _gap_text(gap: float) -> str:
+    """A years gap, rounded for a human. `gap` is fractional now (months), and
+    "About 2.58 years short" is a precision we have not earned."""
+    n = int(round(float(gap)))
+    return "a year" if n == 1 else f"{max(1, n)} years"
+
+
 def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any],
                       alignment: Optional[Dict[str, Any]] = None
                       ) -> Tuple[float, str, bool, bool]:
@@ -2269,7 +2550,15 @@ def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any],
     symmetric over-qualification case for entry roles.
     """
     mx = COMPONENT_MAX["experience"]
+    # FRACTIONAL years, from months, when we have them. `years` is floored for
+    # display, and comparing the floor made eleven months of dated work
+    # identical to none at all - and strictly worse than an UNDATED résumé,
+    # which falls through to the kinder seniority-band branch below. Anything
+    # printed still uses the whole-year `years`; only the arithmetic is finer.
     have = prof.get("years")
+    _months = prof.get("experience_months")
+    if isinstance(_months, (int, float)) and _months >= 0:
+        have = round(float(_months) / 12.0, 2)
     want = reqs.get("required_years")
     job_level = reqs.get("job_level")
     res_level = prof.get("level")
@@ -2285,23 +2574,10 @@ def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any],
     if job_level in _LEVEL_ORDER and res_level in _LEVEL_ORDER:
         level_gap = _LEVEL_ORDER[job_level] - _LEVEL_ORDER[res_level]
 
+    band = _band_only_experience(mx, level_gap, job_level, res_level)
     if have is None or want is None:
-        # Years unknown on one side. A clear two-plus-band under-level for a
-        # senior+ posting is still a real signal - the TITLES said it, which is
-        # evidence, not absence - so that case is scored and marked known.
-        if level_gap is not None and level_gap >= 2 and job_level in _SENIOR_PLUS:
-            return (mx * 0.30, "Your job titles read below the seniority this role "
-                    "asks for.", True, True)
-        if level_gap is not None:
-            # Bands known on both sides, years on neither. Score the bands.
-            if level_gap <= 0:
-                return (mx, f"Your seniority ({res_level}) meets this "
-                        f"{job_level} role.", False, True)
-            if level_gap == 1:
-                return (mx * 0.72, f"One seniority band below this {job_level} "
-                        f"role.", False, True)
-            return (mx * 0.40, f"Below the seniority this {job_level} role asks "
-                    f"for.", False, True)
+        if band is not None:
+            return band
         # Genuinely unknown on both axes. 43.3% of the live inventory states no
         # seniority and 92% state no years, so charging this component's
         # neutral 65% to almost every posting was a systematic 7-point tax on
@@ -2309,27 +2585,45 @@ def _score_experience(reqs: Dict[str, Any], prof: Dict[str, Any],
         return 0.0, "Years of experience are not stated on both sides.", False, False
 
     gap = want - have
+    # What the sentence SAYS stays in whole years (and says "under a year"
+    # rather than "0 years", which reads as a denial of the internships that
+    # produced it). What the arithmetic above uses is the fractional value.
+    _shown = prof.get("years")
+    have_text = ("under a year" if (_shown is not None and int(_shown) == 0)
+                 else f"about {int(_shown) if _shown is not None else have} years")
     if gap <= 0:
         if job_level in EARLY_CAREER_LEVELS and have >= want + 6:
             pts, detail, severe = mx * 0.7, (
-                f"You have about {have} years, well above what this entry level "
+                f"You have {have_text}, well above what this entry level "
                 f"role asks for."), False
         else:
             pts, detail, severe = float(mx), (
-                f"You have about {have} years against roughly {want} asked for."), False
+                f"You have {have_text} against roughly {want} asked for."), False
     elif gap <= 1:
         pts, detail, severe = (
-            mx * 0.85, f"You have about {have} years against roughly {want} asked for.", False)
+            mx * 0.85, f"You have {have_text} against roughly {want} asked for.", False)
     elif gap <= 2:
         pts, detail, severe = (
-            mx * 0.65, f"About {gap} years short of the {want} years asked for.", False)
+            mx * 0.65, f"About {_gap_text(gap)} short of the {want} years asked for.",
+            False)
     elif gap <= 4:
         pts, detail, severe = (
-            mx * 0.35, f"About {gap} years short of the {want} years asked for.", False)
+            mx * 0.35, f"About {_gap_text(gap)} short of the {want} years asked for.",
+            False)
     else:
         severe = stated or job_level in _SENIOR_PLUS
         pts, detail, severe = (
-            mx * 0.12, f"About {gap} years short of the {want} years asked for.", severe)
+            mx * 0.12, f"About {_gap_text(gap)} short of the {want} years asked for.",
+            severe)
+
+    # THE NO-PENALTY-FOR-EVIDENCE FLOOR. Removing information from a résumé
+    # must never improve its score. The years reading and the band reading are
+    # two different scales, and for an early-career candidate the years one is
+    # harsher - so a person who DATED their internships scored below the same
+    # person who did not. Floored at what the bands alone would have said,
+    # never lifted above it, and the band corrections below still apply on top.
+    if band is not None and band[0] > pts:
+        pts, detail = band[0], band[1]
 
     # Seniority-band correction. Only ever dampens - it cannot lift a weak
     # years score, so a padded resume can't buy seniority points.
@@ -2703,6 +2997,94 @@ def _hard_constraints(reqs: Dict[str, Any], prof: Dict[str, Any],
 # Public scoring API
 # ---------------------------------------------------------------------------
 
+#: Fields copied out of a `sponsorship_service` signal. An allowlist, so a
+#: future field on that document cannot silently start appearing on a score,
+#: and so the three that carry the MANDATED FRAMING (`source`, `disclaimer`,
+#: `data_vintage`) can never be dropped by accident.
+_SPONSORSHIP_PASSTHROUGH = (
+    "employer_display", "band", "headline", "summary",
+    "approvals_5y", "denials_5y", "approval_rate", "lca_filings_5y",
+    "top_titles", "median_wage", "data_vintage", "data_window_years",
+    # PROVENANCE. `sponsorship_service.window_of` reads the window off the
+    # ROW rather than from a module constant, so these describe the evidence
+    # that actually exists. `data_window` is the raw subdocument and is
+    # cross-checked in `_employer_sponsorship`.
+    "data_window", "data_window_label", "fiscal_years", "data_imported_at",
+    "evidence", "naics", "location",
+    "source", "disclaimer",
+)
+
+
+def _employer_sponsorship(job: Dict[str, Any], reqs: Dict[str, Any]
+                          ) -> Optional[Dict[str, Any]]:
+    """The employer's PUBLIC H-1B disclosure history, or None.
+
+    Read from `job["sponsorship_signal"]` - an ALREADY-FETCHED
+    `sponsorship_service.get_signal` / `bulk_signals` result. This module does
+    no I/O on the scoring path and will not start: a list view fetches the
+    whole page's signals in one query and hands them in, exactly as
+    `sponsorship_service.attach_signal` is designed for.
+
+    Four rules, all load-bearing:
+
+    1. **It is NOT part of `score`.** `match_score` is one formula (ADR-002)
+       and this is not an input to it. It is returned beside `eligibility`,
+       which is where a separate question belongs.
+    2. **It is NOT a gate.** It can never make anyone ineligible, cap
+       anything, or add a constraint. An employer's filing history is a fact
+       about the employer's past, not a prediction about this requisition or
+       about this person - which is exactly what `sponsorship_service`'s
+       docstring mandates, and the `source` + `disclaimer` it ships with are
+       passed through so the framing cannot be lost downstream.
+    3. **It is NOT a rebuttal.** When the POSTING says it offers no
+       sponsorship, that statement stands. `posting_states_no_sponsorship` is
+       reported alongside so a reader sees both facts and neither is presented
+       as answering the other.
+    4. **No signal means None**, never a zero and never an inferred "this
+       employer probably does not sponsor". `sponsorship_signals` is keyed on
+       a normalized employer name and simply does not cover most employers;
+       absence of a row is absence of data.
+    """
+    raw = (job or {}).get("sponsorship_signal")
+    if not isinstance(raw, dict) or not raw:
+        return None
+    out = {k: raw[k] for k in _SPONSORSHIP_PASSTHROUGH if k in raw}
+    if not out:
+        return None
+    # Renamed on the way out. `sponsorship_service` calls its 0-100 strength
+    # `score`, and this dict sits inside a payload whose `score` is the match
+    # score; two different numbers under one name in one response is how a UI
+    # comes to print the wrong one.
+    if "score" in raw:
+        out["signal_score"] = raw["score"]
+    out["posting_states_no_sponsorship"] = bool(
+        (reqs or {}).get("work_authorization_restricted"))
+    out["affects_match_score"] = False
+
+    # THE WINDOW MUST NOT BE OVERSTATED. The ingested USCIS rows cover ONE
+    # fiscal year (`data_window: {fiscal_years: [2026], years: 1,
+    # service_claim_years: 5}`) while the service's name for the counts is
+    # still `approvals_5y`. `sponsorship_service.window_of` now derives
+    # `data_window_years` from the row, so the two normally agree — this is
+    # the check that they do. If a row ever arrives whose measured window is
+    # SHORTER than the figure published beside it, the measured one is stated
+    # and the discrepancy is named, rather than being resolved silently in the
+    # larger direction.
+    window = raw.get("data_window")
+    if isinstance(window, dict):
+        measured = window.get("years")
+        if isinstance(measured, (int, float)) and measured > 0:
+            out["data_window_years_measured"] = int(measured)
+            if int(measured) != int(out.get("data_window_years") or 0):
+                out["data_window_claim_unverified"] = True
+                out["window_note"] = (
+                    f"The accompanying copy describes a "
+                    f"{out.get('data_window_years')}-fiscal-year window; the "
+                    f"loaded disclosure data covers "
+                    f"{int(measured)}. Read the counts as the shorter window.")
+    return out
+
+
 def score(resume: Dict[str, Any], job: Dict[str, Any],
           profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Score one parsed resume against one job row.
@@ -2837,6 +3219,10 @@ def score(resume: Dict[str, Any], job: Dict[str, Any],
         # cannot express - see the ELIGIBLE/INELIGIBLE/NOT_SCORED note above.
         "eligibility": eligibility,
         "ineligible_reasons": ineligible_reasons,
+        # Employer H-1B disclosure history, passed through UNCHANGED from
+        # `sponsorship_service`. Beside `eligibility`, never inside `score`.
+        # See `_employer_sponsorship`.
+        "employer_sponsorship": _employer_sponsorship(job, reqs),
         # How much of the 100-point frame had evidence on both sides. The
         # score is an average over exactly these components, so a reader can
         # tell "80 out of a complete picture" from "80 out of half of one"
@@ -2912,11 +3298,12 @@ def score_one(
     return score({}, job_row, profile=prof)
 
 
-def score_batch(resume: Dict[str, Any], items: Iterable[Dict[str, Any]]
+def score_batch(resume: Dict[str, Any], items: Iterable[Dict[str, Any]],
+                target_roles: Sequence[Any] = ()
                 ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
     """Score many postings against one resume. The resume profile is built
     once; requirement extraction is memoised per JD."""
-    prof = build_resume_profile(resume or {})
+    prof = build_resume_profile(resume or {}, target_roles)
     out: Dict[str, Dict[str, Any]] = {}
     for it in items or []:
         jid = str(it.get("id") or it.get("job_id") or it.get("url") or "")
@@ -2945,6 +3332,40 @@ def load_structured_for_user(user_email: str) -> Dict[str, Any]:
         return {}
 
 
+def load_target_roles(user_email: str) -> List[str]:
+    """The caller's DECLARED target roles from onboarding, or `[]`.
+
+    `user_preferences.target_roles` is written by `POST /api/auth/preferences`
+    and, until 2.2, NOTHING in the scoring path read it - only career_paths,
+    differentiation, trend_signal and career_readiness did. A user who told us
+    in onboarding that they are applying for "Data Scientist / Machine
+    Learning Engineer / AI Engineer" was ranked as though they had said
+    nothing.
+
+    Never raises and never blocks a score: a missing collection, a missing
+    document or a malformed value all return `[]`, which
+    `classify_resume` reads as "no declared targets".
+
+    The filter is an equality on a string the caller was authenticated as, so
+    it cannot reach an operator position; the value is str()-cast anyway.
+    """
+    email = str(user_email or "").strip()
+    if not email:
+        return []
+    try:
+        from utils.db_connect import DBConnect
+        doc = DBConnect().get_db()["user_preferences"].find_one(
+            {"user_email": email}, {"target_roles": 1, "_id": 0}) or {}
+    except Exception as exc:
+        logger.debug("fit_score.load_target_roles(%s): %s", email,
+                     type(exc).__name__)
+        return []
+    roles = doc.get("target_roles")
+    if not isinstance(roles, (list, tuple)):
+        return []
+    return [str(r).strip() for r in roles if str(r or "").strip()][:12]
+
+
 def load_profile_for_user(user_email: str) -> Optional[Dict[str, Any]]:
     """`build_resume_profile` for the caller's active resume, or None.
 
@@ -2958,7 +3379,7 @@ def load_profile_for_user(user_email: str) -> Optional[Dict[str, Any]]:
     structured = load_structured_for_user(user_email)
     if not structured:
         return None
-    return build_resume_profile(structured)
+    return build_resume_profile(structured, load_target_roles(user_email))
 
 
 def unscored_meta() -> Dict[str, Any]:
@@ -2979,7 +3400,8 @@ def score_batch_for_user(user_email: str, items: Iterable[Dict[str, Any]]
     structured = load_structured_for_user(user_email)
     if not structured:
         return {}, unscored_meta()
-    return score_batch(structured, items)
+    return score_batch(structured, items,
+                       target_roles=load_target_roles(user_email))
 
 
 def _batch_meta(prof: Dict[str, Any]) -> Dict[str, Any]:
@@ -3072,11 +3494,18 @@ def load_profiles_for_user(user_email: str) -> List[Dict[str, Any]]:
     if not assets:
         return []
 
+    # Declared targets are an INPUT to every profile below, so they belong in
+    # the cache key. Without them, editing onboarding would leave every cached
+    # profile stale until a résumé changed.
+    target_roles = load_target_roles(user_email)
     fp = ""
     try:
         fp = fingerprint_assets(assets)
     except Exception:
         fp = ""
+    if fp and target_roles:
+        fp = fp + ":" + hashlib.sha1(
+            "\x00".join(target_roles).encode("utf-8", "replace")).hexdigest()[:12]
     key = (user_email, fp)
     if fp:
         hit = _profiles_cache_get(key)
@@ -3100,7 +3529,7 @@ def load_profiles_for_user(user_email: str) -> List[Dict[str, Any]]:
         if not isinstance(structured, dict) or not structured:
             continue
         try:
-            profile = build_resume_profile(structured)
+            profile = build_resume_profile(structured, target_roles)
         except Exception as exc:
             logger.warning("fit_score: profile build failed for resume %s: %s",
                            asset.get("resume_id"), type(exc).__name__)

@@ -211,4 +211,52 @@ GOLDEN: tuple = (
     ("Now Hiring! Join us for our Hiring Event on September 9th!", "", "", UNK, None, "H - a real live 'title'; must not classify as anything"),
     ("Portuguese Voice Actor - Freelance AI Trainer Project", "Record speech samples.", "", NON, None, "H - 'AI' in the title, not an AI role"),
     ("Competitive Programming Expert - Freelance AI Trainer", "Write and review competitive programming solutions.", "", NON, None, "H - AI TRAINING DATA work. Labelled UNK on first pass and corrected: the classifier is right and the label was wrong. It is paid per task, hires no engineers, and putting it in front of one is the exact failure the gig_content rules exist to stop"),
+
+    # ---- I. PACKAGED TITLES: the discipline wrapped in employment ---------
+    #
+    # Every row here is a title whose discipline the phrase table could not
+    # see through an intern suffix, a level code or a department tail. On a
+    # POSTING that cost retrieval; on a RESUME it cost the whole score, because
+    # `classify_resume` reads titles and `fit_score.role_alignment` -
+    # 25 of 100 points, the largest component - is `unknown` when the résumé
+    # side is empty. Measured live 2026-09-15: an MS Data Science candidate
+    # whose two titles were "Data Science Intern" and "Data Quality Specialist
+    # Intern" scored `unknown` alignment on 4,000 of 4,000 postings.
+    ("Data Science Intern", "Summer internship building models in Python.", "", CORE, "data", "I - the live bug. `data scientist` was in the table and `data science` was not"),
+    ("Data Quality Specialist Intern", "Audit annotations for computer vision datasets.", "", CORE, "data", "I - `specialist` is deliberately not a stack role noun, so this needed enumerating"),
+    ("Machine Learning Co-op", "Eight month co-op with the perception team.", "", CORE, "ai_ml", "I"),
+    ("Software Engineer 2", "Build services in Java.", "", CORE, "software_engineering", "I - a bare level digit"),
+    ("SDE II", "", "", CORE, "software_engineering", "I - roman numeral level code"),
+    ("Senior Data Scientist, Fraud", "Build fraud models.", "", CORE, "data", "I - department tail"),
+    ("Data Engineer Co-op", "", "", CORE, "data", "I"),
+    ("AI Engineer Intern", "", "", CORE, "ai_ml", "I"),
+    # And the direction that must NOT move: stripping a modifier off a
+    # non-technical title reaches a non-technical word, never a technical one.
+    ("Marketing Intern", "", "", UNK, None, "I - stripping `intern` must not manufacture a discipline"),
+    ("Pharmacy Technician Intern", "", "", NON, None, "I"),
+    ("Barista (Part-Time)", "", "", NON, None, "I"),
+
+    # ---- J. LOOSE BODY VOCABULARY IS NOT EVIDENCE -------------------------
+    #
+    # `_TECH_EVIDENCE_RE` is mostly the imported O*NET/overlay vocabulary and
+    # it contains consumer brands and ordinary words - linkedin, youtube,
+    # facebook, salesforce, chef, spark, go, magic, scheme, eiffel, vite,
+    # tempo, bedrock, enclave. Three of those appear in almost any corporate
+    # JD, and `len(tech_terms) >= 3` used to promote the posting to `core` on
+    # that alone. Measured live: 798 of the 925 `core`-with-no-family postings
+    # in a 4,000-row sample were promoted by exactly that clause, and the rows
+    # then scored at the TOP of several users' feeds because a posting with no
+    # family is scored on a thin frame.
+    #
+    # These rows need BODIES to be meaningful, which is why the 559-title live
+    # eval could not see the defect: it classifies titles with no description.
+    ("Growth Marketer", "Own our LinkedIn, YouTube and Facebook channels. Salesforce and SQL reporting on campaign performance.", "", UNK, None, "J - four vocabulary hits, no technical title"),
+    ("Videographer", "Shoot and edit brand video. Publish to YouTube and LinkedIn. Track performance in Salesforce.", "", UNK, None, "J"),
+    ("Business Centre Clerk", "Greet customers, handle documents, use Microsoft Office and Salesforce.", "", UNK, None, "J"),
+    ("Account Manager - Greece", "Own a book of business. Our platform runs on Spark and Go.", "", UNK, None, "J - KNOWN MISS, on the record. `manager` matches `_AMBIGUOUS_TITLE_RE` as a bare noun, and an ambiguous title needs only TWO vocabulary hits. Tightening that second clause would also demote genuinely technical `Analyst`/`Specialist` postings whose body names no specialty phrase, which is a recall loss in the direction that hurts more, so it is left measured rather than fixed blind"),
+    # The recall side of the same rule: a body that names an actual SPECIALTY
+    # is still sufficient on its own, because that is a named discipline
+    # rather than loose vocabulary.
+    ("Technology Analyst", "You will work as a backend engineer on our payments services.", "", CORE, "software_engineering", "J - a specialty phrase in the body still promotes"),
+    ("Associate, Platform Team", "Site reliability engineering for our Kubernetes estate.", "Engineering", CORE, "cloud_platform", "J"),
 )
