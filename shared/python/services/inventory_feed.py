@@ -800,6 +800,7 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         j.get("days_ago") if j.get("days_ago") is not None else 99))
     try:
         _attach_sponsorship(rows)
+        _sponsorship_from_stored_requirements(rows)
         _demote_unreachable_sponsors(rows, user_email)
     except Exception as exc:  # pragma: no cover - enrichment is best effort
         logger.warning("inventory_feed: sponsorship skipped: %s", type(exc).__name__)
@@ -918,6 +919,48 @@ def requires_sponsorship(user_email: str) -> bool:
     except Exception:  # pragma: no cover - never fail a search on a preference
         logger.warning("inventory_feed: sponsorship preference unavailable")
         return False
+
+
+def _sponsorship_from_stored_requirements(rows: List[Dict[str, Any]]) -> None:
+    """Re-derive `sponsorship` from the STORED requirements on each posting.
+
+    `_attach_sponsorship` is shared with the live-crawl path and reads its
+    highest-fidelity signal out of `title + description`. On THIS path the
+    description is deliberately empty — the body lives in S3 and scoring runs
+    off `requirements` (see the row builder) — so the JD regex matches
+    nothing, every row falls through to the tenant tier table, and a tenant
+    that table does not name resolves `unknown`.
+
+    That is not a cosmetic gap. `_demote_unreachable_sponsors` only fires on
+    `refused` / `rare`, so on the inventory path — the one that actually
+    serves the feed since the ADR-003 read cutover — it fired on nothing, for
+    every user, since the cutover. Measured live on an F1-OPT account:
+    `requires_sponsorship` returns True, RTX's postings store
+    `clearance_required: true` AND `work_authorization_restricted: true`, and
+    RTX still held six of the first twenty-four cards with an H-1B chip on
+    them. The verdict existed at ingest, was stored correctly, and was then
+    read from the one field the row does not carry.
+
+    The stored flags ARE the JD verdict — `fit_score.extract_requirements`
+    produced them from the real body when the posting was ingested — so they
+    outrank the tenant-tier estimate and are applied after it.
+
+    A clearance requirement is treated as unreachable for a sponsorship-
+    needing candidate for the same reason the JD text is: US-cleared work is
+    US-person work. This is still a DEMOTION, never a filter — silence stays
+    `unknown`, and nothing is removed.
+    """
+    for row in rows:
+        reqs = row.get("_requirements") or {}
+        if not isinstance(reqs, dict):
+            continue
+        if reqs.get("work_authorization_restricted") or reqs.get("clearance_required"):
+            row["sponsorship"] = "refused"
+            row["h1b_sponsor"] = False
+            row["sponsor_source"] = "jd_requirements"
+            row["sponsor_note"] = (
+                "This posting states a US work-authorization or security-clearance "
+                "requirement.")
 
 
 def _demote_unreachable_sponsors(rows: List[Dict[str, Any]],
