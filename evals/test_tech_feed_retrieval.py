@@ -361,6 +361,95 @@ class TestMatchScoreIsUntouched:
         assert moved, "no row's rank_score responded to the declared status"
 
 
+class TestWorkLocationDimension:
+    """Foreign work locations demote in `rank_score`, never in `match_score`.
+
+    Distinct from sponsorship: "will not sponsor" and "job is in Bangkok" are
+    different facts, different badges, different copy. Unknown country is
+    kept — hard-filtering the 71% unreadable corpus would empty the feed.
+    """
+
+    def _seed_geo(self, clean_db):
+        from datetime import timedelta
+        from eval_tech_feed_retrieval import NOW
+        from services import fit_score
+        seed_corpus()
+        rows = [
+            ("geo-cdmx", "GERENCIA JR. DATA ANALYST ALM", "CDMX",
+             "Data Analyst. Requirements: SQL, Python, Tableau, Power BI. "
+             "Build dashboards and data pipelines."),
+            ("geo-bkk", "Data Analyst Intern",
+             "Bangkok MSG Headquarters",
+             "Data Analyst Intern. Requirements: Python, SQL, pandas, "
+             "Tableau, statistics. Build dashboards."),
+            ("geo-us", "Backend Engineer", "Austin, TX, USA",
+             "Backend Engineer. Requirements: Python, SQL, AWS, Docker."),
+        ]
+        for key, title, loc, desc in rows:
+            inv.upsert_posting({
+                "source": "career-pages", "source_job_id": key,
+                "url": f"https://example.test/geo/{key}",
+                "company": f"Geo Co {key}", "title": title,
+                "location": [loc], "description": desc,
+                "employment_type": "Full time", "cost_class": "free",
+                "source_quality": "direct", "industry": "tech",
+                "ats": "greenhouse", "tenant": f"geo-{key}",
+                "posted_at": NOW - timedelta(days=2),
+            }, now=NOW)
+            doc = inv.get_posting("career-pages", key)
+            inv.mark_requirements_parsed(
+                "career-pages", key, doc["content_hash"],
+                fit_score.extract_requirements(desc, title), now=NOW)
+
+    def test_foreign_rows_rank_below_home_and_stay_reachable(self, clean_db):
+        self._seed_geo(clean_db)
+        got = tfs.search({
+            "tech_scope": ["core"], "page_size": 100, "personalize": False,
+            "posted_within_days": 90,
+            "work_authorization_status": "needs_sponsorship_now",
+            "home_country": "US",
+        })
+        by_url = {j.get("canonical_url"): j for j in got["jobs"]}
+        us = by_url.get("https://example.test/geo/geo-us")
+        mx = by_url.get("https://example.test/geo/geo-cdmx")
+        th = by_url.get("https://example.test/geo/geo-bkk")
+        assert us and mx and th, "demotion must not DROP foreign rows"
+        assert us["rank_score"] > mx["rank_score"]
+        assert us["rank_score"] > th["rank_score"]
+        assert mx["match_score"] is not None and th["match_score"] is not None
+        assert mx["work_location"]["verdict"] == "foreign"
+        assert "foreign_location" in (mx["work_location"].get("badges") or [])
+        assert th["work_location"]["primary_country"] == "TH"
+
+    def test_opt_in_filter_hides_only_resolved_foreign(self, clean_db):
+        self._seed_geo(clean_db)
+        got = tfs.search({
+            "tech_scope": ["core"], "page_size": 100, "personalize": False,
+            "posted_within_days": 90,
+            "work_authorization_status": "needs_sponsorship_now",
+            "home_country": "US",
+            "hide_foreign_locations": True,
+        })
+        urls = {j.get("canonical_url") for j in got["jobs"]}
+        assert "https://example.test/geo/geo-us" in urls
+        assert "https://example.test/geo/geo-cdmx" not in urls
+        assert "https://example.test/geo/geo-bkk" not in urls
+
+    def test_location_demotion_never_moves_match_score(self, clean_db):
+        self._seed_geo(clean_db)
+        body = {"tech_scope": ["core"], "page_size": 100, "personalize": False,
+                "posted_within_days": 90}
+        plain = tfs.search({**body, "work_authorization_status": "unknown"})
+        us_home = tfs.search({
+            **body, "work_authorization_status": "needs_sponsorship_now",
+            "home_country": "US"})
+        by_id = {j["job_id"]: j for j in plain["jobs"]}
+        for job in us_home["jobs"]:
+            other = by_id.get(job["job_id"])
+            if other:
+                assert job["match_score"] == other["match_score"], job["title_raw"]
+
+
 class TestTraversalCeiling:
     """The 2,000-result ceiling, gone.
 

@@ -564,6 +564,14 @@ def normalize_location(loc: Any) -> Dict[str, str]:
     if not country and region and normalize_country(region):
         country, region = region, ""
     code = normalize_country(country)
+    # When the positional split left `country` empty — "CDMX", "Bangkok MSG
+    # Headquarters", "DE-CELLE-…-STRASSE 1" — fall through to the evidence-
+    # first resolver. Never invents a US default; returns "" when unresolved.
+    if not code:
+        from services import location_country as lcm
+        code, _basis = lcm.resolve(
+            {"raw": raw, "city": city, "region": region,
+             "country": country, "country_code": ""})
     key = _safe_key("-".join(p for p in (city, region, country) if p), 160)
     return {"raw": raw, "city": city, "region": region, "country": country,
             "country_code": code, "key": key}

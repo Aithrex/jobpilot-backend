@@ -140,16 +140,25 @@ def plan(doc: Dict[str, Any], body: str = "") -> Tuple[Dict[str, Any], List[str]
             why.append(f"work_mode -> {mode}")
 
     # --- locations[].country_code --------------------------------------
+    # Prefer the evidence-first resolver (`location_country`): the legacy
+    # `normalize_country(country)` only works when a country spelling is
+    # already in the `country` field, which is exactly the 71% gap — "CDMX",
+    # "Bangkok MSG Headquarters", and German street addresses all land in
+    # `city`/`raw` with an empty country. Never defaults to US.
     locs = doc.get("locations")
     if isinstance(locs, list) and locs:
+        from services import location_country as lcm
         rebuilt, changed = [], False
+        title = doc.get("title_raw") or ""
         for loc in locs:
             if not isinstance(loc, dict):
                 rebuilt.append(loc)
                 continue
             entry = dict(loc)
             if not entry.get("country_code"):
-                code = inv.normalize_country(entry.get("country"))
+                code, _basis = lcm.resolve(entry, title=title)
+                if not code:
+                    code = inv.normalize_country(entry.get("country"))
                 if code:
                     entry["country_code"] = code
                     changed = True
@@ -266,12 +275,22 @@ def main() -> int:
     from pymongo import UpdateOne
 
     # Rows below the target version, PLUS any row missing the dedupe identity
-    # whatever its version. A row can be stamped current and still be missing
-    # something this pass can supply, and a selector that only looks at the
-    # version stamp would never revisit it.
+    # OR a resolvable country_code, whatever its version. A row can be stamped
+    # current and still be missing something this pass can supply, and a
+    # selector that only looks at the version stamp would never revisit it —
+    # which is how 71% of active core postings kept an empty country_code
+    # after normalisation v4 shipped.
     q: Dict[str, Any] = {"$or": [
         {"normalization_version": {"$ne": TARGET}},
         {"variant_group_id": {"$in": [None, ""]}},
+        {"locations": {
+            "$elemMatch": {
+                "$or": [
+                    {"country_code": {"$in": [None, ""]}},
+                    {"country_code": {"$exists": False}},
+                ],
+            },
+        }},
     ]}
     if args.active_only:
         q["active"] = True

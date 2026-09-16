@@ -1,0 +1,403 @@
+{
+  "cnf_with_inline_body_measured": 600,
+  "core_body_sample": 3000,
+  "stored_cnf_in_core_body_sample": 679,
+  "old_clause_ge3_among_cnf": 243,
+  "weak_terms_ge3_strong_lt3": 91,
+  "clause_level_demotions_old_vs_new_gate": 91,
+  "classify_demoted_out_of_core": 53,
+  "classify_stayed_core_no_family": 404,
+  "classify_gained_family": 34,
+  "trade_demoted_to_stayed_cnf": "53:404",
+  "stayed_junk_looking": 19,
+  "stayed_likely_genuine": 385,
+  "demoted_examples": [
+    {
+      "title": "Senior Lifecycle & Email Marketing Strategist",
+      "employer": "ServiceNow",
+      "terms": [
+        "agentic",
+        "salesforce",
+        "throughput",
+        "servicenow"
+      ],
+      "strong": [
+        "agentic",
+        "throughput",
+        "servicenow"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Principal PM, Product Strategy and Competitive",
+      "employer": "SambaNova Systems",
+      "terms": [
+        "latency",
+        "throughput",
+        "agentic",
+        "go",
+        "aws",
+        "hbm",
+        "nvlink",
+        "infiniband"
+      ],
+      "strong": [
+        "latency",
+        "throughput",
+        "agentic",
+        "aws",
+        "hbm",
+        "nvlink",
+        "infiniband",
+        "computer science"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Senior Lifecycle & Email Marketing Strategist",
+      "employer": "ServiceNow",
+      "terms": [
+        "agentic",
+        "salesforce",
+        "throughput",
+        "servicenow"
+      ],
+      "strong": [
+        "agentic",
+        "throughput",
+        "servicenow"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Senior Lifecycle & Email Marketing Strategist",
+      "employer": "ServiceNow",
+      "terms": [
+        "agentic",
+        "salesforce",
+        "throughput",
+        "servicenow"
+      ],
+      "strong": [
+        "agentic",
+        "throughput",
+        "servicenow"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Senior Lifecycle & Email Marketing Strategist",
+      "employer": "ServiceNow",
+      "terms": [
+        "agentic",
+        "salesforce",
+        "throughput",
+        "servicenow"
+      ],
+      "strong": [
+        "agentic",
+        "throughput",
+        "servicenow"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Senior Lifecycle & Email Marketing Strategist",
+      "employer": "ServiceNow",
+      "terms": [
+        "agentic",
+        "salesforce",
+        "throughput",
+        "servicenow"
+      ],
+      "strong": [
+        "agentic",
+        "throughput",
+        "servicenow"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Ecosystem Marketing Lead",
+      "employer": "Lattice",
+      "terms": [
+        "go",
+        "slack",
+        "loom"
+      ],
+      "strong": [
+        "loom"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Payments Pricing & Operations, Analyst II",
+      "employer": "Toast, Inc.",
+      "terms": [
+        "scheme",
+        "salesforce",
+        "sql"
+      ],
+      "strong": [
+        "sql"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Risk and Payments Internship- Spring 2027",
+      "employer": "Rush Street Interactive, Inc.",
+      "terms": [
+        "sql",
+        "computer science",
+        "javascript"
+      ],
+      "strong": [
+        "sql",
+        "computer science",
+        "javascript"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Partner Development Direct, IBM",
+      "employer": "Snowflake Inc.",
+      "terms": [
+        "snowflake",
+        "agentic",
+        "go"
+      ],
+      "strong": [
+        "snowflake",
+        "agentic"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Vice President of Sales",
+      "employer": "INSEEGO CORP.",
+      "terms": [
+        "latency",
+        "sase",
+        "go"
+      ],
+      "strong": [
+        "latency",
+        "sase"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Sr. Scheduler (Starship)",
+      "employer": "SpaceX",
+      "terms": [
+        "sql",
+        "python",
+        "smartsheet",
+        "jira",
+        "agile"
+      ],
+      "strong": [
+        "sql",
+        "python",
+        "jira",
+        "agile"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Starlink Customer Success Specialist",
+      "employer": "SpaceX",
+      "terms": [
+        "latency",
+        "salesforce",
+        "smartsheet"
+      ],
+      "strong": [
+        "latency"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Staff Supplier Development Engineer - Structures & Welding (R5984)",
+      "employer": "Shield AI",
+      "terms": [
+        "linkedin",
+        "youtube",
+        "aws"
+      ],
+      "strong": [
+        "aws"
+      ],
+      "scope": "unknown"
+    },
+    {
+      "title": "Senior V-BAT Air Vehicle Operator, Production Flight Test (R4844)",
+      "employer": "Shield AI",
+      "terms": [
+        "linkedin",
+        "youtube",
+        "tempo"
+      ],
+      "strong": [],
+      "scope": "unknown"
+    }
+  ],
+  "stayed_junk_examples": [
+    {
+      "title": "Sales Compliance Analyst (Power Platform)",
+      "employer": "MICRO MOTION, INC.",
+      "strong": []
+    },
+    {
+      "title": "Marketing Operations Specialist",
+      "employer": "Twilio",
+      "strong": [
+        "jira",
+        "airtable",
+        "asana"
+      ]
+    },
+    {
+      "title": "Sales Strategy & Operations, Sr. Associate - Groups",
+      "employer": "Engine",
+      "strong": [
+        "rails",
+        "snowflake",
+        "sql"
+      ]
+    },
+    {
+      "title": "Marketing Project Coordinator",
+      "employer": "Niagen Bioscience, Inc.",
+      "strong": [
+        "asana",
+        "jira"
+      ]
+    },
+    {
+      "title": "Senior Sales Analyst",
+      "employer": "Jobgether",
+      "strong": [
+        "snowflake",
+        "sql",
+        "data warehouse",
+        "tableau",
+        "dbt"
+      ]
+    },
+    {
+      "title": "Marketing Project Manager",
+      "employer": "DAKTRONICS INC /SD/",
+      "strong": [
+        "agile",
+        "asana",
+        "wrike",
+        "jira"
+      ]
+    },
+    {
+      "title": "Assistant Manager - Sales Analytics",
+      "employer": "ExlService Holdings, Inc.",
+      "strong": []
+    },
+    {
+      "title": "CRM Manager (Planning), 1:1 Fan Engagement Marketing",
+      "employer": "ExlService Holdings, Inc.",
+      "strong": []
+    },
+    {
+      "title": "Marketing Claim Verification Program Manager",
+      "employer": "UL Solutions Inc.",
+      "strong": []
+    },
+    {
+      "title": "Sr Manager, Digital Sales",
+      "employer": "ServiceNow",
+      "strong": [
+        "servicenow"
+      ]
+    }
+  ],
+  "stayed_genuine_examples": [
+    {
+      "title": "Air Quality Scientist/Engineer \u2013 Entry Level \u2013 Emissions Monitoring Focus (Hybrid)",
+      "employer": "BARR & BARR, INC.",
+      "strong": []
+    },
+    {
+      "title": "Business Analyst II",
+      "employer": "Centene",
+      "strong": [
+        "sql",
+        "snowflake"
+      ]
+    },
+    {
+      "title": "Manufacturing Associate III - Cell Culture, Site based, Redmond, WA",
+      "employer": "Evotec SE",
+      "strong": [
+        "spark",
+        "throughput"
+      ]
+    },
+    {
+      "title": "Analyst Sr. Lead \u2013 Functional Testing",
+      "employer": "Zensar Technologies",
+      "strong": [
+        "sql",
+        "test automation",
+        "agile",
+        "scrum"
+      ]
+    },
+    {
+      "title": "Playwright Automation Engineer (TypeScript) with AI-Assisted Testing",
+      "employer": "Zensar Technologies",
+      "strong": [
+        "playwright",
+        "typescript",
+        "test automation"
+      ]
+    },
+    {
+      "title": "Sr Dev - RESTful APIs and web services",
+      "employer": "Zensar Technologies",
+      "strong": [
+        "rest api",
+        "api design",
+        "code review"
+      ]
+    },
+    {
+      "title": "Playwright Automation Engineer (TypeScript) with AI-Assisted Testing",
+      "employer": "Zensar Technologies",
+      "strong": [
+        "playwright",
+        "typescript",
+        "test automation"
+      ]
+    },
+    {
+      "title": "Securitized Products Group - Financial Analytics and Structured Transactions - Analyst",
+      "employer": "NUTMEG CONTAINER CORPORATION",
+      "strong": []
+    },
+    {
+      "title": "Securitized Products Group - Financial Analytics and Structured Transactions - Analyst",
+      "employer": "NUTMEG CONTAINER CORPORATION",
+      "strong": []
+    },
+    {
+      "title": "Principal Consultant- Oracle Health",
+      "employer": "Oracle",
+      "strong": []
+    }
+  ],
+  "recall_n": 200,
+  "recall_still_core": 200,
+  "recall_demoted": 0,
+  "recall_rate": 1.0,
+  "recall_misses": [],
+  "tighten_ambiguous_2hit": false,
+  "recommendation": "Do NOT tighten _AMBIGUOUS_TITLE_RE 2-hit. Trade 53:404; stayed cnf mostly genuine (385 vs 19 junk-looking). Clause-level weak-term demotions=91 of 91 weak-only ge3 bodies. Recall 1.0 on 200."
+}

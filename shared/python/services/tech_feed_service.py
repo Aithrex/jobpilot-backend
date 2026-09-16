@@ -1356,7 +1356,9 @@ def _work_auth_context(req: Dict[str, Any]) -> Dict[str, Any]:
     # an UNPERSONALIZED search.
     ctx["active"] = bool(ctx["needs_sponsorship"]
                          or ctx["hide_sponsorship_restricted"]
-                         or ctx["hide_clearance_required"])
+                         or ctx["hide_clearance_required"]
+                         or ctx["home_country"]
+                         or ctx["hide_foreign_locations"])
     return ctx
 
 

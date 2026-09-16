@@ -2,117 +2,64 @@
 
 Context: a live user reported every job scoring 40–50 and being irrelevant.
 Root causes were found and mostly fixed on branch
-`h1b-sponsorship-ingest-and-gap-list`. Two workstreams were stopped
-**mid-measurement** when the session ended. This file is what is left.
+`h1b-sponsorship-ingest-and-gap-list`. **Sections A and B below were finished
+2026-09-16** (measurement + acceptance). Section C (FE contract) and Section D
+(deferred) remain.
 
-Run everything with **`python3`**, never bare `python` — several environments
-here have no `python` on PATH and the failure is easy to misread as a pass.
-Gate: `python3 scripts/verify.py --full` must be green before anything ships.
+Run everything with **`python3`**, never bare `python`. Gate:
+`python3 scripts/verify.py --full` must be green before anything ships.
 Never weaken a test or eval to get green.
 
 ---
 
-## A. Taxonomy junk-vocabulary purge — STOPPED MID-MEASUREMENT
+## A. Taxonomy junk-vocabulary purge — DONE
 
-**Uncommitted:** `shared/python/services/tech_taxonomy.py` (+96 lines).
+**Shipped:** `shared/python/services/tech_taxonomy.py` (`_WEAK_TECH_TERMS` +
+`discriminating_terms`, version `tech-tax-1.3.0`).
 
-**The bug.** `tech_taxonomy` promotes a posting to `tech_scope: core` when
-`len(tech_terms) >= 3`, counting loose imported O*NET/overlay vocabulary that
-contains `linkedin`, `youtube`, `facebook`, `salesforce`, `chef`, `go`,
-`magic`, `scheme`, `eiffel`, `vite`, `tempo`, `bedrock`, `enclave`. Measured:
-**598 of 693** core-with-no-family rows in a 3,000-row live sample were
-promoted by that one clause. "Growth Marketer" → core via
-`linkedin, youtube, salesforce, sql`. "Tecnico Elettrico" → core via
-`vite, tempo, agile`.
+**Re-measurement (2026-09-16, inline bodies only):**
+`docs/coverage/reports/2026-09-16-taxonomy-purge-measure.json`
 
-**Why it matters.** A posting with no role family has `role_alignment`
-EXCLUDED from `_normalized_score`, so it competes on a ~55-point frame where
-~25 points are near-automatic for an internship (intern job level ⇒ full
-experience credit; degree met ⇒ full education credit). Sanofi "VMI Intern"
-reached **80 = "strong match"** on a 4-skill requirement list. Not an
-extraction defect — the bodies are real; the classification is wrong.
+- 600 stored core-no-family rows with inline body ≥200 chars
+- Classify demotions out of core: **53**; stayed core-no-family: **404**
+  (trade `53:404`)
+- Clause-level weak-only ≥3 demotions: **91 / 91**
+- Stayed rows mostly genuine by title: **385 vs 19** junk-looking
+- Recall on 200 Analyst/Specialist/Engineer with real bodies + family:
+  **1.000** (0 demoted)
+- **Do NOT tighten** `_AMBIGUOUS_TITLE_RE` 2-hit clause
 
-**Where it stopped.** The junk-token purge was implemented and being measured.
-Its last recorded finding: *"The purge is a 113:1 trade, but it reveals the
-named rows are mostly genuine."* Read that as: the purge helps, but the
-remaining `fams=[]` rows are largely legitimate postings, so raising the
-threshold may not be justified.
-
-**Finish it by:**
-1. Re-running the live measurement to confirm the 113:1 read and reporting how
-   many of the 598 are demoted.
-2. Taking a sample of `Analyst` / `Specialist` / `Engineer` postings **with
-   real bodies** that are genuinely technical, and measuring how many the
-   change demotes. This is the recall side and it is the reason the threshold
-   was not touched.
-3. Only tightening the `_AMBIGUOUS_TITLE_RE` + 2-hit clause if a measured gap
-   remains AFTER the vocabulary purge. Bare nouns `manager` (119), `specialist`
-   (65), `analyst` (62), `engineer` (52), `associate` (35), `lead` (30),
-   `intern` (24), `director` (21) all match that regex and need only two hits.
-4. Holding the error direction: a false `non_tech` removes a reachable job and
-   is worse than admitting a marginal one.
-
-**Acceptance:** `evals/eval_live_titles.py` scope accuracy must not regress
-(0.979 baseline, and the miss list was byte-identical through the last change —
-diff it). `evals/eval_tech_taxonomy.py` and
-`evals/eval_fit_score_domains.py` stay green.
+**eval_live_titles:** scope accuracy **0.979** (no regression). Miss list
+saved at `docs/coverage/reports/2026-09-16-live-titles-misses.txt` (12 misses,
+same titles as prior).
 
 ---
 
-## B. Country normalization + feed location dimension — STOPPED MID-WORK
+## B. Country normalization + feed location dimension — DONE
 
-**Uncommitted:** `shared/python/services/location_country.py` (NEW),
-`shared/python/services/tech_feed_service.py` (+107),
-`evals/test_tech_feed_retrieval.py` (+19).
+**Shipped:**
+- `shared/python/services/location_country.py` — CDMX, Bangkok MSG HQ, German
+  street addresses, `(M/F/D)`/`(F/H/X)` title markers, Remote-UK / India-Remote,
+  Manila/Toulouse/Sydney CBD; never defaults to US; undeclared home no longer
+  labels US rows as foreign
+- `tech_feed_service.py` — `work_location` on `rank_score` (demote + badge +
+  opt-in `hide_foreign_locations`), distinct from sponsorship
+- `job_inventory_service.normalize_location` delegates to the resolver
+- `scripts/backfill_posting_normalization.py` uses the resolver and selects
+  rows with empty `country_code` even when already at `NORMALIZATION_VERSION`
+  (dry-run: 271/500 country fills; live Mongo is read-only for agents — operator
+  applies with `--apply`, and **without** `--with-bodies` so the version stamp
+  is not frozen mid-upgrade)
 
-**The bug.** We cannot tell what country **71%** of postings are in. Measured
-on live `job_postings`, active + `tech.tech_scope: core` (35,933 rows):
+**Acceptance:**
+`docs/coverage/reports/2026-09-16-relevance-acceptance.md`
 
-```
-country_code == ""      25,562  (71.1%)
-country_code missing       793  ( 2.2%)
-no locations at all        765  ( 2.1%)
-known: US 3,780 · IN 1,873 · CA 1,038 · GB 481 · IL 282 · SG 161 · MX 107 …
-```
+- Location: non-US primary in top-25 **9 → 0**; 9 before-top-25 rows sank
+- Work-auth probe (`query=clearance`): match_score unchanged; rank drops
+  (Anduril 0.50 → 0.16); reachability `unknown` → `unlikely` with clearance /
+  no-sponsorship badges
 
-Only **3,780 are known-US**. The known distribution proves the rest are not
-silently US — we simply never parsed them.
-
-**The damage,** real top-of-feed results for a US-based candidate who needs
-H-1B sponsorship:
-
-```
-91  Santander    "GERENCIA JR. DATA ANALYST ALM - RIESGOS"  [('CDMX', '')]
-88  Michelin     "Digital Transformation - Internship"      [('Bangkok MSG Headquarters', '')]
-93  Baker Hughes "Intern – Systems & Data Analysis (M/F/D)" [('DE-CELLE-BAKER-HUGHES-STRASSE 1', '')]
-```
-
-`fit_score._score_location` reads `unknown` and unknown is EXCLUDED rather than
-penalised. **That rule is correct — do not change the scorer.** The data is
-wrong.
-
-**Finish it by:**
-1. Completing `location_country.py`. The raw strings are parseable: `CDMX`,
-   `Bangkok MSG Headquarters`, a German street address, and `(M/F/D)` /
-   `(F/H/X)` title markers are all strong signals. Where a country genuinely
-   cannot be resolved, leave it unknown — **never default to US**, which is the
-   same error pointing the other way.
-2. Backfilling. `scripts/backfill_posting_normalization.py` already exists.
-   Read it first, and read the CLAUDE.md warning: it stamps
-   `NORMALIZATION_VERSION` only when JD bodies were actually read
-   (`--with-bodies`); stamping a half-upgraded row freezes it there.
-3. Giving the feed a work-location dimension in `rank_score` — demote + badge +
-   optional filter, the same shape as the work-authorization policy. Treat
-   unknown-country conservatively; hard-filtering 71% of the corpus empties the
-   feed. Keep it DISTINCT from sponsorship: "this employer will not sponsor"
-   and "this job is in Bangkok" are different facts and must read differently.
-4. **Never touch `match_score`.** Ordering/preference signals live in
-   `rank_score` (ADR-002). There is exactly ONE match score.
-
-**Acceptance (never delivered, still needed):** live before/after top-25 for
-`cpulikan@asu.edu` with a location column, and the same for the
-work-authorization demotion (employer, title, clearance flag, sponsorship
-flag).
+**fit_score._score_location was NOT changed.**
 
 ---
 

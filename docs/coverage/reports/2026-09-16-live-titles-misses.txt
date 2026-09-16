@@ -1,0 +1,12 @@
+adjacent   -> core       | Data Center Engineering Operations Engineer, Data center engineering operation
+core       -> unknown    | IT CSV Engineer
+adjacent   -> core       | Oracle SaaS Implementation and Solution Lead
+non_tech   -> unknown    | Postdoctoral Fellow - Duda Lab
+non_tech   -> unknown    | Postdoctoral Research Associate, Department of Geosciences
+non_tech   -> unknown    | Regional Manager - Surgical and Neuroscience
+non_tech   -> unknown    | Retail Regional Manager - TN South
+non_tech   -> unknown    | Senior Engineer, Manufacturing
+unknown    -> adjacent   | Senior Solutions Engineer – Systems Integration (BESS)
+non_tech   -> unknown    | Sr Proj Mgr - Renewable Energy
+non_tech   -> unknown    | WWPS Senior Business Manager, WWPS Global GSI Partners
+non_tech   -> unknown    | 医学信息沟通地区经理-广阔市场-山东济南/泰安

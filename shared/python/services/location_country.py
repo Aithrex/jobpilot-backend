@@ -136,6 +136,12 @@ _CITY_COUNTRY: Dict[str, str] = {
     "montreal": "CA", "mississauga": "CA", "scarborough": "CA",
     "etobicoke": "CA", "markham": "CA", "brampton": "CA",
     "saskatoon": "CA", "winnipeg": "CA",
+    # No-US-namesake European / SE Asian hubs that showed up unresolved in
+    # the live top-25 for a US H-1B candidate (Toulouse, Manila, Caen).
+    # Sydney / Amsterdam / London stay OUT — each is also a US city.
+    "manila": "PH", "toulouse": "FR", "caen": "FR", "lyon": "FR",
+    "marseille": "FR", "nantes": "FR", "grenoble": "FR",
+    "sydney cbd": "AU",
 }
 
 #: Canadian province and territory NAMES, which must NOT lead the string.
@@ -210,6 +216,46 @@ def _foreign_address_marker(text: str) -> str:
             return code
     return UNKNOWN
 
+
+#: EU gender-equality markers stamped on titles. Boards that print them are
+#: almost always hiring under German or French equal-opportunity law, and the
+#: location string is frequently empty or a street address with no country.
+#:
+#:   (M/F/D) (M/W/D) (W/M/D) (F/M/D) (D/F/M)  — German DACH convention → DE
+#:   (F/H/X) (H/F) (F/H) (H/F/X)              — French convention → FR
+#:
+#: Applied ONLY when the location itself could not be resolved: a US posting
+#: that copied a European style guide is rare, and inventing a country when we
+#: already have one is the failure mode this module exists to avoid. Austria
+#: and Switzerland also use (M/W/D); same residual accepted for `strasse`.
+_TITLE_COUNTRY_MARKERS: Tuple[Tuple[re.Pattern, str], ...] = (
+    (re.compile(
+        r"\(\s*(?:m\s*/\s*[fwd]\s*/\s*[fwd]"
+        r"|[fwd]\s*/\s*m\s*/\s*[fwd]"
+        r"|[fwd]\s*/\s*[fwd]\s*/\s*m"
+        r"|m\s*/\s*w\s*/\s*d"
+        r"|w\s*/\s*m\s*/\s*d"
+        r"|d\s*/\s*[fm]\s*/\s*[mw]"
+        r")\s*\)",
+        re.IGNORECASE), "DE"),
+    (re.compile(
+        r"\(\s*(?:f\s*/\s*h\s*/\s*x|h\s*/\s*f\s*/\s*x"
+        r"|h\s*/\s*f|f\s*/\s*h)\s*\)",
+        re.IGNORECASE), "FR"),
+)
+
+
+def _title_country_marker(title: Any) -> str:
+    """ISO-2 from an EU gender marker in the title, else ""."""
+    body = str(title or "")
+    if not body:
+        return UNKNOWN
+    for rx, code in _TITLE_COUNTRY_MARKERS:
+        if rx.search(body):
+            return code
+    return UNKNOWN
+
+
 #: Indian state / UT codes seen in the `region` position ("Bengaluru, KA").
 #: `GA` (Goa) and `OR` (Odisha) are DELIBERATELY ABSENT — they are Georgia and
 #: Oregon far more often, and this tier runs after US proof but a collision
@@ -277,11 +323,46 @@ def _country_of_name_strict(value: Any) -> str:
     a positional field carries none, and the positional tiers below
     (`us_state_in_region`, `canada_province`, `india_state`) are where a code
     is read, in an order that resolves the collision deliberately.
+
+    `UK` / `GB` are the exceptions: neither is a US state code, and boards
+    print them as the whole location ("Remote - UK", city=`UK`).
     """
     text = str(value or "").strip()
+    folded = re.sub(r"[^A-Za-z]", "", text).upper()
+    if folded in ("UK", "GB"):
+        return "GB"
     if len(re.sub(r"[^A-Za-z]", "", text)) <= 2:
         return UNKNOWN
     return _country_of_name(text)
+
+
+#: Words that ARE safe as a single-token country hit inside free text even
+#: though they are two letters. Every other two-letter token is a US state
+#: collision risk and is skipped by `_scan_country_names`.
+_SAFE_ISO2_IN_TEXT = frozenset({"uk", "gb"})
+
+#: "Remote - UK", "India Remote", "UK Remote". The country is named; the
+#: work mode is noise. `India` is in `_AMBIGUOUS_COUNTRY_NAMES` because of
+#: Indiana / India St, but paired with `remote` it is decisive — no US street
+#: is called "India Remote".
+_REMOTE_COUNTRY_RE = re.compile(
+    r"(?i)(?:^|[\s,;/|])(?:remote\s*[-–—:/]?\s*)?"
+    r"(?P<name>united\s+kingdom|great\s+britain|u\.?k\.?|"
+    r"india|singapore|germany|france|netherlands|ireland|"
+    r"australia|japan|china|brazil|mexico|canada|philippines|"
+    r"thailand|vietnam|indonesia|malaysia|poland|spain|italy|"
+    r"sweden|norway|denmark|finland|switzerland|austria|"
+    r"portugal|belgium|israel|uae|united\s+arab\s+emirates|"
+    r"south\s+korea|korea|taiwan|hong\s+kong|new\s+zealand)"
+    r"(?:\s*[-–—:/]?\s*remote)?(?:$|[\s,;/|])")
+
+
+def _remote_country(text: str) -> str:
+    """ISO-2 when the string names a country next to a remote marker, else ""."""
+    m = _REMOTE_COUNTRY_RE.search(str(text or ""))
+    if not m:
+        return UNKNOWN
+    return _country_of_name(m.group("name"))
 
 
 def _scan_country_names(text: str) -> str:
@@ -300,8 +381,9 @@ def _scan_country_names(text: str) -> str:
     for size in (4, 3, 2, 1):
         for i in range(len(words) - size + 1):
             gram = " ".join(words[i:i + size])
-            if size == 1 and (gram.lower() in _AMBIGUOUS_COUNTRY_NAMES
-                              or len(gram) <= 2):
+            if size == 1 and gram.lower() in _AMBIGUOUS_COUNTRY_NAMES:
+                continue
+            if size == 1 and len(gram) <= 2 and gram.lower() not in _SAFE_ISO2_IN_TEXT:
                 continue
             code = _country_of_name(gram)
             if code:
@@ -418,14 +500,27 @@ def resolve(loc: Any, *, title: Any = "") -> Tuple[str, str]:
     if region.strip().lower() in _IN_STATE_CODES:
         return "IN", "india_state"
 
-    # 7. A country named inside free text, then the vetted foreign-city
-    #    gazetteer. Last because both are substring scans.
+    # 7. A country named next to a remote marker ("Remote - UK", "India
+    #    Remote"), then a country named inside free text, then the vetted
+    #    foreign-city gazetteer. Last because all three are substring scans.
+    code = _remote_country(raw) or _remote_country(city)
+    if code:
+        return code, "remote_country"
     code = _scan_country_names(raw)
     if code:
         return code, "country_name_in_raw"
     code = _known_foreign_city(raw) or _known_foreign_city(city)
     if code:
         return code, "known_foreign_city"
+
+    # 8. EU gender markers on the TITLE, only when the location itself said
+    #    nothing. `(M/F/D)` and `(F/H/X)` are the boards' own equal-opportunity
+    #    stamps; they are decisive about the hiring jurisdiction and are what
+    #    made Baker Hughes "Intern – Systems & Data Analysis (M/F/D)" readable
+    #    even when the street address was missing.
+    code = _title_country_marker(title)
+    if code:
+        return code, "title_gender_marker"
 
     return UNKNOWN, "unresolved"
 
@@ -498,15 +593,22 @@ def work_location_verdict(doc: Dict[str, Any], home_country: Any = "US"
     codes = resolved["codes"]
 
     if not codes:
+        # Unreadable location. Never treated as foreign — 71% of the corpus.
         verdict, penalty, badges, reasons = LOC_UNKNOWN, 1.0, [], []
-    elif home and home in codes:
+    elif not home:
+        # We resolved WHERE the job is, but the candidate has not declared a
+        # home country. That is not a mismatch: labelling every non-empty
+        # location "foreign" (including US ones) was the bug that made an
+        # undeclared user's United States - Remote card read as foreign.
+        verdict, penalty, badges, reasons = LOC_UNKNOWN, 1.0, [], []
+    elif home in codes:
         verdict, penalty, badges, reasons = LOC_HOME, 1.0, [], []
     else:
         verdict = LOC_FOREIGN
-        penalty = PENALTY_FOREIGN if home else 1.0
+        penalty = PENALTY_FOREIGN
         badges = [BADGE_FOREIGN]
         where = ", ".join(codes[:3])
-        reasons = [f"This role is based in {where}, not {home}"] if home else []
+        reasons = [f"This role is based in {where}, not {home}"]
     return {
         "verdict": verdict,
         "country_codes": codes,
