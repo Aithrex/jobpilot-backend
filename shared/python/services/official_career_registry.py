@@ -588,31 +588,66 @@ CUSTOM_BOARD_ADAPTERS: Tuple[Dict[str, Any], ...] = (
         "domain": "apple.com",
         "vendor": "custom_apple",
         "career_landing_url": "https://jobs.apple.com/en-us/search",
-        # Probed 2026-09-02. `/api/role/search` 301s to apple.com/pagenotfound;
-        # `/api/v1/search` answers 200 with the right SHAPE and
-        # `{"res":{"searchResults":[],"totalRecords":0}}` -- it needs a session
-        # the crawler does not have. Recorded as `blocked`, not left as a
-        # silent zero: "we cannot read this board" and "this board is empty"
-        # are different claims about Apple.
-        "status": "blocked",
-        "status_detail": ("jobs.apple.com/api/v1/search answers 200 with 0 "
-                          "records without a session token (probed 2026-09-02)"),
+        # Re-probed 2026-09-15 and now READ. The 2026-09-02 note was right about
+        # the symptom and one step short of the cause: `/api/v1/search` really
+        # does answer 200 with `{"res":{"searchResults":[],"totalRecords":0}}`,
+        # but the missing half is a COOKIE, not a credential we do not have.
+        # `jobs.apple.com/static/jobsite.main.*.js` builds every API call from
+        # `{csrf:{token:{url:"/api/v1/CSRFToken"}}}` and one GET there is the
+        # whole handshake: the same session then returns the full board.
+        # Measured live by walking the whole board: 6,141 ROWS and 4,905
+        # DISTINCT requisition ids (a multi-location req repeats), of which
+        # 4,503 rows carry a United States location — so on the order of 3,600
+        # distinct US postings. Both numbers are stated because the row count
+        # is what the crawl fetches and the distinct count is what lands.
+        #
+        # The `X-Apple-CSRF-Token` header the bundle also sends turned out NOT
+        # to be required once the session cookie is held (tested three ways:
+        # token+cookies, cookies only, token only). So the row asks for the
+        # cheapest honest thing — the preflight — and sends no invented header.
+        # `/api/role/search` is still a 404; it was renamed, not gated.
+        #
+        # No working country filter was found. `filters.locations` is ignored
+        # for every value tried (`postLocation-USA`, `united-states-USA`,
+        # `USA`) and an unknown filter key falls through to an UNFILTERED
+        # result rather than erroring - so a location filter here would be a
+        # silent lie. The whole board is walked and the US filter stays where
+        # it already is, on the row.
+        "status": "verified",
+        "status_detail": ("jobs.apple.com/api/v1/search returns 6,141 rows / "
+                          "4,905 distinct reqs (4,503 US-located rows) after a "
+                          "GET to /api/v1/CSRFToken on the same session "
+                          "(probed 2026-09-15)"),
         "request": {
             "method": "POST",
             "url": "https://jobs.apple.com/api/v1/search",
             "json_body": {"query": "", "filters": {}, "page": 1,
-                          "locale": "en-us", "sort": "newest"},
+                          "locale": "en-us", "sort": "newest",
+                          "format": {"longDate": "MMMM D, YYYY",
+                                     "mediumDate": "MMM D, YYYY"}},
             "page_field": "page",
+            "preflight": {"method": "GET",
+                          "url": "https://jobs.apple.com/api/v1/CSRFToken"},
         },
-        "pagination": {"style": "page", "page_start": 1, "max_pages": 20},
+        # 20 rows a page, measured, and paging answers well past page 300.
+        # `max_pages` covers the whole 6,140 with headroom; the total-count stop
+        # in `list_jobs` ends the walk before it, so the budget is a ceiling
+        # rather than a cost.
+        "pagination": {"style": "page", "page_start": 1, "page_size": 20,
+                       "max_pages": 340},
         "records_path": "res.searchResults",
         "total_path": "res.totalRecords",
+        # Confirmed against a live record 2026-09-15; `postDateInGMT` is a real
+        # ISO timestamp and `postingDate` is the same date rendered for humans,
+        # so the first path wins and `date_confidence` is EXACT.
         "fields": {
             "source_job_id": ["positionId", "id"],
             "title": ["postingTitle", "title"],
             "location": ["locations.0.name", "postingLocation"],
+            "country": ["locations.0.countryName"],
             "posted_at": ["postDateInGMT", "postingDate"],
             "description": ["jobSummary"],
+            "department": ["team.teamName"],
             "apply_url_template": "https://jobs.apple.com/en-us/details/{source_job_id}",
         },
     },

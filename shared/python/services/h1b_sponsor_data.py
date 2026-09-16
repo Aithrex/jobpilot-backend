@@ -5,6 +5,18 @@ AUTO-GENERATED from FY2024/FY2025 research (USCIS H-1B Employer Data Hub,
 myvisajobs, h1bdata.info — see scripts/ docs). Keyed by tenant slug.
 Tier ~ recent annual approvals: "high" 500+, "medium" 50-499, "low" 1-49.
 Absent tenants are UNKNOWN (no evidence), not proven non-sponsors.
+
+Rows marked `FY2026` were refreshed on 2026-09-15 from `sponsorship_signals`
+(`sponsorship-ingest-2.0.0`, USCIS fiscal year 2026) — the same figure
+`docs/coverage/h1b-sponsor-gaps.csv` ranks board discovery on. The rest keep
+their FY2024/FY2025 estimate; the marker is there so the two vintages are
+never averaged by eye.
+
+An `FY2026` number is ROLLED UP across the employer's filing entities and
+covers ONE fiscal year. Both matter for the tier: Qualcomm's 955 is four
+entities' filings added together (the old 1,500 here was a five-year-flavoured
+estimate of one), and the bands above were written against an ANNUAL figure.
+See `h1b_sponsor_data_careers.py` for the longer note.
 """
 from __future__ import annotations
 
@@ -339,7 +351,7 @@ H1B_SPONSORS: Dict[str, Tuple[str, int]] = {
     "pwc": ("high", 1500),  # PwC
     "q2ebanking": ("low", 40),  # Q2
     "qtsdatacenters": ("low", 15),  # QTS Data Centers
-    "qualcomm": ("high", 1500),  # Qualcomm
+    "qualcomm": ("high", 955),  # Qualcomm (FY2026, sponsorship_signals)
     "qualys": ("medium", 100),  # Qualys
     "quantiphi": ("medium", 200),  # Quantiphi
     "racetrac": ("low", 10),  # RaceTrac

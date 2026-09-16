@@ -98,9 +98,16 @@ def test_catalog_summary_shape():
             # client; both must be present and equal.
             assert set(c.keys()) == {"display_name", "name", "tenant", "ats"}
             assert c["display_name"] == c["name"]
+            # A hand-written allowlist here, rather than `MNC_ENGINES` or the
+            # provider registry, so that adding an engine to the catalog is a
+            # deliberate two-file change. `custom_apple` is a config-board
+            # vendor (`official_career_registry.CUSTOM_BOARD_ADAPTERS`), which
+            # is how Apple moved off the metered `aggregator` engine on
+            # 2026-09-15.
             assert c["ats"] in ("greenhouse", "lever", "ashby", "smartrecruiters",
                                 "workable", "recruitee", "amazon", "eightfold",
                                 "phenom", "radancy", "workday", "orc", "uber",
+                                "successfactors", "custom_apple",
                                 "aggregator")
     assert count_sum == summary["total"]
     assert len(seen_keys) == len(set(seen_keys))

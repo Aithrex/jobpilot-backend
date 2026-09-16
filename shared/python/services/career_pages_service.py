@@ -143,7 +143,8 @@ _ATS_LABEL = {
     "recruitee": "Recruitee", "amazon": "Amazon Jobs",
     "eightfold": "Eightfold", "phenom": "Phenom",
     "orc": "Oracle Recruiting", "uber": "Uber Careers",
-    "neogov": "GovernmentJobs",
+    "neogov": "GovernmentJobs", "radancy": "Radancy",
+    "custom_apple": "Apple Jobs", "successfactors": "SuccessFactors",
 }
 
 # Explicit non-US markers for ATS location strings (board APIs often give
@@ -479,38 +480,64 @@ def _fetch_amazon(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
     return out
 
 
+#: Eightfold returns TEN positions a page and ignores `num`.
+#:
+#: Measured live 2026-09-15 against Microsoft, Qualcomm and Netflix: `num=20`
+#: and `num=50` both come back with ten, and `start` is a row offset that pages
+#: cleanly (0/10/20/30 share no ids). This fetcher asked for 20, took the first
+#: page and stopped, which is why one term returned at most twenty rows for
+#: employers publishing 1,178 (Microsoft), 741 (Qualcomm) and 204 (Netflix).
+#: The same arithmetic off by the same factor is what
+#: `ats_providers.enterprise._EIGHTFOLD_POLICY` documents on the crawl side.
+_EIGHTFOLD_PAGE = 10
+#: Per TERM. Three terms x six pages is 180 rows, which is the right order for
+#: an interactive tab that keeps 30 per company; the background crawl is where
+#: a whole board gets read.
+_EIGHTFOLD_PAGES_PER_TERM = 6
+
+
 def _fetch_eightfold(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
     host = c["host"]
     domain = (c.get("extra") or {}).get("domain") or ""
     variant = (c.get("extra") or {}).get("variant") or "classic"
     out: List[Dict[str, Any]] = []
+    seen: set = set()
     for term in terms[:3]:
-        if variant == "pcsx":
-            r = _SESSION.get(
-                f"https://{host}/api/pcsx/search",
-                params={"domain": domain, "query": term,
-                        "location": "United States", "start": 0},
-                timeout=REQUEST_TIMEOUT)
-            r.raise_for_status()
-            positions = ((r.json() or {}).get("data") or {}).get("positions") or []
-        else:
-            r = _SESSION.get(
-                f"https://{host}/api/apply/v2/jobs",
-                params={"domain": domain, "query": term,
-                        "location": "United States", "start": 0, "num": 20},
-                timeout=REQUEST_TIMEOUT)
-            r.raise_for_status()
-            positions = (r.json() or {}).get("positions") or []
-        for j in positions:
-            locs = j.get("locations") or ([j.get("location")] if j.get("location") else [])
-            # Posting timestamps only — t_update/t_create are record-edit
-            # times and made stale reqs look freshly posted.
-            posted = j.get("postedTs") or j.get("creationTs")
-            url = (j.get("canonicalPositionUrl")
-                   or f"https://{host}/careers/job/{j.get('id')}?domain={domain}")
-            out.append(_row(
-                c, j.get("id"), j.get("name") or "", url,
-                _epoch_to_iso(posted), "; ".join(str(x) for x in locs[:3])))
+        for page in range(_EIGHTFOLD_PAGES_PER_TERM):
+            start = page * _EIGHTFOLD_PAGE
+            if variant == "pcsx":
+                r = _SESSION.get(
+                    f"https://{host}/api/pcsx/search",
+                    params={"domain": domain, "query": term,
+                            "location": "United States", "start": start},
+                    timeout=REQUEST_TIMEOUT)
+                r.raise_for_status()
+                positions = ((r.json() or {}).get("data") or {}).get("positions") or []
+            else:
+                r = _SESSION.get(
+                    f"https://{host}/api/apply/v2/jobs",
+                    params={"domain": domain, "query": term,
+                            "location": "United States", "start": start,
+                            "num": _EIGHTFOLD_PAGE},
+                    timeout=REQUEST_TIMEOUT)
+                r.raise_for_status()
+                positions = (r.json() or {}).get("positions") or []
+            for j in positions:
+                jid = j.get("id")
+                if jid in seen:
+                    continue
+                seen.add(jid)
+                locs = j.get("locations") or ([j.get("location")] if j.get("location") else [])
+                # Posting timestamps only — t_update/t_create are record-edit
+                # times and made stale reqs look freshly posted.
+                posted = j.get("postedTs") or j.get("creationTs")
+                url = (j.get("canonicalPositionUrl")
+                       or f"https://{host}/careers/job/{jid}?domain={domain}")
+                out.append(_row(
+                    c, jid, j.get("name") or "", url,
+                    _epoch_to_iso(posted), "; ".join(str(x) for x in locs[:3])))
+            if len(positions) < _EIGHTFOLD_PAGE:
+                break
     return out
 
 
@@ -691,8 +718,71 @@ def _fetch_radancy(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
     return out
 
 
+def _fetch_via_provider(c: Dict[str, str], terms: List[str], vendor: str, *,
+                        keyword_option: str = "keyword",
+                        cap: int = 400) -> List[Dict[str, Any]]:
+    """Run a REGISTERED provider for the interactive tab.
+
+    Deliberately thin, for the reason `_fetch_radancy` gives: the protocol
+    belongs in `services.ats_providers` — the one place the background crawl
+    also reads it from — and writing the HTTP a second time here is how the two
+    Workday tenant lists in this repo drifted apart. This adapter only
+    translates the tab's `(company dict, terms)` call into the provider and the
+    provider's `RawJob`s back into `_row`.
+    """
+    from services.ats_providers import registry as ats_registry
+    from services.ats_providers.base import Endpoint
+    from services.ats_providers.http import simple_context
+
+    provider = ats_registry.get(vendor)
+    if provider is None:                       # pragma: no cover - defensive
+        return []
+    host = str(c.get("host") or "").strip().lower()
+    endpoint = Endpoint(vendor=vendor, tenant=str(c.get("slug") or vendor),
+                        site=str(c.get("site") or ""), host=host,
+                        extra=dict(c.get("extra") or {}))
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for term in (terms or [""])[:2]:
+        ctx = simple_context(budget_seconds=HEAVY_REQUEST_TIMEOUT * 3,
+                             options={keyword_option: term})
+        try:
+            for job in provider.list_jobs(endpoint, ctx):
+                if job.source_job_id in seen:
+                    continue
+                seen.add(job.source_job_id)
+                out.append(_row(c, job.source_job_id, job.title, job.apply_url,
+                                job.posted_at, job.location,
+                                description=(job.description or "")[:5000],
+                                country=job.country, is_remote=job.remote))
+                if len(out) >= cap:
+                    return out
+        except Exception:                      # one vendor must not fail a tab
+            continue
+    return out
+
+
+def _fetch_apple(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
+    """Apple's own board, through the `custom_apple` config-board adapter.
+
+    The whole board is ~6,140 requisitions and the API takes no working
+    location filter, so the interactive path caps the walk; the background
+    crawl is where the full board is read. See
+    `official_career_registry.CUSTOM_BOARD_ADAPTERS` for the endpoint and the
+    `/api/v1/CSRFToken` handshake that makes it answer with more than zero.
+    """
+    return _fetch_via_provider(c, [""], "custom_apple", cap=400)
+
+
+def _fetch_successfactors(c: Dict[str, str], terms: List[str]) -> List[Dict[str, Any]]:
+    """SAP SuccessFactors RMK career site, on the employer's own hostname."""
+    return _fetch_via_provider(c, terms, "successfactors", cap=300)
+
+
 ENTERPRISE_FETCHERS: Dict[str, Callable[[Dict[str, str], List[str]], List[Dict[str, Any]]]] = {
     "amazon": _fetch_amazon,
+    "custom_apple": _fetch_apple,
+    "successfactors": _fetch_successfactors,
     "eightfold": _fetch_eightfold,
     "phenom": _fetch_phenom,
     "orc": _fetch_orc,
@@ -706,6 +796,13 @@ ENTERPRISE_FETCHERS: Dict[str, Callable[[Dict[str, str], List[str]], List[Dict[s
 ENTERPRISE_CATALOG: List[Dict[str, Any]] = [
     {"display_name": "Amazon", "ats": "amazon", "slug": "amazon",
      "industry": "tech", "host": "www.amazon.jobs", "extra": {}},
+    # Apple runs its own board. Validated live 2026-09-15 through the
+    # `custom_apple` config-board adapter: 6,141 rows / 4,905 distinct
+    # requisitions, 4,503 of them in the United States, in an 85 s walk.
+    # `host` is what the SSRF allowlist and the pacing key read; the endpoint
+    # itself lives in the adapter row, not here, so there is ONE copy of it.
+    {"display_name": "Apple", "ats": "custom_apple", "slug": "apple",
+     "industry": "tech", "host": "jobs.apple.com", "extra": {}},
     {"display_name": "JPMorgan Chase", "ats": "orc", "slug": "jpmc",
      "industry": "banking", "host": "jpmc.fa.oraclecloud.com",
      "extra": {"site_number": "CX_1"}},

@@ -698,3 +698,78 @@ class TestAdapterStatusIsHonest:
                                          tenant="never-probed"), None)
         assert got.status == STATUS_BLOCKED
         assert "never probed" in got.detail
+
+
+def test_config_board_preflights_once_before_the_first_page():
+    """Some boards answer 200-with-zero-rows until the caller holds a session.
+
+    Apple is the case that put this here: `jobs.apple.com/api/v1/search`
+    returns `{"res":{"searchResults":[],"totalRecords":0}}` to a cookieless
+    client and all 6,141 rows once `/api/v1/CSRFToken` has been called on the
+    same session. 200-with-zero-rows is the worst shape a source can fail in,
+    because it reads as "this employer is not hiring" rather than as an error.
+
+    The preflight goes through `ctx`, so it is inside the same SSRF guard and
+    pacing as every other fetch, and it runs ONCE per listing, not per page.
+    """
+    row = dict(_FAKE_ROW, vendor="custom_acme_preflight_test", request={
+        "method": "GET",
+        "url": "https://careers.acme.example/api/search",
+        "preflight": {"method": "GET",
+                      "url": "https://careers.acme.example/api/session"},
+    })
+    provider = ConfigBoardProvider(row)
+    ctx = _Ctx([None, _fake_page(["A1", "A2"]), _fake_page(["A3"], total=4)])
+    jobs = list(provider.list_jobs(provider.default_endpoint(), ctx))
+
+    assert ctx.calls[0].startswith("https://careers.acme.example/api/session")
+    assert sum(1 for c in ctx.calls if "/api/session" in c) == 1
+    assert [j.source_job_id for j in jobs] == ["A1", "A2", "A3"]
+
+
+def test_config_board_survives_a_failing_preflight():
+    """A handshake that 404s must not cost us the postings search still returns.
+
+    The board may have stopped needing it, and a preflight is a convenience,
+    never the contract.
+    """
+    row = dict(_FAKE_ROW, vendor="custom_acme_preflight_fail_test",
+               pagination={"style": "none"}, request={
+                   "method": "GET",
+                   "url": "https://careers.acme.example/api/search",
+                   "preflight": {"url": "https://careers.acme.example/nope"},
+               })
+
+    class _Boom(_Ctx):
+        def get_json(self, url, params=None, timeout=None, vendor="",
+                     extra_headers=None):
+            if "/nope" in url:
+                raise RuntimeError("preflight exploded")
+            return super().get_json(url, params=params, timeout=timeout,
+                                    vendor=vendor, extra_headers=extra_headers)
+
+    provider = ConfigBoardProvider(row)
+    jobs = list(provider.list_jobs(provider.default_endpoint(),
+                                   _Boom(_fake_page(["A1"]))))
+    assert [j.source_job_id for j in jobs] == ["A1"]
+
+
+def test_apple_adapter_is_verified_and_declares_its_handshake():
+    """Apple was `blocked` on the adapter's own evidence; it is now read.
+
+    Probed live 2026-09-15: 6,141 rows / 4,905 distinct requisitions, 4,503 of
+    them in the United States. The row must carry the preflight, or the
+    provider silently reads an empty board again.
+    """
+    from services.official_career_registry import custom_adapter_for
+
+    row = custom_adapter_for("apple")
+    assert row is not None
+    assert row["status"] == "verified"
+    assert row["request"]["preflight"]["url"] == \
+        "https://jobs.apple.com/api/v1/CSRFToken"
+    provider = ats_registry.get("custom_apple")
+    assert provider.preflight_url.endswith("/api/v1/CSRFToken")
+    # A ten-row page must not read as the last page, and 20 is what the API
+    # returns; declaring it is what makes the short-page stop meaningful.
+    assert provider.page_size == 20

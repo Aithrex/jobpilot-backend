@@ -30,6 +30,7 @@ fail-closed guard.
 """
 from __future__ import annotations
 
+from dataclasses import replace as _dc_replace
 from typing import Any, Dict, Iterator, List, Optional
 from urllib.parse import urlparse
 
@@ -232,6 +233,31 @@ class PhenomProvider(AtsProvider):
 # Eightfold
 # ---------------------------------------------------------------------------
 
+#: Eightfold's own policy, and the ONE number in it that matters is `page_size`.
+#:
+#: The shared `_ENTERPRISE_POLICY` says 20, which is what the interactive
+#: fetcher asks for (`num=20`) and NOT what the API returns. Measured live
+#: 2026-09-15 on three tenants: every page comes back with exactly TEN
+#: positions, `num` is ignored (`num=20` and `num=50` both yield 10) and
+#: `start` is a row offset that pages cleanly (start=0/10/20/30 share no ids).
+#: `list_jobs` stops on `len(positions) < size`, so 10 < 20 was true on the
+#: FIRST page of every Eightfold employer we have and the crawl took one page
+#: and left. That is the whole explanation for the live inventory:
+#:
+#:     Microsoft   29 active postings stored / 1,178 US published
+#:     Qualcomm     4                        /   741
+#:     Netflix     10                        /   204
+#:     Lockheed    19                        / (pcsx, same shape)
+#:
+#: Those employers were not thin and they were not blocked. They were read
+#: once. `max_pages` is raised to match. 150 was the first try and Lockheed
+#: Martin stopped dead on 1,500 rows — exactly 150 x 10 — which is a truncation
+#: wearing a round number, so the ceiling is 260: it clears Lockheed's ~2,195
+#: and Microsoft's 1,178, and the short-page stop still ends a small board on
+#: its own (Netflix finishes in 21 pages).
+_EIGHTFOLD_POLICY = _dc_replace(_ENTERPRISE_POLICY, page_size=10, max_pages=260)
+
+
 class EightfoldProvider(AtsProvider):
     """Eightfold apply API (classic `/api/apply/v2/jobs` and PCSX search).
 
@@ -246,7 +272,7 @@ class EightfoldProvider(AtsProvider):
     has_detail = True
     date_confidence = DATE_EXACT
     slug_probe = False
-    policy = _ENTERPRISE_POLICY
+    policy = _EIGHTFOLD_POLICY
 
     api_hosts = (
         "apply.careers.microsoft.com",

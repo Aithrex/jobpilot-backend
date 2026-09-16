@@ -5,6 +5,26 @@ AUTO-GENERATED from FY2024/FY2025 research (USCIS H-1B Employer Data Hub
 via h1bgrader/myvisajobs/h1bdata). Keyed by career_pages_catalog slug.
 Tier ~ recent annual approvals: "high" 500+, "medium" 50-499, "low" 1-49.
 Absent slugs are UNKNOWN (no filing evidence), not proven non-sponsors.
+
+Rows marked `FY2026` below were refreshed on 2026-09-15 from
+`sponsorship_signals` (`sponsorship-ingest-2.0.0`, USCIS fiscal year 2026),
+which is the same figure `docs/coverage/h1b-sponsor-gaps.csv` ranks on — so a
+board added because an employer is a big sponsor and the tier that board's
+postings carry now come from ONE number rather than two vintages of research.
+Only slugs whose board changed in that pass were touched; the rest keep their
+FY2024/FY2025 estimate, which is honest about where each figure came from.
+
+Two things about an `FY2026` number that the older ones do not promise:
+
+* it is **ROLLED UP** across an employer's filing entities, not one entity's
+  filing. Amazon is 13,069 across nine entities, and `AMAZON COM SERVICES LLC`
+  alone is 9,337 — quoting the entity understates every employer that files
+  under more than one name, which is most large ones;
+* the window is **ONE fiscal year**, not the five the older estimates and
+  `sponsorship_service`'s own copy imply. The tier bands here
+  (500+ / 50-499 / 1-49) were written against an annual figure, so a one-year
+  total is the right input for them; a five-year total would inflate every
+  tier by roughly a factor of five.
 """
 from __future__ import annotations
 
@@ -17,7 +37,8 @@ CAREER_H1B_SPONSORS: Dict[str, Tuple[str, int]] = {
     "adyen": ("low", 30),  # Adyen
     "affirm": ("medium", 130),  # Affirm
     "agilityrobotics": ("low", 20),  # Agility Robotics
-    "airbnb": ("medium", 179),  # Airbnb
+    "airbnb": ("medium", 105),  # Airbnb (FY2026)
+    "apple": ("high", 3885),  # Apple (FY2026) — jobs.apple.com, custom_apple
     "aircall": ("low", 5),  # Aircall
     "airtable": ("medium", 60),  # Airtable
     "akunacapital": ("medium", 80),  # Akuna Capital
@@ -215,7 +236,7 @@ CAREER_H1B_SPONSORS: Dict[str, Tuple[str, int]] = {
     "outreach": ("medium", 50),  # Outreach
     "outschool": ("low", 5),  # Outschool
     "pagerduty": ("low", 40),  # PagerDuty
-    "palantir": ("medium", 200),  # Palantir Technologies
+    "palantir": ("low", 70),  # Palantir Technologies (FY2026)
     "parafin": ("low", 10),  # Parafin
     "pathai": ("low", 25),  # PathAI
     "peloton": ("medium", 50),  # Peloton
@@ -316,4 +337,13 @@ CAREER_H1B_SPONSORS: Dict[str, Tuple[str, int]] = {
     "zocdoc": ("medium", 50),  # Zocdoc
     "zoox": ("medium", 274),  # Zoox
     "zyngacareers": ("medium", 100),  # Zynga
+    # ENTERPRISE_CATALOG / MNC_CATALOG tenants. They are keyed the same way
+    # (`career_pages_service._row` stamps `tenant` from the row's `slug`), so
+    # the sponsorship badge on an Eightfold or config-board posting reads from
+    # this table too — it simply had no rows for them, which rendered the
+    # largest sponsors in the catalog as "unknown".
+    "microsoft": ("high", 3688),  # Microsoft (FY2026) — eightfold pcsx
+    "qualcomm": ("high", 955),  # Qualcomm (FY2026) — eightfold pcsx
+    "netflix": ("medium", 258),  # Netflix (FY2026) — eightfold classic
+    "servicenow": ("medium", 401),  # ServiceNow (FY2026)
 }

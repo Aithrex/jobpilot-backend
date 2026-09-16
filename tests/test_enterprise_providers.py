@@ -128,3 +128,37 @@ def test_migrate_indexes_covers_the_employer_graph():
     assert ("companies", "company_id_uniq") in names
     assert ("company_ats_endpoints", "member_key_uniq") in names
     assert ("discovery_queue", "claim_order") in names
+
+
+def test_eightfold_pages_past_the_first_ten_row_page():
+    """The live API returns TEN rows a page and ignores `num`.
+
+    `policy.page_size` used to say 20, and `list_jobs` stops on
+    `len(positions) < size`, so 10 < 20 was true on page ONE of every Eightfold
+    employer and the crawl took twenty rows and left. Measured 2026-09-15:
+    Microsoft published 1,178 US postings and `job_postings` held 29; Qualcomm
+    741 and 4; Netflix 204 and 10. This pins the page size to what the vendor
+    actually returns and proves the walk continues past the first page.
+    """
+    calls = []
+
+    def get_json(url, params=None, timeout=None, vendor=""):
+        start = int((params or {}).get("start") or 0)
+        calls.append(start)
+        if start >= 30:                       # a genuinely short page ends it
+            return 200, {"data": {"positions": []}}
+        return 200, {"data": {"positions": [
+            {"id": f"q-{start + i}", "name": "ASIC Engineer",
+             "location": "San Diego, CA", "postedTs": 1754784000000}
+            for i in range(10)]}}
+
+    ep = Endpoint(vendor="eightfold", tenant="qualcomm",
+                  host="careers.qualcomm.com",
+                  extra={"domain": "qualcomm.com", "variant": "pcsx"})
+    provider = EightfoldProvider()
+    assert provider.policy.page_size == 10, \
+        "a ten-row page must not read as a short page"
+    jobs = list(provider.list_jobs(ep, _ctx(get_json=get_json)))
+    assert calls[:4] == [0, 10, 20, 30], calls
+    assert len(jobs) == 30
+    assert len({j.source_job_id for j in jobs}) == 30

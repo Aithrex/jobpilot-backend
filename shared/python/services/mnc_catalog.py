@@ -17,12 +17,29 @@ was found by fingerprinting the employer's own careers page rather than by
 guessing a tenant, then validated through its provider.
 
 Still genuinely unreachable from a plain HTTP client, re-probed the same day and
-deliberately left on the metered path: Google, Meta, Apple, IBM, Tesla, Walmart,
+deliberately left on the metered path: Google, Meta, IBM, Tesla, Walmart,
 Goldman Sachs, American Express, McKinsey (JS shells whose APIs need a browser
-session or a CSRF handshake) and SAP (SuccessFactors RMK, which answers with
-HTML tiles and needs a provider this repo does not have yet). UnitedHealth is on
-Taleo but its portal id is not derivable, which `job_ingest_worker` already
-documents as a configuration gap rather than an empty employer.
+session or a CSRF handshake). UnitedHealth is on Taleo but its portal id is not
+derivable, which `job_ingest_worker` already documents as a configuration gap
+rather than an empty employer.
+
+Re-probed 2026-09-15, and TWO of those entries were wrong about themselves:
+
+  * **Apple is direct.** Its "browser session" is one anonymous GET to
+    `jobs.apple.com/api/v1/CSRFToken`; the same session then reads all 6,141
+    rows. Moved to `engine: enterprise` / `fetcher: custom_apple`.
+  * **SuccessFactors RMK has a provider** (`ats_providers/successfactors.py`)
+    and it works. It had never been run against the live vendor from an
+    environment with a network; `careers.ey.com` returns 300 rows through it on
+    the first try, against a published total of 8,297. The blocker for SAP
+    itself is not the vendor, it is that nobody probed it.
+
+Re-probed the same day and confirmed NOT reachable, each for a different
+reason worth keeping straight: Google (robots.txt Disallows every paged
+`/about/careers/applications/jobs/results` URL — a refusal, not a wall),
+Tesla (Akamai "Access Denied" on `/cua-api`), Bloomberg (PerimeterX captcha),
+SAIC and Cognizant (Cloudflare interstitial), General Dynamics (403).
+`docs/sourcing/h1b-sponsor-board-discovery.md` has the probe record.
 
 Row shape: {display_name, slug, sector, engine, ...engine-specific}:
   engine "career_pages": + ats                     (slug = board slug)
@@ -66,8 +83,16 @@ MNC_CATALOG: List[Dict[str, Any]] = [
      "engine": "aggregator", "aliases": ["alphabet"]},
     {"display_name": "Meta", "slug": "meta", "sector": "big_tech",
      "engine": "aggregator", "aliases": ["meta platforms"]},
+    # Direct since 2026-09-15. The 2026-08-27 note below still names Apple as
+    # a "JS shell whose API needs a browser session or a CSRF handshake" — the
+    # handshake turned out to be one anonymous GET to
+    # `jobs.apple.com/api/v1/CSRFToken`, and the same session then returns the
+    # whole board: 6,141 rows / 4,905 distinct requisitions, 4,503 US, in 85 s.
+    # The endpoint lives in `official_career_registry.CUSTOM_BOARD_ADAPTERS`
+    # (`custom_apple`); this row only names the engine and the host.
     {"display_name": "Apple", "slug": "apple", "sector": "big_tech",
-     "engine": "aggregator", "aliases": []},
+     "engine": "enterprise", "fetcher": "custom_apple",
+     "host": "jobs.apple.com", "extra": {}},
     {"display_name": "IBM", "slug": "ibm", "sector": "big_tech",
      "engine": "aggregator", "aliases": ["international business machines"]},
     {"display_name": "Cisco", "slug": "cisco", "sector": "big_tech",

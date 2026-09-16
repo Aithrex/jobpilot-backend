@@ -11,9 +11,18 @@ credentials, no paid model calls.
 
 | When | Command |
 | --- | --- |
-| Fast, change-focused (renderer / pagination / selection) | `python scripts/verify.py --fast` |
-| Fast, your selectors | `python scripts/verify.py --fast -- tests/test_foo.py::test_name` |
-| Full pre-push / CI-equivalent | `python scripts/verify.py --full` |
+| Fast, change-focused (renderer / pagination / selection) | `python3 scripts/verify.py --fast` |
+| Fast, your selectors | `python3 scripts/verify.py --fast -- tests/test_foo.py::test_name` |
+| Full pre-push / CI-equivalent | `python3 scripts/verify.py --full` |
+
+**Invoke it as `python3`, not `python`.** Several dev environments here
+(WSL, and any box without the `python-is-python3` shim) have no `python` on
+PATH at all, so `python scripts/verify.py --full` never starts the suite. It
+fails with `No such file or directory` and exit 127 — and wrapped in a
+pipeline or a `timeout ... | tail` the 127 is easy to lose, which reads as a
+pass that ran nothing. `verify.py` itself dispatches pytest through
+`sys.executable`, so once it starts under `python3` everything downstream is
+correct. `python3` is also right on CI, so there is one spelling everywhere.
 
 `--full` is exactly `.github/workflows/tests.yml`:
 

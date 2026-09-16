@@ -30,6 +30,18 @@ What a row may say
     request.json_body    POST body sent on every page (deep-copied per request)
     request.page_field   key INSIDE json_body that carries the page number
     request.offset_field key inside json_body that carries the row offset
+    request.preflight    {"url": ..., "method": "GET"} — one request made ONCE
+                         before the first page, for boards whose search API
+                         answers 200-with-zero-records until the caller holds a
+                         session. Nothing is read from its body; the point is
+                         the cookie jar `make_fetchers` already shares across a
+                         member's crawl. Apple is the case: its
+                         `/api/v1/search` returns `totalRecords: 0` to a
+                         cookieless client and the full 6,140 once
+                         `/api/v1/CSRFToken` has been called on the same
+                         session. A 200-with-zero-rows is the WORST failure
+                         shape a source can have, because it reads as "this
+                         employer is not hiring".
     pagination.style     "page" | "offset" | "none"
     pagination.page_start first page index (Apple's API is 1-based)
     pagination.page_param / offset_param  query parameter names for GET paging
@@ -191,6 +203,9 @@ class ConfigBoardProvider(AtsProvider):
             dict(body) if isinstance(body, dict) else None
         self.page_field = str(request.get("page_field") or "").strip()
         self.offset_field = str(request.get("offset_field") or "").strip()
+        preflight = dict(request.get("preflight") or {})
+        self.preflight_url = str(preflight.get("url") or "").strip()
+        self.preflight_method = str(preflight.get("method") or "GET").strip().upper()
 
         pagination = dict(self.row.get("pagination") or {})
         self.style = str(pagination.get("style") or "none").strip().lower()
@@ -256,6 +271,8 @@ class ConfigBoardProvider(AtsProvider):
             ctx.log("warning", "config_boards: %s needs post_json", self.vendor)
             return
 
+        self._preflight(ctx)
+
         size = self.page_size
         for index in range(int(self.policy.max_pages)):
             if ctx.should_stop():
@@ -299,6 +316,33 @@ class ConfigBoardProvider(AtsProvider):
 
         if self.style != "none":
             ctx.listing_truncated = True
+
+    def _preflight(self, ctx: FetchContext) -> None:
+        """One session-establishing request, when the row asks for one.
+
+        Deliberately fire-and-forget. Whatever it returns is ignored — the
+        value is the cookie the response set, which lands in the jar
+        `make_fetchers` scopes to this member's crawl. A failure is NOT fatal:
+        the board may have stopped needing the handshake, and a preflight that
+        404s must not cost us the postings the search call would still return.
+        It goes through `ctx`, not through `requests`, so it is inside the same
+        SSRF guard and the same per-host pacing as every other listing fetch,
+        and it is spent ONCE per listing rather than per page.
+        """
+        if not self.preflight_url:
+            return
+        try:
+            if self.preflight_method == "POST" and ctx.post_json is not None:
+                ctx.post_json(self.preflight_url, json_body={},
+                              timeout=self.policy.timeout, vendor=self.vendor)
+            else:
+                ctx.get_json(self.preflight_url, timeout=self.policy.timeout,
+                             vendor=self.vendor)
+        except ChallengeError:
+            raise
+        except Exception as exc:
+            ctx.log("info", "config_boards: %s preflight failed (%s)",
+                    self.vendor, type(exc).__name__)
 
     def _fetch_page(self, ctx: FetchContext, index: int) -> Optional[Any]:
         params = dict(self.base_params)
