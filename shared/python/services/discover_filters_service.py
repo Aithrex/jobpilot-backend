@@ -201,15 +201,41 @@ def _sponsors_h1b_flag(signal: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     ``null`` when we have no disclosure row for the employer (unknown, not "no").
     ``true`` when the employer shows a real H-1B track record in the window,
     ``false`` when we have a row but it shows no sponsorship activity.
+
+    **The boolean alone is not publishable.** It answers "did they file at
+    all", and a badge rendered from it says the same thing about RTX and
+    Cisco: RTX filed 6 petitions in FY2026 while holding 1,465 active
+    postings, Cisco filed 1,222. Both are `true`, and shown as a bare
+    "Sponsors H-1B" chip to an F1-OPT candidate the first one reads as an
+    invitation to spend an application on a company that sponsors ~0.4% as
+    often as it posts. That is the opposite of what this feature is for.
+
+    So the flag carries its own magnitude: ``band``, ``approvals`` and the
+    fiscal ``period``, and ``evidence`` always states the count rather than
+    leaving the caller to render an unqualified claim. The boolean stays
+    factually TRUE for a low band — they did sponsor, and deleting a true
+    fact is its own dishonesty — but no caller now has to guess whether
+    `true` means 6 or 1,222.
     """
     if not isinstance(signal, dict):
         return _flag(None, "No H-1B disclosure data on record for this employer")
-    approvals = signal.get("approvals_5y") or 0
-    lca = signal.get("lca_filings_5y") or 0
+    approvals = int(signal.get("approvals_5y") or 0)
+    lca = int(signal.get("lca_filings_5y") or 0)
     band = signal.get("band")
     has_activity = (approvals > 0) or (lca > 0) or (band in ("low", "moderate", "strong"))
     evidence = str(signal.get("headline") or signal.get("summary") or "").strip()
-    return _flag(bool(has_activity), evidence)
+    if not evidence and has_activity and approvals:
+        period = str(signal.get("data_vintage") or "").strip()
+        evidence = (f"Sponsored {approvals:,} "
+                    f"{'person' if approvals == 1 else 'people'} in similar roles"
+                    + (f" in {period}" if period else ""))
+    out = _flag(bool(has_activity), evidence)
+    # Magnitude travels WITH the boolean so a badge can be graded rather than
+    # binary. `low` is the one that most needs saying out loud.
+    out["band"] = band
+    out["approvals"] = approvals or None
+    out["period"] = signal.get("data_vintage")
+    return out
 
 
 # ---------------------------------------------------------------------------
