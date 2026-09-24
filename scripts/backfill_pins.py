@@ -49,8 +49,6 @@ try:
 except ImportError:  # pragma: no cover
     pass
 
-from pymongo import UpdateOne  # noqa: E402
-
 from utils.db_connect import DBConnect  # noqa: E402
 
 HEXID = re.compile(r"^[0-9a-f]{32}$")
@@ -87,16 +85,20 @@ def _collect(db) -> dict:
     return reasons
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--apply", action="store_true")
-    args = ap.parse_args()
+def pin_user_attached(db, *, apply: bool, now=None) -> dict:
+    """Pin every posting a user is attached to, and make every pinned posting
+    undeletable. Idempotent; returns counts.
 
-    db = DBConnect().get_db()
-    now = datetime.now(timezone.utc)
+    "Undeletable" is the second half and it is not optional: retention is a TTL
+    index on `expire_at` (`job_inventory_service.retention_expiry`), which
+    ignores a document without the field. So a pin that leaves `expire_at` in
+    place protects nothing. Two populations need the field removed - rows this
+    run pins, and rows pinned before the TTL existed (or by code that predates
+    it) that still carry one.
+    """
+    now = now or datetime.now(timezone.utc)
     reasons = _collect(db)
     ids = list(reasons)
-    print(f"user-attached posting ids: {len(ids):,}")
 
     present = {}
     for i in range(0, len(ids), 500):
@@ -104,34 +106,58 @@ def main() -> int:
                 {"job_id": {"$in": ids[i:i + 500]}},
                 {"job_id": 1, "pinned": 1, "_id": 0}):
             present[doc["job_id"]] = bool(doc.get("pinned"))
-
     todo = [k for k, is_pinned in present.items() if not is_pinned]
-    print(f"  present in inventory : {len(present):,}")
-    print(f"  already pinned       : {sum(1 for p in present.values() if p):,}")
-    print(f"  NEED PINNING         : {len(todo):,}")
-    # Not recoverable from Mongo, and not an error: `saved_jobs.job_data` and
-    # `tailoring_records.jd_text` each store their own copy of the posting, so
-    # the user-facing history still renders.
-    print(f"  gone from inventory  : {len(ids) - len(present):,} "
-          f"(already purged or pre-inventory)")
+    still_expiring = {"pinned": True, "expire_at": {"$exists": True}}
 
+    report = {
+        "attached": len(ids),
+        "present": len(present),
+        "already_pinned": sum(1 for p in present.values() if p),
+        "to_pin": len(todo),
+        # Not recoverable from Mongo, and not an error: `saved_jobs.job_data`
+        # and `tailoring_records.jd_text` each store their own copy, so the
+        # user-facing history still renders.
+        "gone": len(ids) - len(present),
+        "pinned_but_expiring": db.job_postings.count_documents(still_expiring),
+        "pinned": 0,
+        "expiry_removed": 0,
+    }
+    if not apply:
+        return report
+
+    # One write per posting. The set is small (hundreds: it is bounded by what
+    # users saved, tailored and applied to), so a bulk_write buys nothing.
+    for job_id in todo:
+        res = db.job_postings.update_one(
+            {"job_id": job_id},
+            {"$set": {"pinned": True, "pinned_at": now, "updated_at": now},
+             "$addToSet": {"pin_reasons": {"$each": sorted(reasons[job_id])}},
+             "$unset": {"expire_at": ""}},
+        )
+        report["pinned"] += int(res.modified_count or 0)
+
+    res = db.job_postings.update_many(still_expiring, {"$unset": {"expire_at": ""}})
+    report["expiry_removed"] = int(res.modified_count or 0)
+    return report
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--apply", action="store_true")
+    args = ap.parse_args()
+
+    db = DBConnect().get_db()
+    r = pin_user_attached(db, apply=args.apply)
+    print(f"user-attached posting ids: {r['attached']:,}")
+    print(f"  present in inventory : {r['present']:,}")
+    print(f"  already pinned       : {r['already_pinned']:,}")
+    print(f"  NEED PINNING         : {r['to_pin']:,}")
+    print(f"  pinned but expiring  : {r['pinned_but_expiring']:,}")
+    print(f"  gone from inventory  : {r['gone']:,} (already purged or pre-inventory)")
     if not args.apply:
         print("\nDRY RUN - rerun with --apply to write.")
         return 0
-
-    if todo:
-        ops = [
-            UpdateOne(
-                {"job_id": job_id},
-                {"$set": {"pinned": True, "pinned_at": now, "updated_at": now},
-                 "$addToSet": {"pin_reasons": {"$each": sorted(reasons[job_id])}}},
-            )
-            for job_id in todo
-        ]
-        res = db.job_postings.bulk_write(ops, ordered=False)
-        print(f"\npinned {res.modified_count:,} postings")
-
-    print(f"total pinned now: {db.job_postings.count_documents({'pinned': True}):,}")
+    print(f"\npinned {r['pinned']:,}; removed expiry from {r['expiry_removed']:,} pinned rows")
     return 0
 
 

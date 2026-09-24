@@ -176,6 +176,14 @@ RETENTION_DAYS_AFTER_CLOSE = _env_int("JOB_INVENTORY_RETENTION_DAYS", 2)
 #: statement cannot sit on the collection for an unbounded stretch; the sweep
 #: loops until its own `limit` is reached.
 _EXPIRE_BATCH = 5000
+#: A posting first seen when it is ALREADY older than the window - a board that
+#: keeps listing a requisition it opened a month ago - is kept this long anyway.
+#: Its natural expiry is in the past, so without a floor the TTL monitor would
+#: delete it within a minute and the next crawl would insert it again: a JD
+#: fetch, an S3 write and a parse on every crawl cycle, for a row nobody can be
+#: shown. A day bounds that to one re-insert a day, which is what the old daily
+#: sweep did, at the cost of holding at most one day of such rows.
+RELISTED_MIN_LIFETIME_HOURS = _env_int("JOB_INVENTORY_RELISTED_MIN_HOURS", 24)
 # `job_ingestion_runs` log retention. One row per shard run, and the shard
 # count is high enough (48 Workday + 64 career-pages + 48 Oracle + 96 iCIMS)
 # that 30 days accumulated 172,414 rows / 78 MiB purely to answer "what did the
@@ -1086,6 +1094,10 @@ def upsert_posting(
             "requirements": None,
             "closed_at": None,
             "closed_reason": None,
+            # ON INSERT ONLY. In `$set` a re-crawl would hand a pinned posting
+            # its expiry back, and the TTL index would delete a job somebody
+            # applied to. See `retention_expiry`.
+            "expire_at": retention_expiry(doc.get("posted_at"), now),
         },
         # A posting re-observed as live must NOT keep a retention stamp.
         # (purge_at is absent from $set, so there is no operator conflict.)
@@ -1407,6 +1419,10 @@ def pin_posting(job_id: str, *, reason: str = "applied",
     update: Dict[str, Any] = {
         "$set": {"pinned": True, "pinned_at": now, "updated_at": now},
         "$addToSet": {"pin_reasons": safe_reason},
+        # In the SAME update as the flag: the TTL index ignores a document
+        # without `expire_at`, so this is what makes a pinned row undeletable.
+        # There is no window in which a row is pinned but still expiring.
+        "$unset": {"expire_at": ""},
     }
     if archived:
         update["$set"]["archived_at"] = now
@@ -1431,6 +1447,107 @@ def is_pinned(job_id: str) -> bool:
 # ---------------------------------------------------------------------------
 # Retention
 # ---------------------------------------------------------------------------
+#
+# Retention is ENFORCED BY MONGODB. Every posting carries `expire_at` from the
+# moment it is inserted and a TTL index (`ttl_expire_at`) deletes it once that
+# passes; the server's TTL monitor runs every 60 seconds whether or not anything
+# of ours is running.
+#
+# That replaced a daily sweep as the mechanism, and the reason is measured, not
+# stylistic. The sweep's last `aged-out` closure was 2026-09-02 05:20 UTC, the
+# day the crawl moved from Lambda to the EC2 runner. The runner schedules it,
+# receives every deploy, and did not complete it once in the following three
+# weeks; nothing errored anywhere a person would see, and the cluster climbed
+# back to ~4 GB. A retention policy that needs one process on one box to hit one
+# minute a day is a policy that can stop without anyone noticing. This one
+# cannot stop.
+#
+# Why a TTL is safe HERE when `purge_expired`'s docstring argues against one:
+# that argument is about a TTL on `purge_at`, a field code stamps LATER, where a
+# bug that stamped a live row would silently delete it. `expire_at` is written
+# once, on insert, from the posting's own date, so no later write can bring it
+# forward; and a pinned row has no `expire_at` at all, which a TTL index treats
+# as "never". `expire_aged_postings` / `purge_expired` still exist and still
+# run - they are now the belt, and they own the early purge of postings a board
+# has CLOSED, which dates alone cannot see.
+
+def retention_expiry(posted_at: Any, now: datetime) -> datetime:
+    """When a posting first seen at ``now`` stops being worth storing.
+
+    Anchored on the posting's own date, never later than ``now``: a board that
+    publishes a future date (2027-01-01 was on live data) cannot buy a longer
+    life. Floored at ``RELISTED_MIN_LIFETIME_HOURS`` for a posting that arrives
+    already past the window - see that constant.
+    """
+    anchor = now
+    posted = _safe_dt(posted_at)
+    if posted is not None and posted < now:
+        anchor = posted
+    return max(anchor + timedelta(days=MAX_INVENTORY_AGE_DAYS),
+               now + timedelta(hours=RELISTED_MIN_LIFETIME_HOURS))
+
+
+RETENTION_INDEX_NAME = "ttl_expire_at"
+
+
+def ensure_retention_index() -> str:
+    """Create the TTL index that enforces retention. Idempotent.
+
+    Called by `scripts/retention_watchdog.py` on every run, so an index dropped
+    by hand (or never created on a new cluster) is back within a day rather
+    than silently absent.
+    """
+    return _postings().create_index(
+        [("expire_at", 1)], name=RETENTION_INDEX_NAME, expireAfterSeconds=0)
+
+
+def _ceil_hour(value: datetime) -> datetime:
+    floor = value.replace(minute=0, second=0, microsecond=0)
+    return floor if floor == value else floor + timedelta(hours=1)
+
+
+def backfill_retention_expiry(*, batch: int = 5000) -> int:
+    """Give `expire_at` to every unpinned posting that lacks it.
+
+    Two populations: rows inserted before the TTL existed, and rows inserted by
+    a crawler running code older than this module (the EC2 box has run stale
+    builds before). Applies NO floor: a row that has sat past the window is
+    exactly what this is for, and the TTL monitor deletes it within a minute.
+
+    A row with no date at all is left without the field, i.e. kept. No anchor
+    means no honest expiry, and keeping one undated row is the safe mistake.
+
+    Expiries are rounded UP to the hour so a page of rows collapses into a few
+    `update_many` calls - one per distinct hour - instead of one write per row.
+    Rounding up can only keep a row slightly longer, never delete it early. The
+    pinned guard is re-applied inside each write, so a posting pinned between
+    the read and the write is skipped rather than given an expiry.
+    """
+    missing = {"expire_at": {"$exists": False}, "pinned": {"$ne": True},
+               "first_seen_at": {"$type": "date"}}
+    window = timedelta(days=MAX_INVENTORY_AGE_DAYS)
+    written, last_id = 0, None
+    while True:
+        page = dict(missing)
+        if last_id is not None:
+            page["_id"] = {"$gt": last_id}
+        rows = list(_postings().find(
+            page, {"_id": 1, "posted_at": 1, "first_seen_at": 1})
+            .sort("_id", 1).limit(max(1, int(batch))))
+        if not rows:
+            return written
+        last_id = rows[-1]["_id"]
+        by_expiry: Dict[datetime, List[Any]] = {}
+        for row in rows:
+            first = _safe_dt(row.get("first_seen_at"))
+            posted = _safe_dt(row.get("posted_at"))
+            anchor = min(posted, first) if posted else first
+            by_expiry.setdefault(_ceil_hour(anchor + window), []).append(row["_id"])
+        for expiry, ids in by_expiry.items():
+            res = _postings().update_many({"_id": {"$in": ids}, **missing},
+                                          {"$set": {"expire_at": expiry}})
+            written += int(res.modified_count or 0)
+
 
 def expire_aged_postings(
     *,

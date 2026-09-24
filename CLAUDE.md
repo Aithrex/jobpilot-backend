@@ -552,6 +552,15 @@ before it restarts — a missing dep fails loudly there rather than as a
 crash-loop under `Restart=always` while every EventBridge rule is already
 disabled, which is nothing crawling at all.
 
+> **Retention is a MongoDB TTL, not a schedule.** `job_postings.expire_at` is
+> stamped in `upsert_posting`'s **`$setOnInsert`** and removed by `pin_posting`;
+> the `ttl_expire_at` index deletes the rest. Never move `expire_at` into `$set`
+> — a re-crawl would hand a pinned (applied/saved) posting its expiry back and
+> the TTL would delete it. The EC2 runner's 05:20 sweep did not complete once
+> between 2026-09-02 and 2026-09-24 while the DB climbed to 4 GB; the daily
+> `retention-watchdog` workflow now repairs and FAILS loudly instead. See
+> `docs/ops/manual-steps.md`.
+
 > **Deploys wait for the offline suite on this SHA.** `deploy.yml` polls
 > `tests.yml` for `GITHUB_SHA` and refuses on failure, cancel, timeout, or a
 > missing run. An older green run cannot authorize a newer commit. Local

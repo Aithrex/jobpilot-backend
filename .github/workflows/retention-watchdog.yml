@@ -1,0 +1,94 @@
+# Daily retention watchdog - see scripts/retention_watchdog.py.
+#
+# Retention is enforced by a MongoDB TTL index, not by this workflow. This
+# repairs what the TTL depends on (the index, pins, missing expiries) and FAILS
+# when storage is over budget or the TTL is not actually deleting. A failed
+# scheduled run emails whoever last edited the `schedule` below; that email is
+# the alarm. The cluster reached ~4 GB twice because the mechanism that should
+# have prevented it stopped without anyone being told.
+#
+# Deliberately independent of the EC2 ingest runner and of Lambda: it is the
+# check on both, so it must not share their failure modes.
+#
+# Mongo URI: a `MONGO_URI` repository secret if one exists, otherwise the same
+# SSM parameter the Lambdas read, via the AWS keys deploy.yml already uses.
+#
+# NOTE: deploy.yml's detect-changes step treats `.github/workflows/**` as a
+# shared-layer change, so merging an edit to this file triggers a redeploy.
+name: retention-watchdog
+
+on:
+  schedule:
+    # 06:37 UTC daily: after the EC2 runner's 05:20 sweep slot, off the hour.
+    - cron: "37 6 * * *"
+  workflow_dispatch:
+    inputs:
+      max_gib:
+        description: "Fail above this many GiB (documents + indexes)"
+        required: false
+        default: "3.0"
+      apply:
+        description: "Repair before checking (uncheck for a read-only check)"
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  group: retention-watchdog
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  watchdog:
+    name: Retention watchdog
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_REGION: us-east-1
+      SSM_MONGODB_URI: /jobpilot/prod/mongodb-uri
+      DB_NAME: aspirely_db
+      USE_SSM_SECRETS: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: shared/python/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r shared/python/requirements.txt
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve Mongo URI
+        env:
+          MONGO_URI_SECRET: ${{ secrets.MONGO_URI }}
+        run: |
+          if [ -n "$MONGO_URI_SECRET" ]; then
+            uri="$MONGO_URI_SECRET"
+          elif ! uri=$(aws ssm get-parameter --name "$SSM_MONGODB_URI" \
+                --with-decryption --query Parameter.Value --output text); then
+            echo "::error::Cannot read $SSM_MONGODB_URI from SSM. Either grant the CI IAM user ssm:GetParameter (and kms:Decrypt on its key) for that parameter, or add a MONGO_URI repository secret."
+            exit 1
+          fi
+          echo "::add-mask::$uri"
+          echo "MONGO_URI=$uri" >> "$GITHUB_ENV"
+
+      - name: Run watchdog
+        env:
+          MAX_GIB: ${{ inputs.max_gib || '3.0' }}
+          APPLY: ${{ github.event_name == 'schedule' || inputs.apply }}
+        run: |
+          flags="--max-gib $MAX_GIB"
+          if [ "$APPLY" = "true" ]; then flags="--apply $flags"; fi
+          python scripts/retention_watchdog.py $flags

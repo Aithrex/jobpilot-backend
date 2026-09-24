@@ -160,64 +160,81 @@ updated for `median_tailored` and `dense_5_role`.
 > Secrets and variables -> Actions -> Variables). `gh workflow run deploy.yml
 > --ref main` bypasses it either way, and says so in the log.
 
-## Job-inventory retention — verify the EC2 sweep is running CURRENT code
+## Job-inventory retention — enforced by MongoDB, watched daily
 
-**2026-09-15.** The cluster reached ~4 GB. `job_postings` held 512,057 rows —
-2,510 MiB of documents plus 814 MiB of indexes, 82% of the database — of which
-**344,235 were active and already past the 7-day window** and 14,281 more were
-closed, past `purge_at`, and had never been deleted.
+**Nothing here needs a human to keep storage bounded.** This section is what to
+do when the watchdog emails you, and the one open question about the EC2 box.
 
-The retention code was never the problem. `job_inventory_service` implements
-the 7-day window, `pin_posting` archives anything a user applied to / saved /
-tailored, and `purge_expired` refuses to delete a pinned row whose S3 archive
-it cannot verify. None of it was draining.
+### How it works now (2026-09-24)
 
-**The sweep does NOT run on EventBridge.** It is `Runner.run_maintenance` in
-`services/ingest_runner/runner.py`, daily at **05:20 UTC** on the EC2 box
-(`MAINTENANCE_UTC`), calling `job_ingest_worker.run_maintenance` directly — so
-it writes **no `resume_jobs` row**, and an empty
-`{job_type: "job_ingest_maintenance"}` query proves nothing. The EventBridge
-rules were deliberately disabled at the 2026-09-02 EC2 cutover.
-
-The runner is alive: heartbeat `ip-172-31-6-99` was current and all four
-sources were dispatching. So the sweep is scheduled and the box is up, yet the
-backlog still grew.
-
-**Most likely cause — stale code on the box.** `Runner.MAINTENANCE_PURGE_LIMIT`
-/ `MAINTENANCE_EXPIRE_LIMIT` were raised to 50,000 on 2026-09-03 for exactly
-this reason (the constant's own comment records the backlog at 172,335 rows
-then). The runner passes those explicitly, so they override the callee's
-defaults. If the box is running a build from before that change it is still
-passing **5,000**, which the same comment measures as losing ~1,100 rows a day
-against an average of 6,134 closures. That is the observed shape. This repo has
-had this exact failure before: a build 20 hours older than `main` left 733
-postings an hour arriving unstamped while the backfill reported 100%.
-
-| Step | What | Status |
+| Piece | What it does | Runs where |
 |---|---|---|
-| Confirm the deployed revision | On the box, check the unit's build against `main`. The `deploy-ingest-runner` job ships on any push touching `shared/python/**`, `services/ingest_runner/**`, `infra/ec2/**` — confirm it ran and succeeded for the 2026-09-03 limit change and for this one. | **Check first** |
-| Confirm the sweep executes | `journalctl -u ingest-runner` around 05:20 UTC. `_guard` logs `maintenance finished in Ns` on success and `maintenance FAILED after Ns` with a traceback on failure. Neither line means it never fired. | Check |
-| Watch `retained_unarchived` | Non-zero in the result means pinned postings could not be archived to S3 and were retained. Retention will not shrink further until object storage recovers. Logged at ERROR. | Ongoing |
-| `RESUME_S3_BUCKET` | Must be set wherever the sweep runs or pinned rows are never archived and never purged. It is EMPTY in the local `.env`, so a sweep run from a laptop retains rather than archives. | Verify on the EC2 box |
+| `job_postings.expire_at` + TTL index `ttl_expire_at` | Stamped ON INSERT from the posting's own date (`retention_expiry`: posted date, never later than first seen, + `JOB_INVENTORY_MAX_AGE_DAYS`=7; floored at 24h for a posting that arrives already old). MongoDB deletes the row when it passes. | **Inside MongoDB**, every 60s. Needs nothing of ours running. |
+| Pinning | `pin_posting` removes `expire_at` in the same write that sets `pinned`. A TTL index ignores a document without the field, so an applied/saved/tailored posting can never be deleted. | Apply / save paths (live) + the watchdog (daily). |
+| `resume_jobs` feed results | `career_pages` / `workday_jobs` / `mnc_jobs` results expire after `RESUME_JOBS_FEED_TTL_HOURS`=24 instead of a week (each is ~5 MiB). | Existing `resume_jobs` TTL. |
+| `.github/workflows/retention-watchdog.yml` | Daily 06:37 UTC. Repairs (index, pins, missing expiries, closed-and-due, feed rows) then **fails** if the TTL is not deleting or the DB is over 3.0 GiB. | GitHub Actions — independent of EC2 and Lambda on purpose. |
 
-**Fixed in code alongside this note.** `expire_aged_postings` closed rows one
-`update_one` at a time, so a 50,000-row limit meant 50,000 sequential
-round-trips and the bound could not safely be raised further. It now closes in
-one bulk `update_many` per batch, writing the identical field set under the
-identical still-ACTIVE filter, so `purge_at` keeps its single-writer property.
-`job_ingest_worker.run_maintenance`'s own defaults are now 50,000 to match the
-runner (`JOB_INGEST_EXPIRE_LIMIT` / `JOB_INGEST_PURGE_LIMIT`), so the Lambda
-path is no longer the odd one out at 5,000.
+Run it by hand any time: **Actions → retention-watchdog → Run workflow**, or
+locally `python scripts/retention_watchdog.py` (check only) /
+`--apply` (repair).
 
-The one-off backlog drain is `scripts/purge_job_inventory_backlog.py` (dry run
-by default). It refuses to run while any user-attached posting is unpinned;
-`scripts/backfill_pins.py --apply` fixes that first. Neither replaces the
-scheduled sweep — they exist to get the collection back inside the window once
-it has already escaped.
+### Why it changed — twice
 
-> **Pins were silently missing.** `pin_posting` is best-effort on both live
-> paths and never raises, and tailoring never pinned at all. 65 of the 214
-> postings users were attached to carried no `pinned` flag, **32 of them
-> already older than 7 days** — the purge would have deleted exactly the rows
-> the policy exists to protect. Re-run `scripts/backfill_pins.py` after any
-> S3 outage, and before any manual drain.
+1. **2026-09-15**, ~4 GB. Diagnosed as a sweep too slow to keep up; drained
+   358,401 rows and raised its limits. That diagnosis was incomplete.
+2. **2026-09-24**, ~4 GB again. The real fact: every `aged-out` closure in the
+   collection is stamped 05:20 UTC (the old Lambda cron) and **the last one is
+   2026-09-02** — the day the crawl moved to EC2. The runner schedules the
+   sweep, receives every deploy (`Deploy ingest runner (EC2)` green on
+   2026-09-16), and did not complete it once in three weeks. Nothing errored
+   anywhere a person looks. Hence: retention no longer depends on a scheduled
+   job at all, and the thing that IS scheduled exists to shout.
+
+### When the watchdog emails you
+
+The run page lists each problem as an annotation. What they mean:
+
+| Problem | Meaning | Do |
+|---|---|---|
+| TTL index missing | Someone dropped it. `--apply` recreates it. | Re-run the workflow with *apply*. |
+| N postings past `expire_at` by > 2h | MongoDB's TTL monitor is not deleting. | Check Atlas for a paused/degraded cluster. |
+| N unpinned postings have no `expire_at` | Something inserts without it — almost certainly the EC2 box on a build older than this change. The watchdog backfills daily, so storage stays bounded, but check the box's revision. | See the EC2 question below. |
+| Over the GiB budget | Something other than postings is growing. The run summary has the top-10 table. | Look at the largest collection in the table. |
+| `Cannot read /jobpilot/prod/mongodb-uri` | The CI IAM user lacks `ssm:GetParameter` (+ `kms:Decrypt`) on it. | Grant it, **or** add a `MONGO_URI` repository secret (the workflow prefers it). |
+
+### Still open — why the EC2 sweep never runs
+
+Not needed for storage any more, but it is a silent failure on the crawl box and
+worth one look. Read-only, from a machine with the `aithrex` AWS profile:
+
+```bash
+aws ssm send-command --profile aithrex --region us-east-1 \
+  --instance-ids i-06bf0e03e60d9d409 --document-name AWS-RunShellScript \
+  --parameters 'commands=["journalctl -u ingest-runner --since \"3 days ago\" --no-pager | grep -iE \"maintenance|Traceback|Killed\" | tail -40","systemctl show ingest-runner -p ExecStart -p NRestarts"]'
+# then: aws ssm get-command-invocation --profile aithrex --region us-east-1 \
+#   --instance-id i-06bf0e03e60d9d409 --command-id <id from above>
+```
+
+`_guard` logs `maintenance finished in Ns` or `maintenance FAILED after Ns` with
+a traceback. **Neither line at 05:20** means the task was never dequeued (the
+24-worker pool is shared with shard crawls) or the process restarted first.
+
+### Scripts
+
+- `scripts/retention_watchdog.py [--apply] [--max-gib N]` — the daily job.
+- `scripts/backfill_pins.py [--apply]` — pins user-attached postings and
+  removes their expiry; the watchdog runs it.
+- `scripts/purge_job_inventory_backlog.py [--apply]` — the 2026-09-15 manual
+  drain. Superseded; kept for an emergency, refuses to run while any
+  user-attached posting is unpinned.
+
+> **Known gap:** tailoring still does not pin at write time; the watchdog pins
+> tailored postings within a day. A posting tailored in the last hours of its
+> window can expire first. `tailoring_records.jd_text` keeps the JD, so the
+> user's history still renders.
+
+> **Product conflict to decide:** the tech feed's default window is 30 days
+> (`tech_feed_service.WINDOW_DAYS_DEFAULT`), retention is 7. Anything the feed
+> would show from days 8-30 no longer exists. Raising
+> `JOB_INVENTORY_MAX_AGE_DAYS` fixes the feed and roughly multiplies
+> `job_postings` by the same factor — 30 days would not fit under 4 GB.
