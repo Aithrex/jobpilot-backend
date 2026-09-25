@@ -208,7 +208,16 @@ def _load_script(name):
     path = Path(__file__).resolve().parents[1] / "scripts" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    # The scripts call load_dotenv() at import. Under test that would pull the
+    # developer's real .env - JWT_SECRET_KEY, MONGO_URI - into the process for
+    # every test that runs afterwards. CI has no .env; a laptop does.
+    import dotenv
+    real = dotenv.load_dotenv
+    dotenv.load_dotenv = lambda *a, **k: False
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        dotenv.load_dotenv = real
     return mod
 
 

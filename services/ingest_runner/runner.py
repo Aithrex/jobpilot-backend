@@ -65,12 +65,19 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("ingest_runner")
 
 HEARTBEAT_COLLECTION = "ingest_runner_heartbeat"
+#: One row per daily job per run: started, finished, ok, error. Read by
+#: `scripts/retention_watchdog.py`. It exists because this box ran with
+#: maintenance disabled from 2026-09-02 to 2026-09-24 and its coverage job
+#: failed every morning for the same three weeks, and nothing anyone looks at
+#: said so: `_guard` logs to journald on a box nobody reads.
+DAILY_RUNS_COLLECTION = "ingest_runner_daily_runs"
+DAILY_RUNS_RETENTION = timedelta(days=90)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -279,20 +286,70 @@ class Runner:
         from services import job_ingest_worker as worker
         self._submit(
             "maintenance",
-            lambda: worker.run_maintenance(
+            self._daily("maintenance", lambda: worker.run_maintenance(
                 purge_limit=self.MAINTENANCE_PURGE_LIMIT,
                 expire_limit=self.MAINTENANCE_EXPIRE_LIMIT,
-            ),
+            )),
         )
 
     def run_coverage_snapshot(self) -> None:
         """Persist the measured coverage snapshot. Failures keep the last good one."""
         self._submit(
             "coverage_snapshot",
-            lambda: __import__(
+            self._daily("coverage_snapshot", lambda: __import__(
                 "services.coverage_snapshot_job", fromlist=["run"]
-            ).run(persist=True),
+            ).run(persist=True)),
         )
+
+    def _daily(self, name: str, fn: Callable[[], Any]) -> Callable[[], Any]:
+        """Wrap a daily job so its outcome lands in MongoDB, not only in journald.
+
+        A row is inserted when the job STARTS and completed when it ends, so the
+        three failure shapes stay distinguishable from the database alone:
+        raised (`ok: False` + error), returned a failure (`ok: False`, e.g. the
+        coverage job, which catches its own exceptions), and never finished
+        (`finished_at` missing - killed or hung). Recording is best-effort; it
+        must never be the reason a job does not run.
+        """
+        def run() -> Any:
+            rows = None
+            row_id = None
+            try:
+                from utils.db_connect import DBConnect
+                rows = DBConnect().get_db()[DAILY_RUNS_COLLECTION]
+                now = datetime.now(timezone.utc)
+                row_id = rows.insert_one({
+                    "job": name, "runner_id": self.runner_id,
+                    "started_at": now, "expire_at": now + DAILY_RUNS_RETENTION,
+                }).inserted_id
+            except Exception as exc:
+                logger.warning("daily run record failed for %s: %s",
+                               name, type(exc).__name__)
+
+            def finish(fields: Dict[str, Any]) -> None:
+                if rows is None or row_id is None:
+                    return
+                try:
+                    rows.update_one({"_id": row_id}, {"$set": {
+                        "finished_at": datetime.now(timezone.utc), **fields}})
+                except Exception as exc:
+                    logger.warning("daily run record failed for %s: %s",
+                                   name, type(exc).__name__)
+
+            try:
+                result = fn()
+            except Exception as exc:
+                finish({"ok": False, "error": type(exc).__name__,
+                        "message": str(exc)[:500]})
+                raise
+            ok = not (isinstance(result, dict) and result.get("ok") is False)
+            summary = ({k: v for k, v in result.items()
+                        if isinstance(v, (bool, int, float, str)) or v is None}
+                       if isinstance(result, dict) else {})
+            finish({"ok": ok, "error": summary.get("error") if not ok else None,
+                    "result": summary})
+            return result
+        return run
 
     # -- heartbeat ---------------------------------------------------------
     def heartbeat(self) -> None:
@@ -313,11 +370,16 @@ class Runner:
                     "pid": os.getpid(),
                     "sources": self.sources,
                     "discovery": self.discovery,
+                    # Recorded because it was NOT: `--no-maintenance` shipped
+                    # at cutover and stayed on for three weeks, invisible from
+                    # anywhere but the unit file on the box.
+                    "maintenance": self.maintenance,
                     "workers": WORKERS,
                     "inflight": self.inflight(),
                     "dispatched": dict(self.counts),
                     "updated_at": datetime.now(timezone.utc),
-                }},
+                },
+                 "$setOnInsert": {"started_at": datetime.now(timezone.utc)}},
                 upsert=True)
         except Exception as exc:
             logger.warning("heartbeat write failed: %s", type(exc).__name__)

@@ -21,12 +21,14 @@ RESTART=1
 echo "==> packaging from $HERE"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-# Only what the runner imports: the shared layer and its own package. NOT the
-# other services — a crawler box has no business holding the auth blueprints.
+# What the runner imports - the shared layer, its own package, and the scripts
+# its daily coverage job imports - plus its own systemd unit. NOT the other
+# services: a crawler box has no business holding the auth blueprints. Keep in
+# step with the `deploy-ingest-runner` job in .github/workflows/deploy.yml.
 tar -czf "$TMP/app.tar.gz" \
   -C "$HERE" \
   --exclude='__pycache__' --exclude='*.pyc' --exclude='.git' \
-  shared/python services/ingest_runner
+  shared/python services/ingest_runner infra/ec2 scripts
 
 SIZE=$(du -h "$TMP/app.tar.gz" | cut -f1)
 echo "==> uploading $SIZE to s3://$BUCKET/$KEY"

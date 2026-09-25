@@ -40,13 +40,27 @@ sudo -u jobpilot \
   /opt/jobpilot/venv/bin/python -c \
   'import services.ingest_runner.runner as r, services.job_ingest_worker as w; print("import OK; sources:", w.SOURCES)'
 
+# The 05:45 coverage job imports this from scripts/. Checked here because the
+# job catches its own exceptions: a missing module failed it every morning for
+# three weeks without once failing a deploy.
+sudo -u jobpilot \
+  env PYTHONPATH=/opt/jobpilot/app/shared/python:/opt/jobpilot/app:/opt/jobpilot/app/scripts \
+  /opt/jobpilot/venv/bin/python -c 'import employer_coverage_report; print("coverage report import OK")'
+
 if [ "${NO_RESTART:-0}" != "1" ]; then
   # The unit file itself can change (new env, new dials), so reload before
   # restarting rather than assuming only code moved.
-  if [ -f /opt/jobpilot/app/infra/ec2/ingest-runner.service ]; then
-    install -m 0644 /opt/jobpilot/app/infra/ec2/ingest-runner.service \
-      /etc/systemd/system/ingest-runner.service
+  #
+  # REQUIRED, not `if [ -f ]`. The conditional used to skip silently because
+  # the tarball never contained infra/ec2, so the box ran the cutover unit -
+  # with `--no-maintenance` - from 2026-09-02 until 2026-09-24 while every
+  # deploy reported success. A missing unit is now a failed deploy.
+  UNIT=/opt/jobpilot/app/infra/ec2/ingest-runner.service
+  if [ ! -f "$UNIT" ]; then
+    echo "FATAL: $UNIT missing from the package - refusing to restart on a stale unit" >&2
+    exit 1
   fi
+  install -m 0644 "$UNIT" /etc/systemd/system/ingest-runner.service
   systemctl daemon-reload
   systemctl restart ingest-runner
   sleep 5

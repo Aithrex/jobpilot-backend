@@ -26,6 +26,12 @@ This script exists for the two things a TTL cannot do for itself:
       the TTL monitor is not running and the index is decoration);
     * total size (documents + indexes) is under `--max-gib`.
 
+  CRAWLER - that the EC2 ingest runner's own daily jobs ran, from what it
+  records in MongoDB (`ingest_runner_heartbeat`, `ingest_runner_daily_runs`,
+  `coverage_snapshots`). Its maintenance was switched off by a `--no-maintenance`
+  in a systemd unit that no deploy ever replaced, and its coverage job failed
+  every morning on a missing module - for three weeks, with every deploy green.
+
     python scripts/retention_watchdog.py                   # check only, writes nothing
     python scripts/retention_watchdog.py --apply           # repair, then check (CI)
     python scripts/retention_watchdog.py --apply --max-gib 2.5
@@ -66,6 +72,14 @@ OVERDUE_TOLERANCE = 1000
 #: all (kept on purpose). A large number means something is inserting without
 #: the field faster than this job repairs it.
 UNEXPIRING_TOLERANCE = 5000
+#: The runner heartbeats every minute; half an hour of silence is a dead crawl.
+HEARTBEAT_STALE = timedelta(minutes=30)
+#: Daily jobs: a day plus slack for a slow run.
+DAILY_STALE = timedelta(hours=26)
+#: A run that started this long ago and never finished was killed or is hung.
+DAILY_HUNG = timedelta(hours=2)
+#: Coverage is served with its age; the product calls it stale past a day.
+COVERAGE_STALE = timedelta(hours=30)
 
 
 def _load_pin_backfill():
@@ -92,6 +106,63 @@ def shorten_feed_results(db, now: datetime) -> int:
                 {"_id": row["_id"]}, {"$set": {"expire_at": max(due, now)}}
             ).modified_count
     return fixed
+
+
+def crawler_checks(db, now: datetime):
+    """Did the EC2 runner's daily jobs actually run? Returns (lines, problems)."""
+    lines, problems = [], []
+    hb = db.ingest_runner_heartbeat.find_one(sort=[("updated_at", -1)])
+    if not hb:
+        return ["- crawler heartbeat: **none recorded**"], [
+            "the ingest runner has never written a heartbeat"]
+    beat = inv._safe_dt(hb.get("updated_at"))
+    started = inv._safe_dt(hb.get("started_at"))
+    age = now - beat if beat else None
+    lines.append(f"- crawler heartbeat: {age and str(age).split('.')[0]} ago "
+                 f"(`{hb.get('runner_id')}`)")
+    if age is None or age > HEARTBEAT_STALE:
+        problems.append(f"the ingest runner's last heartbeat was {age} ago - "
+                        "the crawl is not running")
+
+    enabled = hb.get("maintenance")
+    lines.append(f"- runner maintenance: **{ {True: 'enabled', False: 'DISABLED'}.get(enabled, 'unknown (older runner build)') }**")
+    if enabled is False:
+        problems.append("the ingest runner is running with --no-maintenance; "
+                        "check the systemd unit on the box")
+
+    last = db.ingest_runner_daily_runs.find_one({"job": "maintenance"},
+                                                sort=[("started_at", -1)])
+    last_ok = db.ingest_runner_daily_runs.find_one(
+        {"job": "maintenance", "ok": True}, sort=[("started_at", -1)])
+    if last:
+        ran = inv._safe_dt(last.get("started_at"))
+        state = ("running" if "finished_at" not in last
+                 else "ok" if last.get("ok") else f"FAILED ({last.get('error')})")
+        lines.append(f"- last runner maintenance: {ran:%Y-%m-%d %H:%M} UTC, {state}")
+        if last.get("finished_at") is None and now - ran > DAILY_HUNG:
+            problems.append(f"runner maintenance started {ran:%Y-%m-%d %H:%M} UTC "
+                            "and never finished - killed or hung")
+        elif last.get("ok") is False:
+            problems.append(f"runner maintenance failed: {last.get('error')}: "
+                            f"{last.get('message', '')}".rstrip(": "))
+    else:
+        lines.append("- last runner maintenance: none recorded yet")
+    ok_at = inv._safe_dt((last_ok or {}).get("started_at"))
+    runner_old_enough = started is not None and now - started > DAILY_STALE
+    if enabled is not False and runner_old_enough and (
+            ok_at is None or now - ok_at > DAILY_STALE):
+        problems.append("no successful runner maintenance in the last "
+                        f"{DAILY_STALE}; last success: {ok_at or 'never recorded'}")
+
+    snap = db.coverage_snapshots.find_one(sort=[("measured_at", -1)])
+    measured = inv._safe_dt((snap or {}).get("measured_at"))
+    lines.append(f"- coverage snapshot: {measured:%Y-%m-%d %H:%M} UTC" if measured
+                 else "- coverage snapshot: none")
+    if measured is None or now - measured > COVERAGE_STALE:
+        run = db.coverage_snapshot_runs.find_one(sort=[("at", -1)]) or {}
+        problems.append(f"the coverage snapshot is {now - measured if measured else 'missing'} "
+                        f"old; last run: {run.get('status')} {run.get('error') or ''}".rstrip())
+    return lines, problems
 
 
 def _sizes(db):
@@ -131,6 +202,8 @@ def run(*, apply: bool, max_gib: float) -> int:
         step("expiry backfilled", inv.backfill_retention_expiry)
         step("closed & due purged", lambda: inv.purge_expired(limit=500_000, now=now))
         step("feed results re-stamped", lambda: shorten_feed_results(db, now))
+        step("runner daily-run TTL", lambda: db.ingest_runner_daily_runs.create_index(
+            [("expire_at", 1)], name="ttl_expire_at", expireAfterSeconds=0))
 
     lines.append("### Checks")
     postings = db.job_postings
@@ -161,6 +234,11 @@ def run(*, apply: bool, max_gib: float) -> int:
     if pinned_expiring:
         problems.append(f"{pinned_expiring:,} pinned postings carry expire_at "
                         "and WILL be deleted - run with --apply")
+
+    lines.append("### Crawler (EC2 ingest runner)")
+    c_lines, c_problems = crawler_checks(db, now)
+    lines += c_lines
+    problems += c_problems
 
     stats, rows = _sizes(db)
     total = stats.get("dataSize", 0) + stats.get("indexSize", 0)

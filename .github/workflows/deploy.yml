@@ -45,7 +45,7 @@ jobs:
             # infra/ec2/deploy-ingest-runner.sh), so this filter mirrors the
             # tarball rather than guessing at imports -- the same lesson the
             # executor filter above learned the hard way.
-            ingest:  ['services/ingest_runner/**', 'shared/python/**', 'infra/ec2/**']
+            ingest:  ['services/ingest_runner/**', 'shared/python/**', 'infra/ec2/**', 'scripts/**']
             auth:    ['services/auth/**']
             jobs:    ['services/jobs/**']
             resume:  ['services/resume/**']
@@ -280,9 +280,16 @@ jobs:
           # EXACTLY what infra/ec2/deploy-ingest-runner.sh packages. The other
           # services stay off the box on purpose: a crawler has no business
           # holding the auth blueprints.
+          #
+          # `infra/ec2` carries the systemd unit and `scripts` the coverage
+          # report the 05:45 job imports. Neither was packaged until 2026-09-24:
+          # the installer's `if [ -f unit ]` quietly skipped, so the box kept
+          # the cutover unit's `--no-maintenance` for three weeks and the
+          # coverage job failed ModuleNotFoundError every morning - with this
+          # job green on every push.
           tar -czf app.tar.gz \
             --exclude='__pycache__' --exclude='*.pyc' --exclude='.git' \
-            shared/python services/ingest_runner
+            shared/python services/ingest_runner infra/ec2 scripts
           echo "packaged $(du -h app.tar.gz | cut -f1)"
           aws s3 cp app.tar.gz "s3://${DEPLOY_BUCKET}/${KEY_PREFIX}/app.tar.gz" \
             --only-show-errors

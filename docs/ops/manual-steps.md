@@ -198,26 +198,42 @@ The run page lists each problem as an annotation. What they mean:
 |---|---|---|
 | TTL index missing | Someone dropped it. `--apply` recreates it. | Re-run the workflow with *apply*. |
 | N postings past `expire_at` by > 2h | MongoDB's TTL monitor is not deleting. | Check Atlas for a paused/degraded cluster. |
-| N unpinned postings have no `expire_at` | Something inserts without it — almost certainly the EC2 box on a build older than this change. The watchdog backfills daily, so storage stays bounded, but check the box's revision. | See the EC2 question below. |
+| N unpinned postings have no `expire_at` | Something inserts without it — almost certainly the EC2 box on a build older than this change. The watchdog backfills daily, so storage stays bounded, but check the box's revision. | Check the last `Deploy ingest runner (EC2)` job. |
+| runner running with `--no-maintenance` / maintenance failed / never finished | Read from `ingest_runner_heartbeat` and `ingest_runner_daily_runs`; the problem text carries the error. | Fix the error; for the flag, check `/etc/systemd/system/ingest-runner.service` on the box. |
+| coverage snapshot stale | The 05:45 job has not persisted; the problem text carries its last error from `coverage_snapshot_runs`. | Same. `python scripts/employer_coverage_report.py --persist` refreshes it by hand. |
+| crawler heartbeat stale | The runner is not running. | `systemctl status ingest-runner` on the box. |
 | Over the GiB budget | Something other than postings is growing. The run summary has the top-10 table. | Look at the largest collection in the table. |
 | `Cannot read /jobpilot/prod/mongodb-uri` | The CI IAM user lacks `ssm:GetParameter` (+ `kms:Decrypt`) on it. | Grant it, **or** add a `MONGO_URI` repository secret (the workflow prefers it). |
 
-### Still open — why the EC2 sweep never runs
+### Resolved — why the EC2 sweep never ran (2026-09-24)
 
-Not needed for storage any more, but it is a silent failure on the crawl box and
-worth one look. Read-only, from a machine with the `aithrex` AWS profile:
+**The box ran with `--no-maintenance` from the cutover until this fix.** The
+cutover unit (`a77290f`) hard-coded it in `ExecStart`; `70bf259` removed it the
+next day, in the repo only. Neither deploy path packaged `infra/ec2`, and the
+installer replaced the unit `if [ -f ]` — always false, silently skipped. So
+the box never received a unit edit, and the Lambda sweep had already been
+disabled at cutover: retention was owned by nothing for three weeks.
 
-```bash
-aws ssm send-command --profile aithrex --region us-east-1 \
-  --instance-ids i-06bf0e03e60d9d409 --document-name AWS-RunShellScript \
-  --parameters 'commands=["journalctl -u ingest-runner --since \"3 days ago\" --no-pager | grep -iE \"maintenance|Traceback|Killed\" | tail -40","systemctl show ingest-runner -p ExecStart -p NRestarts"]'
-# then: aws ssm get-command-invocation --profile aithrex --region us-east-1 \
-#   --instance-id i-06bf0e03e60d9d409 --command-id <id from above>
-```
+The same packaging gap failed the **05:45 coverage snapshot every morning since
+2026-09-04** (`ModuleNotFoundError: employer_coverage_report` — it lives in
+`scripts/`), so the product's coverage figures went three weeks stale. That one
+was provable from the database without the box: `coverage_snapshot_runs` held
+nineteen consecutive `failed` rows.
 
-`_guard` logs `maintenance finished in Ns` or `maintenance FAILED after Ns` with
-a traceback. **Neither line at 05:20** means the task was never dequeued (the
-24-worker pool is shared with shard crawls) or the process restarted first.
+How it was pinned down without reading the box: the scheduler fires on time
+(shard runs start at every tick minute around 05:20); `Runner.poll` submits
+maintenance at 05:20 when driven with a fake clock; the maintenance function
+and the runner's pool path both succeed locally (27.9s); 13,912 closed rows sat
+past `purge_at` for a week (a single sweep deletes them all); and the unit's
+only non-comment changes since cutover are removing `--no-maintenance` and
+raising the limits.
+
+Fixed by: packaging `infra/ec2` + `scripts` in both deploy paths; the
+installer REQUIRING the unit and import-checking the coverage module; the runner
+writing its `maintenance` flag into the heartbeat and every daily job's outcome
+into `ingest_runner_daily_runs` (started / finished / ok / error); and the
+watchdog failing on a disabled flag, a failed or unfinished run, no success in
+26h, a stale coverage snapshot, or a silent heartbeat.
 
 ### Scripts
 

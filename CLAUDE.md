@@ -541,8 +541,19 @@ sources plus discovery and every matching EventBridge rule disabled. Lambda's
 > the box, **733 postings an hour were arriving unstamped** while the backfill
 > reported 100% attribution. Nothing errored. The `deploy-ingest-runner` job
 > now ships it on every push that touches `shared/python/**`,
-> `services/ingest_runner/**` or `infra/ec2/**` — the same three trees the
-> tarball contains.
+> `services/ingest_runner/**`, `infra/ec2/**` or `scripts/**` — the same four
+> trees the tarball contains.
+>
+> **That sentence said "three trees" and was false for three weeks.** The
+> tarball held only `shared/python` and `services/ingest_runner`; the installer
+> replaced the systemd unit `if [ -f ]`, which never was. So the box kept the
+> cutover unit — `--no-maintenance` hard-coded — from 2026-09-02 to
+> 2026-09-24, retention was owned by nothing, and the 05:45 coverage job
+> (which imports `scripts/employer_coverage_report.py`) failed
+> `ModuleNotFoundError` every morning. Every deploy was green. The installer
+> now REQUIRES the unit and import-checks the coverage module, and the runner
+> records each daily job in `ingest_runner_daily_runs` and its
+> `maintenance` flag in the heartbeat, which `retention-watchdog` checks.
 
 Deployment is over **SSM, not SSH**: no inbound port, no key material in CI.
 `infra/ec2/install-ingest-runner.sh` is the single installer both the CI job
@@ -556,10 +567,10 @@ disabled, which is nothing crawling at all.
 > stamped in `upsert_posting`'s **`$setOnInsert`** and removed by `pin_posting`;
 > the `ttl_expire_at` index deletes the rest. Never move `expire_at` into `$set`
 > — a re-crawl would hand a pinned (applied/saved) posting its expiry back and
-> the TTL would delete it. The EC2 runner's 05:20 sweep did not complete once
-> between 2026-09-02 and 2026-09-24 while the DB climbed to 4 GB; the daily
-> `retention-watchdog` workflow now repairs and FAILS loudly instead. See
-> `docs/ops/manual-steps.md`.
+> the TTL would delete it. The EC2 runner's 05:20 sweep did not run once
+> between 2026-09-02 and 2026-09-24 (see the deploy note above) while the DB
+> climbed to 4 GB; the daily `retention-watchdog` workflow now repairs and
+> FAILS loudly instead. See `docs/ops/manual-steps.md`.
 
 > **Deploys wait for the offline suite on this SHA.** `deploy.yml` polls
 > `tests.yml` for `GITHUB_SHA` and refuses on failure, cancel, timeout, or a
