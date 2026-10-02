@@ -483,8 +483,14 @@ def get_title_seed():
     user_email = get_jwt_identity()
     try:
         from services.job_title_seed import public_title_seed
+        from services import experience_view
 
-        return jsonify(public_title_seed(user_email)), 200
+        payload = public_title_seed(user_email)
+        # The levels the board OPENS on (`{levels, source, years, preference}`,
+        # `levels: []` = all). Here because this is the call the board already
+        # makes on load; `for_user` never raises.
+        payload["experience_view"] = experience_view.for_user(user_email)
+        return jsonify(payload), 200
     except Exception as e:
         logger.error(f"title-seed error: {e}")
         return jsonify({"error": "Failed to load job titles"}), 500
