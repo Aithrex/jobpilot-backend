@@ -85,6 +85,25 @@ class TestTheRunnerRecordsItsDailyJobs:
         assert hb["maintenance"] is False
         assert hb["started_at"]
 
+    def test_the_heartbeat_says_which_build_is_running(self, mock_db, tmp_path, monkeypatch):
+        """A deploy is confirmed by the box reporting the SHA it was handed,
+        not by the installer exiting 0 - the box ran a 20-hour-old build once
+        while every deploy was green."""
+        (tmp_path / "REVISION").write_text("f5d672e0abc\n")
+        monkeypatch.setattr(R, "REVISION_FILE", tmp_path / "REVISION")
+        r = R.Runner(["icims"], maintenance=True)
+        try:
+            r.heartbeat()
+        finally:
+            r.pool.shutdown(wait=False)
+            r.discovery_pool.shutdown(wait=False)
+        hb = mock_db.ingest_runner_heartbeat.find_one({"runner_id": r.runner_id})
+        assert hb["revision"] == "f5d672e0abc"
+
+    def test_a_missing_revision_file_reads_unknown(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(R, "REVISION_FILE", tmp_path / "nope")
+        assert R.read_revision() == "unknown"
+
     def test_maintenance_is_scheduled_through_the_recorder(self, runner, mock_db, monkeypatch):
         from services import job_ingest_worker as worker
         monkeypatch.setattr(worker, "run_maintenance",

@@ -17,13 +17,26 @@ KEY="${DEPLOY_KEY:-deploy/ingest-runner/app.tar.gz}"
 
 install -d -o jobpilot -g jobpilot /opt/jobpilot/app /var/log/jobpilot
 
-# boto3 resolves credentials from the instance profile; no keys on disk.
-sudo -u jobpilot /opt/jobpilot/venv/bin/python - <<PY
+if [ -n "${APP_SRC:-}" ]; then
+  # Off-AWS hosts (infra/oracle/pull-deploy.sh) install from a git checkout.
+  # SAME four trees the S3 tarball carries, so both hosts run the same files.
+  tar -czf /tmp/app.tar.gz -C "$APP_SRC" \
+    --exclude='__pycache__' --exclude='*.pyc' --exclude='.git' \
+    shared/python services/ingest_runner infra/ec2 scripts
+  chown jobpilot /tmp/app.tar.gz
+else
+  # boto3 resolves credentials from the instance profile; no keys on disk.
+  sudo -u jobpilot /opt/jobpilot/venv/bin/python - <<PY
 import boto3
 boto3.client("s3").download_file("${BUCKET}", "${KEY}", "/tmp/app.tar.gz")
 PY
+fi
 sudo -u jobpilot tar -xzf /tmp/app.tar.gz -C /opt/jobpilot/app
 rm -f /tmp/app.tar.gz
+# Read by the runner into its heartbeat, which is how a deploy is confirmed.
+if [ -n "${REVISION:-}" ]; then
+  echo "$REVISION" | sudo -u jobpilot tee /opt/jobpilot/app/REVISION >/dev/null
+fi
 
 # Install the SHARED requirements, not a hand-listed subset: the runner imports
 # the same tree the Lambda layer ships, so guessing the subset is how you find

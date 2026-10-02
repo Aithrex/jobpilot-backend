@@ -1,0 +1,10 @@
+[Unit]
+Description=JobPilot ingest runner - check for a new deploy every 2 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=2min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -66,11 +66,24 @@ import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("ingest_runner")
 
 HEARTBEAT_COLLECTION = "ingest_runner_heartbeat"
+#: Written by `infra/ec2/install-ingest-runner.sh` next to `shared/` and
+#: `services/`. Reported in the heartbeat so a deploy can be CONFIRMED from
+#: Mongo (the box answers with the SHA it is running) rather than inferred
+#: from an installer that exited 0.
+REVISION_FILE = Path(__file__).resolve().parents[2] / "REVISION"
+
+
+def read_revision() -> str:
+    try:
+        return REVISION_FILE.read_text(encoding="utf-8").strip()[:64] or "unknown"
+    except OSError:
+        return "unknown"
 #: One row per daily job per run: started, finished, ok, error. Read by
 #: `scripts/retention_watchdog.py`. It exists because this box ran with
 #: maintenance disabled from 2026-09-02 to 2026-09-24 and its coverage job
@@ -374,6 +387,7 @@ class Runner:
                     # at cutover and stayed on for three weeks, invisible from
                     # anywhere but the unit file on the box.
                     "maintenance": self.maintenance,
+                    "revision": read_revision(),
                     "workers": WORKERS,
                     "inflight": self.inflight(),
                     "dispatched": dict(self.counts),
