@@ -665,3 +665,25 @@ def test_fetch_once_reads_employment_type_the_way_it_was_stored(db):
     row = {"title": "Senior Backend Engineer (Remote)", "employment_type": "FULL_TIME",
            "locations": ["Austin, TX, USA"]}
     assert w._listing_implies_same_content(existing, row) is True
+
+
+def test_restore_puts_back_an_offloaded_body_and_its_hash(db):
+    import importlib.util, pathlib
+    p = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "restore_wiped_bodies.py"
+    spec = importlib.util.spec_from_file_location("restore_wiped_bodies", p)
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    old = "c" * 64
+    db.job_postings.insert_one({"source": "workday", "source_job_id": "W1", "status": "active",
+                                "description_ref": None, "description_text": "",
+                                "content_hash": "d" * 64,
+                                "requirements": {"source_content_hash": old, "text_length": 900}})
+    doc = db.job_postings.find_one({"source_job_id": "W1"})
+    store = {old: "Original body: 3+ years of experience."}
+    assert mod.restore_one(db.job_postings, doc, store.get, apply=False)[0] == "restorable"
+    assert mod.restore_one(db.job_postings, doc, store.get, apply=True)[0] == "restored"
+    after = db.job_postings.find_one({"source_job_id": "W1"})
+    assert after["description_ref"] == old and after["content_hash"] == old
+    assert after["description_chars"] == len(store[old])
+    # never over a body that arrived meanwhile
+    assert mod.restore_one(db.job_postings, doc, store.get, apply=True)[0] == "changed_meanwhile"
+    assert mod.restore_one(db.job_postings, {"_id": 1, "requirements": {}}, store.get, apply=True)[0] == "no_hash"

@@ -181,6 +181,20 @@ LEASE_TTL_SECONDS = 900           # 15 min: > the 110s fetch budget, < a schedul
 # than that is not servable and only costs storage. Closed postings get a short
 # grace so a board that flickers does not lose its rows, then go too.
 MAX_INVENTORY_AGE_DAYS = _env_int("JOB_INVENTORY_MAX_AGE_DAYS", 7)
+#: Intern and entry postings are kept 30 days, everything else 7 (product
+#: decision 2026-10-02). Cross-matching an early-career candidate against 100
+#: entry-level roles taken straight from employers' boards, 93 were missing:
+#: still open, but published more than 7 days earlier. New-grad roles stay
+#: open for weeks; the 7-day window was cutting most of them.
+EARLY_CAREER_LEVELS = frozenset({"intern", "entry"})
+EARLY_CAREER_MAX_AGE_DAYS = _env_int("JOB_INVENTORY_EARLY_CAREER_MAX_AGE_DAYS", 30)
+
+
+def max_age_days_for(seniority: Any) -> int:
+    """How long a posting at this level stays in the inventory."""
+    if str(seniority or "").strip().lower() in EARLY_CAREER_LEVELS:
+        return max(EARLY_CAREER_MAX_AGE_DAYS, MAX_INVENTORY_AGE_DAYS)
+    return MAX_INVENTORY_AGE_DAYS
 RETENTION_DAYS_AFTER_CLOSE = _env_int("JOB_INVENTORY_RETENTION_DAYS", 2)
 #: Rows closed per `update_many` in `expire_aged_postings`. Bounded so one
 #: statement cannot sit on the collection for an unbounded stretch; the sweep
@@ -1142,7 +1156,7 @@ def upsert_posting(
             # ON INSERT ONLY. In `$set` a re-crawl would hand a pinned posting
             # its expiry back, and the TTL index would delete a job somebody
             # applied to. See `retention_expiry`.
-            "expire_at": retention_expiry(doc.get("posted_at"), now),
+            "expire_at": retention_expiry(doc.get("posted_at"), now, doc.get("seniority")),
         },
         # A posting re-observed as live must NOT keep a retention stamp.
         # (purge_at is absent from $set, so there is no operator conflict.)
@@ -1294,11 +1308,13 @@ def mark_requirements_parsed(
     # body can mention many roles ("you will partner with our nursing staff").
     body_family = _safe_family(payload.get("role_family"))
     job_level = stored["job_level"]
+    level_expiry: Optional[datetime] = None
     if body_family or job_level:
         doc = _postings().find_one(
             {"source": _safe_key(source, 60),
              "source_job_id": _safe_str(source_job_id, 200)},
-            {"_id": 0, "role_family": 1, "tech": 1},
+            {"_id": 0, "role_family": 1, "tech": 1, "seniority": 1,
+             "posted_at": 1, "first_seen_at": 1},
         ) or {}
         if body_family and doc and (doc.get("role_family") or "other") == "other":
             update["role_family"] = body_family
@@ -1313,19 +1329,24 @@ def mark_requirements_parsed(
         # blanks a level the posting already carries.
         if job_level:
             update["seniority"] = job_level
+            if job_level != doc.get("seniority"):
+                # The retention window follows the level (`max_age_days_for`).
+                # Applied as its own write, below, guarded so a PINNED posting
+                # - which carries no `expire_at` by design - is never given one.
+                level_expiry = retention_expiry(
+                    doc.get("posted_at") or doc.get("first_seen_at"), now, job_level)
             if isinstance(doc.get("tech"), dict):
                 update["tech.seniority"] = job_level
                 if stored["required_years"] is not None:
                     update["tech.required_years_min"] = stored["required_years"]
 
-    res = _postings().update_one(
-        {
-            "source": _safe_key(source, 60),
-            "source_job_id": _safe_str(source_job_id, 200),
-            "content_hash": ch,
-        },
-        {"$set": update},
-    )
+    key = {"source": _safe_key(source, 60),
+           "source_job_id": _safe_str(source_job_id, 200)}
+    res = _postings().update_one({**key, "content_hash": ch}, {"$set": update})
+    if res.matched_count and level_expiry is not None:
+        _postings().update_one(
+            {**key, "expire_at": {"$exists": True}, "pinned": {"$ne": True}},
+            {"$set": {"expire_at": level_expiry}})
     return bool(res.matched_count)
 
 
@@ -1538,7 +1559,7 @@ def is_pinned(job_id: str) -> bool:
 # run - they are now the belt, and they own the early purge of postings a board
 # has CLOSED, which dates alone cannot see.
 
-def retention_expiry(posted_at: Any, now: datetime) -> datetime:
+def retention_expiry(posted_at: Any, now: datetime, seniority: Any = None) -> datetime:
     """When a posting first seen at ``now`` stops being worth storing.
 
     Anchored on the posting's own date, never later than ``now``: a board that
@@ -1550,7 +1571,7 @@ def retention_expiry(posted_at: Any, now: datetime) -> datetime:
     posted = _safe_dt(posted_at)
     if posted is not None and posted < now:
         anchor = posted
-    return max(anchor + timedelta(days=MAX_INVENTORY_AGE_DAYS),
+    return max(anchor + timedelta(days=max_age_days_for(seniority)),
                now + timedelta(hours=RELISTED_MIN_LIFETIME_HOURS))
 
 
@@ -1592,14 +1613,13 @@ def backfill_retention_expiry(*, batch: int = 5000) -> int:
     """
     missing = {"expire_at": {"$exists": False}, "pinned": {"$ne": True},
                "first_seen_at": {"$type": "date"}}
-    window = timedelta(days=MAX_INVENTORY_AGE_DAYS)
     written, last_id = 0, None
     while True:
         page = dict(missing)
         if last_id is not None:
             page["_id"] = {"$gt": last_id}
         rows = list(_postings().find(
-            page, {"_id": 1, "posted_at": 1, "first_seen_at": 1})
+            page, {"_id": 1, "posted_at": 1, "first_seen_at": 1, "seniority": 1})
             .sort("_id", 1).limit(max(1, int(batch))))
         if not rows:
             return written
@@ -1609,6 +1629,7 @@ def backfill_retention_expiry(*, batch: int = 5000) -> int:
             first = _safe_dt(row.get("first_seen_at"))
             posted = _safe_dt(row.get("posted_at"))
             anchor = min(posted, first) if posted else first
+            window = timedelta(days=max_age_days_for(row.get("seniority")))
             by_expiry.setdefault(_ceil_hour(anchor + window), []).append(row["_id"])
         for expiry, ids in by_expiry.items():
             res = _postings().update_many({"_id": {"$in": ids}, **missing},
@@ -1651,8 +1672,15 @@ def expire_aged_postings(
     not the invariant.
     """
     now = now or _now()
-    limit_days = MAX_INVENTORY_AGE_DAYS if max_age_days is None else int(max_age_days)
-    cutoff = now - timedelta(days=max(0, limit_days))
+
+    def _older_than(days: int) -> Dict[str, Any]:
+        cutoff = now - timedelta(days=max(0, int(days)))
+        return {"$or": [
+            {"posted_at": {"$lt": cutoff}},
+            {"posted_at": None, "first_seen_at": {"$lt": cutoff}},
+            {"posted_at": {"$exists": False}, "first_seen_at": {"$lt": cutoff}},
+        ]}
+
     # A posting with NO `posted_at` ages out on `first_seen_at` instead.
     #
     # `posted_at < cutoff` never matches a null, so an undated posting could
@@ -1662,13 +1690,18 @@ def expire_aged_postings(
     # of them first seen more than a week earlier. 96.1% of live postings state
     # no work mode and 43.3% no seniority, so "the provider omitted a field" is
     # the normal case here, not the exceptional one.
-    aged = {"status": STATUS_ACTIVE,
-            "$or": [
-                {"posted_at": {"$lt": cutoff}},
-                {"posted_at": None, "first_seen_at": {"$lt": cutoff}},
-                {"posted_at": {"$exists": False},
-                 "first_seen_at": {"$lt": cutoff}},
-            ]}
+    if max_age_days is not None:
+        aged = {"status": STATUS_ACTIVE, **_older_than(max_age_days)}
+    else:
+        # Per level: intern/entry keep `EARLY_CAREER_MAX_AGE_DAYS`, the rest
+        # `MAX_INVENTORY_AGE_DAYS` (see `max_age_days_for`).
+        early = sorted(EARLY_CAREER_LEVELS)
+        aged = {"status": STATUS_ACTIVE, "$or": [
+            {"$and": [{"seniority": {"$nin": early}},
+                      _older_than(max_age_days_for(None))]},
+            {"$and": [{"seniority": {"$in": early}},
+                      _older_than(max_age_days_for("entry"))]},
+        ]}
     closure = {"$set": {
         "status": STATUS_CLOSED,
         "active": False,
@@ -1842,6 +1875,9 @@ def get_postings_map(source: str, source_job_ids: Iterable[str],
                   "title_normalized": 1, "employment_type": 1, "locations": 1,
                   "description_chars": 1, "description_ref": 1,
                   "normalization_version": 1,
+                  # `_admit_by_age` keeps an aged row the inventory already
+                  # knows is early-career (see EARLY_CAREER_MAX_AGE_DAYS).
+                  "seniority": 1,
                   # The fetch-once check reads requirements.extractor_version.
                   # Projected as the WHOLE subdocument rather than a dotted
                   # path: mongomock's dotted-projection support has varied

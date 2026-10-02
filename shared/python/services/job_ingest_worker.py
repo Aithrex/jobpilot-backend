@@ -2257,9 +2257,59 @@ def fetch_detail(row: Dict[str, Any], member: Dict[str, Any], *, policy: HostPol
 # The shard run
 # ---------------------------------------------------------------------------
 
+def _aware(value: Any) -> Optional[datetime]:
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _admit_by_age(rows: List[Tuple[Dict[str, Any], Dict[str, Any]]],
+                  existing_by_id: Dict[str, Dict[str, Any]], *,
+                  fresh_cutoff: datetime
+                  ) -> Tuple[List[Tuple[Dict[str, Any], Dict[str, Any]]], int]:
+    """`(rows to process, rows dropped)` after the listing read back to the
+    EARLY-CAREER window.
+
+    Listing now reads back `inv.EARLY_CAREER_MAX_AGE_DAYS` (30), because intern
+    and entry postings are kept that long. A row older than the general 7-day
+    window is admitted only when it is early-career: its TITLE says so, or the
+    inventory already holds it at that level (read from its body when it was
+    fresh). Everything else ages out exactly as before. Undated rows are not an
+    age question and pass through unchanged.
+    """
+    from services import fit_score
+
+    kept: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    dropped = 0
+    for member, row in rows:
+        posted = _aware(row.get("posted_at"))
+        if posted is not None and posted < fresh_cutoff:
+            stored_level = (existing_by_id.get(row.get("source_job_id")) or {}).get("seniority")
+            title_level = fit_score.title_level(row.get("title") or "")
+            if (stored_level not in inv.EARLY_CAREER_LEVELS
+                    and title_level not in inv.EARLY_CAREER_LEVELS):
+                dropped += 1
+                continue
+        kept.append((member, row))
+    return kept, dropped
+
+
+def _inside_listing_window(posted_at: Any, seniority: Any, fresh_cutoff: datetime,
+                           early_cutoff: datetime) -> bool:
+    """Whether a posting this old is still one the listing would re-see, so
+    not re-seeing it means it is gone. Early-career postings are listed back
+    to `early_cutoff`, the rest to `fresh_cutoff`."""
+    posted = _aware(posted_at)
+    if posted is None:
+        return True
+    cutoff = early_cutoff if str(seniority or "") in inv.EARLY_CAREER_LEVELS else fresh_cutoff
+    return posted >= cutoff
+
+
 def _close_stale_in_shard(source: str, censused_keys: set, *, cutoff_seen: datetime,
                           fresh_cutoff: datetime, run_id: str,
-                          now: datetime, limit: int = 200) -> int:
+                          now: datetime, limit: int = 200,
+                          early_cutoff: Optional[datetime] = None) -> int:
     """Close postings this shard is responsible for that the run did not re-see.
 
     Two guards make this safe under the early-stop rule:
@@ -2289,12 +2339,9 @@ def _close_stale_in_shard(source: str, censused_keys: set, *, cutoff_seen: datet
         doc = inv.get_posting(source, source_job_id)
         if not doc:
             continue
-        posted_at = doc.get("posted_at")
-        if isinstance(posted_at, datetime):
-            if posted_at.tzinfo is None:
-                posted_at = posted_at.replace(tzinfo=timezone.utc)
-            if posted_at < fresh_cutoff:
-                continue  # aged out of the listing window, not actually gone
+        if not _inside_listing_window(doc.get("posted_at"), doc.get("seniority"),
+                                      fresh_cutoff, early_cutoff or fresh_cutoff):
+            continue  # aged out of the listing window, not actually gone
         if inv.close_posting(source, source_job_id, reason="not_seen", now=now):
             closed += 1
     if closed:
@@ -2361,6 +2408,10 @@ def run_shard(
     budget = float(budget_seconds if budget_seconds is not None else SHARD_BUDGET_SECONDS)
     deadline = started + max(1.0, budget)
     fresh_cutoff = now - timedelta(days=max(0, int(max_age_days)))
+    # Listing reads back to the EARLY-CAREER window; `_admit_by_age` then keeps
+    # only early-career rows older than `fresh_cutoff`.
+    early_cutoff = min(fresh_cutoff,
+                       now - timedelta(days=max(0, int(inv.EARLY_CAREER_MAX_AGE_DAYS))))
 
     # `now` is threaded through every state write so a run is deterministic:
     # the lease expiry, the backoff window and the posting timestamps must all
@@ -2387,7 +2438,7 @@ def run_shard(
         listed_keys: set = set()
         rows: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
         listing = run_bounded(
-            lambda m: list_member(m, cutoff=fresh_cutoff, policy=policy,
+            lambda m: list_member(m, cutoff=early_cutoff, policy=policy,
                                   deadline=deadline, stop=stop, now=now),
             members, max_workers=listing_workers, deadline=deadline, stop=stop)
         # Two different sets, and conflating them deletes inventory:
@@ -2424,6 +2475,9 @@ def run_shard(
         # wall clock and starve the detail fetches that actually add inventory.
         existing_by_id = inv.get_postings_map(
             src, [row["source_job_id"] for _m, row in rows])
+        rows, aged_out = _admit_by_age(rows, existing_by_id, fresh_cutoff=fresh_cutoff)
+        if aged_out:
+            counts["aged_not_early_career"] += aged_out
 
         touch_ids: List[str] = []
         needs_detail: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
@@ -2564,7 +2618,7 @@ def run_shard(
                                               "rows": len(rows)}, now=now)
         closed = _close_stale_in_shard(src, censused_keys, cutoff_seen=now,
                                        fresh_cutoff=fresh_cutoff, run_id=run_id,
-                                       now=now)
+                                       now=now, early_cutoff=early_cutoff)
         counts["closed"] += closed
 
         if members and not listed_keys:
