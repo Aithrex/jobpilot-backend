@@ -527,11 +527,23 @@ later postings out of the `MAX_ORDERED` window into date order: JPMorgan holds
 
 ## Where the code actually runs (it is not all Lambda)
 
-**Five Lambdas and one EC2 box.** The four HTTP services and `apply_executor`
-deploy to Lambda; `services/ingest_runner` — THE CRAWL — is a systemd unit on
-an EC2 `t3.small` (`i-06bf0e03e60d9d409`), cut over 2026-09-02 with all four
-sources plus discovery and every matching EventBridge rule disabled. Lambda's
-300s wall is why: a shard could not finish its members before being starved.
+**Five Lambdas and one Oracle Cloud box.** The four HTTP services and
+`apply_executor` deploy to Lambda; `services/ingest_runner` — THE CRAWL — is a
+systemd unit on an **Oracle Cloud Always Free** A1 VM (`jobpilot-ingest`,
+4 OCPU / 24 GB, us-ashburn-1), cut over from EC2 on 2026-10-02 to take ~$35/month
+to $0. It moved off Lambda on 2026-09-02 because of the 300s wall: a shard could
+not finish its members before being starved. **Stay at 4 OCPU / 24 GB** — only
+that much A1 is free, and the tenancy quota allows more, which would bill.
+
+> **Oracle deploys are PULLED** (`infra/oracle/`, runbook in its README). CI
+> moves `deploy/ingest-runner` to a SHA whose suite is green; a 2-minute timer
+> on the box installs it through the SAME `infra/ec2/install-ingest-runner.sh`
+> and unit file. The deploy job is green only when `ingest_runner_heartbeat`
+> shows that SHA from hostname `jobpilot-ingest` — the host filter exists
+> because the first version passed on the EC2 heartbeat while Oracle could
+> not fetch. The EC2 box (`i-06bf0e03e60d9d409`) was TERMINATED 2026-10-02 and
+> its CI job deleted; the EC2 paragraphs below are history. `infra/ec2/` stays
+> because its installer and unit file are what the Oracle box runs.
 
 > **Reading `.github/workflows/deploy.yml` alone tells you the wrong thing.**
 > Until 2026-09-02 that workflow knew only about Lambda, so the crawler was
@@ -555,7 +567,7 @@ sources plus discovery and every matching EventBridge rule disabled. Lambda's
 > records each daily job in `ingest_runner_daily_runs` and its
 > `maintenance` flag in the heartbeat, which `retention-watchdog` checks.
 
-Deployment is over **SSM, not SSH**: no inbound port, no key material in CI.
+EC2 deployment was over **SSM, not SSH**: no inbound port, no key material in CI.
 `infra/ec2/install-ingest-runner.sh` is the single installer both the CI job
 and `infra/ec2/deploy-ingest-runner.sh` (the operator path) execute, so the
 path a human tests is the path that runs on every push. It IMPORT-CHECKS
