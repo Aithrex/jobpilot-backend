@@ -18,9 +18,10 @@ When the two point at different bands, or the years sit on a band's edge,
 the view is BOTH bands - a candidate between entry and mid sees entry and
 mid, not an arbitrary one of them.
 
-Levels are in the board's VIEW vocabulary: intern, entry, mid, senior, where
-`senior` covers every band from senior up (staff, principal, director,
-executive), exactly as the board's seniority control groups them.
+Levels are in the board's VIEW vocabulary: intern, entry, mid, senior, staff,
+where `staff` ("Staff+") covers staff, principal, director and executive. It
+was one "Senior+" view until 2026-10-03, so a four-year candidate on
+Mid + Senior was shown principal and director roles (30% of one feed).
 """
 from __future__ import annotations
 
@@ -29,14 +30,14 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-VIEWS = ("intern", "entry", "mid", "senior")
+VIEWS = ("intern", "entry", "mid", "senior", "staff")
 _VIEW_OF_BAND = {"intern": "intern", "entry": "entry", "mid": "mid",
-                 "senior": "senior", "staff": "senior", "principal": "senior",
-                 "director": "senior", "executive": "senior"}
+                 "senior": "senior", "staff": "staff", "principal": "staff",
+                 "director": "staff", "executive": "staff"}
 # Years at the TOP of a band also reach the next one up: two years is the
 # last entry year and a credible mid applicant; four is the last mid year.
 # Same ladder as `fit_score._YEARS_TO_LEVEL`, so the board and the score agree.
-_EDGE_YEARS = {2: "mid", 4: "senior"}
+_EDGE_YEARS = {2: "mid", 4: "senior", 7: "staff"}
 
 
 def resolve(preference: Any, years: Any) -> Dict[str, Any]:

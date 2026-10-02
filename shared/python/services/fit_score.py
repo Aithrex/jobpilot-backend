@@ -1119,8 +1119,14 @@ _LEVEL_PATTERNS: Sequence[Tuple[str, re.Pattern]] = (
     # `(?<![a-z])` lets the trailing digit of "Engineer R-1234" match `[34]`
     # and file the posting as senior, and the trailing `.` of "Autonomy 2.0"
     # gets past a plain `(?![a-z0-9])`.
+    # "Lead <...> Engineer/Developer/Scientist" is a senior IC title (live:
+    # JPMorgan's "Lead Software Engineer" asks 5+ years and read `mid`); a bare
+    # "Lead" or "Team Lead" stays with the manager rules below ("Lead Cashier").
+    # Rungs V/VI and 5/6 are senior too (Netflix "Software Engineer 5").
     ("senior", re.compile(r"(?<![a-z])(senior|snr|sr\.?)(?![a-z])|"
-                          r"(?<![a-z0-9])(i{3,4}|iv|[34])(?![a-z0-9.])")),
+                          r"(?<![a-z])lead\s+(?:[a-z/+#.-]+\s+){0,2}"
+                          r"(?:engineer|developer|scientist|programmer)(?![a-z])|"
+                          r"(?<![a-z0-9])(i{3,4}|iv|vi?|[3-6])(?![a-z0-9.])")),
     # 6. Early career. This list is the answer to "I never see early-career
     #    roles": the old one carried only intern/junior/graduate/trainee/
     #    apprentice/associate/assistant, and so missed the phrasing most large

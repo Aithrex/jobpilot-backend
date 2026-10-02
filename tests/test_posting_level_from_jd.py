@@ -278,3 +278,24 @@ class TestTheRederiveBackfill:
 
     def test_no_body_is_left_for_the_crawler(self):
         assert self._script().rederive_one({}, "   ", apply=True) == ("no_body", None)
+
+
+class TestLeadAndHighRungs:
+    """From one candidate's live feed, 2026-10-03: JPMorgan's "Lead Software
+    Engineer" (a VP-grade role asking 5+ years) read `mid` and scored 98 for a
+    junior; Netflix's "Software Engineer 5" read `unknown`."""
+
+    def test_a_lead_engineer_is_senior(self):
+        for t in ("Lead Software Engineer - Java/Python/AWS",
+                  "Lead Data Scientist", "React/Java Lead Fullstack Engineer",
+                  "Lead Backend Developer"):
+            assert fs.title_level(t) == "senior", t
+
+    def test_a_lead_that_is_not_engineering_is_unchanged(self):
+        assert fs.title_level("Lead Cashier") == "mid"
+        assert fs.title_level("Team Lead, Customer Support") == "mid"
+
+    def test_rungs_five_and_six_are_senior(self):
+        assert fs.title_level("Software Engineer 5 - Partner Test Tech") == "senior"
+        assert fs.title_level("Systems Engineer V") == "senior"
+        assert fs.title_level("Software Engineer VI") == "senior"

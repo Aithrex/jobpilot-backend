@@ -37,9 +37,11 @@ class TestResolve:
         # Three years, "Senior ..." on the resume, told us "Mid": mid, not senior.
         assert levels("Mid", 3) == ["mid"]
 
-    def test_senior_plus_collapses_to_the_senior_view(self):
-        assert levels("Lead / Staff", 9) == ["senior"]
-        assert levels("Manager / Director", None) == ["senior"]
+    def test_staff_and_above_is_its_own_view(self):
+        assert levels("Lead / Staff", 9) == ["staff"]
+        assert levels("Manager / Director", None) == ["staff"]
+        assert levels("Senior", 6) == ["senior"]
+        assert levels("Senior", 7) == ["senior", "staff"]
 
     def test_nothing_known_is_all_levels(self):
         out = ev.resolve(None, None)
