@@ -6,8 +6,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/jobpilot-pull-deploy
-# QUOTED: unquoted, systemd splits on spaces and git runs bare `ssh` without
-# the deploy key (Permission denied (publickey) on the first deploy).
-Environment="GIT_SSH_COMMAND=ssh -i /root/.ssh/jobpilot_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+# GIT_SSH_COMMAND is set inside pull-deploy.sh, not here: this unit is
+# reinstalled from the checkout on every deploy, so it must not be the thing
+# that decides whether the next fetch can authenticate.
 # pip + the runner's 150s drain on restart.
 TimeoutStartSec=900

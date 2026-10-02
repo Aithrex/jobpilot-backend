@@ -375,6 +375,7 @@ jobs:
     env:
       SSM_MONGODB_URI: /jobpilot/prod/mongodb-uri
       DB_NAME: aspirely_db
+      ORACLE_HOSTNAME: ${{ vars.ORACLE_INGEST_HOSTNAME || 'jobpilot-ingest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -409,17 +410,22 @@ jobs:
           from datetime import datetime, timedelta, timezone
           from pymongo import MongoClient
           sha = os.environ["GITHUB_SHA"]
+          # The HOST matters, not just the SHA: while EC2 still deploys, its
+          # heartbeat reports the same SHA, and the first version of this
+          # check went green on the EC2 box while Oracle could not even fetch.
+          host = os.environ["ORACLE_HOSTNAME"]
           hb = MongoClient(os.environ["MONGO_URI"])[os.environ["DB_NAME"]]["ingest_runner_heartbeat"]
           # Poll every 2 min + pip + a 150s drain on restart.
           deadline = time.time() + 20 * 60
           while time.time() < deadline:
               fresh = datetime.now(timezone.utc) - timedelta(minutes=3)
-              row = hb.find_one({"revision": sha, "updated_at": {"$gte": fresh}})
+              row = hb.find_one({"revision": sha, "hostname": host,
+                                 "updated_at": {"$gte": fresh}})
               if row:
                   print(f"running {sha[:7]} on {row['hostname']}")
                   sys.exit(0)
               time.sleep(30)
-          print(f"::error::No heartbeat reports {sha[:7]} after 20 min. "
+          print(f"::error::No heartbeat from {host} reports {sha[:7]} after 20 min. "
                 "On the box: journalctl -u jobpilot-pull-deploy -u ingest-runner")
           sys.exit(1)
           PY

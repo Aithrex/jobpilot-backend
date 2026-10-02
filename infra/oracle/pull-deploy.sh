@@ -12,6 +12,11 @@
 # guard apply here too.
 set -euo pipefail
 
+# Set HERE, not in the unit: the unit is one of the files this script
+# reinstalls from the checkout, so a bad Environment= line there once
+# reverted a hand-fix and locked the box out of git on every later pull.
+export GIT_SSH_COMMAND="ssh -i /root/.ssh/jobpilot_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
 SRC=/opt/jobpilot/src
 BRANCH="${DEPLOY_BRANCH:-deploy/ingest-runner}"
 STATE_DIR=/var/lib/jobpilot
