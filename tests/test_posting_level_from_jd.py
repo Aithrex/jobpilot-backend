@@ -48,6 +48,16 @@ class TestTitleNumerals:
     def test_three_is_still_senior(self):
         assert fs.title_level("Software Engineer III") == "senior"
 
+    def test_a_count_of_years_in_a_title_is_not_a_rung(self):
+        """Live 2026-10-02: "Mechanical Engineer (M.S. + 3 years of consulting
+        experience)" read `senior` because the bare 3 matched the III/3 rung.
+        The years still count - as years."""
+        t = "Mechanical Engineer (M.S. + 3 years of consulting experience)"
+        assert fs.title_level(t) is None
+        assert level(t) == "mid"
+        assert fs.title_level("Research Scientist (M.S. + 4 yrs of exp)") is None
+        assert fs.title_level("Nurse - 2 years experience required") is None
+
 
 class TestStatedYearsOutrankTheTitle:
     def test_years_raise_an_entry_title(self):

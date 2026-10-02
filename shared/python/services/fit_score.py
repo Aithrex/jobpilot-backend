@@ -1243,6 +1243,10 @@ def normalize_level(value: Any) -> Optional[str]:
     return title_level(key)
 
 
+_YEARS_IN_TITLE = re.compile(
+    r"(?<![\d.])\d{1,2}\s*\+?\s*(?:(?:-|to)\s*\d{1,2}\s*\+?\s*)?(?:years?|yrs?)(?![a-z])")
+
+
 def title_level(title: Any) -> Optional[str]:
     """The band a TITLE states, or None when it states none.
 
@@ -1253,6 +1257,10 @@ def title_level(title: Any) -> Optional[str]:
     t = _norm(title)
     if not t.strip():
         return None
+    # A count of years is not a rung: "Mechanical Engineer (M.S. + 3 years of
+    # consulting experience)" read `senior` off the bare 3 (live, 2026-10-02).
+    # `level_from_signals` still reads those years - as years.
+    t = _YEARS_IN_TITLE.sub(" ", t)
     # Demotions and promotions that the ordered scan below would get wrong.
     if _JUNIOR_WORD_IS_SENIOR.search(t):
         return "director" if re.search(
@@ -1324,7 +1332,8 @@ def level_from_signals(title: Any, *, description: Any = "",
     body = _norm(description)
     # The WHOLE body for years: requirements sections sit at the end of long
     # descriptions, and the old 4,000-character window cut them off.
-    years = _max_known(required_years, _required_years(body) if body else None)
+    years = _max_known(required_years, _required_years(body) if body else None,
+                       _required_years(_norm(title)))
     by_years = _level_from_years(years)
 
     if stated:
