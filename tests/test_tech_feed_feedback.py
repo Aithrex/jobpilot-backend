@@ -27,7 +27,10 @@ from services import job_inventory_service as inv
 from services import tech_feed_feedback as tff
 from services import tech_feed_service as tfs
 
-NOW = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+# Relative, not pinned: `search()` reads the real clock, so a fixed date aged
+# the seeded postings out of the default freshness window on 2026-10-01 and
+# every suppression test went red with no code change.
+NOW = datetime.now(timezone.utc).replace(microsecond=0)
 USER = "feedback-test@aspirely.me"
 OTHER = "someone-else@aspirely.me"
 COLLECTIONS = ("job_postings", "job_source_state", "job_ingestion_runs",
