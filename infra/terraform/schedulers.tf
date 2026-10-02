@@ -10,7 +10,8 @@
 # - learning_due  : sweep due scheduled LinkedIn posts every 10 minutes.
 
 # CUT OVER TO EC2 2026-09-02. All four ingest ticks and discovery now run in
-# the `ingest-runner` systemd unit on i-06bf0e03e60d9d409, on the same minute
+# the `ingest-runner` systemd unit (EC2 until 2026-10-02, now the Oracle box
+# `jobpilot-ingest` - see infra/oracle/README.md), on the same minute
 # offsets these rules used. They are declared DISABLED rather than only
 # clicked off because `state` is looked up with an ENABLED default, so an
 # undeclared rule silently re-enables itself on the next apply and both planes
@@ -125,7 +126,7 @@ locals {
     ingest_oracle = { expression = "cron(11/15 * * * ? *)", desc = "Oracle ORC shard ingestion tick (48 shards, <=16/tick)", state = "DISABLED" }
     ingest_icims  = { expression = "cron(4/15 * * * ? *)", desc = "iCIMS shard ingestion tick (96 shards, <=16/tick)", state = "DISABLED" }
     # CUT OVER TO EC2 2026-09-02 (stage 1). The crawl now runs in the
-    # `ingest-runner` systemd unit on i-06bf0e03e60d9d409, which schedules
+    # `ingest-runner` systemd unit (now on the Oracle box), which schedules
     # icims on the same :04/:19/:34/:49 offsets this rule used. Declared
     # DISABLED rather than only clicked off: `state` is looked up with an
     # ENABLED default, so an undeclared rule silently re-enables itself on

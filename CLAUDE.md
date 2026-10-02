@@ -568,9 +568,9 @@ that much A1 is free, and the tenancy quota allows more, which would bill.
 > `maintenance` flag in the heartbeat, which `retention-watchdog` checks.
 
 EC2 deployment was over **SSM, not SSH**: no inbound port, no key material in CI.
-`infra/ec2/install-ingest-runner.sh` is the single installer both the CI job
-and `infra/ec2/deploy-ingest-runner.sh` (the operator path) execute, so the
-path a human tests is the path that runs on every push. It IMPORT-CHECKS
+`infra/ec2/install-ingest-runner.sh` is the single installer — it now runs
+only on the Oracle box, from `infra/oracle/pull-deploy.sh` — so the path a
+human tests is the path that runs on every push. It IMPORT-CHECKS
 before it restarts — a missing dep fails loudly there rather than as a
 crash-loop under `Restart=always` while every EventBridge rule is already
 disabled, which is nothing crawling at all.

@@ -1,36 +1,23 @@
 #!/usr/bin/env bash
-# Runs ON the ingest box. Downloads the staged tarball, installs deps,
-# IMPORT-CHECKS, and only then restarts the unit.
+# Runs ON the ingest box (Oracle Cloud, via infra/oracle/pull-deploy.sh).
+# Packages the four trees from a git checkout, installs deps, IMPORT-CHECKS,
+# and only then restarts the unit.
 #
-# One file, two callers: `deploy-ingest-runner.sh` (operator, from a laptop)
-# and the `deploy-ingest-runner` job in `.github/workflows/deploy.yml` (CI, on
-# push to main). They used to be the same script inlined in two places, which
-# is how a deploy path drifts from the one people actually test.
-#
-# Executed as `bash install.sh`, never inlined into SSM's command list:
-# AWS-RunShellScript runs under dash, where `set -o pipefail` and
-# heredocs-inside-quoting are syntax errors.
+# It lived under infra/ec2/ when the crawl ran on EC2 and was deployed over
+# SSM; that box was terminated 2026-10-02, and this is the one installer that
+# survived it. Kept as one file so the path an operator tests is the path the
+# deploy timer runs.
 set -xeuo pipefail
 
-BUCKET="${DEPLOY_BUCKET:-jobpilot-resumes-prod-032398581420}"
-KEY="${DEPLOY_KEY:-deploy/ingest-runner/app.tar.gz}"
+: "${APP_SRC:?APP_SRC must point at a git checkout (see infra/oracle/pull-deploy.sh)}"
 
 install -d -o jobpilot -g jobpilot /opt/jobpilot/app /var/log/jobpilot
 
-if [ -n "${APP_SRC:-}" ]; then
-  # Off-AWS hosts (infra/oracle/pull-deploy.sh) install from a git checkout.
-  # SAME four trees the S3 tarball carries, so both hosts run the same files.
-  tar -czf /tmp/app.tar.gz -C "$APP_SRC" \
-    --exclude='__pycache__' --exclude='*.pyc' --exclude='.git' \
-    shared/python services/ingest_runner infra/ec2 scripts
-  chown jobpilot /tmp/app.tar.gz
-else
-  # boto3 resolves credentials from the instance profile; no keys on disk.
-  sudo -u jobpilot /opt/jobpilot/venv/bin/python - <<PY
-import boto3
-boto3.client("s3").download_file("${BUCKET}", "${KEY}", "/tmp/app.tar.gz")
-PY
-fi
+# SAME four trees the unit and the import checks below expect.
+tar -czf /tmp/app.tar.gz -C "$APP_SRC" \
+  --exclude='__pycache__' --exclude='*.pyc' --exclude='.git' \
+  shared/python services/ingest_runner infra/ec2 scripts
+chown jobpilot /tmp/app.tar.gz
 sudo -u jobpilot tar -xzf /tmp/app.tar.gz -C /opt/jobpilot/app
 rm -f /tmp/app.tar.gz
 # Read by the runner into its heartbeat, which is how a deploy is confirmed.

@@ -41,8 +41,8 @@ jobs:
             # fills forms, so prod ran old fill logic (2026-07-29). Keep this in
             # step with the COPY above, not with a guess about imports.
             executor: ['services/apply_executor/**', 'shared/python/**']
-            # The EC2 crawler tars exactly these two trees (see
-            # infra/ec2/deploy-ingest-runner.sh), so this filter mirrors the
+            # The crawler's installer tars exactly these trees (see
+            # infra/ec2/install-ingest-runner.sh), so this filter mirrors the
             # tarball rather than guessing at imports -- the same lesson the
             # executor filter above learned the hard way.
             ingest:  ['services/ingest_runner/**', 'shared/python/**', 'infra/ec2/**', 'infra/oracle/**', 'scripts/**']
