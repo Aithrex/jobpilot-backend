@@ -44,6 +44,7 @@ import logging
 import os
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -73,6 +74,19 @@ _BODY_CACHE: Dict[str, str] = {}
 _BODY_CACHE_MAX = 64
 
 _missing_bucket_warned = False
+
+# A DENIED write is billed exactly like a successful one, and a failed put_jd
+# is never remembered, so a missing permission re-pays HEAD + PUT for every
+# posting on every crawl tick. Measured 2026-09: the EC2 ingest role had no
+# s3:PutObject on job-jd/*, which cost 1.99M PutObject requests (~90% of the
+# S3 bill) and stored nothing. After a permission-shaped refusal, stop writing
+# for a while; callers already treat "not stored" as "keep the body in Mongo".
+_WRITE_PAUSE_SECONDS = 1800
+_DENIED_CODES = frozenset({
+    "AccessDenied", "AllAccessDisabled", "InvalidAccessKeyId",
+    "SignatureDoesNotMatch", "NoSuchBucket",
+})
+_write_paused_until = 0.0
 
 
 def bucket() -> str:
@@ -127,6 +141,23 @@ def archive_key(job_id: str) -> str:
     return f"{ARCHIVE_PREFIX}/{j[:2]}/{j}.json" if j else ""
 
 
+def _writes_paused() -> bool:
+    return time.monotonic() < _write_paused_until
+
+
+def _note_write_failure(exc: Exception) -> None:
+    global _write_paused_until
+    code = (getattr(exc, "response", None) or {}).get("Error", {}).get("Code", "")
+    if code not in _DENIED_CODES:
+        return
+    if not _writes_paused():
+        logger.error(
+            "job_content_store: S3 refused a write (%s) on bucket %s - pausing "
+            "JD/archive writes for %ds; bodies stay in Mongo until then",
+            code, bucket(), _WRITE_PAUSE_SECONDS)
+    _write_paused_until = time.monotonic() + _WRITE_PAUSE_SECONDS
+
+
 def _remember(content_hash: str) -> None:
     if len(_KNOWN_HASHES) >= _KNOWN_MAX:
         _KNOWN_HASHES.clear()
@@ -150,6 +181,8 @@ def put_jd(content_hash: str, text: Any) -> Optional[str]:
         return None
     if h in _KNOWN_HASHES:
         return h
+    if _writes_paused():
+        return None
 
     key = jd_key(h)
     try:
@@ -171,6 +204,7 @@ def put_jd(content_hash: str, text: Any) -> Optional[str]:
     except Exception as exc:
         logger.warning("job_content_store: JD write failed for %s: %s",
                        h[:12], type(exc).__name__)
+        _note_write_failure(exc)
         return None
 
 
@@ -229,7 +263,7 @@ def archive_posting(doc: Dict[str, Any], *, reason: str = "pinned") -> bool:
 
     Returns True only when the object is definitely in S3.
     """
-    if not isinstance(doc, dict) or not available():
+    if not isinstance(doc, dict) or not available() or _writes_paused():
         return False
     job_id = _safe_id(doc.get("job_id"))
     key = archive_key(job_id)
@@ -257,6 +291,7 @@ def archive_posting(doc: Dict[str, Any], *, reason: str = "pinned") -> bool:
     except Exception as exc:
         logger.error("job_content_store: archive FAILED for job %s: %s",
                      job_id[:12], type(exc).__name__)
+        _note_write_failure(exc)
         return False
 
 
@@ -291,5 +326,7 @@ def get_archived(job_id: str) -> Optional[Dict[str, Any]]:
 
 def reset_caches() -> None:
     """Test seam."""
+    global _write_paused_until
     _KNOWN_HASHES.clear()
     _BODY_CACHE.clear()
+    _write_paused_until = 0.0
