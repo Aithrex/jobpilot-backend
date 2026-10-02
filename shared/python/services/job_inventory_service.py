@@ -1068,6 +1068,41 @@ def upsert_posting(
         raise ValueError("upsert_posting requires both source and source_job_id")
 
     key = {"source": doc["source"], "source_job_id": doc["source_job_id"]}
+
+    # A LISTING-ONLY write never erases a stored description. Workday and
+    # Greenhouse listings carry no body; a detail fetch over the per-shard cap
+    # is deferred and the row arrives here with an empty one. `$set` used to
+    # write that emptiness over the stored body - and over everything read
+    # from it: the level, the work mode, the content hash the requirements are
+    # guarded by. Measured 2026-10-02: 59,454 active postings had lost their
+    # description this way, because every version bump sends the whole
+    # inventory through the deferred path at once. A posting we already know
+    # is only refreshed as still live; the next detail fetch replaces it.
+    if not _has_body(doc):
+        existing = _postings().find_one(
+            key, {"job_id": 1, "content_hash": 1, "status": 1, "purge_at": 1,
+                  "description_ref": 1, "description_text": 1, "requirements": 1})
+        if existing and _has_body(existing):
+            reopened = bool(existing.get("status") in CLOSED_STATUSES
+                            or existing.get("purge_at") is not None)
+            seen = {"status": STATUS_ACTIVE, "active": True, "last_seen_at": now,
+                    "last_verified_at": now, "updated_at": now}
+            if run_id:
+                seen["last_ingest_run_id"] = _safe_str(run_id, 64)
+            _postings().update_one(key, {"$set": seen, "$unset": {"purge_at": ""}})
+            prev_req = existing.get("requirements") or {}
+            return {
+                "job_id": existing.get("job_id"),
+                "created": False,
+                "content_changed": False,
+                "needs_parse": bool(
+                    not prev_req
+                    or prev_req.get("source_content_hash") != existing.get("content_hash")
+                    or prev_req.get("extractor_version") != EXTRACTOR_VERSION),
+                "reopened": reopened,
+                "content_hash": existing.get("content_hash"),
+            }
+
     mutable = {k: v for k, v in doc.items() if k not in _IDENTITY_FIELDS}
     mutable.update({
         "status": STATUS_ACTIVE,
@@ -1152,6 +1187,12 @@ def upsert_posting(
         "reopened": reopened,
         "content_hash": doc["content_hash"],
     }
+
+
+def _has_body(doc: Dict[str, Any]) -> bool:
+    """A stored or offloaded description, inline or by reference."""
+    return bool((doc or {}).get("description_ref")
+                or str((doc or {}).get("description_text") or "").strip())
 
 
 def touch_seen(source: str, source_job_ids: Iterable[str],

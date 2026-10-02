@@ -2155,7 +2155,9 @@ def _listing_implies_same_content(existing: Dict[str, Any], row: Dict[str, Any])
         return False
     if existing.get("title_normalized") != inv.normalize_title(row.get("title")):
         return False
-    if (existing.get("employment_type") or "") != _slug(row.get("employment_type"), 40):
+    # The SAME normaliser that stored it (`_safe_key`); `_slug` keeps "_" and
+    # accents, so "FULL_TIME" never matched and re-queued every run.
+    if (existing.get("employment_type") or "") != inv._safe_key(row.get("employment_type"), 40):
         return False
     old_keys = sorted((l or {}).get("key", "") for l in (existing.get("locations") or []))
     new_keys = sorted(l["key"] for l in inv.normalize_locations(row.get("locations")))

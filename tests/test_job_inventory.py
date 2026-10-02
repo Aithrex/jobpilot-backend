@@ -595,3 +595,73 @@ def test_a_seniority_filter_still_excludes_a_different_stated_level(db):
     titles = {r["title_raw"] for r in inv.find_active_fresh(
         source="career-pages", seniority="entry", max_age_days=30, now=NOW)}
     assert "Engineering Director" not in titles
+
+
+# ---------------------------------------------------------------------------
+# A listing-only write never erases a stored description
+# ---------------------------------------------------------------------------
+
+class TestAListingNeverErasesTheBody:
+    """Measured 2026-10-02: 59,454 active postings had their description
+    erased. A detail fetch over the per-shard cap is DEFERRED and the row is
+    upserted from the listing alone - which, for Workday and Greenhouse,
+    carries no body - and `upsert_posting` $set the empty body over the
+    stored one, along with everything read from it (level, work mode, the
+    hash the requirements are guarded by). Every version bump sent the whole
+    inventory through that path at once."""
+
+    BODY = ("Qualifications: 6+ years of professional software engineering "
+            "experience. This is a fully remote role. Python and AWS.")
+
+    def test_the_stored_body_and_what_was_read_from_it_survive(self, db):
+        first = inv.upsert_posting(_raw(description=self.BODY), now=NOW)
+        before = db.job_postings.find_one({"source_job_id": "REQ-1001"})
+        assert before["description_text"] or before["description_ref"]
+
+        out = inv.upsert_posting(_raw(description=""), now=NOW + timedelta(hours=1))
+        after = db.job_postings.find_one({"source_job_id": "REQ-1001"})
+        for field in ("description_text", "description_ref", "description_chars",
+                      "content_hash", "seniority", "work_mode"):
+            assert after.get(field) == before.get(field), field
+        assert after["last_seen_at"] == stored(NOW + timedelta(hours=1))
+        assert out["content_changed"] is False
+        assert out["content_hash"] == first["content_hash"]
+        assert out["job_id"] == first["job_id"]
+
+    def test_a_closed_posting_listed_again_reopens_with_its_body(self, db):
+        inv.upsert_posting(_raw(description=self.BODY), now=NOW)
+        db.job_postings.update_one({"source_job_id": "REQ-1001"},
+                                   {"$set": {"status": "closed", "active": False,
+                                             "purge_at": NOW}})
+        out = inv.upsert_posting(_raw(description=""), now=NOW + timedelta(hours=1))
+        after = db.job_postings.find_one({"source_job_id": "REQ-1001"})
+        assert after["status"] == "active" and after["active"] is True
+        assert "purge_at" not in after
+        assert out["reopened"] is True
+        assert after["description_text"] or after["description_ref"]
+
+    def test_a_new_listing_only_posting_is_still_stored(self, db):
+        out = inv.upsert_posting(_raw(source_job_id="REQ-2002", description=""), now=NOW)
+        assert out["created"] is True
+        assert db.job_postings.find_one({"source_job_id": "REQ-2002"}) is not None
+
+    def test_a_new_body_still_replaces_the_old_one(self, db):
+        inv.upsert_posting(_raw(description=self.BODY), now=NOW)
+        out = inv.upsert_posting(_raw(description="A different body: Go and Kafka."),
+                                 now=NOW + timedelta(hours=1))
+        assert out["content_changed"] is True
+
+
+def test_fetch_once_reads_employment_type_the_way_it_was_stored(db):
+    """`FULL_TIME` was stored as `full-time` (`_safe_key`) but compared as
+    `full_time` (`_slug`), so the posting never counted as unchanged and spent
+    a detail fetch from the per-shard budget on every run."""
+    from services import job_ingest_worker as w
+    body = "Qualifications: 2+ years of experience in Python."
+    inv.upsert_posting(_raw(employment_type="FULL_TIME", description=body), now=NOW)
+    existing = db.job_postings.find_one({"source_job_id": "REQ-1001"})
+    existing["requirements"] = {"extractor_version": inv.EXTRACTOR_VERSION}
+    existing["normalization_version"] = inv.NORMALIZATION_VERSION
+    row = {"title": "Senior Backend Engineer (Remote)", "employment_type": "FULL_TIME",
+           "locations": ["Austin, TX, USA"]}
+    assert w._listing_implies_same_content(existing, row) is True
