@@ -684,6 +684,13 @@ class TestSeniorityTaxonomy:
     4,957 and could not be reached from a title at all.
     """
 
+    def test_rung_two_of_a_numbered_ladder_is_mid(self):
+        """It sat in the list above until 2026-10-02. On live inventory
+        "Software Engineer II" asked for 3+ years and "Program Manager 2" for
+        6-8, so reading rung two as entry put them in every new grad's feed.
+        See tests/test_posting_level_from_jd.py."""
+        assert fit_score.title_level("Software Engineer II") == "mid"
+
     @pytest.mark.parametrize("title", [
         "New Grad Software Engineer",
         "2026 University Graduate - Software Engineer",
@@ -693,7 +700,6 @@ class TestSeniorityTaxonomy:
         "Junior Developer",
         "Graduate Engineer Trainee",
         "Software Engineer I",
-        "Software Engineer II",
         "Entry Level Technician",
         "Apprentice Electrician",
     ])

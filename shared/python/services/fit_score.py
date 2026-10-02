@@ -57,7 +57,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.2"
+FIT_SCORE_VERSION = "fit-v2.3"
 
 # The cliff described below is REAL, and this is how 2.1 crosses it.
 #
@@ -92,8 +92,17 @@ FIT_SCORE_VERSION = "fit-v2.2"
 # under-reported until then, which is the safe direction — a missing flag
 # surfaces as "not stated", never as a penalty. A re-extraction backfill is
 # therefore worth running and is not required for correctness.
+#
+# 2.3 keeps the contract again and changes two VALUES, in the direction that
+# matters: `required_years` is the posting's HEADLINE requirement (it was the
+# smallest number in the body - "5+ years, 2+ with AWS" read 2) and `job_level`
+# lets stated years raise a title's band ("Software Engineer II" no longer
+# reads entry; "6+ years" is never entry). A stored 2.2 profile is still valid
+# input but under-reports both until re-extracted, which
+# `job_inventory_service.EXTRACTOR_VERSION` 5 and
+# `scripts/rederive_posting_levels.py` do.
 _COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset(
-    {"fit-v2.0", "fit-v2.1", "fit-v2.2"})
+    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
@@ -1131,9 +1140,18 @@ _LEVEL_PATTERNS: Sequence[Tuple[str, re.Pattern]] = (
         r"leadership\s+development\s+program|"
         r"junior|jnr|jr\.?|trainee|apprentice(ship)?|fresher|"
         r"graduate|associate|assistant|"
-        r"level\s*[12]|l[12]|tier\s*[12]|grade\s*[12]"
+        r"level\s*1|l1|tier\s*1|grade\s*1"
         r")(?![a-z0-9])|"
-        r"(?<![a-z0-9])(i{1,2}|[12])(?![a-z0-9.])")),
+        r"(?<![a-z0-9])(i|1)(?![a-z0-9.])")),
+    # 7. Rung two of a numbered ladder. It used to share the entry rule, so
+    #    "Software Engineer II", "Program Manager 2" and "Private Client
+    #    Advisor II" all read entry - on live inventory they asked for 3, 6-8
+    #    and 12+ years. On every ladder that numbers its rungs, I is the
+    #    entry rung and II is the next one up. Checked AFTER the entry words,
+    #    so "Junior Engineer II" still reads junior.
+    ("mid", re.compile(
+        r"(?<![a-z])(level\s*2|l2|tier\s*2|grade\s*2)(?![a-z0-9])|"
+        r"(?<![a-z0-9])(ii|2)(?![a-z0-9.])")),
 )
 
 # Management titles, read by what they MANAGE rather than by the bare word.
@@ -1298,19 +1316,39 @@ def level_from_signals(title: Any, *, description: Any = "",
     filters on.
     """
     stated = title_level(title)
-    if stated:
+    if stated == "intern":
+        # An internship that mentions "3 years of coursework" is still an
+        # internship; years never move a posting out of this band.
         return stated
 
-    body = _norm(description)[:4000]
-    if body:
-        if _INTERN_JD.search(body):
-            return "intern"
-        if _EARLY_CAREER_JD.search(body):
-            return "entry"
+    body = _norm(description)
+    # The WHOLE body for years: requirements sections sit at the end of long
+    # descriptions, and the old 4,000-character window cut them off.
+    years = _max_known(required_years, _required_years(body) if body else None)
+    by_years = _level_from_years(years)
 
-    years = required_years
-    if years is None and body:
-        years = _required_years(body)
+    if stated:
+        # The employer's word for the level, RAISED - never lowered - by the
+        # years the same posting asks for. "Associate Engineer, 6+ years" and
+        # "Program Manager 2, 8 years" are not entry roles whatever the title
+        # says; "Senior Engineer, 2+ years" is still senior.
+        if by_years and _LEVEL_ORDER[by_years] > _LEVEL_ORDER[stated] \
+                and stated in _YEARS_CAN_RAISE:
+            return by_years
+        return stated
+
+    # Body phrases only where the posting states no years that contradict
+    # them. "We hire new grads across many teams" and "we also run a summer
+    # internship program" are boilerplate on senior postings; a stated
+    # "5+ years" is the requirement. The phrase window stays at 4,000
+    # characters, where a posting describes its OWN audience; benefits and
+    # EEO sections further down mention internships in general.
+    hint_window = body[:4000]
+    if hint_window:
+        if _INTERN_JD.search(hint_window) and (years is None or years <= 1):
+            return "intern"
+        if _EARLY_CAREER_JD.search(hint_window) and (years is None or years <= 2):
+            return "entry"
     # `_level_from_years` is the same ladder the RESUME side reads, so a
     # posting's "3+ years" and a candidate's three years resolve to the same
     # word. Years alone top out at `staff` there: "12+ years" is not evidence
@@ -1318,7 +1356,24 @@ def level_from_signals(title: Any, *, description: Any = "",
     # it as `executive` put ordinary senior engineering roles three bands
     # above where they belong, which is a three-band `level_gap` against
     # every candidate who applied.
-    return _level_from_years(years)
+    return by_years
+
+
+#: Title bands that stated years may raise. The IC ladder up to staff, where
+#: years themselves top out. Management and executive bands are about the
+#: ladder, which only a title states, so years never touch them.
+_YEARS_CAN_RAISE = frozenset({"entry", "mid", "senior"})
+
+
+def _max_known(*values: Any) -> Optional[int]:
+    known = []
+    for v in values:
+        try:
+            if v is not None:
+                known.append(int(v))
+        except (TypeError, ValueError):
+            continue
+    return max(known) if known else None
 
 
 # ---------------------------------------------------------------------------
@@ -1594,16 +1649,75 @@ def _split_sections(blob: str) -> Tuple[str, str]:
     return "\n".join(required), "\n".join(preferred)
 
 
+# One "N years" mention: the number (a range reads as its LOWER bound - "3-6
+# years" asks for 3), then up to 80 characters of what the years are OF.
+_HEADLINE_YEARS_RE = re.compile(
+    r"(?<![\d.$])(\d{1,2})\s*(?:\+|plus)?\s*(?:(?:-|to)\s*\d{1,2}\s*\+?\s*)?"
+    r"(?:or\s+more\s+)?(?:years?|yrs?)(?![a-z])'?\s*([^\n]{0,80})")
+# What makes a count of years an EXPERIENCE requirement rather than an age, a
+# company's history or a degree's length.
+_YEARS_CONTEXT = re.compile(
+    r"experience|(?<![a-z])exp(?![a-z])|work|industry|professional|relevant|"
+    r"related|hands on|engineering|development|programming|coding|(?<![a-z])role|"
+    r"position|building|leading|managing|designing|supporting|administering|"
+    r"(?<![a-z])in (a|an)(?![a-z])")
+_YEARS_NOT_EXPERIENCE = re.compile(
+    r"of age|(?<![a-z])old(?![a-z])|in business|business for|history|founded|"
+    r"anniversary|warranty|tenure|lease|coursework|of (college|school|study)|"
+    r"(?<![a-z])ago(?![a-z])")
+_PREFERRED_CUE = re.compile(
+    r"prefer|nice to have|nice-to-have|(?<![a-z])bonus(?![a-z])|a plus(?![a-z])|"
+    r"ideal(ly)?(?![a-z])|desired|desirable|advantageous")
+_REQUIRED_CUE = re.compile(r"required|(?<![a-z])must(?![a-z])|minimum|at least")
+_SENTENCE_SPLIT = re.compile(r"(?<=[.;])\s+|\s*•\s*")
+
+
 def _required_years(blob: str) -> Optional[int]:
-    best: Optional[int] = None
-    for m in _YEARS_RE.finditer(blob):
-        try:
-            n = int(m.group(1))
-        except (TypeError, ValueError):
+    """The posting's HEADLINE experience requirement, in years, or None.
+
+    The headline, not the smallest number. "5+ years of software engineering,
+    2+ years with AWS" asks for five; the old reader returned the minimum over
+    every match and called it two, which filed senior postings as entry and
+    let the scorer believe a two-year candidate met them. Measured on live
+    inventory 2026-10-02: Program Manager 2 (6-8 years), Business Intelligence
+    Developer (5 years) and Software Engineer II (3+ years) all read entry.
+
+    Required statements outrank preferred ones - "3+ required, 5+ preferred"
+    asks for three - and preferred ones still count when they are the only
+    statement. Degree alternatives ("8 years with a bachelor's, or 6 with a
+    master's") take the larger, bachelor's path, the posting's general case.
+    """
+    if not blob:
+        return None
+    blob = _norm(blob)  # callers normally pass normalised text; cheap if so
+    required: List[int] = []
+    preferred: List[int] = []
+    mode = "required"
+    for line in blob.split("\n"):
+        stripped = line.strip()
+        if not stripped:
             continue
-        if 0 <= n <= 30:
-            best = n if best is None else min(best, n)
-    return best
+        # Same heading rules as `_split_sections`, but decided per SENTENCE:
+        # a one-line "Required: 3+ years. Preferred: 5+ years." has to split.
+        if len(stripped) <= 90:
+            if _PREFERRED_HEAD.search(stripped):
+                mode = "preferred"
+            elif _REQUIRED_HEAD.search(stripped):
+                mode = "required"
+        for sentence in _SENTENCE_SPLIT.split(stripped):
+            is_pref = bool(_PREFERRED_CUE.search(sentence)) or (
+                mode == "preferred" and not _REQUIRED_CUE.search(sentence))
+            for m in _HEADLINE_YEARS_RE.finditer(sentence):
+                n = int(m.group(1))
+                tail = m.group(2) or ""
+                head = sentence[max(0, m.start() - 40):m.start()]
+                if not 0 <= n <= 20 or _YEARS_NOT_EXPERIENCE.search(tail[:40]):
+                    continue
+                if not (_YEARS_CONTEXT.search(tail[:60]) or "experience" in head):
+                    continue
+                (preferred if is_pref else required).append(n)
+    pool = required or preferred
+    return max(pool) if pool else None
 
 
 def _degree_level(blob: str) -> int:
@@ -1758,7 +1872,7 @@ def _extract_requirements_cached(jd_text: str, title: str) -> Dict[str, Any]:
         # inference - it is the posting's own requirement restated in the
         # vocabulary the feed filters on, and it is why `job_level` is now
         # answerable for postings whose title carries no marker (most of them).
-        "job_level": level_from_signals(title_blob, description=blob[:4000],
+        "job_level": level_from_signals(title_blob, description=blob,
                                         required_years=_required_years(combined)),
         "industries": sorted(_industries(combined)),
         "work_mode": _work_mode(combined),

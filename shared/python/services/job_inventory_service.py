@@ -121,7 +121,17 @@ NORMALIZATION_VERSION = 4
 # required" is a FORM LABEL more often than a statement ("government clearance
 # required? no"), and that alternative was removed after it produced 97 false
 # flags from one employer. Re-extraction is what applies both directions.
-EXTRACTOR_VERSION = 4
+#
+# v5: `fit_score._required_years` reads the HEADLINE requirement instead of the
+# smallest number in the body, and `level_from_signals` lets stated years raise
+# a title's band (fit-v2.3). Live 2026-10-02: 41,845 active postings were filed
+# `entry`, among them "Software Engineer II" (3+ years), "Program Manager 2"
+# (6-8 years) and "Private Client Advisor II" (12+ years), and a two-year
+# candidate scored 98 against a "6+ years" posting. `mark_requirements_parsed`
+# now carries the corrected level onto `seniority` and `tech.seniority` as well.
+# `scripts/rederive_posting_levels.py` applies it from stored bodies at once;
+# this bump makes the crawl finish any row it does not reach.
+EXTRACTOR_VERSION = 5
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1
@@ -1242,14 +1252,30 @@ def mark_requirements_parsed(
     # by one derived from the body. A title is the employer's own summary and a
     # body can mention many roles ("you will partner with our nursing staff").
     body_family = _safe_family(payload.get("role_family"))
-    if body_family:
+    job_level = stored["job_level"]
+    if body_family or job_level:
         doc = _postings().find_one(
             {"source": _safe_key(source, 60),
              "source_job_id": _safe_str(source_job_id, 200)},
-            {"_id": 0, "role_family": 1},
-        )
-        if doc and (doc.get("role_family") or "other") == "other":
+            {"_id": 0, "role_family": 1, "tech": 1},
+        ) or {}
+        if body_family and doc and (doc.get("role_family") or "other") == "other":
             update["role_family"] = body_family
+        # The level, too. `job_level` is read from the title AND the full body
+        # AND the years the posting states - the most informed reading there
+        # is - but this write used to store it only inside `requirements`.
+        # `seniority` (what the feed FILTERS on) and `tech.seniority` (what the
+        # card SHOWS) kept their upsert-time answers, so a re-extraction could
+        # correct the scorer while every filter and label stayed wrong. Live
+        # 2026-10-02: "Software Engineer II" (3+ years) and "Program Manager 2"
+        # (6-8 years) were filed `entry`. A None level is "not stated" and never
+        # blanks a level the posting already carries.
+        if job_level:
+            update["seniority"] = job_level
+            if isinstance(doc.get("tech"), dict):
+                update["tech.seniority"] = job_level
+                if stored["required_years"] is not None:
+                    update["tech.required_years_min"] = stored["required_years"]
 
     res = _postings().update_one(
         {

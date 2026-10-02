@@ -1989,30 +1989,8 @@ _HARDWARE_CONTEXT_RE = _compile_alternation((
     "epitax", "\\bcmos\\b", "die attach", "wire bond",
 ))
 
-# Seniority. Title-first, then explicit year requirements from the body.
-_SENIORITY_ORDER = ("intern", "entry", "mid", "senior", "staff", "principal",
-                    "director", "executive")
-_SENIORITY_RULES: Tuple[Tuple[str, re.Pattern], ...] = (
-    ("intern", _compile_alternation(("intern", "internship", "co-op", "coop student",
-                                     "apprentice", "student worker", "summer analyst"))),
-    ("executive", _compile_alternation(("chief technology officer", "cto", "ciso",
-                                        "chief information officer", "cio",
-                                        "chief data officer", "chief architect",
-                                        "svp", "senior vice president",
-                                        "vice president", "\\bvp\\b", "head of"))),
-    ("director", _compile_alternation(("director", "senior director",
-                                       "sr director", "group manager"))),
-    ("principal", _compile_alternation(("principal", "distinguished", "fellow",
-                                        "senior principal", "architect"))),
-    ("staff", _compile_alternation(("staff", "senior staff", "lead engineer",
-                                    "tech lead", "technical lead", "team lead"))),
-    ("senior", _compile_alternation(("senior", "\\bsr\\b", "\\bsr\\.", "\\biii\\b",
-                                     "\\biv\\b", "level 5", "\\bl5\\b", "\\bl6\\b"))),
-    ("entry", _compile_alternation(("junior", "\\bjr\\b", "entry level",
-                                    "associate engineer", "graduate engineer",
-                                    "new grad", "early career", "\\bi\\b",
-                                    "level 1", "\\bl1\\b", "trainee"))),
-)
+# Seniority is `fit_score.level_from_signals` - one classifier for the filter,
+# the card and the scorer (see `classify`).
 _YEARS_RE = re.compile(
     r"(\d{1,2})\s*(?:\+|plus)?\s*(?:-|to|–)?\s*(\d{1,2})?\s*\+?\s*years?"
     r"(?:\s+of)?(?:\s+(?:relevant|professional|related|industry|hands[\s-]?on|"
@@ -2119,8 +2097,8 @@ def normalize_title(title: Any, *, max_length: int = 160) -> str:
 # `fit_score`'s largest component (role_alignment, 25/100) was `unknown` for
 # EVERY posting and the score collapsed to skill-overlap noise.
 #
-# The modifier is NOT thrown away. `_seniority_of` still reads the ORIGINAL
-# title, so "Data Science Intern" keeps `seniority="intern"`; this only stops
+# The modifier is NOT thrown away. Seniority (`fit_score.level_from_signals`)
+# still reads the ORIGINAL title, so "Data Science Intern" keeps `seniority="intern"`; this only stops
 # the intern suffix from destroying family detection. Two separate questions,
 # two separate readings of the same string.
 # ---------------------------------------------------------------------------
@@ -2236,31 +2214,6 @@ def title_variants(title: Any) -> List[str]:
         if c and c not in out:
             out.append(c)
     return out
-
-
-def _seniority_of(title_blob: str, body_blob: str,
-                  years_min: Optional[int]) -> str:
-    """Highest band the title claims; years only break a tie of silence.
-
-    Ordered most-specific-first so "Senior Director" reads as director and
-    "Senior Staff Engineer" reads as staff, not senior.
-    """
-    for band, pattern in _SENIORITY_RULES:
-        if pattern.search(title_blob):
-            return band
-    if years_min is not None:
-        if years_min >= 12:
-            return "principal"
-        if years_min >= 8:
-            return "staff"
-        if years_min >= 5:
-            return "senior"
-        if years_min >= 2:
-            return "mid"
-        return "entry"
-    if _SENIORITY_RULES[0][1].search(body_blob):
-        return "intern"
-    return "unknown"
 
 
 def _years_of(body_blob: str) -> Tuple[Optional[int], Optional[int]]:
@@ -2500,14 +2453,26 @@ def classify(
 
     # ---- years + seniority + skills are independent of the scope verdict ----
     req = requirements if isinstance(requirements, dict) else {}
-    years_min, years_max = _years_of(body_blob)
+    # ONE reader for years and level, shared with `fit_score` and with
+    # `job_postings.seniority`. This module used to keep its own: its own
+    # title rules ("architect" = principal here, staff there) and "lowest
+    # stated requirement wins", so "5+ years overall, 2+ with AWS" read as 2.
+    # The card showed this value, the filter queried the other one, and on
+    # 2026-10-02 they disagreed about 29,852 "entry" postings. Imported here,
+    # not at module level: fit_score imports this module.
+    from services import fit_score as _fs
+    _lo, years_max = _years_of(body_blob)
+    years_min = _fs._required_years(body_blob) if body_blob else None
     if years_min is None:
         rq = req.get("required_years")
         if isinstance(rq, (int, float)) and 0 <= rq <= 40:
             years_min = int(rq)
+    if years_max is not None and years_min is not None and years_max < years_min:
+        years_max = None
     result.required_years_min = years_min
     result.required_years_max = years_max
-    result.seniority = _seniority_of(title_blob, body_blob, years_min)
+    result.seniority = _fs.level_from_signals(
+        raw_title, description=desc_text, required_years=years_min) or "unknown"
 
     req_text, pref_text = _split_requirement_sections(desc_text)
     required_skills = _skills_in(_norm(req_text) + " " + skills_blob)
