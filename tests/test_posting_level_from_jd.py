@@ -110,6 +110,24 @@ class TestHeadlineYears:
     def test_age_and_company_history_are_not_experience(self):
         assert fs._required_years("Must be 18 years of age. Over 100 years in business.") is None
 
+    def test_award_streaks_are_not_experience(self):
+        """Live false positives from the pre-apply spot check, 2026-10-02:
+        a nursing assistant and a maintenance assistant read as `staff`."""
+        assert fs._required_years(
+            'Voted 13 years in a row in the Baltimore Sun as a "top workplace".') is None
+        assert fs._required_years(
+            'Named a "top workplace" for 14 years in a row and recognized by Newsweek.') is None
+        assert level("Maintenance Assistant",
+                     "Named a top workplace for 14 years in a row.") == "entry"
+
+    def test_real_experience_phrasings_still_count(self):
+        assert fs._required_years("5+ years running production Kubernetes clusters.") == 5
+        assert fs._required_years("3 years of experience with award-winning teams.") == 3
+
+    def test_work_must_be_the_word_work(self):
+        assert fs._required_years("Proud of 12 years as a great workplace.") is None
+        assert fs._required_years("3 years of work experience in retail.") == 3
+
     def test_curly_apostrophe_and_hyphenated_context(self):
         assert fs._required_years("8 years’ experience leading programs") == 8
         assert fs._required_years("3+ years of hands-on Java development experience") == 3

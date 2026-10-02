@@ -1657,14 +1657,19 @@ _HEADLINE_YEARS_RE = re.compile(
 # What makes a count of years an EXPERIENCE requirement rather than an age, a
 # company's history or a degree's length.
 _YEARS_CONTEXT = re.compile(
-    r"experience|(?<![a-z])exp(?![a-z])|work|industry|professional|relevant|"
+    r"experience|(?<![a-z])exp(?![a-z])|(?<![a-z])work(ing)?(?![a-z])|industry|"
+    r"professional|relevant|"
     r"related|hands on|engineering|development|programming|coding|(?<![a-z])role|"
     r"position|building|leading|managing|designing|supporting|administering|"
+    r"running|operating|deploying|developing|writing|delivering|owning|"
+    r"implementing|architecting|maintaining|testing|analy[sz]ing|"
     r"(?<![a-z])in (a|an)(?![a-z])")
+# Award streaks too: "voted 13 years in a row a top workplace" filed a nursing
+# assistant and a maintenance assistant as `staff` in the 2026-10-02 spot check.
 _YEARS_NOT_EXPERIENCE = re.compile(
     r"of age|(?<![a-z])old(?![a-z])|in business|business for|history|founded|"
     r"anniversary|warranty|tenure|lease|coursework|of (college|school|study)|"
-    r"(?<![a-z])ago(?![a-z])")
+    r"(?<![a-z])ago(?![a-z])|in a row|consecutive|top workplace|best place")
 _PREFERRED_CUE = re.compile(
     r"prefer|nice to have|nice-to-have|(?<![a-z])bonus(?![a-z])|a plus(?![a-z])|"
     r"ideal(ly)?(?![a-z])|desired|desirable|advantageous")
