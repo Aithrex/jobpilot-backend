@@ -70,7 +70,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from services import salary_normalizer
+from services import salary_normalizer, us_geo
 from utils.db_connect import DBConnect
 from utils.security import InputSanitizer
 
@@ -573,6 +573,11 @@ _alias("BD", "bangladesh", "bgd")
 _alias("LK", "sri lanka", "lka")
 
 
+#: Region tokens `normalize_location` must not promote to a country - every US
+#: state code, plus "in" (Indiana or India; see the comment at the use).
+_STATE_LIKE_REGIONS = frozenset(us_geo._STATE_CODES) | {"in"}
+
+
 def normalize_country(value: Any) -> str:
     """Any country spelling -> ISO 3166-1 alpha-2, or "" when unrecognised.
 
@@ -613,7 +618,16 @@ def normalize_location(loc: Any) -> Dict[str, str]:
     # part is the country, not a region. Parsing them positionally filed the
     # country under `region` and left `country` empty, so every non-US
     # two-part location was uncountable.
-    if not country and region and normalize_country(region):
+    # A two-letter US STATE code is never promoted, even when it is also a
+    # country code: "San Francisco, CA" is California, not Canada. Promoting
+    # it filed 5,653 live US postings under CA/IL/CO/DE/ID/AR (2026-10-03) and
+    # hid every one from US-only feeds. Left as a region, it reaches the
+    # resolver below, which proves US first and still reads "Pune, IN" as
+    # India from its foreign-city gazetteer. "in" joins the state list here
+    # for the same reason `us_geo` keeps it out of its own: it is ambiguous,
+    # and only the resolver has the evidence to settle it.
+    if not country and region and normalize_country(region) \
+            and region.strip().lower() not in _STATE_LIKE_REGIONS:
         country, region = region, ""
     code = normalize_country(country)
     # When the positional split left `country` empty — "CDMX", "Bangkok MSG

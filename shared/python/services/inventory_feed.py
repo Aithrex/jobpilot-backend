@@ -193,7 +193,7 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
     # empty for most providers. Reading only the spelling let "IND-Work from
     # Home-Remote" (stored `country_code: IN`) into US-only feeds as a remote
     # row of unknown country (live, 2026-10-03).
-    iso = str(first.get("country_code") or "").strip().upper() if isinstance(first, dict) else ""
+    country_iso = str(first.get("country_code") or "").strip().upper() if isinstance(first, dict) else ""
     work_mode = doc.get("work_mode") or ""
     ats = doc.get("ats") or ""
     url = str(doc.get("canonical_url") or "")
@@ -218,8 +218,8 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
         "ats": ats,
         "industry": doc.get("industry") or "other",
         "location": location or "Not specified",
-        "country_hint": iso.lower() or country.lower(),
-        "country_code": iso or ("US" if country.lower() in ("us", "usa", "united states") else None),
+        "country_hint": country_iso.lower() or country.lower(),
+        "country_code": country_iso or ("US" if country.lower() in ("us", "usa", "united states") else None),
         "date_posted": iso if dated else "",
         "days_ago": days,
         # What the row can honestly say about its age. A dated row gets the
