@@ -299,3 +299,46 @@ class TestLeadAndHighRungs:
         assert fs.title_level("Software Engineer 5 - Partner Test Tech") == "senior"
         assert fs.title_level("Systems Engineer V") == "senior"
         assert fs.title_level("Software Engineer VI") == "senior"
+
+
+class TestTheNvidiaEngineeringManager:
+    """Shown on an Entry + Mid board, 2026-10-03: NVIDIA "Software Engineering
+    Manager - Cloud Streaming" asks "8+ overall years ... with 3+ years ...
+    leading teams". Three defects at once:
+
+    1. Workday serves descriptions HTML-entity-encoded ("8&#43; years"), and
+       `_norm` stripped tags but never decoded entities - so no "+" ever
+       matched. Sampled: 62% of Workday bodies are encoded, and decoding
+       changes the years reading for 22% of Workday postings.
+    2. "8+ overall years" - a qualifier between the number and "years" - was
+       not read at all.
+    3. "Software Engineering Manager" fell to the generic manager rule (mid).
+    """
+
+    JD = ("What we need to see:\\n"
+          "BS/MS degree in Computer Science or related areas\\n"
+          "8&#43; overall years of overall experience designing and building "
+          "distributed software systems, including edge and networking "
+          "services, with 3&#43; years of experience leading and developing "
+          "teams of engineers.")
+
+    def test_entities_are_decoded(self):
+        assert "8+" in fs._norm("8&#43; years")
+        assert fs._norm("C&#43;&#43; &amp; Go") == "c++ & go"
+
+    def test_a_qualifier_before_years_is_read(self):
+        assert fs._required_years("8+ overall years of overall experience in software") == 8
+        assert fs._required_years("5+ total years of professional experience") == 5
+        assert fs._required_years("minimum 6 combined years of relevant experience") == 6
+
+    def test_engineering_managers_are_not_mid(self):
+        for t in ("Software Engineering Manager - Cloud Streaming",
+                  "Manager, Software Engineering", "Engineering Manager, Platform",
+                  "Software Development Manager"):
+            assert fs.title_level(t) == "senior", t
+        assert fs.title_level("Restaurant Manager") == "mid"
+
+    def test_the_posting_is_read_as_staff(self):
+        assert fs._required_years(fs._norm(self.JD)) == 8
+        assert fs.level_from_signals("Software Engineering Manager - Cloud Streaming",
+                                     description=self.JD) == "staff"

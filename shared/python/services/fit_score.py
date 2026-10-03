@@ -49,6 +49,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import html
 import re
 import threading
 from collections import OrderedDict
@@ -181,6 +182,12 @@ def _norm(text: Any) -> str:
     """Lowercase, de-tag, and fold unicode dashes/quotes. Newlines survive:
     section detection needs them."""
     s = str(text or "")
+    # Decode entities BEFORE stripping tags (an encoded "&lt;p&gt;" is a tag).
+    # Workday serves descriptions entity-encoded - "8&#43; years", "C&#43;&#43;"
+    # - and decoding was missing: sampled 2026-10-03, 62% of Workday bodies
+    # were encoded and the years reading moved for 22% of Workday postings.
+    if "&" in s:
+        s = html.unescape(s)
     if "<" in s and ">" in s:
         s = _TAG_RE.sub("\n", s)
     s = s.translate(_DASHES).translate(_QUOTES).lower()
@@ -1165,9 +1172,16 @@ _LEVEL_PATTERNS: Sequence[Tuple[str, re.Pattern]] = (
 # "VP, Sales" are already claimed) and before the IC bands.
 _MANAGER_LEVEL: Sequence[Tuple[str, re.Pattern]] = (
     # A senior/group/general manager is a real second-line band.
+    # An ENGINEERING manager leads engineers - live, NVIDIA's "Software
+    # Engineering Manager" asks 8+ years with 3+ leading teams - and fell to
+    # the generic `mid` rule meant for "Restaurant Manager".
     ("senior", re.compile(r"(?<![a-z])(senior|sr\.?|group|general|regional|"
                           r"district|division|area|plant|site|national|global)"
-                          r"\s+manager(?![a-z])")),
+                          r"\s+manager(?![a-z])|"
+                          r"(?<![a-z])(software|engineering|development|devops|sre|"
+                          r"platform|infrastructure)\s+manager(?![a-z])|"
+                          r"(?<![a-z])manager,?\s+(of\s+)?(software|engineering|"
+                          r"platform|infrastructure)(?![a-z])")),
     # An assistant/associate/shift/team manager is not.
     ("entry", re.compile(r"(?<![a-z])(assistant|associate|shift|trainee)\s+"
                          r"(manager|supervisor|lead)(?![a-z])")),
@@ -1668,7 +1682,12 @@ def _split_sections(blob: str) -> Tuple[str, str]:
 # years" asks for 3), then up to 80 characters of what the years are OF.
 _HEADLINE_YEARS_RE = re.compile(
     r"(?<![\d.$])(\d{1,2})\s*(?:\+|plus)?\s*(?:(?:-|to)\s*\d{1,2}\s*\+?\s*)?"
-    r"(?:or\s+more\s+)?(?:years?|yrs?)(?![a-z])'?\s*([^\n]{0,80})")
+    r"(?:or\s+more\s+)?"
+    # A qualifier may sit between the number and "years": "8+ overall years",
+    # "5+ total years", "6 combined years" (live: NVIDIA's engineering manager).
+    r"(?:(?:overall|total|combined|cumulative|full[ -]time|professional|relevant|"
+    r"related|industry|progressive|post[ -]graduate)\s+)?"
+    r"(?:years?|yrs?)(?![a-z])'?\s*([^\n]{0,80})")
 # What makes a count of years an EXPERIENCE requirement rather than an age, a
 # company's history or a degree's length.
 _YEARS_CONTEXT = re.compile(

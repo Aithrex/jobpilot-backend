@@ -131,7 +131,14 @@ NORMALIZATION_VERSION = 4
 # now carries the corrected level onto `seniority` and `tech.seniority` as well.
 # `scripts/rederive_posting_levels.py` applies it from stored bodies at once;
 # this bump makes the crawl finish any row it does not reach.
-EXTRACTOR_VERSION = 5
+#
+# v6: `fit_score._norm` decodes HTML entities (Workday serves "8&#43; years";
+# 62% of sampled Workday bodies were encoded and the years reading moved for
+# 22% of Workday postings), "8+ overall years" is read, and engineering
+# managers are senior. Live trigger: NVIDIA "Software Engineering Manager"
+# (8+ years, 3+ leading teams) shown on an Entry + Mid board. Safe to bump
+# since 3c60c1d: a deferred listing-only row no longer erases its body.
+EXTRACTOR_VERSION = 6
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1
