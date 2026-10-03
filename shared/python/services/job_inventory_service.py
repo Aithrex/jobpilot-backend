@@ -1372,7 +1372,10 @@ def mark_requirements_parsed(
     if body_family or job_level:
         if body_family and doc and (doc.get("role_family") or "other") == "other" \
                 and (body_family not in ENGINEERING_FAMILIES
-                     or title_admits_body_family(doc.get("title_raw"))):
+                     or title_admits_body_family(
+                         doc.get("title_raw"),
+                         (doc.get("tech") or {}).get("tech_scope")
+                         if isinstance(doc.get("tech"), dict) else None)):
             update["role_family"] = body_family
         # The level, too. `job_level` is read from the title AND the full body
         # AND the years the posting states - the most informed reading there
@@ -1413,23 +1416,45 @@ ENGINEERING_FAMILIES = frozenset({"software_engineering", "devops", "security", 
                                   "data_engineering", "data_science"})
 
 
-def title_admits_body_family(title: Any) -> bool:
+#: An engineering role noun, abbreviations included ("Sr Advanced Cyb Sec
+#: Archt/Engr"). Deliberately NOT manager/specialist/consultant/lead: those
+#: name every occupation, which is how "Social Impact Manager" got in.
+_ENGINEERING_ROLE_NOUN = re.compile(
+    r"(?<![a-z])(engineers?|engr|developers?|programmers?|architects?|archt|"
+    r"administrators?|admin|analysts?|scientists?|testers?|testing|sre|dba)(?![a-z])")
+
+
+def title_admits_body_family(title: Any, stored_scope: Any = None) -> bool:
     """May a posting whose TITLE names no role family take its body's
     ENGINEERING family?
 
-    Only when the title itself is technical: it names a technical domain
+    Yes when the title itself is technical: it names a technical domain
     ("Technology Analyst", "Member of Technical Staff"), or the occupation
     classifier reads the title alone as core or adjacent tech ("Forward
-    Deployed Engineer", "Customer Engineer"). A body describes the COMPANY as
-    much as the job, so without this GitLab's "Social Impact Manager" became a
-    DevOps role, Oscar Health's "Provider Network Associate" a software one,
-    and both landed on a backend engineer's board (live, 2026-10-03).
+    Deployed Engineer", "Customer Engineer"), or it carries an engineering
+    role noun AND the posting's own classification (title + body) is core
+    ("Microservices Engineer", "System Engineer", "Lead Engineer").
+
+    A body describes the COMPANY as much as the job, so without this GitLab's
+    "Social Impact Manager" became a DevOps role, Oscar Health's "Provider
+    Network Associate" a software one, and both landed on a backend engineer's
+    board (live, 2026-10-03).
     """
     try:
         from services import tech_taxonomy
         t = str(title or "")
-        if tech_taxonomy._TITLE_TECH_TOKEN_RE.search(tech_taxonomy._norm(t)):
+        norm = tech_taxonomy._norm(t)
+        if tech_taxonomy._TITLE_TECH_TOKEN_RE.search(norm):
             return True
+        if stored_scope == "core":
+            from services import fit_score
+            # An engineering role noun, an engineering manager ("Manager,
+            # Engineering"), or a title in a script these rules cannot read
+            # ("对日软件开发实习生") - each with the posting's own core reading.
+            if _ENGINEERING_ROLE_NOUN.search(norm) \
+                    or re.search(fit_score._ENGINEERING_MANAGER, norm) \
+                    or not re.search(r"[a-z]", norm):
+                return True
         return tech_taxonomy.classify(t).to_doc().get("tech_scope") in ("core", "adjacent")
     except Exception:  # pragma: no cover - classification must never fail a write
         return False

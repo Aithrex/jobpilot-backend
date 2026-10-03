@@ -83,3 +83,25 @@ class TestTheRepair:
         assert not mod.should_reset({"title_raw": "DevOps Engineer", "role_family": "devops"})
         assert not mod.should_reset({"title_raw": "Member of Technical Staff", "role_family": "software_engineering"})
         assert not mod.should_reset({"title_raw": "Charge RN", "role_family": "nursing"})
+
+
+class TestEngineeringNounsWithCoreScope:
+    """The first gate's dry run would have stripped 1,239 families, including
+    real engineering roles whose titles the phrase rules do not know:
+    "Microservices Engineer", "System Engineer", "Lead Engineer", "Sr
+    Advanced Cyb Sec Archt/Engr". Each is stored `core`."""
+
+    def test_an_engineering_noun_with_a_core_classification_is_admitted(self):
+        for t in ("Microservices Engineer", "System Engineer", "Lead Engineer",
+                  "Sr Advanced Cyb Sec Archt/Engr", "Applications Development Intermediate Analyst"):
+            assert inv.title_admits_body_family(t, "core"), t
+
+    def test_a_noun_alone_or_a_core_scope_alone_is_not_enough(self):
+        assert not inv.title_admits_body_family("Field Service Engineer", "unknown")
+        assert not inv.title_admits_body_family("Social Impact Manager", "core")
+        assert not inv.title_admits_body_family("Team Lead", "core")
+
+    def test_engineering_managers_and_unreadable_scripts_with_core_scope(self):
+        assert inv.title_admits_body_family("Manager, Engineering", "core")
+        assert inv.title_admits_body_family("对日软件开发实习生", "core")
+        assert not inv.title_admits_body_family("对日软件开发实习生", "unknown")

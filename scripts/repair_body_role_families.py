@@ -19,7 +19,9 @@ A posting is reset to `other` only when ALL hold:
   * its stored family is an engineering one (`ENGINEERING_FAMILIES`);
   * its title alone names no family (`role_family_of(title) == "other"`), so
     the stored family can only have come from the body;
-  * the title is not technical (`title_admits_body_family` is False).
+  * the title is not technical (`title_admits_body_family` is False) - it
+    names no technical domain, does not classify as tech on its own, and does
+    not pair an engineering role noun with a core-tech classification.
 `other` is what insert writes for these titles, so nothing is invented.
 
     python scripts/repair_body_role_families.py           # dry run
@@ -42,7 +44,8 @@ def should_reset(doc) -> bool:
     title = str(doc.get("title_raw") or "")
     return doc.get("role_family") in inv.ENGINEERING_FAMILIES \
         and inv.role_family_of(title) == "other" \
-        and not inv.title_admits_body_family(title)
+        and not inv.title_admits_body_family(
+            title, (doc.get("tech") or {}).get("tech_scope") if isinstance(doc.get("tech"), dict) else None)
 
 
 def main() -> int:
@@ -61,7 +64,7 @@ def main() -> int:
     by_family: collections.Counter = collections.Counter()
     titles: collections.Counter = collections.Counter()
     ops = []
-    for doc in jp.find(q, {"_id": 1, "title_raw": 1, "role_family": 1}).batch_size(2000):
+    for doc in jp.find(q, {"_id": 1, "title_raw": 1, "role_family": 1, "tech.tech_scope": 1}).batch_size(2000):
         if not should_reset(doc):
             continue
         by_family[doc["role_family"]] += 1
