@@ -1133,6 +1133,13 @@ _LEVEL_PATTERNS: Sequence[Tuple[str, re.Pattern]] = (
     ("senior", re.compile(r"(?<![a-z])(senior|snr|sr\.?)(?![a-z])|"
                           r"(?<![a-z])lead\s+(?:[a-z/+#.-]+\s+){0,2}"
                           r"(?:engineer|developer|scientist|programmer)(?![a-z])|"
+                          # ...and the lead AFTER the discipline: "Site Reliability
+                          # Engineering Lead", "Tech Lead". "Team Lead" and
+                          # "Shift Lead" stay with the manager rules.
+                          r"(?<![a-z])(?:engineering|engineer|software|reliability|"
+                          r"platform|infrastructure|devops|sre|ml|qa|security|"
+                          r"frontend|backend|data\s+engineering)\s+lead(?![a-z])|"
+                          r"(?<![a-z])tech(?:nical)?\s+lead(?![a-z])|"
                           r"(?<![a-z0-9])(i{3,4}|iv|vi?|[3-6])(?![a-z0-9.])")),
     # 6. Early career. This list is the answer to "I never see early-career
     #    roles": the old one carried only intern/junior/graduate/trainee/
@@ -1267,6 +1274,61 @@ _YEARS_IN_TITLE = re.compile(
     r"(?<![\d.])\d{1,2}\s*\+?\s*(?:(?:-|to)\s*\d{1,2}\s*\+?\s*)?(?:years?|yrs?)(?![a-z])")
 
 
+# Employer level codes in titles - Netflix "(L5)", Meta "E4", Apple "ICT3".
+# Their meaning is the EMPLOYER's: an L5 is senior at Netflix and Google but
+# mid at Amazon, so they are read only for employers whose ladder is known.
+_LADDER_CODE = re.compile(r"(?<![a-z0-9])(ict|ic|l|e)\s?-?(\d{1,2})(?![a-z0-9])")
+_LADDERS: Dict[str, Dict[str, Dict[int, str]]] = {
+    "google": {"l": {3: "entry", 4: "mid", 5: "senior", 6: "staff", 7: "principal", 8: "principal"}},
+    "netflix": {"l": {3: "entry", 4: "mid", 5: "senior", 6: "staff", 7: "principal"}},
+    "meta": {"e": {3: "entry", 4: "mid", 5: "senior", 6: "staff", 7: "principal"},
+             "ic": {3: "entry", 4: "mid", 5: "senior", 6: "staff", 7: "principal"}},
+    "amazon": {"l": {4: "entry", 5: "mid", 6: "senior", 7: "principal", 8: "principal"}},
+    "apple": {"ict": {2: "entry", 3: "mid", 4: "senior", 5: "staff", 6: "principal"}},
+    "uber": {"l": {3: "entry", 4: "mid", 5: "senior", 6: "staff", 7: "principal"}},
+    "lyft": {"l": {3: "entry", 4: "mid", 5: "senior", 6: "staff", 7: "principal"}},
+}
+_LADDER_ALIASES = {"alphabet": "google", "facebook": "meta", "aws": "amazon",
+                   "amazon web services": "amazon"}
+
+
+def _ladder_for(employer: Any) -> Optional[Dict[str, Dict[int, str]]]:
+    name = _norm(employer)
+    for alias, key in _LADDER_ALIASES.items():
+        if re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", name):
+            return _LADDERS[key]
+    for key, ladder in _LADDERS.items():
+        if re.search(rf"(?<![a-z]){key}(?![a-z])", name):
+            return ladder
+    return None
+
+
+def employer_ladder_level(title: Any, employer: Any) -> Optional[str]:
+    """The band an employer's own level code in the title states, or None."""
+    ladder = _ladder_for(employer)
+    if not ladder:
+        return None
+    for m in _LADDER_CODE.finditer(_norm(title)):
+        band = ladder.get(m.group(1), {}).get(int(m.group(2)))
+        if band:
+            return band
+    return None
+
+
+def level_with_employer(level: Any, title: Any, employer: Any,
+                        required_years: Any) -> Any:
+    """`level`, unless the title carries the employer's own level code - that
+    is the stated level, raised (never lowered) by the years asked for."""
+    stated = employer_ladder_level(title, employer)
+    if not stated:
+        return level
+    by_years = _level_from_years(required_years)
+    if by_years and stated in _YEARS_CAN_RAISE \
+            and _LEVEL_ORDER[by_years] > _LEVEL_ORDER[stated]:
+        return by_years
+    return stated
+
+
 def title_level(title: Any) -> Optional[str]:
     """The band a TITLE states, or None when it states none.
 
@@ -1330,7 +1392,7 @@ _YEARS_TO_LEVEL: Sequence[Tuple[int, str]] = (
 
 
 def level_from_signals(title: Any, *, description: Any = "",
-                       required_years: Any = None) -> Optional[str]:
+                       required_years: Any = None, employer: Any = None) -> Optional[str]:
     """The band, resolved from every signal available, or None.
 
     Title first, because a stated level is the employer's own answer. Then the
@@ -1343,7 +1405,7 @@ def level_from_signals(title: Any, *, description: Any = "",
     - it is the posting's own requirement, restated in the vocabulary the feed
     filters on.
     """
-    stated = title_level(title)
+    stated = employer_ladder_level(title, employer) or title_level(title)
     if stated == "intern":
         # An internship that mentions "3 years of coursework" is still an
         # internship; years never move a posting out of this band.

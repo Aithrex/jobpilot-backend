@@ -116,3 +116,71 @@ class TestTheCrawlAdmitsAgedEarlyCareerOnly:
         assert worker._inside_listing_window(aged, "entry", self.FRESH, early_cut) is True
         assert worker._inside_listing_window(aged, "senior", self.FRESH, early_cut) is False
         assert worker._inside_listing_window(NOW, "senior", self.FRESH, early_cut) is True
+
+
+class TestDeepListingOncePerDay:
+    """Listing every shard back 30 days on every tick (f7f0175) halved Workday
+    throughput: per hour, postings written fell 64,970 -> 25,016 and rows
+    skipped for budget rose 2,252 -> 58,727, because paged sources read ~4x
+    the pages to find a few older early-career roles. Now each shard lists
+    back 30 days ONCE A DAY (a deep run) and 7 days otherwise; its first deep
+    run lands at a per-shard hour, so the fleet does not go deep at once."""
+
+    def test_a_shard_deep_lists_once_a_day(self):
+        now = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
+        assert inv.deep_listing_due({"deep_listed_at": now - timedelta(hours=25)},
+                                    now, shard="s1") is True
+        assert inv.deep_listing_due({"deep_listed_at": now - timedelta(hours=2)},
+                                    now, shard="s1") is False
+
+    def test_first_deep_runs_are_spread_across_the_day(self):
+        hours = {inv.deep_listing_first_hour("workday", f"s{i:03d}") for i in range(48)}
+        assert len(hours) >= 12
+        h = inv.deep_listing_first_hour("workday", "s007")
+        at = datetime(2026, 10, 3, h, 5, tzinfo=timezone.utc)
+        assert inv.deep_listing_due({}, at, source="workday", shard="s007") is True
+        other = at.replace(hour=(h + 1) % 24)
+        assert inv.deep_listing_due({}, other, source="workday", shard="s007") is False
+
+    def test_mark_deep_listed(self):
+        now = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
+        inv.ensure_source_state("workday", "s009", now=now)
+        inv.mark_deep_listed("workday", "s009", now=now)
+        doc = inv._source_state().find_one({"source": "workday", "shard": "s009"})
+        assert doc["deep_listed_at"] == naive(now)
+
+
+class TestEmployerLaddersReachTheStoredLevel:
+    def test_insert_and_reparse_use_the_employer_ladder(self, db):
+        from services import fit_score
+        raw = _raw("NF1", "Software Engineer (L5) - JavaScript Platform", 1)
+        raw["company"] = "Netflix"
+        inv.upsert_posting(raw, now=NOW)
+        doc = db.job_postings.find_one({"source_job_id": "NF1"})
+        assert doc["seniority"] == "senior"
+        assert doc["tech"]["seniority"] == "senior"
+        req = fit_score.extract_requirements("Build our JavaScript platform.", doc["title_raw"])
+        assert inv.mark_requirements_parsed("workday", "NF1", doc["content_hash"], req, now=NOW)
+        after = db.job_postings.find_one({"source_job_id": "NF1"})
+        assert after["seniority"] == "senior"
+        assert after["requirements"]["job_level"] == "senior"
+
+
+class TestAgedRowsAreJudgedByTheirYearsToo:
+    """In a ground truth of 100 real entry-level roles, 70 were entry-level
+    only by their STATED YEARS ("Forward Deployed Software Engineer", 1 year).
+    Lever and Ashby listings carry the body, and a deep run asks Greenhouse
+    for it, so an aged row can be judged on its years with no extra request."""
+
+    FRESH = NOW - timedelta(days=7)
+
+    def test_an_aged_row_with_entry_years_in_its_body_is_admitted(self):
+        rows = [({"member_key": "m"}, {"source_job_id": "a", "title": "Software Engineer",
+                                        "posted_at": NOW - timedelta(days=12),
+                                        "description": "Qualifications: 0-2 years of experience."}),
+                ({"member_key": "m"}, {"source_job_id": "b", "title": "Software Engineer",
+                                        "posted_at": NOW - timedelta(days=12),
+                                        "description": "Qualifications: 6+ years of experience."})]
+        kept, dropped = worker._admit_by_age(rows, {}, fresh_cutoff=self.FRESH)
+        assert [r["source_job_id"] for _m, r in kept] == ["a"]
+        assert dropped == 1

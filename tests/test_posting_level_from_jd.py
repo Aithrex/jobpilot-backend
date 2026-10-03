@@ -342,3 +342,38 @@ class TestTheNvidiaEngineeringManager:
         assert fs._required_years(fs._norm(self.JD)) == 8
         assert fs.level_from_signals("Software Engineering Manager - Cloud Streaming",
                                      description=self.JD) == "staff"
+
+
+class TestLeadSuffixAndEmployerLadders:
+    """Open items from 2026-10-03: "Site Reliability Engineering Lead" read
+    `mid` (the lead rule only matched "Lead <...> Engineer"), and employer
+    level codes - Netflix "(L5)", Meta "E4", Apple "ICT3" - were not read."""
+
+    def test_lead_after_the_discipline_is_senior(self):
+        for t in ("Site Reliability Engineering Lead", "Software Engineering Lead",
+                  "Tech Lead, Payments", "Technical Lead - Platform", "Data Engineering Lead"):
+            assert fs.title_level(t) == "senior", t
+        assert fs.title_level("Team Lead, Customer Support") == "mid"
+        assert fs.title_level("Shift Lead") != "senior"  # an existing rule reads it entry
+
+    def test_employer_ladder_codes(self):
+        cases = [("Software Engineer (L5) - JavaScript Platform", "Netflix", "senior"),
+                 ("Distributed Systems Engineer (L4) - Data Platform", "Netflix", "mid"),
+                 ("Software Engineer III, L4", "Google", "mid"),
+                 ("Software Engineer, E4", "Meta", "mid"),
+                 ("Software Development Engineer, L5", "Amazon", "mid"),
+                 ("Software Engineer (ICT3)", "Apple Inc.", "mid"),
+                 ("Software Engineer, L3", "Uber Technologies", "entry")]
+        for title, employer, want in cases:
+            assert fs.employer_ladder_level(title, employer) == want, (title, employer)
+
+    def test_unknown_employers_and_plain_titles_have_no_ladder(self):
+        assert fs.employer_ladder_level("Software Engineer (L5)", "Acme Corp") is None
+        assert fs.employer_ladder_level("Software Engineer", "Netflix") is None
+
+    def test_the_ladder_is_the_stated_level_and_years_still_raise(self):
+        assert fs.level_from_signals("Software Engineer (L5)", employer="Netflix") == "senior"
+        assert fs.level_from_signals("Software Engineer (L4)", employer="Netflix",
+                                     required_years=6) == "senior"
+        assert fs.level_with_employer("unknown", "Software Engineer (L5)", "Netflix", None) == "senior"
+        assert fs.level_with_employer("mid", "Software Engineer", "Netflix", None) == "mid"

@@ -63,6 +63,7 @@ import logging
 import os
 import re
 import uuid
+import zlib
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -138,7 +139,11 @@ NORMALIZATION_VERSION = 4
 # managers are senior. Live trigger: NVIDIA "Software Engineering Manager"
 # (8+ years, 3+ leading teams) shown on an Entry + Mid board. Safe to bump
 # since 3c60c1d: a deferred listing-only row no longer erases its body.
-EXTRACTOR_VERSION = 6
+#
+# v7: employer level codes ("Software Engineer (L5)" at Netflix is senior,
+# "E4" at Meta mid, "ICT3" at Apple mid) and the lead AFTER the discipline
+# ("Site Reliability Engineering Lead", "Tech Lead") change stored levels.
+EXTRACTOR_VERSION = 7
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1
@@ -425,7 +430,7 @@ SENIORITY_UNKNOWN = "unknown"
 
 
 def seniority_of(title: Any, *, description: Any = "",
-                 required_years: Any = None) -> str:
+                 required_years: Any = None, employer: Any = None) -> str:
     """Seniority band, from `fit_score` so writer and reader agree.
 
     Reads the TITLE first, then the description, then the years the posting
@@ -449,9 +454,17 @@ def seniority_of(title: Any, *, description: Any = "",
     """
     try:
         from services import fit_score
-        return fit_score.level_from_signals(
+        level = fit_score.level_from_signals(
             normalize_title(title), description=description,
-            required_years=required_years) or SENIORITY_UNKNOWN
+            required_years=required_years)
+        # The employer's own level code ("(L5)") is read off the RAW title:
+        # `normalize_title` drops the parenthetical that carries it.
+        if employer:
+            years = fit_score._max_known(
+                required_years,
+                fit_score._required_years(fit_score._norm(description)) if description else None)
+            level = fit_score.level_with_employer(level, title, employer, years)
+        return level or SENIORITY_UNKNOWN
     except Exception:  # pragma: no cover
         return SENIORITY_UNKNOWN
 
@@ -950,7 +963,8 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
                                       description=description_text,
                                       required_years=(raw.get("requirements") or {}).get(
                                           "required_years")
-                                      if isinstance(raw.get("requirements"), dict) else None)),
+                                      if isinstance(raw.get("requirements"), dict) else None,
+                                      employer=employer_name)),
         "locations": locations,
         "work_mode": normalize_work_mode(
             raw.get("work_mode"), title=title_raw,
@@ -1053,6 +1067,11 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
         doc["tech"] = {"tech_scope": "unknown",
                        "taxonomy_version": "error",
                        "classification_confidence": 0.0}
+    # ONE level per posting: the card reads `tech.seniority`, the filter reads
+    # `seniority`. `seniority` is the better-informed of the two here (it
+    # knows the employer's own level codes), so the card mirrors it.
+    if isinstance(doc.get("tech"), dict) and doc.get("seniority") not in (None, "", SENIORITY_UNKNOWN):
+        doc["tech"]["seniority"] = doc["seniority"]
     return doc
 
 
@@ -1314,15 +1333,21 @@ def mark_requirements_parsed(
     # by one derived from the body. A title is the employer's own summary and a
     # body can mention many roles ("you will partner with our nursing staff").
     body_family = _safe_family(payload.get("role_family"))
-    job_level = stored["job_level"]
     level_expiry: Optional[datetime] = None
+    doc = _postings().find_one(
+        {"source": _safe_key(source, 60),
+         "source_job_id": _safe_str(source_job_id, 200)},
+        {"_id": 0, "role_family": 1, "tech": 1, "seniority": 1,
+         "posted_at": 1, "first_seen_at": 1, "title_raw": 1, "employer_name": 1},
+    ) or {}
+    # The extractor sees title and body but not the EMPLOYER, whose own level
+    # code ("Software Engineer (L5)" at Netflix) is the stated level.
+    from services import fit_score as _fs
+    stored["job_level"] = _safe_family(_fs.level_with_employer(
+        stored["job_level"], doc.get("title_raw"), doc.get("employer_name"),
+        stored["required_years"]), 20) or None
+    job_level = stored["job_level"]
     if body_family or job_level:
-        doc = _postings().find_one(
-            {"source": _safe_key(source, 60),
-             "source_job_id": _safe_str(source_job_id, 200)},
-            {"_id": 0, "role_family": 1, "tech": 1, "seniority": 1,
-             "posted_at": 1, "first_seen_at": 1},
-        ) or {}
         if body_family and doc and (doc.get("role_family") or "other") == "other":
             update["role_family"] = body_family
         # The level, too. `job_level` is read from the title AND the full body
@@ -2296,6 +2321,35 @@ def ensure_source_state(source: str, shard: str,
         upsert=True,
     )
     return _source_state().find_one(key)
+
+
+#: How often each shard lists back to the EARLY-CAREER window (a "deep"
+#: run). Every tick did, in f7f0175, and Workday throughput halved: paged
+#: sources read ~4x the pages to find a few older early-career roles. Once a
+#: day still re-sees (and so can close) every aged early-career posting.
+DEEP_LIST_INTERVAL_HOURS = _env_int("JOB_INGEST_DEEP_LIST_HOURS", 24)
+
+
+def deep_listing_first_hour(source: str, shard: str) -> int:
+    """The UTC hour a shard's FIRST deep run may start - spread by a stable
+    hash so the fleet does not go deep together after a deploy."""
+    return zlib.crc32(f"{source}:{shard}".encode("utf-8")) % 24
+
+
+def deep_listing_due(state: Optional[Dict[str, Any]], now: datetime, *,
+                     source: str = "", shard: str = "") -> bool:
+    """Whether this run of the shard should list back to the early-career window."""
+    last = _safe_dt((state or {}).get("deep_listed_at"))
+    if last is not None:
+        return now - last >= timedelta(hours=DEEP_LIST_INTERVAL_HOURS)
+    src = source or str((state or {}).get("source") or "")
+    shd = shard or str((state or {}).get("shard") or "")
+    return now.hour == deep_listing_first_hour(src, shd)
+
+
+def mark_deep_listed(source: str, shard: str, *, now: Optional[datetime] = None) -> None:
+    _source_state().update_one(_state_key(source, shard),
+                               {"$set": {"deep_listed_at": now or _now()}})
 
 
 def acquire_lease(

@@ -186,6 +186,9 @@ SHARD_COUNTS: Dict[str, int] = {
 
 # ADR-001: the guest boundary. Listing stops here; nothing older is paged for.
 FRESHNESS_BOUNDARY_DAYS = _env_int("JOB_INGEST_MAX_AGE_DAYS", 7)
+#: A daily deep run (`inv.deep_listing_due`) lists ~4x the pages of a normal
+#: one on paged sources; it gets this multiple of the shard budget.
+DEEP_BUDGET_MULTIPLIER = _env_float("JOB_INGEST_DEEP_BUDGET_MULTIPLIER", 2.0)
 
 # Wall-clock budget for ONE shard run. Well inside the Lambda ceiling, and the
 # lease TTL (900s) is deliberately longer so a lease cannot lapse mid-run.
@@ -1699,8 +1702,13 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
     member["_listing_truncated"] = False
     rows: List[Dict[str, Any]] = []
 
+    # A DEEP run (listing back past the 7-day window to find older early-career
+    # roles) asks Greenhouse for the bodies too: still one request per board,
+    # and most entry roles are entry-level only in their stated years.
+    deep = bool(now) and cutoff < (now or _utcnow()) - timedelta(days=FRESHNESS_BOUNDARY_DAYS + 1)
     if ats == "greenhouse":
-        url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=false"
+        url = ("https://boards-api.greenhouse.io/v1/boards/"
+               f"{slug}/jobs?content={'true' if deep else 'false'}")
         data = http_get_json(SOURCE_CAREER, url, policy, deadline=deadline, stop=stop)
         for job in ((data or {}).get("jobs") or []) if isinstance(data, dict) else []:
             # first_published ONLY. ADR-001 removed the updated_at fallback:
@@ -1713,7 +1721,9 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
                 member, job.get("id"), title=job.get("title") or "",
                 url=job.get("absolute_url") or "", posted_at=posted_at,
                 location=((job.get("location") or {}).get("name")) or "",
-                compensation=_pay_of(job)))
+                compensation=_pay_of(job),
+                **({"description": _html_to_text(job.get("content") or "")[:15000]}
+                   if deep and job.get("content") else {})))
 
     elif ats == "lever":
         url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
@@ -2286,8 +2296,14 @@ def _admit_by_age(rows: List[Tuple[Dict[str, Any], Dict[str, Any]]],
         if posted is not None and posted < fresh_cutoff:
             stored_level = (existing_by_id.get(row.get("source_job_id")) or {}).get("seniority")
             title_level = fit_score.title_level(row.get("title") or "")
+            body = str(row.get("description") or "")
+            # The body, when the listing carries one (Lever, Ashby; Greenhouse
+            # on a deep run): most entry roles say so only in their years.
+            body_level = (fit_score.level_from_signals(row.get("title") or "", description=body)
+                          if body.strip() and title_level is None else None)
             if (stored_level not in inv.EARLY_CAREER_LEVELS
-                    and title_level not in inv.EARLY_CAREER_LEVELS):
+                    and title_level not in inv.EARLY_CAREER_LEVELS
+                    and body_level not in inv.EARLY_CAREER_LEVELS):
                 dropped += 1
                 continue
         kept.append((member, row))
@@ -2408,8 +2424,9 @@ def run_shard(
     budget = float(budget_seconds if budget_seconds is not None else SHARD_BUDGET_SECONDS)
     deadline = started + max(1.0, budget)
     fresh_cutoff = now - timedelta(days=max(0, int(max_age_days)))
-    # Listing reads back to the EARLY-CAREER window; `_admit_by_age` then keeps
-    # only early-career rows older than `fresh_cutoff`.
+    # Once a day per shard (`inv.deep_listing_due`) the listing reads back to
+    # the EARLY-CAREER window and `_admit_by_age` keeps only early-career rows
+    # older than `fresh_cutoff`; every other run lists the usual 7 days.
     early_cutoff = min(fresh_cutoff,
                        now - timedelta(days=max(0, int(inv.EARLY_CAREER_MAX_AGE_DAYS))))
 
@@ -2426,6 +2443,11 @@ def run_shard(
         result.update({"skipped": "lease_unavailable", "counts": {}})
         return result
 
+    deep = inv.deep_listing_due(state, now, source=src, shard=shard_id)
+    list_cutoff = early_cutoff if deep else fresh_cutoff
+    if deep:
+        # A deep run reads more pages; give it room so it still WRITES.
+        deadline = started + max(1.0, budget * DEEP_BUDGET_MULTIPLIER)
     run_id = inv.start_run(src, shard_id, trace_id=owner, now=now)
     members = _rotate_members(shard_members(src, shard_id), now=now)
     policy = HostPolicy()
@@ -2438,7 +2460,7 @@ def run_shard(
         listed_keys: set = set()
         rows: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
         listing = run_bounded(
-            lambda m: list_member(m, cutoff=early_cutoff, policy=policy,
+            lambda m: list_member(m, cutoff=list_cutoff, policy=policy,
                                   deadline=deadline, stop=stop, now=now),
             members, max_workers=listing_workers, deadline=deadline, stop=stop)
         # Two different sets, and conflating them deletes inventory:
@@ -2618,7 +2640,7 @@ def run_shard(
                                               "rows": len(rows)}, now=now)
         closed = _close_stale_in_shard(src, censused_keys, cutoff_seen=now,
                                        fresh_cutoff=fresh_cutoff, run_id=run_id,
-                                       now=now, early_cutoff=early_cutoff)
+                                       now=now, early_cutoff=list_cutoff)
         counts["closed"] += closed
 
         if members and not listed_keys:
@@ -2629,9 +2651,13 @@ def run_shard(
                 f"(tripped hosts: {len(policy.tripped)})"
             )
 
+        if deep:
+            counts["deep-listing"] = 1
         inv.bump_run_counts(run_id, **{k: int(v) for k, v in counts.items()})
         inv.finish_run(run_id, status="succeeded", now=now)
         inv.record_success(src, shard_id, owner=owner, now=now)
+        if deep:
+            inv.mark_deep_listed(src, shard_id, now=now)
         result.update({
             "counts": dict(counts),
             "listed_members": len(listed_keys),
