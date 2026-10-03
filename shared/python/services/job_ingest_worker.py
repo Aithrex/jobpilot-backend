@@ -1698,6 +1698,12 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
     whenever it succeeds, which is what lets `_close_stale_in_shard` act on
     these members.
     """
+    # Imported HERE. The deep-run branch below used it without importing it
+    # (a18db94): every Greenhouse board raised NameError on every deep run, so
+    # for a day no aged early-career role was admitted from 686 of the 1,309
+    # career-page companies, and each run just logged 30-40 "errors".
+    from services.career_pages_service import _html_to_text
+
     ats, slug = member["ats"], member["slug"]
     member["_listing_truncated"] = False
     rows: List[Dict[str, Any]] = []

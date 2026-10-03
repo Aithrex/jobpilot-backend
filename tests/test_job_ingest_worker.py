@@ -367,6 +367,42 @@ def test_career_listing_drops_rows_past_the_boundary(monkeypatch):
     assert [r["title"] for r in rows] == ["Fresh"]
 
 
+def test_a_deep_greenhouse_listing_reads_bodies_and_admits_entry_by_years(monkeypatch):
+    """The deep branch called `_html_to_text` without importing it, so every
+    Greenhouse board raised NameError on every deep run (live 2026-10-03:
+    Coinbase "Software Engineer, Developer Infrastructure", 2 years, posted 24
+    days earlier, never admitted). This runs the REAL listing code on a deep
+    cutoff, then the real admission rule."""
+    urls = []
+
+    def fake_http(source, url, policy, **kw):
+        urls.append(url)
+        return {"jobs": [
+            {"id": 7, "title": "Software Engineer, Developer Infrastructure",
+             "absolute_url": "https://x/7",
+             "first_published": (NOW - timedelta(days=24)).isoformat(),
+             "location": {"name": "Remote - USA"},
+             "content": "&lt;p&gt;Qualifications: 2+ years of experience in software engineering.&lt;/p&gt;"},
+            {"id": 8, "title": "Software Engineer, Payments",
+             "absolute_url": "https://x/8",
+             "first_published": (NOW - timedelta(days=24)).isoformat(),
+             "location": {"name": "Remote - USA"},
+             "content": "&lt;p&gt;Qualifications: 6+ years of experience in software engineering.&lt;/p&gt;"},
+        ]}
+
+    monkeypatch.setattr(w, "http_get_json", fake_http)
+    member = dict(_fake_members(w.SOURCE_CAREER, 1)[0], ats="greenhouse")
+    rows = w._list_career(member, cutoff=NOW - timedelta(days=30),
+                          policy=w.HostPolicy(min_interval=0, jitter=0),
+                          deadline=time.monotonic() + 30, now=NOW)
+    assert urls and urls[0].endswith("content=true")
+    assert len(rows) == 2 and "2+ years" in rows[0]["description"]
+    kept, dropped = w._admit_by_age([(member, r) for r in rows], {},
+                                    fresh_cutoff=NOW - timedelta(days=7))
+    assert [r["title"] for _m, r in kept] == ["Software Engineer, Developer Infrastructure"]
+    assert dropped == 1
+
+
 # ---------------------------------------------------------------------------
 # 5. Shard runs: idempotence, duplicate delivery, watermark, closure
 # ---------------------------------------------------------------------------

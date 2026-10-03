@@ -16,3 +16,7 @@ Pillow>=10.0
 # zoneinfo raises ZoneInfoNotFoundError without this package and the civil-day
 # tests fall back to UTC (off-by-one vs America/Los_Angeles).
 tzdata>=2024.1
+
+# Undefined-name gate (tests/test_no_undefined_names.py). pytest cannot see a
+# name that is only undefined on a branch no test runs.
+ruff>=0.5

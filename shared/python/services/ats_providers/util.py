@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 # ---------------------------------------------------------------------------
 # HTML -> text
