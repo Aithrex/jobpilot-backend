@@ -143,7 +143,15 @@ NORMALIZATION_VERSION = 4
 # v7: employer level codes ("Software Engineer (L5)" at Netflix is senior,
 # "E4" at Meta mid, "ICT3" at Apple mid) and the lead AFTER the discipline
 # ("Site Reliability Engineering Lead", "Tech Lead") change stored levels.
-EXTRACTOR_VERSION = 7
+#
+# v8: engineering managers and leads outrank a rung ("Engineering Manager II",
+# "Test Engineering Manager 2", "Site Reliability Engineering (SRE) Manager",
+# "Engineering Team Lead", "Software Engineer, Lead") - all read `mid` and
+# showed on Entry+Mid boards (live, 2026-10-03). Postings with NO stored body
+# are re-levelled from the title by `relevel_from_title`; the v7 re-derive
+# skipped all 55,901 of them and left 247 whose own title says senior at
+# entry or mid.
+EXTRACTOR_VERSION = 8
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1
@@ -1362,7 +1370,9 @@ def mark_requirements_parsed(
         stored["required_years"]), 20) or None
     job_level = stored["job_level"]
     if body_family or job_level:
-        if body_family and doc and (doc.get("role_family") or "other") == "other":
+        if body_family and doc and (doc.get("role_family") or "other") == "other" \
+                and (body_family not in ENGINEERING_FAMILIES
+                     or title_admits_body_family(doc.get("title_raw"))):
             update["role_family"] = body_family
         # The level, too. `job_level` is read from the title AND the full body
         # AND the years the posting states - the most informed reading there
@@ -1394,6 +1404,72 @@ def mark_requirements_parsed(
             {**key, "expire_at": {"$exists": True}, "pinned": {"$ne": True}},
             {"$set": {"expire_at": level_expiry}})
     return bool(res.matched_count)
+
+
+#: Legacy role families that mean "an engineering job". Only these are gated
+#: by `title_admits_body_family`: a nursing body under a title that names no
+#: family is still a nursing job.
+ENGINEERING_FAMILIES = frozenset({"software_engineering", "devops", "security", "qa",
+                                  "data_engineering", "data_science"})
+
+
+def title_admits_body_family(title: Any) -> bool:
+    """May a posting whose TITLE names no role family take its body's
+    ENGINEERING family?
+
+    Only when the title itself is technical: it names a technical domain
+    ("Technology Analyst", "Member of Technical Staff"), or the occupation
+    classifier reads the title alone as core or adjacent tech ("Forward
+    Deployed Engineer", "Customer Engineer"). A body describes the COMPANY as
+    much as the job, so without this GitLab's "Social Impact Manager" became a
+    DevOps role, Oscar Health's "Provider Network Associate" a software one,
+    and both landed on a backend engineer's board (live, 2026-10-03).
+    """
+    try:
+        from services import tech_taxonomy
+        t = str(title or "")
+        if tech_taxonomy._TITLE_TECH_TOKEN_RE.search(tech_taxonomy._norm(t)):
+            return True
+        return tech_taxonomy.classify(t).to_doc().get("tech_scope") in ("core", "adjacent")
+    except Exception:  # pragma: no cover - classification must never fail a write
+        return False
+
+
+def relevel_from_title(source: str, source_job_id: str, *,
+                       now: Optional[datetime] = None) -> Optional[Tuple[str, str]]:
+    """Re-read a posting's level from its title (and any years already
+    extracted) when there is no body to re-parse. `(old, new)` when it moved.
+
+    The body re-derive (`scripts/rederive_posting_levels.py`) can only reach
+    postings whose description we hold; the rest kept whatever level the title
+    rules of the day gave them at insert. Same rules as insert
+    (`seniority_of`), same side effects as a re-parse (`seniority`,
+    `tech.seniority`, and the retention window), and like a re-parse it never
+    blanks a level: a title that states none leaves the posting as it was.
+    """
+    now = now or _now()
+    key = {"source": _safe_key(source, 60),
+           "source_job_id": _safe_str(source_job_id, 200)}
+    doc = _postings().find_one(key, {
+        "_id": 0, "title_raw": 1, "employer_name": 1, "seniority": 1, "tech": 1,
+        "posted_at": 1, "first_seen_at": 1, "requirements.required_years": 1}) or {}
+    if not doc:
+        return None
+    old = doc.get("seniority") or SENIORITY_UNKNOWN
+    new = seniority_of(doc.get("title_raw") or "",
+                       required_years=(doc.get("requirements") or {}).get("required_years"),
+                       employer=doc.get("employer_name"))
+    if new in (SENIORITY_UNKNOWN, old):
+        return None
+    update: Dict[str, Any] = {"seniority": new, "updated_at": now}
+    if isinstance(doc.get("tech"), dict):
+        update["tech.seniority"] = new
+    _postings().update_one(key, {"$set": update})
+    _postings().update_one(
+        {**key, "expire_at": {"$exists": True}, "pinned": {"$ne": True}},
+        {"$set": {"expire_at": retention_expiry(
+            doc.get("posted_at") or doc.get("first_seen_at"), now, new)}})
+    return old, new
 
 
 def needs_requirements_parse(doc: Dict[str, Any]) -> bool:

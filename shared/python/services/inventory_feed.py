@@ -138,6 +138,19 @@ def _ats_labels() -> Dict[str, str]:
 _ATS_LABEL = _ats_labels()
 
 
+def _contradicts_its_family(doc: Dict[str, Any]) -> bool:
+    """An engineering `role_family` on a posting the occupation classifier is
+    confident is NOT technical. Retrieval keys on the legacy family, which a
+    title like "Refrigeration Systems Engineer" earns from its words alone;
+    `tech.tech_scope == "non_tech"` is the better-informed answer (title AND
+    body), so the two disagreeing means the family is wrong. A posting whose
+    family is non-technical is never touched - a nurse's feed is a nurse's."""
+    from services import job_inventory_service as inv
+    tech = doc.get("tech") if isinstance(doc.get("tech"), dict) else {}
+    return doc.get("role_family") in inv.ENGINEERING_FAMILIES \
+        and tech.get("tech_scope") == "non_tech"
+
+
 def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[str, Any]]:
     """One `job_postings` document in the shape the tab payload already uses.
 
@@ -736,6 +749,8 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
 
     rows: List[Dict[str, Any]] = []
     for doc in docs:
+        if _contradicts_its_family(doc):
+            continue
         row = _row_from_posting(doc, tz_offset=tz_offset)
         if row is None:
             continue

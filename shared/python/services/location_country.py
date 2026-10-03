@@ -65,7 +65,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-RESOLVER_VERSION = "location-country-1.0.0"
+RESOLVER_VERSION = "location-country-1.1.0"
 
 #: Verdicts. `UNKNOWN` is a real answer and the most common one.
 UNKNOWN = ""
@@ -91,7 +91,7 @@ _CITY_COUNTRY: Dict[str, str] = {
     "kuwait city": "KW", "lahore": "PK", "makati": "PH", "manama": "BH",
     "medellin": "CO", "mexico city": "MX", "monterrey": "MX", "mumbai": "IN",
     "muscat": "OM", "mysore": "IN", "mysuru": "IN", "nagoya": "JP",
-    "nagpur": "IN", "navi mumbai": "IN", "noida": "IN", "pasig": "PH",
+    "nagpur": "IN", "nashik": "IN", "navi mumbai": "IN", "noida": "IN", "pasig": "PH",
     "penang": "MY", "porto alegre": "BR", "pretoria": "ZA", "pune": "IN",
     "queretaro": "MX", "quezon city": "PH", "rio de janeiro": "BR",
     "riyadh": "SA", "sao paulo": "BR", "secunderabad": "IN", "seoul": "KR",
@@ -446,9 +446,19 @@ def resolve(loc: Any, *, title: Any = "") -> Tuple[str, str]:
     # 3. A whole field that IS a country name. This is the single largest
     #    repairable bucket (3,543 rows, "Brazil" filed as a city) and it exists
     #    purely because the positional parser puts a one-part string in `city`.
+    # ...except a CITY named like a country beside a US state code: "Peru, IN"
+    # and "Brazil, IN" are towns in Indiana, "Mexico, MO" is in Missouri.
+    state_beside = region.strip().lower() in (set(us_geo._STATE_CODES) | {"in"})
     for value, name in ((city, "country_name_in_city"),
                         (region, "country_name_in_region"),
                         (raw, "country_name_is_raw")):
+        if name == "country_name_in_city" and state_beside:
+            named = _country_of_name_strict(value)
+            if named == "IN" and region.strip().lower() == "in":
+                return "IN", "country_name_in_city"  # "India, IN" is India
+            if named:
+                return "US", "us_town_named_for_country"
+            continue
         code = _country_of_name_strict(value)
         if code:
             return code, name
@@ -521,6 +531,17 @@ def resolve(loc: Any, *, title: Any = "") -> Tuple[str, str]:
     code = _title_country_marker(title)
     if code:
         return code, "title_gender_marker"
+
+    # 9. "City, IN" with no Indian evidence left is Indiana. `us_geo` keeps
+    #    "in" out of its state codes because "Hyderabad IN" is India - and
+    #    every Indian signal above (the gazetteer, Indian state codes, address
+    #    markers, country names) has now had its chance and said nothing. On
+    #    live inventory these were 656 rows across 127 places, and all but one
+    #    (Nashik, now in the gazetteer) were in Indiana: Meijer, Ivy Tech,
+    #    Allison Transmission (2026-10-03). Unresolved, every one was dropped
+    #    by the US-only feeds.
+    if region.strip().lower() == "in" and not us_geo.has_foreign_marker(raw):
+        return "US", "indiana_by_elimination"
 
     return UNKNOWN, "unresolved"
 

@@ -50,11 +50,19 @@ _TWO_PART = re.compile(r"^\s*[^,]+,\s*([A-Za-z]{2})\s*$")
 
 
 def has_signature(loc) -> bool:
-    if not isinstance(loc, dict) or loc.get("region"):
+    """A "City, ST" entry the parser filed under the state's namesake country
+    (region empty, country = ST), or one already re-filed as a region that
+    the resolver could not place then ("Whitestown, IN") or placed abroad
+    ("Peru, IN") - both resolve since location-country-1.1.0."""
+    if not isinstance(loc, dict):
         return False
     m = _TWO_PART.match(str(loc.get("raw") or ""))
-    return bool(m) and m.group(1).upper() == str(loc.get("country") or "").upper() \
-        and m.group(1).upper() in COLLIDING
+    if not m or m.group(1).upper() not in COLLIDING:
+        return False
+    st = m.group(1).upper()
+    region = str(loc.get("region") or "").upper()
+    country = str(loc.get("country") or "").upper()
+    return (not region and country == st) or (region == st and not country)
 
 
 def repaired(locations):
@@ -81,9 +89,11 @@ def main() -> int:
     from utils.db_connect import DBConnect
 
     jp = DBConnect().get_db().job_postings
-    q = {"status": "active", "locations": {"$elemMatch": {
-        "country": {"$in": COLLIDING + tuple(c.lower() for c in COLLIDING)},
-        "region": {"$in": ["", None]}}}}
+    codes = list(COLLIDING) + [c.lower() for c in COLLIDING]
+    q = {"status": "active", "$or": [
+        {"locations": {"$elemMatch": {"country": {"$in": codes}, "region": {"$in": ["", None]}}}},
+        {"locations": {"$elemMatch": {"region": {"$in": codes}, "country": {"$in": ["", None]}}}},
+    ]}
     print(f"mode: {'APPLY' if args.apply else 'dry-run'} | candidates: {jp.count_documents(q):,}")
 
     moves: collections.Counter = collections.Counter()

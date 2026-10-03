@@ -32,7 +32,9 @@ What it never does
   usually at the END - which is how "6+ years" went missing in the first place.
 * It never blanks a level: an extraction that finds none leaves `seniority`
   exactly as it was (`mark_requirements_parsed`).
-* A posting with no readable body is skipped and left for the crawler.
+* A posting with no readable body is re-levelled from its TITLE
+  (`job_inventory_service.relevel_from_title`, v8) - the same reading insert
+  gives it - and its requirements are left for the crawler to parse.
 
     python scripts/rederive_posting_levels.py                 # dry run
     python scripts/rederive_posting_levels.py --apply --workers 8
@@ -54,7 +56,7 @@ sys.path.insert(0, str(ROOT))
 
 PROJECTION = {"_id": 0, "source": 1, "source_job_id": 1, "content_hash": 1,
               "title_raw": 1, "seniority": 1, "description_ref": 1,
-              "description_text": 1}
+              "description_text": 1, "employer_name": 1}
 
 
 def full_body(doc: Dict[str, Any], get_jd: Optional[Callable[[str], Any]]) -> str:
@@ -78,6 +80,17 @@ def rederive_one(doc: Dict[str, Any], body: str, *, apply: bool) -> Tuple[str, O
     from services import job_ingest_worker as worker
 
     if not body.strip():
+        # No body to re-parse: re-read the level from the title, which is
+        # what insert did - under the title rules of its day.
+        from services import job_inventory_service as inv
+        if apply:
+            moved = inv.relevel_from_title(str(doc.get("source") or ""),
+                                           str(doc.get("source_job_id") or ""))
+            return ("no_body_relevelled", moved[1]) if moved else ("no_body", None)
+        level = inv.seniority_of(str(doc.get("title_raw") or ""),
+                                 employer=doc.get("employer_name"))
+        if level != inv.SENIORITY_UNKNOWN and level != (doc.get("seniority") or "unknown"):
+            return "no_body_would_relevel", level
         return "no_body", None
     title = str(doc.get("title_raw") or "")
     level = fit_score.extract_requirements(body, title).get("job_level")

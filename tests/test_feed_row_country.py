@@ -69,7 +69,7 @@ class TestAStateCodeIsNotACountry:
         from services import job_inventory_service as inv
         assert inv.normalize_location("Pune, IN")["country_code"] == "IN"
         assert inv.normalize_location("Bangalore, IN")["country_code"] == "IN"
-        assert inv.normalize_location("Indianapolis, IN")["country_code"] != "IN"
+        assert inv.normalize_location("Indianapolis, IN")["country_code"] == "US"
 
     def test_real_countries_are_still_promoted(self):
         from services import job_inventory_service as inv
@@ -99,3 +99,39 @@ class TestAStateCodeIsNotACountry:
         assert new[0]["country_code"] == "US" and new[0]["key"] == "folsom-ca"
         assert new[1] is canada
         assert changes == [("CA", "US", "Folsom, CA")]
+
+    def test_the_repair_places_rows_the_first_pass_left_unresolved(self):
+        import importlib.util
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location(
+            "repair", Path(__file__).resolve().parents[1] / "scripts" / "repair_state_code_countries.py")
+        repair = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(repair)
+        town = {"raw": "Whitestown, IN", "city": "Whitestown", "region": "IN", "country": "",
+                "country_code": "", "key": "whitestown-in"}
+        peru = {"raw": "Peru, IN", "city": "Peru", "region": "IN", "country": "",
+                "country_code": "PE", "key": "peru-in"}
+        new, changes = repair.repaired([town, peru])
+        assert [l["country_code"] for l in new] == ["US", "US"]
+        assert len(changes) == 2
+
+
+class TestIndianaAndIndia:
+    """"City, IN" is ambiguous, so the resolver lets every Indian signal speak
+    first and only then reads Indiana. Live, 656 such rows covered 127 places
+    and all but Nashik were in Indiana (2026-10-03)."""
+
+    def test_indiana_by_elimination(self):
+        from services import job_inventory_service as inv
+        for raw in ("Whitestown, IN", "Bloomington, IN", "Jeffersonville, IN", "Indianapolis, IN"):
+            assert inv.normalize_location(raw)["country_code"] == "US", raw
+
+    def test_india_still_wins_on_evidence(self):
+        from services import job_inventory_service as inv
+        for raw in ("Pune, IN", "Nashik, IN", "Bangalore, IN", "Hyderabad IN", "India, IN"):
+            assert inv.normalize_location(raw)["country_code"] == "IN", raw
+
+    def test_us_towns_named_for_countries(self):
+        from services import job_inventory_service as inv
+        for raw in ("Peru, IN", "Brazil, IN", "Mexico, MO", "Lebanon, PA"):
+            assert inv.normalize_location(raw)["country_code"] == "US", raw

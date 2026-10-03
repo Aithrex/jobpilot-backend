@@ -377,3 +377,89 @@ class TestLeadSuffixAndEmployerLadders:
                                      required_years=6) == "senior"
         assert fs.level_with_employer("unknown", "Software Engineer (L5)", "Netflix", None) == "senior"
         assert fs.level_with_employer("mid", "Software Engineer", "Netflix", None) == "mid"
+
+
+class TestEngineeringManagersAndLeadsOutrankARung:
+    """Live, 2026-10-03, on one early-career candidate's Entry + Mid board:
+    "Engineering Manager II, AI Systems", "Site Reliability Engineering (SRE)
+    Manager", "Integration & Test Engineering Manager 2", "Engineering Team
+    Lead", "Software Engineer, Lead" and "Lead Systems Administrator - DevOps
+    Tools" all read `mid`. The rung rule (II / 2) ran before the manager rule,
+    and the bracketed, team-lead and trailing-lead spellings matched nothing."""
+
+    def test_engineering_managers_and_leads_are_senior(self):
+        for t in ("Engineering Manager II, AI Systems",
+                  "Site Reliability Engineering (SRE) Manager",
+                  "Integration & Test Engineering Manager 2 (AHT)",
+                  "Engineering Team Lead, Site Reliability Engineering",
+                  "Engineering Pod Lead, Growth",
+                  "Software Engineer, Lead",
+                  "Lead Systems Administrator - DevOps Tools",
+                  "Manager, Technology Delivery (ADO/DevOps) - REMOTE",
+                  "Software Development Manager",
+                  "Manager, Software Engineering"):
+            assert fs.title_level(t) == "senior", t
+
+    def test_other_managers_and_leads_do_not_move(self):
+        assert fs.title_level("Restaurant Manager") == "mid"
+        assert fs.title_level("Team Lead") == "mid"
+        assert fs.title_level("Product Manager") == "mid"
+        assert fs.title_level("Engineering Project Manager") == "mid"
+        assert fs.title_level("Business Development Manager") == "mid"
+        assert fs.title_level("Engineering Assistant Manager") == "entry"
+        assert fs.title_level("Shift Lead") == "entry"
+        assert fs.title_level("Software Engineer II") == "mid"
+        assert fs.title_level("Engineering Manager Intern") == "intern"
+        assert fs.title_level("Director of Engineering") == "director"
+
+    def test_lead_generation_is_not_a_lead(self):
+        assert fs.title_level("Lead Generation Specialist") is None
+
+
+class TestBodylessPostingsAreRelevelledFromTheTitle:
+    """The v7 re-derive skipped every posting with no stored body (55,901),
+    and 247 kept an entry/mid level their own title now reads as senior -
+    "Lead Software Engineer" at Salesforce and M&T Bank, "Engineering
+    Manager", "Technical Lead, Security Platforms"."""
+
+    def _seed(self, mock_db, **extra):
+        from datetime import datetime, timedelta
+        mock_db.job_postings.delete_many({})
+        now = datetime(2026, 10, 3, 12, 0)
+        doc = {"source": "workday", "source_job_id": "t1", "status": "active",
+               "title_raw": "Lead Software Engineer - Axiom ControllerView",
+               "employer_name": "M&T Bank", "seniority": "mid", "tech": {"seniority": "mid"},
+               "posted_at": now - timedelta(days=3), "expire_at": now + timedelta(days=4)}
+        doc.update(extra)
+        mock_db.job_postings.insert_one(doc)
+        return now
+
+    def test_the_title_moves_the_level_card_and_expiry(self, mock_db):
+        from datetime import timedelta, timezone
+        from services import job_inventory_service as inv
+        now = self._seed(mock_db)
+        assert inv.relevel_from_title("workday", "t1", now=now.replace(tzinfo=timezone.utc)) == ("mid", "senior")
+        doc = mock_db.job_postings.find_one({"source_job_id": "t1"})
+        assert doc["seniority"] == "senior" and doc["tech"]["seniority"] == "senior"
+        assert doc["expire_at"] == now - timedelta(days=3) + timedelta(days=7)
+
+    def test_a_title_that_states_nothing_changes_nothing(self, mock_db):
+        from services import job_inventory_service as inv
+        self._seed(mock_db, title_raw="Software Engineer")
+        assert inv.relevel_from_title("workday", "t1") is None
+        assert mock_db.job_postings.find_one({"source_job_id": "t1"})["seniority"] == "mid"
+
+    def test_a_pinned_posting_gets_no_expiry(self, mock_db):
+        from services import job_inventory_service as inv
+        self._seed(mock_db, pinned=True, expire_at=None)
+        mock_db.job_postings.update_one({"source_job_id": "t1"}, {"$unset": {"expire_at": ""}})
+        assert inv.relevel_from_title("workday", "t1") == ("mid", "senior")
+        assert "expire_at" not in mock_db.job_postings.find_one({"source_job_id": "t1"})
+
+    def test_the_rederive_script_uses_it(self, mock_db):
+        self._seed(mock_db)
+        mod = TestTheRederiveBackfill()._script()
+        doc = mock_db.job_postings.find_one({"source_job_id": "t1"})
+        assert mod.rederive_one(doc, "", apply=False) == ("no_body_would_relevel", "senior")
+        assert mod.rederive_one(doc, "", apply=True) == ("no_body_relevelled", "senior")
+        assert mock_db.job_postings.find_one({"source_job_id": "t1"})["seniority"] == "senior"

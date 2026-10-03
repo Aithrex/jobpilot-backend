@@ -1094,6 +1094,16 @@ _SENIOR_WORD_IS_TRAINEE = re.compile(
     r"surgical|academic|graduate)\s+fellow|chief\s+resident|"
     r"fellowship)(?![a-z])")
 
+#: An engineering manager, in every spelling live titles use: "Software
+#: Engineering Manager", "Engineering Manager II", "Site Reliability Engineering
+#: (SRE) Manager", "Manager, Software Engineering", "Manager, Technology
+#: Delivery". "Business Development Manager" is a sales role and is excluded.
+_ENGINEERING_MANAGER = (
+    r"(?<![a-z])(?<!business )(?:software|engineering|development|devops|sre|"
+    r"platform|infrastructure|reliability)\s+(?:\([a-z/&]+\)\s+)?manager(?![a-z])|"
+    r"(?<![a-z])manager,?\s+(?:of\s+)?(?:software|engineering|platform|"
+    r"infrastructure|technology)(?![a-z])")
+
 _LEVEL_PATTERNS: Sequence[Tuple[str, re.Pattern]] = (
     # 1. Internships and co-ops FIRST, so "Software Engineer Intern" does not
     #    fall through to the entry rule and become indistinguishable from a
@@ -1131,8 +1141,17 @@ _LEVEL_PATTERNS: Sequence[Tuple[str, re.Pattern]] = (
     # "Lead" or "Team Lead" stays with the manager rules below ("Lead Cashier").
     # Rungs V/VI and 5/6 are senior too (Netflix "Software Engineer 5").
     ("senior", re.compile(r"(?<![a-z])(senior|snr|sr\.?)(?![a-z])|"
+                          # People who manage or lead ENGINEERS, read here so a
+                          # rung cannot outrank them: "Engineering Manager II",
+                          # "Test Engineering Manager 2" and "Site Reliability
+                          # Engineering (SRE) Manager" all read `mid` and showed
+                          # on Entry+Mid boards (live, 2026-10-03).
+                          + _ENGINEERING_MANAGER + r"|"
+                          r"(?<![a-z])(?:engineering|software|development|devops|"
+                          r"sre|platform|infrastructure)\s+(?:team|pod|squad)\s+lead(?![a-z])|"
+                          r"(?<![a-z])(?:engineer|developer)\s*,\s*lead(?![a-z])|"
                           r"(?<![a-z])lead\s+(?:[a-z/+#.-]+\s+){0,2}"
-                          r"(?:engineer|developer|scientist|programmer)(?![a-z])|"
+                          r"(?:engineer|developer|scientist|programmer|administrator)(?![a-z])|"
                           # ...and the lead AFTER the discipline: "Site Reliability
                           # Engineering Lead", "Tech Lead". "Team Lead" and
                           # "Shift Lead" stay with the manager rules.
@@ -1184,17 +1203,14 @@ _MANAGER_LEVEL: Sequence[Tuple[str, re.Pattern]] = (
     # the generic `mid` rule meant for "Restaurant Manager".
     ("senior", re.compile(r"(?<![a-z])(senior|sr\.?|group|general|regional|"
                           r"district|division|area|plant|site|national|global)"
-                          r"\s+manager(?![a-z])|"
-                          r"(?<![a-z])(software|engineering|development|devops|sre|"
-                          r"platform|infrastructure)\s+manager(?![a-z])|"
-                          r"(?<![a-z])manager,?\s+(of\s+)?(software|engineering|"
-                          r"platform|infrastructure)(?![a-z])")),
+                          r"\s+manager(?![a-z])|" + _ENGINEERING_MANAGER)),
     # An assistant/associate/shift/team manager is not.
     ("entry", re.compile(r"(?<![a-z])(assistant|associate|shift|trainee)\s+"
                          r"(manager|supervisor|lead)(?![a-z])")),
     # Everything else that manages people or a shift: mid. "Restaurant
     # Manager", "Engineering Manager", "Team Lead", "Shift Supervisor".
-    ("mid", re.compile(r"(?<![a-z])(manager|mgr|supervisor|lead|foreman|"
+    # "Lead Generation Specialist" is a sales job, not a lead.
+    ("mid", re.compile(r"(?<![a-z])(manager|mgr|supervisor|lead(?!\s+gen)|foreman|"
                        r"crew chief)(?![a-z])")),
 )
 
