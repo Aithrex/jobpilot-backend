@@ -962,6 +962,17 @@ def list_tailoring_records():
     except (TypeError, ValueError):
         limit = 1000
     limit = max(50, min(limit, 5000))
+    # Opt-in paging keeps existing API consumers compatible. The browser loads
+    # every page; never send its entire history through Lambda's 6 MB envelope.
+    paginated = "page_size" in request.args and not list_view
+    offset = 0
+    if paginated:
+        try:
+            page_size = max(1, min(int(request.args["page_size"]), 100))
+            offset = max(0, int(request.args.get("offset", 0)))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid pagination parameters"}), 400
+        limit = page_size
     try:
         db = DBConnect().get_db()
 
@@ -974,14 +985,19 @@ def list_tailoring_records():
             ])
             return jsonify({"records": [serialize_list_row(r) for r in rows]}), 200
 
-        projection = {"_id": 0}
+        projection = {"_id": 0, "tailoring_source_snapshot": 0}
+        if not include_full:
+            projection.update({"versions.tailored_resume": 0, "jd_text": 0})
         records = list(
             db.tailoring_records.find({"user_email": user_email}, projection)
-            .sort("created_at", -1)
-            .limit(limit)
+            .sort([("created_at", -1), ("record_id", -1)])
+            .skip(offset)
+            .limit(limit + 1 if paginated else limit)
         )
         out = []
-        for r in records:
+        # Reserve the records wrapper, separators and pagination metadata too.
+        payload_bytes = 1024
+        for r in records[:limit]:
             versions, migrated = ensure_versions(r)
             if migrated:
                 # Persist the lazy migration so next reads are cheap.
@@ -998,7 +1014,20 @@ def list_tailoring_records():
                 r.setdefault("current_version_id", versions[-1]["version_id"])
             if not r.get("current_version_id") and versions:
                 r["current_version_id"] = versions[-1]["version_id"]
-            out.append(serialize_record(r, include_full=include_full))
+            row = serialize_record(r, include_full=include_full)
+            if paginated:
+                # Leave room for the Lambda proxy envelope / JSON escaping.
+                # Count bytes as well as rows: assessments vary widely in size.
+                row_bytes = len(jsonify(row).get_data()) + 1
+                if payload_bytes + row_bytes > 2 * 1024 * 1024:
+                    if not out:
+                        return jsonify({"error": "A tailoring record is too large to load"}), 413
+                    break
+                payload_bytes += row_bytes
+            out.append(row)
+        if paginated:
+            next_offset = offset + len(out) if len(records) > len(out) else None
+            return jsonify({"records": out, "next_offset": next_offset}), 200
         return jsonify({"records": out}), 200
     except Exception as e:
         logger.exception("List tailoring records error: %s", e)

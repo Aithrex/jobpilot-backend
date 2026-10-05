@@ -155,6 +155,93 @@ class TestSlimRows:
         assert "version_count" not in row
 
 
+class TestHistoryPagination:
+    def test_all_pages_preserve_versions_and_owner_scope(self, client, db):
+        for i in range(5):
+            _seed(db, f"rec-{i}", versions=[{
+                "version_id": f"v-{i}", "version_number": 1,
+                "tailored_resume": {"summary": "Full resume"},
+                "files": {"pdf": {"filename": "resume.pdf"}},
+            }])
+        _seed(db, "other", user="other@example.com")
+        token = _token(client)
+        offset = 0
+        rows = []
+        while offset is not None:
+            resp = _list(client, token, f"?page_size=2&offset={offset}")
+            assert resp.status_code == 200
+            page = resp.get_json()
+            rows.extend(page["records"])
+            offset = page["next_offset"]
+        assert [r["record_id"] for r in rows] == [f"rec-{i}" for i in range(4, -1, -1)]
+        for row in rows:
+            assert row["versions"][0]["files"]["pdf"]["filename"] == "resume.pdf"
+            assert "tailored_resume" not in row["versions"][0]
+        # Projection must not discard stored resume content.
+        assert db.tailoring_records.find_one({"record_id": "rec-0"})["versions"][0]["tailored_resume"]
+
+    def test_large_history_is_split_by_bytes_without_losing_records(self, client, db):
+        for i in range(7):
+            _seed(db, f"rec-{i}")
+            db.tailoring_records.update_one({"record_id": f"rec-{i}"}, {
+                "$set": {"ats_scores.details": "x" * 1_100_000},
+            })
+        token = _token(client)
+        # Reproduce the old failure: the unpaged body alone exceeds Lambda's
+        # response envelope, even though Flask returns a successful status.
+        assert len(_list(client, token).data) > 6 * 1024 * 1024
+        offset = 0
+        seen = []
+        while offset is not None:
+            resp = _list(client, token, f"?page_size=50&offset={offset}")
+            assert resp.status_code == 200
+            assert len(resp.data) < 2 * 1024 * 1024
+            page = resp.get_json()
+            seen.extend(r["record_id"] for r in page["records"])
+            offset = page["next_offset"]
+        assert len(seen) == len(set(seen)) == 7
+
+    def test_empty_history_and_offset_past_end_terminate(self, client, db):
+        token = _token(client)
+        for query in ("?page_size=50", "?page_size=50&offset=100"):
+            resp = _list(client, token, query)
+            assert resp.status_code == 200
+            assert resp.get_json() == {"records": [], "next_offset": None}
+
+    def test_single_oversized_record_returns_explicit_error(self, client, db):
+        _seed(db, "oversized")
+        db.tailoring_records.update_one({"record_id": "oversized"}, {
+            "$set": {"ats_scores.details": "x" * (2 * 1024 * 1024)},
+        })
+        resp = _list(client, _token(client), "?page_size=50")
+        assert resp.status_code == 413
+        assert "too large" in resp.get_json()["error"]
+
+    def test_full_page_preserves_resume_bodies_and_job_description(self, client, db):
+        _seed(db, "full", versions=[{
+            "version_id": "v-1", "tailored_resume": {"summary": "Full resume"},
+        }])
+        resp = _list(client, _token(client), "?page_size=50&include=full")
+        assert resp.status_code == 200
+        row = resp.get_json()["records"][0]
+        assert row["versions"][0]["tailored_resume"]["summary"] == "Full resume"
+        assert row["jd_text"]
+
+    def test_legacy_versions_still_migrate_and_detail_keeps_content(self, client, db):
+        _seed(db, "legacy", tailored={"summary": "Legacy resume"})
+        db.tailoring_records.update_one({"record_id": "legacy"}, {"$unset": {"current_version_id": ""}})
+        token = _token(client)
+        row = _list(client, token, "?page_size=50").get_json()["records"][0]
+        assert row["versions"][0]["version_id"] == row["current_version_id"]
+        resp = client.test_client().get("/api/resume/tailoring-records/legacy",
+            headers={"Authorization": f"Bearer {token}"})
+        assert resp.get_json()["record"]["versions"][0]["tailored_resume"]["summary"] == "Legacy resume"
+
+    @pytest.mark.parametrize("query", ["?page_size=bad", "?page_size=50&offset=bad"])
+    def test_invalid_pagination(self, client, db, query):
+        assert _list(client, _token(client), query).status_code == 400
+
+
 class TestStaleScanProjection:
     """The nudge scan now runs on a filter plus a projection instead of every
     whole document. Its answers must not have moved."""
