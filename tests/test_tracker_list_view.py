@@ -12,8 +12,8 @@ Covered here:
     the client can still tell a base-resume application from a tailored one
     without the arrays behind them;
   * datetimes still arrive as ISO strings with an explicit UTC offset;
-  * the default (non-``view``) response is untouched, because interview prep and
-    the tailored-resumes page read the full shape off this same endpoint;
+  * the default (non-``view``) response retains version and job metadata for
+    interview prep and tailored resumes, with assessment details on demand;
   * the stale-application scan still finds and still skips the right records now
     that it runs against a projection and a status filter.
 
@@ -143,9 +143,9 @@ class TestSlimRows:
 
         assert [r["record_id"] for r in rows] == ["mine"]
 
-    def test_the_default_response_is_unchanged(self, client, db):
-        # Interview prep and the tailored-resumes page read the full shape off
-        # this same endpoint, so the slim path has to stay strictly opt-in.
+    def test_default_response_retains_version_and_job_metadata(self, client, db):
+        # Interview prep and tailored resumes need version and job metadata,
+        # so the tracker's version-free slim path stays strictly opt-in.
         _seed(db, "rec-1", versions=[{"version_id": "v-1"}])
 
         row = _list(client, _token(client)).get_json()["records"][0]
@@ -156,6 +156,45 @@ class TestSlimRows:
 
 
 class TestHistoryPagination:
+    def test_existing_client_gets_small_summaries_and_details_remain_available(self, client, db):
+        scores = {"overall": 88, "schema_version": 2, "details": "x" * 1_100_000}
+        for i in range(7):
+            _seed(db, f"rec-{i}", versions=[{
+                "version_id": f"v-{i}", "version_number": 1, "source": "initial",
+                "tailored_resume": {"summary": "Full resume"},
+                "ats_scores": scores,
+                "files": {"pdf": {"filename": "resume.pdf", "s3_key": "saved.pdf"}},
+            }])
+            db.tailoring_records.update_one({"record_id": f"rec-{i}"}, {
+                "$set": {"ats_scores": scores},
+            })
+        token = _token(client)
+        # The already-deployed browser sends no pagination parameters.
+        resp = _list(client, token)
+        assert resp.status_code == 200
+        assert len(resp.data) < 100_000
+        rows = resp.get_json()["records"]
+        assert len(rows) == 7
+        for row in rows:
+            assert row["ats_scores"] == {"overall": 88, "schema_version": 2}
+            assert row["versions"][0]["ats_scores"] == row["ats_scores"]
+            assert row["versions"][0]["files"]["pdf"]["s3_key"] == "saved.pdf"
+            assert row["jd_analysis"]["required_skills"]
+        detail = client.test_client().get("/api/resume/tailoring-records/rec-0",
+            headers={"Authorization": f"Bearer {token}"}).get_json()["record"]
+        assert detail["ats_scores"] == scores
+        assert detail["versions"][0]["ats_scores"] == scores
+        assert detail["versions"][0]["tailored_resume"]["summary"] == "Full resume"
+        assert db.tailoring_records.find_one({"record_id": "rec-0"})["ats_scores"] == scores
+
+    @pytest.mark.parametrize("scores", [None, {}, {"schema_version": 4, "overall": None}])
+    def test_summary_preserves_unknown_and_unscored_results(self, client, db, scores):
+        _seed(db, "unscored", versions=[{"version_id": "v-1", "ats_scores": scores}])
+        db.tailoring_records.update_one({"record_id": "unscored"}, {"$set": {"ats_scores": scores}})
+        row = _list(client, _token(client)).get_json()["records"][0]
+        assert row["ats_scores"] == scores
+        assert row["versions"][0]["ats_scores"] == scores
+
     def test_all_pages_preserve_versions_and_owner_scope(self, client, db):
         for i in range(5):
             _seed(db, f"rec-{i}", versions=[{
@@ -187,13 +226,13 @@ class TestHistoryPagination:
                 "$set": {"ats_scores.details": "x" * 1_100_000},
             })
         token = _token(client)
-        # Reproduce the old failure: the unpaged body alone exceeds Lambda's
-        # response envelope, even though Flask returns a successful status.
-        assert len(_list(client, token).data) > 6 * 1024 * 1024
+        # Explicit full exports still need the byte limit: assessment reports
+        # are intentionally preserved when the caller asks for full records.
+        assert len(_list(client, token, "?include=full").data) > 6 * 1024 * 1024
         offset = 0
         seen = []
         while offset is not None:
-            resp = _list(client, token, f"?page_size=50&offset={offset}")
+            resp = _list(client, token, f"?include=full&page_size=50&offset={offset}")
             assert resp.status_code == 200
             assert len(resp.data) < 2 * 1024 * 1024
             page = resp.get_json()
@@ -213,7 +252,7 @@ class TestHistoryPagination:
         db.tailoring_records.update_one({"record_id": "oversized"}, {
             "$set": {"ats_scores.details": "x" * (2 * 1024 * 1024)},
         })
-        resp = _list(client, _token(client), "?page_size=50")
+        resp = _list(client, _token(client), "?include=full&page_size=50")
         assert resp.status_code == 413
         assert "too large" in resp.get_json()["error"]
 

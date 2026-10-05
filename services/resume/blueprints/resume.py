@@ -951,7 +951,7 @@ def list_tailoring_records():
     # `view=list` is the application tracker's slim path: the projection happens
     # in Mongo, so the heavy fields are never read rather than read-and-
     # discarded. Opt-in, because interview prep and the tailored-resumes page
-    # still read the full shape off this same endpoint.
+    # still need version and job metadata from this same endpoint.
     list_view = request.args.get("view") == "list"
     # `limit` query param tunable; bumped default from 100 → 1000 so the
     # tracker can show ALL of a user's records. The 100 cap was causing the
@@ -1015,6 +1015,20 @@ def list_tailoring_records():
             if not r.get("current_version_id") and versions:
                 r["current_version_id"] = versions[-1]["version_id"]
             row = serialize_record(r, include_full=include_full)
+            if not include_full:
+                # The existing browser only reads score summaries in lists;
+                # full assessment reports are fetched from the detail route.
+                # Reports are duplicated per version and can exceed Lambda's
+                # response limit even when resume bodies have been removed.
+                # Apply this to unpaged requests too, so older clients benefit.
+                for scored in [row, *row.get("versions", [])]:
+                    scores = scored.get("ats_scores")
+                    if isinstance(scores, dict):
+                        scored["ats_scores"] = {
+                            key: scores[key]
+                            for key in ("overall", "schema_version", "assessment_version", "assessment_id")
+                            if key in scores
+                        }
             if paginated:
                 # Leave room for the Lambda proxy envelope / JSON escaping.
                 # Count bytes as well as rows: assessments vary widely in size.
