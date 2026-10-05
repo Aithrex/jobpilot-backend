@@ -943,6 +943,21 @@ def get_streak_route():
 # ------------------------------------------------------------------
 # GET /api/resume/tailoring-records — List user's tailoring history
 # ------------------------------------------------------------------
+@resume_bp.route("/tailoring-history", methods=["GET"])
+@jwt_required()
+def tailoring_history():
+    """One bounded page, with filtering/sorting performed in MongoDB."""
+    from services.tailoring_history_service import list_history
+    try:
+        return jsonify(list_history(DBConnect().get_db().tailoring_records,
+                                    get_jwt_identity(), request.args)), 200
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        logger.exception("List tailoring history page failed")
+        return jsonify({"error": "Failed to load tailoring history"}), 500
+
+
 @resume_bp.route("/tailoring-records", methods=["GET"])
 @jwt_required()
 def list_tailoring_records():

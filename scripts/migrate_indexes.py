@@ -214,6 +214,8 @@ INDEX_SPECS = [
     ("tailoring_records", [("record_id", ASCENDING)], {"unique": True, "name": "record_id_unique"}),
     ("tailoring_records", [("user_email", ASCENDING), ("updated_at", DESCENDING)],
      {"name": "user_email_updated_at"}),
+    ("tailoring_records", [("user_email", ASCENDING), ("created_at", DESCENDING), ("record_id", DESCENDING)],
+     {"name": "user_email_history_created_record"}),
 
     # === learning ==========================================================
     # learning_service.count_active_paths:164 / overview:63,72 find({user_email,status}).
