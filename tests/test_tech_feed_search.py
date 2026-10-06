@@ -338,11 +338,37 @@ class TestFilters:
         assert job["salary"]["max_annual"] is None
 
     def test_remote_filter(self, db):
+        # `remote` rides along with `unknown` (~96.1% of the corpus states no
+        # mode), so a row with no work_mode is now returned alongside the
+        # positively-remote one. A row positively classified as a DIFFERENT
+        # mode (onsite) is still excluded.
         seed(sjid="r1", title="Backend Engineer", company="Acme",
              work_mode="remote", location="Remote, USA")
         seed(sjid="r2", title="Backend Engineer", company="Beta", tenant="beta")
-        got = [j["work_mode"] for j in search(work_modes=["remote"])["jobs"]]
-        assert got == ["remote"]
+        seed(sjid="r3", title="Backend Engineer", company="Gamma",
+             tenant="gamma", work_mode="onsite", location="Austin, TX, USA")
+        got = sorted(j["work_mode"] for j in search(work_modes=["remote"])["jobs"])
+        assert "remote" in got
+        assert "onsite" not in got
+        assert len(got) == 2  # the remote row and the unknown row, not onsite
+
+    def test_work_mode_filter_rides_unknown_along(self):
+        # C2: picking `remote` must also admit the ~96.1% of postings whose
+        # mode is `unknown`, mirroring the seniority clause. Asking for
+        # `unknown` alone stays an exact filter.
+        q = tfs.build_query(tfs.normalize_request({"work_modes": ["remote"]}))
+        assert q["work_mode"] == {"$in": ["remote", "unknown"]}
+        q = tfs.build_query(tfs.normalize_request({"work_modes": ["unknown"]}))
+        assert q["work_mode"] == {"$in": ["unknown"]}
+
+    def test_unknown_work_mode_is_not_excluded_by_a_work_mode_filter(self, db):
+        # C2 end-to-end: a positively-remote row AND a row with no work_mode
+        # (unknown) both come back when the caller asks for remote.
+        seed(sjid="w1", title="Backend Engineer", company="Acme",
+             work_mode="remote", location="Remote, USA")
+        seed(sjid="w2", title="Backend Engineer", company="Beta", tenant="beta")
+        got = sorted(j["work_mode"] for j in search(work_modes=["remote"])["jobs"])
+        assert got == ["remote", "unknown"]
 
     def test_unknown_seniority_is_not_excluded_by_a_seniority_filter(self, db):
         seed(sjid="u1", title="Software Engineer", company="Acme",
@@ -973,6 +999,32 @@ class TestRegionAndPayIntervalActuallyFilter:
     def test_a_region_filter_is_case_insensitive(self, db):
         seed(sjid="r3", title="Backend Engineer", location="Austin, TX, USA")
         assert len(titles(search(regions=["tx"]))) == 1
+
+    def test_a_region_filter_rides_unparsed_region_rows_along(self):
+        # H1: a posting with a city but no parsed `locations.region` is a row
+        # the location parse has not reached, not a row in another state.
+        # The regions clause must OR in those rows, mirroring the countries
+        # 'OR in unreached rows' pattern.
+        q = tfs.build_query(tfs.normalize_request({"regions": ["TX"]}))
+        region_or = next(
+            clause["$or"] for clause in q["$and"]
+            if isinstance(clause, dict) and "$or" in clause
+            and any("locations.region" in branch for branch in clause["$or"]))
+        assert {"locations.region": {"$exists": False}} in region_or
+        assert {"locations.region": None} in region_or
+        # the positive $in branch still carries the normalised state variants
+        assert any(
+            isinstance(branch.get("locations.region"), dict)
+            and "$in" in branch["locations.region"]
+            and "TX" in branch["locations.region"]["$in"]
+            for branch in region_or)
+
+    def test_a_region_filter_still_excludes_a_different_parsed_region(self, db):
+        # The ride-along must not weaken precision: a row positively parsed to
+        # a DIFFERENT state is still dropped.
+        seed(sjid="rx1", title="Backend Engineer", location="Austin, TX, USA")
+        seed(sjid="rx2", title="Backend Engineer", location="Seattle, WA, USA")
+        assert len(titles(search(regions=["TX"]))) == 1
 
     def test_a_posting_with_no_compensation_survives_a_pay_interval_filter(self, db):
         """Not stating a pay interval is not the same as stating a different

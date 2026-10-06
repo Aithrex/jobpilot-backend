@@ -582,7 +582,17 @@ def build_query(req: Dict[str, Any], *, now: Optional[datetime] = None
         ]})
 
     if req["work_modes"]:
-        q["work_mode"] = {"$in": req["work_modes"]}
+        # Unknown rides along unless the caller asked for `unknown` alone,
+        # mirroring the seniority clause below: ~96.1% of postings carry
+        # work_mode `unknown`, so a bare equality $in on `remote` would hide
+        # almost the whole corpus behind a mode the employer never stated.
+        # The hybrid/remote overlap (a user wanting remote often accepts
+        # hybrid) is a deliberate OPEN product decision left UNCHANGED here:
+        # a row positively classified as a DIFFERENT mode is still excluded.
+        wanted = set(req["work_modes"])
+        if wanted != {"unknown"}:
+            wanted.add("unknown")
+        q["work_mode"] = {"$in": sorted(wanted)}
     if req["seniority"]:
         # Unknown rides along unless the caller asked for `unknown` alone:
         # most postings state no level, and an equality filter would hide the
@@ -653,7 +663,14 @@ def build_query(req: Dict[str, Any], *, now: Optional[datetime] = None
         variants = sorted({v for r in req["regions"]
                            for v in us_geo.state_aliases(r)})
         if variants:
-            _and.append({"locations.region": {"$in": variants}})
+            # OR in rows with no parsed region - a posting with a city but no
+            # `locations.region` is one the location parse has not reached, not
+            # a posting in a different state. Mirrors the countries fallback.
+            _and.append({"$or": [
+                {"locations.region": {"$in": variants}},
+                {"locations.region": {"$exists": False}},
+                {"locations.region": None},
+            ]})
     if req["pay_interval"]:
         # `compensation.period` is the stored field; the API renames it
         # `salary.interval`. A row with NO compensation is ORed in: not
