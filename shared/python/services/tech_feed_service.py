@@ -405,6 +405,24 @@ KEYSET_MAX_SCAN = int(os.getenv("TECH_FEED_KEYSET_MAX_SCAN", "1500") or 1500)
 #: does not admit it is worse than no number.
 COUNT_LIMIT = int(os.getenv("TECH_FEED_COUNT_LIMIT", "50000") or 50000)
 
+#: Time ceiling on the exact facet aggregation and each date-window count, same
+#: philosophy as `_count_matches`'s 2500 ms: a slow plan degrades to a windowed
+#: estimate flagged `exact:false`, never a 500 and never a silent wrong number.
+FACET_COUNT_MAX_MS = int(os.getenv("TECH_FEED_FACET_MAX_MS", "2500") or 2500)
+
+#: The cumulative date windows the exact `date_window` facet reports. Each is a
+#: separate bounded `count_documents` so the undated `first_seen_at` ride-along
+#: `build_query`'s `$or` includes is reproduced by construction, which a single
+#: `$bucket` on `posted_at` could not do.
+FACET_DATE_WINDOWS = (1, 3, 7, 14, 30, 45, 90)
+
+#: Facets that stay window-based (read-time reclassification / dedupe /
+#: employer-canonicalisation have no faithful pure-Mongo equivalent) and are
+#: therefore labelled `exact:false` in `_exactness`.
+_WINDOWED_FACETS = ("employer", "role_family", "role_specialty", "tech_scope",
+                    "ats", "source", "employment_type", "salary_published",
+                    "employer_kind")
+
 
 def encode_cursor(search_id: str, offset: Optional[int] = None, *,
                   keyset: Optional[Dict[str, Any]] = None) -> str:
@@ -828,6 +846,11 @@ def retrieve(req: Dict[str, Any], *, limit: Optional[int] = None,
                    "requirements_upfront": projection is _PROJECTION,
                    "query_keys": sorted(query.keys()),
                    "total_matched": total_matched, "total_is_exact": exact}
+    # Stash the IDENTICAL filter object `find()`/`_count_matches()` used, so
+    # `_run_search` can count exact facets over the same `$match` the retrieval
+    # ran — the facet count and the filter can never then disagree. Popped in
+    # `_run_search` exactly like `_keyset`.
+    diagnostics["_query"] = query
     if docs:
         last = docs[-1]
         diagnostics["_keyset"] = {"p": _as_utc(last.get("posted_at")),
@@ -1808,6 +1831,118 @@ def build_facets(rows: Sequence[Dict[str, Any]], *, top: int = 25
     return out
 
 
+def _window_query(req: Dict[str, Any], *, days: int,
+                  now: Optional[datetime] = None) -> Dict[str, Any]:
+    """`build_query` for the same request but a cumulative `days`-day window.
+
+    No freshness-clause surgery: `build_query` writes freshness two different
+    ways (a top-level `$or` when `include_undated=True`, sibling
+    `posted_at`+`posted_at_confidence` keys when `False`), so re-calling the
+    whole builder on a shallow-copied request is the only drift-free way to get
+    a window variant. The undated `first_seen_at` ride-along is identical by
+    construction across both branches, and the same pinned `now` means no skew
+    against the retrieval query.
+    """
+    r = dict(req)
+    r["posted_within_days"] = int(days)
+    return build_query(r, now=now)
+
+
+def facet_counts(query: Dict[str, Any], req: Dict[str, Any], *,
+                 now: Optional[datetime] = None) -> Dict[str, Any]:
+    """EXACT seniority / work_mode / country / date-window counts.
+
+    Counted over the SAME `build_query()` filter `retrieve()` used (`query`),
+    so a facet count is exactly what clicking that filter returns — including
+    every "unknown rides along" clause already baked into `query`. The
+    windowed `build_facets` estimate (capped at `CANDIDATE_LIMIT`) is replaced
+    for these four facets; employer/role/tech_scope/etc. stay window-based and
+    are labelled honestly by the caller.
+
+    One bounded `$facet` aggregation for the three stored scalar/array fields,
+    plus one bounded `count_documents` per cumulative date window (re-built via
+    `_window_query` so undated ride-along matches retrieval by construction).
+    Every read is bounded by `FACET_COUNT_MAX_MS`; a trip of the bound falls
+    back — the aggregation facets are simply omitted (the caller keeps its
+    windowed value) and flagged `exact:false`, a window count omits that
+    window — never a 0, never a raise.
+
+    Returns `{seniority, work_mode, country, date_window, _exactness,
+    date_window_is_exact}`. The `seniority`/`work_mode`/`country`/`date_window`
+    keys are present ONLY when exact; a facet whose bound tripped is absent
+    (so the merge leaves the windowed value in place) and recorded in
+    `_exactness` with `exact:false`.
+    """
+    from services import job_inventory_service as inv
+
+    out: Dict[str, Any] = {}
+    exactness: Dict[str, Dict[str, Any]] = {}
+
+    def _buckets(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        rows = [{"value": str(e.get("_id")), "count": int(e.get("count") or 0)}
+                for e in (entries or [])]
+        rows.sort(key=lambda r: (-r["count"], r["value"]))
+        return rows
+
+    # (a) ONE $facet over the passed query $match — three stored fields grouped
+    #     in a single bounded scan (not one read per field).
+    try:
+        agg = list(inv._postings().aggregate([
+            {"$match": query},
+            {"$facet": {
+                "seniority": [{"$group": {
+                    "_id": {"$ifNull": ["$seniority", "unknown"]},
+                    "count": {"$sum": 1}}}],
+                "work_mode": [{"$group": {
+                    "_id": {"$ifNull": ["$work_mode", "unknown"]},
+                    "count": {"$sum": 1}}}],
+                "country": [{"$group": {
+                    "_id": {"$ifNull": [
+                        {"$arrayElemAt": ["$locations.country", 0]}, "unknown"]},
+                    "count": {"$sum": 1}}}],
+            }},
+        ], maxTimeMS=FACET_COUNT_MAX_MS, allowDiskUse=False))
+        block = agg[0] if agg else {}
+        for facet in ("seniority", "work_mode", "country"):
+            out[facet] = _buckets(block.get(facet))
+            exactness[facet] = {"exact": True, "basis": "full_filter_aggregation"}
+    except Exception as exc:   # pragma: no cover - a slow/failed agg must not 500
+        logger.debug("tech_feed.facet_counts aggregation: %s", type(exc).__name__)
+        for facet in ("seniority", "work_mode", "country"):
+            # Leave the facet unset so the caller keeps its windowed value.
+            exactness[facet] = {"exact": False,
+                                "basis": "ranked_window_timeout_fallback"}
+
+    # (b) cumulative date-window counts, each a bounded count over the SAME
+    #     filter builder with `posted_within_days=N`.
+    windows: List[Dict[str, Any]] = []
+    date_window_is_exact = True
+    for days in FACET_DATE_WINDOWS:
+        try:
+            n = inv._postings().count_documents(
+                _window_query(req, days=days, now=now),
+                maxTimeMS=FACET_COUNT_MAX_MS)
+            windows.append({"value": f"<={days}d", "count": int(n), "days": days})
+        except Exception as exc:   # pragma: no cover - a slow count must not 500
+            logger.debug("tech_feed.facet_counts window %sd: %s",
+                         days, type(exc).__name__)
+            date_window_is_exact = False
+    out["date_window"] = windows
+    exactness["date_window"] = {
+        "exact": date_window_is_exact,
+        "basis": ("full_filter_counts" if date_window_is_exact
+                  else "ranked_window_timeout_fallback")}
+    out["date_window_is_exact"] = date_window_is_exact
+
+    # Every window-only facet, flagged honestly so a consumer can tell a true
+    # number from a windowed estimate.
+    for facet in _WINDOWED_FACETS:
+        exactness[facet] = {"exact": False, "basis": "ranked_window",
+                            "window": CANDIDATE_LIMIT}
+    out["_exactness"] = exactness
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Card shape - the canonical output contract
 # ---------------------------------------------------------------------------
@@ -2779,6 +2914,19 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
     diagnostics["rank_ms"] = round((time.perf_counter() - t) * 1000, 1)
     t = time.perf_counter()
     facets = build_facets(kept)
+    # Make the per-level, work_mode, country and (new) date-window counts EXACT
+    # true-DB values over the SAME filter retrieval used, replacing the
+    # windowed `build_facets` estimate for those facets. Everything else stays
+    # window-based and is labelled honestly via `_exactness`. The merge only
+    # overrides a facet when `facet_counts` returned an exact list, so a bound
+    # that tripped leaves the windowed value in place (flagged `exact:false`).
+    exact = facet_counts(diagnostics.pop("_query", None) or build_query(req, now=now),
+                         req, now=now)
+    for _facet in ("seniority", "work_mode", "country", "date_window"):
+        if _facet in exact:
+            facets[_facet] = exact[_facet]
+    facets["_exactness"] = exact.get("_exactness") or {}
+    facets["date_window_is_exact"] = bool(exact.get("date_window_is_exact"))
     diagnostics["facet_ms"] = round((time.perf_counter() - t) * 1000, 1)
     order = [str(r.get("job_id") or "") for r in kept if r.get("job_id")]
 
