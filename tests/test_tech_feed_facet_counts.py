@@ -155,9 +155,14 @@ class TestDateWindowExactness:
         seed(sjid="d40", seniority="entry", days=40)    # <=45d
         seed(sjid="d80", seniority="entry", days=80)    # <=90d
         # Undated rows: ride along on `first_seen_at`. One fresh, one aged out
-        # of the 7-day window (first seen 10 days ago).
+        # of the 7-day window (first seen 10 days ago). `u_fresh` is seeded at
+        # the fixture clock itself (first_seen_days=0) so it sits comfortably
+        # inside even the tightest 1-day window: `build_query`'s cutoff is
+        # computed from the real wall clock, which is a few hours ahead of the
+        # noon-pinned fixture NOW, so a row placed exactly one day back would
+        # fall just outside the 1-day cutoff by that skew.
         seed(sjid="u_fresh", seniority="entry",
-             confidence=inv.CONFIDENCE_UNKNOWN, first_seen_days=1)
+             confidence=inv.CONFIDENCE_UNKNOWN, first_seen_days=0)
         seed(sjid="u_old", seniority="entry",
              confidence=inv.CONFIDENCE_UNKNOWN, first_seen_days=10)
 
