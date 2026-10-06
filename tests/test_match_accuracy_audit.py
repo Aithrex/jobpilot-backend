@@ -370,3 +370,44 @@ class TestRecallPastTheWindow:
         for key in ("personalized", "all_levels"):
             assert result[key]["recall"]["silent_drops"] == 0
             assert result[key]["recall"]["extra_returned"] == 0
+
+
+class TestRecallIsJudgedPerJob:
+    """`should - returned` over posting ids is not a list of unreachable jobs.
+    On a frozen copy of live inventory (2026-10-06) it was 65 postings, and
+    all 65 had been served through another copy of the same opening or the
+    same role in another city. The harness reported them as silent drops."""
+
+    def _ids(self, db, *sjids):
+        return [str(db.job_postings.find_one({"source_job_id": s})["job_id"]) for s in sjids]
+
+    def test_a_job_shown_through_a_sibling_copy_is_not_a_drop(self, db):
+        seed_posting(sjid="a1", company="Acme Inc", tenant="acme")
+        seed_posting(sjid="a2", company="Acme Inc", tenant="acme")
+        gid = db.job_postings.find_one({"source_job_id": "a1"})["dedupe_group_id"]
+        db.job_postings.update_one({"source_job_id": "a2"}, {"$set": {"dedupe_group_id": gid}})
+        a1, a2 = self._ids(db, "a1", "a2")
+        unreachable, repeated, vanished = audit.job_level_recall({a1}, {a2})
+        assert (unreachable, repeated, vanished) == (set(), 0, 0)
+
+    def test_the_same_opening_served_twice_is_counted(self, db):
+        seed_posting(sjid="a1", company="Acme Inc", tenant="acme")
+        seed_posting(sjid="a2", company="Acme Inc", tenant="acme")
+        gid = db.job_postings.find_one({"source_job_id": "a1"})["dedupe_group_id"]
+        db.job_postings.update_one({"source_job_id": "a2"}, {"$set": {"dedupe_group_id": gid}})
+        a1, a2 = self._ids(db, "a1", "a2")
+        _unreachable, repeated, _v = audit.job_level_recall({a1}, {a1, a2})
+        assert repeated == 1
+
+    def test_a_job_shown_in_no_form_is_a_drop(self, db):
+        seed_posting(sjid="a1", company="Acme Inc", tenant="acme")
+        seed_posting(sjid="b1", company="Other Co", tenant="other", title="Platform Engineer")
+        a1, b1 = self._ids(db, "a1", "b1")
+        unreachable, _r, _v = audit.job_level_recall({a1, b1}, {a1})
+        assert unreachable == {b1}
+
+    def test_a_posting_that_closed_mid_run_is_churn_not_a_drop(self, db):
+        seed_posting(sjid="a1", company="Acme Inc", tenant="acme")
+        (a1,) = self._ids(db, "a1")
+        unreachable, _r, vanished = audit.job_level_recall({a1, "gone-since"}, {a1})
+        assert unreachable == set() and vanished == 1

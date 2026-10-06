@@ -191,6 +191,53 @@ def survivor_set(req: Dict[str, Any], now: datetime, true_total: int
     return should, recall_bounded, recall_limit
 
 
+def job_level_recall(should: set, returned: set) -> Tuple[set, int, int]:
+    """`(unreachable, repeated_openings, vanished)` - recall judged per JOB.
+
+    `should - returned` over posting ids is not a list of jobs the user cannot
+    reach. The feed shows ONE card per opening and folds a role's other cities
+    onto it, and which copy carries the card differs between an all-at-once
+    pass and a paged walk. On a frozen copy of live inventory (2026-10-06)
+    that id-level difference was 65 postings - and every one of the 65 had
+    been served through a sibling copy.
+
+    * `unreachable`: survivors the walk shows in NO form - not themselves, not
+      another copy of the same opening, not a card for the same role at the
+      same employer. This is the number that must be zero.
+    * `repeated_openings`: openings the walk served through more than one
+      copy. Also zero: showing a job twice is a defect, just not a recall one.
+    * `vanished`: ids no longer in the collection (closed or expired while
+      the run was in flight). Churn, reported so it is not mistaken for either.
+    """
+    from services import inventory_feed
+    ids = sorted(should | returned)
+    docs: Dict[str, Dict[str, Any]] = {}
+    for i in range(0, len(ids), 5000):
+        for d in _postings().find({"job_id": {"$in": ids[i:i + 5000]}}, tfs._PROJECTION_LIGHT):
+            docs[str(d.get("job_id"))] = d
+
+    def roles(d: Dict[str, Any]) -> set:
+        keys = {tfs._canonical_variant_key_of(d),
+                str(d.get("variant_group_id") or "") or tfs._variant_key_of(d)}
+        return keys - {""}
+
+    shown_openings: Counter = Counter()
+    shown_roles: set = set()
+    for jid in returned:
+        d = docs.get(jid)
+        if d is not None:
+            shown_openings[inventory_feed.dedupe_key_of(d)] += 1
+            shown_roles |= roles(d)
+    unreachable = {
+        jid for jid in should - returned
+        if jid in docs
+        and inventory_feed.dedupe_key_of(docs[jid]) not in shown_openings
+        and not (roles(docs[jid]) & shown_roles)}
+    repeated = sum(n - 1 for n in shown_openings.values() if n > 1)
+    vanished = sum(1 for jid in ids if jid not in docs)
+    return unreachable, repeated, vanished
+
+
 def page_to_exhaustion(payload: Dict[str, Any], max_pages: int = 100_000
                        ) -> Tuple[set, Dict[str, Any], int]:
     """Run the REAL feed and follow `next_cursor` to the end.
@@ -276,8 +323,12 @@ def audit_run(payload: Dict[str, Any], now: datetime, view_levels: List[str]
 
     # Recall: full-pipeline survivor set vs what paging actually surfaced.
     should, recall_bounded, recall_limit = survivor_set(req, now, true_total)
-    silent_drops = should - returned
+    # Posting-id differences are NOT recall: the feed shows one card per job,
+    # and which copy represents a job legitimately differs between an
+    # all-at-once pass and a paged one. Recall is judged per JOB.
+    id_level_drops = should - returned
     extra_returned = returned - should
+    silent_drops, repeated_openings, vanished = job_level_recall(should, returned)
 
     # Cap-aware total check (design Finding 1).
     total_capped = not total_is_exact
@@ -334,12 +385,15 @@ def audit_run(payload: Dict[str, Any], now: datetime, view_levels: List[str]
             "returned": len(returned),
             "silent_drops": len(silent_drops),
             "silent_drop_ids": sorted(silent_drops)[:50],
+            "repeated_openings": repeated_openings,
+            "vanished_during_run": vanished,
+            "id_level_drops": len(id_level_drops),
             "extra_returned": len(extra_returned),
             "extra_returned_ids": sorted(extra_returned)[:50],
             "recall_bounded": recall_bounded,
             "recall_limit": recall_limit,
             "explained_drops": diagnostics.get("filtered_out") or {},
-            "pass": len(silent_drops) == 0 and len(extra_returned) == 0,
+            "pass": len(silent_drops) == 0 and repeated_openings == 0,
         },
         "checks": {
             "seniority_exact": sen_exact,
@@ -543,6 +597,8 @@ def render_markdown(payload: Dict[str, Any]) -> str:
             lines.append(f"- date_window true:      {_fmt_counts(run['true']['date_window'])}")
             lines.append(f"- recall: should_be_returnable={r['should_be_returnable']} "
                          f"returned={r['returned']} silent_drops={r['silent_drops']} "
+                         f"repeated_openings={r.get('repeated_openings', 0)} "
+                         f"id_level_drops={r.get('id_level_drops', 0)} "
                          f"extra_returned={r['extra_returned']} "
                          f"(bounded={r['recall_bounded']}, limit={r['recall_limit']})")
             if r["silent_drop_ids"]:

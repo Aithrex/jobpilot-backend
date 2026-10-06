@@ -3212,6 +3212,146 @@ def keyset_predicate(keyset: Dict[str, Any]) -> Dict[str, Any]:
     ]}
 
 
+#: How many sibling postings one deep page may load to decide what it has
+#: already shown. Above this the page falls back to page-local collapsing.
+KEYSET_SIBLING_LIMIT = int(os.getenv("TECH_FEED_KEYSET_SIBLING_LIMIT", "4000") or 4000)
+KEYSET_SIBLING_MAX_MS = int(os.getenv("TECH_FEED_KEYSET_SIBLING_MAX_MS", "2500") or 2500)
+
+
+def _traversal_key(position: Dict[str, Any]) -> Tuple[int, float, str]:
+    """`_index_position_key` for a POSITION (`_position_of` / a stored keyset)
+    rather than a document. Positions are timezone-aware UTC, so two of them
+    compare the same on every host; a raw Mongo datetime is naive."""
+    posted = position.get("p")
+    job_id = str(position.get("j") or "")
+    if isinstance(posted, datetime):
+        return (0, -posted.timestamp(), job_id)
+    if _is_undated_tail_start(position):
+        return (1, float("-inf"), "")
+    seen = position.get("f")
+    return (1, -seen.timestamp() if isinstance(seen, datetime) else float("inf"), job_id)
+
+
+def _one_card_per_job_across_pages(rows: List[Dict[str, Any]], *,
+                                   pool: List[Dict[str, Any]], base: Dict[str, Any],
+                                   stored_req: Dict[str, Any], suppressed: Any,
+                                   projection: Dict[str, Any],
+                                   window_end: Optional[Dict[str, Any]],
+                                   wa_ctx: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """Which of `rows` are cards, judged against EVERYTHING the traversal
+    serves rather than against this page. Returns None when it cannot decide
+    (the caller then collapses within the page, as before).
+
+    A deep page used to run `_dedupe` and `_collapse_location_variants` over
+    its own rows only. So the copy of an opening that had already been served
+    - in the ranked window, or 300 pages earlier - was served again: on a
+    frozen copy of live inventory (2026-10-06) a full walk of 23,753 cards
+    carried 255 repeated openings and 897 location variants of a card already
+    shown, 4.8% of everything past the ranked window.
+
+    The rule is the feed's own, applied to the whole group instead of a page:
+
+      * load every posting in the result set that shares a group with one of
+        `rows` (same opening, or same role at the same employer), and put it
+        through the SAME filters, so a sibling the user would never be shown
+        cannot claim a card;
+      * an opening the ranked window already served is not served again;
+      * an opening that lives entirely past the window is served once, by the
+        copy `_dedupe` prefers, on the page where that copy falls;
+      * location variants collapse exactly as they do in the window:
+        `_collapse_location_variants` is an online rule over index order, so
+        running it over the whole group gives each row the same answer on
+        every page and on every replay.
+
+    `pool` is every row this request has in hand (the scanned hop); `rows` is
+    the slice being decided. The caller decides a page's worth at a time and
+    stops when the page is full, so the lookups stay proportional to what is
+    served, not to what was scanned. Nothing is remembered between requests
+    and nothing is written.
+    """
+    if not rows or not window_end:
+        return None
+    from services import inventory_feed
+    from services import job_inventory_service as inv
+
+    in_hand = {str(r.get("job_id") or "") for r in pool}
+    dedupe_ids = sorted({str(r["dedupe_group_id"]) for r in rows if r.get("dedupe_group_id")})
+    variant_ids = sorted({str(r["variant_group_id"]) for r in rows if r.get("variant_group_id")})
+    # The canonical employer can join roles the stored key split (one
+    # requisition under "JPMorgan Chase" and under "Nutmeg Container
+    # Corporation"); a row with no stored key at all is grouped at read time
+    # from (employer, title). Both are found by employer + exact title.
+    canon_rows = [r for r in rows if r.get("canonical_employer_id") and r.get("title_normalized")]
+    bare_rows = [r for r in rows if not r.get("variant_group_id")
+                 and r.get("employer_id") and r.get("title_normalized")]
+    # Each lookup is its own query on its own index. As ONE `$or` they were a
+    # residual filter: `build_query` already spends the single rooted `$or`
+    # Mongo will sub-plan on the freshness window.
+    lookups: List[Dict[str, Any]] = []
+    if dedupe_ids:
+        lookups.append({"dedupe_group_id": {"$in": dedupe_ids}})
+    if variant_ids:
+        lookups.append({"variant_group_id": {"$in": variant_ids}})
+    if canon_rows:
+        lookups.append({
+            "canonical_employer_id": {"$in": sorted({str(r["canonical_employer_id"]) for r in canon_rows})},
+            "title_normalized": {"$in": sorted({str(r["title_normalized"]) for r in canon_rows})}})
+    if bare_rows:
+        lookups.append({
+            "employer_id": {"$in": sorted({str(r["employer_id"]) for r in bare_rows})},
+            "title_normalized": {"$in": sorted({str(r["title_normalized"]) for r in bare_rows})}})
+    if not lookups:
+        return None
+    found: Dict[str, Dict[str, Any]] = {}
+    try:
+        for clause in lookups:
+            returned = 0
+            for doc in (inv._postings().find({"$and": [base, clause]}, projection)
+                        .limit(KEYSET_SIBLING_LIMIT + 1)
+                        .max_time_ms(KEYSET_SIBLING_MAX_MS)):
+                returned += 1
+                jid = str(doc.get("job_id") or "")
+                if jid and jid not in in_hand:
+                    found.setdefault(jid, doc)
+            if returned > KEYSET_SIBLING_LIMIT:
+                # The query was cut off at the limit, so the group is
+                # incomplete - and an incomplete group cannot say who its
+                # representative is. Counted on what the QUERY returned: rows
+                # already in hand are part of the answer too.
+                return None
+    except Exception as exc:
+        logger.warning("tech_feed: sibling lookup failed (%s); collapsing within the page",
+                       type(exc).__name__)
+        return None
+    siblings = list(found.values())
+
+    for doc in siblings:
+        doc["_tech"] = _read_time_tech(doc)
+    siblings, _ = hard_filter(siblings, stored_req, suppressed=suppressed)
+    _resolve_employers(siblings)
+    siblings, _ = filter_company_categories(siblings, stored_req)
+    if stored_req["employer_scope"] == EMPLOYER_SCOPE_TECH:
+        siblings, _dropped = _apply_employer_scope(siblings)
+    if wa_ctx["hide_sponsorship_restricted"] or wa_ctx["hide_clearance_required"]:
+        hydrate_requirements(siblings)
+        siblings, _wa = filter_work_authorization(siblings, wa_ctx)
+
+    end = _traversal_key(window_end)
+    pos = lambda r: _traversal_key(_position_of(r))  # noqa: E731
+    universe = sorted(pool + siblings, key=pos)
+    in_window = [r for r in universe if pos(r) <= end]
+    past = [r for r in universe if pos(r) > end]
+    # 1. The same opening. The window's own winner stands; an opening it holds
+    #    is never re-served, whatever copy a later page would have preferred.
+    served_by_window = {inventory_feed.dedupe_key_of(r) for r in in_window}
+    winners = inventory_feed._dedupe(in_window) + inventory_feed._dedupe(
+        [r for r in past if inventory_feed.dedupe_key_of(r) not in served_by_window])
+    # 2. The same role in another city: the window's rule, over the whole group.
+    winners.sort(key=pos)
+    cards = {str(r.get("job_id") or "") for r in _collapse_location_variants(winners)}
+    return [r for r in rows if str(r.get("job_id") or "") in cards]
+
+
 def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
                        req: Dict[str, Any], started: float) -> Dict[str, Any]:
     """Continue a search PAST the ranked window, by index position.
@@ -3228,8 +3368,10 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
       tell it is no longer relevance-ranked. Ranking a page in isolation
       would produce an order that looks personalised and is not comparable
       across pages, which is worse than saying so.
-    * DEDUPLICATION still runs (`inventory_feed._dedupe` plus location-variant
-      collapsing), within the page.
+    * DEDUPLICATION runs against the WHOLE traversal, not just this page -
+      see `_one_card_per_job_across_pages`. It falls back to within-the-page
+      only when the sibling lookup fails or is too large, and says which in
+      `diagnostics.collapsed_across_pages`.
     * CURSOR EXPIRY is unchanged: the session still carries the filters and
       still expires, and a dead session still returns 410.
     """
@@ -3309,20 +3451,41 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
     kept, _ = filter_company_categories(kept, stored_req)
     if stored_req["employer_scope"] == EMPLOYER_SCOPE_TECH:
         kept, _dropped = _apply_employer_scope(kept)
-    kept = inventory_feed._dedupe(kept)
-    kept = _collapse_location_variants(kept)
     if wa_ctx["hide_sponsorship_restricted"] or wa_ctx["hide_clearance_required"]:
         # Hydrated BEFORE the verdict is cached, or the assessment would be
         # made against a `requirements` block that has not arrived. Paid for
-        # only when the user actually asked for the filter.
+        # only when the user actually asked for the filter. Runs BEFORE the
+        # collapse, as it must for the siblings too: a copy this user is never
+        # shown cannot be the reason another copy is withheld.
         hydrate_requirements(kept)
         kept, _wa_drops = filter_work_authorization(kept, wa_ctx)
-    # Index order, explicitly, before slicing. Every stage above preserves
-    # input order, but the cursor for the next page is derived from the LAST
-    # ROW OF THIS PAGE, so "in order" has to be a guarantee rather than a
-    # property that happens to hold.
+    # Index order, explicitly. Every stage above preserves input order, but
+    # the cursor for the next page is derived from the LAST ROW OF THIS PAGE,
+    # so "in order" has to be a guarantee rather than a property that happens
+    # to hold.
     kept.sort(key=_index_position_key)
-    page = kept[:page_size]
+    # One card per job across the WHOLE traversal, decided a page's worth at a
+    # time and stopping once the page is full (plus one, to know there is a
+    # remainder): a hop can hold 8x what a page serves.
+    cards: List[Dict[str, Any]] = []
+    decided = 0
+    step = max(page_size * 2, 40)
+    collapsed_across_pages = True
+    while decided < len(kept) and len(cards) <= page_size:
+        chunk = kept[decided:decided + step]
+        out = _one_card_per_job_across_pages(
+            chunk, pool=kept, base=base, stored_req=stored_req, suppressed=suppressed,
+            projection=projection, window_end=session.get("keyset"), wa_ctx=wa_ctx)
+        if out is None:
+            collapsed_across_pages = False
+            cards = _collapse_location_variants(inventory_feed._dedupe(kept))
+            cards.sort(key=_index_position_key)
+            decided = len(kept)
+            break
+        cards.extend(out)
+        decided += len(chunk)
+    undecided = decided < len(kept)
+    page = cards[:page_size]
 
     # Hydrated and ranked unconditionally. Without this a keyset page carried
     # no work-auth badge and no demotion, so the same posting read differently
@@ -3342,7 +3505,7 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
     # cursor resumes from the last row SERVED; only when the whole hop was
     # consumed does it resume from the last row EXAMINED (which is faster,
     # because it skips rows already rejected).
-    if len(kept) > len(page):
+    if len(cards) > len(page) or undecided:
         cursor_key = _position_of(page[-1]) if page else cursor_key
         has_more = True
     else:
@@ -3360,8 +3523,9 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
         source_health=session.get("source_health") or {},
         warnings=warnings,
         diagnostics={"served_from": "keyset", "sort": "index_order",
-                     "scanned": scanned, "kept": len(kept),
+                     "scanned": scanned, "kept": len(cards),
                      "exhausted": exhausted,
+                     "collapsed_across_pages": collapsed_across_pages,
                      "keyset_ms": round((time.perf_counter() - t) * 1000, 1)},
         started=started, work_auth=wa_ctx)
 

@@ -539,6 +539,42 @@ def _collapse_locations(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def dedupe_key_of(row: Dict[str, Any]) -> str:
+    """Stored identity when we have it, the display-string rule otherwise.
+
+    The fallback is not decoration. 227,914 active postings were written
+    before `dedupe_group_id` existed and carry none until the backfill
+    (docs/ops/tech-feed-rollout.md step 3) reaches them. Without this
+    branch every one of those rows becomes its own group on the day this
+    ships, and the feed shows every duplicate it currently collapses.
+    """
+    # SAME TENANT + SAME REQUISITION ID is the same job, whatever name
+    # the board printed on it. JPMorgan's Oracle instance serves one
+    # requisition (`210786394`) from three CX sites, and each copy is
+    # stamped a different employer - "JPMorgan Chase", "NUTMEG CONTAINER
+    # CORPORATION", "CHASE FAMILY LIMITED PARTNERSHIP NO. 5" - so all
+    # three carry different `dedupe_group_id`s and nothing collapsed
+    # them. Sorted by Best match they were the top THREE cards, one job
+    # shown three times. Platform-wide this is 11,837 redundant copies
+    # across 9,436 (tenant, requisition) groups, 4,216 of them wearing
+    # more than one employer name.
+    from services import job_inventory_service as inv
+
+    req = str(row.get("_req_key") or "")
+    if req:
+        return req
+    stored = str(row.get("dedupe_group_id") or "")
+    if stored:
+        return stored
+    location = str(row.get("location") or "").strip()
+    return "|".join((
+        "legacy",
+        inv.employer_id_of(row.get("company")),
+        _title_key(row.get("title")),
+        inv.normalize_location(location)["key"] if location else "",
+    ))
+
+
 def _dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Collapse the same opening, PRESERVING the provenance of what collapsed.
 
@@ -588,38 +624,7 @@ def _dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     # pymongo and the feed is imported on paths that never touch Mongo.
     from services import job_inventory_service as inv
 
-    def _key_of(row: Dict[str, Any], index: int) -> str:
-        """Stored identity when we have it, the display-string rule otherwise.
-
-        The fallback is not decoration. 227,914 active postings were written
-        before `dedupe_group_id` existed and carry none until the backfill
-        (docs/ops/tech-feed-rollout.md step 3) reaches them. Without this
-        branch every one of those rows becomes its own group on the day this
-        ships, and the feed shows every duplicate it currently collapses.
-        """
-        # SAME TENANT + SAME REQUISITION ID is the same job, whatever name
-        # the board printed on it. JPMorgan's Oracle instance serves one
-        # requisition (`210786394`) from three CX sites, and each copy is
-        # stamped a different employer - "JPMorgan Chase", "NUTMEG CONTAINER
-        # CORPORATION", "CHASE FAMILY LIMITED PARTNERSHIP NO. 5" - so all
-        # three carry different `dedupe_group_id`s and nothing collapsed
-        # them. Sorted by Best match they were the top THREE cards, one job
-        # shown three times. Platform-wide this is 11,837 redundant copies
-        # across 9,436 (tenant, requisition) groups, 4,216 of them wearing
-        # more than one employer name.
-        req = str(row.get("_req_key") or "")
-        if req:
-            return req
-        stored = str(row.get("dedupe_group_id") or "")
-        if stored:
-            return stored
-        location = str(row.get("location") or "").strip()
-        return "|".join((
-            "legacy",
-            inv.employer_id_of(row.get("company")),
-            _title_key(row.get("title")),
-            inv.normalize_location(location)["key"] if location else "",
-        ))
+    _key_of = lambda row, index: dedupe_key_of(row)  # noqa: E731
 
     for index, row in enumerate(rows):
         key = _key_of(row, index)
