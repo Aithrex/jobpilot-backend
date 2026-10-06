@@ -440,11 +440,18 @@ def encode_cursor(search_id: str, offset: Optional[int] = None, *,
     """
     if keyset is not None:
         posted = keyset.get("p")
-        obj: Dict[str, Any] = {
-            "s": search_id,
-            "k": {"p": posted.isoformat() if isinstance(posted, datetime) else None,
-                  "j": str(keyset.get("j") or "")[:64]},
+        k: Dict[str, Any] = {
+            "p": posted.isoformat() if isinstance(posted, datetime) else None,
+            "j": str(keyset.get("j") or "")[:64],
         }
+        # Undated cursors carry `first_seen_at` (`f`) as the secondary order
+        # key for the undated tail. Dated cursors omit `f` entirely, so their
+        # encoding is byte-for-byte unchanged.
+        if posted is None:
+            seen = keyset.get("f")
+            if isinstance(seen, datetime):
+                k["f"] = seen.isoformat()
+        obj: Dict[str, Any] = {"s": search_id, "k": k}
     else:
         obj = {"s": search_id, "o": int(offset or 0)}
     raw = json.dumps(obj, separators=(",", ":")).encode("utf-8")
@@ -472,7 +479,16 @@ def decode_cursor(cursor: Any) -> Optional[Tuple[str, int, Optional[Dict[str, An
         job_id = str(obj["k"].get("j") or "")[:64]
         if raw_posted and posted is None:
             return None
-        return sid, 0, {"p": posted, "j": job_id}
+        ks: Dict[str, Any] = {"p": posted, "j": job_id}
+        # `f` (first_seen_at) is only meaningful for an undated cursor; a bad
+        # value is ignored rather than fatal (the tail then resumes a little
+        # earlier, never skipping a row).
+        raw_seen = obj["k"].get("f")
+        if posted is None and raw_seen:
+            seen = _as_utc(_parse_iso(raw_seen))
+            if seen is not None:
+                ks["f"] = seen
+        return sid, 0, ks
 
     try:
         off = int(obj["o"])
@@ -852,9 +868,15 @@ def retrieve(req: Dict[str, Any], *, limit: Optional[int] = None,
     # `_run_search` exactly like `_keyset`.
     diagnostics["_query"] = query
     if docs:
-        last = docs[-1]
-        diagnostics["_keyset"] = {"p": _as_utc(last.get("posted_at")),
-                                  "j": str(last.get("job_id") or "")}
+        # `_position_of` carries `first_seen_at` (`f`) for an undated handoff
+        # row, so the keyset tail resumes in the SAME `(first_seen_at desc,
+        # job_id asc)` order the undated phase uses — not the `job_id`-only
+        # order the retrieval window happened to return undated rows in.
+        # `retrieve` stays a pure "up to `limit` docs + stash keyset" read; the
+        # dated-vs-undated window boundary is decided by `_run_search` (the
+        # audit harness also calls `retrieve` and must see EVERY survivor,
+        # undated included, so no trimming happens here).
+        diagnostics["_keyset"] = _position_of(docs[-1])
     return docs, diagnostics
 
 
@@ -2796,6 +2818,23 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
     watermark = _watermark(docs)
     keyset = diagnostics.pop("_keyset", None)
     truncated = len(docs) >= CANDIDATE_LIMIT
+    if truncated and docs and docs[-1].get("posted_at") is None:
+        # Boundary case: the match set is larger than the candidate window AND
+        # the window reached into the undated (`posted_at:null`) rows. The DB
+        # sort returns undated by `job_id`, but the keyset tail owns them in
+        # `(first_seen_at desc, job_id asc)` order — the two cannot agree on
+        # WHICH undated rows a `job_id`-limited slice contains. So the undated
+        # rows are handed ENTIRELY to the keyset tail: the scored window keeps
+        # only its dated prefix (all dated matches are present, since there
+        # were fewer than the window size) and the handoff keyset is the START
+        # of the undated tail. No undated row is scored-then-also-keyset-served
+        # (no duplicate) and none is skipped (no silent drop). The common case
+        # — more than `CANDIDATE_LIMIT` DATED matches — keeps a dated handoff
+        # keyset and is untouched.
+        docs = [d for d in docs if d.get("posted_at") is not None]
+        diagnostics["candidates"] = len(docs)
+        diagnostics["undated_in_tail"] = True
+        keyset = dict(_UNDATED_TAIL_START)
     total_matched = int(diagnostics.get("total_matched") or 0)
     total_is_exact = bool(diagnostics.get("total_is_exact"))
     if truncated:
@@ -2988,47 +3027,188 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
 
 
 def _position_of(doc: Dict[str, Any]) -> Dict[str, Any]:
-    """A document's position in `(posted_at desc, job_id asc)` order."""
-    return {"p": _as_utc(doc.get("posted_at")), "j": str(doc.get("job_id") or "")}
+    """A document's keyset position in the `_index_position_key` total order.
+
+    Dated rows carry only `(p, j)`. Undated rows (`posted_at` null/missing)
+    carry `p=None` plus `f` = `first_seen_at`, which is the secondary order key
+    for the undated tail, so the cursor can resume strictly after a given
+    undated row by `(first_seen_at desc, job_id asc)`.
+    """
+    posted = _as_utc(doc.get("posted_at"))
+    pos: Dict[str, Any] = {"p": posted, "j": str(doc.get("job_id") or "")}
+    if posted is None:
+        pos["f"] = _as_utc(doc.get("first_seen_at"))
+    return pos
 
 
 def _index_position_key(doc: Dict[str, Any]) -> Tuple[int, float, str]:
-    """Sort key matching `(posted_at desc, job_id asc)`, undated last."""
+    """Total order for the keyset traversal.
+
+    Dated rows come first, ordered `(posted_at desc, job_id asc)` — byte-for-
+    byte the historical top-of-feed order. Undated rows (`posted_at` null or
+    missing) come AFTER every dated row, ordered `(first_seen_at desc, job_id
+    asc)`: `first_seen_at` is the real lower bound we observed for an undated
+    posting (ADR-001), so "most-recently-first-seen" is the honest proxy for
+    recency within the tail, with `job_id` the stable tie-break. Undated rows
+    whose `first_seen_at` is itself missing sort last among the undated tail.
+
+    This is the single source of truth the batch is re-sorted by before a page
+    is sliced and before the next cursor is derived, so the DB `.sort()` only
+    has to agree WITHIN a phase (dated vs undated), never across the boundary.
+    """
     posted = doc.get("posted_at")
     if isinstance(posted, datetime):
         return (0, -posted.timestamp(), str(doc.get("job_id") or ""))
-    return (1, 0.0, str(doc.get("job_id") or ""))
+    seen = doc.get("first_seen_at")
+    seen_rank = -seen.timestamp() if isinstance(seen, datetime) else float("inf")
+    return (1, seen_rank, str(doc.get("job_id") or ""))
 
 
-def keyset_predicate(keyset: Dict[str, Any]) -> Dict[str, Any]:
-    """The "everything strictly after this row" clause for `(posted_at desc,
-    job_id asc)`.
+#: The undated-tail START cursor — a synthetic position BEFORE every undated
+#: row (`p=None`, empty `job_id`, no `f`). `job_id` is never empty on a real
+#: posting, so this is unambiguous and it survives JSON/BSON round-trips (no
+#: in-memory sentinel), which matters because the dated→undated handoff keyset
+#: is persisted in the session and encoded into the client cursor.
+_UNDATED_TAIL_START: Dict[str, Any] = {"p": None, "j": ""}
 
-    BSON orders `Null < Date`, so a descending sort puts UNDATED postings
-    last, and `{"posted_at": {"$lt": <date>}}` already includes them. That is
-    correct and load-bearing: 18,222 live postings carry no date, and a naive
-    keyset would either skip them entirely or serve them twice. Once the
-    traversal reaches them, `p` is None and the clause narrows to the undated
-    tail ordered by `job_id`.
+
+def _is_undated_tail_start(keyset: Dict[str, Any]) -> bool:
+    return (keyset.get("p") is None and not str(keyset.get("j") or "")
+            and "f" not in keyset)
+
+
+def _undated_tail_predicate(first_seen: Any, job_id: str,
+                            *, start: bool = False) -> Dict[str, Any]:
+    """"Everything strictly after this UNDATED row" in `(first_seen_at desc,
+    job_id asc)` order, where a missing `first_seen_at` sorts LAST.
+
+    Mirrors `_index_position_key`'s undated branch exactly.
+
+    * `start=True` → the whole undated tail (fresh start, nothing consumed):
+      just `posted_at:null`.
+    * `first_seen is None` → the cursor is already in the no-`first_seen_at`
+      sub-tail, so only `job_id > j` (also missing `first_seen_at`) remains.
+    * a datetime → older `first_seen_at`, OR equal `first_seen_at` with a later
+      `job_id`, OR any row with no `first_seen_at` (those sort last).
     """
+    if start:
+        return {"posted_at": None}
+    if first_seen is None:
+        return {"posted_at": None,
+                "$or": [{"first_seen_at": None},
+                        {"first_seen_at": {"$exists": False}}],
+                "job_id": {"$gt": job_id}}
+    return {"posted_at": None, "$or": [
+        # Older first_seen_at (ranks after in `first_seen_at desc`).
+        {"first_seen_at": {"$lt": first_seen}},
+        # Same first_seen_at, later job_id.
+        {"first_seen_at": first_seen, "job_id": {"$gt": job_id}},
+        # Rows with no first_seen_at sort last, so they are all strictly after.
+        {"first_seen_at": None},
+        {"first_seen_at": {"$exists": False}},
+    ]}
+
+
+#: The dated-phase scan sort — the historical top-of-feed order, UNCHANGED.
+_DATED_SORT = [("posted_at", -1), ("job_id", 1)]
+#: The undated-tail scan sort — `(first_seen_at desc, job_id asc)`, matching
+#: `_index_position_key`'s undated branch so each hop returns a contiguous
+#: prefix of the remaining tail and the cursor never skips a row.
+_UNDATED_SORT = [("first_seen_at", -1), ("job_id", 1)]
+
+
+def _keyset_sort(cursor_key: Dict[str, Any]) -> List[Tuple[str, int]]:
+    """The DB `.sort()` for the phase this cursor is in. A dated cursor scans
+    the dated region (its predicate is restricted to dated rows via
+    `_dated_hop_predicate`); an undated cursor scans the undated tail."""
+    return _UNDATED_SORT if cursor_key.get("p") is None else _DATED_SORT
+
+
+def _dated_hop_predicate(keyset: Dict[str, Any]) -> Dict[str, Any]:
+    """The dated-only "strictly after" clause — the fast closed-range scan,
+    WITHOUT the undated-tail branch. Used inside the dated scan phase so a hop
+    returns only dated rows (ordered `(posted_at desc, job_id asc)`); the
+    transition into the undated tail is made explicitly once dated rows run
+    out, so the two phases never interleave within a hop."""
     posted = keyset.get("p")
     job_id = str(keyset.get("j") or "")
-    if posted is None:
-        return {"posted_at": None, "job_id": {"$gt": job_id}}
-    # The `$lte` clause is what makes this fast, and it is not redundant with
-    # the `$or`. An `$or` alone cannot bound an index range: measured on live
-    # `job_postings`, the deep-page query examined 71,333 index keys to return
-    # 250 rows and took 13.6 seconds, because Mongo could only use the base
-    # `posted_at >= cutoff` bound and evaluated the `$or` as a residual over
-    # everything after it. Adding the upper bound on the SAME field gives one
-    # closed range, and the range SHRINKS as paging advances - so later pages
-    # get cheaper rather than more expensive.
     return {"$and": [
         {"posted_at": {"$lte": posted}},
         {"$or": [
             {"posted_at": {"$lt": posted}},
             {"posted_at": posted, "job_id": {"$gt": job_id}},
         ]},
+    ]}
+
+
+def _hop_predicate(cursor_key: Dict[str, Any]) -> Dict[str, Any]:
+    """Per-hop "strictly after" clause, phase-restricted so one hop never
+    straddles the dated/undated boundary. The public `keyset_predicate`
+    (dated-reaching) is still the recall contract and the ground truth the
+    audit harness checks; this is only the paging-walk's phased variant.
+
+    The `_UNDATED_TAIL_START` cursor (`p=None`, empty `j`, no `f`) means the
+    tail has not been entered yet — match every undated row. A resumed undated
+    cursor (post encode/decode, so `f` is a datetime, None, or absent) resumes
+    strictly after its row; an absent `f` on such a cursor is treated as the
+    no-`first_seen_at` sub-tail position via `None`.
+    """
+    if cursor_key.get("p") is None:
+        if _is_undated_tail_start(cursor_key):
+            return _undated_tail_predicate(None, "", start=True)
+        f = cursor_key["f"] if "f" in cursor_key else None
+        return _undated_tail_predicate(f, str(cursor_key.get("j") or ""))
+    return _dated_hop_predicate(cursor_key)
+
+
+def keyset_predicate(keyset: Dict[str, Any]) -> Dict[str, Any]:
+    """The "everything strictly after this row" clause for the keyset total
+    order (`_index_position_key`): dated rows `(posted_at desc, job_id asc)`
+    first, then the undated tail `(first_seen_at desc, job_id asc)`.
+
+    THE UNDATED-TAIL FIX. `{"posted_at": {"$lt": <date>}}` does NOT match a row
+    whose `posted_at` is null/missing — a `$lt` date comparison only ranges
+    over dates, so the ~18k undated postings were never reachable once the
+    cursor sat on a dated row, and deep pagination terminated before draining
+    them (every live silent-drop sampled was `posted_at:null`, the early-career
+    tail the feed must not miss). A descending index SORT puts nulls last, but
+    the keyset PREDICATE has to name them explicitly to reach them.
+
+    * Dated cursor: the fast index-bounded dated clause (`$lte` upper bound so
+      the range shrinks as paging advances) OR the ENTIRE undated tail
+      (`posted_at:null`). Keeping the two as top-level `$or` branches preserves
+      the closed-range scan on the dated branch (the undated branch is a point
+      match on the same leading field, grouped together on the index) while
+      making the tail reachable.
+    * Undated cursor: resume strictly after within the undated tail by
+      `(first_seen_at desc, job_id asc)` — see `_undated_tail_predicate`.
+    """
+    posted = keyset.get("p")
+    job_id = str(keyset.get("j") or "")
+    if posted is None:
+        if _is_undated_tail_start(keyset):
+            return _undated_tail_predicate(None, "", start=True)
+        f = keyset["f"] if "f" in keyset else None
+        return _undated_tail_predicate(f, job_id)
+    # The `$lte` clause is what makes the dated branch fast, and it is not
+    # redundant with the inner `$or`. An `$or` alone cannot bound an index
+    # range: measured on live `job_postings`, the deep-page query examined
+    # 71,333 index keys to return 250 rows and took 13.6 seconds, because Mongo
+    # could only use the base `posted_at >= cutoff` bound and evaluated the
+    # `$or` as a residual over everything after it. Adding the upper bound on
+    # the SAME field gives one closed range, and the range SHRINKS as paging
+    # advances - so later pages get cheaper rather than more expensive. The
+    # undated tail is a SEPARATE top-level branch so it does not loosen that
+    # bound.
+    return {"$or": [
+        {"$and": [
+            {"posted_at": {"$lte": posted}},
+            {"$or": [
+                {"posted_at": {"$lt": posted}},
+                {"posted_at": posted, "job_id": {"$gt": job_id}},
+            ]},
+        ]},
+        {"posted_at": None},
     ]}
 
 
@@ -3069,7 +3249,6 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
     stored_req["page_size"] = page_size
 
     base = build_query(stored_req, now=now)
-    query = {"$and": [base, keyset_predicate(keyset)]}
     projection = (_PROJECTION if _needs_requirements_upfront(stored_req)
                   else _PROJECTION_LIGHT)
 
@@ -3089,24 +3268,40 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
 
     # Read forward in bounded hops until the page is full. Each hop advances
     # `cursor_key` past every row EXAMINED, not merely every row kept, so a
-    # heavily-filtered slice never re-reads what it already rejected.
+    # heavily-filtered slice never re-reads what it already rejected. The scan
+    # runs in two phases: the dated region (`(posted_at desc, job_id asc)`,
+    # unchanged) first, then the undated tail (`(first_seen_at desc, job_id
+    # asc)`). A hop never straddles the boundary — when the dated phase drains,
+    # the cursor is transitioned explicitly to the START of the undated tail so
+    # the previously-unreachable `posted_at:null` rows are walked to the end.
     while len(kept) < page_size and scanned < KEYSET_MAX_SCAN:
         hop = min(page_size * KEYSET_OVERFETCH, KEYSET_MAX_SCAN - scanned)
         batch = list(inv._postings()
-                     .find({"$and": [base, keyset_predicate(cursor_key)]}, projection)
-                     .sort([("posted_at", -1), ("job_id", 1)]).limit(hop))
+                     .find({"$and": [base, _hop_predicate(cursor_key)]}, projection)
+                     .sort(_keyset_sort(cursor_key)).limit(hop))
         if not batch:
+            if cursor_key.get("p") is not None:
+                # Dated phase exhausted — hand off to the undated tail rather
+                # than ending the traversal. The START cursor matches every
+                # undated row; the first hop then walks them in
+                # `(first_seen_at desc, job_id asc)` order.
+                cursor_key = dict(_UNDATED_TAIL_START)
+                continue
             exhausted = True
             break
         scanned += len(batch)
-        last = batch[-1]
-        cursor_key = {"p": _as_utc(last.get("posted_at")),
-                      "j": str(last.get("job_id") or "")}
+        cursor_key = _position_of(batch[-1])
         for doc in batch:
             doc["_tech"] = _read_time_tech(doc)
         survivors, _drops = hard_filter(batch, stored_req, suppressed=suppressed)
         kept.extend(survivors)
         if len(batch) < hop:
+            # This phase is drained. In the DATED phase that is NOT the end of
+            # the traversal — the undated tail still has to be walked, so hand
+            # off to it. In the UNDATED phase a short batch is the true end.
+            if cursor_key.get("p") is not None:
+                cursor_key = dict(_UNDATED_TAIL_START)
+                continue
             exhausted = True
             break
 

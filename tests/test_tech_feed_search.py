@@ -212,18 +212,28 @@ class TestCursor:
 
 
 class TestKeysetPredicate:
-    """`(posted_at desc, job_id asc)` with an undated tail.
+    """Dated rows `(posted_at desc, job_id asc)` first, THEN the undated tail
+    `(first_seen_at desc, job_id asc)`.
 
-    BSON orders `Null < Date`, so descending puts undated postings LAST and
-    `$lt: <date>` already includes them. Getting this wrong either skips
-    18,222 postings or serves them on every page.
+    A `$lt: <date>` comparison does NOT match a `posted_at:null` row — it only
+    ranges over dates — so a dated cursor could never reach the ~18k undated
+    postings and deep pagination dropped them silently (the early-career tail
+    the feed must not miss). The dated clause therefore top-level-`$or`s the
+    whole undated tail in, and the undated tail resumes by `first_seen_at` —
+    the real lower bound observed for an undated posting (ADR-001) — so it is
+    both reachable and totally ordered.
     """
 
-    def test_dated_position_advances_on_both_keys(self):
+    def test_dated_position_reaches_dated_range_and_the_undated_tail(self):
         from datetime import datetime, timezone
         posted = datetime(2026, 8, 30, tzinfo=timezone.utc)
         pred = tfs.keyset_predicate({"p": posted, "j": "j5"})
-        bound, tie = pred["$and"]
+        # Two top-level branches: the fast dated range OR the entire undated
+        # tail (the fix that makes `posted_at:null` reachable from a dated
+        # cursor).
+        dated_branch, undated_branch = pred["$or"]
+        assert undated_branch == {"posted_at": None}
+        bound, tie = dated_branch["$and"]
         assert tie["$or"][0] == {"posted_at": {"$lt": posted}}
         assert tie["$or"][1] == {"posted_at": posted, "job_id": {"$gt": "j5"}}
         # The upper bound is not redundant with the `$or` - it is what lets
@@ -237,13 +247,33 @@ class TestKeysetPredicate:
         from datetime import datetime, timedelta, timezone
         first = datetime(2026, 8, 30, tzinfo=timezone.utc)
         later = first - timedelta(days=5)
-        a = tfs.keyset_predicate({"p": first, "j": "j1"})["$and"][0]
-        b = tfs.keyset_predicate({"p": later, "j": "j9"})["$and"][0]
+        a = tfs.keyset_predicate({"p": first, "j": "j1"})["$or"][0]["$and"][0]
+        b = tfs.keyset_predicate({"p": later, "j": "j9"})["$or"][0]["$and"][0]
         assert b["posted_at"]["$lte"] < a["posted_at"]["$lte"]
 
-    def test_the_undated_tail_orders_by_job_id_alone(self):
-        assert tfs.keyset_predicate({"p": None, "j": "j5"}) == {
-            "posted_at": None, "job_id": {"$gt": "j5"}}
+    def test_the_undated_tail_start_matches_every_undated_row(self):
+        # The dated->undated handoff cursor (empty job_id, no `f`) matches the
+        # whole undated tail — nothing consumed yet.
+        assert tfs.keyset_predicate({"p": None, "j": ""}) == {"posted_at": None}
+
+    def test_the_undated_tail_resumes_by_first_seen_then_job_id(self):
+        from datetime import datetime, timezone
+        seen = datetime(2026, 8, 20, tzinfo=timezone.utc)
+        pred = tfs.keyset_predicate({"p": None, "f": seen, "j": "j5"})
+        assert pred["posted_at"] is None
+        branches = pred["$or"]
+        # Older first_seen_at, OR same first_seen_at with a later job_id, OR a
+        # row with no first_seen_at (which sorts last among the undated tail).
+        assert {"first_seen_at": {"$lt": seen}} in branches
+        assert {"first_seen_at": seen, "job_id": {"$gt": "j5"}} in branches
+        assert {"first_seen_at": None} in branches
+
+    def test_an_undated_cursor_without_first_seen_stays_in_the_null_subtail(self):
+        # A cursor on a null-first_seen_at row only advances by job_id within
+        # the no-first_seen_at sub-tail (which sorts last).
+        pred = tfs.keyset_predicate({"p": None, "f": None, "j": "j5"})
+        assert pred["posted_at"] is None
+        assert pred["job_id"] == {"$gt": "j5"}
 
 
 # ---------------------------------------------------------------------------

@@ -83,6 +83,28 @@ def seed_posting(*, sjid, seniority=None, title=SWE_TITLE, days=2,
     return sjid
 
 
+def seed_undated_posting(d, *, sjid, seniority=None, first_seen_days=1,
+                         title=SWE_TITLE, company="Acme Inc", tenant="acme",
+                         description=SWE_JD):
+    """An UNDATED posting: `posted_at` null, `posted_at_confidence` unknown, so
+    it rides the keyset undated tail on `first_seen_at` (backdated by
+    `first_seen_days`). Fields are passed verbatim (no re-parse) so the stored
+    `seniority`/null-date are exactly what the pipeline sees."""
+    raw = {
+        "source": "career-pages", "source_job_id": sjid,
+        "url": f"https://boards.greenhouse.io/{tenant}/jobs/{sjid}",
+        "company": company, "title": title, "location": ["Austin, TX, USA"],
+        "description": description, "employment_type": "Full time",
+        "cost_class": "free", "source_quality": "direct", "industry": "tech",
+        "ats": "greenhouse", "tenant": tenant, "posted_at": None,
+        "posted_at_confidence": inv.CONFIDENCE_UNKNOWN,
+    }
+    if seniority is not None:
+        raw["seniority"] = seniority
+    inv.upsert_posting(raw, now=NOW - timedelta(days=first_seen_days))
+    return sjid
+
+
 def seed_user(d, *, email, years=3, level="mid"):
     """A user with an active, parsed resume so get_active_structured is non-None."""
     rid = f"rid-{email}"
@@ -106,6 +128,21 @@ def seed_user(d, *, email, years=3, level="mid"):
 
 def _collection_counts(d):
     return {c: d[c].count_documents({}) for c in COLLECTIONS}
+
+
+def _jid_list(d, source_ids):
+    """The generated `job_id`s for the given `source_job_id`s, in the SAME
+    order (postings expose a hex `job_id`, not the seed `source_job_id`)."""
+    out = []
+    for sjid in source_ids:
+        doc = d.job_postings.find_one({"source_job_id": sjid}, {"job_id": 1})
+        assert doc is not None, f"posting {sjid} was not seeded"
+        out.append(str(doc["job_id"]))
+    return out
+
+
+def _jids_for(d, source_ids):
+    return set(_jid_list(d, source_ids))
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +246,110 @@ class TestRecallPastTheWindow:
         assert returned - should == set()
         assert len(should) == 30
         assert pages >= 2  # proves we paged past the first (10-row) window
+
+    def test_dated_and_undated_tail_are_both_fully_paged(self, db, monkeypatch):
+        """THE UNDATED-TAIL RECALL FIX (the parent task's core requirement:
+        "new-grad roles must not be missed, even one"). With the ranked window
+        far below the match set so the keyset phase runs, a corpus that spans
+        DATED and UNDATED (`posted_at:null`) rows must page to the end and
+        return EVERY survivor — dated first, then the undated tail. On the OLD
+        keyset predicate the undated rows were unreachable from a dated cursor
+        (`$lt:<date>` never matches null), so they were silent drops; here
+        `should_be_returnable - returned == ∅`.
+        """
+        monkeypatch.setattr(tfs, "CANDIDATE_LIMIT", 5)
+        seed_user(db, email="erin@example.com", years=3, level="mid")
+
+        # 12 DATED survivors at descending ages, and 8 UNDATED survivors whose
+        # posting date is unknown (the early-career tail). All distinct
+        # tenants/companies so dedupe/collapse keep every one.
+        for i in range(12):
+            seed_posting(sjid=f"dated{i:02d}", seniority="mid", days=i + 1,
+                         company=f"Dated Co {i}", tenant=f"dco{i}", parse=True)
+        for i in range(8):
+            seed_undated_posting(db, sjid=f"undated{i:02d}", seniority="mid",
+                                 first_seen_days=i + 1,
+                                 company=f"Undated Co {i}", tenant=f"uco{i}")
+
+        now = tfs._now()
+        payload = {"user_email": "erin@example.com", "personalize": True,
+                   "seniority": ["mid"], "page_size": tfs.MAX_PAGE_SIZE}
+        req = tfs.normalize_request(payload)
+        true_total = audit._postings().count_documents(tfs.build_query(req, now=now))
+        assert true_total == 20  # 12 dated + 8 undated all match the filter
+
+        # `job_id` is a generated hex, not `source_job_id`; map both tails.
+        dated_jids = _jids_for(db, [f"dated{i:02d}" for i in range(12)])
+        undated_jids = _jids_for(db, [f"undated{i:02d}" for i in range(8)])
+
+        should, _bounded, _limit = audit.survivor_set(req, now, true_total)
+        returned, _first, pages = audit.page_to_exhaustion(payload)
+
+        # Every survivor reached — undated tail included, no silent drop.
+        assert should - returned == set(), "survivors missing (silent drops)"
+        assert returned - should == set(), "rows returned that should not be"
+        assert len(should) == 20
+        # Both the 8 undated and the 12 dated are present.
+        assert undated_jids <= returned
+        assert dated_jids <= returned
+        assert pages >= 2  # paged past the 5-row ranked window
+
+    def test_early_pages_are_unchanged_dated_first_then_undated(self, db, monkeypatch):
+        """ORDERING guarantee: the dated region is served FIRST and in the
+        historical `(posted_at desc, job_id asc)` order; the undated tail is
+        only ever appended at the END. Walking the whole feed, every dated
+        job_id must appear before every undated one, and the dated slice must
+        be exactly date-descending.
+        """
+        monkeypatch.setattr(tfs, "CANDIDATE_LIMIT", 4)
+        seed_user(db, email="finn@example.com", years=3, level="mid")
+
+        for i in range(10):
+            seed_posting(sjid=f"d{i:02d}", seniority="mid", days=i + 1,
+                         company=f"D Co {i}", tenant=f"d{i}", parse=True)
+        for i in range(6):
+            seed_undated_posting(db, sjid=f"u{i:02d}", seniority="mid",
+                                 first_seen_days=i + 1,
+                                 company=f"U Co {i}", tenant=f"u{i}")
+
+        payload = {"user_email": "finn@example.com", "personalize": True,
+                   "seniority": ["mid"], "page_size": 3}
+
+        # Walk the whole feed collecting the order rows are SERVED in.
+        order: list = []
+        body = dict(payload)
+        cursor = None
+        pages = 0
+        while True:
+            if cursor is not None:
+                body = dict(payload)
+                body["cursor"] = cursor
+            resp = tfs.search(body)
+            pages += 1
+            for job in resp.get("jobs") or []:
+                order.append(str(job.get("job_id") or ""))
+            cursor = resp.get("next_cursor")
+            if not cursor or not resp.get("has_more") or pages > 100:
+                break
+
+        # `job_id` is a generated hex; map source ids to it, preserving the
+        # seed order (d00 newest … d09 oldest; u00 … u05).
+        dated_order = _jid_list(db, [f"d{i:02d}" for i in range(10)])
+        undated_set = _jids_for(db, [f"u{i:02d}" for i in range(6)])
+        dated_set = set(dated_order)
+
+        served_dated = [j for j in order if j in dated_set]
+        served_undated = [j for j in order if j in undated_set]
+        # No row served twice.
+        assert len(order) == len(set(order))
+        # Every dated row comes before every undated row (undated appended).
+        last_dated_pos = max(order.index(j) for j in served_dated)
+        first_undated_pos = min(order.index(j) for j in served_undated)
+        assert last_dated_pos < first_undated_pos
+        # The dated region is exactly date-descending (d00 newest … d09 oldest).
+        assert served_dated == dated_order
+        # The undated tail is complete.
+        assert set(served_undated) == undated_set
 
     def test_legit_drop_does_not_inflate_silent_drops_in_full_audit(self, db, monkeypatch):
         monkeypatch.setattr(tfs, "CANDIDATE_LIMIT", 10)
