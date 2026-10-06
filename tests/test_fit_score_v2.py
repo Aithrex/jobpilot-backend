@@ -702,6 +702,7 @@ class TestSeniorityTaxonomy:
         "Software Engineer I",
         "Entry Level Technician",
         "Apprentice Electrician",
+        "Software Engineer (Campus)",
     ])
     def test_early_career_titles_land_in_entry(self, title):
         """The old vocabulary had only intern/junior/graduate/trainee/
@@ -733,6 +734,7 @@ class TestSeniorityTaxonomy:
         ("Staff Product Manager", "staff"),
         ("Sr Staff Endpoint Systems Engineer", "staff"),
         ("Solutions Architect", "staff"),
+        ("Staff Software Engineer", "staff"),
     ])
     def test_management_titles_are_not_the_ic_staff_band(self, title, expected):
         assert fit_score.title_level(title) == expected, title
@@ -743,6 +745,33 @@ class TestSeniorityTaxonomy:
         `staff` alongside Distinguished Engineers."""
         assert fit_score.title_level("RN Staff Nurse Burn ICU Full-time Nights") != "staff"
         assert fit_score.title_level("Staff Accountant") != "staff"
+
+    def test_member_of_technical_staff_is_not_the_ic_staff_band(self):
+        """"Member of Technical Staff"/"MTS" is a job-family label, not the IC
+        staff band. Read as `staff` it hid the role from new-grad/entry users
+        and the guest entry view even when the title said "New Grad". With the
+        staff rung skipped the scan falls through: an early-career word lands
+        it in entry, otherwise None (unknown rides along with every band)."""
+        # Bare label carries no band — unknown, not staff.
+        assert fit_score.title_level("Member of Technical Staff") is None
+        # An early-career word present -> entry.
+        assert fit_score.title_level("Member of Technical Staff, New Grad") == "entry"
+        assert fit_score.title_level(
+            "Software Engineer, New Grad - Member of Technical Staff") == "entry"
+        assert fit_score.title_level("Associate Member of Technical Staff") == "entry"
+        # Resolved from the body when the title names no level.
+        assert fit_score.level_from_signals(
+            "Member of Technical Staff",
+            description="We welcome new graduates. 0-2 years experience.") == "entry"
+
+    @pytest.mark.parametrize("title", [
+        "Campus Police Officer",
+        "Campus Security Guard",
+    ])
+    def test_campus_without_a_tech_role_is_not_entry(self, title):
+        """The bare "(Campus)" entry marker is scoped to engineering role
+        nouns, so campus-location safety roles do not read as graduate hires."""
+        assert fit_score.title_level(title) != "entry", title
 
     @pytest.mark.parametrize("title,expected", [
         ("Assistant Director of Nursing", "senior"),

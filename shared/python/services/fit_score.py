@@ -1078,6 +1078,16 @@ _STAFF_IS_RANK_AND_FILE = re.compile(
     r"attorney|counsel|writer|editor|chaplain|counselor|aide|clerk|"
     r"interpreter|dietitian|psychologist|surveyor|appraiser|sergeant|officer)"
     r"(?![a-z])")
+# "Member of Technical Staff" / "MTS" is a job-family label, not the IC staff
+# band: on the live corpus it reads `staff` off the bare word and hides the
+# role from new-grad/entry users and the guest entry view, even when the title
+# literally says "New Grad". With the staff rung skipped, the scan falls
+# through to the entry rung when an early-career word is present, else returns
+# None (unknown) — "unknown is not a no".
+_STAFF_IS_MTS = re.compile(
+    r"(?<![a-z])member\s+of\s+(?:[a-z]+\s+)?technical\s+staff(?![a-z])|"
+    r"(?<![a-z])MTS(?![a-z])|"
+    r"(?<=member of )technical\s+staff(?![a-z])", re.IGNORECASE)
 # "Assistant/Associate <senior thing>" is senior, not junior.
 _JUNIOR_WORD_IS_SENIOR = re.compile(
     r"(?<![a-z])(assistant|associate|deputy)\s+"
@@ -1173,6 +1183,14 @@ _LEVEL_PATTERNS: Sequence[Tuple[str, re.Pattern]] = (
         r"college\s+grad(uate)?|grad(uate)?\s+(engineer|developer|analyst|"
         r"scientist|programme|program|scheme|role|hire|trainee)|"
         r"campus\s+(hire|recruit|program|programme)|on[ -]campus|"
+        # A bare "(Campus)" is a graduate-hire marker, but only on an
+        # ENGINEERING title: scope it to a tech role noun within a short
+        # bounded distance, in either order, so "Software Engineer (Campus)"
+        # reads entry while "Campus Police"/"Campus Security" do not.
+        r"campus(?:[^a-z0-9]+(?:[a-z]+\s+){0,2}(engineer|developer|programmer|"
+        r"software|data\s+scientist|analyst|sde|swe))|"
+        r"(engineer|developer|programmer|software|data\s+scientist|analyst|"
+        r"sde|swe)(?:[^a-z0-9]+(?:[a-z]+\s+){0,2}campus)|"
         r"early\s+(career|professional|talent)|early[ -]in[ -]career|"
         r"entry[ -]?level|entry\s+career|"
         r"rotational|rotation\s+program|"
@@ -1368,9 +1386,10 @@ def title_level(title: Any) -> Optional[str]:
     if _SENIOR_WORD_IS_TRAINEE.search(t):
         return "entry"
     staff_is_rank_and_file = bool(_STAFF_IS_RANK_AND_FILE.search(t))
+    staff_is_mts = bool(_STAFF_IS_MTS.search(t))
 
     for level, rx in _LEVEL_PATTERNS:
-        if level == "staff" and staff_is_rank_and_file:
+        if level == "staff" and (staff_is_rank_and_file or staff_is_mts):
             # "Staff Nurse" is not the staff band. Keep scanning: a genuine
             # marker later in the title still wins, and otherwise the
             # management scan below or `None` answers.
