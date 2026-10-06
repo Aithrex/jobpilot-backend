@@ -75,11 +75,29 @@ VG_COLLECTIONS = (
 )
 
 
+def assert_in_memory(db):
+    """Fail loudly unless `db` is mongomock. Every fixture that clears a
+    collection goes through this: on 2026-10-06 a fixture's `delete_many({})`
+    reached the production cluster named in a developer's `.env`."""
+    if not isinstance(db, mongomock.Database):
+        raise db_connect.RealDatabaseInTestRun(
+            f"the test database is {type(db).__module__}.{type(db).__name__}, "
+            "not mongomock - refusing to run fixtures against it")
+    return db
+
+
 def current_db():
     """Resolve the live (mock) DB dynamically — never capture it at import
     time, because tests/test_voicegraph_cascade.py installs its own
     module-level mongomock patch and the last import wins."""
-    return db_connect.DBConnect().get_db()
+    return assert_in_memory(db_connect.DBConnect().get_db())
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _refuse_a_real_database():
+    """Checked once before any test runs, and again by `current_db()`."""
+    assert_in_memory(db_connect.DBConnect().get_db())
+    yield
 
 
 @pytest.fixture(autouse=True)
