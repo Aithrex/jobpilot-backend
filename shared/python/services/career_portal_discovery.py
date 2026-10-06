@@ -175,8 +175,12 @@ def candidate_domains(name: str, known: str = "") -> List[str]:
     #                                `palantir.com` serves a Lever board.
     #   SAP SE                    -> settled on `www.sapse.com`; sap.com.
     # Both were then written as `no_portal`, which is terminal.
+    # A DNS label is at most 63 characters. Registry names run far past that
+    # ("ZION EVANGELICAL LUTHERAN CHURCH OF THE UNALTERED AUGSBURG CONFESSION
+    # OF SOUTHINGTON"), and resolving such a label raises UnicodeError rather
+    # than failing a lookup - which killed the attempt before it was recorded.
     stems = [t for t in dict.fromkeys([joined, first, hyphen])
-             if t and len(t) >= 3]
+             if t and 3 <= len(t) <= 63]
     out = [f"{stem}.com" for stem in stems]
     out += [f"www.{stem}.com" for stem in stems]
     return list(dict.fromkeys(out_known + out))[:6]
@@ -661,6 +665,9 @@ class PortalDiscovery:
 #: not concentrate load anywhere. It is the difference between draining the
 #: 59,673-company queue in days and draining it in hours.
 DISCOVERY_CONCURRENCY = int(os.getenv("DISCOVERY_CONCURRENCY", "16") or 16)
+#: Consecutive challenged employers after which a batch stops making
+#: requests (see `discover_batch`).
+DISCOVERY_CHALLENGE_BREAKER = int(os.getenv("DISCOVERY_CHALLENGE_BREAKER", "6") or 6)
 
 
 def discover_batch(companies: Sequence[Dict[str, Any]], ctx: FetchContext, *,
@@ -684,8 +691,19 @@ def discover_batch(companies: Sequence[Dict[str, Any]], ctx: FetchContext, *,
              "no_portal": 0, "errors": 0, "unknown_hosts": {}}
     lock = threading.Lock()
 
+    #: Consecutive bot-challenges across DIFFERENT employers. One site saying
+    #: 429 is that site; a run of them is the CDNs in front of them limiting
+    #: OUR address, and every further request both fails and extends it.
+    streak = {"challenges": 0}
+
     def _one(row: Dict[str, Any]) -> None:
         if ctx.should_stop():
+            return
+        if streak["challenges"] >= DISCOVERY_CHALLENGE_BREAKER:
+            # Leave the rest of this batch unattempted. Their leases lapse and
+            # a later tick takes them, by which time the limit has cooled.
+            with lock:
+                stats["skipped_rate_limited"] = stats.get("skipped_rate_limited", 0) + 1
             return
         name = str(row.get("name") or "")
         if not name:
@@ -705,12 +723,38 @@ def discover_batch(companies: Sequence[Dict[str, Any]], ctx: FetchContext, *,
                                      ticker=str(row.get("ticker") or ""),
                                      company_id=str(row.get("company_id") or ""))
         except Exception as exc:
+            challenged = isinstance(exc, ChallengeError)
             with lock:
                 stats["companies"] += 1
                 stats["errors"] += 1
+                if challenged:
+                    stats["blocked"] += 1
+                    streak["challenges"] += 1
             logger.info("discovery: %s failed (%s: %s)", name,
                         type(exc).__name__, str(exc)[:120])
+            # RECORD IT. Returning here left the row `running`: its lease
+            # expired, it was claimed again, and it failed the same way. Live
+            # 2026-10-06: 502 rows had been attempted 50+ times each, the
+            # refill kept selecting those same top-priority companies, found
+            # them un-rearmable, and reported `refilled: 0` on every tick -
+            # 69,785 companies due a retry got none, and the queue finished
+            # ONE company in 24 hours. `deferred` is the honest state: we did
+            # not get a fair look, and it comes back after the cooldown
+            # instead of in fifteen minutes.
+            company_id = str(row.get("company_id") or "")
+            if persist and company_id:
+                try:
+                    from services import company_registry_service as reg
+                    reg.complete_discovery(
+                        company_id, state=reg.DISCOVERY_DEFERRED,
+                        detail=("challenge: " if challenged else "error: ")
+                        + f"{type(exc).__name__}: {str(exc)[:160]}")
+                except Exception as rec_exc:
+                    logger.warning("discovery: could not record failure for %s: %s",
+                                   name, type(rec_exc).__name__)
             return
+        with lock:
+            streak["challenges"] = 0
 
         with lock:
             stats["companies"] += 1

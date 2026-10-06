@@ -220,6 +220,105 @@ def test_one_failing_company_does_not_end_the_batch(monkeypatch):
     assert stats["errors"] == 1
 
 
+def test_a_failed_attempt_is_recorded_so_it_cannot_jam_the_queue(monkeypatch):
+    """Live 2026-10-06: an attempt that raised was logged and dropped, so the
+    row stayed `running`, was re-claimed when its lease lapsed, and failed the
+    same way - 502 rows, 50+ attempts each. Refill kept choosing those same
+    companies, could not re-arm them, and the queue finished ONE company in 24
+    hours while 69,785 were due a retry."""
+    from services import career_portal_discovery as disc
+    from services import company_registry_service as reg
+    from services.ats_providers.base import ChallengeError
+
+    recorded = {}
+    monkeypatch.setattr(reg, "complete_discovery",
+                        lambda cid, **kw: recorded.__setitem__(cid, kw))
+
+    class _Engine:
+        def __init__(self, *a, **k):
+            pass
+
+        def discover(self, name, **kwargs):
+            if name == "walled":
+                raise ChallengeError("discovery challenge (status=429)")
+            if name == "broken":
+                raise UnicodeError("label empty or too long")
+            return disc.DiscoveryResult(name=name)
+
+    monkeypatch.setattr(disc, "PortalDiscovery", _Engine)
+    monkeypatch.setattr(disc, "_persist", lambda result: None)
+    rows = [{"name": n, "company_id": n} for n in ("walled", "broken", "fine")]
+    stats = disc.discover_batch(rows, _StubCtx(), persist=True, concurrency=1)
+
+    assert set(recorded) == {"walled", "broken"}
+    assert all(v["state"] == reg.DISCOVERY_DEFERRED for v in recorded.values())
+    assert recorded["walled"]["detail"].startswith("challenge: ChallengeError")
+    assert recorded["broken"]["detail"].startswith("error: UnicodeError")
+    assert stats["errors"] == 2 and stats["blocked"] == 1
+
+
+def test_a_run_of_challenges_stops_the_batch(monkeypatch):
+    """One 429 is that site. Six in a row from different employers is the CDNs
+    in front of them limiting OUR address; more requests only extend it."""
+    from services import career_portal_discovery as disc
+    from services import company_registry_service as reg
+    from services.ats_providers.base import ChallengeError
+
+    attempted = []
+    monkeypatch.setattr(reg, "complete_discovery", lambda cid, **kw: None)
+    monkeypatch.setattr(disc, "DISCOVERY_CHALLENGE_BREAKER", 3)
+
+    class _Engine:
+        def __init__(self, *a, **k):
+            pass
+
+        def discover(self, name, **kwargs):
+            attempted.append(name)
+            raise ChallengeError("discovery challenge (status=429)")
+
+    monkeypatch.setattr(disc, "PortalDiscovery", _Engine)
+    rows = [{"name": f"c{i}", "company_id": f"c{i}"} for i in range(10)]
+    stats = disc.discover_batch(rows, _StubCtx(), persist=True, concurrency=1)
+
+    assert attempted == ["c0", "c1", "c2"]
+    assert stats["skipped_rate_limited"] == 7
+
+
+def test_a_success_resets_the_challenge_streak(monkeypatch):
+    from services import career_portal_discovery as disc
+    from services import company_registry_service as reg
+    from services.ats_providers.base import ChallengeError
+
+    attempted = []
+    monkeypatch.setattr(reg, "complete_discovery", lambda cid, **kw: None)
+    monkeypatch.setattr(disc, "DISCOVERY_CHALLENGE_BREAKER", 2)
+    monkeypatch.setattr(disc, "_persist", lambda result: None)
+
+    class _Engine:
+        def __init__(self, *a, **k):
+            pass
+
+        def discover(self, name, **kwargs):
+            attempted.append(name)
+            if name.startswith("w"):
+                raise ChallengeError("discovery challenge (status=429)")
+            return disc.DiscoveryResult(name=name)
+
+    monkeypatch.setattr(disc, "PortalDiscovery", _Engine)
+    rows = [{"name": n, "company_id": n} for n in ("w1", "ok1", "w2", "ok2", "w3", "ok3")]
+    disc.discover_batch(rows, _StubCtx(), persist=True, concurrency=1)
+    assert attempted == ["w1", "ok1", "w2", "ok2", "w3", "ok3"]
+
+
+def test_a_name_too_long_for_dns_yields_no_invalid_guess():
+    from services.career_portal_discovery import candidate_domains
+    name = ("ZION EVANGELICAL LUTHERAN CHURCH OF THE UNALTERED AUGSBURG "
+            "CONFESSION OF SOUTHINGTON, HARTFORD AV.")
+    for host in candidate_domains(name):
+        assert all(0 < len(label) <= 63 for label in host.split(".")), host
+        host.encode("idna")     # raised UnicodeError before
+
+
 def test_batch_runs_companies_concurrently(monkeypatch):
     """Throughput is the whole point: 20.8s/company serial vs 4.85s at 8-way."""
     import threading as _t
