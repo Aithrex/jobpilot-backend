@@ -135,3 +135,37 @@ class TestIndianaAndIndia:
         from services import job_inventory_service as inv
         for raw in ("Peru, IN", "Brazil, IN", "Mexico, MO", "Lebanon, PA"):
             assert inv.normalize_location(raw)["country_code"] == "US", raw
+
+
+class TestSeveralPlacesInOneString:
+    """Boards list several offices in one string. Split on commas alone,
+    "San Francisco, CA; Mountain View, CA" put the trailing "CA" in the country
+    slot and filed the posting in Canada: 15 of the 128 in-inventory roles
+    missing from real users' boards on 2026-10-06 (Waymo, DoorDash, Robinhood)."""
+
+    def test_a_list_of_us_offices_is_in_the_us(self):
+        from services import job_inventory_service as inv
+        for raw in ("San Francisco, CA; Mountain View, CA",
+                    "San Francisco, CA; Sunnyvale, CA; Seattle, WA",
+                    "Menlo Park, CA | New York, NY",
+                    "San Francisco, CA • New York, NY"):
+            loc = inv.normalize_location(raw)
+            assert loc["country_code"] == "US", raw
+            assert loc["raw"] == raw and loc["region"] == "CA", raw
+            row = inventory_feed._row_from_posting(_doc(loc), tz_offset=0)
+            assert us_geo.keep_us_row(row) is True, raw
+
+    def test_a_us_office_anywhere_in_the_list_counts(self):
+        from services import job_inventory_service as inv
+        assert inv.normalize_location("Toronto, ON; San Francisco, CA")["country_code"] == "US"
+
+    def test_a_list_with_no_us_office_is_not_made_american(self):
+        from services import job_inventory_service as inv
+        assert inv.normalize_location("Vancouver, BC; Toronto, ON")["country_code"] == "CA"
+        assert inv.normalize_location("London, UK; Dublin, Ireland")["country_code"] == "GB"
+
+    def test_three_parts_ending_in_a_state(self):
+        from services import job_inventory_service as inv
+        assert inv.normalize_location("Building 5, Santa Clara, CA")["country_code"] == "US"
+        assert inv.normalize_location("Toronto, ON, CA")["country_code"] == "CA"
+        assert inv.normalize_location("Austin, TX, USA")["country_code"] == "US"

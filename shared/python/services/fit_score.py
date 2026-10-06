@@ -1004,6 +1004,56 @@ _PHYSICAL_QUALIFIER_RE = re.compile(
     r")(?![a-z])", re.IGNORECASE)
 
 
+#: A role an employer could only mean as software, whatever team it sits on.
+_UNAMBIGUOUS_SOFTWARE_HEAD = re.compile(
+    r"(?<![a-z])(software|developer|data engineer|data scientist|data analyst|"
+    r"front ?end|back ?end|full ?stack|web|mobile|ios|android|devops|cloud)(?![a-z])")
+_TITLE_SEGMENT_SPLIT = re.compile(r"\s*(?:,|\s-\s|\s–\s|\s—\s|\(|\||/|:)\s*")
+
+
+def _team_name_only_qualifier(blob: str) -> bool:
+    """True when the physical word is the TEAM, not the job.
+
+    "Software Engineer, Test Frameworks & Tooling" and "Data Engineer,
+    Hardware & Consumer Devices" are software roles named for the group they
+    serve; both read `hardware_engineering` and left every software feed
+    (live, 2026-10-06). The veto still stands when the qualifier modifies the
+    role itself ("Hardware Reliability Engineer") or when the role noun is one
+    a plant also uses ("Reliability Engineer - Power Electronics").
+    """
+    head = _TITLE_SEGMENT_SPLIT.split(blob, maxsplit=1)[0]
+    return bool(_UNAMBIGUOUS_SOFTWARE_HEAD.search(head)) \
+        and not _PHYSICAL_QUALIFIER_RE.search(head)
+
+
+_EARLY_ROLE_NOUN = (r"(intern|interns|internship|co ?op|apprentice\w*|trainee|"
+                    r"new ?grad\w*|graduate|resident|residency|fellow|fellowship|"
+                    r"engineer|scientist|researcher|analyst|developer|specialist)")
+#: Discipline-noun titles, tried only when no role phrase matched.
+_DISCIPLINE_FAMILIES: Sequence[Tuple[str, re.Pattern]] = (
+    ("software_engineering", re.compile(
+        r"(?<![a-z])(software|web|back ?end|front ?end|full ?stack|mobile|ios|"
+        r"android|platform|cloud|api|application|systems software)\s+"
+        r"(engineering|development)(?![a-z])")),
+    ("data_engineering", re.compile(r"(?<![a-z])data\s+engineering(?![a-z])")),
+    ("devops", re.compile(
+        r"(?<![a-z])(devops|site reliability|infrastructure|production)\s+"
+        r"engineering(?![a-z])")),
+    ("security", re.compile(
+        r"(?<![a-z])(security|cybersecurity|cyber security)\s+engineering(?![a-z])")),
+    ("qa", re.compile(r"(?<![a-z])(quality|test)\s+engineering(?![a-z])")),
+    ("data_science", re.compile(
+        r"(?<![a-z])(machine learning|deep learning|data science|applied science|"
+        r"artificial intelligence|computer vision|natural language processing)"
+        r"(?![a-z]).{0,40}?(?<![a-z])" + _EARLY_ROLE_NOUN + r"(?![a-z])|"
+        r"(?<![a-z])" + _EARLY_ROLE_NOUN + r"(?![a-z]).{0,24}?(?<![a-z])"
+        r"(machine learning|data science|applied science)(?![a-z])")),
+    ("hardware_engineering", re.compile(
+        r"(?<![a-z])(hardware|electrical|mechanical|firmware|embedded)\s+"
+        r"engineering(?![a-z])")),
+)
+
+
 def classify_role(text: Any) -> Optional[str]:
     """Role family for a title (or a short blob). Returns None when nothing
     matches. It NEVER falls back to software_engineering: defaulting an
@@ -1019,9 +1069,20 @@ def classify_role(text: Any) -> Optional[str]:
         # Reliability Engineer" is a hardware role that happens to contain the
         # phrase "reliability engineer"; reading it as SRE puts a corrosion
         # engineer at the top of a cloud engineer's feed.
-        if fam in _SOFTWARE_FAMILIES and _PHYSICAL_QUALIFIER_RE.search(blob):
+        if fam in _SOFTWARE_FAMILIES and _PHYSICAL_QUALIFIER_RE.search(blob) \
+                and not _team_name_only_qualifier(blob):
             return "hardware_engineering"
         return fam
+    # The DISCIPLINE form: "Software Engineering Intern", "Data Science
+    # Intern", "Machine Learning Intern". The phrase table knows the role noun
+    # ("software engineer") and not the discipline, so every internship titled
+    # this way had no family. Reached only when no phrase matched at all.
+    for fam, rx in _DISCIPLINE_FAMILIES:
+        if rx.search(blob):
+            if fam in _SOFTWARE_FAMILIES and _PHYSICAL_QUALIFIER_RE.search(blob) \
+                    and not _team_name_only_qualifier(blob):
+                return "hardware_engineering"
+            return fam
     # "nurse"/"rn" appear as bare tokens far more than as phrases.
     if re.search(r"(?<![A-Za-z0-9_])(nurse|nursing|rn)(?![A-Za-z0-9_])", blob):
         return "nursing"

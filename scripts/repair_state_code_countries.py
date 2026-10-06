@@ -47,6 +47,7 @@ sys.path.insert(0, str(ROOT))
 #: US state codes that are also ISO country codes, plus "IN".
 COLLIDING = ("AR", "CA", "CO", "DE", "ID", "IL", "IN")
 _TWO_PART = re.compile(r"^\s*[^,]+,\s*([A-Za-z]{2})\s*$")
+_SEVERAL_PLACES = re.compile(r";|\||\u2022|\s/\s")
 
 
 def has_signature(loc) -> bool:
@@ -56,7 +57,12 @@ def has_signature(loc) -> bool:
     ("Peru, IN") - both resolve since location-country-1.1.0."""
     if not isinstance(loc, dict):
         return False
-    m = _TWO_PART.match(str(loc.get("raw") or ""))
+    raw = str(loc.get("raw") or "")
+    if _SEVERAL_PLACES.search(raw) or raw.count(",") >= 2:
+        # "San Francisco, CA; Mountain View, CA" / "Building 5, Santa Clara,
+        # CA": the trailing state code was read as the country.
+        return str(loc.get("country_code") or "").upper() in COLLIDING
+    m = _TWO_PART.match(raw)
     if not m or m.group(1).upper() not in COLLIDING:
         return False
     st = m.group(1).upper()
@@ -72,6 +78,13 @@ def repaired(locations):
     for loc in locations or []:
         if has_signature(loc):
             new = inv.normalize_location(str(loc.get("raw") or ""))
+            multi = bool(_SEVERAL_PLACES.search(str(loc.get("raw") or ""))) \
+                or str(loc.get("raw") or "").count(",") >= 2
+            # A multi-place or three-part string is only ever moved TO the US:
+            # that is the one direction the trailing-state bug went wrong in.
+            if multi and new["country_code"] != "US":
+                out.append(loc)
+                continue
             if new["country_code"] != loc.get("country_code"):
                 changes.append((loc.get("country_code"), new["country_code"], loc.get("raw")))
                 loc = new
@@ -91,6 +104,8 @@ def main() -> int:
     jp = DBConnect().get_db().job_postings
     codes = list(COLLIDING) + [c.lower() for c in COLLIDING]
     q = {"status": "active", "$or": [
+        {"locations": {"$elemMatch": {"country_code": {"$in": list(COLLIDING)},
+                                      "raw": {"$regex": r";|\||\u2022| / |,[^,]*,"}}}},
         {"locations": {"$elemMatch": {"country": {"$in": codes}, "region": {"$in": ["", None]}}}},
         {"locations": {"$elemMatch": {"region": {"$in": codes}, "country": {"$in": ["", None]}}}},
     ]}

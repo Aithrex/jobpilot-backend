@@ -184,3 +184,48 @@ class TestAgedRowsAreJudgedByTheirYearsToo:
         kept, dropped = worker._admit_by_age(rows, {}, fresh_cutoff=self.FRESH)
         assert [r["source_job_id"] for _m, r in kept] == ["a"]
         assert dropped == 1
+
+
+class TestEarlyCareerRolesOlderThanTheCandidateWindow:
+    """Retrieval is newest-first and capped. Early-career postings live 30 days
+    and the rest 7, so most of what an early-career user came for is OLDER than
+    the newest N candidates and never reached scoring. Cross-checked against
+    employers' own boards for every real user (2026-10-06): 51 of 128
+    in-inventory roles missing from their boards were lost exactly here."""
+
+    def _seed(self, db):
+        # 6 fresh senior roles fill the window; the entry and intern roles are older.
+        for i in range(6):
+            inv.upsert_posting(_raw(f"S{i}", "Senior Software Engineer", 1), now=NOW)
+        inv.upsert_posting(_raw("E18", "Software Engineer, New Grad", 18), now=NOW - timedelta(days=17))
+        inv.upsert_posting(_raw("I22", "Software Engineer Intern", 22), now=NOW - timedelta(days=21))
+        inv.upsert_posting(_raw("M20", "Software Engineer II", 20), now=NOW - timedelta(days=19))
+        db.job_postings.update_many({}, {"$set": {"status": "active"}})
+
+    def _window(self, monkeypatch, db, levels):
+        from services import experience_view, inventory_feed
+        monkeypatch.setattr(inventory_feed, "CANDIDATE_LIMIT", 6)
+        monkeypatch.setattr(experience_view, "for_user", lambda email: {"levels": levels})
+        docs = inv.find_active_fresh(source="workday", max_age_days=30, limit=6, now=NOW)
+        assert {d["source_job_id"] for d in docs} == {f"S{i}" for i in range(6)}
+        return inventory_feed, docs
+
+    def test_an_early_career_user_gets_the_older_roles_at_their_level(self, db, monkeypatch):
+        self._seed(db)
+        feed, docs = self._window(monkeypatch, db, ["intern", "entry"])
+        extra = feed._own_level_slice(docs, "a@b.co", source="workday")
+        assert {d["source_job_id"] for d in extra} == {"E18", "I22"}
+
+    def test_only_the_levels_in_their_view(self, db, monkeypatch):
+        self._seed(db)
+        feed, docs = self._window(monkeypatch, db, ["entry", "mid"])
+        extra = feed._own_level_slice(docs, "a@b.co", source="workday")
+        assert {d["source_job_id"] for d in extra} == {"E18"}     # mid is not early-career
+
+    def test_other_users_and_unfilled_windows_are_untouched(self, db, monkeypatch):
+        self._seed(db)
+        feed, docs = self._window(monkeypatch, db, ["senior"])
+        assert feed._own_level_slice(docs, "a@b.co", source="workday") == []
+        feed, docs = self._window(monkeypatch, db, ["entry"])
+        assert feed._own_level_slice(docs[:3], "a@b.co", source="workday") == []   # window not full
+        assert feed._own_level_slice(docs, "", source="workday") == []             # guest

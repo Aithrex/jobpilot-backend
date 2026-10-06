@@ -586,6 +586,21 @@ _alias("LK", "sri lanka", "lka")
 _STATE_LIKE_REGIONS = frozenset(us_geo._STATE_CODES) | {"in"}
 
 
+#: Separators between several places written in one location string.
+_MULTI_PLACE_SPLIT = re.compile(r"\s*(?:;|\||\u2022|\s/\s)\s*")
+
+
+def _is_state_or_province(value: Any) -> bool:
+    v = str(value or "").strip().lower()
+    if v in _STATE_LIKE_REGIONS:
+        return True
+    try:
+        from services import location_country as lcm
+        return v in lcm._CA_PROVINCE_CODES
+    except Exception:  # pragma: no cover
+        return False
+
+
 def normalize_country(value: Any) -> str:
     """Any country spelling -> ISO 3166-1 alpha-2, or "" when unrecognised.
 
@@ -614,14 +629,36 @@ def normalize_location(loc: Any) -> Dict[str, str]:
     else:
         raw = _safe_display(loc, 200)
         city = region = country = ""
+    # A board that lists several offices in ONE string - "San Francisco, CA;
+    # Mountain View, CA", "Menlo Park, CA | New York, NY" - is read by its
+    # FIRST place. Split on commas alone, the last piece ("CA") landed in the
+    # country slot and the posting was filed in Canada (live, 2026-10-06: 15
+    # of 128 roles missing from users' boards, Waymo and DoorDash among them).
+    places = [p.strip() for p in _MULTI_PLACE_SPLIT.split(raw) if p.strip()] if raw else []
+    if len(places) > 1 and not isinstance(loc, dict):
+        # Prefer a US place when the list has one: "Toronto, ON; San
+        # Francisco, CA" is a role a US candidate can take, and a US-only feed
+        # that reads only "Toronto" hides it. Otherwise the first place.
+        read = [normalize_location(p) for p in places[:6]]
+        chosen = next((r for r in read if r["country_code"] == "US"), read[0])
+        return {**chosen, "raw": raw}
+    first = places[0] if places else raw
     if raw and not city:
-        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        parts = [p.strip() for p in first.split(",") if p.strip()]
         if parts:
             city = _safe_display(parts[0], 80)
         if len(parts) > 1:
             region = region or _safe_display(parts[1], 80)
         if len(parts) > 2:
-            country = country or _safe_display(parts[-1], 80)
+            last = parts[-1]
+            # "Building 5, Santa Clara, CA" ends in a STATE. It is a country
+            # only when the piece before it is itself a state or province
+            # ("Toronto, ON, CA").
+            if last.lower() in _STATE_LIKE_REGIONS \
+                    and not _is_state_or_province(parts[-2]):
+                region = _safe_display(last, 80)
+            else:
+                country = country or _safe_display(last, 80)
     # "Berlin, Germany" and "Remote, USA" are two-part strings whose SECOND
     # part is the country, not a region. Parsing them positionally filed the
     # country under `region` and left `country` empty, so every non-US
@@ -644,7 +681,7 @@ def normalize_location(loc: Any) -> Dict[str, str]:
     if not code:
         from services import location_country as lcm
         code, _basis = lcm.resolve(
-            {"raw": raw, "city": city, "region": region,
+            {"raw": first or raw, "city": city, "region": region,
              "country": country, "country_code": ""})
     key = _safe_key("-".join(p for p in (city, region, country) if p), 160)
     return {"raw": raw, "city": city, "region": region, "country": country,
@@ -1371,6 +1408,8 @@ def mark_requirements_parsed(
     job_level = stored["job_level"]
     if body_family or job_level:
         if body_family and doc and (doc.get("role_family") or "other") == "other" \
+                and not _technical_title_given_a_non_technical_family(
+                    doc.get("title_raw"), body_family) \
                 and (body_family not in ENGINEERING_FAMILIES
                      or title_admits_body_family(
                          doc.get("title_raw"),
@@ -1422,6 +1461,30 @@ ENGINEERING_FAMILIES = frozenset({"software_engineering", "devops", "security", 
 _ENGINEERING_ROLE_NOUN = re.compile(
     r"(?<![a-z])(engineers?|engr|developers?|programmers?|architects?|archt|"
     r"administrators?|admin|analysts?|scientists?|testers?|testing|sre|dba)(?![a-z])")
+
+
+#: Families a title that names a technical domain may take from its body.
+_TECHNICAL_BODY_FAMILIES = ENGINEERING_FAMILIES | frozenset({
+    "hardware_engineering", "data_analysis", "it_support", "product",
+    "project_management", "design"})
+
+
+def _technical_title_given_a_non_technical_family(title: Any, body_family: str) -> bool:
+    """The mirror of `title_admits_body_family`. A posting's body is mostly
+    about the COMPANY and its hiring process, so "Software Engineering Intern,
+    Android" was filed `hr`, "Software Engineering Winter Internship"
+    `teaching` and "PhD Intern, Data Science" `design` - and every one left
+    the software and data feeds (live, 2026-10-06). A title that names a
+    technical domain keeps `other` rather than borrow a family that
+    contradicts it."""
+    if body_family in _TECHNICAL_BODY_FAMILIES:
+        return False
+    try:
+        from services import tech_taxonomy
+        return bool(tech_taxonomy._TITLE_TECH_TOKEN_RE.search(
+            tech_taxonomy._norm(str(title or ""))))
+    except Exception:  # pragma: no cover
+        return False
 
 
 def title_admits_body_family(title: Any, stored_scope: Any = None) -> bool:
@@ -2082,6 +2145,8 @@ def find_active_fresh(
     location_key: Optional[str] = None,
     work_mode: Optional[str] = None,
     seniority: Optional[str] = None,
+    seniorities: Optional[Iterable[str]] = None,
+    posted_before: Optional[datetime] = None,
     source: Optional[str] = None,
     sources: Optional[Iterable[str]] = None,
     industries: Optional[Iterable[str]] = None,
@@ -2092,6 +2157,11 @@ def find_active_fresh(
     now: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
     """THE retrieval path: active + fresh, optionally by role family.
+
+    `seniorities` is an EXACT set of bands (no unknown ride-along) and
+    `posted_before` an upper bound on `posted_at`. Together they are how a
+    caller asks for "the postings at these levels OLDER than what I already
+    hold" - see `inventory_feed._own_level_slice`.
 
     Query shape (this is what the compound indexes in migrate_indexes.py are
     built from - equality, then sort, then range):
@@ -2193,6 +2263,12 @@ def find_active_fresh(
         # which is the same argument `role_family` above is built on.
         query["seniority"] = ({"$in": [sen, SENIORITY_UNKNOWN]}
                               if sen != SENIORITY_UNKNOWN else sen)
+    exact = [b for b in (_safe_family(b, 20) for b in (seniorities or [])) if b]
+    if exact:
+        query["seniority"] = {"$in": exact} if len(exact) > 1 else exact[0]
+    before = _safe_dt(posted_before) if posted_before is not None else None
+    if before is not None:
+        query["posted_at"] = {"$gte": cutoff, "$lt": before}
 
     # Feed-tab filters. The authenticated tabs let a user narrow to a source, an
     # industry set or a specific company; those used to be applied by choosing

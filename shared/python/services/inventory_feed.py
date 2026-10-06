@@ -138,6 +138,50 @@ def _ats_labels() -> Dict[str, str]:
 _ATS_LABEL = _ats_labels()
 
 
+#: Extra candidates fetched for an early-career user's own levels.
+OWN_LEVEL_SLICE = int(os.getenv("FEED_INVENTORY_OWN_LEVEL_SLICE", "2500") or 2500)
+
+
+def _own_level_slice(docs: List[Dict[str, Any]], user_email: str,
+                     **retrieval: Any) -> List[Dict[str, Any]]:
+    """The intern / entry postings OLDER than the candidate window, for a user
+    whose own level is intern or entry.
+
+    Retrieval is newest-first and capped at `CANDIDATE_LIMIT`. Early-career
+    postings are kept 30 days and everything else 7, so for an early-career
+    user most of what they came for is older than the newest 4,000 rows and
+    was never a candidate at all. Cross-checked against employers' own boards
+    for every real user (2026-10-06): 51 of the 128 in-inventory roles missing
+    from their boards were lost here - 55 of 94 for one intern+entry profile,
+    Stripe's "Software Engineer, Early Career" (18 days old) among them.
+
+    Same remedy as the undated slice in `find_active_fresh`: a guaranteed
+    slice of its own, appended after the dated window. Only for early-career
+    levels - no other level outlives the window - and only when the window
+    was actually full.
+    """
+    if not user_email or len(docs) < CANDIDATE_LIMIT:
+        return []
+    try:
+        from services import experience_view
+        from services import job_inventory_service as inv
+        view = (experience_view.for_user(user_email) or {}).get("levels") or []
+        levels = [b for b in view if b in inv.EARLY_CAREER_LEVELS]
+        if not levels:
+            return []
+        dated = [d["posted_at"] for d in docs if isinstance(d.get("posted_at"), datetime)]
+        if not dated:
+            return []
+        have = {d.get("job_id") for d in docs}
+        older = inv.find_active_fresh(
+            seniorities=levels, posted_before=min(dated),
+            max_age_days=WINDOW_DAYS, limit=OWN_LEVEL_SLICE, **retrieval)
+        return [d for d in older if d.get("job_id") not in have]
+    except Exception as exc:
+        logger.warning("inventory_feed: own-level slice failed (%s)", type(exc).__name__)
+        return []
+
+
 def _contradicts_its_family(doc: Dict[str, Any]) -> bool:
     """An engineering `role_family` on a posting the occupation classifier is
     confident is NOT technical. Retrieval keys on the legacy family, which a
@@ -742,6 +786,13 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         logger.warning("inventory_feed: retrieval failed for %s: %s",
                        source, type(exc).__name__)
         return None
+    docs = docs + _own_level_slice(
+        docs, user_email,
+        source=None if source == SOURCE_CAREER else source,
+        sources=CAREER_FEED_SOURCES if source == SOURCE_CAREER else None,
+        role_families=families or None, industries=industries or None,
+        tenants=companies or None,
+        work_mode="remote" if remote_only else None)
 
     # Geo is decided by the ONE shared rule (`us_geo`), not a country-code
     # check: most inventory rows carry no parsed country (boards ship a

@@ -105,3 +105,49 @@ class TestEngineeringNounsWithCoreScope:
         assert inv.title_admits_body_family("Manager, Engineering", "core")
         assert inv.title_admits_body_family("对日软件开发实习生", "core")
         assert not inv.title_admits_body_family("对日软件开发实习生", "unknown")
+
+
+class TestInternshipsKeepTheirFamily:
+    """Cross-checked against employers' own boards for every real user
+    (2026-10-06): 39 of 128 in-inventory roles missing from their boards had
+    the wrong family. The phrase table knew "software engineer" and not
+    "software engineering", so "Software Engineering Intern, Android" had no
+    family from its title - and took `hr` from a body about recruiting."""
+
+    def test_discipline_titles_classify(self):
+        cases = {
+            "Software Engineering Intern, Android (Summer 2027)": "software_engineering",
+            "Software Engineering Winter Internship": "software_engineering",
+            "High School Internship, Software Engineering": "software_engineering",
+            "Web Development Intern": "software_engineering",
+            "PhD Intern, Data Science (2027)": "data_science",
+            "Machine Learning Intern": "data_science",
+            "Data Science Intern": "data_science",
+            "Test Engineering Intern": "qa",
+            "Mechanical Engineering Intern": "hardware_engineering",
+        }
+        for title, family in cases.items():
+            assert fs.classify_role(title) == family, title
+
+    def test_non_engineering_internships_are_not_swept_in(self):
+        for title in ("Marketing Intern", "Recruiting Coordinator Intern",
+                      "Product Design Intern", "Sales Engineering Intern"):
+            assert fs.classify_role(title) not in inv.ENGINEERING_FAMILIES, title
+
+    def test_a_team_name_is_not_the_job(self):
+        assert fs.classify_role("Software Engineer, Test Frameworks & Tooling") == "software_engineering"
+        assert fs.classify_role("Data Engineer, Hardware & Consumer Devices") == "data_engineering"
+
+    def test_the_physical_veto_still_stands_where_it_should(self):
+        for title in ("Staff Hardware Reliability Engineer", "Corrosion Reliability Engineer II",
+                      "Senior Reliability Engineer - Power Electronics",
+                      "Build Reliability Engineer II, Propulsion", "Manufacturing Software Engineer"):
+            assert fs.classify_role(title) == "hardware_engineering", title
+
+    def test_a_technical_title_never_takes_a_non_technical_body_family(self, mock_db):
+        _seed(mock_db, "Technology Analyst")
+        req = fs.extract_requirements("Our recruiting team will contact you.",
+                                      "Technology Analyst")
+        req["role_family"] = "hr"
+        assert inv.mark_requirements_parsed("workday", "f1", CH, req)
+        assert mock_db.job_postings.find_one({"source_job_id": "f1"})["role_family"] == "other"
