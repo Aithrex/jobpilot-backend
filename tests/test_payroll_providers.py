@@ -83,7 +83,13 @@ def test_ukg_prefers_the_postal_address_over_the_site_label():
     assert "Office" not in jobs[0].location
 
 
-def test_ukg_reads_the_real_posted_date():
+def test_ukg_reads_the_real_posted_date(monkeypatch):
+    # The fixture's stamp is 19:52:04.042Z, and `looks_minted_now` discards a
+    # millisecond-precision stamp whose TIME OF DAY is within five minutes of
+    # the clock - so this failed every day between 19:47 and 19:57 UTC. That
+    # detector has its own tests; here the clock is simply taken out.
+    from services.ats_providers import payroll
+    monkeypatch.setattr(payroll, "looks_minted_now", lambda value, **kw: False)
     jobs = list(UkgProvider().list_jobs(
         Endpoint(vendor="ukg", tenant="AAM1000AAM", site="board-guid"),
         _Ctx(payload=_UKG)))

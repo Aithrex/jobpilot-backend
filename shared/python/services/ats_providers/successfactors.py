@@ -69,6 +69,7 @@ is added here once it has been verified, the same posture `enterprise.py` and
 """
 from __future__ import annotations
 
+import html as _html
 import re
 from typing import Any, Dict, Iterator, List, Optional
 from urllib.parse import urljoin
@@ -127,6 +128,125 @@ def _first(node: Any, *xpaths: str) -> str:
     return ""
 
 
+#: RMK prints a location as "City, CC" or "City, ST, CC", where the LAST token
+#: is the ISO country. Read as a US address that is wrong in the worst way:
+#: "Montreal, CA" is California and "Munich, DE" is Delaware. Spelling the
+#: country out removes the ambiguity for every reader downstream.
+_ISO2_COUNTRY: Dict[str, str] = {
+    "US": "United States", "CA": "Canada", "MX": "Mexico", "BR": "Brazil",
+    "AR": "Argentina", "CL": "Chile", "CO": "Colombia", "PE": "Peru",
+    "GB": "United Kingdom", "IE": "Ireland", "FR": "France", "DE": "Germany",
+    "ES": "Spain", "PT": "Portugal", "IT": "Italy", "NL": "Netherlands",
+    "BE": "Belgium", "LU": "Luxembourg", "CH": "Switzerland", "AT": "Austria",
+    "SE": "Sweden", "NO": "Norway", "DK": "Denmark", "FI": "Finland",
+    "PL": "Poland", "CZ": "Czech Republic", "SK": "Slovakia", "HU": "Hungary",
+    "RO": "Romania", "BG": "Bulgaria", "GR": "Greece", "TR": "Turkey",
+    "UA": "Ukraine", "IL": "Israel", "AE": "United Arab Emirates",
+    "SA": "Saudi Arabia", "QA": "Qatar", "EG": "Egypt", "MA": "Morocco",
+    "TN": "Tunisia", "ZA": "South Africa", "NG": "Nigeria", "KE": "Kenya",
+    "IN": "India", "CN": "China", "HK": "Hong Kong", "TW": "Taiwan",
+    "JP": "Japan", "KR": "South Korea", "SG": "Singapore", "MY": "Malaysia",
+    "TH": "Thailand", "VN": "Vietnam", "PH": "Philippines", "ID": "Indonesia",
+    "AU": "Australia", "NZ": "New Zealand",
+}
+_MORE_SUFFIX_RE = re.compile(r"\s*\+\s*\d+\s+more.*$", re.IGNORECASE)
+
+
+#: Two-letter codes that are ALSO a US state. "Austin, TX" is safe either way;
+#: "San Francisco, CA" is not, so a two-part location ending in one of these
+#: is only read as a country on a board verified to print the country last.
+_ALSO_A_US_STATE = frozenset({
+    "AL", "AR", "AZ", "CA", "CO", "DE", "GA", "ID", "IL", "IN", "LA", "MA",
+    "MD", "ME", "MN", "MO", "MT", "NC", "NE", "PA", "SC", "SD", "TN", "VA"})
+#: Verified live 2026-10-07: US rows read "Atlanta, US" / "Dallas, TX, US".
+_COUNTRY_LAST_HOSTS = frozenset({"careers.capgemini.com"})
+
+
+def _place(raw: Any, host: str = "") -> tuple:
+    """(location, country) with the trailing ISO country spelled out."""
+    text = _MORE_SUFFIX_RE.sub("", str(raw or "")).strip()
+    parts = [p.strip() for p in text.split(",")]
+    code = parts[-1] if len(parts) >= 2 else ""
+    if code in _ISO2_COUNTRY and (
+            len(parts) >= 3 or code not in _ALSO_A_US_STATE
+            or host in _COUNTRY_LAST_HOSTS):
+        country = _ISO2_COUNTRY[code]
+        return ", ".join(parts[:-1] + [country]), country
+    return text, ""
+
+
+#: Ten rows a page, so this is 1,500 postings - more than a week of any
+#: board measured, and a ceiling rather than a cost (see the early stop).
+_UNIFIED_MAX_PAGES = 150
+
+
+def _one(value: Any) -> str:
+    """A unified-search field: sometimes a string, sometimes a one-item list."""
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ""
+    return str(value or "").strip()
+
+
+def _us_date(value: Any) -> str:
+    """`10/7/26` -> ISO. The endpoint prints US short dates only."""
+    match = re.match(r"^\s*(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})\s*$", str(value or ""))
+    if not match:
+        return ""
+    month, day, year = (int(g) for g in match.groups())
+    year += 2000 if year < 100 else 0
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return ""
+    return f"{year:04d}-{month:02d}-{day:02d}T00:00:00+00:00"
+
+
+def _unified_row(host: str, row: Dict[str, Any]) -> Optional[RawJob]:
+    rid = _one(row.get("id"))
+    title = _one(row.get("unifiedStandardTitle"))
+    # The slug arrives HTML-escaped ("Support&amp;Ops").
+    slug = _html.unescape(_one(row.get("unifiedUrlTitle")) or _one(row.get("urlTitle")))
+    if not rid or not title:
+        return None
+    country = _one(row.get("jobLocationCountry")) or _one(row.get("custCountryRegion"))
+    city = _one(row.get("sfstd_jobLocation_obj")) or _one(row.get("custprimecity"))
+    state = _one(row.get("jobLocationState"))
+    if city.lower() in ("others", "other"):
+        city = ""
+    location = ", ".join(x for x in (city, state, country) if x)
+    posted = _us_date(row.get("unifiedStandardStart"))
+    return RawJob(
+        source_job_id=rid,
+        title=title,
+        apply_url=f"https://{host}/job/{slug or 'job'}/{rid}-en_US",
+        location=location,
+        country=country,
+        posted_at=posted,
+        date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
+        raw_posted_text=_one(row.get("unifiedStandardStart")),
+        remote=looks_remote(title, location),
+    )
+
+
+_JOB_DESCRIPTION_RE = re.compile(
+    r'<span[^>]*class="[^"]*\bjobdescription\b[^"]*"[^>]*>(.*?)</span>\s*</div>',
+    re.IGNORECASE | re.DOTALL)
+
+
+def _itemprop_description(body: str) -> str:
+    """The unified template's body: one or more `itemprop="description"`
+    blocks (Wipro prints the company blurb and the role separately)."""
+    try:
+        from lxml import html as lxml_html
+        doc = lxml_html.fromstring(body)
+    except Exception:
+        return ""
+    parts: List[str] = []
+    for node in doc.xpath('//*[@itemprop="description"]'):
+        text = re.sub(r"[ \t]+", " ", node.text_content() or "").strip()
+        if text and text not in parts:
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
 class SuccessFactorsProvider(AtsProvider):
     vendor = "successfactors"
     #: White-labelled onto employer domains, so there is no slug to guess and
@@ -142,7 +262,10 @@ class SuccessFactorsProvider(AtsProvider):
     #: The listing carries title, location, department and date. The detail
     #: page adds the description, but at one request per posting across a
     #: vendor this large; the description is left to the enrichment path.
-    has_detail = False
+    #: The search page prints no description; the posting page does
+    #: (`span.jobdescription`). Verified live on careers.capgemini.com
+    #: 2026-10-07: 8,137 characters where the listing carries none.
+    has_detail = True
     date_confidence = DATE_EXACT
     #: `career5.successfactors.eu` is a POD, not an employer, so a guessed
     #: tenant is unfalsifiable here — every wrong `?company=` value renders the
@@ -154,6 +277,13 @@ class SuccessFactorsProvider(AtsProvider):
         ".successfactors.com",
         # First-party RMK host named by the official career registry.
         "jobs.sap.com",
+        # Verified live 2026-10-07: 1,867 postings, 659 in the United States,
+        # dated and newest-first. (The RCM tenant `capgemitecP3` on file
+        # returned nothing, which is what this module predicts for RCM.)
+        "careers.capgemini.com",
+        # Unified-search boards, verified live 2026-10-07.
+        "careers.wipro.com",
+        "careers.hcltech.com",
     )
     portal_hosts = api_hosts
 
@@ -271,6 +401,17 @@ class SuccessFactorsProvider(AtsProvider):
                     continue
                 emitted.add(job.source_job_id)
                 yield job
+
+        # The newer RMK renders its results client-side from a JSON endpoint;
+        # the search page then carries no rows at all. Opt-in per endpoint
+        # (`extra["unified"]`), for the same reason the RSS feed is.
+        if (endpoint.extra or {}).get("unified"):
+            for job in self._from_unified(endpoint, host, ctx):
+                if job.source_job_id in emitted:
+                    continue
+                emitted.add(job.source_job_id)
+                yield job
+            return
 
         produced_html = False
         for job in self._from_search(host, ctx):
@@ -416,17 +557,82 @@ class SuccessFactorsProvider(AtsProvider):
                           './/td[contains(@class,"colDate")]')
         posted = to_iso(raw_date)
 
+        location, country = _place(location, host)
         return RawJob(
             source_job_id=str(rid),
             title=title,
             apply_url=urljoin(f"https://{host}/", href),
             location=location,
+            country=country,
             posted_at=posted,
             date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
             raw_posted_text=raw_date,
             department=(department or facility)[:120],
             remote=looks_remote(title, location),
         )
+
+    # -- shape 1b: the unified-search JSON endpoint --------------------------
+
+    def _from_unified(self, endpoint: Endpoint, host: str,
+                      ctx: FetchContext) -> Iterator[RawJob]:
+        """`POST /services/recruiting/v1/jobs`, ten rows a page, newest first.
+
+        Verified live 2026-10-07 on careers.wipro.com (6,202 postings) and
+        careers.hcltech.com (14,652). The page size is fixed at ten whatever
+        is asked for, so the walk is bounded two ways: an optional country
+        filter from the endpoint (`extra["location"]` or
+        `extra["facet_filters"]`), and an early stop once a whole page is
+        older than the cutoff - the sort is by date and was confirmed to hold
+        forty pages in.
+        """
+        if ctx.post_json is None:
+            ctx.log("warning", "successfactors: %s needs post_json", host)
+            return
+        extra = endpoint.extra or {}
+        body: Dict[str, Any] = {
+            "locale": "en_US", "pageNumber": 0, "sortBy": "date",
+            "keywords": "", "location": str(extra.get("location") or ""),
+            "facetFilters": dict(extra.get("facet_filters") or {}),
+            "brand": "", "skills": [], "categoryId": 0, "alertId": "",
+            "rcmCandidateId": "",
+        }
+        seen = 0
+        for page in range(_UNIFIED_MAX_PAGES):
+            if ctx.should_stop():
+                ctx.listing_truncated = True
+                return
+            status, payload = ctx.post_json(
+                f"https://{host}/services/recruiting/v1/jobs",
+                json_body=dict(body, pageNumber=page),
+                timeout=self.policy.timeout, vendor=self.vendor)
+            if self.policy.is_challenge(status):
+                raise ChallengeError(self.vendor, status)
+            if status != 200 or not isinstance(payload, dict):
+                if page:
+                    ctx.listing_truncated = True
+                return
+            rows = [r.get("response") for r in (payload.get("jobSearchResult") or [])
+                    if isinstance(r, dict) and isinstance(r.get("response"), dict)]
+            if not rows:
+                return
+            stale = 0
+            for row in rows:
+                job = _unified_row(host, row)
+                if job is None:
+                    continue
+                if ctx.cutoff_iso and job.posted_at and job.posted_at < ctx.cutoff_iso:
+                    stale += 1
+                    continue
+                yield job
+            seen += len(rows)
+            if stale == len(rows):
+                return
+            try:
+                if seen >= int(payload.get("totalJobs") or 0):
+                    return
+            except (TypeError, ValueError):
+                pass
+        ctx.listing_truncated = True
 
     # -- shape 2: the optional RSS feed --------------------------------------
 
@@ -516,6 +722,35 @@ class SuccessFactorsProvider(AtsProvider):
                 date_confidence=DATE_UNKNOWN,
                 remote=looks_remote(title),
             )
+
+    # -- detail --------------------------------------------------------------
+
+    def fetch_detail(self, endpoint: Endpoint, job: RawJob,
+                     ctx: FetchContext) -> Optional[RawJob]:
+        """The description from the posting page. None when the page did not
+        answer or its template carries no `jobdescription` block - the caller
+        then keeps the body-less listing row."""
+        # The crawler hands back whatever reference the listing carried, and
+        # for this vendor that is the requisition id, not a URL.
+        url = job.detail_url if str(job.detail_url).startswith("http") \
+            else job.apply_url
+        if not str(url).startswith("http"):
+            return None
+        status, body = ctx.get_text(url, params={},
+                                    timeout=self.policy.detail_timeout,
+                                    vendor=self.vendor)
+        if self.policy.is_challenge(status, body or ""):
+            raise ChallengeError(self.vendor, status)
+        if status != 200 or not body:
+            return None
+        match = _JOB_DESCRIPTION_RE.search(body)
+        text = html_to_text(match.group(1)).strip() if match else ""
+        if not text:
+            text = _itemprop_description(body)
+        if not text:
+            return None
+        return RawJob(source_job_id=job.source_job_id, title=job.title,
+                      apply_url=job.apply_url, description=text[:15000])
 
     # -- identity ------------------------------------------------------------
 

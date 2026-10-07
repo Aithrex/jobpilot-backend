@@ -343,7 +343,10 @@ def test_successfactors_parses_the_rmk_listing():
     assert jobs[0].title == "Senior Developer"
     assert jobs[0].apply_url == (
         "https://jobs.sap.com/job/Walldorf-Senior-Developer-Job-BW-69190/1044321/")
-    assert jobs[0].location == "Walldorf, BW, DE"
+    # The trailing ISO country is spelled out: read as a US address, "BW, DE"
+    # is Delaware (and "Montreal, CA" is California).
+    assert jobs[0].location == "Walldorf, BW, Germany"
+    assert jobs[0].country == "Germany"
     assert jobs[0].department == "Software Engineering"
     assert jobs[1].remote is True
 
@@ -773,3 +776,115 @@ def test_apple_adapter_is_verified_and_declares_its_handshake():
     # A ten-row page must not read as the last page, and 20 is what the API
     # returns; declaring it is what makes the short-page stop meaningful.
     assert provider.page_size == 20
+
+
+@pytest.mark.parametrize("raw,host,location,country", [
+    ("Munich, DE, DE", "", "Munich, DE, Germany", "Germany"),
+    ("Atlanta, GA, US", "", "Atlanta, GA, United States", "United States"),
+    ("Gda\u0144sk, PL +4 more\u2026", "", "Gda\u0144sk, Poland", "Poland"),
+    ("London, GB", "", "London, United Kingdom", "United Kingdom"),
+    ("Remote", "", "Remote", ""),
+    # A code that is also a US state is only a country where that is proven.
+    ("San Francisco, CA", "", "San Francisco, CA", ""),
+    ("Montreal, CA", "careers.capgemini.com", "Montreal, Canada", "Canada"),
+    ("Munich, DE", "careers.capgemini.com", "Munich, Germany", "Germany"),
+])
+def test_successfactors_spells_out_the_trailing_country(raw, host, location, country):
+    """RMK prints the ISO country last; read as a US address "Montreal, CA" is
+    California and "Munich, DE" is Delaware."""
+    from services.ats_providers.successfactors import _place
+    assert _place(raw, host) == (location, country)
+
+
+def test_successfactors_reads_the_description_from_the_posting_page():
+    page = ('<div class="job"><span class="jobdescription" itemprop="description">'
+            '<p>Build SAP integrations.</p><ul><li>5+ years of Java</li></ul>'
+            '</span>\n</div>')
+    from services.ats_providers.base import RawJob
+    job = RawJob(source_job_id="1", title="Developer",
+                 apply_url="https://careers.capgemini.com/job/x/1/")
+    out = SuccessFactorsProvider().fetch_detail(_sf_endpoint(), job, _Ctx(text=page))
+    assert "Build SAP integrations." in out.description and "5+ years of Java" in out.description
+    assert "<li>" not in out.description
+    assert SuccessFactorsProvider().fetch_detail(
+        _sf_endpoint(), job, _Ctx(text="<html>no body here</html>")) is None
+    # The crawler's reference for this vendor is the requisition id; the page
+    # to read is still the apply URL.
+    job.detail_url = "1"
+    assert SuccessFactorsProvider().fetch_detail(_sf_endpoint(), job, _Ctx(text=page))
+
+
+class TestSuccessFactorsUnifiedSearch:
+    """Wipro and HCL render their boards from `POST /services/recruiting/v1/jobs`;
+    the search page itself carries no rows. Shapes copied from the live
+    responses of 2026-10-07."""
+
+    WIPRO = {"id": "208155", "unifiedStandardTitle": "TECHNICAL LEAD L1",
+             "unifiedUrlTitle": "TECHNICAL-LEAD-L1", "unifiedStandardStart": "10/7/26",
+             "jobLocationCountry": ["United States"], "jobLocationState": ["Kentucky"],
+             "sfstd_jobLocation_obj": ["Louisville"]}
+    HCL = {"id": "171140", "unifiedStandardTitle": "Subject Matter Expert",
+           "unifiedUrlTitle": "Subject-Matter-Expert-%28Support&amp;Ops%29",
+           "unifiedStandardStart": "9/1/26", "custCountryRegion": ["United States"],
+           "custprimecity": "Others"}
+
+    def _run(self, pages, *, extra, cutoff=""):
+        from services.ats_providers.base import Endpoint, FetchContext
+        sent = []
+
+        def post_json(url, **kwargs):
+            sent.append((url, kwargs["json_body"]))
+            page = kwargs["json_body"]["pageNumber"]
+            rows = pages[page] if page < len(pages) else []
+            return 200, {"totalJobs": 999,
+                         "jobSearchResult": [{"response": r} for r in rows]}
+
+        ctx = FetchContext(get_json=None, get_text=None, post_json=post_json,
+                           cutoff_iso=cutoff)
+        endpoint = Endpoint(vendor="successfactors", tenant="wipro",
+                            host="careers.wipro.com", extra=extra)
+        return list(SuccessFactorsProvider().list_jobs(endpoint, ctx)), sent
+
+    def test_rows_dates_and_the_country_filter(self):
+        jobs, sent = self._run([[self.WIPRO, self.HCL]],
+                               extra={"unified": True, "location": "United States"})
+        assert sent[0][0] == "https://careers.wipro.com/services/recruiting/v1/jobs"
+        assert sent[0][1]["location"] == "United States" and sent[0][1]["sortBy"] == "date"
+        first, second = jobs
+        assert first.source_job_id == "208155"
+        assert first.location == "Louisville, Kentucky, United States"
+        assert first.posted_at.startswith("2026-10-07")
+        assert first.apply_url == "https://careers.wipro.com/job/TECHNICAL-LEAD-L1/208155-en_US"
+        assert second.location == "United States"          # "Others" is not a city
+        assert "&amp;" not in second.apply_url and "Support&Ops" in second.apply_url
+
+    def test_the_walk_stops_at_the_first_wholly_stale_page(self):
+        fresh, old = dict(self.WIPRO), dict(self.WIPRO, id="1", unifiedStandardStart="9/1/26")
+        jobs, sent = self._run([[fresh], [old], [dict(fresh, id="3")]],
+                               extra={"unified": True}, cutoff="2026-10-01T00:00:00+00:00")
+        assert [j.source_job_id for j in jobs] == ["208155"]
+        assert len(sent) == 2
+
+    def test_it_is_opt_in(self):
+        from services.ats_providers.base import Endpoint, FetchContext
+        calls = []
+        ctx = FetchContext(get_json=None, post_json=lambda *a, **k: calls.append(a) or (200, {}),
+                           get_text=lambda url, **k: (200, "<html></html>"))
+        endpoint = Endpoint(vendor="successfactors", tenant="x", host="jobs.sap.com")
+        list(SuccessFactorsProvider().list_jobs(endpoint, ctx))
+        assert calls == []
+
+    def test_the_description_is_every_itemprop_block(self):
+        from services.ats_providers.base import RawJob
+        page = ('<span itemprop="description" class="rtl"><p>About Wipro.</p></span>'
+                '<div><span itemprop="description"><p>Mandatory Skills: Tosca.</p></span></div>')
+        job = RawJob(source_job_id="1", title="T",
+                     apply_url="https://careers.wipro.com/job/T/1-en_US")
+        out = SuccessFactorsProvider().fetch_detail(_sf_endpoint(), job, _Ctx(text=page))
+        assert "About Wipro." in out.description and "Mandatory Skills: Tosca." in out.description
+
+    @pytest.mark.parametrize("raw,iso", [("10/7/26", "2026-10-07"), ("2/13/2026", "2026-02-13"),
+                                         ("13/40/26", ""), ("Oct 7", ""), ("", "")])
+    def test_us_short_dates(self, raw, iso):
+        from services.ats_providers.successfactors import _us_date
+        assert _us_date(raw)[:10] == iso

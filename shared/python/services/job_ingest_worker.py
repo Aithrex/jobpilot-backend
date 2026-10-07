@@ -640,7 +640,7 @@ def _load_career_members() -> List[Dict[str, Any]]:
 # not derivable and that we do not have for `tetratech`, and the provider
 # reports that as a configuration gap rather than pretending the employer has no
 # openings. A seed here would be a member that can only ever return zero.
-_SEED_ENDPOINTS: Tuple[Dict[str, str], ...] = (
+_SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {"vendor": "oracle_orc", "tenant": "jpmc", "site": "CX_1",
      "host": "jpmc.fa.oraclecloud.com", "display_name": "JPMorgan Chase",
      "industry": "banking"},
@@ -672,6 +672,29 @@ _SEED_ENDPOINTS: Tuple[Dict[str, str], ...] = (
     {"vendor": "custom_tiktok", "tenant": "tiktok", "site": "",
      "host": "api.lifeattiktok.com", "display_name": "TikTok",
      "industry": "tech"},
+    # Capgemini (1,612 H-1B approvals in FY2026). The source on file was its
+    # RCM tenant, which no anonymous client can list; the RMK career site is
+    # the readable half and is where the postings are.
+    {"vendor": "successfactors", "tenant": "capgemini", "site": "",
+     "host": "careers.capgemini.com", "display_name": "Capgemini",
+     "industry": "tech"},
+    # Wipro (1,192 H-1B approvals) and HCL (1,525). Both boards are large
+    # and mostly outside the US, so each is walked through its own country
+    # filter: 535 and 1,075 US postings on 2026-10-07.
+    {"vendor": "successfactors", "tenant": "wipro", "site": "",
+     "host": "careers.wipro.com", "display_name": "Wipro", "industry": "tech",
+     "extra": {"unified": True, "location": "United States"}},
+    {"vendor": "successfactors", "tenant": "hcltech", "site": "",
+     "host": "careers.hcltech.com", "display_name": "HCLTech", "industry": "tech",
+     "extra": {"unified": True,
+               "facet_filters": {"custCountryRegion": ["United States"]}}},
+    # Google and Goldman Sachs run their own stacks; see
+    # `ats_providers.direct_boards` for what was probed and how each is read.
+    {"vendor": "google_careers", "tenant": "google", "site": "",
+     "host": "www.google.com", "display_name": "Google", "industry": "tech"},
+    {"vendor": "goldman_sachs", "tenant": "goldmansachs", "site": "",
+     "host": "api-higher.gs.com", "display_name": "Goldman Sachs",
+     "industry": "banking"},
     # iCIMS seeds. Each was verified on 2026-08-18 to return real postings
     # through `IcimsProvider.list_jobs`, not merely to answer 200 - `*.icims.com`
     # is wildcard DNS, so "the host resolves" and even "the host serves HTML"
@@ -824,7 +847,8 @@ def _load_seed_members(source: str) -> List[Dict[str, Any]]:
                              site=row.get("site") or "",
                              host=row.get("host") or "",
                              display_name=row.get("display_name") or "",
-                             industry=row.get("industry") or "")
+                             industry=row.get("industry") or "",
+                             extra=row.get("extra") or None)
             for row in _SEED_ENDPOINTS
             if source_of_vendor(row["vendor"]) == source
             and row["vendor"] in _TERMLESS_ATS]

@@ -1434,11 +1434,47 @@ def employer_ladder_level(title: Any, employer: Any) -> Optional[str]:
     return None
 
 
+# Banks print a CORPORATE title, and theirs do not mean what the words mean
+# anywhere else: a Vice President at Goldman Sachs or JPMorgan is a senior
+# individual contributor with six to ten years, not an officer of the firm.
+# Read by the general rules every such posting was `executive`, so it was
+# hidden from exactly the senior engineers it is for. Named employers only.
+_BANK_EMPLOYER = re.compile(
+    r"(?<![a-z])(goldman sachs|jpmorgan|jp morgan|j p morgan|morgan stanley|"
+    r"citi|citigroup|citibank|bank of america|merrill lynch|barclays|"
+    r"deutsche bank|ubs|credit suisse|wells fargo|bny|bny mellon|"
+    r"bank of new york|state street|blackrock|nomura|hsbc|bnp paribas|"
+    r"societe generale|northern trust|rbc|royal bank of canada)(?![a-z])")
+_BANK_ABOVE_VP = re.compile(
+    r"(?<![a-z])(senior vice president|executive vice president|svp|evp|"
+    r"chief|head of|managing director|president and|global head)(?![a-z])")
+_BANK_AVP = re.compile(r"(?<![a-z])(assistant vice president|avp)(?![a-z])")
+_BANK_VP = re.compile(r"(?<![a-z])(vice president|vp)(?![a-z])")
+_BANK_ED = re.compile(r"(?<![a-z])executive director(?![a-z])")
+
+
+def bank_title_level(title: Any, employer: Any) -> Optional[str]:
+    """The band a bank's corporate title states, or None."""
+    if not _BANK_EMPLOYER.search(_norm(employer)):
+        return None
+    text = _norm(title)
+    if _BANK_ABOVE_VP.search(text):
+        return None
+    if _BANK_AVP.search(text):
+        return "mid"
+    if _BANK_VP.search(text):
+        return "senior"
+    if _BANK_ED.search(text):
+        return "staff"
+    return None
+
+
 def level_with_employer(level: Any, title: Any, employer: Any,
                         required_years: Any) -> Any:
     """`level`, unless the title carries the employer's own level code - that
     is the stated level, raised (never lowered) by the years asked for."""
-    stated = employer_ladder_level(title, employer)
+    stated = employer_ladder_level(title, employer) \
+        or bank_title_level(title, employer)
     if not stated:
         return level
     by_years = _level_from_years(required_years)
