@@ -70,3 +70,4 @@ question_histogram.json
 
 # USCIS H-1B Employer Data Hub export: input to scripts/ingest_sponsorship.py, re-downloadable, 4.5 MB
 /Employer Information.xlsx
+/Employer_Information.xlsx
