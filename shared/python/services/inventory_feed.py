@@ -182,6 +182,54 @@ def _own_level_slice(docs: List[Dict[str, Any]], user_email: str,
         return []
 
 
+#: How many rows at the user's own level may take a place from rows at levels
+#: they have filtered away, when the cap would otherwise cut them.
+OWN_LEVEL_KEEP = int(os.getenv("FEED_INVENTORY_OWN_LEVEL_KEEP", "600") or 600)
+
+
+def _cap_keeping_own_level(rows: List[Dict[str, Any]], user_email: str) -> List[Dict[str, Any]]:
+    """`rows[:GLOBAL_KEEP]`, except that a row at the USER'S OWN LEVEL is not
+    cut while a lower-ranked row at a level they filter away is kept.
+
+    The cap takes the top `GLOBAL_KEEP` by score across every level, and the
+    board then shows the user their own levels. So a role at their level lost
+    its place to roles they never see: measured for every real user
+    (2026-10-07), 40 to 900 rows in a user's own view sat past the cap, 19 of
+    them roles independently found on employers' own boards.
+
+    The TOTAL does not grow. Responses are already 5.3-5.6 MB at the cap and
+    Lambda rejects 6 MB; a first draft that appended the overflow measured
+    7.1 MB for three users. Instead each rescued row displaces the
+    lowest-ranked row at a level outside the user's view. A row that states no
+    level is in every view and is never displaced.
+    """
+    head, overflow = rows[:GLOBAL_KEEP], rows[GLOBAL_KEEP:]
+    if not overflow or not user_email or OWN_LEVEL_KEEP <= 0:
+        return head
+    try:
+        from services import experience_view
+        view = set((experience_view.for_user(user_email) or {}).get("levels") or [])
+        if not view:
+            return head
+        band_view = experience_view._VIEW_OF_BAND
+
+        def view_of(row: Dict[str, Any]) -> Optional[str]:
+            return band_view.get(str(row.get("seniority") or ""))
+
+        mine = [r for r in overflow if view_of(r) in view][:OWN_LEVEL_KEEP]
+        if not mine:
+            return head
+        # Lowest-ranked first: `head` is already in rank order.
+        displaced = [i for i in range(len(head) - 1, -1, -1)
+                     if view_of(head[i]) is not None and view_of(head[i]) not in view]
+        displaced = set(displaced[:len(mine)])
+        mine = mine[:len(displaced)]
+        return [r for i, r in enumerate(head) if i not in displaced] + mine
+    except Exception as exc:
+        logger.warning("inventory_feed: own-level cap skipped (%s)", type(exc).__name__)
+        return head
+
+
 def _contradicts_its_family(doc: Dict[str, Any]) -> bool:
     """An engineering `role_family` on a posting the occupation classifier is
     confident is NOT technical. Retrieval keys on the legacy family, which a
@@ -895,7 +943,7 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         marketplace_sort_key(j),
         -(j.get("match_score") or 0),
         j.get("days_ago") if j.get("days_ago") is not None else 99))
-    rows = rows[:GLOBAL_KEEP]
+    rows = _cap_keeping_own_level(rows, user_email)
 
     _attach_feasibility(rows, skills, resume_years)
     rows.sort(key=lambda j: (

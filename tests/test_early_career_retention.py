@@ -229,3 +229,39 @@ class TestEarlyCareerRolesOlderThanTheCandidateWindow:
         feed, docs = self._window(monkeypatch, db, ["entry"])
         assert feed._own_level_slice(docs[:3], "a@b.co", source="workday") == []   # window not full
         assert feed._own_level_slice(docs, "", source="workday") == []             # guest
+
+
+class TestTheRowCapDoesNotCostAUserTheirOwnLevel:
+    """The board keeps the top GLOBAL_KEEP rows by score across EVERY level and
+    then shows the user their own. Measured for every real user (2026-10-07):
+    40 to 900 rows in a user's own view sat past the cap. The total must not
+    grow: responses are 5.3-5.6 MB at the cap and Lambda rejects 6 MB."""
+
+    def _rows(self):
+        # rank order: 4 senior, 1 unknown, then past a cap of 5: entry, intern, senior, principal
+        return ([{"job_id": f"s{i}", "seniority": "senior"} for i in range(4)]
+                + [{"job_id": "u1", "seniority": ""},
+                   {"job_id": "e1", "seniority": "entry"}, {"job_id": "i1", "seniority": "intern"},
+                   {"job_id": "s9", "seniority": "senior"}, {"job_id": "p1", "seniority": "principal"}])
+
+    def _cap(self, monkeypatch, levels, email="a@b.co", keep=600):
+        from services import experience_view, inventory_feed
+        monkeypatch.setattr(experience_view, "for_user", lambda e: {"levels": levels})
+        monkeypatch.setattr(inventory_feed, "GLOBAL_KEEP", 5)
+        monkeypatch.setattr(inventory_feed, "OWN_LEVEL_KEEP", keep)
+        return [r["job_id"] for r in inventory_feed._cap_keeping_own_level(self._rows(), email)]
+
+    def test_own_level_rows_displace_the_lowest_ranked_filtered_rows(self, monkeypatch):
+        got = self._cap(monkeypatch, ["intern", "entry"])
+        assert got == ["s0", "s1", "u1", "e1", "i1"]      # s3 and s2 gave way; unknown stayed
+        assert len(got) == 5                              # the total never grows
+
+    def test_a_user_whose_level_already_fills_the_cap_is_untouched(self, monkeypatch):
+        assert self._cap(monkeypatch, ["senior"]) == ["s0", "s1", "s2", "s3", "u1"]
+
+    def test_staff_view_covers_the_bands_above_it(self, monkeypatch):
+        assert self._cap(monkeypatch, ["staff"]) == ["s0", "s1", "s2", "u1", "p1"]
+
+    def test_bounded_and_guests_get_the_plain_cap(self, monkeypatch):
+        assert self._cap(monkeypatch, ["intern", "entry"], keep=1) == ["s0", "s1", "s2", "u1", "e1"]
+        assert self._cap(monkeypatch, ["intern", "entry"], email="") == ["s0", "s1", "s2", "s3", "u1"]
