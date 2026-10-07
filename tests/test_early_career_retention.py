@@ -262,6 +262,21 @@ class TestTheRowCapDoesNotCostAUserTheirOwnLevel:
     def test_staff_view_covers_the_bands_above_it(self, monkeypatch):
         assert self._cap(monkeypatch, ["staff"]) == ["s0", "s1", "s2", "u1", "p1"]
 
+    def test_a_row_with_no_stated_level_is_rescued_too(self, monkeypatch):
+        """It is in every view, so the cap costs the user that row just the
+        same. Own-level rows still take the first places."""
+        from services import experience_view, inventory_feed
+        rows = ([{"job_id": f"s{i}", "seniority": "senior"} for i in range(5)]
+                + [{"job_id": "u9", "seniority": ""}, {"job_id": "e1", "seniority": "entry"},
+                   {"job_id": "u8", "seniority": "unknown"}])
+        monkeypatch.setattr(experience_view, "for_user", lambda e: {"levels": ["entry"]})
+        monkeypatch.setattr(inventory_feed, "GLOBAL_KEEP", 5)
+        got = [r["job_id"] for r in inventory_feed._cap_keeping_own_level(rows, "a@b.co")]
+        assert got == ["s0", "s1", "e1", "u9", "u8"] and len(got) == 5
+        monkeypatch.setattr(inventory_feed, "OWN_LEVEL_KEEP", 1)
+        got = [r["job_id"] for r in inventory_feed._cap_keeping_own_level(rows, "a@b.co")]
+        assert got == ["s0", "s1", "s2", "s3", "e1"]
+
     def test_bounded_and_guests_get_the_plain_cap(self, monkeypatch):
         assert self._cap(monkeypatch, ["intern", "entry"], keep=1) == ["s0", "s1", "s2", "u1", "e1"]
         assert self._cap(monkeypatch, ["intern", "entry"], email="") == ["s0", "s1", "s2", "s3", "u1"]

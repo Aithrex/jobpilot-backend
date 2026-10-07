@@ -1261,6 +1261,10 @@ _LEVEL_PATTERNS: Sequence[Tuple[str, re.Pattern]] = (
     ("entry", re.compile(
         r"(?<![a-z])("
         r"new\s?grad(uate)?s?|recent\s+grad(uate)?|university\s+grad(uate)?|"
+        # A class year next to "grad" is a graduate intake: "Software Engineer
+        # Grad 2027" (Pure Storage) named no level and was cut from every
+        # entry-level board.
+        r"grad(uate)?s?\s+20\d\d|20\d\d\s+grad(uate)?s?|"
         r"college\s+grad(uate)?|grad(uate)?\s+(engineer|developer|analyst|"
         r"scientist|programme|program|scheme|role|hire|trainee)|"
         r"campus\s+(hire|recruit|program|programme)|on[ -]campus|"

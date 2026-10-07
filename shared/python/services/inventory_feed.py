@@ -216,7 +216,12 @@ def _cap_keeping_own_level(rows: List[Dict[str, Any]], user_email: str) -> List[
         def view_of(row: Dict[str, Any]) -> Optional[str]:
             return band_view.get(str(row.get("seniority") or ""))
 
-        mine = [r for r in overflow if view_of(r) in view][:OWN_LEVEL_KEEP]
+        # A row that states no level is in EVERY view, so past the cap it is
+        # as lost to the user as one at their own level - 14 of the 41 roles
+        # found on employers' boards and held but not shown (2026-10-07) were
+        # exactly these. Own-level rows still go first.
+        mine = ([r for r in overflow if view_of(r) in view]
+                + [r for r in overflow if view_of(r) is None])[:OWN_LEVEL_KEEP]
         if not mine:
             return head
         # Lowest-ranked first: `head` is already in rank order.

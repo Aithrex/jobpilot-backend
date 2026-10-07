@@ -1971,6 +1971,16 @@ _PHYSICAL_QUALIFIER_RE = re.compile(
     r"facilities|janitorial|calibration"
     r")(?![a-z])", re.IGNORECASE)
 
+# The veto is for a role NOUN that only sounds technical ("Reliability
+# Engineer", "Systems Engineer"). A title that says software outright is
+# software whatever the team is called: Roblox's "Software Engineer, Test
+# Frameworks & Tooling" was vetoed by `tooling` and hidden from every board,
+# and "Software Engineer, Manufacturing Systems" writes software for a plant.
+_EXPLICIT_SOFTWARE_TITLE_RE = re.compile(
+    r"(?<![a-z])(software\s+(engineer|developer|development\s+engineer|architect)|"
+    r"(full\s?stack|back\s?end|front\s?end|web|mobile|ios|android)\s+"
+    r"(engineer|developer))(?![a-z])", re.IGNORECASE)
+
 # Semiconductor/hardware words are NOT a physical veto - they are the
 # `semiconductor_hardware` adjacent family, which is selectable.
 _HARDWARE_CONTEXT_RE = _compile_alternation((
@@ -2598,7 +2608,8 @@ def classify(
             # `engineering manager` and read as technical leadership. A
             # physical qualifier vetoes that reading too.
             F_TECH_LEADERSHIP, F_UX_DESIGN_SYSTEMS}
-        if physical and software_ish and not hardware_ctx:
+        if physical and software_ish and not hardware_ctx \
+                and not _EXPLICIT_SOFTWARE_TITLE_RE.search(title_blob):
             result.tech_scope = SCOPE_NON_TECH
             result.classification_confidence = 0.8
             result.classification_evidence = [
