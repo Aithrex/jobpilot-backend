@@ -280,3 +280,18 @@ class TestTheRowCapDoesNotCostAUserTheirOwnLevel:
     def test_bounded_and_guests_get_the_plain_cap(self, monkeypatch):
         assert self._cap(monkeypatch, ["intern", "entry"], keep=1) == ["s0", "s1", "s2", "u1", "e1"]
         assert self._cap(monkeypatch, ["intern", "entry"], email="") == ["s0", "s1", "s2", "s3", "u1"]
+
+
+class TestEqualScoresAreOrderedByRoleAlignment:
+    """Capped postings tie at one score by the hundred; recency alone decided."""
+
+    def test_alignment_then_experience(self):
+        from services import inventory_feed
+        row = lambda ra, ex: {"fit": {"components": {"role_alignment": ra, "experience": ex}}}
+        assert inventory_feed._tie_break(row(25, 0)) > inventory_feed._tie_break(row(10, 20))
+        assert inventory_feed._tie_break(row(10, 20)) > inventory_feed._tie_break(row(10, 5))
+
+    def test_a_row_without_a_verdict_sorts_last_not_crashes(self):
+        from services import inventory_feed
+        assert inventory_feed._tie_break({}) == 0.0
+        assert inventory_feed._tie_break({"fit": {"components": {"role_alignment": "x"}}}) == 0.0

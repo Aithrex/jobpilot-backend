@@ -235,6 +235,24 @@ def _cap_keeping_own_level(rows: List[Dict[str, Any]], user_email: str) -> List[
         return head
 
 
+def _tie_break(row: Dict[str, Any]) -> float:
+    """Order among rows with the SAME score: role alignment, then experience.
+
+    A posting whose description names too few skills is capped at one score
+    (`insufficient_job_requirements`), so hundreds of rows tie exactly - 320 at
+    40 on one real board (2026-10-07) - and the tie fell to recency alone.
+    OpenAI's "Software Engineer" for a software engineer sat among unrelated
+    titles posted the same day. The cap is untouched and no row with a
+    different score moves; this only decides which equal comes first.
+    """
+    parts = ((row.get("fit") or {}).get("components") or {})
+    try:
+        return float(parts.get("role_alignment") or 0) * 100 \
+            + float(parts.get("experience") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _contradicts_its_family(doc: Dict[str, Any]) -> bool:
     """An engineering `role_family` on a posting the occupation classifier is
     confident is NOT technical. Retrieval keys on the legacy family, which a
@@ -947,6 +965,7 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     rows.sort(key=lambda j: (
         marketplace_sort_key(j),
         -(j.get("match_score") or 0),
+        -_tie_break(j),
         j.get("days_ago") if j.get("days_ago") is not None else 99))
     rows = _cap_keeping_own_level(rows, user_email)
 
