@@ -1282,7 +1282,7 @@ def upsert_posting(
     }
     if teaser and raw.get("detail_attempted"):
         # Counted so a detail that never arrives stops being asked for.
-        update["$inc"] = {"detail_attempts": 1}
+        update["$inc"] = {"detail_misses": 1}
 
     try:
         before = _postings().find_one_and_update(
@@ -2123,7 +2123,7 @@ def get_postings_map(source: str, source_job_ids: Iterable[str],
                   "normalization_version": 1,
                   # Whether the stored body is the fetched one or only the
                   # listing teaser (`job_ingest_worker._owes_a_detail_fetch`).
-                  "body_state": 1, "detail_attempts": 1,
+                  "body_state": 1, "detail_misses": 1,
                   # `_admit_by_age` keeps an aged row the inventory already
                   # knows is early-career (see EARLY_CAREER_MAX_AGE_DAYS).
                   "seniority": 1,

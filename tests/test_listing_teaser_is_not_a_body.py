@@ -75,7 +75,7 @@ class TestAStoredTeaserIsFetchedAgain:
                                           _row(), ORACLE)
 
     def test_it_gives_up_after_the_attempt_limit(self):
-        stored = {"body_state": "teaser", "detail_attempts": w.DETAIL_MAX_ATTEMPTS}
+        stored = {"body_state": "teaser", "detail_misses": w.DETAIL_MAX_ATTEMPTS}
         assert not w._owes_a_detail_fetch(stored, _row(), ORACLE)
 
     def test_no_route_means_nothing_is_owed(self):
@@ -87,13 +87,13 @@ class TestTheStoredBodySurvivesATeaser:
         inv.upsert_posting(_raw("T1", TEASER, body_state="teaser", detail_attempted=True), now=NOW)
         inv.upsert_posting(_raw("T1", TEASER, body_state="teaser", detail_attempted=True), now=NOW)
         doc = db.job_postings.find_one({"source_job_id": "T1"})
-        assert doc["body_state"] == "teaser" and doc["detail_attempts"] == 2
+        assert doc["body_state"] == "teaser" and doc["detail_misses"] == 2
         stored = inv.get_postings_map("career", ["T1"])["T1"]
-        assert stored["body_state"] == "teaser" and stored["detail_attempts"] == 2
+        assert stored["body_state"] == "teaser" and stored["detail_misses"] == 2
 
     def test_a_deferred_teaser_is_not_an_attempt(self, db):
         inv.upsert_posting(_raw("T2", TEASER, body_state="teaser"), now=NOW)
-        assert "detail_attempts" not in db.job_postings.find_one({"source_job_id": "T2"})
+        assert "detail_misses" not in db.job_postings.find_one({"source_job_id": "T2"})
 
     def test_the_detail_replaces_the_teaser(self, db):
         inv.upsert_posting(_raw("T3", TEASER, body_state="teaser"), now=NOW)
@@ -168,3 +168,43 @@ class TestAConfigBoardCanDeclareADetail:
         provider = self._provider()
         job = RawJob(source_job_id="1", title="T", apply_url="https://jobs.apple.com/x")
         assert provider.fetch_detail(provider.default_endpoint(), job, Ctx()) is None
+
+
+class TestTheDetailIsAskedForById:
+    """Oracle and Taleo address a posting's detail by ID. They were handed the
+    detail URL as the id, so every fetch returned nothing - measured on the
+    first deploy of the teaser fix: 2,217 Oracle fetches, 0 descriptions."""
+
+    def _fetch(self, monkeypatch, row):
+        seen = {}
+
+        class Provider:
+            has_detail = True
+
+            def fetch_detail(self, endpoint, job, ctx):
+                seen["id"], seen["url"] = job.source_job_id, job.detail_url
+                return job
+
+        class Registry:
+            def get(self, vendor):
+                return Provider()
+
+        monkeypatch.setattr(w, "_ats_registry", lambda: Registry())
+        monkeypatch.setattr(w, "_endpoint_from_member", lambda member: object())
+        monkeypatch.setattr(w, "_provider_fetch_context", lambda member, **kw: object())
+        w._detail_via_provider(row, ORACLE, deadline=0.0)
+        return seen
+
+    def test_a_url_ref_is_not_the_id(self, monkeypatch):
+        url = "https://x.fa.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails"
+        seen = self._fetch(monkeypatch, {"source_job_id": "oracle_orc-jpmc-cx_1002:210797028",
+                                         "_detail_ref": url})
+        assert seen == {"id": "210797028", "url": url}
+
+    def test_an_id_ref_still_wins(self, monkeypatch):
+        seen = self._fetch(monkeypatch, {"source_job_id": "v-t:abc", "_detail_ref": "REF-9"})
+        assert seen["id"] == "REF-9"
+
+    def test_no_ref_uses_the_posting_id(self, monkeypatch):
+        seen = self._fetch(monkeypatch, {"source_job_id": "custom_apple-apple:200313970"})
+        assert seen["id"] == "200313970"

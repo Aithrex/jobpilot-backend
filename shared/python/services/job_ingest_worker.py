@@ -2073,8 +2073,14 @@ def _detail_via_provider(row: Dict[str, Any], member: Dict[str, Any], *,
     ctx = _provider_fetch_context(
         member, cutoff=datetime(1970, 1, 1, tzinfo=timezone.utc),
         deadline=deadline, stop=stop)
-    raw_id = (str(row.get("_detail_ref") or "")
-              or str(row.get("source_job_id") or "").rsplit(":", 1)[-1])
+    # The posting's own id. `_detail_ref` is the provider's `detail_url`, and a
+    # URL is not an id: Oracle and Taleo address the detail BY id, so handing
+    # them the URL asked for a requisition called "https://..." and every such
+    # fetch came back empty. A ref that is not a URL is still honoured as an id.
+    ref = str(row.get("_detail_ref") or "")
+    raw_id = str(row.get("source_job_id") or "").rsplit(":", 1)[-1]
+    if ref and not ref.lower().startswith(("http://", "https://")):
+        raw_id = ref
     job = RawJob(
         source_job_id=raw_id,
         title=str(row.get("title") or ""),
@@ -2191,7 +2197,7 @@ def _owes_a_detail_fetch(existing: Dict[str, Any], row: Dict[str, Any],
     if not existing or existing.get("body_state") == BODY_FULL:
         return False
     try:
-        attempts = int(existing.get("detail_attempts") or 0)
+        attempts = int(existing.get("detail_misses") or 0)
     except (TypeError, ValueError):
         attempts = 0
     if attempts >= DETAIL_MAX_ATTEMPTS:
