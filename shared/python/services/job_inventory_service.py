@@ -1194,11 +1194,24 @@ def upsert_posting(
     # description this way, because every version bump sends the whole
     # inventory through the deferred path at once. A posting we already know
     # is only refreshed as still live; the next detail fetch replaces it.
-    if not _has_body(doc):
+    #
+    # The same holds for a listing TEASER arriving over a fetched body. A
+    # version bump defers most detail fetches at once, and the teaser those
+    # rows carry is a real, non-empty string - it would replace a 6,000
+    # character description with a 130 character one and nothing would notice.
+    body_state = raw.get("body_state") if raw.get("body_state") in ("full", "teaser") else None
+    teaser = body_state == "teaser"
+    if not _has_body(doc) or teaser:
         existing = _postings().find_one(
             key, {"job_id": 1, "content_hash": 1, "status": 1, "purge_at": 1,
-                  "description_ref": 1, "description_text": 1, "requirements": 1})
-        if existing and _has_body(existing):
+                  "description_ref": 1, "description_text": 1, "requirements": 1,
+                  "body_state": 1, "description_chars": 1})
+        # "Longer" covers bodies fetched before `body_state` was recorded.
+        if existing and _has_body(existing) and (
+                not _has_body(doc)
+                or existing.get("body_state") == "full"
+                or int(existing.get("description_chars") or 0)
+                > int(doc.get("description_chars") or 0)):
             reopened = bool(existing.get("status") in CLOSED_STATUSES
                             or existing.get("purge_at") is not None)
             seen = {"status": STATUS_ACTIVE, "active": True, "last_seen_at": now,
@@ -1217,9 +1230,12 @@ def upsert_posting(
                     or prev_req.get("extractor_version") != EXTRACTOR_VERSION),
                 "reopened": reopened,
                 "content_hash": existing.get("content_hash"),
+                "kept_stored_body": True,
             }
 
     mutable = {k: v for k, v in doc.items() if k not in _IDENTITY_FIELDS}
+    if body_state:
+        mutable["body_state"] = body_state
     mutable.update({
         "status": STATUS_ACTIVE,
         "active": True,
@@ -1264,6 +1280,9 @@ def upsert_posting(
         # (purge_at is absent from $set, so there is no operator conflict.)
         "$unset": unset,
     }
+    if teaser and raw.get("detail_attempted"):
+        # Counted so a detail that never arrives stops being asked for.
+        update["$inc"] = {"detail_attempts": 1}
 
     try:
         before = _postings().find_one_and_update(
@@ -2102,6 +2121,9 @@ def get_postings_map(source: str, source_job_ids: Iterable[str],
                   "title_normalized": 1, "employment_type": 1, "locations": 1,
                   "description_chars": 1, "description_ref": 1,
                   "normalization_version": 1,
+                  # Whether the stored body is the fetched one or only the
+                  # listing teaser (`job_ingest_worker._owes_a_detail_fetch`).
+                  "body_state": 1, "detail_attempts": 1,
                   # `_admit_by_age` keeps an aged row the inventory already
                   # knows is early-career (see EARLY_CAREER_MAX_AGE_DAYS).
                   "seniority": 1,

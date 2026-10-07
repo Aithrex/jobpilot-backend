@@ -650,6 +650,21 @@ CUSTOM_BOARD_ADAPTERS: Tuple[Dict[str, Any], ...] = (
             "department": ["team.teamName"],
             "apply_url_template": "https://jobs.apple.com/en-us/details/{source_job_id}",
         },
+        # `jobSummary` is a pitch (median 887 characters stored) and names no
+        # requirement, so 74% of Apple's engineering postings could not be
+        # scored. The qualifications are on the posting itself. Probed
+        # 2026-10-06: answers 200 without the search session's token.
+        "detail": {
+            "url_template": ("https://jobs.apple.com/api/v1/jobDetails/"
+                             "{source_job_id}?locale=en-us"),
+            "record_path": "res",
+            "sections": [
+                ["", "jobSummary"],
+                ["Description", "description"],
+                ["Minimum Qualifications", "minimumQualifications"],
+                ["Preferred Qualifications", "preferredQualifications"],
+            ],
+        },
     },
     {
         "key": "tesla",

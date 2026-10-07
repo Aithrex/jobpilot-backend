@@ -2121,21 +2121,90 @@ def list_member(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy,
 #: must still hit the detail endpoint. Lever/Ashby listing payloads that already
 #: carry a real body are not in this set.
 _TEASER_LISTING_VENDORS = frozenset({
-    "workday", "oracle", "icims", "eightfold", "cornerstone", "taleo",
+    "workday", "oracle", "oracle_orc", "icims", "eightfold", "cornerstone", "taleo",
 })
 MIN_USABLE_DESCRIPTION_CHARS = 80
+#: A listing description this long is a posting body whatever the vendor. Below
+#: it, a board that HAS a detail route is assumed to have printed a teaser
+#: (a short posting that really is whole costs DETAIL_MAX_ATTEMPTS requests).
+#: Measured 2026-10-06 on the live inventory: Oracle listings carry a median of
+#: 131 characters, iCIMS 532, against ~6,500 for a fetched Workday body - and
+#: because 131 >= MIN_USABLE_DESCRIPTION_CHARS those teasers were being stored
+#: AS the description, so 62% of Oracle and 81% of iCIMS engineering postings
+#: were too thin to score and sat capped at 40 on every board.
+FULL_LISTING_BODY_CHARS = 1200
+#: `body_state` on a stored posting. FULL: the detail was fetched, or the
+#: listing is all there is. TEASER: listing text stored while a detail fetch is
+#: still owed (over budget, or it failed).
+BODY_FULL = "full"
+BODY_TEASER = "teaser"
+#: A detail that keeps failing, or keeps returning nothing longer than the
+#: listing, stops being retried. Without the bound those rows would take a slot
+#: of every tick's detail budget for as long as the posting stayed open.
+DETAIL_MAX_ATTEMPTS = 2
+
+
+def _has_detail_route(row: Dict[str, Any], member: Dict[str, Any]) -> bool:
+    """Is there somewhere to fetch this posting's body from?"""
+    vendor = _vendor_of(member)
+    if vendor not in _LEGACY_LISTING_VENDORS:
+        registry = _ats_registry()
+        provider = registry.get(vendor) if registry is not None else None
+        if provider is not None:
+            return bool(getattr(provider, "has_detail", False)
+                        and (row.get("_detail_ref") or row.get("source_job_id")))
+    if member.get("source") == SOURCE_WORKDAY:
+        return bool(row.get("_detail_ref"))
+    return member.get("ats") in _ATS_WITH_DETAIL
 
 
 def _listing_description_is_complete(row: Dict[str, Any], member: Dict[str, Any]) -> bool:
     desc = str(row.get("description") or "")
     if not desc:
         return False
+    if len(desc) >= FULL_LISTING_BODY_CHARS:
+        return True
+    # A board with a detail route keeps its posting body there. A provider
+    # says so by declaring `has_detail`, and that declaration used to be
+    # ignored the moment the listing printed any text at all: Paylocity's
+    # fixed 110-character teaser, JPMorgan's 120-character Oracle blurb.
+    if _has_detail_route(row, member):
+        return False
     vendor = _vendor_of(member)
-    source = member.get("source")
-    if vendor in _TEASER_LISTING_VENDORS or source in (
+    if vendor in _TEASER_LISTING_VENDORS or member.get("source") in (
             SOURCE_WORKDAY, SOURCE_ORACLE, SOURCE_ICIMS):
+        # No route: the teaser is the most there will ever be.
         return len(desc) >= MIN_USABLE_DESCRIPTION_CHARS
     return True
+
+
+def _owes_a_detail_fetch(existing: Dict[str, Any], row: Dict[str, Any],
+                         member: Dict[str, Any]) -> bool:
+    """A stored posting whose body is only the listing teaser.
+
+    `_listing_implies_same_content` asks "does the stored doc have a body?" and
+    a teaser answers yes, so a row written from the listing was never fetched
+    again - the deferral that was meant to last one tick lasted for the life of
+    the posting. This is the other half of that rule: a body that is known, or
+    looks, to be a teaser is still owed its detail.
+    """
+    if not existing or existing.get("body_state") == BODY_FULL:
+        return False
+    try:
+        attempts = int(existing.get("detail_attempts") or 0)
+    except (TypeError, ValueError):
+        attempts = 0
+    if attempts >= DETAIL_MAX_ATTEMPTS:
+        return False
+    if existing.get("body_state") != BODY_TEASER:
+        # Written before `body_state` existed: judge it by its size.
+        try:
+            chars = int(existing.get("description_chars") or 0)
+        except (TypeError, ValueError):
+            chars = 0
+        if chars >= FULL_LISTING_BODY_CHARS:
+            return False
+    return _needs_http_detail(row, member)
 
 
 def _listing_implies_same_content(existing: Dict[str, Any], row: Dict[str, Any]) -> bool:
@@ -2190,16 +2259,7 @@ def _needs_http_detail(row: Dict[str, Any], member: Dict[str, Any]) -> bool:
     """
     if _listing_description_is_complete(row, member):
         return False
-    vendor = _vendor_of(member)
-    if vendor not in _LEGACY_LISTING_VENDORS:
-        registry = _ats_registry()
-        provider = registry.get(vendor) if registry is not None else None
-        if provider is not None:
-            return bool(getattr(provider, "has_detail", False)
-                        and (row.get("_detail_ref") or row.get("source_job_id")))
-    if member.get("source") == SOURCE_WORKDAY:
-        return bool(row.get("_detail_ref"))
-    return member.get("ats") in _ATS_WITH_DETAIL
+    return _has_detail_route(row, member)
 
 
 def fetch_detail(row: Dict[str, Any], member: Dict[str, Any], *, policy: HostPolicy,
@@ -2511,7 +2571,8 @@ def run_shard(
         needs_detail: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
         for member, row in rows:
             existing = existing_by_id.get(row["source_job_id"])
-            if _listing_implies_same_content(existing, row):
+            if (_listing_implies_same_content(existing, row)
+                    and not _owes_a_detail_fetch(existing, row, member)):
                 touch_ids.append(row["source_job_id"])
                 counts["unchanged"] += 1
             else:
@@ -2562,6 +2623,9 @@ def run_shard(
             (pair, str(pair[1].get("description") or ""), None)
             for pair in free_rows + deferred
         ]
+        # What each row's body IS, so the next tick knows whether one is owed.
+        attempted_ids = {id(pair[1]) for pair in detail_targets}
+        deferred_ids = {id(pair[1]) for pair in deferred}
         counts["detail_free"] += len(free_rows)
         inv.renew_lease(src, shard_id, owner, now=now)
 
@@ -2588,6 +2652,17 @@ def run_shard(
             payload.pop("_member_key", None)
             if description:
                 payload["description"] = description
+            listing_desc = str(row.get("description") or "")
+            if id(row) in attempted_ids:
+                # `fetch_detail` hands the listing text back when the fetch
+                # failed or found nothing longer.
+                got_detail = bool(description) and description != listing_desc
+                payload["body_state"] = BODY_FULL if got_detail else BODY_TEASER
+                payload["detail_attempted"] = not got_detail
+            elif id(row) in deferred_ids:
+                payload["body_state"] = BODY_TEASER
+            else:
+                payload["body_state"] = BODY_FULL
             try:
                 outcome = inv.upsert_posting(payload, run_id=run_id, now=now)
             except ValueError as exc:
@@ -2605,6 +2680,11 @@ def run_shard(
             if isinstance(posted_at, datetime):
                 aware = posted_at if posted_at.tzinfo else posted_at.replace(tzinfo=timezone.utc)
                 watermark = aware if watermark is None or aware > watermark else watermark
+            if outcome.get("kept_stored_body"):
+                # The stored body is the fetched one; this row only carried the
+                # teaser, and parsing THAT against the stored hash would
+                # replace real requirements with a blurb's.
+                continue
             if outcome["needs_parse"] and description:
                 # Parse-once across the whole inventory: if this exact body was
                 # already extracted (same req on a second board, or an edit that

@@ -679,10 +679,12 @@ def test_listing_body_skips_the_detail_fetch(db, small_registry, monkeypatch):
     rows = {}
     for i, m in enumerate(members):
         rows[m["member_key"]] = [
+            # A posting body, not a blurb: under FULL_LISTING_BODY_CHARS a
+            # board with a detail route is assumed to have printed a teaser.
             _row(m, "WITH-BODY", description=(
                 "Python, MongoDB and AWS required. Experience with Kubernetes, "
-                "Terraform and CI/CD is expected for this backend role."
-            )),
+                "Terraform and CI/CD is expected for this backend role. "
+            ) * 12),
             _row(m, "NO-BODY"),
         ]
     detail_calls = []
@@ -719,8 +721,8 @@ def test_detail_budget_only_counts_rows_that_would_fetch(db, small_registry, mon
     members = w.shard_members(w.SOURCE_WORKDAY, shard)
     rows = {m["member_key"]: [_row(m, f"REQ-{i}", description=(
                 "Python and AWS. Kubernetes, Terraform, observability and "
-                "on-call ownership are part of this platform role."
-            ))
+                "on-call ownership are part of this platform role. "
+            ) * 14)
                               for i in range(5)] for m in members}
     _patch_shard_io(monkeypatch, rows)
 
@@ -926,3 +928,46 @@ def test_write_stage_respects_the_shard_budget(db, small_registry, monkeypatch):
     # Safe to resume: the watermark only advanced over what was actually written.
     state = inv.get_source_state(w.SOURCE_WORKDAY, shard)
     assert state["lease_owner"] is None, "the lease is released even on a short run"
+
+
+def test_a_stored_teaser_is_fetched_on_a_later_tick(db, small_registry, monkeypatch):
+    """A row written from the listing blurb is still owed its description.
+
+    The deferral was meant to last one tick. It lasted for the life of the
+    posting, because the fetch-once rule asked "does the stored doc have a
+    body?" and a 130-character teaser answers yes: 17,427 Oracle and 11,774
+    iCIMS postings were stored that way on 2026-10-06 and scored blind.
+    """
+    shard = w.shard_of(w.SOURCE_WORKDAY, small_registry[0]["member_key"])
+    members = w.shard_members(w.SOURCE_WORKDAY, shard)
+    teaser = "Join our team in Austin and help us build great products."
+    body = "Requirements: Python, MongoDB, AWS and five years of experience. " * 30
+    rows = {m["member_key"]: [dict(_row(m, "REQ-1", description=teaser),
+                                   _detail_ref="/job/REQ-1")] for m in members}
+    monkeypatch.setattr(w, "list_member", lambda member, **kw: (
+        member.__setitem__("_listing_truncated", False)
+        or [dict(r) for r in rows.get(member["member_key"], [])]))
+    calls = []
+
+    def fake_detail(row, member, **kw):
+        calls.append(row["source_job_id"])
+        return body
+
+    monkeypatch.setattr(w, "fetch_detail", fake_detail)
+
+    # Tick 1: no detail budget, so the teaser is what gets stored.
+    w.run_shard(w.SOURCE_WORKDAY, shard, now=NOW, max_details=0)
+    assert not calls
+    stored = list(db.job_postings.find({}))
+    assert len(stored) == len(members)
+    assert all(d["body_state"] == "teaser" for d in stored)
+
+    # Tick 2: nothing in the listing changed, and the detail is fetched anyway.
+    w.run_shard(w.SOURCE_WORKDAY, shard, now=NOW + timedelta(minutes=15))
+    assert len(calls) == len(members)
+    stored = list(db.job_postings.find({}))
+    assert all(d["body_state"] == "full" and d["description_chars"] > 1200 for d in stored)
+
+    # Tick 3: fetched once, never again.
+    w.run_shard(w.SOURCE_WORKDAY, shard, now=NOW + timedelta(minutes=30))
+    assert len(calls) == len(members)

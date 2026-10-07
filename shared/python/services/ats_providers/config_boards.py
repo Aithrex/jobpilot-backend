@@ -221,6 +221,17 @@ class ConfigBoardProvider(AtsProvider):
         self.fields: Dict[str, Any] = dict(self.row.get("fields") or {})
         self.apply_template = str(self.fields.get("apply_url_template") or "").strip()
 
+        # An optional second request per posting, for a board whose search
+        # API prints a summary and keeps the qualifications on the posting.
+        detail = dict(self.row.get("detail") or {})
+        self.detail_template = str(detail.get("url_template") or "").strip()
+        self.detail_record_path = str(detail.get("record_path") or "").strip()
+        self.detail_sections: List[Tuple[str, str]] = [
+            (str(label or "").strip(), str(path or "").strip())
+            for label, path in (detail.get("sections") or ())
+            if str(path or "").strip()]
+        self.has_detail = bool(self.detail_template and self.detail_sections)
+
         # ADR-001: the row decides, not the crawler.
         self.date_confidence = (DATE_EXACT if _as_paths(self.fields.get("posted_at"))
                                 else DATE_UNKNOWN)
@@ -431,6 +442,42 @@ class ConfigBoardProvider(AtsProvider):
             remote=looks_remote(values["title"], values["location"]),
             extra={"config_key": self.key},
         )
+
+    # -- detail --------------------------------------------------------------
+
+    def fetch_detail(self, endpoint: Endpoint, job: RawJob,
+                     ctx: FetchContext) -> Optional[RawJob]:
+        """The posting body, assembled from the sections the row names.
+
+        Each section keeps its heading ("Minimum Qualifications") because the
+        requirement extractor reads the heading to tell required from
+        preferred. None when the row declares no detail, the request fails, or
+        nothing came back - the caller keeps the listing text in that case.
+        """
+        if not self.has_detail:
+            return None
+        url = _format_template(self.detail_template,
+                               {"source_job_id": job.source_job_id})
+        if not url:
+            return None
+        status, payload = ctx.get_json(url, timeout=self.policy.detail_timeout,
+                                       vendor=self.vendor)
+        if self.policy.is_challenge(status):
+            raise ChallengeError(self.vendor, status)
+        if status != 200:
+            return None
+        record = dig(payload, self.detail_record_path) \
+            if self.detail_record_path else payload
+        if not isinstance(record, dict):
+            return None
+        parts: List[str] = []
+        for label, path in self.detail_sections:
+            text = html_to_text(_as_text(dig(record, path))).strip()
+            if text:
+                parts.append(f"{label}\n{text}" if label else text)
+        if not parts:
+            return None
+        return _dc_replace(job, description="\n\n".join(parts)[:15000])
 
     # -- identity ------------------------------------------------------------
 
