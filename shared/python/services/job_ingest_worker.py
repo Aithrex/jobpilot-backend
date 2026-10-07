@@ -2005,6 +2005,32 @@ def _provider_fetch_context(member: Dict[str, Any], *, cutoff: datetime,
     )
 
 
+def _location_with_stated_country(location: Any, country: Any) -> Any:
+    """The location, with the country the board STATED when the place alone
+    does not say.
+
+    A provider's `country` was dropped on the way to the inventory, so a board
+    that prints "San Jose" beside "United States of America" stored a bare
+    city no resolver can place: of TikTok's first 1,112 postings 700 had no
+    country, 265 of them San Jose and 118 Seattle, and a US-only board showed
+    none of them. A location that already resolves is never touched, and a
+    multi-place string is left to `normalize_location`.
+    """
+    place = str(location or "").strip() if isinstance(location, str) else ""
+    stated = str(country or "").strip()
+    if not place or not stated or ";" in place:
+        return location
+    try:
+        if inv.normalize_location(place).get("country_code"):
+            return location
+        joined = f"{place}, {stated}"
+        if inv.normalize_location(joined).get("country_code"):
+            return joined
+    except Exception:
+        pass
+    return location
+
+
 def _raw_job_to_listing(member: Dict[str, Any], job: Any, *,
                         cutoff: datetime) -> Optional[Dict[str, Any]]:
     posted_at = _parse_iso(getattr(job, "posted_at", "") or "")
@@ -2023,7 +2049,8 @@ def _raw_job_to_listing(member: Dict[str, Any], job: Any, *,
         title=title,
         url=str(getattr(job, "apply_url", "") or ""),
         posted_at=posted_at,
-        location=getattr(job, "location", "") or "",
+        location=_location_with_stated_country(
+            getattr(job, "location", "") or "", getattr(job, "country", "") or ""),
         description=str(getattr(job, "description", "") or ""),
         employment_type=str(getattr(job, "employment_type", "") or ""),
         posted_text=str(getattr(job, "raw_posted_text", "") or ""),

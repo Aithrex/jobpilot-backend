@@ -971,3 +971,21 @@ def test_a_stored_teaser_is_fetched_on_a_later_tick(db, small_registry, monkeypa
     # Tick 3: fetched once, never again.
     w.run_shard(w.SOURCE_WORKDAY, shard, now=NOW + timedelta(minutes=30))
     assert len(calls) == len(members)
+
+
+@pytest.mark.parametrize("place,country,expected,code", [
+    ("San Jose", "United States of America", "San Jose, United States of America", "US"),
+    ("Seattle", "US", "Seattle, US", "US"),
+    ("London", "United Kingdom", "London, United Kingdom", "GB"),
+    ("Austin, TX", "Canada", "Austin, TX", "US"),          # already resolves: untouched
+    ("San Jose", "", "San Jose", ""),
+    ("Paris; San Jose", "France", "Paris; San Jose", None),  # multi-place: left alone
+    ("San Jose", "Atlantis", "San Jose", ""),               # a country we cannot read adds nothing
+])
+def test_a_stated_country_places_a_bare_city(place, country, expected, code):
+    """A provider's `country` was dropped, so "San Jose" beside "United States
+    of America" stored a city no resolver can place."""
+    got = w._location_with_stated_country(place, country)
+    assert got == expected
+    if code is not None:
+        assert inv.normalize_location(got)["country_code"] == code
