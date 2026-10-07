@@ -647,6 +647,11 @@ _SEED_ENDPOINTS: Tuple[Dict[str, str], ...] = (
     {"vendor": "oracle_orc", "tenant": "eeho", "site": "CX_1",
      "host": "eeho.fa.us2.oraclecloud.com", "display_name": "Oracle",
      "industry": "tech"},
+    # Probed live 2026-10-07: 866 open requisitions. Ford filed 627 H-1B
+    # approvals in FY2026 and its only source on file was an unproven candidate.
+    {"vendor": "oracle_orc", "tenant": "efds", "site": "CX_1",
+     "host": "efds.fa.em5.oraclecloud.com", "display_name": "Ford Motor Company",
+     "industry": "manufacturing_automotive"},
     # iCIMS seeds. Each was verified on 2026-08-18 to return real postings
     # through `IcimsProvider.list_jobs`, not merely to answer 200 - `*.icims.com`
     # is wildcard DNS, so "the host resolves" and even "the host serves HTML"

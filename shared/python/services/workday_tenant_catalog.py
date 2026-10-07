@@ -26,6 +26,13 @@ WORKDAY_TENANT_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Snap Inc.", "tenant": "snapchat", "wd_host": "wd1",
      "site": "snap", "industry": "tech", "wd_domain": "myworkdaysite.com"},
 
+    # ── H-1B sponsors we held no board for ───────────────────────
+    # Probed live 2026-10-07: thermofisher.wd5 /ThermoFisherCareers/jobs
+    # answers 200 with total=2928. The employer filed 122 H-1B approvals in
+    # FY2026 and its only source on file was an unproven candidate.
+    {"display_name": "Thermo Fisher Scientific", "tenant": "thermofisher",
+     "wd_host": "wd5", "site": "ThermoFisherCareers", "industry": "pharma"},
+
     # ── banking ───────────────────────────────────────────────────
     {"display_name": "Bread Financial", "tenant": "alliancedata", "wd_host": "wd5", "site": "breadfinancial_India", "industry": "banking"},
     {"display_name": "Ares Management", "tenant": "aresmgmt", "wd_host": "wd1", "site": "External", "industry": "banking"},
