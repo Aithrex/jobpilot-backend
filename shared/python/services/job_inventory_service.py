@@ -414,7 +414,18 @@ def role_family_of(title: Any) -> str:
     """
     try:
         from services import fit_score
-        return fit_score.classify_role(normalize_title(title)) or "other"
+        family = fit_score.classify_role(normalize_title(title))
+        # `normalize_title` strips the punctuation that separates a role from
+        # the TEAM it sits on, and that separator is what tells "Software
+        # Engineer, Test Frameworks & Tooling" (software) from "Tooling
+        # Engineer" (a plant). So when the normalized title was vetoed into
+        # hardware, the RAW title gets the casting vote - and only then, so
+        # every other title is classified exactly as before.
+        if family == "hardware_engineering":
+            raw_family = fit_score.classify_role(title)
+            if raw_family in fit_score._SOFTWARE_FAMILIES:
+                family = raw_family
+        return family or "other"
     except Exception:  # pragma: no cover - taxonomy unavailable
         return "other"
 

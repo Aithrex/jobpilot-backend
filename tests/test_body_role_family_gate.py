@@ -149,6 +149,17 @@ class TestInternshipsKeepTheirFamily:
         assert fs.classify_role("Software Engineer, Test Frameworks & Tooling") == "software_engineering"
         assert fs.classify_role("Data Engineer, Hardware & Consumer Devices") == "data_engineering"
 
+    def test_the_stored_family_sees_the_separator_too(self):
+        """The first version of this fix was tested on `classify_role` with
+        the raw title, and did nothing in production: the inventory classifies
+        a NORMALIZED title, with the comma already stripped. Roblox's
+        "Software Engineer, Test Frameworks & Tooling" stayed `hardware`."""
+        assert inv.role_family_of("Software Engineer, Test Frameworks & Tooling") == "software_engineering"
+        assert inv.role_family_of("Data Engineer, Hardware & Consumer Devices") == "data_engineering"
+        assert inv.role_family_of("Staff Hardware Reliability Engineer") == "hardware_engineering"
+        assert inv.role_family_of("Manufacturing Software Engineer") == "hardware_engineering"
+        assert inv.role_family_of("Tooling Engineer") != "software_engineering"
+
     def test_the_physical_veto_still_stands_where_it_should(self):
         for title in ("Staff Hardware Reliability Engineer", "Corrosion Reliability Engineer II",
                       "Senior Reliability Engineer - Power Electronics",
