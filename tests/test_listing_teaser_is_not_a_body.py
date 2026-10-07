@@ -208,3 +208,52 @@ class TestTheDetailIsAskedForById:
     def test_no_ref_uses_the_posting_id(self, monkeypatch):
         seen = self._fetch(monkeypatch, {"source_job_id": "custom_apple-apple:200313970"})
         assert seen["id"] == "200313970"
+
+
+class TestAConfigBoardWhoseResponseIsTheList:
+    """Atlassian: one GET returns a JSON list, body split across three fields."""
+
+    def _jobs(self, payload):
+        from services.ats_providers.config_boards import ConfigBoardProvider
+        from services.official_career_registry import CUSTOM_BOARD_ADAPTERS
+        provider = ConfigBoardProvider(
+            next(r for r in CUSTOM_BOARD_ADAPTERS if r["key"] == "atlassian"))
+
+        class Ctx:
+            cutoff_iso = ""
+            listing_truncated = False
+            post_json = None
+
+            def should_stop(self):
+                return False
+
+            def get_json(self, url, **kwargs):
+                return 200, payload
+
+            def log(self, *a, **k):
+                pass
+
+        return list(provider.list_jobs(provider.default_endpoint(), Ctx()))
+
+    def test_rows_and_sectioned_body(self):
+        jobs = self._jobs([{
+            "id": "25480", "title": "Software Engineer", "type": "Full-Time",
+            "category": "Engineering",
+            "locations": ["Bengaluru - India -   Bengaluru,  560071 India",
+                          "Seattle - United States - Seattle, WA 98101 United States"],
+            "overview": "<p>Working at Atlassian</p>",
+            "responsibilities": "<ul><li>Build Jira</li></ul>",
+            "qualifications": "<ul><li>3+ years of Java</li></ul>",
+            "applyUrl": "https://globalcareers-atlassian.icims.com/jobs/25480/x"}])
+        assert len(jobs) == 1
+        job = jobs[0]
+        assert job.source_job_id == "25480" and job.apply_url.endswith("/jobs/25480/x")
+        assert job.location.startswith("Bengaluru - India") and "Seattle - United States" in job.location
+        from services import job_inventory_service as inv
+        assert inv.normalize_location(job.location)["country_code"] == "US"
+        assert "Qualifications\n3+ years of Java" in job.description
+        assert "Responsibilities\nBuild Jira" in job.description and "<li>" not in job.description
+        assert job.posted_at == ""
+
+    def test_a_reshaped_response_yields_nothing_rather_than_raising(self):
+        assert self._jobs({"error": "nope"}) == []

@@ -667,6 +667,40 @@ CUSTOM_BOARD_ADAPTERS: Tuple[Dict[str, Any], ...] = (
         },
     },
     {
+        "key": "atlassian",
+        "display_name": "Atlassian",
+        "domain": "atlassian.com",
+        "vendor": "custom_atlassian",
+        "career_landing_url": "https://www.atlassian.com/company/careers/all-jobs",
+        # Probed live 2026-10-07: one GET returns the whole board as a JSON
+        # LIST (358 postings, 290 US-located rows). The apply links point into
+        # globalcareers-atlassian.icims.com, which answers a crawler with a
+        # 164-byte stub - so this endpoint is the only readable source.
+        # 135 H-1B approvals in FY2026 and no board on file before this row.
+        "request": {"method": "GET",
+                    "url": "https://www.atlassian.com/endpoint/careers/listings"},
+        "pagination": {"style": "none"},
+        "records_path": "$",
+        "fields": {
+            "source_job_id": ["id"],
+            "title": ["title"],
+            "location": ["locations"],
+            "department": ["category"],
+            "employment_type": ["type"],
+            "apply_url": ["applyUrl", "portalJobPost.portalUrl"],
+            # No posting date is published; `updatedDate` moves on every edit
+            # and would re-date an old requisition as new, so it is not mapped
+            # and the row stays DATE_UNKNOWN.
+            "description_sections": [
+                ["", "overview"],
+                ["Responsibilities", "responsibilities"],
+                ["Qualifications", "qualifications"],
+            ],
+        },
+        "status": "verified",
+        "status_detail": "358 postings in one response (probed 2026-10-07)",
+    },
+    {
         "key": "tesla",
         "display_name": "Tesla",
         "domain": "tesla.com",

@@ -157,6 +157,19 @@ def _format_template(template: str, values: Dict[str, str]) -> str:
     return "" if missing else out
 
 
+def _join_sections(record: Dict[str, Any],
+                   sections: Sequence[Tuple[str, str]]) -> str:
+    """The named fields of one record as a single body, each under its
+    heading - the requirement extractor reads "Qualifications" to tell what is
+    required from what is preferred."""
+    parts: List[str] = []
+    for label, path in sections:
+        text = html_to_text(_as_text(dig(record, path))).strip()
+        if text:
+            parts.append(f"{label}\n{text}" if label else text)
+    return "\n\n".join(parts)
+
+
 class ConfigBoardProvider(AtsProvider):
     """One employer-run board, entirely described by its registry row."""
 
@@ -231,6 +244,12 @@ class ConfigBoardProvider(AtsProvider):
             for label, path in (detail.get("sections") or ())
             if str(path or "").strip()]
         self.has_detail = bool(self.detail_template and self.detail_sections)
+        # A LISTING that already carries the body, split across fields
+        # (Atlassian: overview / responsibilities / qualifications).
+        self.description_sections: List[Tuple[str, str]] = [
+            (str(label or "").strip(), str(path or "").strip())
+            for label, path in (self.fields.get("description_sections") or ())
+            if str(path or "").strip()]
 
         # ADR-001: the row decides, not the crawler.
         self.date_confidence = (DATE_EXACT if _as_paths(self.fields.get("posted_at"))
@@ -388,7 +407,9 @@ class ConfigBoardProvider(AtsProvider):
         return payload
 
     def _records(self, payload: Any) -> List[Dict[str, Any]]:
-        records = dig(payload, self.records_path)
+        # "$": the response IS the list.
+        records = payload if self.records_path == "$" \
+            else dig(payload, self.records_path)
         if not isinstance(records, (list, tuple)):
             return []
         return [r for r in records if isinstance(r, dict)]
@@ -406,8 +427,13 @@ class ConfigBoardProvider(AtsProvider):
     def _map(self, record: Dict[str, Any]) -> Optional[RawJob]:
         values: Dict[str, str] = {}
         for name in ("source_job_id", "title") + _PLAIN_FIELDS:
-            values[name] = _as_text(
-                first_present(record, _as_paths(self.fields.get(name))))
+            found = first_present(record, _as_paths(self.fields.get(name)))
+            if name == "location" and isinstance(found, (list, tuple)):
+                # A posting open in several places: keep them all, so a role
+                # listed "Bengaluru; Seattle" is not filed as India-only.
+                found = "; ".join(str(x).strip() for x in found[:4]
+                                  if isinstance(x, str) and x.strip())
+            values[name] = _as_text(found)
         if not values["source_job_id"] or not values["title"]:
             return None
 
@@ -423,6 +449,9 @@ class ConfigBoardProvider(AtsProvider):
 
         description = first_present(
             record, _as_paths(self.fields.get("description")))
+        if self.description_sections:
+            description = _join_sections(record, self.description_sections) \
+                or description
         compensation = first_present(
             record, _as_paths(self.fields.get("compensation")))
 
@@ -434,7 +463,8 @@ class ConfigBoardProvider(AtsProvider):
             posted_at=posted,
             date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
             raw_posted_text=_as_text(raw_posted),
-            description=html_to_text(description)[:15000] if description else "",
+            description=(description if self.description_sections
+                         else html_to_text(description))[:15000] if description else "",
             country=values["country"],
             employment_type=values["employment_type"],
             compensation=compensation if compensation not in ("", None) else None,
@@ -470,14 +500,10 @@ class ConfigBoardProvider(AtsProvider):
             if self.detail_record_path else payload
         if not isinstance(record, dict):
             return None
-        parts: List[str] = []
-        for label, path in self.detail_sections:
-            text = html_to_text(_as_text(dig(record, path))).strip()
-            if text:
-                parts.append(f"{label}\n{text}" if label else text)
-        if not parts:
+        body = _join_sections(record, self.detail_sections)
+        if not body:
             return None
-        return _dc_replace(job, description="\n\n".join(parts)[:15000])
+        return _dc_replace(job, description=body[:15000])
 
     # -- identity ------------------------------------------------------------
 
