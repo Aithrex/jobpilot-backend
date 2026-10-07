@@ -229,6 +229,13 @@ MEMBER_BUDGET_SECONDS = _env_float("JOB_INGEST_MEMBER_BUDGET", 30.0)
 MEMBER_BUDGET_OVERRIDES: Dict[str, float] = {
     "workday": _env_float("JOB_INGEST_WORKDAY_MEMBER_BUDGET", 45.0),
     "amazon": _env_float("JOB_INGEST_AMAZON_MEMBER_BUDGET", 45.0),
+    # Google: 20 rows in 1.3 MB of HTML per page, paced a second apart. A week
+    # of US postings is ~30 pages; inside 30s the first live crawl reached
+    # three (56 postings) and would never have read past them.
+    "google_careers": _env_float("JOB_INGEST_GOOGLE_MEMBER_BUDGET", 120.0),
+    # The unified-search boards answer ten rows a page (HCL: 31 requests for
+    # one week of US postings).
+    "successfactors": _env_float("JOB_INGEST_SUCCESSFACTORS_MEMBER_BUDGET", 60.0),
 }
 
 
