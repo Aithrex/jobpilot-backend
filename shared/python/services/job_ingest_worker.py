@@ -661,6 +661,12 @@ _SEED_ENDPOINTS: Tuple[Dict[str, str], ...] = (
     {"vendor": "radancy", "tenant": "rivian", "site": "",
      "host": "careers.rivian.com", "display_name": "Rivian",
      "industry": "manufacturing_automotive"},
+    # Atlassian's own listings endpoint (a config board; see
+    # `official_career_registry.CUSTOM_BOARD_ADAPTERS`). Tenant == the row key,
+    # exactly as `ConfigBoardProvider.default_endpoint` mints it.
+    {"vendor": "custom_atlassian", "tenant": "atlassian", "site": "",
+     "host": "www.atlassian.com", "display_name": "Atlassian",
+     "industry": "tech"},
     # iCIMS seeds. Each was verified on 2026-08-18 to return real postings
     # through `IcimsProvider.list_jobs`, not merely to answer 200 - `*.icims.com`
     # is wildcard DNS, so "the host resolves" and even "the host serves HTML"
