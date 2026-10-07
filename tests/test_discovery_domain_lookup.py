@@ -1,0 +1,94 @@
+"""When a company's name does not spell its domain, discovery asks a public
+index for a suggestion - and believes it only if the site names the company.
+
+2026-10-07: of the H-1B sponsors discovery had deferred, 71% had no domain.
+"""
+import pytest
+
+from services import career_portal_discovery as d
+
+
+class _Ctx:
+    def __init__(self, pages, suggestions=None, lookup_status=200):
+        self.pages, self.suggestions, self.lookup_status = pages, suggestions, lookup_status
+        self.asked, self.fetched = [], []
+
+    def should_stop(self):
+        return False
+
+    def get_json(self, url, **kwargs):
+        self.asked.append(kwargs["params"]["query"])
+        return self.lookup_status, self.suggestions
+
+    def get_text(self, url, **kwargs):
+        self.fetched.append(url)
+        return (200, self.pages[url]) if url in self.pages else (404, "")
+
+
+class _Robots:
+    def allows(self, url):
+        return True
+
+
+def _discoverer(ctx, monkeypatch):
+    monkeypatch.setattr(d, "_resolves", lambda host: True)
+    engine = object.__new__(d.PortalDiscovery) if hasattr(d, "PortalDiscovery") else None
+    if engine is None:
+        cls = next(v for v in vars(d).values()
+                   if isinstance(v, type) and hasattr(v, "_resolve_domain"))
+        engine = object.__new__(cls)
+    engine.ctx, engine.robots, engine.last_status = ctx, _Robots(), None
+    return engine
+
+
+AA = "<html><head><title>American Airlines - Airline tickets and low fares</title></head><body>Book</body></html>"
+
+
+def test_a_suggested_domain_is_used_when_its_own_page_names_the_company(monkeypatch):
+    ctx = _Ctx({"https://aa.com/": AA},
+               suggestions=[{"name": "American Airlines Group", "domain": "aa.com"}])
+    res = d.DiscoveryResult()
+    assert _discoverer(ctx, monkeypatch)._resolve_domain("AMERICAN AIRLINES INC", "", res) == "aa.com"
+    assert ctx.asked == ["american airlines"]
+
+
+def test_a_resembling_but_wrong_suggestion_is_refused(monkeypatch):
+    post = ("<html><head><title>New York Post - Breaking News</title></head><body>"
+            "An independent operator said the system in New York failed.</body></html>")
+    ctx = _Ctx({"https://nypost.com/": post},
+               suggestions=[{"name": "New York Post", "domain": "nypost.com"}])
+    res = d.DiscoveryResult()
+    name = "NEW YORK INDEPENDENT SYSTEM OPERATOR"
+    assert _discoverer(ctx, monkeypatch)._resolve_domain(name, "", res) == ""
+    assert res.detail == "domain did not confirm"
+
+
+def test_the_name_spelled_domain_still_wins_and_costs_no_lookup(monkeypatch):
+    ctx = _Ctx({"https://cognex.com/": "<html><title>Cognex</title>cognex vision</html>"},
+               suggestions=[{"domain": "elsewhere.com"}])
+    res = d.DiscoveryResult()
+    assert _discoverer(ctx, monkeypatch)._resolve_domain("COGNEX CORP", "", res) == "cognex.com"
+    assert ctx.asked == []
+
+
+@pytest.mark.parametrize("status,payload", [(429, None), (200, {"error": "x"}), (200, [])])
+def test_a_lookup_that_fails_is_just_no_suggestion(monkeypatch, status, payload):
+    ctx = _Ctx({}, suggestions=payload, lookup_status=status)
+    res = d.DiscoveryResult()
+    assert _discoverer(ctx, monkeypatch)._resolve_domain("AMERICAN AIRLINES INC", "", res) == ""
+
+
+def test_it_can_be_switched_off(monkeypatch):
+    monkeypatch.setattr(d, "DOMAIN_LOOKUP_URL", "")
+    ctx = _Ctx({"https://aa.com/": AA}, suggestions=[{"domain": "aa.com"}])
+    res = d.DiscoveryResult()
+    assert _discoverer(ctx, monkeypatch)._resolve_domain("AMERICAN AIRLINES INC", "", res) == ""
+    assert ctx.asked == []
+
+
+def test_a_name_with_nothing_to_check_never_confirms_a_suggestion():
+    assert not d._page_mentions("<title>TT</title>", "TT LLC", suggested=True)
+    assert d._page_mentions("<title>The Jackson Laboratory</title>", "THE JACKSON LABORATORY",
+                            suggested=True)
+    assert d._page_mentions("<title>UH</title><p>University Hospitals Medical Group, Inc.</p>",
+                            "UNIVERSITY HOSPITALS MEDICAL GROUP INC", suggested=True)

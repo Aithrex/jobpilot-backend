@@ -200,8 +200,16 @@ def _name_tokens(name: str) -> List[str]:
             if len(t) > 3 and not _LEGAL_WORDS.match(t)]
 
 
+#: A public company-name -> domain index, used only to SUGGEST a domain when
+#: the name does not spell one. Empty disables it.
+DOMAIN_LOOKUP_URL = os.getenv(
+    "DISCOVERY_DOMAIN_LOOKUP_URL",
+    "https://autocomplete.clearbit.com/v1/companies/suggest").strip()
+DOMAIN_LOOKUP_MAX = 3
+
+
 def _page_mentions(body: str, name: str, *, host: str = "",
-                   ticker: str = "") -> bool:
+                   ticker: str = "", suggested: bool = False) -> bool:
     """Cheap confirmation that a guessed domain belongs to this company.
 
     Guards the very common case where `<name>.com` is a parked domain or an
@@ -231,6 +239,21 @@ def _page_mentions(body: str, name: str, *, host: str = "",
     if tick and len(tick) >= 3 and re.search(rf"\b{re.escape(tick)}\b", low):
         return True
     tokens = _name_tokens(name)
+    if suggested:
+        # A domain an index SUGGESTED is held to more than a domain the name
+        # itself spelled: the index answers by resemblance ("New York
+        # Independent System Operator" -> nypost.com), and a large page
+        # contains most common words somewhere. The company must be named in
+        # the page TITLE, or its name must appear on the page as a phrase.
+        if not tokens:
+            return False
+        title = " ".join(re.findall(r"<title[^>]*>(.*?)</title>", low, re.DOTALL))
+        if all(t in title for t in tokens):
+            return True
+        phrase = " ".join(t for t in re.split(
+            r"[^a-z0-9]+", _LEGAL_WORDS.sub(" ", str(name or "").lower())) if t)
+        flat = re.sub(r"[^a-z0-9]+", " ", low)
+        return len(phrase) >= 8 and f" {phrase} " in f" {flat} "
     if not tokens:
         return True
     if all(t in low for t in tokens):
@@ -601,9 +624,11 @@ class PortalDiscovery:
         way. A supplied domain still goes FIRST - it is a strong hint - it just
         no longer bypasses the check.
         """
+        tried: List[str] = []
         for cand in candidate_domains(name, domain):
             if self.ctx.should_stop():
                 return ""
+            tried.append(cand)
             if not _resolves(cand):
                 continue
             html = self._get_html(f"https://{cand}/")
@@ -613,7 +638,59 @@ class PortalDiscovery:
             if _page_mentions(html, name, host=cand, ticker=ticker):
                 return cand
             res.detail = "domain did not confirm"
+        # The name did not spell the domain: American Airlines is aa.com, The
+        # Jackson Laboratory jax.org, Charles Schwab schwab.com. Of the H-1B
+        # sponsors discovery had deferred by 2026-10-07, 71% had no domain at
+        # all. A lookup SUGGESTS one; the same page check as above decides.
+        for cand in self._lookup_domains(name):
+            if self.ctx.should_stop():
+                return ""
+            if cand in tried or not _resolves(cand):
+                continue
+            html = self._get_html(f"https://{cand}/")
+            if html is None:
+                continue
+            res.pages_fetched += 1
+            if _page_mentions(html, name, host=cand, ticker=ticker,
+                              suggested=True):
+                return cand
+            res.detail = "domain did not confirm"
         return ""
+
+    def _lookup_domains(self, name: str) -> List[str]:
+        """Domains a public company-name index offers for `name`, best first.
+
+        Never trusted: a suggestion only becomes the company's domain if its
+        own homepage then names the company (`_page_mentions`). Any failure -
+        the service down, rate limited, reshaped - is simply no suggestions.
+        """
+        if not DOMAIN_LOOKUP_URL:
+            return []
+        tokens = [t for t in re.split(
+            r"[^a-z0-9]+", _LEGAL_WORDS.sub(" ", str(name or "").lower())) if t]
+        if not tokens:
+            return []
+        queries = [" ".join(tokens)]
+        if len(tokens) > 2:
+            queries.append(" ".join(tokens[:2]))
+        out: List[str] = []
+        for query in queries:
+            try:
+                status, payload = self.ctx.get_json(
+                    DOMAIN_LOOKUP_URL, params={"query": query}, timeout=6.0,
+                    vendor="discovery")
+            except Exception:
+                return out
+            if status != 200 or not isinstance(payload, list):
+                continue
+            for row in payload[:DOMAIN_LOOKUP_MAX]:
+                host = str((row or {}).get("domain") or "").strip().lower() \
+                    if isinstance(row, dict) else ""
+                if host and re.match(r"^[a-z0-9.-]{4,80}$", host) and host not in out:
+                    out.append(host)
+            if out:
+                break
+        return out[:DOMAIN_LOOKUP_MAX]
 
     @staticmethod
     def _unknown_ats_hosts(urls: Iterable[str], own_host: str) -> Dict[str, int]:
