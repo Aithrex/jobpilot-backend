@@ -141,6 +141,10 @@ class TestBankCorporateTitles:
         ("Managing Director, Engineering", "Goldman Sachs", "executive"),
         ("Vice President of Engineering", "Stripe", "executive"),
         ("Vice President, Engineering", "Citizens Bank", "executive"),
+        # A level the title states in ordinary words is not overruled.
+        ("Accounting Control Senior Analyst, AVP", "Deutsche Bank", "senior"),
+        ("Principal Software Engineer - Full Stack, AVP", "State Street", "principal"),
+        ("Financial Controller - AVP", "Barclays", "mid"),
     ])
     def test_levels(self, title, employer, level):
         assert inv.seniority_of(title, employer=employer) == level

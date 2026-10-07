@@ -1473,8 +1473,13 @@ def level_with_employer(level: Any, title: Any, employer: Any,
                         required_years: Any) -> Any:
     """`level`, unless the title carries the employer's own level code - that
     is the stated level, raised (never lowered) by the years asked for."""
-    stated = employer_ladder_level(title, employer) \
-        or bank_title_level(title, employer)
+    stated = employer_ladder_level(title, employer)
+    if not stated:
+        # A bank's corporate title corrects the MISREADING ("Vice President"
+        # as an executive) and fills a blank. It does not overrule a level the
+        # title states in ordinary words: "Senior Analyst, AVP" stays senior.
+        if level in (None, "", "unknown", "executive", "director"):
+            stated = bank_title_level(title, employer)
     if not stated:
         return level
     by_years = _level_from_years(required_years)
