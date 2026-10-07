@@ -123,7 +123,7 @@ class TestInternshipsKeepTheirFamily:
             "PhD Intern, Data Science (2027)": "data_science",
             "Machine Learning Intern": "data_science",
             "Data Science Intern": "data_science",
-            "Test Engineering Intern": "qa",
+            "Test Automation Engineering Intern": "qa",
             "Mechanical Engineering Intern": "hardware_engineering",
         }
         for title, family in cases.items():
@@ -133,6 +133,17 @@ class TestInternshipsKeepTheirFamily:
         for title in ("Marketing Intern", "Recruiting Coordinator Intern",
                       "Product Design Intern", "Sales Engineering Intern"):
             assert fs.classify_role(title) not in inv.ENGINEERING_FAMILIES, title
+
+    def test_factory_and_utility_disciplines_are_not_software(self):
+        """The first draft of these rules read every "quality engineering"
+        as software QA and every "infrastructure engineering" as DevOps. The
+        dry run against live inventory showed what that swept in."""
+        for title in ("Material Quality Engineering Co-Op", "Quality Engineering Co-op (January - August 2027)",
+                      "Quality Engineering Technician, Dimensional (2nd Shift)", "PE Test Engineering",
+                      "Water Infrastructure Engineering Intern", "Engineer II - Production Engineering (Assembly)"):
+            assert fs.classify_role(title) not in ("qa", "devops", "software_engineering"), title
+        assert fs.classify_role("Engineer, Application Development and Maintenance") == "software_engineering"
+        assert fs.classify_role("Cloud Infrastructure Engineering Intern") == "devops"
 
     def test_a_team_name_is_not_the_job(self):
         assert fs.classify_role("Software Engineer, Test Frameworks & Tooling") == "software_engineering"

@@ -48,6 +48,9 @@ sys.path.insert(0, str(ROOT))
 COLLIDING = ("AR", "CA", "CO", "DE", "ID", "IL", "IN")
 _TWO_PART = re.compile(r"^\s*[^,]+,\s*([A-Za-z]{2})\s*$")
 _SEVERAL_PLACES = re.compile(r";|\||\u2022|\s/\s")
+_PROVINCES = ("ontario|quebec|british columbia|alberta|manitoba|saskatchewan|"
+              "nova scotia|new brunswick|newfoundland|prince edward island")
+_PROVINCE_THEN_CA = re.compile(rf",\s*(?:{_PROVINCES})\s*,\s*ca\s*$", re.IGNORECASE)
 
 
 def has_signature(loc) -> bool:
@@ -58,6 +61,10 @@ def has_signature(loc) -> bool:
     if not isinstance(loc, dict):
         return False
     raw = str(loc.get("raw") or "")
+    if _PROVINCE_THEN_CA.search(raw):
+        # "Toronto, Ontario, CA": for two hours on 2026-10-06/07 (324197f) the
+        # parser checked province CODES only and filed these in California.
+        return str(loc.get("country_code") or "").upper() == "US"
     if _SEVERAL_PLACES.search(raw) or raw.count(",") >= 2:
         # "San Francisco, CA; Mountain View, CA" / "Building 5, Santa Clara,
         # CA": the trailing state code was read as the country.
@@ -82,7 +89,9 @@ def repaired(locations):
                 or str(loc.get("raw") or "").count(",") >= 2
             # A multi-place or three-part string is only ever moved TO the US:
             # that is the one direction the trailing-state bug went wrong in.
-            if multi and new["country_code"] != "US":
+            back_to_canada = bool(_PROVINCE_THEN_CA.search(str(loc.get("raw") or ""))) \
+                and new["country_code"] == "CA"
+            if multi and new["country_code"] != "US" and not back_to_canada:
                 out.append(loc)
                 continue
             if new["country_code"] != loc.get("country_code"):
@@ -104,8 +113,10 @@ def main() -> int:
     jp = DBConnect().get_db().job_postings
     codes = list(COLLIDING) + [c.lower() for c in COLLIDING]
     q = {"status": "active", "$or": [
+        {"locations": {"$elemMatch": {"country_code": "US", "raw": {
+            "$regex": rf",\s*(?:{_PROVINCES})\s*,\s*ca\s*$", "$options": "i"}}}},
         {"locations": {"$elemMatch": {"country_code": {"$in": list(COLLIDING)},
-                                      "raw": {"$regex": r";|\||\u2022| / |,[^,]*,"}}}},
+                                      "raw": {"$regex": ";|\\||\u2022| / |,[^,]*,"}}}},
         {"locations": {"$elemMatch": {"country": {"$in": codes}, "region": {"$in": ["", None]}}}},
         {"locations": {"$elemMatch": {"region": {"$in": codes}, "country": {"$in": ["", None]}}}},
     ]}

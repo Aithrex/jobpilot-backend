@@ -169,3 +169,29 @@ class TestSeveralPlacesInOneString:
         assert inv.normalize_location("Building 5, Santa Clara, CA")["country_code"] == "US"
         assert inv.normalize_location("Toronto, ON, CA")["country_code"] == "CA"
         assert inv.normalize_location("Austin, TX, USA")["country_code"] == "US"
+
+    def test_a_province_or_state_spelled_out_before_the_code(self):
+        """The dry run of the repair would have moved "Toronto, Ontario, CA"
+        and "Mississauga, Ontario, CA" to the US."""
+        from services import job_inventory_service as inv
+        for raw in ("Toronto, Ontario, CA", "Mississauga, Ontario, CA", "Vancouver, British Columbia, CA"):
+            assert inv.normalize_location(raw)["country_code"] == "CA", raw
+        assert inv.normalize_location("Bloomington, Veterans Parkway, Bloomington, IL")["country_code"] == "US"
+        assert inv.normalize_location("US, Adelanto, CA")["country_code"] == "US"
+        assert inv.normalize_location("Huntsville, AL; Littleton, CO")["country_code"] == "US"
+
+
+def test_the_repair_sends_a_province_named_row_back_to_canada():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "repair2", Path(__file__).resolve().parents[1] / "scripts" / "repair_state_code_countries.py")
+    repair = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(repair)
+    wrong = {"raw": "Toronto, Ontario, CA", "city": "Toronto", "region": "CA", "country": "",
+             "country_code": "US", "key": "toronto-ca"}
+    fine = {"raw": "Kearny Mesa, San Diego, CA", "city": "Kearny Mesa", "region": "CA", "country": "",
+            "country_code": "US", "key": "kearny-mesa-ca"}
+    new, changes = repair.repaired([wrong, fine])
+    assert new[0]["country_code"] == "CA" and new[1] is fine
+    assert changes == [("US", "CA", "Toronto, Ontario, CA")]

@@ -596,7 +596,13 @@ def _is_state_or_province(value: Any) -> bool:
         return True
     try:
         from services import location_country as lcm
-        return v in lcm._CA_PROVINCE_CODES
+        # Codes AND names: "Toronto, Ontario, CA" is Canada exactly as
+        # "Toronto, ON, CA" is. Checking codes alone moved it to California.
+        # Both patterns expect the name to FOLLOW a separator.
+        padded = f", {v}"
+        return (v in lcm._CA_PROVINCE_CODES
+                or bool(lcm._CA_PROVINCE_NAME_RE.search(padded))
+                or bool(us_geo._US_STATE_NAME_RE.search(padded)))
     except Exception:  # pragma: no cover
         return False
 

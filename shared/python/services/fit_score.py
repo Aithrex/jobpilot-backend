@@ -1007,8 +1007,20 @@ _PHYSICAL_QUALIFIER_RE = re.compile(
 #: A role an employer could only mean as software, whatever team it sits on.
 _UNAMBIGUOUS_SOFTWARE_HEAD = re.compile(
     r"(?<![a-z])(software|developer|data engineer|data scientist|data analyst|"
+    r"application development|"
     r"front ?end|back ?end|full ?stack|web|mobile|ios|android|devops|cloud)(?![a-z])")
 _TITLE_SEGMENT_SPLIT = re.compile(r"\s*(?:,|\s-\s|\s–\s|\s—\s|\(|\||/|:)\s*")
+
+
+_SOFTWARE_MAINTENANCE = re.compile(
+    r"(?<![a-z])(application|software|systems?)\s+(development\s+and\s+)?"
+    r"(maintenance|support)(?![a-z])")
+
+
+def _names_a_physical_domain(blob: str) -> bool:
+    """`_PHYSICAL_QUALIFIER_RE`, except that "Application Development and
+    Maintenance" is software being maintained, not a plant."""
+    return bool(_PHYSICAL_QUALIFIER_RE.search(_SOFTWARE_MAINTENANCE.sub(" ", blob)))
 
 
 def _team_name_only_qualifier(blob: str) -> bool:
@@ -1036,12 +1048,20 @@ _DISCIPLINE_FAMILIES: Sequence[Tuple[str, re.Pattern]] = (
         r"android|platform|cloud|api|application|systems software)\s+"
         r"(engineering|development)(?![a-z])")),
     ("data_engineering", re.compile(r"(?<![a-z])data\s+engineering(?![a-z])")),
+    # NOT bare "infrastructure" or "production" engineering: a water utility
+    # and an assembly line use both ("Water Infrastructure Engineering
+    # Intern", "Production Engineering (Assembly)").
     ("devops", re.compile(
-        r"(?<![a-z])(devops|site reliability|infrastructure|production)\s+"
-        r"engineering(?![a-z])")),
+        r"(?<![a-z])(devops|site reliability|cloud infrastructure|"
+        r"platform infrastructure)\s+engineering(?![a-z])")),
     ("security", re.compile(
         r"(?<![a-z])(security|cybersecurity|cyber security)\s+engineering(?![a-z])")),
-    ("qa", re.compile(r"(?<![a-z])(quality|test)\s+engineering(?![a-z])")),
+    # NOT bare "quality" or "test" engineering: on a factory floor those are
+    # manufacturing roles ("Material Quality Engineering Co-Op", "Quality
+    # Engineering Technician, Dimensional"), and `qa` here means software QA.
+    ("qa", re.compile(
+        r"(?<![a-z])(software quality|quality assurance|software test|"
+        r"test automation)\s+engineering(?![a-z])")),
     ("data_science", re.compile(
         r"(?<![a-z])(machine learning|deep learning|data science|applied science|"
         r"artificial intelligence|computer vision|natural language processing)"
@@ -1069,7 +1089,7 @@ def classify_role(text: Any) -> Optional[str]:
         # Reliability Engineer" is a hardware role that happens to contain the
         # phrase "reliability engineer"; reading it as SRE puts a corrosion
         # engineer at the top of a cloud engineer's feed.
-        if fam in _SOFTWARE_FAMILIES and _PHYSICAL_QUALIFIER_RE.search(blob) \
+        if fam in _SOFTWARE_FAMILIES and _names_a_physical_domain(blob) \
                 and not _team_name_only_qualifier(blob):
             return "hardware_engineering"
         return fam
@@ -1079,7 +1099,7 @@ def classify_role(text: Any) -> Optional[str]:
     # this way had no family. Reached only when no phrase matched at all.
     for fam, rx in _DISCIPLINE_FAMILIES:
         if rx.search(blob):
-            if fam in _SOFTWARE_FAMILIES and _PHYSICAL_QUALIFIER_RE.search(blob) \
+            if fam in _SOFTWARE_FAMILIES and _names_a_physical_domain(blob) \
                     and not _team_name_only_qualifier(blob):
                 return "hardware_engineering"
             return fam
