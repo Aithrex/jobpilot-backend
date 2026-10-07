@@ -77,7 +77,9 @@ class RadancyProvider(AtsProvider):
     slug_probe = False
 
     #: Verified tenants only - see the SSRF note in the module docstring.
-    api_hosts = ("careers.amd.com",)
+    # careers.rivian.com: probed live 2026-10-07, the same /api/jobs contract,
+    # totalCount 819. Rivian left iCIMS (see the seed note in the worker).
+    api_hosts = ("careers.amd.com", "careers.rivian.com")
     portal_hosts = api_hosts
 
     policy = CrawlPolicy(

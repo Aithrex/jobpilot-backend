@@ -57,7 +57,10 @@ from services.ats_providers.registry import register
 # the Oracle-owned space; vanity hosts are admitted per-endpoint via `host`
 # only after validation, so an attacker cannot point us anywhere by planting a
 # link (see registry/discovery validation).
-_API_HOSTS = (".oraclecloud.com", ".oracle.com")
+# Dell serves its Oracle Recruiting pod from a first-party host. Probed live
+# 2026-10-07: the same REST contract, 424 open requisitions, site CX_1001.
+# Listed by name - never as a suffix - so the guard stays fail-closed.
+_API_HOSTS = (".oraclecloud.com", ".oracle.com", "enterpriseplatform.dell.com")
 
 _DEFAULT_SITE = "CX_1"
 

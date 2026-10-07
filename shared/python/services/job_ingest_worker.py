@@ -652,6 +652,15 @@ _SEED_ENDPOINTS: Tuple[Dict[str, str], ...] = (
     {"vendor": "oracle_orc", "tenant": "efds", "site": "CX_1",
      "host": "efds.fa.em5.oraclecloud.com", "display_name": "Ford Motor Company",
      "industry": "manufacturing_automotive"},
+    # Dell: 425 H-1B approvals in FY2026, no proven board on file. Its pod
+    # answers on a first-party host (allowlisted by name in oracle_orc).
+    {"vendor": "oracle_orc", "tenant": "dell", "site": "CX_1001",
+     "host": "enterpriseplatform.dell.com", "display_name": "Dell Technologies",
+     "industry": "tech"},
+    # Rivian: 325 approvals; its iCIMS source went dead when it migrated.
+    {"vendor": "radancy", "tenant": "rivian", "site": "",
+     "host": "careers.rivian.com", "display_name": "Rivian",
+     "industry": "manufacturing_automotive"},
     # iCIMS seeds. Each was verified on 2026-08-18 to return real postings
     # through `IcimsProvider.list_jobs`, not merely to answer 200 - `*.icims.com`
     # is wildcard DNS, so "the host resolves" and even "the host serves HTML"
