@@ -112,6 +112,14 @@ class TestUndatedPostingsStillAgeOut:
     them first seen over a week earlier.
     """
 
+    @pytest.fixture(autouse=True)
+    def _only_these_rows(self, mock_db):
+        # The sweep counts every aged row in the collection. Rows other test
+        # modules leave behind carry FIXED dates, so they cross the retention
+        # window as the calendar moves and this count went from 1 to 2 on
+        # 2026-10-07 with no code change.
+        mock_db.job_postings.delete_many({})
+
     def _row(self, mock_db, jid, **extra):
         doc = {"job_id": jid, "source": "greenhouse", "source_job_id": jid,
                "status": "active"}

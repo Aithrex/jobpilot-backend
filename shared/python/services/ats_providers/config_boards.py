@@ -214,6 +214,9 @@ class ConfigBoardProvider(AtsProvider):
         body = request.get("json_body")
         self.base_body: Optional[Dict[str, Any]] = \
             dict(body) if isinstance(body, dict) else None
+        # Fixed request headers a board insists on (TikTok: `website-path`).
+        self.headers: Dict[str, str] = {
+            str(k): str(v) for k, v in dict(request.get("headers") or {}).items()}
         self.page_field = str(request.get("page_field") or "").strip()
         self.offset_field = str(request.get("offset_field") or "").strip()
         preflight = dict(request.get("preflight") or {})
@@ -391,14 +394,17 @@ class ConfigBoardProvider(AtsProvider):
             else:
                 params[self.offset_param] = value
 
+        # Passed only when the row sets some, so a row without headers makes
+        # exactly the call it always did.
+        extra = {"extra_headers": dict(self.headers)} if self.headers else {}
         if self.method == "POST":
             status, payload = ctx.post_json(
                 self.url, params=params or None, json_body=body,
-                timeout=self.policy.timeout, vendor=self.vendor)
+                timeout=self.policy.timeout, vendor=self.vendor, **extra)
         else:
             status, payload = ctx.get_json(
                 self.url, params=params, timeout=self.policy.timeout,
-                vendor=self.vendor)
+                vendor=self.vendor, **extra)
 
         if self.policy.is_challenge(status):
             raise ChallengeError(self.vendor, status)

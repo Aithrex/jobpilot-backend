@@ -667,6 +667,11 @@ _SEED_ENDPOINTS: Tuple[Dict[str, str], ...] = (
     {"vendor": "custom_atlassian", "tenant": "atlassian", "site": "",
      "host": "www.atlassian.com", "display_name": "Atlassian",
      "industry": "tech"},
+    {"vendor": "custom_ibm", "tenant": "ibm", "site": "",
+     "host": "www-api.ibm.com", "display_name": "IBM", "industry": "tech"},
+    {"vendor": "custom_tiktok", "tenant": "tiktok", "site": "",
+     "host": "api.lifeattiktok.com", "display_name": "TikTok",
+     "industry": "tech"},
     # iCIMS seeds. Each was verified on 2026-08-18 to return real postings
     # through `IcimsProvider.list_jobs`, not merely to answer 200 - `*.icims.com`
     # is wildcard DNS, so "the host resolves" and even "the host serves HTML"

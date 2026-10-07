@@ -257,3 +257,57 @@ class TestAConfigBoardWhoseResponseIsTheList:
 
     def test_a_reshaped_response_yields_nothing_rather_than_raising(self):
         assert self._jobs({"error": "nope"}) == []
+
+
+class TestIbmAndTikTokRows:
+    """Two sponsors with public search APIs and no board on file (2026-10-07)."""
+
+    def _list(self, key, payload, seen):
+        from services.ats_providers.config_boards import ConfigBoardProvider
+        from services.official_career_registry import CUSTOM_BOARD_ADAPTERS
+        provider = ConfigBoardProvider(
+            next(r for r in CUSTOM_BOARD_ADAPTERS if r["key"] == key))
+
+        class Ctx:
+            cutoff_iso = ""
+            listing_truncated = False
+
+            def should_stop(self):
+                return False
+
+            def log(self, *a, **k):
+                pass
+
+            def post_json(self, url, **kwargs):
+                seen.append(kwargs)
+                return 200, payload
+
+        return list(provider.list_jobs(provider.default_endpoint(), Ctx()))
+
+    def test_ibm(self):
+        seen = []
+        jobs = self._list("ibm", {"hits": {"total": {"value": 1}, "hits": [{"_source": {
+            "field_text_01": "131951", "title": "Software Developer",
+            "url": "https://careers.ibm.com/careers/JobDetail?jobId=131951",
+            "dcdate": "2026-10-07", "body": "Python and Kubernetes required.",
+            "field_keyword_05": "United States", "field_keyword_19": "AUSTIN, TX",
+            "field_keyword_08": "Software Engineering"}}]}}, seen)
+        assert len(jobs) == 1 and jobs[0].source_job_id == "131951"
+        assert jobs[0].posted_at.startswith("2026-10-07") and jobs[0].country == "United States"
+        assert jobs[0].apply_url.endswith("jobId=131951")
+        assert seen[0]["json_body"]["from"] == 0 and "extra_headers" not in seen[0]
+
+    def test_tiktok_sends_its_header_and_builds_the_body(self):
+        seen = []
+        jobs = self._list("tiktok", {"data": {"count": 1, "job_post_list": [{
+            "id": "769", "title": "Backend Software Engineer",
+            "description": "Build services.", "requirement": "3+ years of Go",
+            "city_info": {"en_name": "San Jose", "parent": {
+                "en_name": "California", "parent": {"en_name": "United States of America"}}},
+            "job_category": {"en_name": "Engineering"},
+            "recruit_type": {"en_name": "Regular"}}]}}, seen)
+        assert seen[0]["extra_headers"] == {"website-path": "tiktok"}
+        job = jobs[0]
+        assert job.apply_url == "https://lifeattiktok.com/search/769"
+        assert job.location == "San Jose" and job.country == "United States of America"
+        assert "Requirements\n3+ years of Go" in job.description

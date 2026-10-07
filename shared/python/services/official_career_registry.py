@@ -701,6 +701,90 @@ CUSTOM_BOARD_ADAPTERS: Tuple[Dict[str, Any], ...] = (
         "status_detail": "358 postings in one response (probed 2026-10-07)",
     },
     {
+        "key": "ibm",
+        "display_name": "IBM",
+        "domain": "ibm.com",
+        "vendor": "custom_ibm",
+        "career_landing_url": "https://www.ibm.com/careers/search",
+        # Probed live 2026-10-07: the search index behind ibm.com/careers
+        # answers a plain POST. 2,317 postings (574 in the United States),
+        # newest first, `from`/`size` paging confirmed to offset 2,200, and
+        # `body` is the whole description (median 3,706 characters).
+        # 1,230 H-1B approvals in FY2026 and no board on file before this row.
+        "request": {
+            "method": "POST",
+            "url": "https://www-api.ibm.com/search/api/v2",
+            "json_body": {
+                "appId": "careers", "scopes": ["careers2"],
+                "query": {"bool": {"must": []}},
+                "size": 100, "from": 0, "sort": [{"dcdate": "desc"}],
+                "lang": "zz", "localeSelector": {},
+                "sm": {"query": "", "lang": "zz"},
+                "_source": ["title", "url", "body", "dcdate",
+                            "field_keyword_05", "field_keyword_08",
+                            "field_keyword_18", "field_keyword_19",
+                            "field_text_01"],
+            },
+            "offset_field": "from",
+        },
+        "pagination": {"style": "offset", "page_size": 100, "max_pages": 40},
+        "records_path": "hits.hits",
+        "total_path": "hits.total.value",
+        "fields": {
+            "source_job_id": ["_source.field_text_01"],
+            "title": ["_source.title"],
+            "location": ["_source.field_keyword_19"],
+            "country": ["_source.field_keyword_05"],
+            "department": ["_source.field_keyword_08"],
+            "posted_at": ["_source.dcdate"],
+            "description": ["_source.body"],
+            "apply_url": ["_source.url"],
+        },
+        "status": "verified",
+        "status_detail": "2,317 postings, 574 US (probed 2026-10-07)",
+    },
+    {
+        "key": "tiktok",
+        "display_name": "TikTok",
+        "domain": "tiktok.com",
+        "vendor": "custom_tiktok",
+        "career_landing_url": "https://lifeattiktok.com/search",
+        # Probed live 2026-10-07: 4,266 postings, about 40% in the United
+        # States; `offset`/`limit` paging confirmed to the last page. Without
+        # the `website-path` header the endpoint answers with an empty body.
+        # No posting date is published, so rows stay DATE_UNKNOWN.
+        # 474 H-1B approvals in FY2026 (ByteDance a further 435).
+        "request": {
+            "method": "POST",
+            "url": ("https://api.lifeattiktok.com/api/v1/public/supplier/"
+                    "search/job/posts"),
+            "headers": {"website-path": "tiktok"},
+            "json_body": {"recruitment_id_list": [], "job_category_id_list": [],
+                          "subject_id_list": [], "location_code_list": [],
+                          "keyword": "", "limit": 100, "offset": 0},
+            "offset_field": "offset",
+        },
+        "pagination": {"style": "offset", "page_size": 100, "max_pages": 60},
+        "records_path": "data.job_post_list",
+        "total_path": "data.count",
+        "fields": {
+            "source_job_id": ["id"],
+            "title": ["title"],
+            "location": ["city_info.en_name"],
+            "country": ["city_info.parent.parent.en_name",
+                        "city_info.parent.en_name"],
+            "department": ["job_category.en_name"],
+            "employment_type": ["recruit_type.en_name"],
+            "apply_url_template": "https://lifeattiktok.com/search/{source_job_id}",
+            "description_sections": [
+                ["", "description"],
+                ["Requirements", "requirement"],
+            ],
+        },
+        "status": "verified",
+        "status_detail": "4,266 postings (probed 2026-10-07)",
+    },
+    {
         "key": "tesla",
         "display_name": "Tesla",
         "domain": "tesla.com",
