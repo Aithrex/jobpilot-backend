@@ -452,6 +452,54 @@ def test_refill_does_not_rearm_a_settled_company(_reg_db):
     assert reg.claim_discovery_batch("w1", size=5) == []
 
 
+def test_refill_is_not_stalled_by_rows_it_cannot_arm(_reg_db):
+    """Live 2026-10-07: 798 companies were `pending` in `companies` while
+    their queue rows were `done` / `no_portal` - Merck, GitHub, JPMorgan,
+    NVIDIA, the highest priorities. They filled the 400-row refill window,
+    none could be re-armed, and every tick reported `refilled: 0` with 70,573
+    eligible companies beneath them."""
+    from datetime import timedelta
+
+    from services import company_registry_service as reg
+
+    now = reg._now()
+    stale = now - timedelta(days=reg.DISCOVERY_RETRY_AFTER_DAYS + 1)
+    # Five top-priority companies another worker is HOLDING: un-armable.
+    for i in range(5):
+        _company(reg, f"held{i}", name=f"Held {i}", priority=90,
+                 status=reg.DISCOVERY_PENDING, last=None)
+        reg._db()[reg.QUEUE].insert_one({
+            "company_id": f"held{i}", "state": reg.DISCOVERY_RUNNING, "priority": 90,
+            "attempts": 1, "created_at": stale, "lease_owner": "other",
+            "lease_expiry": now + timedelta(minutes=10)})
+    # ...and beneath them, real work.
+    for i in range(3):
+        _company(reg, f"due{i}", name=f"Due {i}", priority=1,
+                 status=reg.DISCOVERY_DEFERRED, last=stale)
+        reg._db()[reg.QUEUE].insert_one({
+            "company_id": f"due{i}", "state": reg.DISCOVERY_DEFERRED, "priority": 1,
+            "attempts": 1, "created_at": stale, "lease_owner": None, "lease_expiry": None})
+
+    assert reg.refill_queue(limit=3) == 3
+    claimed = {c["company_id"] for c in reg.claim_discovery_batch("w1", size=10)}
+    assert claimed == {"due0", "due1", "due2"}
+
+
+def test_a_company_marked_pending_is_probed_again_even_if_it_once_finished(_reg_db):
+    """`pending` on the company is a request to look again. NVIDIA was
+    `pending` with a queue row saying `no_portal`; it has a careers page."""
+    from services import company_registry_service as reg
+
+    for cid, state in (("c-nv", reg.DISCOVERY_NO_PORTAL), ("c-gh", reg.DISCOVERY_DONE)):
+        _company(reg, cid, name=cid, priority=40, status=reg.DISCOVERY_PENDING, last=None)
+        reg._db()[reg.QUEUE].insert_one({
+            "company_id": cid, "state": state, "priority": 40, "attempts": 1,
+            "created_at": reg._now(), "lease_owner": None, "lease_expiry": None})
+
+    assert reg.refill_queue(limit=100) == 2
+    assert {c["company_id"] for c in reg.claim_discovery_batch("w1", size=5)} == {"c-nv", "c-gh"}
+
+
 def test_refill_does_not_starve_the_low_priority_tail(_reg_db):
     """The selection window must MOVE between ticks.
 

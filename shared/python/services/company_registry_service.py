@@ -646,8 +646,13 @@ DISCOVERY_RETRY_AFTER_DAYS = int(
     os.getenv("DISCOVERY_RETRY_AFTER_DAYS", "7") or 7)
 
 
+#: How far past `limit` a refill may scan to find rows it can arm.
+REFILL_SCAN_MULTIPLE = int(os.getenv("DISCOVERY_REFILL_SCAN_MULTIPLE", "25") or 25)
+
+
 def enqueue_discovery(company_id: str, *, priority: int = 1,
-                      reason: str = "", rearm: bool = False) -> bool:
+                      reason: str = "", rearm: bool = False,
+                      from_terminal: bool = False) -> bool:
     """Put a company on the discovery queue. True when it is now CLAIMABLE.
 
     `rearm` is the difference between a queue row existing and a queue row
@@ -674,8 +679,14 @@ def enqueue_discovery(company_id: str, *, priority: int = 1,
 
     # Re-arm in one atomic step, guarded on the state so a row another worker
     # is holding (`running`, live lease) is never yanked out from under it.
+    # `from_terminal` also re-arms a FINISHED row (`done` / `no_portal`). Only
+    # for a company whose own record says `pending` - someone asked for it to
+    # be probed again - and never for a `running` row, which another worker
+    # holds.
+    states = list(_REARMABLE_STATES) + (
+        [DISCOVERY_DONE, DISCOVERY_NO_PORTAL] if from_terminal else [])
     res = _col(QUEUE).update_one(
-        {"company_id": company_id, "state": {"$in": list(_REARMABLE_STATES)}},
+        {"company_id": company_id, "state": {"$in": states}},
         {"$set": {"priority": int(priority), "reason": reason[:120],
                   "state": DISCOVERY_PENDING, "lease_owner": None,
                   "lease_expiry": None, "rearmed_at": now}})
@@ -723,15 +734,31 @@ def refill_queue(limit: int = 5000) -> int:
                  {"last_discovered_at": {"$exists": False}},
                  {"last_discovered_at": {"$lt": cutoff}}]},
     ]}
+    # Scan until `limit` rows are actually CLAIMABLE, not until `limit` rows
+    # have been looked at. A hard `.limit(limit)` on the scan stalls the moment
+    # the top of the priority order is rows that cannot be armed - the same
+    # failure the tiebreak above fixed, by another route. Live 2026-10-07: 798
+    # companies were `pending` here while their queue rows were `done` or
+    # `no_portal` (Merck, GitHub, JPMorgan, NVIDIA - the highest priorities).
+    # They filled the whole 400-row window, none could be re-armed, and every
+    # tick reported `refilled: 0` with 70,573 companies eligible beneath them.
+    #
+    # A company that says `pending` is an explicit request to probe it again,
+    # so its finished queue row is re-armed (`from_terminal`). A `deferred`
+    # one re-arms only from the states it always did.
+    want = max(1, int(limit))
     cur = col.find(
-        query, {"company_id": 1, "priority": 1, "name": 1},
-    ).sort([("priority", -1), ("last_discovered_at", 1)]).limit(int(limit))
+        query, {"company_id": 1, "priority": 1, "name": 1, "discovery_status": 1},
+    ).sort([("priority", -1), ("last_discovered_at", 1)]).limit(want * REFILL_SCAN_MULTIPLE)
     n = 0
     for doc in cur:
         if enqueue_discovery(doc["company_id"],
                              priority=int(doc.get("priority") or 1),
-                             reason="registry", rearm=True):
+                             reason="registry", rearm=True,
+                             from_terminal=doc.get("discovery_status") == DISCOVERY_PENDING):
             n += 1
+            if n >= want:
+                break
     return n
 
 
