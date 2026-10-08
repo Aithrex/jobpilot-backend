@@ -134,3 +134,32 @@ class TestTheCrawlerPinsTheMemberToItsOwnHost:
         monkeypatch.setattr(jd_fetcher, "url_is_safe", lambda url: (False, "private"))
         with pytest.raises(ValueError):
             w.assert_own_site_url(HOST, "https://hectorsystems.com/jobs/a")
+
+
+def test_button_text_inside_the_link_is_not_part_of_the_title():
+    page = ('<a href="/jobs/software-engineer/">Software Developers/Software Engineer More Details</a>'
+            '<a href="/jobs/devops-engineer/">DevOps Engineer - Apply Now</a>')
+    titles = [t for _u, t in own_site.job_links(page, "https://galey.com/careers", "galey.com")]
+    assert titles == ["Software Developers/Software Engineer", "DevOps Engineer"]
+
+
+class TestAServerIsNotAlwaysAWaiter:
+    """Every "SQL Server Developer" and "Windows Server Administrator" was
+    filed under hospitality."""
+
+    @pytest.mark.parametrize("title,family", [
+        ("SQL Server DBA", "data_engineering"), ("SQL Server Developer", "data_engineering"),
+        ("Sr.DBA (MSSQL)", "data_engineering"), ("Database Administrator", "data_engineering"),
+        ("Oracle DBA", "data_engineering"),
+        ("Windows Server Administrator", None), ("Linux Server Engineer", None),
+        # Still a waiter.
+        ("Server", "hospitality"), ("Restaurant Server", "hospitality"),
+        ("Banquet Server", "hospitality"), ("Lead Server", "hospitality"),
+        ("Food Server - Web Cafe", "hospitality"),
+        # And not everything with "database" in it is a DBA.
+        ("Database Marketing Manager", "marketing"),
+        ("Senior Software Engineer, Database", "software_engineering"),
+    ])
+    def test_families(self, title, family):
+        from services import fit_score
+        assert fit_score.classify_role(title) == family

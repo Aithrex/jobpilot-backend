@@ -78,6 +78,10 @@ _SECTION_RE = re.compile(
     r"|@",
     re.IGNORECASE)
 
+#: A card's link often wraps its button too: "Software Engineer More Details".
+_BUTTON_TEXT_RE = re.compile(
+    r"\s*[-|:]?\s*(more details|view details|read more|learn more|apply now|"
+    r"apply|view job|view|details)\s*$", re.IGNORECASE)
 _POSTING_TEXT_RE = re.compile(
     r"\b(responsibilit|qualification|requirement|experience|apply|"
     r"job description|what you|skills)", re.IGNORECASE)
@@ -125,7 +129,8 @@ def job_links(body: str, page_url: str, host: str) -> List[Tuple[str, str]]:
             continue
         if url.rstrip("/") == page or not _JOB_PATH_RE.search(urlparse(url).path):
             continue
-        title = re.sub(r"\s+", " ", anchor.text_content() or "").strip()
+        title = _BUTTON_TEXT_RE.sub("", re.sub(
+            r"\s+", " ", anchor.text_content() or "").strip()).strip(" -|:")
         if not looks_like_a_job_title(title):
             continue
         found.setdefault(url, title)

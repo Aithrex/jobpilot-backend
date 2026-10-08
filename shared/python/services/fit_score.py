@@ -1074,6 +1074,21 @@ _DISCIPLINE_FAMILIES: Sequence[Tuple[str, re.Pattern]] = (
 )
 
 
+_IT_SERVER = re.compile(
+    r"(?<![a-z])(sql|windows|linux|unix|web|application|app|database|db|exchange|"
+    r"sharepoint|mail|file|proxy|virtual|vmware|cloud|game|media|build|"
+    r"mcp|api)\s+servers?(?![a-z])"
+    r"|(?<![a-z])servers?[\s\-]+(side|admin|administrator|administration|"
+    r"engineer|engineering|developer|architect|infrastructure|support|"
+    r"technician|operations|hardware|platform|systems?)(?![a-z])")
+_IT_SERVER_WORD = re.compile(r"(?<![a-z])servers?(?![a-z])")
+#: Database administration and development: the data family, by title.
+_DATABASE_ROLE = re.compile(
+    r"(?<![a-z])(dba|database\s+(administrator|admin|engineer|developer|"
+    r"architect|specialist)|sql\s+server\s+(developer|dba|administrator|"
+    r"engineer)|sql\s+developer)(?![a-z])")
+
+
 def classify_role(text: Any) -> Optional[str]:
     """Role family for a title (or a short blob). Returns None when nothing
     matches. It NEVER falls back to software_engineering: defaulting an
@@ -1082,6 +1097,16 @@ def classify_role(text: Any) -> Optional[str]:
     blob = _norm(text)
     if not blob.strip():
         return None
+    # A machine, not a waiter. "server" is a hospitality title, and every
+    # "SQL Server Developer", "Windows Server Administrator" and "Linux Server
+    # Engineer" was being filed with the bartenders - hidden from the people
+    # it is for and shown to the people it is not.
+    if _IT_SERVER.search(blob):
+        if _DATABASE_ROLE.search(blob):
+            return "data_engineering"
+        blob = _IT_SERVER_WORD.sub(" ", blob)
+    elif _DATABASE_ROLE.search(blob) and not _FAMILY_RE.search(blob):
+        return "data_engineering"
     m = _FAMILY_RE.search(blob)
     if m:
         fam = _PHRASE_TO_FAMILY.get(m.group(0))
