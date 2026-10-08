@@ -208,6 +208,28 @@ DOMAIN_LOOKUP_URL = os.getenv(
 DOMAIN_LOOKUP_MAX = 3
 
 
+#: Words a corporate group adds to its trading name without naming a
+#: different organisation.
+_GROUP_WORDS = frozenset({"group", "holdings", "holding", "global", "international",
+                          "worldwide", "usa", "america", "americas", "north"})
+
+
+def _suggestion_fits(company: Any, suggestion: Any) -> bool:
+    """Is the index's entry THIS company, rather than something named after it?
+
+    Every word of the suggestion must already be in the company's name (group
+    words aside), and it must share the company's leading word.
+    """
+    def words(value: Any) -> List[str]:
+        return [t for t in re.split(
+            r"[^a-z0-9]+", _LEGAL_WORDS.sub(" ", str(value or "").lower())) if t]
+
+    ours, theirs = words(company), words(suggestion)
+    if not ours or not theirs or ours[0] != theirs[0]:
+        return False
+    return all(t in ours or t in _GROUP_WORDS for t in theirs)
+
+
 def _page_mentions(body: str, name: str, *, host: str = "",
                    ticker: str = "", suggested: bool = False) -> bool:
     """Cheap confirmation that a guessed domain belongs to this company.
@@ -683,11 +705,20 @@ class PortalDiscovery:
                 return out
             if status != 200 or not isinstance(payload, list):
                 continue
-            for row in payload[:DOMAIN_LOOKUP_MAX]:
-                host = str((row or {}).get("domain") or "").strip().lower() \
-                    if isinstance(row, dict) else ""
-                if host and re.match(r"^[a-z0-9.-]{4,80}$", host) and host not in out:
-                    out.append(host)
+            for row in payload[:DOMAIN_LOOKUP_MAX * 2]:
+                if not isinstance(row, dict):
+                    continue
+                host = str(row.get("domain") or "").strip().lower()
+                if not host or not re.match(r"^[a-z0-9.-]{4,80}$", host) or host in out:
+                    continue
+                # The index lists a company's namesakes beside it. For
+                # "American Airlines" it offers the airline, then the
+                # American Airlines Federal Credit Union - whose own page
+                # also says "American Airlines", and which was accepted when
+                # the airline's site refused the request.
+                if not _suggestion_fits(name, row.get("name")):
+                    continue
+                out.append(host)
             if out:
                 break
         return out[:DOMAIN_LOOKUP_MAX]

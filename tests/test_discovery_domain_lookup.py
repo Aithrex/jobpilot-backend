@@ -52,15 +52,14 @@ def test_a_suggested_domain_is_used_when_its_own_page_names_the_company(monkeypa
     assert ctx.asked == ["american airlines"]
 
 
-def test_a_resembling_but_wrong_suggestion_is_refused(monkeypatch):
-    post = ("<html><head><title>New York Post - Breaking News</title></head><body>"
-            "An independent operator said the system in New York failed.</body></html>")
-    ctx = _Ctx({"https://nypost.com/": post},
-               suggestions=[{"name": "New York Post", "domain": "nypost.com"}])
+def test_a_fitting_suggestion_is_still_refused_when_its_page_is_someone_else(monkeypatch):
+    parked = ("<html><head><title>Domain for sale</title></head><body>"
+              "Rockets and other acme products. Summit views.</body></html>")
+    ctx = _Ctx({"https://sra.io/": parked},
+               suggestions=[{"name": "Summit Rockets", "domain": "sra.io"}])
     res = d.DiscoveryResult()
-    name = "NEW YORK INDEPENDENT SYSTEM OPERATOR"
-    assert _discoverer(ctx, monkeypatch)._resolve_domain(name, "", res) == ""
-    assert res.detail == "domain did not confirm"
+    assert _discoverer(ctx, monkeypatch)._resolve_domain("SUMMIT ROCKETS INC", "", res) == ""
+    assert "https://sra.io/" in ctx.fetched and res.detail == "domain did not confirm"
 
 
 def test_the_name_spelled_domain_still_wins_and_costs_no_lookup(monkeypatch):
@@ -92,3 +91,29 @@ def test_a_name_with_nothing_to_check_never_confirms_a_suggestion():
                             suggested=True)
     assert d._page_mentions("<title>UH</title><p>University Hospitals Medical Group, Inc.</p>",
                             "UNIVERSITY HOSPITALS MEDICAL GROUP INC", suggested=True)
+
+
+@pytest.mark.parametrize("company,suggestion,fits", [
+    ("AMERICAN AIRLINES INC", "American Airlines Group", True),
+    ("AMERICAN AIRLINES INC", "American Airlines Federal Credit Union", False),
+    ("AMERICAN AIRLINES INC", "American Airlines Cargo", False),
+    ("CHARLES SCHWAB & CO., INC.", "Charles Schwab", True),
+    ("THE JACKSON LABORATORY", "Jackson Laboratory Japan", False),
+    ("NEW YORK INDEPENDENT SYSTEM OPERATOR", "New York Post", False),
+    ("UNIVERSITY OF ILLINOIS AT URBANA-CHAMPAIGN", "University of Michigan", False),
+    ("WHIRLPOOL CORPORATION", "Whirlpool", True),
+    ("WHIRLPOOL CORPORATION", "", False),
+])
+def test_a_namesake_is_not_the_company(company, suggestion, fits):
+    assert d._suggestion_fits(company, suggestion) is fits
+
+
+def test_a_namesake_is_never_fetched(monkeypatch):
+    union = "<html><title>American Airlines Federal Credit Union</title></html>"
+    ctx = _Ctx({"https://aacreditunion.org/": union},
+               suggestions=[{"name": "American Airlines Group", "domain": "aa.com"},
+                            {"name": "American Airlines Federal Credit Union",
+                             "domain": "aacreditunion.org"}])
+    res = d.DiscoveryResult()
+    assert _discoverer(ctx, monkeypatch)._resolve_domain("AMERICAN AIRLINES INC", "", res) == ""
+    assert "https://aacreditunion.org/" not in ctx.fetched
