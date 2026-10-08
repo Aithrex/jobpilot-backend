@@ -179,6 +179,9 @@ class TestTheSiteMustBeTheEmployers:
         ("ALPHA TECHNOLOGIES SERVICES INC", "alpha.com", "<p>Alpha batteries by EnerSys</p>", False),
         ("STRATUS TECHNOLOGIES INC", "stratus.com", "<p>SMART Modular Stratus servers</p>", True),
         ("BRONX RIVER ALLIANCE", "bronx.com", "<p>The Bronx news and events</p>", False),
+        ("AIVRES SYSTEMS INC.", "aivres.com", "<p>AI servers</p>", True),
+        ("4WALL AI INC.", "4wall.com", "<p>4Wall Entertainment lighting rental</p>", False),
+        ("GLOBAL DATA PARTNERS LLC", "global.com", "<p>Global payments</p>", False),
         ("", "acme.com", "", False),
     ])
     def test_evidence(self, name, host, page, ok):

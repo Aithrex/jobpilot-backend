@@ -231,6 +231,15 @@ def _suggestion_fits(company: Any, suggestion: Any) -> bool:
 
 
 _FILLER_WORDS = frozenset({"and", "the", "of", "for", "dba"})
+#: First words too ordinary for a domain made of one to prove whose it is.
+_COMMON_FIRST_WORDS = frozenset({
+    "global", "united", "allied", "summit", "apollo", "vertex", "legacy",
+    "modern", "public", "system", "systems", "design", "health", "energy",
+    "impact", "vision", "target", "nation", "national", "bright", "future",
+    "mobile", "secure", "simple", "american", "america", "general", "central",
+    "pacific", "atlantic", "premier", "advanced", "digital", "quality",
+    "capital", "liberty", "pioneer", "phoenix", "horizon", "infinite",
+    "integrated", "innovative", "international", "universal", "strategic"})
 
 
 def site_is_the_employers(name: Any, host: Any, pages: Sequence[str]) -> bool:
@@ -245,8 +254,9 @@ def site_is_the_employers(name: Any, host: Any, pages: Sequence[str]) -> bool:
       * the name spells the domain (`galeysystems.com`);
       * the name appears on the site as a phrase ("CyberTech Systems and
         Software");
-      * the domain is the name's distinctive first word (`opendoor.com`) -
-        seven letters or more, so `one.com` and `alpha.com` do not qualify.
+      * the domain is the name's distinctive first word (`opendoor.com`,
+        `aivres.com`) - six letters or more and not an everyday word, so
+        `one.com`, `alpha.com`, `4wall.com` and `global.com` do not qualify.
     """
     def words(value: Any) -> List[str]:
         return [t for t in re.split(
@@ -259,7 +269,7 @@ def site_is_the_employers(name: Any, host: Any, pages: Sequence[str]) -> bool:
         return False
     if stem == "".join(tokens):
         return True
-    if stem == tokens[0] and len(stem) >= 7:
+    if stem == tokens[0] and len(stem) >= 6 and stem not in _COMMON_FIRST_WORDS:
         return True
     phrase = " ".join(tokens)
     if len(phrase) < 8 or len(tokens) < 2:
