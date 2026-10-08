@@ -472,6 +472,7 @@ class PortalDiscovery:
 
         collected: Dict[str, Endpoint] = {}
         urls_seen: List[str] = []
+        own_pages: List[Tuple[str, str]] = []
         pages = 0
 
         home_html = self._get_html(f"https://{host}/")
@@ -518,6 +519,8 @@ class PortalDiscovery:
                 res.career_pages_read += 1
             urls_seen.append(target)
             urls_seen.extend(self.extract_urls(html, target))
+            if thost == host or thost.endswith(f".{host}"):
+                own_pages.append((target, html))
 
             # Second hop. Large employers routinely put the ATS link one level
             # below /careers ("Search open roles" -> /careers/search -> the
@@ -552,6 +555,15 @@ class PortalDiscovery:
                 collected.setdefault(ep.member_key, ep)
             if collected:
                 res.detail = "found by slug probe"
+
+        # Last: no board system at all, the openings are pages on the
+        # employer's own site. Deliberately narrow - see `own_site`.
+        if not collected and own_pages:
+            from services.ats_providers import own_site
+            ep = own_site.endpoint_for_pages(host, own_pages)
+            if ep is not None:
+                collected.setdefault(ep.member_key, ep)
+                res.detail = "openings listed on the employer's own careers page"
 
         for ep in collected.values():
             ep.company_id = company_id

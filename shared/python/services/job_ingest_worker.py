@@ -111,6 +111,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import random
 import threading
 import time
@@ -1229,6 +1230,32 @@ def assert_outbound_url(source: str, url: str) -> str:
     return url
 
 
+def _own_site_host(member: Dict[str, Any]) -> str:
+    """The one host a `careers_page` member may fetch, or "" for every other
+    vendor."""
+    if _vendor_of(member) != "careers_page":
+        return ""
+    host = str(member.get("host") or member.get("tenant") or "").strip().lower()
+    host = host[4:] if host.startswith("www.") else host
+    return host if re.match(r"^[a-z0-9][a-z0-9.-]{2,120}\.[a-z]{2,24}$", host) else ""
+
+
+def assert_own_site_url(own_host: str, url: str) -> str:
+    """HTTPS, on the member's own host (or a subdomain of it), and public."""
+    parsed = urlparse(str(url or ""))
+    host = (parsed.hostname or "").lower()
+    host = host[4:] if host.startswith("www.") else host
+    if parsed.scheme != "https" or not own_host or not (
+            host == own_host or host.endswith(f".{own_host}")):
+        raise ValueError("outbound host is not this employer's own site")
+    from services.jd_fetcher import url_is_safe
+
+    ok, reason = url_is_safe(url)
+    if not ok:
+        raise ValueError(f"outbound url blocked: {reason}")
+    return url
+
+
 # ---------------------------------------------------------------------------
 # Per-host rate limiting + circuit breaking
 # ---------------------------------------------------------------------------
@@ -2023,7 +2050,13 @@ def _provider_fetch_context(member: Dict[str, Any], *, cutoff: datetime,
         deadline,
         _time.monotonic() + member_budget_seconds(_vendor_of(member)))
 
+    # An employer's own careers page has no vendor host to allowlist, so the
+    # member is pinned to ITS host instead: nothing off it is ever fetched.
+    own_host = _own_site_host(member)
+
     def guard(_vendor: str, url: str) -> str:
+        if own_host:
+            return assert_own_site_url(own_host, url)
         return assert_outbound_url(source, url)
 
     get_json, get_text, post_json = make_fetchers(
