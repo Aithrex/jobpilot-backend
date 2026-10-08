@@ -230,6 +230,47 @@ def _suggestion_fits(company: Any, suggestion: Any) -> bool:
     return all(t in ours or t in _GROUP_WORDS for t in theirs)
 
 
+_FILLER_WORDS = frozenset({"and", "the", "of", "for", "dba"})
+
+
+def site_is_the_employers(name: Any, host: Any, pages: Sequence[str]) -> bool:
+    """Is this site demonstrably THIS employer's, not a namesake's?
+
+    A board vendor can be asked who owns a board; a company's own pages
+    cannot, and the postings read off them are published under the employer's
+    name. `_page_mentions` is not enough for that: it settled ONE GLOBAL INFO
+    SYSTEMS LLC on one.com, and one.com's openings were then listed as theirs.
+    So one of these must hold:
+
+      * the name spells the domain (`galeysystems.com`);
+      * the name appears on the site as a phrase ("CyberTech Systems and
+        Software");
+      * the domain is the name's distinctive first word (`opendoor.com`) -
+        seven letters or more, so `one.com` and `alpha.com` do not qualify.
+    """
+    def words(value: Any) -> List[str]:
+        return [t for t in re.split(
+            r"[^a-z0-9]+", _LEGAL_WORDS.sub(" ", str(value or "").lower()))
+            if t and t not in _FILLER_WORDS]
+
+    tokens = words(name)
+    stem = re.sub(r"^www\.", "", str(host or "").lower()).split(".")[0].replace("-", "")
+    if not tokens or not stem:
+        return False
+    if stem == "".join(tokens):
+        return True
+    if stem == tokens[0] and len(stem) >= 7:
+        return True
+    phrase = " ".join(tokens)
+    if len(phrase) < 8 or len(tokens) < 2:
+        return False
+    for body in pages or ():
+        flat = " ".join(words(re.sub(r"<[^>]+>", " ", str(body or "")[:400000])))
+        if f" {phrase} " in f" {flat} ":
+            return True
+    return False
+
+
 def _page_mentions(body: str, name: str, *, host: str = "",
                    ticker: str = "", suggested: bool = False) -> bool:
     """Cheap confirmation that a guessed domain belongs to this company.
@@ -558,7 +599,8 @@ class PortalDiscovery:
 
         # Last: no board system at all, the openings are pages on the
         # employer's own site. Deliberately narrow - see `own_site`.
-        if not collected and own_pages:
+        if not collected and own_pages and site_is_the_employers(
+                name, host, [home_html or ""] + [body for _u, body in own_pages]):
             from services.ats_providers import own_site
             ep = own_site.endpoint_for_pages(host, own_pages)
             if ep is not None:

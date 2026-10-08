@@ -163,3 +163,24 @@ class TestAServerIsNotAlwaysAWaiter:
     def test_families(self, title, family):
         from services import fit_score
         assert fit_score.classify_role(title) == family
+
+
+class TestTheSiteMustBeTheEmployers:
+    """ONE GLOBAL INFO SYSTEMS LLC was matched to one.com, and one.com's
+    openings were then listed as theirs (seen live, 2026-10-08)."""
+
+    @pytest.mark.parametrize("name,host,page,ok", [
+        ("GALEY SYSTEMS INC", "galeysystems.com", "", True),                  # name spells the domain
+        ("SOOTHSAYER ANALYTICS LLC", "www.soothsayeranalytics.com", "", True),
+        ("OPENDOOR LABS INC", "opendoor.com", "<p>Sell your home</p>", True),  # distinctive first word
+        ("CYBERTECH SYSTEMS & SOFTWARE INC", "cybertech.com",
+         "<footer>&copy; CyberTech Systems and Software, Inc.</footer>", True),  # named as a phrase
+        ("ONE GLOBAL INFO SYSTEMS LLC", "one.com", "<title>one.com - domains and hosting</title>", False),
+        ("ALPHA TECHNOLOGIES SERVICES INC", "alpha.com", "<p>Alpha batteries by EnerSys</p>", False),
+        ("STRATUS TECHNOLOGIES INC", "stratus.com", "<p>SMART Modular Stratus servers</p>", True),
+        ("BRONX RIVER ALLIANCE", "bronx.com", "<p>The Bronx news and events</p>", False),
+        ("", "acme.com", "", False),
+    ])
+    def test_evidence(self, name, host, page, ok):
+        from services import career_portal_discovery as d
+        assert d.site_is_the_employers(name, host, [page]) is ok
