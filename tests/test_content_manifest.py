@@ -64,6 +64,19 @@ def test_unresolved_heading_not_treated_as_empty():
     assert proj.content_id in manifest.parse_unresolved
 
 
+def test_contact_and_prose_do_not_become_unresolved_sections():
+    resume = {"contact": {"name": "Alex Rivera"}, "projects": []}
+    raw = (
+        "ALEX  RIVERA\nTempe, AZ | alex@example.com\n"
+        "Data engineer building reliable pipelines.\n"
+        "Projects\nPipeline monitor\nCOMMUNITY SERVICE\n"
+    )
+    manifest = build_manifest(resume, raw_text=raw)
+    unresolved = {s.original_heading for s in manifest.sections()
+                  if s.parse_status == "unresolved"}
+    assert unresolved == {"Projects", "COMMUNITY SERVICE"}
+
+
 def test_content_id_not_array_position():
     assert content_id("experience", "acme", "swe", "2020") == content_id(
         "experience", "acme", "swe", "2020"

@@ -618,6 +618,38 @@ def test_wrapped_skill_categories_stay_bold(monkeypatch):
     assert regular_full_rows == [], regular_full_rows
 
 
+@pytest.mark.parametrize("fixture", ["sparse", "eight_by_six"])
+def test_saved_name_heading_does_not_add_content_or_pages(fixture):
+    import copy
+    from docx import Document
+
+    resume = copy.deepcopy(FIXTURES[fixture])
+    renderer = ResumeRenderer()
+    baseline, baseline_resolution = renderer.generate_pdf(resume)
+    resume["additional_sections"] = [{
+        "heading": "ALEX  RIVERA", "semantic_type": "custom",
+        "parse_status": "unresolved", "entries": [], "raw_text": "",
+    }]
+    pdf, resolution = renderer.generate_pdf(resume)
+    assert extract_pdf_text(pdf) == extract_pdf_text(baseline)
+    assert resolution.pages == baseline_resolution.pages
+    doc = Document(io.BytesIO(renderer.generate_docx(resume)))
+    assert sum(p.text.casefold() == "alex rivera" for p in doc.paragraphs) == 1
+    assert not any(p.text == "ALEX  RIVERA" for p in doc.paragraphs)
+
+
+def test_name_section_with_real_content_and_unresolved_sections_are_preserved():
+    resume = _resume()
+    resume["additional_sections"] = [
+        {"heading": "Alex Rivera", "raw_text": "Community mentoring work."},
+        {"heading": "PUBLICATIONS", "parse_status": "unresolved"},
+    ]
+    pdf, _ = ResumeRenderer().generate_pdf(resume)
+    text, _ = extract_pdf_text(pdf)
+    assert "Community mentoring work." in text
+    assert "PUBLICATIONS" in text
+
+
 def test_visual_snapshots():
     """Render three fixtures to PNG. Compared against committed goldens when
     pypdfium2 is installed; otherwise skipped so CI still runs."""

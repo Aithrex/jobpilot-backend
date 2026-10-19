@@ -655,10 +655,17 @@ def mark_unresolved_headings(
     }
     # First-class empty-but-ok (author never had the section): heading absent.
     found_headings: List[Tuple[str, str]] = []
+    contact_name = _norm((resume.get("contact") or {}).get("name") or "")
     for line in raw_text.splitlines():
         stripped = line.strip().rstrip(":")
+        if contact_name and _norm(stripped) == contact_name:
+            continue
         semantic = heading_semantic_type(stripped)
         if not semantic or semantic in _SKIP_HEADINGS:
+            continue
+        # Recognized aliases may use title case; arbitrary prose and contact
+        # lines must not become custom sections merely because they are unknown.
+        if semantic == "custom" and not _HEADING_LINE_RE.fullmatch(stripped):
             continue
         found_headings.append((stripped, semantic))
 

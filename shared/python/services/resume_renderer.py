@@ -575,6 +575,7 @@ class ResumeRenderer:
 
     @staticmethod
     def _iter_additional_sections(tailored: Dict[str, Any]):
+        contact_name = " ".join(str((tailored.get("contact") or {}).get("name") or "").split()).casefold()
         for sec in tailored.get("additional_sections") or []:
             if not isinstance(sec, dict):
                 continue
@@ -586,6 +587,11 @@ class ResumeRenderer:
             ).strip()
             entries = [e for e in (sec.get("entries") or []) if isinstance(e, dict)]
             raw = str(sec.get("raw_text") or "").strip()
+            # Older manifests mistook the contact name for an unresolved
+            # section. Suppress only the empty duplicate, preserving real content.
+            if (contact_name and " ".join(heading.split()).casefold() == contact_name
+                    and not entries and not raw):
+                continue
             if not entries and not raw and str(sec.get("parse_status") or "") != "unresolved":
                 continue
             yield sec, heading, entries, raw
