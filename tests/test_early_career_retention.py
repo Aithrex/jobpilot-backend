@@ -193,6 +193,13 @@ class TestEarlyCareerRolesOlderThanTheCandidateWindow:
     employers' own boards for every real user (2026-10-06): 51 of 128
     in-inventory roles missing from their boards were lost exactly here."""
 
+    @pytest.fixture(autouse=True)
+    def _fixed_inventory_clock(self, monkeypatch):
+        # Seed dates and the initial window use NOW. The follow-up own-level
+        # query defaults to inv._now(), so leaving it on wall time made these
+        # rows age out and broke deployment as the calendar advanced.
+        monkeypatch.setattr(inv, "_now", lambda: NOW)
+
     def _seed(self, db):
         # 6 fresh senior roles fill the window; the entry and intern roles are older.
         for i in range(6):
@@ -221,6 +228,15 @@ class TestEarlyCareerRolesOlderThanTheCandidateWindow:
         feed, docs = self._window(monkeypatch, db, ["entry", "mid"])
         extra = feed._own_level_slice(docs, "a@b.co", source="workday")
         assert {d["source_job_id"] for d in extra} == {"E18"}     # mid is not early-career
+
+    def test_own_level_slice_still_excludes_expired_postings(self, db, monkeypatch):
+        self._seed(db)
+        for age in (30, 31):
+            inv.upsert_posting(_raw(f"E{age}", "Software Engineer, New Grad", age),
+                               now=NOW - timedelta(days=age - 1))
+        feed, docs = self._window(monkeypatch, db, ["entry"])
+        extra = feed._own_level_slice(docs, "a@b.co", source="workday")
+        assert {d["source_job_id"] for d in extra} == {"E18", "E30"}
 
     def test_other_users_and_unfilled_windows_are_untouched(self, db, monkeypatch):
         self._seed(db)
