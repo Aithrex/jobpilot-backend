@@ -23,14 +23,33 @@ jobs:
     outputs:
       services: ${{ steps.resolve.outputs.services }}
       any: ${{ steps.resolve.outputs.any }}
-      shared: ${{ steps.filter.outputs.shared }}
-      executor: ${{ steps.filter.outputs.executor }}
-      ingest: ${{ steps.filter.outputs.ingest }}
+      shared: ${{ steps.baseline.outputs.full == 'true' || steps.filter.outputs.shared == 'true' }}
+      executor: ${{ steps.baseline.outputs.full == 'true' || steps.filter.outputs.executor == 'true' }}
+      ingest: ${{ steps.baseline.outputs.full == 'true' || steps.filter.outputs.ingest == 'true' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: baseline
+        name: Find the last successful deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A blocked/failed release must remain in the next deployment's diff,
+          # even when the next push only repairs tests. Comparing with the
+          # previous push silently left those application changes undeployed.
+          BASE=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/deploy.yml/runs?branch=main&status=success&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // ""')
+          echo "sha=$BASE" >> "$GITHUB_OUTPUT"
+          if [ -z "$BASE" ]; then
+            echo "full=true" >> "$GITHUB_OUTPUT"
+          fi
       - id: filter
+        if: steps.baseline.outputs.sha != ''
         uses: dorny/paths-filter@v3
         with:
+          base: ${{ steps.baseline.outputs.sha }}
           filters: |
             shared:  ['shared/**', 'infra/**', '.github/workflows/**', 'scripts/build_layer.sh', 'scripts/package.sh']
             # The image does `COPY shared/python /opt/python` — the WHOLE tree —
@@ -53,7 +72,7 @@ jobs:
       - id: resolve
         run: |
           MANUAL=${{ github.event_name == 'workflow_dispatch' }}
-          SHARED=${{ steps.filter.outputs.shared }}
+          SHARED=${{ steps.baseline.outputs.full == 'true' || steps.filter.outputs.shared == 'true' }}
           declare -a S=()
           # A shared-layer or manual change => redeploy ALL services (layer version bump).
           if [ "$MANUAL" = "true" ] || [ "$SHARED" = "true" ]; then
