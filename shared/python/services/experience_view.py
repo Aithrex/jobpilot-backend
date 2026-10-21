@@ -40,8 +40,15 @@ _VIEW_OF_BAND = {"intern": "intern", "entry": "entry", "mid": "mid",
 _EDGE_YEARS = {2: "mid", 4: "senior", 7: "staff"}
 
 
-def resolve(preference: Any, years: Any) -> Dict[str, Any]:
-    """`{levels, source, years, preference}` from the two raw inputs."""
+def resolve(preference: Any, years: Any, *, early_career: bool = False) -> Dict[str, Any]:
+    """`{levels, source, years, preference}` from the two raw inputs.
+
+    `early_career` is `fit_score.early_career_only` over the resume's titles:
+    every role was an internship, co-op, traineeship or assistantship. Their
+    months still add up to years, but they place the candidate on the
+    internship and new-grad board, never past it - the same cap
+    `fit_score.resume_level` applies, so the board and the score agree.
+    """
     from services import fit_score
 
     views: set = set()
@@ -60,7 +67,11 @@ def resolve(preference: Any, years: Any) -> Dict[str, Any]:
         n = None
     if n is not None and n < 0:
         n = None
-    if n is not None:
+    if n is not None and early_career:
+        for view in ("intern", "entry"):
+            if not pref_band or _beside(view, views):
+                views.add(view)
+    elif n is not None:
         band = fit_score._level_from_years(n)
         resume_view = _VIEW_OF_BAND.get(band or "", None)
         # A stated level is the candidate's own answer; the resume adds a
@@ -101,13 +112,20 @@ def for_user(user_email: str) -> Dict[str, Any]:
                                              {"experience_level": 1, "seniority": 1}) or {}
         preference = prefs.get("experience_level") or prefs.get("seniority")
         years = None
+        early_career = False
         user = db.users.find_one({"email": email}, {"active_resume_id": 1}) or {}
         rid = user.get("active_resume_id")
         if rid:
             asset = db.resume_assets.find_one(
-                {"resume_id": rid, "parse_status": "parsed"}, {"experience_years": 1}) or {}
+                {"resume_id": rid, "parse_status": "parsed"},
+                {"experience_years": 1, "structured.experience.title": 1}) or {}
             years = asset.get("experience_years")
-        return resolve(preference, years)
+            from services import fit_score
+            early_career = fit_score.early_career_only(
+                [(e or {}).get("title") for e in
+                 ((asset.get("structured") or {}).get("experience") or [])
+                 if isinstance(e, dict)])
+        return resolve(preference, years, early_career=early_career)
     except Exception as exc:  # pragma: no cover - never break the board
         logger.warning("experience_view: falling back to all levels (%s)", type(exc).__name__)
         return resolve(None, None)

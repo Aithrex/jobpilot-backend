@@ -152,6 +152,72 @@ def _display_title(phrase: str) -> str:
     return " ".join(_TITLE_CASE_FIXES.get(w, w) for w in phrase.title().split())
 
 
+#: Engineering disciplines `tech_taxonomy` has no phrase for, and the role
+#: names each is hired under. A power-systems graduate's titles were "Graduate
+#: Service Assistant", "Graduate Research Assistant" and "Electrical Design
+#: Trainee", so the non-tech pass-through handed those back as search terms and
+#: the board searched for assistantships. The discipline was in the degree and
+#: the summary all along.
+_DISCIPLINE_ROLE_NAMES: Tuple[Tuple[re.Pattern, Tuple[str, ...]], ...] = (
+    (re.compile(r"(?<![a-z])(power systems?|electrical power|power (and|&) energy|"
+                r"power engineering)(?![a-z])"),
+     ("Power Systems Engineer", "Electrical Engineer")),
+    (re.compile(r"(?<![a-z])electrical(?![a-z])"), ("Electrical Engineer",)),
+    (re.compile(r"(?<![a-z])mechanical(?![a-z])"), ("Mechanical Engineer",)),
+    (re.compile(r"(?<![a-z])civil(?![a-z])"), ("Civil Engineer",)),
+    (re.compile(r"(?<![a-z])chemical(?![a-z])"), ("Chemical Engineer",)),
+    (re.compile(r"(?<![a-z])aerospace(?![a-z])"), ("Aerospace Engineer",)),
+)
+#: A discipline word names an ENGINEERING role only beside one of these. An
+#: "Electrical Technician" is a trade, and "Electrical Engineer" is the wrong
+#: search for them.
+_ENGINEERING_TITLE = re.compile(r"(?<![a-z])(engineer|engineering|design|designer)(?![a-z])")
+_DEGREE_MARK = re.compile(
+    r"(?<![a-z])(b\.? ?e|b\.? ?tech|b\.? ?s|bachelor\w*|m\.? ?s|m\.? ?tech|m\.? ?eng|"
+    r"master\w*|ph\.? ?d|doctor\w*)(?![a-z])")
+
+#: Titles that are not something anyone searches for: assistantships held
+#: while studying, a bare "Intern", a career break. Dropped from the non-tech
+#: pass-through, but only when a real title survives - an empty list reads to
+#: the user as "there are no jobs".
+_NOT_A_TARGET = re.compile(
+    r"^((graduate|undergraduate|student)\s+)?(service|research|teaching|student)\s+"
+    r"assistant$|^(intern|internship|trainee|volunteer)$|career break|upskilling|"
+    r"sabbatical", re.IGNORECASE)
+
+
+def _discipline_role_names(titles: Sequence[Any], degrees: Sequence[Any]) -> List[str]:
+    """Role names for the engineering discipline a title or a degree states."""
+    out: List[str] = []
+    texts = [(str(t or "").lower(), _ENGINEERING_TITLE) for t in titles or []]
+    texts += [(str(d or "").lower(), _DEGREE_MARK) for d in degrees or []]
+    for text, context in texts:
+        if not text or not context.search(text):
+            continue
+        for pattern, names in _DISCIPLINE_ROLE_NAMES:
+            if pattern.search(text):
+                out.extend(n for n in names if n not in out)
+                break
+    return out
+
+
+def degrees_from_assets(assets: List[Dict[str, Any]]) -> List[str]:
+    """Every degree string across the parsed resumes, with its field."""
+    out: List[str] = []
+    for asset in assets or []:
+        structured = asset.get("structured") or {}
+        education = (structured.get("education") if isinstance(structured, dict) else None) \
+            or asset.get("education") or []
+        for entry in education if isinstance(education, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            text = " ".join(str(entry.get(k) or "") for k in
+                            ("degree", "field_of_study", "major")).strip()
+            if text and text not in out:
+                out.append(text)
+    return out
+
+
 @functools.lru_cache(maxsize=1)
 def _intern_phrases() -> Tuple[Tuple[str, str], ...]:
     """`(intern phrase, its specialty)`, longest phrase first."""
@@ -187,6 +253,7 @@ def _adult_phrase_for(specialty: str) -> Optional[str]:
 def canonical_search_titles(titles: Sequence[Any],
                             specialties: Sequence[Any] = (),
                             *, level: Optional[str] = None,
+                            degrees: Sequence[Any] = (),
                             cap: int = TITLE_CAP) -> List[str]:
     """Rewrite generated titles into ones that can actually MATCH a posting.
 
@@ -310,7 +377,13 @@ def canonical_search_titles(titles: Sequence[Any],
         # otherwise be handed a pure software list with its own occupation
         # erased - measured: a nurse plus `general_software` produced eleven
         # software titles and zero nursing ones.
-        kept: List[str] = []
+        #
+        # An engineering discipline the tech vocabulary has no phrase for
+        # (power, electrical, civil...) leads, read off the titles and the
+        # degrees: it is the search a power-systems graduate actually wants,
+        # where their held titles were assistantships.
+        kept: List[str] = _discipline_role_names(titles, degrees)
+        passed: List[str] = []
         for raw in titles or []:
             text = str(raw or "").strip()
             if not text:
@@ -323,8 +396,10 @@ def canonical_search_titles(titles: Sequence[Any],
                 # discipline, which is the closest honest reading available.
                 text = re.sub(r"[\s,\-/|]*\b(intern|internship)\b[\s.]*$", "",
                               text, flags=re.IGNORECASE).strip(" ,-/|")
-            if text:
-                kept.append(text)
+            if text and text.lower() not in {k.lower() for k in kept + passed}:
+                passed.append(text)
+        targets = [t for t in passed if not _NOT_A_TARGET.search(t)]
+        kept.extend(targets if (targets or kept) else passed)
         return kept[:cap]
 
     # Breadth from the SPECIALTIES the taxonomy read off the resume, not only
@@ -537,14 +612,23 @@ def public_title_seed(user_email: str) -> Dict[str, Any]:
         # titles the candidate has HELD (internships included) and
         # `synth_titles` are keyword strings; neither matches live postings.
         # See `canonical_search_titles`.
-        "match_titles": match_titles_for(user_email, resume_titles + synth),
+        "match_titles": match_titles_for(user_email, resume_titles + synth,
+                                         degrees=degrees_from_assets(assets)),
         "resume_count": len(assets),
         "cached": True,
     }
 
 
-def match_titles_for(user_email: str, titles: Sequence[Any]) -> List[str]:
-    """`canonical_search_titles` with this user's own specialties and level.
+def match_titles_for(user_email: str, titles: Sequence[Any],
+                     *, degrees: Optional[Sequence[Any]] = None) -> List[str]:
+    """`canonical_search_titles` with this user's own specialties, level,
+    degrees and DECLARED target roles.
+
+    The roles a user named in onboarding lead the input. They were read by the
+    scorer and never by the search: a data analyst whose only held title was
+    "Assistant Engineer" declared "Data Scientist" and "data analyst", and
+    searched for "Assistant Engineer" and "Professional Upskilling & Career
+    Break" - the second a gap on the resume, not a job.
 
     Degrades to the generic vocabulary on any failure rather than raising: a
     taxonomy or profile problem must cost a user precision, never their whole
@@ -556,6 +640,13 @@ def match_titles_for(user_email: str, titles: Sequence[Any]) -> List[str]:
     level: Optional[str] = None
     try:
         from services import fit_score
+
+        declared = fit_score.load_target_roles(user_email)
+        if declared:
+            held = {str(t or "").strip().lower() for t in titles or []}
+            titles = [t for t in declared if t.strip().lower() not in held] + list(titles or [])
+        if degrees is None:
+            degrees = degrees_from_assets(resume_access.list_parsed_assets(user_email))
 
         seen: set = set()
         best = -1
@@ -570,7 +661,7 @@ def match_titles_for(user_email: str, titles: Sequence[Any]) -> List[str]:
                 best, level = rank, profile.get("level")
     except Exception:
         logger.exception("match_titles_for: profile lookup failed for %s", user_email)
-    return canonical_search_titles(titles, specialties, level=level)
+    return canonical_search_titles(titles, specialties, level=level, degrees=degrees or ())
 
 
 def _cached_suggestions(stored: Dict[str, Any], fp: str) -> Optional[Dict[str, Any]]:

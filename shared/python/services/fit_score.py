@@ -783,6 +783,12 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
         "benefits specialist", "employee relations", "learning and development",
         "training specialist", "talent partner",
         "talent development", "workforce", "staffing coordinator",
+        # HR systems. "hris" was here and the platform names were not, so a
+        # Workday HCM analyst's own titles classified as nothing.
+        # Not bare "workday hcm": leftmost-first matching would file "Workday
+        # HCM Software Engineer" here.
+        "workday analyst", "hcm analyst", "workday consultant",
+        "hcm consultant", "hr systems", "people systems",
     ],
     "marketing": [
         "marketing manager", "marketing specialist", "marketing coordinator",
@@ -890,6 +896,15 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
         "validation engineer", "packaging engineer", "fire safety engineer",
         "facade engineer", "electronics engineer", "product engineer",
         "tooling engineer", "materials engineer", "reliability engineering",
+        # Power and utility engineering. None of these named a family, so a
+        # power-systems graduate's resume classified as nothing and the feed
+        # retrieved the whole market for them; stored postings fell through to
+        # their body and read `legal` ("Power Systems Studies Engineer II") or
+        # `operations` ("Senior Electrical Power Engineer").
+        "electrical power", "power systems engineer", "power system engineer",
+        "power engineer", "power systems studies", "substation engineer",
+        "protection engineer", "protection and control engineer",
+        "relay engineer", "electrical design", "electrical designer",
     ],
     "science_lab": [
         "lab technician", "laboratory technician", "research associate", "chemist",
@@ -1068,8 +1083,15 @@ _DISCIPLINE_FAMILIES: Sequence[Tuple[str, re.Pattern]] = (
         r"(?![a-z]).{0,40}?(?<![a-z])" + _EARLY_ROLE_NOUN + r"(?![a-z])|"
         r"(?<![a-z])" + _EARLY_ROLE_NOUN + r"(?![a-z]).{0,24}?(?<![a-z])"
         r"(machine learning|data science|applied science)(?![a-z])")),
+    # Also the DEGREE form, which is how `build_resume_profile` reads a resume
+    # whose titles name no discipline: "B.E. in Electrical and Electronics
+    # Engineering", "MS Power Systems Engineering". NOT bare "electronics and
+    # communication": in India that degree feeds software and data far more
+    # often than hardware, so it decides nothing on its own.
     ("hardware_engineering", re.compile(
-        r"(?<![a-z])(hardware|electrical|mechanical|firmware|embedded)\s+"
+        r"(?<![a-z])(hardware|electrical|mechanical|firmware|embedded|"
+        r"electronics|chemical|aerospace|industrial|manufacturing|materials|"
+        r"power|power systems?|electrical (and|&) electronics?)\s+"
         r"engineering(?![a-z])")),
 )
 
@@ -1512,6 +1534,28 @@ def level_with_employer(level: Any, title: Any, employer: Any,
             and _LEVEL_ORDER[by_years] > _LEVEL_ORDER[stated]:
         return by_years
     return stated
+
+
+_STUDENT_ROLE = re.compile(
+    r"(?<![a-z])(intern|interns|internship|co ?op|apprentice\w*|trainee|student|"
+    r"(graduate|research|teaching|service)\s+assistant\w*|assistantship|"
+    r"fellow|fellowship)(?![a-z])")
+
+
+def early_career_only(titles: Sequence[Any]) -> bool:
+    """True when the resume names roles and EVERY one was held as a student or
+    trainee: internships, co-ops, apprenticeships, graduate assistantships.
+
+    Their months still count as experience (`_resume_months` says why). What
+    they cannot do is make someone mid-level. A Master's student with an
+    internship, a trainee year and two assistantships sums to ~46 months, and
+    the years ladder put them on the MID board by default - where new-grad
+    postings, the ones they are applying to, were filtered out. One regular
+    role anywhere ("Software Engineer, Contract") and the ladder applies as
+    before.
+    """
+    named = [_norm(t) for t in titles or [] if str(t or "").strip()]
+    return bool(named) and all(_STUDENT_ROLE.search(t) for t in named)
 
 
 def title_level(title: Any) -> Optional[str]:
@@ -2410,12 +2454,22 @@ def build_resume_profile(resume: Dict[str, Any],
     titles = [str((e or {}).get("title") or "") for e in (resume.get("experience") or [])
               if isinstance(e, dict)]
     families = {f for f in (classify_role(t) for t in titles) if f}
-    if not families:
-        # Only from the summary, and only if a title yielded nothing. Never a
-        # default family.
-        fam = classify_role(resume.get("summary") or "")
-        if fam:
-            families.add(fam)
+    # Only when no title yielded a family, and each source only when every one
+    # before it yielded nothing: the summary, then the roles the user declared,
+    # then the degree. Never a default family.
+    #
+    # The later two exist because titles held while studying often name no
+    # discipline at all ("Graduate Research Assistant", "Intern"). A power-
+    # systems graduate's resume classified as nothing, and a resume with no
+    # family retrieves the WHOLE market, so they were shown software,
+    # nursing and billing roles above every electrical one we held.
+    degrees = [str((e or {}).get("degree") or "") + " "
+               + str((e or {}).get("field_of_study") or (e or {}).get("major") or "")
+               for e in (resume.get("education") or []) if isinstance(e, dict)]
+    for fallback in ([resume.get("summary") or ""], list(target_roles or ()), degrees):
+        if families:
+            break
+        families = {f for f in (classify_role(t) for t in fallback) if f}
     listed = set(find_skills(skills_text))
     applied = set(find_skills(exp_text))
     # Computed once: `level` reads it too, so a second `_resume_years` call
@@ -2428,6 +2482,9 @@ def build_resume_profile(resume: Dict[str, Any],
         "all_text": full_norm,
         "titles": [t for t in titles if t.strip()],
         "families": families,
+        # Specialties the titles held and the degrees name. Read only inside
+        # a shared legacy family (`_specialty_tier`).
+        "legacy_specialties": legacy_specialties(titles + degrees),
         # The CANONICAL occupation classification, on the same 14/101 tree the
         # postings are classified with. `families` above is the legacy 32-key
         # reading, kept because `job_postings.role_family` is written from it.
@@ -2561,6 +2618,11 @@ def resume_level(titles: Sequence[Any],
             best = level
 
     from_years = _level_from_years(years)
+    # Years cannot carry a resume past entry when every role on it was held
+    # as a student or trainee. See `early_career_only`.
+    if from_years is not None and early_career_only(titles) \
+            and _LEVEL_ORDER.get(from_years, -1) > _LEVEL_ORDER.get("entry", -1):
+        from_years = "entry"
     if from_years is not None and (
             best is None
             or _LEVEL_ORDER.get(from_years, -1) > _LEVEL_ORDER.get(best, -1)):
@@ -2757,6 +2819,83 @@ def _score_role(reqs: Dict[str, Any], prof: Dict[str, Any], job_title: str,
     return mx * weight, detail, tier == "unrelated", align
 
 
+#: Specialties inside a coarse legacy family.
+#:
+#: `hardware_engineering` holds electrical, mechanical, civil, chemical and
+#: aerospace engineering together, and `hr` holds HR systems, recruiting,
+#: total rewards and generalist work, so every one of them scored
+#: `same_family` against every other - the flatness `tech_taxonomy`'s
+#: specialties removed for software. Measured on live boards: a power-systems
+#: graduate saw "Mechanical Engineer" at 72 and 77 above "Electrical Design
+#: Engineer - Electric Power" at 62 (rank 64), and a Workday HCM analyst saw
+#: eleven "HR Generalist" postings above "Senior HRIS Analyst".
+#:
+#: Electrical leaves out "transmission" and "distribution": a gearbox and a
+#: warehouse use both words.
+_LEGACY_SPECIALTIES: Dict[str, Tuple[Tuple[str, re.Pattern], ...]] = {
+    "hardware_engineering": (
+        ("electrical", re.compile(
+            r"(?<![a-z])(electrical|electronics?|electric power|power systems?|"
+            r"power engineer\w*|substation|protection (and|&) control|relay|"
+            r"switchgear|high voltage|mechatronic\w*)(?![a-z])")),
+        ("mechanical", re.compile(
+            r"(?<![a-z])(mechanical|hvac|thermal|mechatronic\w*)(?![a-z])")),
+        ("civil", re.compile(r"(?<![a-z])(civil|structural|geotechnical)(?![a-z])")),
+        ("chemical", re.compile(r"(?<![a-z])chemical(?![a-z])")),
+        ("aerospace", re.compile(r"(?<![a-z])(aerospace|propulsion|avionics)(?![a-z])")),
+        ("manufacturing", re.compile(r"(?<![a-z])(manufacturing|industrial)(?![a-z])")),
+        ("materials", re.compile(r"(?<![a-z])(materials|metallurg\w*)(?![a-z])")),
+    ),
+    "hr": (
+        ("hr systems", re.compile(
+            r"(?<![a-z])(workday|hcm|hris|hr systems?|people systems|hr technology|"
+            r"successfactors|dayforce|ukg|ultipro|peoplesoft|people analytics|"
+            r"hr data)(?![a-z])")),
+        ("recruiting", re.compile(
+            r"(?<![a-z])(recruit\w*|talent acquisition|sourcer|sourcing)(?![a-z])")),
+        ("total rewards", re.compile(
+            r"(?<![a-z])(compensation|benefits|total rewards|payroll)(?![a-z])")),
+        ("hr generalist", re.compile(
+            r"(?<![a-z])(hr generalist|human resources generalist|hr business partner|"
+            r"hrbp|hr partner|people partner|employee relations|hr advisor|"
+            r"hr consultant)(?![a-z])")),
+    ),
+}
+
+
+def legacy_specialties(texts: Iterable[Any]) -> Set[str]:
+    """Every legacy-family specialty the texts name. Names are unique across
+    families, so one set serves every family."""
+    found: Set[str] = set()
+    for text in texts or []:
+        blob = _norm(text)
+        if not blob.strip():
+            continue
+        for specialties in _LEGACY_SPECIALTIES.values():
+            for name, pattern in specialties:
+                if pattern.search(blob):
+                    found.add(name)
+    return found
+
+
+def _specialty_tier(job_fam: str, job_title: str,
+                    prof: Dict[str, Any]) -> Optional[Tuple[str, float, str]]:
+    """Specialty match inside one legacy family, or None when either side
+    names no specialty of that family (which keeps `same_family`)."""
+    names = {name for name, _ in _LEGACY_SPECIALTIES.get(job_fam, ())}
+    mine = (prof.get("legacy_specialties") or set()) & names
+    theirs = legacy_specialties([job_title]) & names
+    if not mine or not theirs:
+        return None
+    shared = sorted(mine & theirs)
+    if shared:
+        return ("adjacent_specialty", 0.84,
+                f"Same specialty as your background - {shared[0]}.")
+    return ("adjacent_family", 0.46,
+            f"A different specialty from your background "
+            f"({_humanize(sorted(theirs))}, not {_humanize(sorted(mine))}).")
+
+
 def _legacy_role_tier(reqs: Dict[str, Any], prof: Dict[str, Any],
                       job_title: str) -> Optional[Tuple[str, float, str]]:
     """`(tier, weight, detail)` from the 32-key legacy families, or None.
@@ -2770,6 +2909,20 @@ def _legacy_role_tier(reqs: Dict[str, Any], prof: Dict[str, Any],
     if not job_fam or not fams:
         return None
     if job_fam in fams:
+        # A family only the BODY supplied earns partial credit, not a match.
+        # "Floral Department Manager" is stored `hr` because its posting
+        # mentions human resources, and was collecting same-family credit in
+        # an HRIS analyst's feed. Not None: an unknown component is EXCLUDED
+        # from the average (`_normalized_score`), which scores these rows
+        # HIGHER than a title-confirmed match - measured, it lifted
+        # "Engineering Technician I" from 77 to 83 on an electrical board.
+        if classify_role(job_title) is None:
+            return ("adjacent_family", 0.46,
+                    "This posting's title names no role; its description reads "
+                    "as your field.")
+        specialty = _specialty_tier(job_fam, job_title, prof)
+        if specialty is not None:
+            return specialty
         return ("same_family", 0.70,
                 "Your background is in the same role family as this posting.")
     if RELATED_FAMILIES.get(job_fam, set()) & fams:

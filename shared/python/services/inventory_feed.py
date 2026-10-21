@@ -425,15 +425,21 @@ def _role_families(titles: Iterable[str], skills: Iterable[str],
     """
     from services import fit_score
 
+    titles = [str(t or "").strip() for t in (titles or []) if str(t or "").strip()]
     out: List[str] = []
-    for value in list(titles or []):
-        fam = fit_score.classify_role(str(value or ""))
+    for value in titles:
+        fam = fit_score.classify_role(value)
         if fam and fam not in out:
             out.append(fam)
-    # Only widen a filter that already exists. With no titles the caller wants
-    # everything, and injecting the resume's families there would NARROW the
-    # feed instead of widening it.
-    if out:
+    # With NO titles the caller wants everything, and injecting the resume's
+    # families there would narrow the feed instead of widening it. Titles that
+    # are present but name no family are a different case: they are what a
+    # resume seeds when every role held was "Graduate Research Assistant" or
+    # "Intern", and reading them as "show me everything" handed a power-systems
+    # graduate the newest 4,000 postings of every occupation - billing,
+    # sleep-lab and software roles above every electrical one we held. Those
+    # titles say nothing; the resume does.
+    if out or titles:
         for fam in (resume_families or []):
             if fam and fam not in out:
                 out.append(str(fam))
