@@ -62,23 +62,31 @@ def main() -> int:
     print(f"mode: {'APPLY' if args.apply else 'dry-run'} | active postings: {jp.count_documents(q):,}")
     moves: collections.Counter = collections.Counter()
     samples: dict = collections.defaultdict(list)
-    ops, changed = [], 0
-    for doc in jp.find(q, {"_id": 1, "title_raw": 1, "role_family": 1}).batch_size(2000):
-        fam = new_family(doc)
-        if not fam:
-            continue
-        changed += 1
-        key = (doc.get("role_family") or "other", fam)
-        moves[key] += 1
-        if len(samples[key]) < 3:
-            samples[key].append(str(doc.get("title_raw") or "")[:52])
-        if args.apply:
-            ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": {"role_family": fam}}))
-            if len(ops) >= 500:
-                jp.bulk_write(ops, ordered=False)
-                ops = []
-    if ops:
-        jp.bulk_write(ops, ordered=False)
+    # Read in `_id` pages, each its own short query, and write only after the
+    # scan. One cursor held open across ~350k rows plus interleaved bulk
+    # writes outlived Atlas's cursor timeout on the first --apply run
+    # (CursorNotFound) - the dry run never wrote, so it never saw it.
+    ops, changed, last_id = [], 0, None
+    while True:
+        page_q = dict(q, **({"_id": {"$gt": last_id}} if last_id is not None else {}))
+        page = list(jp.find(page_q, {"_id": 1, "title_raw": 1, "role_family": 1})
+                    .sort("_id", 1).limit(5000))
+        if not page:
+            break
+        last_id = page[-1]["_id"]
+        for doc in page:
+            fam = new_family(doc)
+            if not fam:
+                continue
+            changed += 1
+            key = (doc.get("role_family") or "other", fam)
+            moves[key] += 1
+            if len(samples[key]) < 3:
+                samples[key].append(str(doc.get("title_raw") or "")[:52])
+            if args.apply:
+                ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": {"role_family": fam}}))
+    for i in range(0, len(ops), 500):
+        jp.bulk_write(ops[i:i + 500], ordered=False)
     print(f"postings whose family changes: {changed:,}")
     for (old, new), n in moves.most_common(40):
         print(f"  {old:>22} -> {new:<22} {n:>6,}   e.g. {samples[(old, new)]}")
