@@ -228,6 +228,12 @@ _EXPIRE_BATCH = 5000
 #: shown. A day bounds that to one re-insert a day, which is what the old daily
 #: sweep did, at the cost of holding at most one day of such rows.
 RELISTED_MIN_LIFETIME_HOURS = _env_int("JOB_INVENTORY_RELISTED_MIN_HOURS", 24)
+#: How long the identity of a deleted posting is remembered (`posting_sightings`).
+#: The posting row itself is deleted by the retention TTL while the board may
+#: still be listing it; this is what lets the NEXT crawl recognise it. Longer
+#: than any retention window, refreshed on every re-insert.
+SIGHTING_RETENTION_DAYS = _env_int("JOB_INVENTORY_SIGHTING_DAYS", 120)
+SIGHTINGS_INDEX_NAME = "ttl_sighting_expire_at"
 # `job_ingestion_runs` log retention. One row per shard run, and the shard
 # count is high enough (48 Workday + 64 career-pages + 48 Oracle + 96 iCIMS)
 # that 30 days accumulated 172,414 rows / 78 MiB purely to answer "what did the
@@ -257,6 +263,10 @@ def _db():
 
 def _postings():
     return _db().job_postings
+
+
+def _sightings():
+    return _db().posting_sightings
 
 
 def _source_state():
@@ -1266,7 +1276,7 @@ def upsert_posting(
     update = {
         "$set": mutable,
         "$setOnInsert": {
-            "job_id": uuid.uuid4().hex,
+            "job_id": posting_job_id(doc["source"], doc["source_job_id"]),
             "first_seen_at": now,
             "requirements": None,
             "closed_at": None,
@@ -1303,6 +1313,7 @@ def upsert_posting(
 
     if created:
         job_id = _postings().find_one(key, {"job_id": 1}).get("job_id")
+        job_id = _resume_sighting(key, job_id, doc, now) or job_id
     else:
         job_id = before.get("job_id")
 
@@ -1322,6 +1333,73 @@ def upsert_posting(
         "reopened": reopened,
         "content_hash": doc["content_hash"],
     }
+
+
+def posting_job_id(source: str, source_job_id: str) -> str:
+    """The `job_id` a posting is inserted with: a function of its identity.
+
+    It was `uuid4()`, so a posting deleted by the retention TTL while its board
+    still listed it came back on the next crawl as a DIFFERENT job: Rippling,
+    JazzHR, iCIMS and Atlassian publish no date on the listing, an undated row
+    expires `max_age_days_for` after it was first seen, and a requisition open
+    for three weeks was reborn twice with a new id and "First seen today". The
+    user saw it again under Today, and every reference held by the old id - a
+    hidden card, a dismissal, an un-pinned save - no longer matched it.
+    Same 32 hex characters as before, so no reader can tell the difference.
+    """
+    digest = hashlib.sha1(f"{source}\x1f{source_job_id}".encode("utf-8"))
+    return digest.hexdigest()[:32]
+
+
+def _resume_sighting(key: Dict[str, Any], job_id: str, doc: Dict[str, Any],
+                     now: datetime) -> Optional[str]:
+    """Remember a newly inserted posting; restore it if it was seen before.
+
+    `posting_sightings` holds one tiny row per `(source, source_job_id)` that
+    outlives the posting row. On a re-insert it gives back the ORIGINAL
+    `first_seen_at` (so an undated requisition is not presented as new and its
+    retention clock does not restart) and the ORIGINAL `job_id` (rows inserted
+    before `posting_job_id` carry a random one). Returns the job id the row now
+    has, or None when nothing changed. Best-effort: a failure here leaves the
+    posting exactly as it was inserted, which is the old behaviour.
+    """
+    try:
+        sid = f"{key['source']}\x1f{key['source_job_id']}"
+        prior = _sightings().find_one_and_update(
+            {"_id": sid},
+            {"$setOnInsert": {"first_seen_at": now, "job_id": job_id},
+             "$set": {"expire_at": now + timedelta(days=SIGHTING_RETENTION_DAYS),
+                      "last_inserted_at": now}},
+            upsert=True, return_document=ReturnDocument.BEFORE)
+    except Exception as exc:      # pragma: no cover - identity memory is additive
+        logger.debug("upsert_posting: sighting unavailable: %s", exc)
+        return None
+    if not prior:
+        return None
+    restore: Dict[str, Any] = {}
+    first = _safe_dt(prior.get("first_seen_at"))
+    if first is not None and first < now:
+        restore["first_seen_at"] = first
+        restore["expire_at"] = retention_expiry(
+            doc.get("posted_at"), now, doc.get("seniority"), first_seen=first)
+    old_id = _safe_str(prior.get("job_id"), 64)
+    if old_id and old_id != job_id and not _postings().find_one(
+            {"job_id": old_id}, {"_id": 1}):
+        restore["job_id"] = old_id
+    if not restore:
+        return None
+    try:
+        _postings().update_one(dict(key, pinned={"$ne": True}), {"$set": restore})
+    except Exception as exc:      # pragma: no cover
+        logger.debug("upsert_posting: sighting restore failed: %s", exc)
+        return None
+    return restore.get("job_id")
+
+
+def ensure_sightings_index() -> str:
+    """TTL on `posting_sightings.expire_at`. Idempotent; see the watchdog."""
+    return _sightings().create_index(
+        [("expire_at", 1)], name=SIGHTINGS_INDEX_NAME, expireAfterSeconds=0)
 
 
 def _has_body(doc: Dict[str, Any]) -> bool:
@@ -1805,18 +1883,24 @@ def is_pinned(job_id: str) -> bool:
 # run - they are now the belt, and they own the early purge of postings a board
 # has CLOSED, which dates alone cannot see.
 
-def retention_expiry(posted_at: Any, now: datetime, seniority: Any = None) -> datetime:
+def retention_expiry(posted_at: Any, now: datetime, seniority: Any = None,
+                     *, first_seen: Optional[datetime] = None) -> datetime:
     """When a posting first seen at ``now`` stops being worth storing.
 
     Anchored on the posting's own date, never later than ``now``: a board that
     publishes a future date (2027-01-01 was on live data) cannot buy a longer
-    life. Floored at ``RELISTED_MIN_LIFETIME_HOURS`` for a posting that arrives
-    already past the window - see that constant.
+    life. An UNDATED posting is anchored on when it was first seen, which is
+    ``now`` unless `posting_sightings` remembers an earlier sighting. Floored at
+    ``RELISTED_MIN_LIFETIME_HOURS`` for a posting that arrives already past the
+    window - see that constant.
     """
     anchor = now
     posted = _safe_dt(posted_at)
+    seen = _safe_dt(first_seen)
     if posted is not None and posted < now:
         anchor = posted
+    elif posted is None and seen is not None and seen < now:
+        anchor = seen
     return max(anchor + timedelta(days=max_age_days_for(seniority)),
                now + timedelta(hours=RELISTED_MIN_LIFETIME_HOURS))
 

@@ -198,6 +198,7 @@ def run(*, apply: bool, max_gib: float) -> int:
     if apply:
         lines.append("### Repairs")
         step("TTL index", inv.ensure_retention_index)
+        step("sightings TTL index", inv.ensure_sightings_index)
         step("pins", lambda: _load_pin_backfill().pin_user_attached(db, apply=True, now=now))
         step("expiry backfilled", inv.backfill_retention_expiry)
         step("closed & due purged", lambda: inv.purge_expired(limit=500_000, now=now))

@@ -247,7 +247,9 @@ class TestAConfigBoardWhoseResponseIsTheList:
             "applyUrl": "https://globalcareers-atlassian.icims.com/jobs/25480/x"}])
         assert len(jobs) == 1
         job = jobs[0]
-        assert job.source_job_id == "25480" and job.apply_url.endswith("/jobs/25480/x")
+        assert job.source_job_id == "25480"
+        # Atlassian's own job page, never the iCIMS shell (see the row).
+        assert job.apply_url == "https://www.atlassian.com/company/careers/details/25480"
         assert job.location.startswith("Bengaluru - India") and "Seattle - United States" in job.location
         from services import job_inventory_service as inv
         assert inv.normalize_location(job.location)["country_code"] == "US"

@@ -74,3 +74,18 @@ def _reset_mongomock_indexes():
         except Exception:
             pass
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_posting_sightings():
+    """`posting_sightings` outlives `job_postings` BY DESIGN - it is how a
+    re-inserted posting gets its original `first_seen_at` and `job_id` back
+    (`job_inventory_service._resume_sighting`). In one shared mongomock
+    database that would let one test's sighting re-date another test's
+    posting, so every test starts without any."""
+    from _vg_support import current_db as _cdb
+    try:
+        _cdb()["posting_sightings"].delete_many({})
+    except Exception:
+        pass
+    yield

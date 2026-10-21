@@ -687,7 +687,17 @@ CUSTOM_BOARD_ADAPTERS: Tuple[Dict[str, Any], ...] = (
             "location": ["locations"],
             "department": ["category"],
             "employment_type": ["type"],
-            "apply_url": ["applyUrl", "portalJobPost.portalUrl"],
+            # The link a candidate opens is Atlassian's own job page, not the
+            # iCIMS `applyUrl`. Re-probed 2026-10-21: every iCIMS link (six
+            # different hosts, `careers-americas.icims.com` for most US rows)
+            # answers 200 with the same ~479 KB Atlassian-branded shell, and a
+            # requisition id that does not exist returns the same page. The job
+            # is loaded later by script into an `in_iframe=1` frame, so the
+            # link shows no job in some browsers and reads as broken.
+            # `/company/careers/details/<id>` renders the posting server-side
+            # and carries its own Apply button into the right iCIMS portal.
+            "apply_url_template":
+                "https://www.atlassian.com/company/careers/details/{source_job_id}",
             # No posting date is published; `updatedDate` moves on every edit
             # and would re-date an old requisition as new, so it is not mapped
             # and the row stays DATE_UNKNOWN.
