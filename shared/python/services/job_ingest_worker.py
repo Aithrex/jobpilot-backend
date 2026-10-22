@@ -823,6 +823,12 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {"vendor": "paycor", "tenant": "8a7883c66ee9a5cc016ef0ea2d5b06cb",
      "site": "", "host": "recruitingbypaycor.com",
      "display_name": "Spring Arbor University", "industry": "education"},
+    # BreezyHR: destroai.com/careers links destro-ai.breezy.hr/. The research
+    # matrix recorded one role; the board held 13 (two same-title roles in
+    # different cities are different requisitions).
+    {"vendor": "breezy", "tenant": "destro-ai", "site": "",
+     "host": "destro-ai.breezy.hr", "display_name": "Destro AI",
+     "industry": "tech"},
 )
 
 
