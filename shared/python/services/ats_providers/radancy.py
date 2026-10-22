@@ -84,7 +84,8 @@ class RadancyProvider(AtsProvider):
                  # page, same public /api/jobs contract, verified 2026-10-21
                  # (docs/audit/direct-employer-onboarding.md). Named hosts only.
                  "jobs.echostar.com", "jobs.firstcitizens.com", "careers.ice.com",
-                 "jobs.exeloncorp.com")
+                 "jobs.exeloncorp.com", "jobs.constellationenergy.com",
+                 "careers.pplweb.com")
     portal_hosts = api_hosts
 
     policy = CrawlPolicy(

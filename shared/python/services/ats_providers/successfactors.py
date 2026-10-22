@@ -302,6 +302,14 @@ class SuccessFactorsProvider(AtsProvider):
         "jobs.pseg.com",
         "careers.hubbell.com",
         "careers.bv.com",
+        "careers.pacificorp.com",
+        "careers.wecenergygroup.com",
+        "careers.aps.com",
+        "careers.centerpointenergy.com",
+        "jobs.pse.com",
+        "careers.landisgyr.com",
+        "careers.southwire.com",
+        "careers.westinghousenuclear.com",
     )
     portal_hosts = api_hosts
 

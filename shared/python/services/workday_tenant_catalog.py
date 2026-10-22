@@ -1076,6 +1076,8 @@ WORKDAY_TENANT_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Swift", "tenant": "swift", "wd_host": "wd3", "site": "Join-Swift", "industry": "fintech"},
     {"display_name": "The Home Depot", "tenant": "homedepot", "wd_host": "wd5", "site": "CareerDepot", "industry": "ecommerce_retail"},
     {"display_name": "Alteryx", "tenant": "alteryx", "wd_host": "wd108", "site": "AlteryxCareers", "industry": "tech"},
+    {"display_name": "NiSource", "tenant": "nisource", "wd_host": "wd1", "site": "NiSource", "industry": "energy"},
+    {"display_name": "Schweitzer Engineering Laboratories", "tenant": "selinc", "wd_host": "wd1", "site": "SEL", "industry": "energy"},
 ]
 
 INDUSTRIES: List[str] = sorted({row["industry"] for row in WORKDAY_TENANT_CATALOG})

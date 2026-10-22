@@ -1,6 +1,6 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T05:09:44Z",
+ "generated_at": "2026-10-22T05:28:59Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
@@ -4437,16 +4437,16 @@
    ]
   },
   "top": {
-   "denominator": 130,
+   "denominator": 166,
    "counts": {
     "existing_covered": 76,
     "existing_unhealthy_or_moved": 7,
-    "new_validated": 18,
+    "new_validated": 38,
     "excluded": 0,
     "review": 0,
-    "blocked": 10,
-    "unsupported": 7,
-    "pending": 12
+    "blocked": 17,
+    "unsupported": 8,
+    "pending": 20
    },
    "rows": [
     {
@@ -9441,6 +9441,1216 @@
       "member_key": "workday-analogdevices-external"
      },
      "domain_group": "electrical_power"
+    },
+    {
+     "company": "FirstEnergy",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "firstenergycorp.com",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "fa-etjd-saasfaprod1",
+      "site": "CX_1",
+      "host": "fa-etjd-saasfaprod1.fa.ocs.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "oracle_orc-fa-etjd-saasfaprod1-cx_1",
+     "provider_needed": "",
+     "note": "careers.firstenergycorp.com is an ORC vanity front end; its page names pod fa-etjd-saasfaprod1, site FirstEnergyCareers in the hash route and CX_1 in the API config.",
+     "validation": {
+      "at": "2026-10-22T05:19:38Z",
+      "vendor": "oracle_orc",
+      "status": "budget_limited",
+      "source_reported": 334,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Transmission & Substation Services Engineer",
+       "Readiness Coordinator III - PA Work Management - Warren",
+       "Manager, Strategic Category Management"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-fa-etjd-saasfaprod1-cx_1"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Evergy",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "evergy.com",
+     "provider": "taleo",
+     "endpoint": {
+      "vendor": "taleo",
+      "tenant": "evergy",
+      "site": "",
+      "host": "evergy.taleo.net",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation blocked",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "Official page links evergy.taleo.net (evergy_external_career_section).",
+     "validation": {
+      "at": "2026-10-22T05:19:42Z",
+      "vendor": "taleo",
+      "status": "blocked",
+      "source_reported": null,
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [],
+      "detail": "",
+      "member_key": "taleo-evergy"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "PacifiCorp",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "pacificorp.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "pacificorp",
+      "site": "",
+      "host": "careers.pacificorp.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-pacificorp",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:19:42Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 87,
+      "unique_ids": 87,
+      "duplicate_rows": 0,
+      "requisitions": 87,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Logistics Specialist I",
+       "Journeyman Lineman",
+       "Journeyman Meter Relay Technician"
+      ],
+      "detail": "",
+      "member_key": "successfactors-pacificorp"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "PPL",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "pplweb.com",
+     "provider": "radancy",
+     "endpoint": {
+      "vendor": "radancy",
+      "tenant": "pplweb",
+      "site": "",
+      "host": "careers.pplweb.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy-pplweb",
+     "provider_needed": "",
+     "note": "The official page links careers-pplweb.icims.com, which now redirects to careers.pplweb.com/jobs - an iCIMS Jibe front end (observed 2026-10-21). Recorded as a move, read via /api/jobs.",
+     "validation": {
+      "at": "2026-10-22T05:28:35Z",
+      "vendor": "radancy",
+      "status": "complete",
+      "source_reported": 168,
+      "parsed": 168,
+      "unique_ids": 168,
+      "duplicate_rows": 0,
+      "requisitions": 168,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Craft Worker Intern \u2013 Electric Meter Technician",
+       "Regional Design Supervisor",
+       "Power Plant Environmental Coordinator I, II or III"
+      ],
+      "detail": "",
+      "member_key": "radancy-pplweb"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "WEC Energy Group",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "wecenergygroup.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "wecenergygroup",
+      "site": "",
+      "host": "careers.wecenergygroup.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-wecenergygroup",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:19:48Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 74,
+      "unique_ids": 74,
+      "duplicate_rows": 0,
+      "requisitions": 74,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Enterprise Applications Developer",
+       "General Supervisor - System Operations",
+       "Locator"
+      ],
+      "detail": "",
+      "member_key": "successfactors-wecenergygroup"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "NiSource",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "nisource.com",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "nisource",
+      "site": "NiSource",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "workday_tenant_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "nisource",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:19:52Z",
+      "vendor": "workday",
+      "status": "complete",
+      "source_reported": 37,
+      "parsed": 37,
+      "unique_ids": 37,
+      "duplicate_rows": 0,
+      "requisitions": 37,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Scheduling Leader",
+       "Technical Accounting Project Manager (hybrid)",
+       "Financial Systems Manager (hybrid)"
+      ],
+      "detail": "",
+      "member_key": "workday-nisource-nisource"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Arizona Public Service",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "aps.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "aps",
+      "site": "",
+      "host": "careers.aps.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-aps",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:19:53Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 10,
+      "unique_ids": 10,
+      "duplicate_rows": 0,
+      "requisitions": 10,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "IT Integration Communications Specialist II, III, Senior",
+       "Supervisor Renewables Engineering",
+       "System Operations Planner Senior"
+      ],
+      "detail": "",
+      "member_key": "successfactors-aps"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "CenterPoint Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "centerpointenergy.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "centerpointenergy",
+      "site": "",
+      "host": "careers.centerpointenergy.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-centerpointenergy",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:19:55Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 28,
+      "unique_ids": 28,
+      "duplicate_rows": 0,
+      "requisitions": 28,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Supply Chain Summer Internship 2027",
+       "Bilingual Media Relations Representative/Spokesperson (Gas)",
+       "Electrical Engineering Summer Internship 2027"
+      ],
+      "detail": "",
+      "member_key": "successfactors-centerpointenergy"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Puget Sound Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "pse.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "pse",
+      "site": "",
+      "host": "jobs.pse.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-pse",
+     "provider_needed": "",
+     "note": "pse.com/en/careers redirects to jobs.pse.com (RMK).",
+     "validation": {
+      "at": "2026-10-22T05:19:59Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 49,
+      "unique_ids": 49,
+      "duplicate_rows": 0,
+      "requisitions": 49,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Engineer I - Substation Controls",
+       "Engineer III - Substation Controls",
+       "Senior Engineer - Substation Controls"
+      ],
+      "detail": "",
+      "member_key": "successfactors-pse"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Constellation Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "constellationenergy.com",
+     "provider": "radancy",
+     "endpoint": {
+      "vendor": "radancy",
+      "tenant": "constellationenergy",
+      "site": "",
+      "host": "jobs.constellationenergy.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy-constellationenergy",
+     "provider_needed": "",
+     "note": "iCIMS Jibe front end (careers-constellationenergy.icims.com).",
+     "validation": {
+      "at": "2026-10-22T05:20:01Z",
+      "vendor": "radancy",
+      "status": "budget_limited",
+      "source_reported": 343,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Operational Technology Compliance Engineer",
+       "Associate AI Solutions Specialist",
+       "AI Solutions Specialist"
+      ],
+      "detail": "",
+      "member_key": "radancy-constellationenergy"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Schweitzer Engineering Laboratories",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "selinc.com",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "selinc",
+      "site": "SEL",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "workday_tenant_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "selinc",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:20:02Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Project Engineer I - SPS Automation",
+       "Project Engineer II - Protection (Ingenier\u00eda de Servicio)",
+       "Project Engineer II - Protection (Ingenier\u00eda de Servicio)"
+      ],
+      "detail": "",
+      "member_key": "workday-selinc-sel"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "S&C Electric",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "sandc.com",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "ejia",
+      "site": "CX_1001",
+      "host": "ejia.fa.us6.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "oracle_orc-ejia-cx_1001",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:20:14Z",
+      "vendor": "oracle_orc",
+      "status": "budget_limited",
+      "source_reported": 203,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Product Designer",
+       "Inside Sales Representative",
+       "Associate Technical Application Engineering Specialist"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-ejia-cx_1001"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Ulteig",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "ulteig.com",
+     "provider": "ukg",
+     "endpoint": {
+      "vendor": "ukg",
+      "tenant": "ULT1008ULTE",
+      "site": "71bc1da6-c7b0-4b37-9f7b-076d7d68c57b",
+      "host": "recruiting2.ultipro.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ukg-ult1008ulte-71bc1da6-c7b0-4b37-9f7b-076d7d68c57b",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:20:17Z",
+      "vendor": "ukg",
+      "status": "complete",
+      "source_reported": 109,
+      "parsed": 109,
+      "unique_ids": 109,
+      "duplicate_rows": 0,
+      "requisitions": 109,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Lead Construction Inspector- Colorado Per Diem",
+       "Transportation Design Engineer",
+       "Inside Sales Specialist"
+      ],
+      "detail": "",
+      "member_key": "ukg-ult1008ulte-71bc1da6-c7b0-4b37-9f7b-076d7d68c57b"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "HDR",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "hdrinc.com",
+     "provider": "taleo",
+     "endpoint": {
+      "vendor": "taleo",
+      "tenant": "hdr",
+      "site": "",
+      "host": "hdr.taleo.net",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "taleo-hdr",
+     "provider_needed": "",
+     "note": "Official page links hdr.taleo.net sections `ex` (external) and `iam`; the provider reads the portal the zone publishes.",
+     "validation": {
+      "at": "2026-10-22T05:20:19Z",
+      "vendor": "taleo",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Associate / Senior Associate Mechanical Engineer (Building Services)",
+       "Colorado ICT/Security Team Lead",
+       "Dakotas/Wyoming Area Operations Manager"
+      ],
+      "detail": "",
+      "member_key": "taleo-hdr"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Bechtel",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "bechtel.com",
+     "provider": "phenom",
+     "endpoint": {
+      "vendor": "phenom",
+      "tenant": "bechtel",
+      "site": "",
+      "host": "jobs.bechtel.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "phenom-bechtel",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:20:28Z",
+      "vendor": "phenom",
+      "status": "budget_limited",
+      "source_reported": 1150,
+      "parsed": 100,
+      "unique_ids": 100,
+      "duplicate_rows": 0,
+      "requisitions": 100,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Paralegal",
+       "Document Management Technician",
+       "Designer"
+      ],
+      "detail": "",
+      "member_key": "phenom-bechtel"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Emerson",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "emerson.com",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "hdjq",
+      "site": "CX_1",
+      "host": "hdjq.fa.us2.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "oracle_orc-hdjq-cx_1",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:20:33Z",
+      "vendor": "oracle_orc",
+      "status": "budget_limited",
+      "source_reported": 1169,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Team Leader Quickship Operations",
+       "Quality Inspector",
+       "Senior Specialist Graphics and Multimedia"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-hdjq-cx_1"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Vertiv",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "vertiv.com",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "egup",
+      "site": "CX",
+      "host": "egup.fa.us2.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "oracle_orc-egup-cx",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:20:35Z",
+      "vendor": "oracle_orc",
+      "status": "budget_limited",
+      "source_reported": 2385,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 199,
+      "filtered_non_requisition": 1,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "DCP- Electronics Engineering (Global)-SZ",
+       "IS-Mechanical Engineering(Global)-XA",
+       "IS- Mechanical Engineering (Global)-XA"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-egup-cx"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "First Solar",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "firstsolar.com",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "fa-esbv-saasfaprod1",
+      "site": "CX_1",
+      "host": "fa-esbv-saasfaprod1.fa.ocs.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "oracle_orc-fa-esbv-saasfaprod1-cx_1",
+     "provider_needed": "",
+     "note": "Official page links several sites on one pod (CX_1, CX_4, CX_7, CX_1001); CX_1 is the one validated here.",
+     "validation": {
+      "at": "2026-10-22T05:20:39Z",
+      "vendor": "oracle_orc",
+      "status": "budget_limited",
+      "source_reported": 260,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Development Engineer Technician I",
+       "Technician- Coater I  (Crew B)",
+       "Technician- Coater I  (Crew B)"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-fa-esbv-saasfaprod1-cx_1"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Landis+Gyr",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "landisgyr.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "landisgyr",
+      "site": "",
+      "host": "careers.landisgyr.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-landisgyr",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:20:41Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 60,
+      "unique_ids": 60,
+      "duplicate_rows": 0,
+      "requisitions": 60,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Product Manager",
+       "Field Service Representative I",
+       "Sr Engineer, Firmware Quality Assurance"
+      ],
+      "detail": "",
+      "member_key": "successfactors-landisgyr"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Southwire",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "southwire.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "southwire",
+      "site": "",
+      "host": "careers.southwire.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-southwire",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:20:44Z",
+      "vendor": "successfactors",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Electronic Technician",
+       "Sales eCommerce Intern",
+       "Operator, Drawing II"
+      ],
+      "detail": "",
+      "member_key": "successfactors-southwire"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Westinghouse Electric",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "westinghousenuclear.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "westinghousenuclear",
+      "site": "",
+      "host": "careers.westinghousenuclear.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-westinghousenuclear",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T05:21:01Z",
+      "vendor": "successfactors",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Nuclear Engineer, Safety Analysis",
+       "Utility Worker",
+       "Electrical Engineer 1"
+      ],
+      "detail": "",
+      "member_key": "successfactors-westinghousenuclear"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Sempra",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "sempra.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "sempra.com/careers answered 403 on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Tennessee Valley Authority",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "tva.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "tva.com/careers answered 403 on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Littelfuse",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "littelfuse.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "littelfuse.com/careers answered 403 on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Avangrid",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "avangrid.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "avangrid.com/careers timed out on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Oncor",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "oncor.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "oncor.com careers page timed out on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Siemens",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "siemens.com",
+     "provider": "avature",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:avature",
+     "member_key": "",
+     "provider_needed": "avature",
+     "note": "jobs.siemens.com is Avature.",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Kiewit",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "kiewit.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official link goes to an AllCraftJobs craft board only; the professional board was not observed",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Stantec",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "stantec.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official careers page served no ATS link",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Mott MacDonald",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "mottmac.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official careers page served no ATS link",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Jacobs",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "jacobs.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "jobs.jacobs.com does not resolve; current board not observed",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "NRG Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "nrg.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "nrg.com/careers.html answered 404",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Enphase Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "enphase.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official page uses a Jobvite link builder; tenant not in served HTML",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Mitsubishi Electric Power Products",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "meppi.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "Greenhouse referenced but no board token in served HTML",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Wabtec",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "wabteccorp.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "careers.wabtec.com is a custom front end over SmartRecruiters; company id not observed",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Fluor",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "fluor.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "careers.fluor.com is disallowed to our agent by robots.txt",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
     }
    ]
   },
@@ -9631,6 +10841,21 @@
   "Schneider Electric",
   "Eaton",
   "Burns & McDonnell",
-  "POWER Engineers"
+  "POWER Engineers",
+  "Evergy",
+  "Sempra",
+  "Tennessee Valley Authority",
+  "Littelfuse",
+  "Avangrid",
+  "Oncor",
+  "Kiewit",
+  "Stantec",
+  "Mott MacDonald",
+  "Jacobs",
+  "NRG Energy",
+  "Enphase Energy",
+  "Mitsubishi Electric Power Products",
+  "Wabtec",
+  "Fluor"
  ]
 }

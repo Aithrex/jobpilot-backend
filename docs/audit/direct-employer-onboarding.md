@@ -1,6 +1,6 @@
 # Direct-employer onboarding — outcomes per company
 
-Generated 2026-10-22T05:09:44Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
+Generated 2026-10-22T05:28:59Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
 
 **Coverage basis:** in-repo catalogs and seed tables the crawler loads (no production inventory was read). `existing_covered` means the crawl tables already carry the exact endpoint; it is not a claim about live inventory counts.
 
@@ -189,7 +189,7 @@ Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, revi
 
 ## Owner priority: top employers per domain
 
-Denominator: **130**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_validated: 18, blocked: 10, unsupported: 7, pending: 12
+Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_validated: 38, blocked: 17, unsupported: 8, pending: 20
 
 | company | domain | evidence | provider | endpoint | outcome | why | validated at | status | source | parsed | req | non-req |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -323,6 +323,42 @@ Denominator: **130**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | POWER Engineers | electrical_power | BLOCKED |  |  | blocked | powereng.com/careers redirects to wsp.com (now WSP), which answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
 | Texas Instruments | electrical_power | EXISTING | oracle_orc | `oracle_orc/edbz.fa.us2.oraclecloud.com/edbz/CX_1` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:24Z | budget_limited | 874 | 30 | 30 | 0 |
 | Analog Devices | electrical_power | EXISTING | workday | `workday/analogdevices/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:27Z | budget_limited | 318 | 30 | 30 | 0 |
+| FirstEnergy | electrical_power | CHAIN | oracle_orc | `oracle_orc/fa-etjd-saasfaprod1.fa.ocs.oraclecloud.com/fa-etjd-saasfaprod1/CX_1` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:19:38Z | budget_limited | 334 | 200 | 200 | 0 |
+| Evergy | electrical_power | CHAIN | taleo | `taleo/evergy.taleo.net/evergy` | blocked | not added; validation blocked | 2026-10-22T05:19:42Z | blocked |  | 0 | 0 | 0 |
+| PacifiCorp | electrical_power | CHAIN | successfactors | `successfactors/careers.pacificorp.com/pacificorp` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:19:42Z | complete |  | 87 | 87 | 0 |
+| PPL | electrical_power | CHAIN | radancy | `radancy/careers.pplweb.com/pplweb` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:28:35Z | complete | 168 | 168 | 168 | 0 |
+| WEC Energy Group | electrical_power | CHAIN | successfactors | `successfactors/careers.wecenergygroup.com/wecenergygroup` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:19:48Z | complete |  | 74 | 74 | 0 |
+| NiSource | electrical_power | CHAIN | workday | `workday/nisource/NiSource/wd1` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:19:52Z | complete | 37 | 37 | 37 | 0 |
+| Arizona Public Service | electrical_power | CHAIN | successfactors | `successfactors/careers.aps.com/aps` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:19:53Z | complete |  | 10 | 10 | 0 |
+| CenterPoint Energy | electrical_power | CHAIN | successfactors | `successfactors/careers.centerpointenergy.com/centerpointenergy` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:19:55Z | complete |  | 28 | 28 | 0 |
+| Puget Sound Energy | electrical_power | CHAIN | successfactors | `successfactors/jobs.pse.com/pse` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:19:59Z | complete |  | 49 | 49 | 0 |
+| Constellation Energy | electrical_power | CHAIN | radancy | `radancy/jobs.constellationenergy.com/constellationenergy` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:20:01Z | budget_limited | 343 | 200 | 200 | 0 |
+| Schweitzer Engineering Laboratories | electrical_power | CHAIN | workday | `workday/selinc/SEL/wd1` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:20:02Z | budget_limited |  | 200 | 200 | 0 |
+| S&C Electric | electrical_power | CHAIN | oracle_orc | `oracle_orc/ejia.fa.us6.oraclecloud.com/ejia/CX_1001` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:20:14Z | budget_limited | 203 | 200 | 200 | 0 |
+| Ulteig | electrical_power | CHAIN | ukg | `ukg/recruiting2.ultipro.com/ULT1008ULTE/71bc1da6-c7b0-4b37-9f7b-076d7d68c57b` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:20:17Z | complete | 109 | 109 | 109 | 0 |
+| HDR | electrical_power | CHAIN | taleo | `taleo/hdr.taleo.net/hdr` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:20:19Z | budget_limited |  | 200 | 200 | 0 |
+| Bechtel | electrical_power | CHAIN | phenom | `phenom/jobs.bechtel.com/bechtel` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:20:28Z | budget_limited | 1150 | 100 | 100 | 0 |
+| Emerson | electrical_power | CHAIN | oracle_orc | `oracle_orc/hdjq.fa.us2.oraclecloud.com/hdjq/CX_1` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:20:33Z | budget_limited | 1169 | 200 | 200 | 0 |
+| Vertiv | electrical_power | CHAIN | oracle_orc | `oracle_orc/egup.fa.us2.oraclecloud.com/egup/CX` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:20:35Z | budget_limited | 2385 | 200 | 199 | 1 |
+| First Solar | electrical_power | CHAIN | oracle_orc | `oracle_orc/fa-esbv-saasfaprod1.fa.ocs.oraclecloud.com/fa-esbv-saasfaprod1/CX_1` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:20:39Z | budget_limited | 260 | 200 | 200 | 0 |
+| Landis+Gyr | electrical_power | CHAIN | successfactors | `successfactors/careers.landisgyr.com/landisgyr` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:20:41Z | complete |  | 60 | 60 | 0 |
+| Southwire | electrical_power | CHAIN | successfactors | `successfactors/careers.southwire.com/southwire` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:20:44Z | budget_limited |  | 200 | 200 | 0 |
+| Westinghouse Electric | electrical_power | CHAIN | successfactors | `successfactors/careers.westinghousenuclear.com/westinghousenuclear` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:21:01Z | budget_limited |  | 200 | 200 | 0 |
+| Sempra | electrical_power | BLOCKED |  |  | blocked | sempra.com/careers answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
+| Tennessee Valley Authority | electrical_power | BLOCKED |  |  | blocked | tva.com/careers answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
+| Littelfuse | electrical_power | BLOCKED |  |  | blocked | littelfuse.com/careers answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
+| Avangrid | electrical_power | BLOCKED |  |  | blocked | avangrid.com/careers timed out on 2026-10-21 |  | not_run |  |  |  |  |
+| Oncor | electrical_power | BLOCKED |  |  | blocked | oncor.com careers page timed out on 2026-10-21 |  | not_run |  |  |  |  |
+| Siemens | electrical_power | FRONTEND | avature |  | unsupported | unsupported_pending_provider:avature |  | not_run |  |  |  |  |
+| Kiewit | electrical_power | PENDING |  |  | pending | official link goes to an AllCraftJobs craft board only; the professional board was not observed |  | not_run |  |  |  |  |
+| Stantec | electrical_power | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
+| Mott MacDonald | electrical_power | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
+| Jacobs | electrical_power | PENDING |  |  | pending | jobs.jacobs.com does not resolve; current board not observed |  | not_run |  |  |  |  |
+| NRG Energy | electrical_power | PENDING |  |  | pending | nrg.com/careers.html answered 404 |  | not_run |  |  |  |  |
+| Enphase Energy | electrical_power | PENDING |  |  | pending | official page uses a Jobvite link builder; tenant not in served HTML |  | not_run |  |  |  |  |
+| Mitsubishi Electric Power Products | electrical_power | PENDING |  |  | pending | Greenhouse referenced but no board token in served HTML |  | not_run |  |  |  |  |
+| Wabtec | electrical_power | PENDING |  |  | pending | careers.wabtec.com is a custom front end over SmartRecruiters; company id not observed |  | not_run |  |  |  |  |
+| Fluor | electrical_power | BLOCKED |  |  | blocked | careers.fluor.com is disallowed to our agent by robots.txt |  | not_run |  |  |  |  |
 
 ## Existing rows health-checked (no duplicates added)
 
@@ -361,4 +397,19 @@ Run `--validate --only <name>` after recording the official career page and the 
 - Eaton
 - Burns & McDonnell
 - POWER Engineers
+- Evergy
+- Sempra
+- Tennessee Valley Authority
+- Littelfuse
+- Avangrid
+- Oncor
+- Kiewit
+- Stantec
+- Mott MacDonald
+- Jacobs
+- NRG Energy
+- Enphase Energy
+- Mitsubishi Electric Power Products
+- Wabtec
+- Fluor
 

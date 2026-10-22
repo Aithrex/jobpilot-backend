@@ -113,6 +113,7 @@ class PhenomProvider(AtsProvider):
         "jobs.baesystems.com",
         "careers.snowflake.com",
         "careers.abb",
+        "jobs.bechtel.com",
         ".phenompeople.com",
     )
     portal_hosts = api_hosts

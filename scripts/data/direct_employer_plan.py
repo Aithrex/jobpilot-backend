@@ -472,7 +472,20 @@ TOP_EMPLOYERS: Dict[str, Any] = {
                          "Siemens Energy", "Hitachi Energy", "Schneider Electric",
                          "ABB", "Eaton", "Hubbell", "Quanta Services",
                          "Burns & McDonnell", "Black & Veatch", "Sargent & Lundy",
-                         "POWER Engineers", "Texas Instruments", "Analog Devices"],
+                         "POWER Engineers", "Texas Instruments", "Analog Devices",
+                         # Second pass (owner: power first). Utilities, grid
+                         # equipment, A/E power-design firms, EE manufacturers
+                         # that no crawl table carried.
+                         "FirstEnergy", "Evergy", "PacifiCorp", "PPL", "WEC Energy Group",
+                         "NiSource", "Arizona Public Service", "CenterPoint Energy",
+                         "Puget Sound Energy", "Constellation Energy",
+                         "Schweitzer Engineering Laboratories", "S&C Electric",
+                         "Ulteig", "HDR", "Bechtel", "Emerson", "Vertiv", "First Solar",
+                         "Landis+Gyr", "Southwire", "Westinghouse Electric",
+                         "Sempra", "Tennessee Valley Authority", "Littelfuse",
+                         "Avangrid", "Oncor", "Siemens", "Kiewit", "Stantec",
+                         "Mott MacDonald", "Jacobs", "NRG Energy", "Enphase Energy",
+                         "Mitsubishi Electric Power Products", "Wabtec", "Fluor"],
 }
 
 
@@ -487,6 +500,18 @@ def _blocked(reason: str, **kw: Any) -> Dict[str, Any]:
 
 def _pending(reason: str, **kw: Any) -> Dict[str, Any]:
     return dict(plan="pending", reason=reason, state="PENDING", **kw)
+
+
+def _cand(domain: str, endpoint: Dict[str, Any], career_url: str, *,
+          where: str = "seed", note: str = "") -> Dict[str, Any]:
+    return dict(domain=domain, state="CHAIN", plan="candidate", endpoint=endpoint,
+                where=where, industry="energy", career_url=career_url, note=note)
+
+
+def _added(*a: Any, **kw: Any) -> Dict[str, Any]:
+    out = _cand(*a, **kw)
+    out["plan"] = "added"
+    return out
 
 
 TOP_EMPLOYER_PLAN: Dict[str, Dict[str, Any]] = {
@@ -755,4 +780,97 @@ TOP_EMPLOYER_PLAN: Dict[str, Dict[str, Any]] = {
     "Burns & McDonnell": _pending("official link is burnsmcd.jobs (DirectEmployers); "
                                   "underlying ATS not established",
                                   domain="burnsmcd.com"),
+    # --- power, second pass ----------------------------------------------
+    "FirstEnergy": _added("firstenergycorp.com", _ep("oracle_orc", "fa-etjd-saasfaprod1", site="CX_1",
+                         host="fa-etjd-saasfaprod1.fa.ocs.oraclecloud.com"),
+                         "https://careers.firstenergycorp.com/",
+                         note="careers.firstenergycorp.com is an ORC vanity front end; its "
+                              "page names pod fa-etjd-saasfaprod1, site FirstEnergyCareers "
+                              "in the hash route and CX_1 in the API config."),
+    "Evergy": _cand("evergy.com", _ep("taleo", "evergy", host="evergy.taleo.net"),
+                    "https://www.evergy.com/careers",
+                    note="Official page links evergy.taleo.net "
+                         "(evergy_external_career_section)."),
+    "PacifiCorp": _added("pacificorp.com", _ep("successfactors", "pacificorp",
+                        host="careers.pacificorp.com"), "https://careers.pacificorp.com/"),
+    "PPL": _added("pplweb.com", _ep("radancy", "pplweb", host="careers.pplweb.com"),
+                 "https://www.pplweb.com/careers/",
+                 note="The official page links careers-pplweb.icims.com, which now "
+                      "redirects to careers.pplweb.com/jobs - an iCIMS Jibe front end "
+                      "(observed 2026-10-21). Recorded as a move, read via /api/jobs."),
+    "WEC Energy Group": _added("wecenergygroup.com", _ep("successfactors", "wecenergygroup",
+                              host="careers.wecenergygroup.com"),
+                              "https://careers.wecenergygroup.com/"),
+    "NiSource": _added("nisource.com", _ep("workday", "nisource", site="NiSource", wd_host="wd1"),
+                      "https://www.nisource.com/careers", where="workday_tenant_catalog"),
+    "Arizona Public Service": _added("aps.com", _ep("successfactors", "aps", host="careers.aps.com"),
+                                    "https://careers.aps.com/"),
+    "CenterPoint Energy": _added("centerpointenergy.com", _ep("successfactors", "centerpointenergy",
+                                host="careers.centerpointenergy.com"),
+                                "https://careers.centerpointenergy.com/"),
+    "Puget Sound Energy": _added("pse.com", _ep("successfactors", "pse", host="jobs.pse.com"),
+                                "https://www.pse.com/en/careers",
+                                note="pse.com/en/careers redirects to jobs.pse.com (RMK)."),
+    "Constellation Energy": _added("constellationenergy.com", _ep("radancy", "constellationenergy",
+                                  host="jobs.constellationenergy.com"),
+                                  "https://jobs.constellationenergy.com/careers-home",
+                                  note="iCIMS Jibe front end (careers-constellationenergy.icims.com)."),
+    "Schweitzer Engineering Laboratories": _added("selinc.com", _ep("workday", "selinc", site="SEL",
+                                                 wd_host="wd1"),
+                                                 "https://selinc.com/company/careers/",
+                                                 where="workday_tenant_catalog"),
+    "S&C Electric": _added("sandc.com", _ep("oracle_orc", "ejia", site="CX_1001",
+                          host="ejia.fa.us6.oraclecloud.com"), "https://www.sandc.com/en/careers/"),
+    "Ulteig": _added("ulteig.com", _ep("ukg", "ULT1008ULTE",
+                    site="71bc1da6-c7b0-4b37-9f7b-076d7d68c57b", host="recruiting2.ultipro.com"),
+                    "https://ulteig.com/careers/"),
+    "HDR": _added("hdrinc.com", _ep("taleo", "hdr", host="hdr.taleo.net"),
+                 "https://www.hdrinc.com/careers",
+                 note="Official page links hdr.taleo.net sections `ex` (external) and "
+                      "`iam`; the provider reads the portal the zone publishes."),
+    "Bechtel": _added("bechtel.com", _ep("phenom", "bechtel", host="jobs.bechtel.com"),
+                     "https://jobs.bechtel.com/"),
+    "Emerson": _added("emerson.com", _ep("oracle_orc", "hdjq", site="CX_1",
+                     host="hdjq.fa.us2.oraclecloud.com"), "https://www.emerson.com/en-us/careers"),
+    "Vertiv": _added("vertiv.com", _ep("oracle_orc", "egup", site="CX",
+                    host="egup.fa.us2.oraclecloud.com"), "https://www.vertiv.com/en-us/about/careers/"),
+    "First Solar": _added("firstsolar.com", _ep("oracle_orc", "fa-esbv-saasfaprod1", site="CX_1",
+                         host="fa-esbv-saasfaprod1.fa.ocs.oraclecloud.com"),
+                         "https://www.firstsolar.com/en/Careers",
+                         note="Official page links several sites on one pod (CX_1, CX_4, "
+                              "CX_7, CX_1001); CX_1 is the one validated here."),
+    "Landis+Gyr": _added("landisgyr.com", _ep("successfactors", "landisgyr",
+                        host="careers.landisgyr.com"),
+                        "https://www.landisgyr.com/us/en/home/careers"),
+    "Southwire": _added("southwire.com", _ep("successfactors", "southwire",
+                       host="careers.southwire.com"), "https://www.southwire.com/careers"),
+    "Westinghouse Electric": _added("westinghousenuclear.com", _ep("successfactors",
+                                   "westinghousenuclear", host="careers.westinghousenuclear.com"),
+                                   "https://westinghousenuclear.com/careers"),
+    "Sempra": _blocked("sempra.com/careers answered 403 on 2026-10-21", domain="sempra.com"),
+    "Tennessee Valley Authority": _blocked("tva.com/careers answered 403 on 2026-10-21",
+                                           domain="tva.com"),
+    "Littelfuse": _blocked("littelfuse.com/careers answered 403 on 2026-10-21",
+                           domain="littelfuse.com"),
+    "Avangrid": _blocked("avangrid.com/careers timed out on 2026-10-21", domain="avangrid.com"),
+    "Oncor": _blocked("oncor.com careers page timed out on 2026-10-21", domain="oncor.com"),
+    "Fluor": _blocked("careers.fluor.com is disallowed to our agent by robots.txt",
+                      domain="fluor.com"),
+    "Siemens": dict(plan="unsupported", state="FRONTEND", provider_needed="avature",
+                    domain="siemens.com", note="jobs.siemens.com is Avature."),
+    "Kiewit": _pending("official link goes to an AllCraftJobs craft board only; the "
+                       "professional board was not observed", domain="kiewit.com"),
+    "Stantec": _pending("official careers page served no ATS link", domain="stantec.com"),
+    "Mott MacDonald": _pending("official careers page served no ATS link",
+                               domain="mottmac.com"),
+    "Jacobs": _pending("jobs.jacobs.com does not resolve; current board not observed",
+                       domain="jacobs.com"),
+    "NRG Energy": _pending("nrg.com/careers.html answered 404", domain="nrg.com"),
+    "Enphase Energy": _pending("official page uses a Jobvite link builder; tenant "
+                               "not in served HTML", domain="enphase.com"),
+    "Mitsubishi Electric Power Products": _pending("Greenhouse referenced but no board "
+                                                   "token in served HTML", domain="meppi.com"),
+    "Wabtec": _pending("careers.wabtec.com is a custom front end over SmartRecruiters; "
+                       "company id not observed", domain="wabteccorp.com"),
 }
+
