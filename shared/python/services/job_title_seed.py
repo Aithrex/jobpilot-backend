@@ -201,6 +201,130 @@ def _discipline_role_names(titles: Sequence[Any], degrees: Sequence[Any]) -> Lis
     return out
 
 
+#: Version of the title SUGGESTIONS contract. A cached bundle without it was
+#: produced by the software-only synthesizer, which handed an electrical
+#: power graduate "Backend Engineer", "Software Development Engineer" and
+#: IT-support titles (reported 2026-10-21). Bumped whenever a stored bundle
+#: could be wrong for a domain it now handles.
+TITLE_SUGGESTION_VERSION = "suggest-2.0"
+
+#: Role names an engineering DISCIPLINE is actually posted under, beyond the
+#: one or two `_DISCIPLINE_ROLE_NAMES` lead with. Every entry is a literal
+#: title employers post - these are search terms, matched contiguously
+#: against `title_raw`, so a keyword string ("Electrical Engineer ETAP")
+#: would match nothing. Intern forms are added per level, never here.
+_DISCIPLINE_TITLES: Dict[str, Tuple[str, ...]] = {
+    "electrical": (
+        "Electrical Engineer", "Power Systems Engineer", "Electrical Design Engineer",
+        "Power Engineer", "Protection and Control Engineer", "Protection Engineer",
+        "Substation Engineer", "Relay Engineer", "Controls Engineer", "Electrical Project Engineer",
+        "Interconnection Engineer", "Grid Engineer", "Electrical Field Engineer",
+        "Renewable Energy Engineer", "Energy Engineer", "Electrical Engineer I",
+        "Associate Electrical Engineer", "Junior Electrical Engineer",
+    ),
+    "mechanical": (
+        "Mechanical Engineer", "Mechanical Design Engineer", "Design Engineer",
+        "Manufacturing Engineer", "Product Engineer", "HVAC Engineer",
+        "Mechanical Engineer I", "Associate Mechanical Engineer",
+    ),
+    "civil": (
+        "Civil Engineer", "Structural Engineer", "Geotechnical Engineer",
+        "Transportation Engineer", "Water Resources Engineer", "Civil Engineer I",
+    ),
+    "chemical": (
+        "Chemical Engineer", "Process Engineer", "Chemical Process Engineer",
+    ),
+    "aerospace": (
+        "Aerospace Engineer", "Propulsion Engineer", "Avionics Engineer",
+    ),
+}
+#: Which discipline `_DISCIPLINE_ROLE_NAMES`' first role name stands for.
+_DISCIPLINE_OF_NAME = {
+    "Power Systems Engineer": "electrical", "Electrical Engineer": "electrical",
+    "Mechanical Engineer": "mechanical", "Civil Engineer": "civil",
+    "Chemical Engineer": "chemical", "Aerospace Engineer": "aerospace",
+}
+
+#: Legacy role families that are a DIFFERENT occupation for someone whose
+#: background is a physical engineering discipline and who shows no software
+#: evidence: the software market and the IT-support desk. A title that names
+#: a physical domain ("Embedded Software Engineer", "Controls Engineer") is
+#: kept - that is the discipline's own software.
+_OFF_DISCIPLINE_FAMILIES = frozenset({
+    "software_engineering", "it_support", "devops", "qa", "security",
+    "customer_support",
+})
+_PHYSICAL_QUALIFIER = re.compile(
+    r"(?<![a-z])(embedded|firmware|fpga|hardware|controls?|plc|scada|power|"
+    r"electrical|electronics?|mechanical|robotics?|automation|substation|grid)"
+    r"(?![a-z])", re.IGNORECASE)
+
+#: Evidence that a résumé IS software work, so none of the above applies.
+#: Degrees count; a held or declared title that reads as software counts.
+_SOFTWARE_DEGREE = re.compile(
+    r"(?<![a-z])(computer science|software|information technology|"
+    r"computer engineering|data science|information systems|"
+    r"computer applications)(?![a-z])", re.IGNORECASE)
+
+
+def _is_software_title(title: Any) -> bool:
+    from services import fit_score
+
+    text = str(title or "").strip()
+    if not text:
+        return False
+    return (fit_score.classify_role(text) in _OFF_DISCIPLINE_FAMILIES
+            and not _PHYSICAL_QUALIFIER.search(text))
+
+
+def domain_title_plan(titles: Sequence[Any], degrees: Sequence[Any] = (),
+                      declared: Sequence[Any] = ()) -> Dict[str, Any]:
+    """Which occupation a résumé belongs to, for TITLE SUGGESTION purposes.
+
+    Returns ``{"discipline": key|None, "software": bool, "titles": [...]}``.
+    ``discipline`` is set only for a physical engineering discipline read off
+    the held titles, the declared targets or the degrees, AND only when
+    nothing in the résumé reads as software - a computer-science degree or a
+    software title held. In that case the software title vocabulary is the
+    wrong one entirely, and every consumer must use ``titles`` instead.
+
+    Deterministic and cheap: it is called on every title-seed GET.
+    """
+    held = [str(t or "").strip() for t in (titles or []) if str(t or "").strip()]
+    wanted = [str(t or "").strip() for t in (declared or []) if str(t or "").strip()]
+    degs = [str(d or "") for d in (degrees or [])]
+    software = (any(_is_software_title(t) for t in held + wanted)
+                or any(_SOFTWARE_DEGREE.search(d) for d in degs))
+    names = _discipline_role_names(held + wanted, degs)
+    discipline = next((_DISCIPLINE_OF_NAME[n] for n in names
+                       if n in _DISCIPLINE_OF_NAME), None)
+    if software or not discipline:
+        return {"discipline": None, "software": software, "titles": []}
+    ordered: List[str] = []
+    for title in names + list(_DISCIPLINE_TITLES.get(discipline, ())):
+        if title not in ordered:
+            ordered.append(title)
+    return {"discipline": discipline, "software": False, "titles": ordered}
+
+
+def off_domain_titles(candidates: Sequence[Any], plan: Dict[str, Any]) -> List[str]:
+    """The candidate titles that are a different occupation under ``plan``.
+
+    Empty unless the plan names a physical discipline - a software résumé, or
+    one we cannot place, keeps every title it has. Never removes a title the
+    plan itself proposes."""
+    if not plan.get("discipline"):
+        return []
+    own = {t.lower() for t in plan.get("titles") or []}
+    out: List[str] = []
+    for raw in candidates or []:
+        text = str(raw or "").strip()
+        if text and text.lower() not in own and _is_software_title(text) \
+                and text not in out:
+            out.append(text)
+    return out
+
+
 def degrees_from_assets(assets: List[Dict[str, Any]]) -> List[str]:
     """Every degree string across the parsed resumes, with its field."""
     out: List[str] = []
@@ -597,13 +721,44 @@ def public_title_seed(user_email: str) -> Dict[str, Any]:
     fp = fingerprint_assets(assets)
     resume_titles = union_titles_from_assets(assets)
     stored = load_title_seed(user_email)
+    if stored.get("fingerprint") != fp or stored.get("resume_titles") != resume_titles:
+        _persist_union(user_email, fp, resume_titles, stored)
+    return dict(search_titles_view(user_email, assets, stored),
+                resume_count=len(assets), cached=True)
+
+
+def search_titles_view(user_email: str, assets: List[Dict[str, Any]],
+                       stored: Dict[str, Any]) -> Dict[str, Any]:
+    """What a user SEARCHES with, computed without writing anything.
+
+    The single definition `public_title_seed` serves and the read-only feed
+    audit (`scripts/user_feed_fidelity_audit.py`) replays, so the audit can
+    never measure a search the product does not run.
+    """
+    fp = fingerprint_assets(assets)
+    resume_titles = union_titles_from_assets(assets)
     synth: List[str] = []
     if stored.get("synth_fingerprint") == fp:
         raw = stored.get("synth_titles") or []
         if isinstance(raw, list):
             synth = [str(t).strip() for t in raw if str(t).strip()][:TITLE_CAP]
-    if stored.get("fingerprint") != fp or stored.get("resume_titles") != resume_titles:
-        _persist_union(user_email, fp, resume_titles, stored)
+    degrees = degrees_from_assets(assets)
+    plan = domain_title_plan(resume_titles, degrees, _declared_targets(user_email))
+    # A stored synth from the software-only suggester carries software and
+    # IT-support titles for an electrical graduate. Folded into the search it
+    # did worse than add noise: ONE software title flips
+    # `canonical_search_titles` onto its technical branch, which never emits
+    # the discipline's own role names - "Electrical Engineer" disappeared.
+    stale = (stored.get("suggestions") or {}).get("workday_titles") or []
+    off = off_domain_titles(list(synth) + list(stale) + list(_ALWAYS_MATCHABLE), plan)
+    off_keys = {t.lower() for t in off}
+    synth = [t for t in synth if t.lower() not in off_keys]
+    match = match_titles_for(user_email, resume_titles + synth, degrees=degrees)
+    for title in plan.get("titles") or []:
+        if len(match) >= TITLE_CAP:
+            break
+        if title.lower() not in {m.lower() for m in match}:
+            match.append(title)
     return {
         "fingerprint": fp,
         "resume_titles": resume_titles,
@@ -612,11 +767,23 @@ def public_title_seed(user_email: str) -> Dict[str, Any]:
         # titles the candidate has HELD (internships included) and
         # `synth_titles` are keyword strings; neither matches live postings.
         # See `canonical_search_titles`.
-        "match_titles": match_titles_for(user_email, resume_titles + synth,
-                                         degrees=degrees_from_assets(assets)),
-        "resume_count": len(assets),
-        "cached": True,
+        "match_titles": match,
+        # Titles a client must drop from a SAVED chip set for this user: they
+        # are a different occupation (see `domain_title_plan`). Exact titles,
+        # so a client can remove them without classifying anything itself.
+        "off_domain_titles": off,
+        "discipline": plan.get("discipline"),
     }
+
+
+def _declared_targets(user_email: str) -> List[str]:
+    try:
+        from services import fit_score
+
+        return list(fit_score.load_target_roles(user_email) or [])
+    except Exception:
+        logger.debug("title_seed: target roles unavailable for %s", user_email)
+        return []
 
 
 def match_titles_for(user_email: str, titles: Sequence[Any],
@@ -664,12 +831,15 @@ def match_titles_for(user_email: str, titles: Sequence[Any],
     return canonical_search_titles(titles, specialties, level=level, degrees=degrees or ())
 
 
-def _cached_suggestions(stored: Dict[str, Any], fp: str) -> Optional[Dict[str, Any]]:
+def _cached_suggestions(stored: Dict[str, Any], fp: str,
+                        *, require_version: bool = False) -> Optional[Dict[str, Any]]:
     suggestions = stored.get("suggestions")
     if (
         stored.get("synth_fingerprint") == fp
         and isinstance(suggestions, dict)
         and (suggestions.get("workday_titles") or suggestions.get("linkedin_keyword_sets"))
+        and (not require_version
+             or suggestions.get("suggester_version") == TITLE_SUGGESTION_VERSION)
     ):
         return suggestions
     return None
@@ -694,7 +864,14 @@ def suggest_filters_cached(
 
     with _lock_for(user_email):
         stored = load_title_seed(user_email)
-        hit = _cached_suggestions(stored, fp)
+        # A résumé in a physical engineering discipline must not be served a
+        # bundle the software-only suggester produced; everyone else keeps
+        # their cache, so this costs no LLM call outside that population.
+        plan = domain_title_plan(union_titles_from_assets(assets),
+                                 degrees_from_assets(assets),
+                                 _declared_targets(user_email))
+        hit = _cached_suggestions(stored, fp,
+                                  require_version=bool(plan.get("discipline")))
         if hit is not None:
             logger.info("title_seed: cache hit fingerprint=%s user=%s", fp, user_email)
             return hit, True

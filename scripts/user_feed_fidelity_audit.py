@@ -83,6 +83,8 @@ from services import tech_taxonomy as tx  # noqa: E402
 from services.experience_view import _VIEW_OF_BAND  # noqa: E402
 
 OUT_DIR = ROOT / ".agents" / "tasks" / "feed-fidelity"
+#: G2's window: what a user checking the board daily must not miss.
+RECALL_DAYS = 3
 TABS = (inventory_feed.SOURCE_WORKDAY, inventory_feed.SOURCE_CAREER)
 
 #: Occupational domains. A row is ON-domain when any of its readings lands in
@@ -140,15 +142,12 @@ def board_titles(email: str) -> Dict[str, Any]:
     """`match_titles` exactly as `/jobs/title-seed` would compute them, minus
     the write `public_title_seed` makes to refresh its cache."""
     assets = resume_access.list_parsed_assets(email)
-    resume_titles = job_title_seed.union_titles_from_assets(assets)
-    stored = job_title_seed.load_title_seed(email)
-    synth: List[str] = []
-    if stored.get("synth_fingerprint") == job_title_seed.fingerprint_assets(assets):
-        synth = [str(t).strip() for t in (stored.get("synth_titles") or []) if str(t).strip()]
+    view = job_title_seed.search_titles_view(
+        email, assets, job_title_seed.load_title_seed(email))
     return {
-        "resume_titles": resume_titles,
-        "synth_titles": synth,
-        "match_titles": job_title_seed.match_titles_for(email, resume_titles + synth),
+        "resume_titles": view["resume_titles"],
+        "synth_titles": view["synth_titles"],
+        "match_titles": view["match_titles"],
         "resume_count": len(assets),
     }
 
@@ -245,6 +244,86 @@ def held_in_domain(domains: List[str]) -> int:
     })
 
 
+def _domain_query(domains: List[str]) -> Optional[Dict[str, Any]]:
+    ors: List[Dict[str, Any]] = []
+    for key in domains:
+        spec = DOMAINS.get(key) or {}
+        if spec.get("legacy"):
+            ors.append({"role_family": {"$in": sorted(spec["legacy"])}})
+        if spec.get("tech"):
+            ors.append({"tech.role_families": {"$in": sorted(spec["tech"])}})
+        if spec.get("title"):
+            ors.append({"title_raw": {"$regex": spec["title"], "$options": "i"}})
+    return {"$or": ors} if ors else None
+
+
+def missed_in_domain(domains: List[str], levels: List[str], board: Dict[str, Any],
+                     match_titles: List[str], days: int,
+                     cap: int = 5000) -> Dict[str, Any]:
+    """G2, per user: the in-domain postings they SHOULD be able to reach and
+    are not shown.
+
+    The population is what the board itself promises: active, US
+    (`us_geo.keep_us_posting`, the board's own rule), at one of the user's
+    levels (unknown always passes, as on the board), and new in the last
+    `days` - posted, or first seen when undated. Every held row is judged
+    with the same `judge` the top-N verdicts use, so "in domain" means one
+    thing in both numbers.
+
+    A row counts as shown when its job id OR its dedupe group is on the board:
+    collapsing a duplicate is not missing it. A miss is attributed to the
+    search when no match title occurs in its title (a vocabulary gap) and to
+    serving otherwise (ranking window, scoring, eligibility). Bounded by `cap`
+    and says so when it is hit.
+    """
+    from services import us_geo
+
+    base = _domain_query(domains)
+    if base is None:
+        return {"population": 0}
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    q = {"status": "active", "$and": [base, {"$or": [
+        {"posted_at": {"$gte": since}},
+        {"posted_at": None, "first_seen_at": {"$gte": since}}]}]}
+    proj = {"_id": 0, "job_id": 1, "title_raw": 1, "employer_name": 1, "locations": 1,
+            "seniority": 1, "dedupe_group_id": 1, "country_code": 1}
+    shown_ids = {str(r.get("job_id") or "") for r in board["rows"]}
+    shown_groups = {str(r.get("dedupe_group_id") or "") for r in board["rows"]} - {""}
+    patterns = [re.compile(r"(?<![A-Za-z0-9_])" + re.escape(t) + r"(?![A-Za-z0-9_])",
+                           re.IGNORECASE) for t in match_titles if t]
+    population = shown = 0
+    reasons: Dict[str, int] = {}
+    sample: List[Dict[str, Any]] = []
+    scanned = 0
+    for doc in _db().job_postings.find(q, proj).limit(cap):
+        scanned += 1
+        if not us_geo.keep_us_posting(doc) or not _in_levels(doc, levels):
+            continue
+        if judge(str(doc.get("title_raw") or ""), domains) != "on":
+            continue
+        population += 1
+        if (str(doc.get("job_id") or "") in shown_ids
+                or str(doc.get("dedupe_group_id") or "") in shown_groups):
+            shown += 1
+            continue
+        title = str(doc.get("title_raw") or "")
+        why = ("searched_not_served" if any(p.search(title) for p in patterns)
+               else "not_searched")
+        reasons[why] = reasons.get(why, 0) + 1
+        if len(sample) < 12:
+            sample.append({"title": title[:90], "company": doc.get("employer_name"),
+                           "why": why})
+    return {
+        "days": days,
+        "population": population,
+        "shown": shown,
+        "recall": round(shown / population, 3) if population else None,
+        "missed_by_reason": reasons,
+        "missed_sample": sample,
+        "truncated": scanned >= cap,
+    }
+
+
 def auto_domains(email: str) -> List[str]:
     """Fallback when no label is given: the resume's own taxonomy families."""
     fams: set = set()
@@ -294,6 +373,8 @@ def audit_user(email: str, domains: List[str], top: int, show: int) -> Dict[str,
         "on_top100": _share(100, "on"),
         "off_top10": verdicts[:10].count("off"),
         "held_in_domain": held_in_domain(domains),
+        "missed": missed_in_domain(domains, levels, board, seed["match_titles"],
+                                   days=RECALL_DAYS),
         "sample": [{"title": r.get("title"), "company": r.get("company"),
                     "score": r.get("match_score"), "verdict": v}
                    for r, v in list(zip(rows, verdicts))[:show]],
@@ -304,8 +385,8 @@ def _markdown(run: str, results: List[Dict[str, Any]]) -> str:
     lines = [f"# Feed fidelity scorecard {run}", "",
              "Read-only replay of the inventory-served For-you tabs. "
              "on/off = share of shown rows in / out of the user's domain.", "",
-             "| user | domains | resume fams | shown | on@25 | off@25 | off@10 | on@100 | held in-domain |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             "| user | domains | resume fams | shown | on@25 | off@25 | off@10 | on@100 | held in-domain | recall (new, own levels) | missed: not searched / not served |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in results:
         if r.get("error"):
             lines.append(f"| {r['user']} | error: {r['error']} |||||||")
@@ -314,7 +395,10 @@ def _markdown(run: str, results: List[Dict[str, Any]]) -> str:
             f"| {r['user']} | {','.join(r['domains']) or '-'} | "
             f"{','.join(r['resume_families']) or '-'} | {r['shown_total']} | "
             f"{r['on_top25']} | {r['off_top25']} | {r['off_top10']} | "
-            f"{r['on_top100']} | {r['held_in_domain']} |")
+            f"{r['on_top100']} | {r['held_in_domain']} | "
+            f"{(r.get('missed') or {}).get('recall')} of {(r.get('missed') or {}).get('population')} | "
+            f"{((r.get('missed') or {}).get('missed_by_reason') or {}).get('not_searched', 0)} / "
+            f"{((r.get('missed') or {}).get('missed_by_reason') or {}).get('searched_not_served', 0)} |")
     for r in results:
         if r.get("error"):
             continue
@@ -323,6 +407,11 @@ def _markdown(run: str, results: List[Dict[str, Any]]) -> str:
                   f"- levels: {r['levels'] or 'all'} · tabs: {r['tab_counts']}"]
         for s in r["sample"]:
             lines.append(f"  - [{s['verdict']}] {s['score']} · {s['title']} · {s['company']}")
+        missed = r.get("missed") or {}
+        if missed.get("missed_sample"):
+            lines.append(f"- missed (new in {missed.get('days')}d, own levels, US):")
+            for m in missed["missed_sample"]:
+                lines.append(f"  - [{m['why']}] {m['title']} · {m['company']}")
     return "\n".join(lines) + "\n"
 
 
@@ -354,7 +443,9 @@ def main() -> int:
         r = results[-1]
         print(f"{r['user']:10} {','.join(r.get('domains') or []):24} "
               f"on@25={r.get('on_top25')} off@10={r.get('off_top10')} "
-              f"held={r.get('held_in_domain')} {r.get('error') or ''}", flush=True)
+              f"held={r.get('held_in_domain')} "
+              f"recall={(r.get('missed') or {}).get('recall')}/"
+              f"{(r.get('missed') or {}).get('population')} {r.get('error') or ''}", flush=True)
 
     run = _utc_run_id()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
