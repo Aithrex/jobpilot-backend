@@ -481,3 +481,22 @@ def test_new_hosts_are_named_not_wildcards():
         assert host in registry.get(vendor).api_hosts
         assert jw.host_allowed(jw.source_of_vendor(vendor), f"https://{host}/api/jobs")
     assert not jw.host_allowed(jw.SOURCE_CAREER, "https://jobs.example-unknown.com/api/jobs")
+
+
+# ---------------------------------------------------------------------------
+# A dotted board token is crawled as the vendor spells it
+# ---------------------------------------------------------------------------
+
+def test_dotted_catalog_slug_keeps_its_dot_in_the_url_but_not_the_key():
+    members = {m["member_key"]: m for m in jw._load_career_members()}
+    m = members["ashby-mistral-ai"]          # key unchanged: no posting id moves
+    assert m["slug"] == "mistral.ai"
+    ep = jw._endpoint_from_member(m)
+    assert ep.tenant == "mistral.ai"
+    assert jw._board_token("Fathom.Video ") == "fathom.video"
+    assert jw._board_token("a/b?c") == "a-b-c"
+
+
+def test_moved_board_repaired_in_place():
+    members = {m["member_key"]: m for m in jw._load_career_members()}
+    assert "ashby-amplitude" in members and "greenhouse-amplitude" not in members
