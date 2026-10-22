@@ -317,6 +317,9 @@ class GreenhouseProvider(_BoardProvider):
         tenant = str(endpoint.tenant or "").strip()
         if region is None or not tenant:
             return ""
+        if region == "":
+            # US: unchanged default (`boards.greenhouse.io/<tenant>`).
+            return super().board_url(endpoint)
         return f"https://{self.REGION_BOARD_HOSTS[region]}/{tenant}"
 
     @staticmethod

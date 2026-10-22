@@ -104,7 +104,7 @@ def test_us_board_is_unchanged(gh):
 def test_board_url_is_region_specific(gh, eu_ep):
     assert gh.board_url(eu_ep) == f"{EU}/cognite"
     assert gh.board_url(Endpoint(vendor="greenhouse", tenant="hover")) == \
-        "https://job-boards.greenhouse.io/hover"
+        "https://boards.greenhouse.io/hover"
     assert gh.board_url(Endpoint(vendor="greenhouse", tenant="x", site="apac")) == ""
 
 
