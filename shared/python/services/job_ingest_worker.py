@@ -529,6 +529,21 @@ def _skip_unknown_vendor(ats: str, display_name: str, catalog: str) -> None:
         catalog, ats, display_name)
 
 
+#: A board token as the VENDOR spells it, for the URL. `_slug` turns "." into
+#: "-", which is right for a member KEY and wrong for a URL: the catalog's
+#: `mistral.ai`, `fathom.video`, `kraken.com`, `rivianvw.tech`, `arch.co` and
+#: `magic.dev` Ashby boards were requested as `mistral-ai` & co. and 404'd on
+#: every crawl (measured 2026-10-21: jobs.ashbyhq.com/mistral.ai holds 222
+#: postings, /mistral-ai none). The member key is unchanged, so no posting id
+#: moves; only the address the provider is handed is now the real one.
+_BOARD_TOKEN_RE = re.compile(r"[^a-z0-9._-]+")
+
+
+def _board_token(value: Any, limit: int = 120) -> str:
+    raw = str(value or "").strip().lower()
+    return _BOARD_TOKEN_RE.sub("-", raw).strip("-.")[:limit]
+
+
 def _load_career_members() -> List[Dict[str, Any]]:
     from services.career_pages_catalog import CAREER_PAGES_CATALOG
 
@@ -554,7 +569,7 @@ def _load_career_members() -> List[Dict[str, Any]]:
             "source": SOURCE_CAREER,
             "vendor": ats,
             "ats": ats,
-            "slug": slug,
+            "slug": _board_token(row.get("slug")) or slug,
             "display_name": str(row.get("display_name") or slug),
             "industry": str(row.get("industry") or "other"),
         })
@@ -618,7 +633,7 @@ def _load_career_members() -> List[Dict[str, Any]]:
                 "source": SOURCE_CAREER,
                 "vendor": ats,
                 "ats": ats,
-                "slug": slug,
+                "slug": _board_token(row.get("slug")) or slug,
                 "display_name": name,
                 "industry": _mnc_industry(row),
             })

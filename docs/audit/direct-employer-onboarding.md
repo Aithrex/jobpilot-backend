@@ -1,6 +1,6 @@
 # Direct-employer onboarding — outcomes per company
 
-Generated 2026-10-22T02:17:09Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
+Generated 2026-10-22T02:19:32Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
 
 **Coverage basis:** in-repo catalogs and seed tables the crawler loads (no production inventory was read). `existing_covered` means the crawl tables already carry the exact endpoint; it is not a claim about live inventory counts.
 
@@ -189,127 +189,127 @@ Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, revi
 
 ## Owner priority: top employers per domain
 
-Denominator: **130**. existing_covered: 84, new_validated: 17, blocked: 10, unsupported: 7, pending: 12
+Denominator: **130**. existing_covered: 75, existing_unhealthy_or_moved: 9, new_validated: 17, blocked: 10, unsupported: 7, pending: 12
 
 | company | domain | evidence | provider | endpoint | outcome | why | validated at | status | source | parsed | req | non-req |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Microsoft | software | EXISTING | eightfold | `eightfold/apply.careers.microsoft.com/microsoft` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Google | software | EXISTING | google_careers | `google_careers/www.google.com/google` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Apple | software | EXISTING | custom_apple | `custom_apple/jobs.apple.com/apple` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Amazon | software | EXISTING | amazon | `amazon/www.amazon.jobs/amazon` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Microsoft | software | EXISTING | eightfold | `eightfold/apply.careers.microsoft.com/microsoft` | existing_unhealthy_or_moved | validation blocked | 2026-10-22T02:17:30Z | blocked |  | 0 | 0 | 0 |
+| Google | software | EXISTING | google_careers | `google_careers/www.google.com/google` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:32Z | budget_limited |  | 30 | 30 | 0 |
+| Apple | software | EXISTING | custom_apple | `custom_apple/jobs.apple.com/apple` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:34Z | budget_limited |  | 30 | 30 | 0 |
+| Amazon | software | EXISTING | amazon | `amazon/www.amazon.jobs/amazon` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:36Z | budget_limited |  | 30 | 30 | 0 |
 | Meta | software | OWN | meta_careers |  | unsupported | unsupported_pending_provider:meta_careers |  | not_run |  |  |  |  |
-| Oracle | software | EXISTING | oracle_orc | `oracle_orc/eeho.fa.us2.oraclecloud.com/eeho/CX_1` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Salesforce | software | EXISTING | workday | `workday/salesforce/External_Career_Site/wd12` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Adobe | software | EXISTING | workday | `workday/adobe/external_experienced/wd5` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| IBM | software | EXISTING | custom_ibm | `custom_ibm/www-api.ibm.com/ibm` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Oracle | software | EXISTING | oracle_orc | `oracle_orc/eeho.fa.us2.oraclecloud.com/eeho/CX_1` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:37Z | budget_limited | 2367 | 30 | 30 | 0 |
+| Salesforce | software | EXISTING | workday | `workday/salesforce/External_Career_Site/wd12` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:41Z | budget_limited |  | 30 | 30 | 0 |
+| Adobe | software | EXISTING | workday | `workday/adobe/external_experienced/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:45Z | budget_limited | 195 | 30 | 30 | 0 |
+| IBM | software | EXISTING | custom_ibm | `custom_ibm/www-api.ibm.com/ibm` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:46Z | budget_limited |  | 30 | 30 | 0 |
 | Intuit | software | FRONTEND | radancy_talentbrew |  | unsupported | unsupported_pending_provider:radancy_talentbrew |  | not_run |  |  |  |  |
-| ServiceNow | software | EXISTING | smartrecruiters | `smartrecruiters/servicenow` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Workday | software | EXISTING | workday | `workday/workday/Workday/wd5` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Atlassian | software | EXISTING | custom_atlassian | `custom_atlassian/www.atlassian.com/atlassian` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| ServiceNow | software | EXISTING | smartrecruiters | `smartrecruiters/servicenow` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:48Z | budget_limited | 430 | 30 | 30 | 0 |
+| Workday | software | EXISTING | workday | `workday/workday/Workday/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:49Z | budget_limited |  | 30 | 30 | 0 |
+| Atlassian | software | EXISTING | custom_atlassian | `custom_atlassian/www.atlassian.com/atlassian` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:58Z | budget_limited |  | 30 | 30 | 0 |
 | Uber | software | OWN | uber_careers |  | unsupported | unsupported_pending_provider:uber_careers |  | not_run |  |  |  |  |
-| Airbnb | software | EXISTING | greenhouse | `greenhouse/airbnb` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Stripe | software | EXISTING | greenhouse | `greenhouse/stripe` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Airbnb | software | EXISTING | greenhouse | `greenhouse/airbnb` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:59Z | budget_limited | 193 | 30 | 30 | 0 |
+| Stripe | software | EXISTING | greenhouse | `greenhouse/stripe` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:00Z | budget_limited | 726 | 30 | 30 | 0 |
 | Shopify | software | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
-| Cisco | software | EXISTING | workday | `workday/cisco/Cisco_Careers/wd5` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Autodesk | software | EXISTING | workday | `workday/autodesk/Ext/wd1` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| PayPal | software | EXISTING | workday | `workday/paypal/jobs/wd1` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Block | software | EXISTING | greenhouse | `greenhouse/block` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Netflix | software | EXISTING | eightfold | `eightfold/explore.jobs.netflix.net/netflix` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| DoorDash | software | EXISTING | greenhouse | `greenhouse/doordashusa` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Cisco | software | EXISTING | workday | `workday/cisco/Cisco_Careers/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:00Z | budget_limited | 1479 | 30 | 30 | 0 |
+| Autodesk | software | EXISTING | workday | `workday/autodesk/Ext/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:02Z | budget_limited | 32 | 30 | 30 | 0 |
+| PayPal | software | EXISTING | workday | `workday/paypal/jobs/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:04Z | budget_limited |  | 30 | 30 | 0 |
+| Block | software | EXISTING | greenhouse | `greenhouse/block` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:10Z | budget_limited | 206 | 30 | 30 | 0 |
+| Netflix | software | EXISTING | eightfold | `eightfold/explore.jobs.netflix.net/netflix` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:10Z | budget_limited |  | 30 | 30 | 0 |
+| DoorDash | software | EXISTING | greenhouse | `greenhouse/doordashusa` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:12Z | budget_limited | 457 | 30 | 30 | 0 |
 | Bloomberg | software | BLOCKED |  |  | blocked | PerimeterX captcha (mnc_catalog record); not bypassed |  | not_run |  |  |  |  |
-| Qualcomm | software | EXISTING | eightfold | `eightfold/careers.qualcomm.com/qualcomm` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| OpenAI | ai_ml | EXISTING | ashby | `ashby/openai` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Anthropic | ai_ml | EXISTING | greenhouse | `greenhouse/anthropic` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Qualcomm | software | EXISTING | eightfold | `eightfold/careers.qualcomm.com/qualcomm` | existing_unhealthy_or_moved | validation blocked | 2026-10-22T02:18:13Z | blocked |  | 0 | 0 | 0 |
+| OpenAI | ai_ml | EXISTING | ashby | `ashby/openai` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:14Z | budget_limited |  | 30 | 30 | 0 |
+| Anthropic | ai_ml | EXISTING | greenhouse | `greenhouse/anthropic` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:17Z | budget_limited | 678 | 30 | 30 | 0 |
 | Google DeepMind | ai_ml | PENDING |  |  | pending | official careers page is client-rendered; board link not in served HTML |  | not_run |  |  |  |  |
-| NVIDIA | ai_ml | EXISTING | workday | `workday/nvidia/NVIDIAExternalCareerSite/wd5` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| xAI | ai_ml | EXISTING | greenhouse | `greenhouse/xai` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Scale AI | ai_ml | EXISTING | greenhouse | `greenhouse/scaleai` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Cohere | ai_ml | EXISTING | ashby | `ashby/cohere` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Perplexity | ai_ml | EXISTING | ashby | `ashby/perplexity` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Character.AI | ai_ml | EXISTING | ashby | `ashby/character` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Cursor | ai_ml | EXISTING | ashby | `ashby/cursor` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Hugging Face | ai_ml | EXISTING | workable | `workable/huggingface` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| NVIDIA | ai_ml | EXISTING | workday | `workday/nvidia/NVIDIAExternalCareerSite/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:18Z | budget_limited |  | 30 | 30 | 0 |
+| xAI | ai_ml | EXISTING | greenhouse | `greenhouse/xai` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:22Z | budget_limited | 293 | 30 | 30 | 0 |
+| Scale AI | ai_ml | EXISTING | greenhouse | `greenhouse/scaleai` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:23Z | budget_limited | 174 | 30 | 30 | 0 |
+| Cohere | ai_ml | EXISTING | ashby | `ashby/cohere` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:20Z | budget_limited |  | 30 | 30 | 0 |
+| Perplexity | ai_ml | EXISTING | ashby | `ashby/perplexity` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:22Z | budget_limited |  | 30 | 30 | 0 |
+| Character.AI | ai_ml | EXISTING | ashby | `ashby/character` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:22Z | complete |  | 13 | 13 | 0 |
+| Cursor | ai_ml | EXISTING | ashby | `ashby/cursor` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:23Z | budget_limited |  | 30 | 30 | 0 |
+| Hugging Face | ai_ml | EXISTING | workable | `workable/huggingface` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:24Z | complete |  | 6 | 6 | 0 |
 | Runway | ai_ml | CHAIN | ashby | `ashby/runway-ml` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:14:37Z | complete |  | 48 | 48 | 0 |
-| Glean | ai_ml | EXISTING | greenhouse | `greenhouse/gleanwork` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Harvey | ai_ml | EXISTING | ashby | `ashby/harvey` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Cerebras | ai_ml | EXISTING | ashby | `ashby/cerebras` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| SambaNova | ai_ml | EXISTING | greenhouse | `greenhouse/sambanovasystems` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Glean | ai_ml | EXISTING | greenhouse | `greenhouse/gleanwork` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:24Z | budget_limited | 120 | 30 | 30 | 0 |
+| Harvey | ai_ml | EXISTING | ashby | `ashby/harvey` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:25Z | budget_limited |  | 30 | 30 | 0 |
+| Cerebras | ai_ml | EXISTING | ashby | `ashby/cerebras` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:27Z | budget_limited |  | 30 | 30 | 0 |
+| SambaNova | ai_ml | EXISTING | greenhouse | `greenhouse/sambanovasystems` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:27Z | budget_limited | 61 | 30 | 30 | 0 |
 | Groq | ai_ml | PENDING |  |  | pending | groq.com/careers redirects to the homepage; no board link served |  | not_run |  |  |  |  |
-| Together AI | ai_ml | EXISTING | greenhouse | `greenhouse/togetherai` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Together AI | ai_ml | EXISTING | greenhouse | `greenhouse/togetherai` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:27Z | budget_limited | 79 | 30 | 30 | 0 |
 | Figure AI | ai_ml | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
-| Waymo | ai_ml | EXISTING | greenhouse | `greenhouse/waymo` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Aurora Innovation | ai_ml | EXISTING | greenhouse | `greenhouse/aurorainnovation` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Physical Intelligence | ai_ml | EXISTING | ashby | `ashby/physicalintelligence` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Mistral AI | ai_ml | EXISTING | ashby | `ashby/mistral-ai` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| ElevenLabs | ai_ml | EXISTING | ashby | `ashby/elevenlabs` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Abridge | ai_ml | EXISTING | ashby | `ashby/abridge` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Databricks | data_science | EXISTING | greenhouse | `greenhouse/databricks` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Waymo | ai_ml | EXISTING | greenhouse | `greenhouse/waymo` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:28Z | budget_limited | 361 | 30 | 30 | 0 |
+| Aurora Innovation | ai_ml | EXISTING | greenhouse | `greenhouse/aurorainnovation` | existing_unhealthy_or_moved | validation failed | 2026-10-22T02:18:28Z | failed |  | 0 | 0 | 0 |
+| Physical Intelligence | ai_ml | EXISTING | ashby | `ashby/physicalintelligence` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:28Z | budget_limited |  | 30 | 30 | 0 |
+| Mistral AI | ai_ml | EXISTING | ashby | `ashby/mistral-ai` | existing_unhealthy_or_moved | validation failed | 2026-10-22T02:18:28Z | failed |  | 0 | 0 | 0 |
+| ElevenLabs | ai_ml | EXISTING | ashby | `ashby/elevenlabs` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:29Z | budget_limited |  | 30 | 30 | 0 |
+| Abridge | ai_ml | EXISTING | ashby | `ashby/abridge` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:29Z | budget_limited |  | 30 | 30 | 0 |
+| Databricks | data_science | EXISTING | greenhouse | `greenhouse/databricks` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:30Z | budget_limited | 897 | 30 | 30 | 0 |
 | Snowflake | data_science | FRONTEND | phenom | `phenom/careers.snowflake.com/snowflake` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:14:41Z | budget_limited | 361 | 100 | 100 | 0 |
-| Palantir | data_science | EXISTING | lever | `lever/palantir` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Confluent | data_science | EXISTING | ashby | `ashby/confluent` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| MongoDB | data_science | EXISTING | greenhouse | `greenhouse/mongodb` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Datadog | data_science | EXISTING | greenhouse | `greenhouse/datadog` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Elastic | data_science | EXISTING | greenhouse | `greenhouse/elastic` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Fivetran | data_science | EXISTING | greenhouse | `greenhouse/fivetran` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| dbt Labs | data_science | EXISTING | greenhouse | `greenhouse/dbtlabsinc` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Palantir | data_science | EXISTING | lever | `lever/palantir` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:30Z | budget_limited |  | 30 | 30 | 0 |
+| Confluent | data_science | EXISTING | ashby | `ashby/confluent` | existing_unhealthy_or_moved | validation blocked | 2026-10-22T02:18:31Z | blocked |  | 0 | 0 | 0 |
+| MongoDB | data_science | EXISTING | greenhouse | `greenhouse/mongodb` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:32Z | budget_limited | 390 | 30 | 30 | 0 |
+| Datadog | data_science | EXISTING | greenhouse | `greenhouse/datadog` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:32Z | budget_limited | 440 | 30 | 30 | 0 |
+| Elastic | data_science | EXISTING | greenhouse | `greenhouse/elastic` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:32Z | budget_limited | 379 | 30 | 30 | 0 |
+| Fivetran | data_science | EXISTING | greenhouse | `greenhouse/fivetran` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:33Z | budget_limited | 166 | 30 | 29 | 1 |
+| dbt Labs | data_science | EXISTING | greenhouse | `greenhouse/dbtlabsinc` | existing_unhealthy_or_moved | validation failed | 2026-10-22T02:18:33Z | failed |  | 0 | 0 | 0 |
 | Teradata | data_science | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
-| Cloudera | data_science | EXISTING | workday | `workday/cloudera/External_Career/wd5` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Cloudera | data_science | EXISTING | workday | `workday/cloudera/External_Career/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:33Z | budget_limited | 20 | 30 | 20 | 0 |
 | Informatica | data_science | EXISTING | workday | `workday/salesforce/External_Career_Site/wd12` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
 | Alteryx | data_science | CHAIN | workday | `workday/alteryx/AlteryxCareers/wd108` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:14:38Z | complete | 50 | 50 | 50 | 0 |
 | Domo | data_science | BLOCKED |  |  | blocked | domo.com/company/careers answered 405 on 2026-10-21 |  | not_run |  |  |  |  |
 | ThoughtSpot | data_science | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
-| Sigma Computing | data_science | EXISTING | greenhouse | `greenhouse/sigmacomputing` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Hex | data_science | EXISTING | greenhouse | `greenhouse/hextechnologies` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Starburst | data_science | EXISTING | greenhouse | `greenhouse/starburst` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| ClickHouse | data_science | EXISTING | greenhouse | `greenhouse/clickhouse` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Amplitude | data_science | EXISTING | greenhouse | `greenhouse/amplitude` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Sigma Computing | data_science | EXISTING | greenhouse | `greenhouse/sigmacomputing` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:35Z | budget_limited | 77 | 30 | 30 | 0 |
+| Hex | data_science | EXISTING | greenhouse | `greenhouse/hextechnologies` | existing_unhealthy_or_moved | validation failed | 2026-10-22T02:18:35Z | failed |  | 0 | 0 | 0 |
+| Starburst | data_science | EXISTING | greenhouse | `greenhouse/starburst` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:35Z | budget_limited | 33 | 30 | 30 | 0 |
+| ClickHouse | data_science | EXISTING | greenhouse | `greenhouse/clickhouse` | existing_unhealthy_or_moved | validation failed | 2026-10-22T02:18:36Z | failed |  | 0 | 0 | 0 |
+| Amplitude | data_science | EXISTING | greenhouse | `greenhouse/amplitude` | existing_unhealthy_or_moved | validation failed | 2026-10-22T02:18:36Z | failed |  | 0 | 0 | 0 |
 | Two Sigma | data_science | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
-| Capital One | data_science | EXISTING | workday | `workday/capitalone/Capital_One/wd12` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Capital One | data_science | EXISTING | workday | `workday/capitalone/Capital_One/wd12` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:36Z | budget_limited | 1998 | 30 | 30 | 0 |
 | Nielsen | data_science | PENDING |  |  | pending | careers URL answered 404; NielsenIQ (crawled) is a different company |  | not_run |  |  |  |  |
-| Experian | data_science | EXISTING | smartrecruiters | `smartrecruiters/experian` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Experian | data_science | EXISTING | smartrecruiters | `smartrecruiters/experian` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:38Z | complete | 26 | 26 | 26 | 0 |
 | Splunk | data_science | EXISTING | workday | `workday/cisco/Cisco_Careers/wd5` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Cloudflare | cloud | EXISTING | greenhouse | `greenhouse/cloudflare` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Cloudflare | cloud | EXISTING | greenhouse | `greenhouse/cloudflare` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:38Z | budget_limited | 443 | 30 | 30 | 0 |
 | DigitalOcean | cloud | PENDING |  |  | pending | open-roles page is a JS shell (XHRs Greenhouse per CLAUDE.md); token not observed in served HTML |  | not_run |  |  |  |  |
-| CoreWeave | cloud | EXISTING | greenhouse | `greenhouse/coreweave` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| CoreWeave | cloud | EXISTING | greenhouse | `greenhouse/coreweave` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:39Z | budget_limited | 321 | 30 | 30 | 0 |
 | Akamai | cloud | BLOCKED |  |  | blocked | akamai.com/careers answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
-| Fastly | cloud | EXISTING | greenhouse | `greenhouse/fastly` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Fastly | cloud | EXISTING | greenhouse | `greenhouse/fastly` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:39Z | budget_limited | 53 | 30 | 30 | 0 |
 | HashiCorp | cloud | EXISTING | custom_ibm | `custom_ibm/www-api.ibm.com/ibm` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Broadcom | cloud | EXISTING | workday | `workday/broadcom/External_Career/wd1` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Red Hat | cloud | EXISTING | workday | `workday/redhat/jobs/wd5` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Broadcom | cloud | EXISTING | workday | `workday/broadcom/External_Career/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:39Z | budget_limited | 372 | 30 | 30 | 0 |
+| Red Hat | cloud | EXISTING | workday | `workday/redhat/jobs/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:41Z | budget_limited |  | 30 | 30 | 0 |
 | Nutanix | cloud | BLOCKED |  |  | blocked | careers.nutanix.com answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
 | NetApp | cloud | CHAIN | eightfold | `eightfold/netapp.eightfold.ai/netapp` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:14:45Z | complete |  | 136 | 136 | 0 |
-| Equinix | cloud | EXISTING | workday | `workday/equinix/External/wd1` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Equinix | cloud | EXISTING | workday | `workday/equinix/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:44Z | budget_limited |  | 30 | 30 | 0 |
 | Digital Realty | cloud | BLOCKED |  |  | blocked | TLS error fetching digitalrealty.com/about/careers on 2026-10-21 |  | not_run |  |  |  |  |
-| Rackspace | cloud | EXISTING | workday | `workday/rackspace/External/wd1` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Lambda | cloud | EXISTING | ashby | `ashby/lambda` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Crusoe | cloud | EXISTING | ashby | `ashby/crusoe` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Vercel | cloud | EXISTING | greenhouse | `greenhouse/vercel` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Okta | cloud | EXISTING | greenhouse | `greenhouse/okta` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Zscaler | cloud | EXISTING | greenhouse | `greenhouse/zscaler` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Palo Alto Networks | cloud | EXISTING | workday | `workday/paloaltonetworks/panwexternalcareers/wd5` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Dell Technologies | cloud | EXISTING | oracle_orc | `oracle_orc/enterpriseplatform.dell.com/dell/CX_1001` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Hewlett Packard Enterprise | cloud | EXISTING | workday | `workday/hpe/Jobsathpe/wd5` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Rackspace | cloud | EXISTING | workday | `workday/rackspace/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:48Z | budget_limited | 35 | 30 | 30 | 0 |
+| Lambda | cloud | EXISTING | ashby | `ashby/lambda` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:50Z | budget_limited |  | 30 | 30 | 0 |
+| Crusoe | cloud | EXISTING | ashby | `ashby/crusoe` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:50Z | budget_limited |  | 30 | 30 | 0 |
+| Vercel | cloud | EXISTING | greenhouse | `greenhouse/vercel` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:54Z | budget_limited | 95 | 30 | 30 | 0 |
+| Okta | cloud | EXISTING | greenhouse | `greenhouse/okta` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:55Z | budget_limited | 398 | 30 | 30 | 0 |
+| Zscaler | cloud | EXISTING | greenhouse | `greenhouse/zscaler` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:56Z | budget_limited | 359 | 30 | 30 | 0 |
+| Palo Alto Networks | cloud | EXISTING | workday | `workday/paloaltonetworks/panwexternalcareers/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:56Z | budget_limited | 1425 | 30 | 30 | 0 |
+| Dell Technologies | cloud | EXISTING | oracle_orc | `oracle_orc/enterpriseplatform.dell.com/dell/CX_1001` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:58Z | budget_limited | 493 | 30 | 30 | 0 |
+| Hewlett Packard Enterprise | cloud | EXISTING | workday | `workday/hpe/Jobsathpe/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:03Z | budget_limited |  | 30 | 30 | 0 |
 | Arista Networks | cloud | BLOCKED |  |  | blocked | arista.com/en/careers answered 406 on 2026-10-21 |  | not_run |  |  |  |  |
-| Pure Storage | cloud | EXISTING | greenhouse | `greenhouse/purestorage` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Twilio | cloud | EXISTING | greenhouse | `greenhouse/twilio` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Pure Storage | cloud | EXISTING | greenhouse | `greenhouse/purestorage` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:09Z | budget_limited | 369 | 30 | 30 | 0 |
+| Twilio | cloud | EXISTING | greenhouse | `greenhouse/twilio` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:09Z | budget_limited | 131 | 30 | 30 | 0 |
 | Supermicro | cloud | PENDING |  |  | pending | official careers URL answered 404; current page unknown |  | not_run |  |  |  |  |
-| Duke Energy | electrical_power | EXISTING | workday | `workday/dukeenergy/Search/wd1` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Duke Energy | electrical_power | EXISTING | workday | `workday/dukeenergy/Search/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:10Z | budget_limited |  | 30 | 30 | 0 |
 | Southern Company | electrical_power | PENDING |  |  | pending | only a DirectEmployers .jobs site (southerncompany.jobs) observed; employer ATS not established |  | not_run |  |  |  |  |
 | NextEra Energy | electrical_power | CHAIN | successfactors | `successfactors/jobs.nexteraenergy.com/nexteraenergy` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:20Z | budget_limited |  | 200 | 200 | 0 |
 | Dominion Energy | electrical_power | FRONTEND | successfactors | `successfactors/careers.dominionenergy.com/dominionenergy` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:14:56Z | complete |  | 145 | 145 | 0 |
-| American Electric Power | electrical_power | EXISTING | workday | `workday/aep/AEPCareerSite/wd1` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Xcel Energy | electrical_power | EXISTING | workday | `workday/xcelenergy/External/wd1` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| American Electric Power | electrical_power | EXISTING | workday | `workday/aep/AEPCareerSite/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:14Z | budget_limited | 287 | 30 | 30 | 0 |
+| Xcel Energy | electrical_power | EXISTING | workday | `workday/xcelenergy/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:16Z | budget_limited |  | 30 | 30 | 0 |
 | Exelon | electrical_power | FRONTEND | radancy | `radancy/jobs.exeloncorp.com/exeloncorp` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:51Z | complete | 124 | 124 | 124 | 0 |
 | PG&E | electrical_power | FRONTEND | radancy_talentbrew |  | unsupported | unsupported_pending_provider:radancy_talentbrew |  | not_run |  |  |  |  |
 | Southern California Edison | electrical_power | FRONTEND | symphony_cws |  | unsupported | unsupported_pending_provider:symphony_cws |  | not_run |  |  |  |  |
 | Entergy | electrical_power | CHAIN | successfactors | `successfactors/jobs.entergy.com/entergy` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:02Z | budget_limited |  | 200 | 200 | 0 |
 | Con Edison | electrical_power | CHAIN | oracle_orc | `oracle_orc/ejcu.fa.us6.oraclecloud.com/ejcu/CX_1033` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:49Z | complete | 49 | 49 | 49 | 0 |
 | National Grid | electrical_power | BLOCKED |  |  | blocked | careers.nationalgrid.com answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
-| Eversource | electrical_power | EXISTING | workday | `workday/eversource/ExternalSite/wd1` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Eversource | electrical_power | EXISTING | workday | `workday/eversource/ExternalSite/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:20Z | budget_limited |  | 30 | 30 | 0 |
 | PSEG | electrical_power | FRONTEND | successfactors | `successfactors/jobs.pseg.com/pseg` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:31Z | complete |  | 32 | 32 | 0 |
 | DTE Energy | electrical_power | FRONTEND | successfactors | `successfactors/careers.dteenergy.com/dteenergy` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:12Z | complete |  | 83 | 83 | 0 |
 | Consumers Energy | electrical_power | CHAIN | successfactors | `successfactors/careers.consumersenergy.com/consumersenergy` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:16Z | complete |  | 52 | 52 | 0 |
-| GE Vernova | electrical_power | EXISTING | workday | `workday/gevernova/Vernova_ExternalSite/wd5` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| GE Vernova | electrical_power | EXISTING | workday | `workday/gevernova/Vernova_ExternalSite/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:22Z | budget_limited | 2280 | 30 | 30 | 0 |
 | Siemens Energy | electrical_power | FRONTEND | avature |  | unsupported | unsupported_pending_provider:avature |  | not_run |  |  |  |  |
 | Hitachi Energy | electrical_power | FRONTEND |  |  | unsupported | links Hitachi's shared Workday board (hitachi.wd1/hitachi); needs an entity filter |  | not_run |  |  |  |  |
 | Schneider Electric | electrical_power | BLOCKED |  |  | blocked | careers.se.com answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
@@ -321,8 +321,8 @@ Denominator: **130**. existing_covered: 84, new_validated: 17, blocked: 10, unsu
 | Black & Veatch | electrical_power | FRONTEND | successfactors | `successfactors/careers.bv.com/bv` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:41Z | budget_limited |  | 200 | 200 | 0 |
 | Sargent & Lundy | electrical_power | CHAIN | icims | `icims/careers-sargentlundy.icims.com/careers-sargentlundy` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:59Z | budget_limited |  | 200 | 200 | 0 |
 | POWER Engineers | electrical_power | BLOCKED |  |  | blocked | powereng.com/careers redirects to wsp.com (now WSP), which answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
-| Texas Instruments | electrical_power | EXISTING | oracle_orc | `oracle_orc/edbz.fa.us2.oraclecloud.com/edbz/CX_1` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
-| Analog Devices | electrical_power | EXISTING | workday | `workday/analogdevices/External/wd1` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
+| Texas Instruments | electrical_power | EXISTING | oracle_orc | `oracle_orc/edbz.fa.us2.oraclecloud.com/edbz/CX_1` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:24Z | budget_limited | 874 | 30 | 30 | 0 |
+| Analog Devices | electrical_power | EXISTING | workday | `workday/analogdevices/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:27Z | budget_limited | 318 | 30 | 30 | 0 |
 
 ## Existing rows health-checked (no duplicates added)
 

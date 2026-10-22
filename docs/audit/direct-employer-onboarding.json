@@ -1,6 +1,6 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T02:17:09Z",
+ "generated_at": "2026-10-22T02:19:32Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
@@ -4439,8 +4439,8 @@
   "top": {
    "denominator": 130,
    "counts": {
-    "existing_covered": 84,
-    "existing_unhealthy_or_moved": 0,
+    "existing_covered": 75,
+    "existing_unhealthy_or_moved": 9,
     "new_validated": 17,
     "excluded": 0,
     "review": 0,
@@ -4464,13 +4464,28 @@
      },
      "where": "catalog_or_seed",
      "plan": "existing",
-     "outcome": "existing_covered",
-     "why": "row already in the crawl tables",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation blocked",
      "member_key": "eightfold-microsoft",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:17:30Z",
+      "vendor": "eightfold",
+      "status": "blocked",
+      "source_reported": null,
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "403"
+      ],
+      "sample_titles": [],
+      "detail": "",
+      "member_key": "eightfold-microsoft"
      },
      "domain_group": "software"
     },
@@ -4495,7 +4510,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:17:32Z",
+      "vendor": "google_careers",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Software Engineer, Gemini Deployment and Performance, DeepMind",
+       "Group Manager, Global Executive Events and Engagement, Google Cloud",
+       "Lead, GBAI Strategy and Insights"
+      ],
+      "detail": "",
+      "member_key": "google_careers-google"
      },
      "domain_group": "software"
     },
@@ -4520,7 +4554,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:17:34Z",
+      "vendor": "custom_apple",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "JP-Technical Specialist",
+       "JP-Operations Expert",
+       "IN-Business Expert"
+      ],
+      "detail": "",
+      "member_key": "custom_apple-apple"
      },
      "domain_group": "software"
     },
@@ -4545,7 +4598,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:17:36Z",
+      "vendor": "amazon",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Transportation Area Manager",
+       "Sr. RF DVT Engineer, Amazon Leo Silicon",
+       "Spacecraft Hardware Development Specialist, Amazon Leo DevOps"
+      ],
+      "detail": "",
+      "member_key": "amazon-amazon"
      },
      "domain_group": "software"
     },
@@ -4589,7 +4661,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:17:37Z",
+      "vendor": "oracle_orc",
+      "status": "budget_limited",
+      "source_reported": 2367,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Core Infrastructure Engineer",
+       "Senior Platform Software Engineer- Oracle Health",
+       "Principal Platform Software Engineer- Oracle Health"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-eeho-cx_1"
      },
      "domain_group": "software"
     },
@@ -4616,7 +4707,27 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:17:41Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Customer Success Manager, Senior Manager (BtoC)",
+       "Senior Director, Security Engineering - Slack",
+       "Manager, Sales"
+      ],
+      "detail": "",
+      "member_key": "workday-salesforce-external_career_site"
      },
      "domain_group": "software"
     },
@@ -4643,7 +4754,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:17:45Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 195,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Director of Engineering, Real Time Experience (RTX)",
+       "Sr. Manager Risk & Controls",
+       "Director and Associate General Counsel, Corporate Legal"
+      ],
+      "detail": "",
+      "member_key": "workday-adobe-external_experienced"
      },
      "domain_group": "software"
     },
@@ -4668,7 +4798,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:17:46Z",
+      "vendor": "custom_ibm",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "IBM Consulting Interns",
+       "Entry Level Systems Thermal Modeler 2027  -Poughkeepsie, NY",
+       "Secure System Platform Engineer"
+      ],
+      "detail": "",
+      "member_key": "custom_ibm-ibm"
      },
      "domain_group": "software"
     },
@@ -4712,7 +4861,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:17:48Z",
+      "vendor": "smartrecruiters",
+      "status": "budget_limited",
+      "source_reported": 430,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Sr Staff Software Engineer (Distributed Systems | Data Ingestion | Storage | Ana",
+       "Senior Staff Software Engineer - Platform Access Control - Security",
+       "Senior Security Software Engineer, IAM - Moveworks"
+      ],
+      "detail": "",
+      "member_key": "smartrecruiters-servicenow"
      },
      "domain_group": "software"
     },
@@ -4739,7 +4907,27 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:17:49Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Field Pricing Manager",
+       "Site Reliability Engineer (US Federal)",
+       "Medium Enterprise Regional Sales Director - Healthcare"
+      ],
+      "detail": "",
+      "member_key": "workday-workday-workday"
      },
      "domain_group": "software"
     },
@@ -4764,7 +4952,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:17:58Z",
+      "vendor": "custom_atlassian",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Executive, Mid Market",
+       "Account Executive, SMB",
+       "Backend Software Engineer"
+      ],
+      "detail": "",
+      "member_key": "custom_atlassian-atlassian"
      },
      "domain_group": "software"
     },
@@ -4808,7 +5015,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:17:59Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 193,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Associate Legal Counsel, Japan",
+       "Associate Principal, Procurement Innovation Supplier Programs",
+       "Business Development Manager"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-airbnb"
      },
      "domain_group": "software"
     },
@@ -4833,7 +5059,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:00Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 726,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Abuse Investigator",
+       "Abuse Investigator",
+       "Abuse Investigator"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-stripe"
      },
      "domain_group": "software"
     },
@@ -4879,7 +5124,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:00Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 1479,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior QA Engineer",
+       "Lead Product Designer - AI and Platform Experience",
+       "ASIC Technical Leader- RTL"
+      ],
+      "detail": "",
+      "member_key": "workday-cisco-cisco_careers"
      },
      "domain_group": "software"
     },
@@ -4906,7 +5170,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:02Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 32,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Business Development Representative",
+       "Principal Engineer, Platform Services",
+       "Senior Software Engineer"
+      ],
+      "detail": "",
+      "member_key": "workday-autodesk-ext"
      },
      "domain_group": "software"
     },
@@ -4933,7 +5216,27 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:04Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Staff Cybersecurity Threat Analyst",
+       "Legal Counsel, Consumer Credit",
+       "Sr Director, Product Growth - U.S. Consumer Credit"
+      ],
+      "detail": "",
+      "member_key": "workday-paypal-jobs"
      },
      "domain_group": "software"
     },
@@ -4958,7 +5261,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:10Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 206,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Manager, SMB",
+       "Account Manager, SMB",
+       "Account Manager, SMB"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-block"
      },
      "domain_group": "software"
     },
@@ -4983,7 +5305,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:10Z",
+      "vendor": "eightfold",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "AI Engineer 6 - AI Foundation & Tooling, Ads Platform",
+       "Director, Privacy Legal",
+       "Senior Manager, Business & Technical Operations - Content & Business Products"
+      ],
+      "detail": "",
+      "member_key": "eightfold-netflix"
      },
      "domain_group": "software"
     },
@@ -5008,7 +5349,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:12Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 457,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Executive",
+       "Account Executive",
+       "Account Executive - CPG Ads"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-doordashusa"
      },
      "domain_group": "software"
     },
@@ -5046,13 +5406,28 @@
      },
      "where": "catalog_or_seed",
      "plan": "existing",
-     "outcome": "existing_covered",
-     "why": "row already in the crawl tables",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation blocked",
      "member_key": "eightfold-qualcomm",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:13Z",
+      "vendor": "eightfold",
+      "status": "blocked",
+      "source_reported": null,
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "403"
+      ],
+      "sample_titles": [],
+      "detail": "",
+      "member_key": "eightfold-qualcomm"
      },
      "domain_group": "software"
     },
@@ -5077,7 +5452,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:14Z",
+      "vendor": "ashby",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Technical Program Manager, Compute Infrastructure",
+       "Research Engineer",
+       "Research Engineer, Retrieval & Search, Applied Engineering"
+      ],
+      "detail": "",
+      "member_key": "ashby-openai"
      },
      "domain_group": "ai_ml"
     },
@@ -5102,7 +5496,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:17Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 678,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "3P Revenue Accounting & Reporting",
+       "Account Executive, AI Native",
+       "Account Executive - DNB"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-anthropic"
      },
      "domain_group": "ai_ml"
     },
@@ -5148,7 +5561,27 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:18Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Senior Packaging Technical Engineer - Hardware",
+       "PhD Research Intern, Robotic Perception and Learning - 2027",
+       "PhD Research Intern, AI for Climate and Weather Simulation - 2027"
+      ],
+      "detail": "",
+      "member_key": "workday-nvidia-nvidiaexternalcareersite"
      },
      "domain_group": "ai_ml"
     },
@@ -5173,7 +5606,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:22Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 293,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Agency Development Manager",
+       "AI Tutor - Croatian",
+       "AI Tutor - Design"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-xai"
      },
      "domain_group": "ai_ml"
     },
@@ -5198,7 +5650,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:23Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 174,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Based Marketing Lead",
+       "AI Advisory Principal",
+       "AI Product Manager (Coding/Multimodal)"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-scaleai"
      },
      "domain_group": "ai_ml"
     },
@@ -5223,7 +5694,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:20Z",
+      "vendor": "ashby",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Full-Stack Engineer, Internal Applications",
+       "Member of Technical Staff, Modeling",
+       "Revenue Enablement Manager - EMEA"
+      ],
+      "detail": "",
+      "member_key": "ashby-cohere"
      },
      "domain_group": "ai_ml"
     },
@@ -5248,7 +5738,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:22Z",
+      "vendor": "ashby",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Product Marketing Manager, Partnerships",
+       "Member of Technical Staff (Software Engineer, Monetization)",
+       "Associate Product Marketing Manager"
+      ],
+      "detail": "",
+      "member_key": "ashby-perplexity"
      },
      "domain_group": "ai_ml"
     },
@@ -5273,7 +5782,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:22Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 13,
+      "unique_ids": 13,
+      "duplicate_rows": 0,
+      "requisitions": 13,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Machine Learning Infrastructure Engineer",
+       "Research Engineer, Post-Training (All Industry Levels)",
+       "Software Engineer, Core Product"
+      ],
+      "detail": "",
+      "member_key": "ashby-character"
      },
      "domain_group": "ai_ml"
     },
@@ -5298,7 +5826,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:23Z",
+      "vendor": "ashby",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Software Engineer, Growth",
+       "Software Engineer, RL Data",
+       "Software Engineer, Infrastructure"
+      ],
+      "detail": "",
+      "member_key": "ashby-cursor"
      },
      "domain_group": "ai_ml"
     },
@@ -5323,7 +5870,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:24Z",
+      "vendor": "workable",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 6,
+      "unique_ids": 6,
+      "duplicate_rows": 0,
+      "requisitions": 6,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Open-Source Machine Learning Engineer - EMEA Remote",
+       "Open-Source Machine Learning Engineer - US Remote",
+       "Senior Machine Learning Engineer, Voice Agents - EMEA Remote"
+      ],
+      "detail": "",
+      "member_key": "workable-huggingface"
      },
      "domain_group": "ai_ml"
     },
@@ -5392,7 +5958,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:24Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 120,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Accountant",
+       "AI Data Analyst",
+       "AI Success Manager, Central"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-gleanwork"
      },
      "domain_group": "ai_ml"
     },
@@ -5417,7 +6002,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:25Z",
+      "vendor": "ashby",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Legal Engineering Manager (Law Firm, Litigation/Regulatory)",
+       "Customer Success Manager, Mid Market, EMEA",
+       "Enterprise Customer Success Manager"
+      ],
+      "detail": "",
+      "member_key": "ashby-harvey"
      },
      "domain_group": "ai_ml"
     },
@@ -5442,7 +6046,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:27Z",
+      "vendor": "ashby",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "FPGA Engineer",
+       "Software Supply Chain Security Engineer",
+       "Distributed Systems Security Engineer"
+      ],
+      "detail": "",
+      "member_key": "ashby-cerebras"
      },
      "domain_group": "ai_ml"
     },
@@ -5467,7 +6090,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:27Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 61,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "AI Hardware System Architect",
+       "AI Performance Engineer - New Grad",
+       "ASIC Network Architect"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-sambanovasystems"
      },
      "domain_group": "ai_ml"
     },
@@ -5511,7 +6153,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:27Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 79,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "AI Infrastructure Systems Engineer",
+       "AI Infrastructure Systems Engineer (Amsterdam & London)",
+       "Associate, Infrastructure Strategy & Operations"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-togetherai"
      },
      "domain_group": "ai_ml"
     },
@@ -5555,7 +6216,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:28Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 361,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "2027 Summer Intern, BS, Depot Automation",
+       "2027 Summer Intern, BS/MS, Global Supply Management (GSM)",
+       "2027 Summer Intern, BS/MS, Scenes"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-waymo"
      },
      "domain_group": "ai_ml"
     },
@@ -5574,13 +6254,28 @@
      },
      "where": "catalog_or_seed",
      "plan": "existing",
-     "outcome": "existing_covered",
-     "why": "row already in the crawl tables",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation failed",
      "member_key": "greenhouse-aurorainnovation",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:28Z",
+      "vendor": "greenhouse",
+      "status": "failed",
+      "source_reported": null,
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "404"
+      ],
+      "sample_titles": [],
+      "detail": "",
+      "member_key": "greenhouse-aurorainnovation"
      },
      "domain_group": "ai_ml"
     },
@@ -5605,7 +6300,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:28Z",
+      "vendor": "ashby",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Manufacturing Engineer",
+       "ML Infra Engineer, Data Systems",
+       "NPI Technical Program Manager"
+      ],
+      "detail": "",
+      "member_key": "ashby-physicalintelligence"
      },
      "domain_group": "ai_ml"
     },
@@ -5624,13 +6338,28 @@
      },
      "where": "catalog_or_seed",
      "plan": "existing",
-     "outcome": "existing_covered",
-     "why": "row already in the crawl tables",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation failed",
      "member_key": "ashby-mistral-ai",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:28Z",
+      "vendor": "ashby",
+      "status": "failed",
+      "source_reported": null,
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "404"
+      ],
+      "sample_titles": [],
+      "detail": "",
+      "member_key": "ashby-mistral-ai"
      },
      "domain_group": "ai_ml"
     },
@@ -5655,7 +6384,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:29Z",
+      "vendor": "ashby",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Manager - India",
+       "Enterprise Solutions Engineer - USA",
+       "Account Executive - Japan"
+      ],
+      "detail": "",
+      "member_key": "ashby-elevenlabs"
      },
      "domain_group": "ai_ml"
     },
@@ -5680,7 +6428,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:29Z",
+      "vendor": "ashby",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Member of Technical Staff, Machine Learning",
+       "Member of Technical Staff, VistA Integrations",
+       "Member of Data Science Staff"
+      ],
+      "detail": "",
+      "member_key": "ashby-abridge"
      },
      "domain_group": "ai_ml"
     },
@@ -5705,7 +6472,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:30Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 897,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "\u30c7\u30ea\u30d0\u30ea\u30fc\u30bd\u30ea\u30e5\u30fc\u30b7\u30e7\u30f3\u30a2\u30fc\u30ad\u30c6\u30af\u30c8",
+       "Account Executive",
+       "Account Executive, Commercial - Hunter"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-databricks"
      },
      "domain_group": "data_science"
     },
@@ -5774,7 +6560,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:30Z",
+      "vendor": "lever",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Administrative Business Partner",
+       "Administrative Business Partner",
+       "Administrative Business Partner - ShipOS"
+      ],
+      "detail": "",
+      "member_key": "lever-palantir"
      },
      "domain_group": "data_science"
     },
@@ -5793,13 +6598,28 @@
      },
      "where": "catalog_or_seed",
      "plan": "existing",
-     "outcome": "existing_covered",
-     "why": "row already in the crawl tables",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation blocked",
      "member_key": "ashby-confluent",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:31Z",
+      "vendor": "ashby",
+      "status": "blocked",
+      "source_reported": null,
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [],
+      "detail": "",
+      "member_key": "ashby-confluent"
      },
      "domain_group": "data_science"
     },
@@ -5824,7 +6644,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:32Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 390,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "2027 - Software Engineer Intern, Dublin - 6 Month Internship",
+       "Account Development Representative",
+       "Account Development Representative"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-mongodb"
      },
      "domain_group": "data_science"
     },
@@ -5849,7 +6688,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:32Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 440,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Accounts Payable Analyst",
+       "AI Research Engineer - Datadog AI Research (DAIR)",
+       "AI Research Scientist - Datadog AI Research (DAIR)"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-datadog"
      },
      "domain_group": "data_science"
     },
@@ -5874,7 +6732,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:32Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 379,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "ABM Manager, Global Public Sector",
+       "ABM Regional Manager, AMER",
+       "Account Executive"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-elastic"
      },
      "domain_group": "data_science"
     },
@@ -5899,7 +6776,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:33Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 166,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 29,
+      "filtered_non_requisition": 1,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Executive, Enterprise",
+       "Accounts Payable Analyst",
+       "Business Development Representative"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-fivetran"
      },
      "domain_group": "data_science"
     },
@@ -5918,13 +6814,28 @@
      },
      "where": "catalog_or_seed",
      "plan": "existing",
-     "outcome": "existing_covered",
-     "why": "row already in the crawl tables",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation failed",
      "member_key": "greenhouse-dbtlabsinc",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:33Z",
+      "vendor": "greenhouse",
+      "status": "failed",
+      "source_reported": null,
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "404"
+      ],
+      "sample_titles": [],
+      "detail": "",
+      "member_key": "greenhouse-dbtlabsinc"
      },
      "domain_group": "data_science"
     },
@@ -5970,7 +6881,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:33Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 20,
+      "parsed": 30,
+      "unique_ids": 20,
+      "duplicate_rows": 10,
+      "requisitions": 20,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Business Value Manager",
+       "Pricing Strategy Director, AI Ecosystem Partners",
+       "Staff DevSecOps Engineer - Product Security"
+      ],
+      "detail": "",
+      "member_key": "workday-cloudera-external_career"
      },
      "domain_group": "data_science"
     },
@@ -6106,7 +7036,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:35Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 77,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "AI/ML PhD Intern (Summer 2027)",
+       "AI/ML PhD Intern (Summer 2027)",
+       "AVP, Commercial and Scale Customer Success"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-sigmacomputing"
      },
      "domain_group": "data_science"
     },
@@ -6125,13 +7074,28 @@
      },
      "where": "catalog_or_seed",
      "plan": "existing",
-     "outcome": "existing_covered",
-     "why": "row already in the crawl tables",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation failed",
      "member_key": "greenhouse-hextechnologies",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:35Z",
+      "vendor": "greenhouse",
+      "status": "failed",
+      "source_reported": null,
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "404"
+      ],
+      "sample_titles": [],
+      "detail": "",
+      "member_key": "greenhouse-hextechnologies"
      },
      "domain_group": "data_science"
     },
@@ -6156,7 +7120,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:35Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 33,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "AI Agent Engineer",
+       "AI Platform Engineer",
+       "Alliance Manager"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-starburst"
      },
      "domain_group": "data_science"
     },
@@ -6175,13 +7158,28 @@
      },
      "where": "catalog_or_seed",
      "plan": "existing",
-     "outcome": "existing_covered",
-     "why": "row already in the crawl tables",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation failed",
      "member_key": "greenhouse-clickhouse",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:36Z",
+      "vendor": "greenhouse",
+      "status": "failed",
+      "source_reported": null,
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "404"
+      ],
+      "sample_titles": [],
+      "detail": "",
+      "member_key": "greenhouse-clickhouse"
      },
      "domain_group": "data_science"
     },
@@ -6200,13 +7198,28 @@
      },
      "where": "catalog_or_seed",
      "plan": "existing",
-     "outcome": "existing_covered",
-     "why": "row already in the crawl tables",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation failed",
      "member_key": "greenhouse-amplitude",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:36Z",
+      "vendor": "greenhouse",
+      "status": "failed",
+      "source_reported": null,
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "404"
+      ],
+      "sample_titles": [],
+      "detail": "",
+      "member_key": "greenhouse-amplitude"
      },
      "domain_group": "data_science"
     },
@@ -6252,7 +7265,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:36Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 1998,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Sr. Operations Representative",
+       "Senior Staff Full-stack Engineer - Global Payment Network (Remote - Eligible)",
+       "Full-stack Engineer 4"
+      ],
+      "detail": "",
+      "member_key": "workday-capitalone-capital_one"
      },
      "domain_group": "data_science"
     },
@@ -6296,7 +7328,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:38Z",
+      "vendor": "smartrecruiters",
+      "status": "complete",
+      "source_reported": 26,
+      "parsed": 26,
+      "unique_ids": 26,
+      "duplicate_rows": 0,
+      "requisitions": 26,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Carrier Relations Lead",
+       "Revenue Cycle Solutions Consultant",
+       "Enterprise and Operational Risk Director"
+      ],
+      "detail": "",
+      "member_key": "smartrecruiters-experian"
      },
      "domain_group": "data_science"
     },
@@ -6348,7 +7399,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:38Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 443,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Executive, FedCiv",
+       "Account Executive, Indonesia",
+       "AI Security Research & Red Team Engineer"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-cloudflare"
      },
      "domain_group": "cloud"
     },
@@ -6392,7 +7462,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:39Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 321,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Accountant, JV & VIE",
+       "Account Executive - Greenfield",
+       "Account Executive - Greenfield - Toronto"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-coreweave"
      },
      "domain_group": "cloud"
     },
@@ -6436,7 +7525,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:39Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 53,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Assistant General Counsel, Commercial",
+       "Brand Marketing Manager",
+       "Contracts Manager"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-fastly"
      },
      "domain_group": "cloud"
     },
@@ -6488,7 +7596,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:39Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 372,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Fab Assistant",
+       "RTL IC Design Engineer",
+       "IC Design Engineer"
+      ],
+      "detail": "",
+      "member_key": "workday-broadcom-external_career"
      },
      "domain_group": "cloud"
     },
@@ -6515,7 +7642,27 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:41Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Consultant, OpenShift AI - Top Secret Clearance Required",
+       "Architect, AI - Active Top Secret Clearance",
+       "Associate Consultant"
+      ],
+      "detail": "",
+      "member_key": "workday-redhat-jobs"
      },
      "domain_group": "cloud"
     },
@@ -6607,7 +7754,27 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:44Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Senior Director AI, Chief Revenue Organization",
+       "Operations Support Senior Associate",
+       "Data Center Customer Operations IV"
+      ],
+      "detail": "",
+      "member_key": "workday-equinix-external"
      },
      "domain_group": "cloud"
     },
@@ -6653,7 +7820,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:48Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 35,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "DC Ops Technician III",
+       "DC Ops Technician III - FedRAMP Clearance",
+       "Head of Investor Relations"
+      ],
+      "detail": "",
+      "member_key": "workday-rackspace-external"
      },
      "domain_group": "cloud"
     },
@@ -6678,7 +7864,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:50Z",
+      "vendor": "ashby",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior HPC Platform Hardware Engineer",
+       "Senior Software Engineer - Fleet Engineering",
+       "Senior Network Engineer"
+      ],
+      "detail": "",
+      "member_key": "ashby-lambda"
      },
      "domain_group": "cloud"
     },
@@ -6703,7 +7908,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:50Z",
+      "vendor": "ashby",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Staff Product Security Engineer",
+       "Senior Network Production Engineer, Network Ops",
+       "Wiring Technician"
+      ],
+      "detail": "",
+      "member_key": "ashby-crusoe"
      },
      "domain_group": "cloud"
     },
@@ -6728,7 +7952,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:54Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 95,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Executive, Commercial",
+       "Account Executive, Majors",
+       "Account Executive, Majors (APAC)"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-vercel"
      },
      "domain_group": "cloud"
     },
@@ -6753,7 +7996,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:55Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 398,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Executive Auth0",
+       "Account Executive Large Enterprise Public Sector",
+       "AE, Okta & Auth0"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-okta"
      },
      "domain_group": "cloud"
     },
@@ -6778,7 +8040,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:56Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 359,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Executive",
+       "Account Executive -  Commercial",
+       "Account Executive, Commercial"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-zscaler"
      },
      "domain_group": "cloud"
     },
@@ -6805,7 +8086,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:56Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 1425,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Manager, Support Delivery",
+       "Principal Threat Researcher (Unit 42)",
+       "Channel Solutions Consultant 2"
+      ],
+      "detail": "",
+      "member_key": "workday-paloaltonetworks-panwexternalcareers"
      },
      "domain_group": "cloud"
     },
@@ -6830,7 +8130,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:18:58Z",
+      "vendor": "oracle_orc",
+      "status": "budget_limited",
+      "source_reported": 493,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Industrial Design Principal Engineer",
+       "AI Solution Sales Specialist",
+       "\u516c\u5171\u55b6\u696d\u3000\uff08\u5927\u962a\uff09"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-dell-cx_1001"
      },
      "domain_group": "cloud"
     },
@@ -6857,7 +8176,27 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:19:03Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Storage Sales Manager -DOW and Intelligence Community",
+       "Software Development Intern, AI-Assisted Development (Summer 2027)  /  Stagiaire",
+       "Marketing Intern"
+      ],
+      "detail": "",
+      "member_key": "workday-hpe-jobsathpe"
      },
      "domain_group": "cloud"
     },
@@ -6901,7 +8240,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:19:09Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 369,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "\u30d1\u30fc\u30c8\u30ca\u30fc\u30a2\u30ab\u30a6\u30f3\u30c8\u30de\u30cd\u30fc\u30b8\u30e3\u30fc",
+       "\u30d1\u30fc\u30c8\u30ca\u30fc\u30a2\u30ab\u30a6\u30f3\u30c8\u30de\u30cd\u30fc\u30b8\u30e3\u30fc",
+       "Account Executive, AI/HPC, Neo / Sovereign Cloud (EMEA)"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-purestorage"
      },
      "domain_group": "cloud"
     },
@@ -6926,7 +8284,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:19:09Z",
+      "vendor": "greenhouse",
+      "status": "budget_limited",
+      "source_reported": 131,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Executive 3",
+       "Applications Engineer 2",
+       "Billing Operations Analyst 1"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-twilio"
      },
      "domain_group": "cloud"
     },
@@ -6972,7 +8349,27 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:19:10Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Gas Gen Training Tech - Operations",
+       "Research Specialist II - IN",
+       "Research Specialist II - OH/KY"
+      ],
+      "detail": "",
+      "member_key": "workday-dukeenergy-search"
      },
      "domain_group": "electrical_power"
     },
@@ -7106,7 +8503,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:19:14Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 287,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Distribution System Supervisor",
+       "T-Line Asset Engineer",
+       "Facility Project Coordinator"
+      ],
+      "detail": "",
+      "member_key": "workday-aep-aepcareersite"
      },
      "domain_group": "electrical_power"
     },
@@ -7133,7 +8549,27 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:19:16Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Distribution Planning Engineer (Entry, Staff, Senior, or Principal)",
+       "DER/ BESS Engineer (Staff, Senior, or Principal)",
+       "System Protection Technician Specialist - Golden, Colorado"
+      ],
+      "detail": "",
+      "member_key": "workday-xcelenergy-external"
      },
      "domain_group": "electrical_power"
     },
@@ -7349,7 +8785,27 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:19:20Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Senior Engineer,  DER  Planning (Hybrid Schedule)",
+       "Senior Engineer, DER Planning (Hybrid Schedule)",
+       "Distribution System Modeling and Automation Engineer (Hybrid Schedule)"
+      ],
+      "detail": "",
+      "member_key": "workday-eversource-externalsite"
      },
      "domain_group": "electrical_power"
     },
@@ -7508,7 +8964,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:19:22Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 2280,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Lead Analytics Sourcing Specialist (Sp\u00e9cialiste principal analytique des achats ",
+       "Technicien de maintenance industrielle (H/F)",
+       "Ing\u00e9nieur Doctorant CIFRE"
+      ],
+      "detail": "",
+      "member_key": "workday-gevernova-vernova_externalsite"
      },
      "domain_group": "electrical_power"
     },
@@ -7890,7 +9365,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:19:24Z",
+      "vendor": "oracle_orc",
+      "status": "budget_limited",
+      "source_reported": 874,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Digital Design Verification Engineer",
+       "Product Marketing Engineer | HVP DBB",
+       "Operations Analyst"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-edbz-cx_1"
      },
      "domain_group": "electrical_power"
     },
@@ -7917,7 +9411,26 @@
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:19:27Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 318,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Government Affairs Manager",
+       "Instrumentation Systems Design Engineer",
+       "Assembly Manufacturing Operator, All Shifts"
+      ],
+      "detail": "",
+      "member_key": "workday-analogdevices-external"
      },
      "domain_group": "electrical_power"
     }
