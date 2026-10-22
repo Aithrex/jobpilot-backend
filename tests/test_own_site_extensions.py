@@ -287,3 +287,19 @@ def test_purpose_hints_come_from_the_title(title, hint):
 ])
 def test_application_method(url, method):
     assert own_site.application_method_for(url) == method
+
+
+def test_comeet_plugin_positions_use_the_comeet_uid_as_identity():
+    url = "https://www.upwind.io/careers"
+    jobs, ctx, _ = _list("upwind.io", url, {url: _read("upwind_comeet_listing.html")})
+    assert [j.source_job_id for j in jobs][:1] == ["comeet-ae.e69"]
+    # The trimmed fixture keeps one group with one position: a single
+    # opening, accepted because its card says "US (Remote) · Full-time".
+    assert len(jobs) == 1
+    assert jobs[0].title == "Revenue Operations Manager"       # not the meta line
+    assert jobs[0].detail_url.endswith("/careers/co/us-remote/AE.E69/revenue-operations-manager/all")
+    detail = jobs[0].detail_url
+    out = own_site.OwnSiteCareersProvider().fetch_detail(
+        _ep("upwind.io", url), jobs[0], _ctx({detail: _read("upwind_comeet_detail.html")}, []))
+    assert out.posted_at.startswith("2026-10-21") and out.date_confidence == DATE_EXACT
+    assert out.extra["hiring_organization"] == "Upwind Security"

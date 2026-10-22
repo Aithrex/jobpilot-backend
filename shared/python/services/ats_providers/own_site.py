@@ -120,6 +120,12 @@ _JOB_PATH_RE = re.compile(
     r"/(jobs?|careers?|positions?|openings?|vacanc(?:y|ies)|opportunit(?:y|ies)|"
     r"job-openings|current-openings|open-positions|join-us|employment)"
     r"/(?P<slug>[^/?#]{6,120})/?$", re.IGNORECASE)
+#: The Comeet WordPress plugin renders positions on the employer's own site
+#: as `/careers/co/<location>/<position uid>/<slug>/all` (Upwind, observed
+#: 2026-10-22). The uid ("AE.E69") is Comeet's stable position id.
+_COMEET_PATH_RE = re.compile(
+    r"/co/(?P<loc>[^/?#]{2,80})/(?P<uid>[0-9A-F]{2}\.[0-9A-F]{2,5})/"
+    r"(?P<slug>[^/?#]{2,120})(?:/all)?/?$")
 _LINKEDIN_JOB_RE = re.compile(
     r"^https?://(?:[a-z]{2,3}\.)?(?:www\.)?linkedin\.com/jobs/view/(?:[^/?#]*-)?(?P<id>\d{6,14})",
     re.IGNORECASE)
@@ -309,6 +315,8 @@ def _pattern_key(url: str, host: str) -> str:
     m = _LINKEDIN_JOB_RE.match(url)
     if m:
         return "linkedin"
+    if _COMEET_PATH_RE.search(urlparse(url).path):
+        return "comeet"
     jm = _JOB_PATH_RE.search(urlparse(url).path)
     if not jm:
         return ""
@@ -571,7 +579,9 @@ def _link_rows(doc: Any, page_url: str, host: str) -> List[Dict[str, Any]]:
         if li:
             url = f"https://www.linkedin.com/jobs/view/{li.group('id')}"
         elif not url.startswith("https://") or not _same_site(url, host) or \
-                url.rstrip("/") == page or not _JOB_PATH_RE.search(urlparse(url).path):
+                url.rstrip("/") == page or not (
+                    _JOB_PATH_RE.search(urlparse(url).path)
+                    or _COMEET_PATH_RE.search(urlparse(url).path)):
             continue
         anchor.set("_resolved", url)
         anchors.append((anchor, url))
@@ -580,7 +590,13 @@ def _link_rows(doc: Any, page_url: str, host: str) -> List[Dict[str, Any]]:
     per_url: Dict[str, Dict[str, Any]] = {}
     order: List[str] = []
     for anchor, url in anchors:
-        text = _BUTTON_TEXT_RE.sub("", _ws(anchor.text_content())).strip(" -|:")
+        # A link that wraps several blocks (name, location, type) names its
+        # title block by class; prefer it to the joined text.
+        named = [el for el in anchor.iter() if el is not anchor and isinstance(el.tag, str)
+                 and re.search(r"(position|job|role)[-_]?(name|title)|\btitle\b",
+                               str(el.get("class") or ""), re.IGNORECASE)]
+        raw_text = _ws(named[0].text_content()) if named else _ws(anchor.text_content())
+        text = _BUTTON_TEXT_RE.sub("", raw_text).strip(" -|:")
         strict = looks_like_a_job_title(text)
         title = text if strict else ""
         if not title:
@@ -627,8 +643,12 @@ def _link_rows(doc: Any, page_url: str, host: str) -> List[Dict[str, Any]]:
             rid = f"li-{li.group('id')}"
             method, detail = "linkedin", ""
         else:
+            cm = _COMEET_PATH_RE.search(urlparse(url).path)
             match = _JOB_PATH_RE.search(urlparse(url).path)
-            rid = slugify(match.group("slug") if match else url, 80)
+            if cm:
+                rid = f"comeet-{cm.group('uid').lower()}"
+            else:
+                rid = slugify(match.group("slug") if match else url, 80)
             method, detail = "page", url
         if not rid:
             continue
