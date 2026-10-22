@@ -1,6 +1,6 @@
 # Direct-employer onboarding — outcomes per company
 
-Generated 2026-10-22T02:19:32Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
+Generated 2026-10-22T05:09:44Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
 
 **Coverage basis:** in-repo catalogs and seed tables the crawler loads (no production inventory was read). `existing_covered` means the crawl tables already carry the exact endpoint; it is not a claim about live inventory counts.
 
@@ -189,7 +189,7 @@ Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, revi
 
 ## Owner priority: top employers per domain
 
-Denominator: **130**. existing_covered: 75, existing_unhealthy_or_moved: 9, new_validated: 17, blocked: 10, unsupported: 7, pending: 12
+Denominator: **130**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_validated: 18, blocked: 10, unsupported: 7, pending: 12
 
 | company | domain | evidence | provider | endpoint | outcome | why | validated at | status | source | parsed | req | non-req |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -240,7 +240,7 @@ Denominator: **130**. existing_covered: 75, existing_unhealthy_or_moved: 9, new_
 | Waymo | ai_ml | EXISTING | greenhouse | `greenhouse/waymo` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:28Z | budget_limited | 361 | 30 | 30 | 0 |
 | Aurora Innovation | ai_ml | EXISTING | greenhouse | `greenhouse/aurorainnovation` | existing_unhealthy_or_moved | validation failed | 2026-10-22T02:18:28Z | failed |  | 0 | 0 | 0 |
 | Physical Intelligence | ai_ml | EXISTING | ashby | `ashby/physicalintelligence` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:28Z | budget_limited |  | 30 | 30 | 0 |
-| Mistral AI | ai_ml | EXISTING | ashby | `ashby/mistral-ai` | existing_unhealthy_or_moved | validation failed | 2026-10-22T02:18:28Z | failed |  | 0 | 0 | 0 |
+| Mistral AI | ai_ml | EXISTING | ashby | `ashby/mistral.ai` | existing_covered | row already in the crawl tables | 2026-10-22T05:09:40Z | complete |  | 222 | 222 | 0 |
 | ElevenLabs | ai_ml | EXISTING | ashby | `ashby/elevenlabs` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:29Z | budget_limited |  | 30 | 30 | 0 |
 | Abridge | ai_ml | EXISTING | ashby | `ashby/abridge` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:29Z | budget_limited |  | 30 | 30 | 0 |
 | Databricks | data_science | EXISTING | greenhouse | `greenhouse/databricks` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:30Z | budget_limited | 897 | 30 | 30 | 0 |
@@ -262,7 +262,7 @@ Denominator: **130**. existing_covered: 75, existing_unhealthy_or_moved: 9, new_
 | Hex | data_science | EXISTING | greenhouse | `greenhouse/hextechnologies` | existing_unhealthy_or_moved | validation failed | 2026-10-22T02:18:35Z | failed |  | 0 | 0 | 0 |
 | Starburst | data_science | EXISTING | greenhouse | `greenhouse/starburst` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:35Z | budget_limited | 33 | 30 | 30 | 0 |
 | ClickHouse | data_science | EXISTING | greenhouse | `greenhouse/clickhouse` | existing_unhealthy_or_moved | validation failed | 2026-10-22T02:18:36Z | failed |  | 0 | 0 | 0 |
-| Amplitude | data_science | EXISTING | greenhouse | `greenhouse/amplitude` | existing_unhealthy_or_moved | validation failed | 2026-10-22T02:18:36Z | failed |  | 0 | 0 | 0 |
+| Amplitude | data_science | CHAIN | ashby | `ashby/amplitude` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:09:44Z | complete |  | 41 | 41 | 0 |
 | Two Sigma | data_science | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
 | Capital One | data_science | EXISTING | workday | `workday/capitalone/Capital_One/wd12` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:36Z | budget_limited | 1998 | 30 | 30 | 0 |
 | Nielsen | data_science | PENDING |  |  | pending | careers URL answered 404; NielsenIQ (crawled) is a different company |  | not_run |  |  |  |  |

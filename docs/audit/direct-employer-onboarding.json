@@ -1,6 +1,6 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T02:19:32Z",
+ "generated_at": "2026-10-22T05:09:44Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
@@ -4439,9 +4439,9 @@
   "top": {
    "denominator": 130,
    "counts": {
-    "existing_covered": 75,
-    "existing_unhealthy_or_moved": 9,
-    "new_validated": 17,
+    "existing_covered": 76,
+    "existing_unhealthy_or_moved": 7,
+    "new_validated": 18,
     "excluded": 0,
     "review": 0,
     "blocked": 10,
@@ -4468,7 +4468,7 @@
      "why": "validation blocked",
      "member_key": "eightfold-microsoft",
      "provider_needed": "",
-     "note": "",
+     "note": "Eightfold PCSX answered 403 to our validation (may be IP-specific; production inventory not visible here)",
      "validation": {
       "at": "2026-10-22T02:17:30Z",
       "vendor": "eightfold",
@@ -5410,7 +5410,7 @@
      "why": "validation blocked",
      "member_key": "eightfold-qualcomm",
      "provider_needed": "",
-     "note": "",
+     "note": "Eightfold answered 403 to our validation (may be IP-specific)",
      "validation": {
       "at": "2026-10-22T02:18:13Z",
       "vendor": "eightfold",
@@ -6258,7 +6258,7 @@
      "why": "validation failed",
      "member_key": "greenhouse-aurorainnovation",
      "provider_needed": "",
-     "note": "",
+     "note": "greenhouse/aurorainnovation answers 404; aurora.tech/careers serves no board link (JS)",
      "validation": {
       "at": "2026-10-22T02:18:28Z",
       "vendor": "greenhouse",
@@ -6331,33 +6331,37 @@
      "provider": "ashby",
      "endpoint": {
       "vendor": "ashby",
-      "tenant": "mistral-ai",
+      "tenant": "mistral.ai",
       "site": "",
       "host": "",
       "extra": {}
      },
      "where": "catalog_or_seed",
      "plan": "existing",
-     "outcome": "existing_unhealthy_or_moved",
-     "why": "validation failed",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
      "member_key": "ashby-mistral-ai",
      "provider_needed": "",
-     "note": "",
+     "note": "Catalog slug `mistral.ai` was crawled as `mistral-ai` (404) because the loader slugged the dot; fixed in job_ingest_worker._board_token. 222 jobs on 2026-10-21.",
      "validation": {
-      "at": "2026-10-22T02:18:28Z",
+      "at": "2026-10-22T05:09:40Z",
       "vendor": "ashby",
-      "status": "failed",
+      "status": "complete",
       "source_reported": null,
-      "parsed": 0,
-      "unique_ids": 0,
+      "parsed": 222,
+      "unique_ids": 222,
       "duplicate_rows": 0,
-      "requisitions": 0,
+      "requisitions": 222,
       "filtered_non_requisition": 0,
       "filtered_other_entity": 0,
       "http_statuses": [
-       "404"
+       "200"
       ],
-      "sample_titles": [],
+      "sample_titles": [
+       "AI Deployment Strategist - USA",
+       "Engineering Team Lead, Fleet Delivery",
+       "AI Scientist - Agentic Engineering"
+      ],
       "detail": "",
       "member_key": "ashby-mistral-ai"
      },
@@ -6602,7 +6606,7 @@
      "why": "validation blocked",
      "member_key": "ashby-confluent",
      "provider_needed": "",
-     "note": "",
+     "note": "ashby/confluent answers 200 with zero jobs; careers.confluent.io answered 429",
      "validation": {
       "at": "2026-10-22T02:18:31Z",
       "vendor": "ashby",
@@ -6818,7 +6822,7 @@
      "why": "validation failed",
      "member_key": "greenhouse-dbtlabsinc",
      "provider_needed": "",
-     "note": "",
+     "note": "greenhouse/dbtlabsinc answers 404; getdbt.com careers page shows Jibe/RMK hints, board not established",
      "validation": {
       "at": "2026-10-22T02:18:33Z",
       "vendor": "greenhouse",
@@ -7078,7 +7082,7 @@
      "why": "validation failed",
      "member_key": "greenhouse-hextechnologies",
      "provider_needed": "",
-     "note": "",
+     "note": "greenhouse/hextechnologies answers 404; hex.tech/careers serves no board link",
      "validation": {
       "at": "2026-10-22T02:18:35Z",
       "vendor": "greenhouse",
@@ -7162,7 +7166,7 @@
      "why": "validation failed",
      "member_key": "greenhouse-clickhouse",
      "provider_needed": "",
-     "note": "",
+     "note": "greenhouse/clickhouse answers 404; clickhouse.com careers serves no board link",
      "validation": {
       "at": "2026-10-22T02:18:36Z",
       "vendor": "greenhouse",
@@ -7186,40 +7190,44 @@
     {
      "company": "Amplitude",
      "disposition": "eligible_direct",
-     "evidence_state": "EXISTING",
-     "domain": "",
-     "provider": "greenhouse",
+     "evidence_state": "CHAIN",
+     "domain": "amplitude.com",
+     "provider": "ashby",
      "endpoint": {
-      "vendor": "greenhouse",
+      "vendor": "ashby",
       "tenant": "amplitude",
       "site": "",
       "host": "",
       "extra": {}
      },
-     "where": "catalog_or_seed",
-     "plan": "existing",
-     "outcome": "existing_unhealthy_or_moved",
-     "why": "validation failed",
-     "member_key": "greenhouse-amplitude",
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-amplitude",
      "provider_needed": "",
-     "note": "",
+     "note": "Moved: greenhouse/amplitude 404s; the official careers page links jobs.ashbyhq.com/amplitude. Catalog row repaired in place.",
      "validation": {
-      "at": "2026-10-22T02:18:36Z",
-      "vendor": "greenhouse",
-      "status": "failed",
+      "at": "2026-10-22T05:09:44Z",
+      "vendor": "ashby",
+      "status": "complete",
       "source_reported": null,
-      "parsed": 0,
-      "unique_ids": 0,
+      "parsed": 41,
+      "unique_ids": 41,
       "duplicate_rows": 0,
-      "requisitions": 0,
+      "requisitions": 41,
       "filtered_non_requisition": 0,
       "filtered_other_entity": 0,
       "http_statuses": [
-       "404"
+       "200"
       ],
-      "sample_titles": [],
+      "sample_titles": [
+       "Staff Software Engineer, Business Systems & Data",
+       "Social Media Manager",
+       "Senior Customer Success Architect"
+      ],
       "detail": "",
-      "member_key": "greenhouse-amplitude"
+      "member_key": "ashby-amplitude"
      },
      "domain_group": "data_science"
     },

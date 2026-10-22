@@ -129,7 +129,7 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Airtable", "ats": "greenhouse", "slug": "airtable", "industry": "tech"},
     {"display_name": "Akuna Capital", "ats": "greenhouse", "slug": "akunacapital", "industry": "fintech"},
     {"display_name": "Alloy", "ats": "greenhouse", "slug": "alloy", "industry": "fintech"},
-    {"display_name": "Amplitude", "ats": "greenhouse", "slug": "amplitude", "industry": "tech"},
+    {"display_name": "Amplitude", "ats": "ashby", "slug": "amplitude", "industry": "tech"},  # moved off greenhouse/amplitude (404) — official amplitude.com/careers links Ashby, 41 jobs 2026-10-21
     {"display_name": "Amwins", "ats": "greenhouse", "slug": "amwins", "industry": "insurance"},
     {"display_name": "Anduril Industries", "ats": "greenhouse", "slug": "andurilindustries", "industry": "aerospace_defense"},
     {"display_name": "Anthropic", "ats": "greenhouse", "slug": "anthropic", "industry": "tech"},
