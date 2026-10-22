@@ -24,10 +24,11 @@ Run by hand to read the misses:
 
     PYTHONPATH=shared/python python3 evals/eval_trust_context.py
 
-The gate in `evals/test_trust_context_eval.py` is set BELOW the measured
-numbers on purpose (see the docstring there): the rows are few, and a gate at
-exactly the measured value would invite memorising them. Misses are printed,
-not hidden. Do not add a rule whose only purpose is to flip one of these rows.
+The gates and the measured numbers live in `evals/test_trust_context_eval.py`.
+`HOLDOUT_B` is the clean generalisation figure (precision 1.0, recall 0.44 on
+first and only run); `HOLDOUT` was used once to fix a general logic error and
+is no longer clean. Misses are printed, not hidden. Do not add a rule whose
+only purpose is to flip one of these rows.
 """
 from __future__ import annotations
 
@@ -113,14 +114,56 @@ HOLDOUT: List[Tuple[str, str, Optional[str]]] = [
 ]
 
 
-def run(verbose: bool = True) -> Dict[str, Any]:
+# Second batch, written AFTER the first measurement and run ONCE before any
+# further change, because fixing the one miss in HOLDOUT (the "refundable
+# deposit ... for the laptop we ship you" row) made HOLDOUT's own numbers no
+# longer a clean held-out measurement. Report HOLDOUT_B separately.
+HOLDOUT_B: List[Tuple[str, str, Optional[str]]] = [
+    ("", "New associates are responsible for a one-time $75 uniform charge, payable on "
+         "acceptance of this offer.", "payment_request"),
+    ("", "Wire the onboarding deposit to the account in the attached PDF within 24 hours.",
+     "payment_request"),
+    ("", "To unlock your training portal, purchase the $129 software license from our "
+         "partner store.", "payment_request"),
+    ("", "Please reply with your full card number and expiry date for identity checks.",
+     "credential_request"),
+    ("", "Our onboarding agent will need your mother's maiden name, date of birth and SSN "
+         "before the interview.", "credential_request"),
+    ("", "Download Telegram and message @talent_team_hr with the code JP-42 to continue.",
+     "offplatform_contact"),
+    ("", "For faster processing, all interviews happen over WhatsApp text chat.",
+     "offplatform_contact"),
+    ("", "Your job is to receive customer payments into your personal account and forward "
+         "them by wire.", "money_mule"),
+    ("", "No interview needed - start earning today!", "too_good_to_be_true"),
+    ("", "We never charge job seekers - not for applications, not for training.", None),
+    ("", "Heads up: anyone requesting gift cards on our behalf is not affiliated with us.",
+     None),
+    ("Risk Analyst", "Analyze chargeback patterns and help customers recover funds lost to "
+                     "fake recruiters.", None),
+    ("Staff Engineer, Payments", "You will own the ledger that tracks card payments and "
+                                 "bank transfers across 40 countries.", None),
+    ("Product Manager, Messaging", "Drive the roadmap for our WhatsApp and Telegram "
+                                   "channel integrations.", None),
+    ("", "Relocation assistance and a home-office stipend are provided.", None),
+    ("", "Hourly pay: $28-$34 depending on experience.", None),
+    ("", "Questions? Email careers.team@outlook.com.", None),
+    ("", "You'll complete tax and direct deposit forms on your first day.", None),
+    ("Security Engineer", "Harden our SSO so employees are never prompted for passwords "
+                          "outside the identity provider.", None),
+    ("", "Must be able to pass a background check.", None),
+]
+
+
+def run(verbose: bool = True, rows: Optional[List[Tuple[str, str, Optional[str]]]] = None
+        ) -> Dict[str, Any]:
     from services.job_legitimacy_service import assess_posting_trust
 
     tp = fp = fn = tn = 0
     code_correct = 0
     misses: List[str] = []
     false_alarms: List[str] = []
-    for title, sentence, expected in HOLDOUT:
+    for title, sentence, expected in (rows if rows is not None else HOLDOUT):
         trust = assess_posting_trust({"title_raw": title or "Engineer",
                                       "employer_name": "Example Co",
                                       "description_text": sentence})
@@ -146,7 +189,7 @@ def run(verbose: bool = True) -> Dict[str, Any]:
     precision = tp / (tp + fp) if (tp + fp) else 1.0
     recall = tp / positives if positives else 1.0
     out = {
-        "rows": len(HOLDOUT), "positives": positives, "negatives": fp + tn,
+        "rows": len(rows if rows is not None else HOLDOUT), "positives": positives, "negatives": fp + tn,
         "tp": tp, "fp": fp, "fn": fn, "tn": tn,
         "precision": round(precision, 3), "recall": round(recall, 3),
         "code_accuracy_on_hits": round(code_correct / tp, 3) if tp else 1.0,
@@ -164,4 +207,7 @@ def run(verbose: bool = True) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
+    print("== HOLDOUT (36 rows) ==")
     run()
+    print("== HOLDOUT_B (20 rows, written after the first measurement) ==")
+    run(rows=HOLDOUT_B)
