@@ -125,7 +125,12 @@ def _top_matches(user_email: str, top_n: int) -> List[Dict[str, Any]]:
         sort=[("completed_at", -1)],
     )
     result = (job or {}).get("result") or {}
-    rows = result.get("apply_now") or []
+    rows = [r for r in (result.get("apply_now") or []) if isinstance(r, dict)]
+    # The user's direct-employer policy, re-applied at SEND time: a stored
+    # pipeline result may predate the policy or the user's latest choice, and
+    # an email is the one surface that cannot be corrected after it leaves.
+    from services import employer_policy as ep
+    rows, _block = ep.apply([dict(r) for r in rows], ep.get_prefs(user_email))
     out: List[Dict[str, Any]] = []
     for r in rows[: max(0, top_n)]:
         out.append({

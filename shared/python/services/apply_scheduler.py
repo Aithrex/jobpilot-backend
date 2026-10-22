@@ -546,6 +546,11 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
     #    Auto Aggressive / Autopilot users get matching postings queued daily
     #    (hourly sweep) without waiting for a manual click.
     fresh: List[Dict[str, Any]] = []  # this tick's rows that still need a go-ahead
+    # The user's direct-employer policy, read once per user tick. A SAVED job
+    # the policy excludes is not applied to unattended: saving is not consent
+    # to an unattended application at a firm the user's own policy excludes.
+    from services import employer_policy as _ep
+    _policy_prefs = _ep.get_prefs(email)
     for saved in _saved_jobs(email)[: match_cap * 3]:
         if out["enqueued"] >= match_cap:
             break
@@ -561,6 +566,11 @@ def _run_user_hourly(email: str) -> Dict[str, int]:
             continue
         if _is_closed(fields["posting_closes_at"], now=now):
             out["skipped_closed"] += 1
+            continue
+        _jd = dict(saved.get("job_data") or {})
+        _allowed, _blk = _ep.apply([_jd], _policy_prefs, now=now)
+        if not _allowed:
+            out["skipped_policy"] = out.get("skipped_policy", 0) + 1
             continue
         try:
             identity = als.normalized_job_identity(

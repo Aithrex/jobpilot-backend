@@ -1137,6 +1137,39 @@ def _feed_from_inventory(source: str, payload: Dict[str, Any]) -> Optional[Dict[
         return None
 
 
+def _apply_employer_policy(payload: Any, user_email: str,
+                           list_keys: Tuple[str, ...] = ("jobs",)) -> Any:
+    """The user's direct-employer policy on a legacy result / partial, in place.
+
+    The SAME `employer_policy.apply` the tech feed and inventory tabs run, so
+    a live-crawl fallback, the legacy search and the pipeline cannot show what
+    the feed hides. A payload that already carries `policy` (the inventory
+    path applied it) is left alone. `_raw_jobs` - the wide list job search
+    caches for re-filtering - is filtered too, or it would carry every
+    excluded row back to the client.
+
+    Fails OPEN with a visible marker: a registry outage must not blank a
+    search, and `policy.error` says the rows were not checked.
+    """
+    if not isinstance(payload, dict) or isinstance(payload.get("policy"), dict):
+        return payload
+    try:
+        from services import employer_policy as ep
+        prefs = ep.get_prefs(user_email) if user_email else ep.default_prefs()
+        ep.apply_to_payload(payload, prefs, list_keys)
+        raw = payload.get("_raw_jobs")
+        if isinstance(raw, list):
+            kept, _ = ep.apply([r for r in raw if isinstance(r, dict)], prefs)
+            ep.strip_internal(kept)
+            payload["_raw_jobs"] = kept
+    except Exception as exc:
+        logger.warning("employer policy skipped on legacy payload (%s)",
+                       type(exc).__name__)
+        payload["policy"] = {"error": "policy_unavailable",
+                             "version": "employer-policy-1.0.0"}
+    return payload
+
+
 def _stamp_job_logos(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Add `logo_url` to a search result/partial's `jobs` rows, in place.
 
@@ -2270,6 +2303,8 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 partial = dict(partial)
                 if mode == "single":
                     partial["page"] = int(payload.get("page", 1) or 1)
+                # A streamed partial is shown to the user too.
+                _apply_employer_policy(partial, common["user_email"])
                 svc.update_job_partial(job_id, partial)
 
             if mode == "single":
@@ -2285,7 +2320,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                     partial_cb=_stream_partial,
                     **common,
                 )
-            svc.complete_job(job_id, result)
+            svc.complete_job(job_id, _apply_employer_policy(result, common["user_email"]))
 
         elif job_type == "tech_feed_search":
             # ADR-005 unified feed. The search itself is a bounded inventory
@@ -2307,10 +2342,12 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 from services.workday_jobs_service import run_workday_jobs_search
 
                 def _stream_workday_partial(partial: dict) -> None:
-                    svc.update_job_partial(job_id, _stamp_job_logos(partial))
+                    svc.update_job_partial(job_id, _stamp_job_logos(_apply_employer_policy(
+                        dict(partial), str(payload.get("user_email") or ""))))
 
                 result = run_workday_jobs_search(payload, partial_cb=_stream_workday_partial)
-            svc.complete_job(job_id, _stamp_job_logos(result))
+            svc.complete_job(job_id, _stamp_job_logos(_apply_employer_policy(
+                result, str(payload.get("user_email") or ""))))
 
         elif job_type == "career_pages":
             result = _feed_from_inventory("career-pages", payload)
@@ -2318,19 +2355,23 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 from services.career_pages_service import run_career_pages_search
 
                 def _stream_career_partial(partial: dict) -> None:
-                    svc.update_job_partial(job_id, _stamp_job_logos(partial))
+                    svc.update_job_partial(job_id, _stamp_job_logos(_apply_employer_policy(
+                        dict(partial), str(payload.get("user_email") or ""))))
 
                 result = run_career_pages_search(payload, partial_cb=_stream_career_partial)
-            svc.complete_job(job_id, _stamp_job_logos(result))
+            svc.complete_job(job_id, _stamp_job_logos(_apply_employer_policy(
+                result, str(payload.get("user_email") or ""))))
 
         elif job_type == "mnc_jobs":
             from services.mnc_jobs_service import run_mnc_search
 
             def _stream_mnc_partial(partial: dict) -> None:
-                svc.update_job_partial(job_id, _stamp_job_logos(partial))
+                svc.update_job_partial(job_id, _stamp_job_logos(_apply_employer_policy(
+                    dict(partial), str(payload.get("user_email") or ""))))
 
             result = run_mnc_search(payload, partial_cb=_stream_mnc_partial)
-            svc.complete_job(job_id, _stamp_job_logos(result))
+            svc.complete_job(job_id, _stamp_job_logos(_apply_employer_policy(
+                result, str(payload.get("user_email") or ""))))
 
         elif job_type == "daily_pipeline":
             # Idempotency guard — Lambda async invocations are at-least-once,
@@ -2376,6 +2417,12 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             )
             # Surface which token tier was used so the UI can display it.
             result["used_user_apify_key"] = bool(user_key)
+            # The pipeline's two SERVED lists go through the same policy; the
+            # morning digest reads `apply_now` from this stored result.
+            _apply_employer_policy(result, user_email, ("apply_now", "verify_dates"))
+            if isinstance(result.get("totals"), dict):
+                result["totals"]["apply_now"] = len(result.get("apply_now") or [])
+                result["totals"]["verify_dates"] = len(result.get("verify_dates") or [])
             svc.complete_job(job_id, result)
 
             # Scheduled morning-digest path: once the pipeline result is

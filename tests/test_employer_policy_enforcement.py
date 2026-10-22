@@ -210,3 +210,22 @@ def test_legacy_payload_path_filters_and_counts():
     c = out["policy"]["excluded_counts"]
     assert c["consultancy"] == 1 and c["staffing"] == 1 and c["client_placement"] == 1
     assert "_employer_profile" not in out["jobs"][0]
+
+
+def test_legacy_async_results_and_raw_cache_are_filtered(db):
+    """`/api/jobs/search`, the crawl fallbacks and the pipeline complete through
+    `resume_service._apply_employer_policy`; `_raw_jobs` must not leak."""
+    from services.resume_service import _apply_employer_policy
+    rows = lambda: [  # noqa: E731
+        {"company": "Capgemini", "title": "Dev", "apply_link": "https://careers.capgemini.com/1"},
+        {"company": "Zyxwv Labs", "title": "Dev", "apply_link": "https://linkedin.com/jobs/9"}]
+    res = _apply_employer_policy({"jobs": rows(), "_raw_jobs": rows(), "total": 2}, USER)
+    assert [j["company"] for j in res["jobs"]] == ["Zyxwv Labs"]
+    assert [j["company"] for j in res["_raw_jobs"]] == ["Zyxwv Labs"]
+    assert res["policy"]["excluded_counts"]["consultancy"] == 1
+    pipe = _apply_employer_policy({"apply_now": rows(), "verify_dates": rows()}, USER,
+                                  ("apply_now", "verify_dates"))
+    assert len(pipe["apply_now"]) == 1 and len(pipe["verify_dates"]) == 1
+    # An inventory payload that already carries a policy block is untouched.
+    pre = {"jobs": rows(), "policy": {"preset": "off"}}
+    assert len(_apply_employer_policy(pre, USER)["jobs"]) == 2
