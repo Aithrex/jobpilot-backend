@@ -1,6 +1,6 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T05:46:26Z",
+ "generated_at": "2026-10-22T07:49:58Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
