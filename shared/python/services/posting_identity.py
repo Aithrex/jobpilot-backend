@@ -76,6 +76,13 @@ _COLLECTION_SEGMENTS = frozenset({
     "o", "view", "requisition", "requisitions",
 })
 
+#: A job id carried in a hash-routed portal's FRAGMENT: JobDiva
+#: `portal/?a=<company>#/jobs/33273835`, RippleHire `#detail/job/61907`. The
+#: query names only the company, so without the fragment three different jobs
+#: share one URL (Scalence, 2026-10-21 capture).
+_FRAGMENT_JOB_RE = re.compile(r"(?:^|[/#?&])(?:jobs?|requisitions?|req|jobid|job_id)[/=]"
+                              r"([A-Za-z0-9_-]*\d{2,}[A-Za-z0-9_-]*)", re.IGNORECASE)
+
 _LOCALE_RE = re.compile(r"^[a-z]{2}([-_][a-z]{2,4})?$", re.IGNORECASE)
 _UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
                       re.IGNORECASE)
@@ -132,6 +139,8 @@ def is_job_specific_url(url: Any) -> bool:
     host, path, kept = parts
     if any(k.lower() in _JOB_ID_PARAMS for k, _ in kept):
         return True
+    if fragment_job_id(url):
+        return True
     segments = [s for s in path.split("/") if s]
     segments = [s for s in segments if not _LOCALE_RE.match(s) or _is_id_like(s)]
     tenant_n = _ats_tenant_segments(host)
@@ -149,6 +158,15 @@ def is_job_specific_url(url: Any) -> bool:
                 nxt not in _GENERIC_SEGMENTS for nxt in lowered[i + 1:]):
             return True
     return False
+
+
+def fragment_job_id(url: Any) -> str:
+    """The job id a hash-routed portal keeps after `#`, or ""."""
+    raw = str(url or "")
+    if "#" not in raw:
+        return ""
+    m = _FRAGMENT_JOB_RE.search(raw.split("#", 1)[1])
+    return m.group(1) if m else ""
 
 
 def _split(url: Any) -> Optional[Tuple[str, str, List[Tuple[str, str]]]]:
@@ -175,8 +193,9 @@ def apply_url_key(url: Any) -> str:
     """One posting's application link reduced to what identifies the job.
 
     Same output format as the frontend's `applyUrlKey` -
-    ``host/path?sorted-functional-query`` - with two deliberate additions the
-    frontend should adopt: `jr_id`/`iis`/`iisn` are tracking, and a URL that
+    ``host/path?sorted-functional-query`` - with three deliberate additions
+    the frontend should adopt: `jr_id`/`iis`/`iisn` are tracking; a job id in
+    a hash-routed portal's fragment is kept (`#job=<id>`); and a URL that
     names no specific job returns ``""`` (unusable as a key) rather than a key
     that would collapse every job behind one portal.
 
@@ -189,7 +208,10 @@ def apply_url_key(url: Any) -> str:
     if not is_job_specific_url(url):
         return ""
     query = ("?" + urlencode(kept)) if kept else ""
-    return f"{host}{path}{query}"
+    frag = fragment_job_id(url)
+    # The frontend drops the fragment entirely; for a hash-routed portal that
+    # is the only place the job id lives, so it is kept here as `#job=<id>`.
+    return f"{host}{path}{query}" + (f"#job={frag}" if frag else "")
 
 
 # ---------------------------------------------------------------------------

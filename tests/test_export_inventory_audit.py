@@ -19,6 +19,7 @@ from services import job_inventory_service as inv
 ROOT = Path(__file__).resolve().parent.parent
 T0 = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
 AS_OF = T0 + timedelta(hours=1)
+# Generic portal with NO job id anywhere (the worst case): must never merge.
 PORTAL = "https://www1.jobdiva.com/portal/?a=aljdnw0qolq9pzanc6e7lzw46uuoh200575&jr_id={}"
 
 
