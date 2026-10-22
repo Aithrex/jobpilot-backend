@@ -721,13 +721,27 @@ def public_title_seed(user_email: str) -> Dict[str, Any]:
     fp = fingerprint_assets(assets)
     resume_titles = union_titles_from_assets(assets)
     stored = load_title_seed(user_email)
+    if stored.get("fingerprint") != fp or stored.get("resume_titles") != resume_titles:
+        _persist_union(user_email, fp, resume_titles, stored)
+    return dict(search_titles_view(user_email, assets, stored),
+                resume_count=len(assets), cached=True)
+
+
+def search_titles_view(user_email: str, assets: List[Dict[str, Any]],
+                       stored: Dict[str, Any]) -> Dict[str, Any]:
+    """What a user SEARCHES with, computed without writing anything.
+
+    The single definition `public_title_seed` serves and the read-only feed
+    audit (`scripts/user_feed_fidelity_audit.py`) replays, so the audit can
+    never measure a search the product does not run.
+    """
+    fp = fingerprint_assets(assets)
+    resume_titles = union_titles_from_assets(assets)
     synth: List[str] = []
     if stored.get("synth_fingerprint") == fp:
         raw = stored.get("synth_titles") or []
         if isinstance(raw, list):
             synth = [str(t).strip() for t in raw if str(t).strip()][:TITLE_CAP]
-    if stored.get("fingerprint") != fp or stored.get("resume_titles") != resume_titles:
-        _persist_union(user_email, fp, resume_titles, stored)
     degrees = degrees_from_assets(assets)
     plan = domain_title_plan(resume_titles, degrees, _declared_targets(user_email))
     # A stored synth from the software-only suggester carries software and
@@ -759,8 +773,6 @@ def public_title_seed(user_email: str) -> Dict[str, Any]:
         # so a client can remove them without classifying anything itself.
         "off_domain_titles": off,
         "discipline": plan.get("discipline"),
-        "resume_count": len(assets),
-        "cached": True,
     }
 
 
