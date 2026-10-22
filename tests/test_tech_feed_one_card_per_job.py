@@ -40,6 +40,17 @@ def db():
         d[c].delete_many({})
 
 
+@pytest.fixture(autouse=True)
+def _policy_off(monkeypatch):
+    """These tests measure PAGINATION recall against a pure Mongo truth set;
+    the employer policy is orthogonal and has its own cross-page tests
+    (`test_employer_policy_enforcement.py`). Seeded rows carry verifications
+    up to 200h old, which strict mode would rightly hide."""
+    from services import employer_policy as ep
+    monkeypatch.setattr(tfs, "_load_policy_prefs",
+                        lambda req: ep.normalize_prefs({"preset": "off"}))
+
+
 def _seed(d, rng, now, *, jobs):
     """`jobs` roles; each open in 1-4 cities, some cities twice, and some
     openings also listed by a second source."""

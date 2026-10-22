@@ -272,6 +272,11 @@ def _empty_block(prefs: Dict[str, Any]) -> Dict[str, Any]:
     return block
 
 
+def empty_block(prefs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """A zero-count policy block for an empty or failed list."""
+    return _empty_block(prefs or default_prefs())
+
+
 def apply(rows: Sequence[Dict[str, Any]], prefs: Optional[Dict[str, Any]] = None,
           *, now: Optional[datetime] = None, resolve: bool = True
           ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:

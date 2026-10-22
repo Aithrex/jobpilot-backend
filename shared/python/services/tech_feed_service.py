@@ -788,6 +788,10 @@ _PROJECTION = {
     # board. Every employer-shaped operation below PREFERS it and falls back
     # to `(ats, tenant)`, which is what they all keyed on before.
     "canonical_employer_id": 1, "canonical_employer_basis": 1,
+    # employer-policy-1.0.0: what `posting_profile.availability` and the
+    # relationship classifier read. All stored scalars; no body.
+    "last_seen_at": 1, "closed_at": 1, "closed_reason": 1,
+    "liveness_probed_at": 1, "liveness_dead_strikes": 1, "posting_signals": 1,
 }
 
 #: The retrieval projection. `requirements` is DELIBERATELY absent.
@@ -2126,6 +2130,11 @@ def _card(row: Dict[str, Any], *, now: datetime) -> Dict[str, Any]:
                 "employer_name_conflict", "employer_name_variants"):
         if key in row:
             card[key] = row[key]
+    # employer-policy-1.0.0 (contract C1-C4). `direct_apply` above is the
+    # APPLICATION PATH only; `employer_profile.kind` is the employer.
+    for key in ("employer_profile", "posting_profile", "availability", "trust"):
+        if key in row:
+            card[key] = row[key]
     return card
 
 
@@ -2139,7 +2148,8 @@ def _save_session(*, search_id: str, req: Dict[str, Any], order: List[str],
                   source_health: Dict[str, Any], warnings: List[str],
                   keyset: Optional[Dict[str, Any]] = None,
                   total_matched: Optional[int] = None,
-                  total_is_exact: bool = True) -> None:
+                  total_is_exact: bool = True,
+                  policy: Optional[Dict[str, Any]] = None) -> None:
     now = _now()
     try:
         _sessions().update_one(
@@ -2164,6 +2174,7 @@ def _save_session(*, search_id: str, req: Dict[str, Any], order: List[str],
                 "coverage": coverage,
                 "source_health": source_health,
                 "warnings": warnings,
+                "policy": policy,
                 "feed_version": FEED_VERSION,
                 "created_at": now,
                 "expire_at": now + timedelta(seconds=SESSION_TTL_SECONDS),
@@ -2827,17 +2838,41 @@ def search(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     started = time.perf_counter()
     req = normalize_request(payload)
+    # The user's direct-employer policy, read ONCE per request and applied to
+    # every page of every phase - including cursor pages, so a preference
+    # changed mid-scroll takes effect on the next page rather than after the
+    # session expires.
+    prefs = _load_policy_prefs(req)
     cursor = decode_cursor(payload.get("cursor"))
     if cursor:
         search_id, offset, keyset = cursor
         if keyset is not None:
-            return _serve_keyset_page(search_id, keyset, req, started)
-        return _serve_page(search_id, offset, req, started)
-    return _run_search(req, started)
+            return _serve_keyset_page(search_id, keyset, req, started, prefs=prefs)
+        return _serve_page(search_id, offset, req, started, prefs=prefs)
+    return _run_search(req, started, prefs=prefs)
 
 
-def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
+def _load_policy_prefs(req: Dict[str, Any]) -> Dict[str, Any]:
+    from services import employer_policy as ep
+    return ep.get_prefs(req.get("user_email"))
+
+
+def _apply_policy(rows: List[Dict[str, Any]], req: Dict[str, Any],
+                  prefs: Optional[Dict[str, Any]]
+                  ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """THE shared policy (`employer_policy.apply`), with the request's own
+    `employer_kind` honoured as the user's intentional choice."""
+    from services import employer_policy as ep
+    eff = ep.effective_prefs(prefs or ep.default_prefs(),
+                             employer_kind=req.get("employer_kind"))
+    return ep.apply(rows, eff)
+
+
+def _run_search(req: Dict[str, Any], started: float, *,
+                prefs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     now = _now()
+    if prefs is None:
+        prefs = _load_policy_prefs(req)
     warnings: List[str] = []
 
     # ONE read of the user's work authorization per search, reused by `rank`,
@@ -2886,6 +2921,11 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
         suppressed = tech_feed_feedback.suppressed_for(req["user_email"])
 
     t = time.perf_counter()
+    # Business models for the WHOLE candidate set, one registry `$in`, BEFORE
+    # the hard filter - its `employer_kind` test and the policy stage below
+    # must read the same answer.
+    from services import employer_business_model as ebm
+    ebm.resolve_rows(docs)
     kept, drops = hard_filter(docs, req, suppressed=suppressed)
     diagnostics["filter_ms"] = round((time.perf_counter() - t) * 1000, 1)
     # `filtered_out` is published further down, AFTER the employer-scope and
@@ -2926,6 +2966,14 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
              tech_only_dropped["unclassified"])) if v})
     if _cat_dropped:
         drops["company_category_dropped"] = _cat_dropped
+    # === employer policy (employer-policy-1.0.0) ============================
+    # BEFORE dedupe and the location collapse, so a copy the user is never
+    # shown cannot win a dedupe group and hide a copy they would be shown.
+    kept, policy_block = _apply_policy(kept, req, prefs)
+    policy_block["scope"] = "ranked_window"
+    for _reason, _n in policy_block["excluded_counts"].items():
+        if _n:
+            drops[f"employer_policy:{_reason}"] = _n
     diagnostics["filtered_out"] = dict(sorted(drops.items(), key=lambda kv: -kv[1]))
 
     profile, skills, years = _load_profile(req)
@@ -2995,6 +3043,15 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
         if _facet in exact:
             facets[_facet] = exact[_facet]
     facets["_exactness"] = exact.get("_exactness") or {}
+    # The exact counts are Mongo counts over the retrieval filter, i.e. BEFORE
+    # every Python stage (hard filters AND the employer policy) - the same
+    # scope as `total`. The windowed facets are after both. Said, not implied.
+    facets["_policy"] = {"applied": sorted(set(facets) - {"seniority", "work_mode",
+                                                          "country", "date_window",
+                                                          "_exactness"}),
+                         "not_applied": ["seniority", "work_mode", "country",
+                                         "date_window"],
+                         "version": policy_block["version"]}
     facets["date_window_is_exact"] = bool(exact.get("date_window_is_exact"))
     diagnostics["facet_ms"] = round((time.perf_counter() - t) * 1000, 1)
     order = [str(r.get("job_id") or "") for r in kept if r.get("job_id")]
@@ -3014,7 +3071,7 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
                   coverage=coverage, source_health=health, warnings=warnings,
                   keyset=keyset if truncated else None,
                   total_matched=total_matched or len(order),
-                  total_is_exact=total_is_exact)
+                  total_is_exact=total_is_exact, policy=policy_block)
 
     if not order:
         suggestions = broadening_suggestions(req, diagnostics.get("filtered_out") or {})
@@ -3053,7 +3110,8 @@ def _run_search(req: Dict[str, Any], started: float) -> Dict[str, Any]:
         has_more=has_more, total=int(total_matched or len(order)),
         facets=facets, watermark=watermark,
         coverage=coverage, source_health=health, warnings=warnings,
-        diagnostics=diagnostics, started=started, work_auth=wa_ctx)
+        diagnostics=diagnostics, started=started, work_auth=wa_ctx,
+        policy=policy_block)
 
 
 def _position_of(doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -3267,7 +3325,9 @@ def _one_card_per_job_across_pages(rows: List[Dict[str, Any]], *,
                                    stored_req: Dict[str, Any], suppressed: Any,
                                    projection: Dict[str, Any],
                                    window_end: Optional[Dict[str, Any]],
-                                   wa_ctx: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+                                   wa_ctx: Dict[str, Any],
+                                   prefs: Optional[Dict[str, Any]] = None
+                                   ) -> Optional[List[Dict[str, Any]]]:
     """Which of `rows` are cards, judged against EVERYTHING the traversal
     serves rather than against this page. Returns None when it cannot decide
     (the caller then collapses within the page, as before).
@@ -3357,7 +3417,11 @@ def _one_card_per_job_across_pages(rows: List[Dict[str, Any]], *,
 
     for doc in siblings:
         doc["_tech"] = _read_time_tech(doc)
+    from services import employer_business_model as ebm
+    ebm.resolve_rows(siblings)
     siblings, _ = hard_filter(siblings, stored_req, suppressed=suppressed)
+    # A sibling the POLICY hides cannot claim a card either.
+    siblings, _ = _apply_policy(siblings, stored_req, prefs)
     _resolve_employers(siblings)
     siblings, _ = filter_company_categories(siblings, stored_req)
     if stored_req["employer_scope"] == EMPLOYER_SCOPE_TECH:
@@ -3383,7 +3447,8 @@ def _one_card_per_job_across_pages(rows: List[Dict[str, Any]], *,
 
 
 def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
-                       req: Dict[str, Any], started: float) -> Dict[str, Any]:
+                       req: Dict[str, Any], started: float, *,
+                       prefs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Continue a search PAST the ranked window, by index position.
 
     This is the half of paging that has no ceiling. `_serve_page` replays a
@@ -3431,6 +3496,11 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
 
     profile, skills, years = _load_profile(stored_req)
     wa_ctx = _work_auth_context(stored_req)
+    if prefs is None:
+        prefs = _load_policy_prefs(stored_req)
+    from services import employer_business_model as ebm
+    from services import employer_policy as ep
+    hop_policies: List[Dict[str, Any]] = []
 
     kept: List[Dict[str, Any]] = []
     scanned = 0
@@ -3465,7 +3535,12 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
         cursor_key = _position_of(batch[-1])
         for doc in batch:
             doc["_tech"] = _read_time_tech(doc)
+        ebm.resolve_rows(batch)
         survivors, _drops = hard_filter(batch, stored_req, suppressed=suppressed)
+        # The SAME policy as the ranked window, per hop, before the
+        # cross-page dedupe, counted per hop and summed for this page.
+        survivors, _hop_policy = _apply_policy(survivors, stored_req, prefs)
+        hop_policies.append(_hop_policy)
         kept.extend(survivors)
         if len(batch) < hop:
             # This phase is drained. In the DATED phase that is NOT the end of
@@ -3505,7 +3580,8 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
         chunk = kept[decided:decided + step]
         out = _one_card_per_job_across_pages(
             chunk, pool=kept, base=base, stored_req=stored_req, suppressed=suppressed,
-            projection=projection, window_end=session.get("keyset"), wa_ctx=wa_ctx)
+            projection=projection, window_end=session.get("keyset"), wa_ctx=wa_ctx,
+            prefs=prefs)
         if out is None:
             collapsed_across_pages = False
             cards = _collapse_location_variants(inventory_feed._dedupe(kept))
@@ -3557,7 +3633,9 @@ def _serve_keyset_page(search_id: str, keyset: Dict[str, Any],
                      "exhausted": exhausted,
                      "collapsed_across_pages": collapsed_across_pages,
                      "keyset_ms": round((time.perf_counter() - t) * 1000, 1)},
-        started=started, work_auth=wa_ctx)
+        started=started, work_auth=wa_ctx,
+        policy=_session_policy(session, ep.merge_blocks(hop_policies)
+                               or ep.empty_block(prefs), keyset=True))
 
 
 def attach_sponsorship_signals(rows: Sequence[Dict[str, Any]]) -> Dict[str, int]:
@@ -3673,7 +3751,8 @@ def _clearance_of(row: Dict[str, Any]) -> Optional[bool]:
 
 
 def _serve_page(search_id: str, offset: int, req: Dict[str, Any],
-                started: float) -> Dict[str, Any]:
+                started: float, *, prefs: Optional[Dict[str, Any]] = None
+                ) -> Dict[str, Any]:
     session = _load_session(search_id, req.get("user_email") or "")
     if not session:
         # An expired or foreign cursor is not an error the user caused. Say so
@@ -3689,7 +3768,8 @@ def _serve_page(search_id: str, offset: int, req: Dict[str, Any],
     if not slice_ids:
         session_keyset = session.get("keyset")
         if session_keyset:
-            return _serve_keyset_page(search_id, session_keyset, req, started)
+            return _serve_keyset_page(search_id, session_keyset, req, started,
+                                      prefs=prefs)
         return _envelope(
             search_id=search_id, req=session.get("applied_filters") or req,
             jobs=[], next_cursor=None, has_more=False,
@@ -3700,7 +3780,8 @@ def _serve_page(search_id: str, offset: int, req: Dict[str, Any],
             source_health=session.get("source_health") or {},
             warnings=session.get("warnings") or [],
             diagnostics={"served_from": "session"}, started=started,
-            work_auth=_work_auth_context(req))
+            work_auth=_work_auth_context(req),
+            policy=_session_policy(session, None))
 
     from services import job_inventory_service as inv
     docs = list(inv._postings().find({"job_id": {"$in": slice_ids}},
@@ -3718,6 +3799,12 @@ def _serve_page(search_id: str, offset: int, req: Dict[str, Any],
     for doc in ordered:
         doc["_tech"] = _read_time_tech(doc)
     _resolve_employers(ordered)
+    # Re-applied on every replayed page with the CURRENT preference: the order
+    # was filtered when the search ran, so this normally removes nothing; when
+    # the user changed their policy since, the page is short and says why.
+    if prefs is None:
+        prefs = _load_policy_prefs(stored_req)
+    ordered, page_policy = _apply_policy(ordered, stored_req, prefs)
     profile, skills, years = _load_profile(stored_req)
     wa_ctx = _work_auth_context(stored_req)
     # Unconditional: the work-auth badge is not a personalization, and a page
@@ -3761,7 +3848,25 @@ def _serve_page(search_id: str, offset: int, req: Dict[str, Any],
         source_health=session.get("source_health") or {},
         warnings=warnings,
         diagnostics={"served_from": "session", "page_offset": offset},
-        started=started, work_auth=wa_ctx)
+        started=started, work_auth=wa_ctx,
+        policy=_session_policy(session, page_policy))
+
+
+def _session_policy(session: Dict[str, Any], page: Optional[Dict[str, Any]],
+                    *, keyset: bool = False) -> Dict[str, Any]:
+    """The policy block a cursor page carries: the ranked window's counts from
+    search time (the same numbers page one showed) plus what THIS page removed.
+    Counts are never re-estimated or extrapolated to the unread remainder."""
+    from services import employer_policy as ep
+    base = dict(session.get("policy") or page or ep.empty_block())
+    base.setdefault("scope", "ranked_window")
+    if page is not None:
+        base["page"] = {"scope": "keyset_page" if keyset else "page",
+                        "excluded_counts": page.get("excluded_counts") or {},
+                        "examined": page.get("examined", 0),
+                        "kept": page.get("kept", 0),
+                        "unverified_shown": page.get("unverified_shown", 0)}
+    return base
 
 
 def _company_docs_for(names: Iterable[str]) -> Dict[str, Dict[str, Any]]:
@@ -4196,8 +4301,10 @@ def _envelope(*, search_id: str, req: Dict[str, Any], jobs: List[Dict[str, Any]]
               coverage: Dict[str, Any], source_health: Dict[str, Any],
               warnings: List[str], diagnostics: Dict[str, Any],
               started: float,
-              work_auth: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+              work_auth: Optional[Dict[str, Any]] = None,
+              policy: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from services import fit_score
+    from services import employer_policy as ep
     from services import tech_taxonomy as tx
     diagnostics = dict(diagnostics)
     diagnostics["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
@@ -4227,6 +4334,10 @@ def _envelope(*, search_id: str, req: Dict[str, Any], jobs: List[Dict[str, Any]]
         "warnings": warnings,
         "broadening_suggestions": diagnostics.get("broadening_suggestions") or [],
         "diagnostics": diagnostics,
+        # employer-policy-1.0.0 (contract C6): every served list says which
+        # policy ran and how many rows each reason removed. Never relaxed to
+        # fill a page.
+        "policy": policy or ep.empty_block(),
     }
 
 

@@ -48,6 +48,17 @@ SWE_JD = ("Backend Engineer. Build services with Python, AWS and PostgreSQL. "
           "3+ years of experience.")
 
 
+@pytest.fixture(autouse=True)
+def _policy_off(monkeypatch):
+    """Recall-past-the-window is measured against Mongo truth sets whose
+    undated rows were verified days ago (seeded from `first_seen_days`); strict
+    employer policy would rightly hide those as stale. The policy has its own
+    cross-page tests (`test_employer_policy_enforcement.py`)."""
+    from services import employer_policy as ep
+    monkeypatch.setattr(tfs, "_load_policy_prefs",
+                        lambda req: ep.normalize_prefs({"preset": "off"}))
+
+
 @pytest.fixture()
 def db(monkeypatch):
     monkeypatch.delenv("RESUME_S3_BUCKET", raising=False)
