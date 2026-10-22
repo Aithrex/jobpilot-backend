@@ -159,6 +159,21 @@ def test_anonymous_client_placement_even_at_unknown_employer():
     assert kept == [] and block["excluded_counts"]["client_placement"] == 1
 
 
+def test_unanticipated_client_sites_is_a_placement():
+    # AGAP Technologies, served at 88 on 2026-10-22.
+    row = _fresh(employer_name="AGAP TECHNOLOGIES INC", title_raw="SOFTWARE DEVELOPER",
+                 description="Work under supervision. Travel and/or relocation to "
+                             "unanticipated client sites throughout USA is required.")
+    kept, block = ep.apply([row], ep.default_prefs(), now=NOW, resolve=False)
+    assert row["posting_profile"]["relationship"] == "undisclosed_client"
+    assert kept == [] and block["excluded_counts"]["client_placement"] == 1
+
+
+def test_a_consultant_travelling_to_clients_is_not_a_placement():
+    for text in ("Travel up to 50% to client sites.", "Travel to customer sites as needed."):
+        assert "undisclosed_client" not in pp.signals_from_text("Senior Consultant", text)
+
+
 def test_named_client():
     row = _fresh(employer_name="Somefirm", description="End Client: Wells Fargo. Onsite.")
     assert pp.classify_posting(row, "unknown")["relationship"] == "named_client"

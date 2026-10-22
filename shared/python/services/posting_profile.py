@@ -86,6 +86,17 @@ _UNDISCLOSED_RE = re.compile(
     r"prestigious|fortune \d+|reputed|renowned)\s+){0,3}client\b(?!s)|"
     r"end[- ]client|direct client|confidential client|implementation partner|"
     r"prime vendor|client is (?:seeking|looking|hiring))", re.IGNORECASE)
+#: Placement at client sites the posting cannot name. "Relocation to various
+#: unanticipated locations / client sites" is the labor-condition wording
+#: H-1B consultancies print on a role that is a placement, not a desk at the
+#: poster (AGAP Technologies, 2026-10-22: "Travel and/or relocation to
+#: unanticipated client sites throughout USA is required"). Deliberately NOT
+#: bare "travel to client sites": a Big-4 consultant travels to clients and is
+#: still the firm's own employee, and consultancies are shown by default.
+_CLIENT_SITE_PLACEMENT_RE = re.compile(
+    r"\b(unanticipated\s+(?:client\s+)?(?:work\s+)?(?:sites?|locations?)|"
+    r"(?:placed|deployed|assigned)\s+(?:at|to|on)\s+(?:our\s+|various\s+|multiple\s+)?"
+    r"client(?:s'|'s)?\s+(?:sites?|locations?|projects?))", re.IGNORECASE)
 _NAMED_CLIENT_RE = re.compile(
     r"\b(?i:end[- ]client|client(?: name)?)\s*[:\-–]\s*([A-Z][\w&.,' -]{1,40})")
 _C2C_RE = re.compile(r"\b(c2c|corp[- ]?to[- ]?corp|corp2corp)\b", re.IGNORECASE)
@@ -146,7 +157,7 @@ def signals_from_text(title: Any, text: Any = "") -> List[str]:
             out.append(code)
 
     both = t + "\n" + body
-    if _UNDISCLOSED_RE.search(both):
+    if _UNDISCLOSED_RE.search(both) or _CLIENT_SITE_PLACEMENT_RE.search(both):
         add("undisclosed_client")
     m = _NAMED_CLIENT_RE.search(both)
     if m:
