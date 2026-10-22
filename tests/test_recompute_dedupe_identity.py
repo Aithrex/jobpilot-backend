@@ -49,3 +49,27 @@ def test_apply_splits_the_collapsed_group_and_rollback_restores_it(db):
     docs = list(db.job_postings.find())
     assert {d["dedupe_group_id"] for d in docs} == {"old-shared"}
     assert not any("identity_prev" in d for d in docs)
+
+
+def test_writes_are_batched_and_a_stopped_run_resumes(mock_db):
+    """One round trip per page; a re-run after a partial apply changes nothing
+    it already wrote and finishes the rest."""
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "recompute_bulk", Path(__file__).resolve().parents[1] / "scripts" / "recompute_dedupe_identity.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    coll = mock_db.job_postings
+    for i in range(25):
+        coll.insert_one({"status": "active", "source": "greenhouse", "ats": "greenhouse",
+                         "employer_id": "acme", "source_job_id": str(1000 + i),
+                         "title_raw": "Engineer",
+                         "canonical_url": f"https://boards.greenhouse.io/acme/jobs/{1000 + i}"})
+    first = mod.run(mock_db, apply=True, batch=10, limit=12)
+    assert first["stats"].get("written", 0) == first["stats"].get("changed", 0) > 0
+    second = mod.run(mock_db, apply=True, batch=10)
+    assert second["stats"].get("changed", 0) == 25 - first["stats"]["changed"]
+    third = mod.run(mock_db, apply=True, batch=10)
+    assert third["stats"].get("changed", 0) == 0

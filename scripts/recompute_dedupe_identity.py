@@ -28,6 +28,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from pymongo import UpdateOne
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "shared" / "python"))
 
@@ -61,7 +63,7 @@ def plan_for(doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def run(db: Any, *, apply: bool = False, rollback: bool = False, batch: int = 2000,
-        limit: Optional[int] = None) -> Dict[str, Any]:
+        limit: Optional[int] = None, progress: bool = False) -> Dict[str, Any]:
     coll = db.job_postings
     stats: Counter = Counter()
     examples: List[Dict[str, Any]] = []
@@ -76,6 +78,11 @@ def run(db: Any, *, apply: bool = False, rollback: bool = False, batch: int = 20
         page = list(coll.find(q, PROJECTION).sort("_id", 1).limit(batch))
         if not page:
             break
+        # One round trip per PAGE, not per row. One `update_one` per posting
+        # ran at ~13 rows/s against Atlas from a laptop - 311,650 rows was a
+        # six-hour run on 2026-10-22. Rows already rewritten plan as unchanged,
+        # so a stopped run resumes where it left off.
+        ops: List[Any] = []
         for doc in page:
             last = doc["_id"]
             seen += 1
@@ -89,7 +96,7 @@ def run(db: Any, *, apply: bool = False, rollback: bool = False, batch: int = 20
                     restore = {k: v for k, v in prev.items() if v is not None}
                     if restore:
                         update["$set"] = restore
-                    coll.update_one({"_id": doc["_id"]}, update)
+                    ops.append(UpdateOne({"_id": doc["_id"]}, update))
                 continue
             plan = plan_for(doc)
             if plan is None:
@@ -101,11 +108,22 @@ def run(db: Any, *, apply: bool = False, rollback: bool = False, batch: int = 20
             if len(examples) < 10:
                 examples.append({"_id": str(doc["_id"]), **plan})
             if apply:
-                coll.update_one({"_id": doc["_id"]},
-                                {"$set": {**plan["set"],
-                                          "identity_prev": plan["prev"]}})
+                ops.append(UpdateOne({"_id": doc["_id"]},
+                                     {"$set": {**plan["set"],
+                                               "identity_prev": plan["prev"]}}))
             if limit and seen >= limit:
                 break
+        if ops:
+            try:
+                coll.bulk_write(ops, ordered=False)
+            except (TypeError, NotImplementedError):
+                # mongomock does not take every kwarg the driver's UpdateOne
+                # carries - same fallback as employer_registry.bulk_upsert_employers.
+                for op in ops:
+                    coll.update_one(op._filter, op._doc)
+            stats["written"] += len(ops)
+            if progress:
+                print(f"  examined {seen:,} written {stats['written']:,}", flush=True)
         if limit and seen >= limit:
             break
     return {"mode": ("rollback" if rollback else "recompute") + (" APPLY" if apply else
@@ -128,7 +146,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         pass
     from utils.db_connect import DBConnect
     out = run(DBConnect().get_db(), apply=args.apply, rollback=args.rollback,
-              batch=max(1, args.batch), limit=args.limit)
+              batch=max(1, args.batch), limit=args.limit, progress=True)
     print(json.dumps(out, indent=2, default=str))
     return 0
 
