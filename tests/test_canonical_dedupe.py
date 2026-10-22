@@ -77,10 +77,12 @@ class TestDedupeIdentity:
         b = _identity(canonical_url="", content_hash="different")
         assert a["dedupe_group_id"] == b["dedupe_group_id"] != ""
 
-    def test_content_hash_is_the_last_resort(self):
+    def test_content_hash_is_a_review_hint_never_a_merge(self):
+        """identity-1.0.0: content similarity is supporting evidence only."""
         a = _identity(canonical_url="", source_job_id="")
         b = _identity(canonical_url="", source_job_id="", ats="lever")
-        assert a["dedupe_group_id"] == b["dedupe_group_id"] != ""
+        assert a["dedupe_group_id"] == b["dedupe_group_id"] == ""
+        assert a["possible_duplicate_group_id"] == b["possible_duplicate_group_id"] != ""
 
     def test_no_identity_at_all_yields_no_group(self):
         got = _identity(canonical_url="", source_job_id="", content_hash="")

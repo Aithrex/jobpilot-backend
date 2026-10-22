@@ -867,11 +867,15 @@ def compute_content_hash(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-_TRACKING_PARAMS = frozenset({
-    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-    "gh_src", "gh_jid", "src", "source", "ref", "referrer", "trackingid",
-    "trk", "lever-source", "lever-origin", "iis", "iisn", "fbclid", "gclid",
-})
+def apply_url_key(url: Any) -> str:
+    """Normalized ORIGINAL application URL - see `posting_identity.apply_url_key`.
+
+    Lives beside `canonical_url_key` so every URL rule in the inventory has one
+    home; the implementation is the pure, import-light shared module so the
+    daily pipeline and the feeds can use it without pulling in pymongo.
+    """
+    from services.posting_identity import apply_url_key as _key
+    return _key(url)
 
 
 def canonical_url_key(url: Any) -> str:
@@ -884,28 +888,19 @@ def canonical_url_key(url: Any) -> str:
     duplicate groups exist even before normalization, and normalizing finds
     more.
 
-    Returns "" when there is no usable URL - never a partial key, because a
-    partial key would collapse unrelated postings.
+    `gh_jid` USED to be stripped here as tracking. It is the Greenhouse job id
+    on an employer-hosted board (`acme.com/careers?gh_jid=123`), so every job
+    on such a board shared ONE key and therefore one `dedupe_group_id`, and the
+    served dedupe showed one of them. It is now kept, as are `ashby_jid`,
+    `token` and every other functional id; `jr_id` (an aggregator click id) is
+    dropped. A URL that names no specific job - a generic portal such as
+    `jobdiva.com/portal/?a=<company>` - returns "" for the same reason a
+    partial key does: it would collapse unrelated postings.
+
+    Returns "" when there is no usable URL - never a partial key.
     """
-    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
-    raw = str(url or "").strip()
-    if not raw or "://" not in raw:
-        return ""
-    try:
-        parts = urlsplit(raw)
-    except ValueError:
-        return ""
-    host = (parts.netloc or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
-    host = host.split(":")[0]
-    path = (parts.path or "/").rstrip("/") or "/"
-    query = urlencode(sorted(
-        (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=False)
-        if k.lower() not in _TRACKING_PARAMS))
-    if not host:
-        return ""
-    return urlunsplit(("https", host, path, query, ""))
+    key = apply_url_key(url)
+    return f"https://{key}" if key else ""
 
 
 def _title_group_key(title: Any) -> str:
@@ -949,7 +944,8 @@ def compute_dedupe_identity(
         1. normalized canonical URL   - a requisition URL is the employer's
            own identifier for it
         2. (employer, ats, source requisition id) - the ATS's identifier
-        3. content hash               - same employer, title, locations, body
+      Content (same employer, title, locations, body) is NOT identity: it
+      fills `possible_duplicate_group_id`, a review hint, and never merges.
       A row with none of these gets its own group (its `job_id`), which is the
       safe default: failing to merge shows a duplicate, wrongly merging hides
       a real job.
@@ -959,16 +955,21 @@ def compute_dedupe_identity(
       collapses, and the members are kept as variants rather than deleted.
     """
     url_key = canonical_url_key(canonical_url)
+    possible = ""
     if url_key:
         group = _hash_key("url", url_key)
     elif source_job_id:
         group = _hash_key("req", employer_id, ats or source, source_job_id)
-    elif content_hash:
-        group = _hash_key("content", content_hash)
     else:
+        # Content alone is SUPPORTING evidence (identity-1.0.0): two postings
+        # with the same employer, title, locations and body but no URL or
+        # requisition id may be one job or two evergreen requisitions. They
+        # are flagged for review, never merged.
         group = ""
+        possible = _hash_key("content", content_hash) if content_hash else ""
     return {
         "dedupe_group_id": group,
+        "possible_duplicate_group_id": possible,
         "variant_group_id": _hash_key("variant", employer_id,
                                       _title_group_key(title_normalized)),
         "canonical_url_key": url_key,
