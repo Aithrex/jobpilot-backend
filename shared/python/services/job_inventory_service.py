@@ -1101,6 +1101,30 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
     if doc["compensation"] is None:
         doc.pop("compensation")
 
+    # Provenance (CLAUDE-PROMPT D). Stored only when the provider SUPPLIED it -
+    # absent means "not told", and an empty string on 400k rows would say
+    # nothing while costing a field on every document.
+    for field, aliases in (("source_url", ("source_url",)),
+                           ("original_job_url", ("original_job_url",)),
+                           ("canonical_apply_url", ("canonical_apply_url", "apply_url")),
+                           ("requisition_id", ("requisition_id", "employer_requisition_id",
+                                               "req_id"))):
+        for alias in aliases:
+            value = raw.get(alias)
+            if value:
+                doc[field] = (_safe_url(value) if field != "requisition_id"
+                              else _safe_str(value, 120))
+                break
+        if field in doc and not doc[field]:
+            doc.pop(field)
+    # The normalized ORIGINAL application link (identity-1.0.0). What a
+    # dismissal / an application is matched on when the same requisition comes
+    # back under a different job_id. "" for a generic portal, by design.
+    url_key = apply_url_key(doc.get("canonical_apply_url") or doc.get("original_job_url")
+                            or doc["canonical_url"])
+    if url_key:
+        doc["apply_url_key"] = url_key
+
     # Body offload. The matching path scores off `requirements`, never the raw
     # text, so a JD in Mongo is dead weight on a shared-tier cluster. Push it to
     # S3 under its content hash and keep only a pointer. If S3 is unavailable
@@ -1168,6 +1192,14 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 # Fields that identify the doc; never overwritten after insert.
 _IDENTITY_FIELDS = ("source", "source_job_id")
+
+#: Bound on `change_history` (first sighting, material content changes and
+#: reposts, newest last). Older entries are dropped by `$slice`.
+CHANGE_HISTORY_LIMIT = 10
+
+#: A provider date that moves FORWARD by more than this is a repost, not a
+#: re-render of the same date in another timezone.
+REPOST_TOLERANCE = timedelta(hours=36)
 
 
 def upsert_posting(
@@ -1245,6 +1277,13 @@ def upsert_posting(
             }
 
     mutable = {k: v for k, v in doc.items() if k not in _IDENTITY_FIELDS}
+    # A write that knows no date must not erase one we know (ADR-001 says an
+    # unknown date is never INVENTED; it must not be invented as "unknown"
+    # either). Undated: the date fields are set on insert only.
+    undated_on_insert: Dict[str, Any] = {}
+    if doc.get("posted_at") is None:
+        for field in ("posted_at", "posted_at_confidence", "raw_posted_text"):
+            undated_on_insert[field] = mutable.pop(field, None)
     if body_state:
         mutable["body_state"] = body_state
     mutable.update({
@@ -1277,6 +1316,9 @@ def upsert_posting(
     update = {
         "$set": mutable,
         "$setOnInsert": {
+            **undated_on_insert,
+            "change_history": [{"event": "first_seen", "content_hash": doc["content_hash"],
+                                "seen_at": now}],
             "job_id": posting_job_id(doc["source"], doc["source_job_id"]),
             "first_seen_at": now,
             "requirements": None,
@@ -1317,6 +1359,7 @@ def upsert_posting(
         job_id = _resume_sighting(key, job_id, doc, now) or job_id
     else:
         job_id = before.get("job_id")
+        _keep_publication_and_record_changes(key, before, doc, now, content_changed)
 
     prev_req = (before or {}).get("requirements") or {}
     needs_parse = bool(
@@ -1334,6 +1377,56 @@ def upsert_posting(
         "reopened": reopened,
         "content_hash": doc["content_hash"],
     }
+
+
+def _keep_publication_and_record_changes(key: Dict[str, Any], before: Dict[str, Any],
+                                         doc: Dict[str, Any], now: datetime,
+                                         content_changed: bool) -> None:
+    """Second, rare write after an update of an EXISTING posting.
+
+    * A provider date that moved FORWARD is a repost: the original
+      publication date is restored and the new one kept as `reposted_at`,
+      unless the stored date was only an estimate (relative / unknown) and
+      the new one is exact - then the exact date is the better fact.
+    * A material content change or a repost appends to `change_history`
+      (bounded to `CHANGE_HISTORY_LIMIT`).
+
+    Only runs a write when one of those happened, so an unchanged re-crawl
+    costs nothing extra. Best-effort: a failure leaves the main upsert intact.
+    """
+    restore: Dict[str, Any] = {}
+    events: List[Dict[str, Any]] = []
+    old_at = _safe_dt(before.get("posted_at"))
+    new_at = doc.get("posted_at")
+    if old_at is not None and new_at is not None:
+        if old_at.tzinfo is None:
+            old_at = old_at.replace(tzinfo=timezone.utc)
+        if new_at.tzinfo is None:
+            new_at = new_at.replace(tzinfo=timezone.utc)
+        old_conf = before.get("posted_at_confidence")
+        upgraded = (old_conf != CONFIDENCE_EXACT
+                    and doc.get("posted_at_confidence") == CONFIDENCE_EXACT)
+        if new_at - old_at > REPOST_TOLERANCE and not upgraded:
+            restore = {"posted_at": old_at,
+                       "posted_at_confidence": old_conf or CONFIDENCE_EXACT,
+                       "reposted_at": new_at}
+            events.append({"event": "reposted", "content_hash": doc["content_hash"],
+                           "seen_at": now, "reported_posted_at": new_at})
+    if content_changed:
+        events.append({"event": "content_changed", "content_hash": doc["content_hash"],
+                       "seen_at": now})
+    if not (restore or events):
+        return
+    update: Dict[str, Any] = {}
+    if restore:
+        update["$set"] = restore
+    if events:
+        update["$push"] = {"change_history": {"$each": events,
+                                              "$slice": -CHANGE_HISTORY_LIMIT}}
+    try:
+        _postings().update_one(key, update)
+    except Exception as exc:      # pragma: no cover - history is additive
+        logger.debug("upsert_posting: publication/history write failed: %s", exc)
 
 
 def posting_job_id(source: str, source_job_id: str) -> str:
