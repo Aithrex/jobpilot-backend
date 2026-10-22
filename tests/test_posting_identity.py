@@ -167,3 +167,36 @@ class TestCaptureRegressions:
                 _card("Acme", "Payroll Specialist", "NYC", url, job_id="b")]
         g = pid.group_rows(rows)
         assert g["group_of"][0] != g["group_of"][1]
+
+
+class TestServedDedupe:
+    """The real served collapse: `inventory_feed._dedupe` (used by the tech
+    feed and the inventory tabs)."""
+
+    def _feed(self):
+        from services import inventory_feed
+        return inventory_feed
+
+    def test_openai_cards_sharing_an_ashby_uuid_collapse(self):
+        rows = [{"job_id": "a", "company": "OpenAI", "title": "SWE, Research Dev Productivity",
+                 "location": "San Francisco, CA", "url": OPENAI_A, "days_ago": 1},
+                {"job_id": "b", "company": "OpenAI", "title": "SWE, Research Dev Productivity",
+                 "location": "San Francisco, CA", "url": OPENAI_B, "days_ago": 0}]
+        out = self._feed()._dedupe(rows)
+        assert len(out) == 1 and out[0]["duplicate_count"] == 1
+
+    def test_scalence_portal_cards_stay_separate(self):
+        rows = [{"job_id": f"s{i}", "company": "Scalence L.L.C.", "title": t,
+                 "location": "United States", "url": SCALENCE.format(jr=i)}
+                for i, t in enumerate(["Software Engineer I", "Site Reliability Engineer II",
+                                       "Python+Data Engineer"])]
+        assert len(self._feed()._dedupe(rows)) == 3
+
+    def test_microsoft_cards_stay_separate_and_unflagged(self):
+        rows = [{"job_id": "r", "company": "Microsoft", "title": "Software Engineer",
+                 "location": "Redmond, WA", "url": MS_REDMOND},
+                {"job_id": "c", "company": "Microsoft", "title": "Software Engineer",
+                 "location": "Cambridge, MA", "url": MS_CAMBRIDGE}]
+        out = self._feed()._dedupe(rows)
+        assert len(out) == 2
+        assert not any(r.get("possible_duplicate_of") for r in out)

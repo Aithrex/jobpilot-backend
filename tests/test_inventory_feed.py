@@ -253,9 +253,12 @@ def test_no_resume_and_no_skills_scores_nothing_rather_than_guessing(db):
 # and the DB round-trip in the test above only obscures which shapes it catches.
 # ---------------------------------------------------------------------------
 
-def _row(company, title, location, days_ago=3):
-    return {"company": company, "title": title, "location": location,
-            "days_ago": days_ago, "job_id": f"{company}|{title}|{days_ago}"}
+def _row(company, title, location, days_ago=3, url=None):
+    r = {"company": company, "title": title, "location": location,
+         "days_ago": days_ago, "job_id": f"{company}|{title}|{location}|{days_ago}"}
+    if url:
+        r["url"] = url
+    return r
 
 
 @pytest.mark.parametrize("a,b,why", [
@@ -272,11 +275,26 @@ def _row(company, title, location, days_ago=3):
      ("Acme", "Data Analyst - Full Time", "Austin, TX"),
      "employment type"),
 ])
-def test_one_opening_published_two_ways_collapses(a, b, why):
-    """Every one of these is a single opening that reached us twice. Matching on
-    the raw display strings let all of them through - they are byte-unequal and
-    none of them is a different job."""
+def test_a_look_alike_is_flagged_for_review_not_merged(a, b, why):
+    """identity-1.0.0: these MAY be one opening that reached us twice, but
+    company + title + city is not proof - the 2026-10-21 capture has distinct
+    requisitions with exactly this shape. Both stay; the second is marked."""
     out = feed._dedupe([_row(*a), _row(*b)])
+    assert len(out) == 2, why
+    assert out[1]["possible_duplicate_of"] == out[0]["job_id"], why
+
+
+@pytest.mark.parametrize("a,b,why", [
+    (("Google", "Software Engineer III", "New York, NY"),
+     ("Google LLC", "Software Engineer III", "New York, NY"), "legal suffix"),
+    (("Stripe", "Backend Engineer", "Seattle, WA"),
+     ("Stripe", "Backend Engineer (Remote)", "Seattle, WA"), "work-mode tag"),
+])
+def test_one_opening_published_two_ways_collapses_on_its_apply_url(a, b, why):
+    """The SAME original apply URL (tracking aside) is proof, and collapses."""
+    out = feed._dedupe([
+        _row(*a, url="https://boards.greenhouse.io/x/jobs/42?gh_src=li"),
+        _row(*b, url="https://boards.greenhouse.io/x/jobs/42")])
     assert len(out) == 1, f"duplicate survived: {why}"
 
 
@@ -301,9 +319,10 @@ def test_genuinely_different_openings_are_never_merged(a, b):
 
 def test_the_freshest_copy_of_a_duplicate_wins():
     """The displayed age has to stay honest once copies collapse."""
+    url = "https://careers.google.com/jobs/results/123-software-engineer"
     out = feed._dedupe([
-        _row("Google LLC", "Software Engineer", "New York, NY", days_ago=9),
-        _row("Google", "Software Engineer (Remote)", "New York, NY", days_ago=1),
+        _row("Google LLC", "Software Engineer", "New York, NY", days_ago=9, url=url),
+        _row("Google", "Software Engineer (Remote)", "New York, NY", days_ago=1, url=url),
     ])
     assert len(out) == 1
     assert out[0]["days_ago"] == 1
