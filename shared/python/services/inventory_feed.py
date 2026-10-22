@@ -919,12 +919,26 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     # the weaker of the two implementations then in the tree.
     from services import us_geo
 
+    # === employer policy (employer-policy-1.0.0) ===========================
+    # Decided on the RAW documents (they carry status / verification / board
+    # fields the tab row does not), annotated onto each row, and enforced
+    # BEFORE `_dedupe` so an excluded copy can never win a dedupe group.
+    from services import employer_policy as ep
+    policy_prefs = ep.get_prefs(user_email) if user_email else ep.default_prefs()
+    allowed_docs, policy_block = ep.apply(docs, policy_prefs)
+    allowed_ids = {id(d) for d in allowed_docs}
+
     rows: List[Dict[str, Any]] = []
+    policy_dropped = 0
     for doc in docs:
         if _contradicts_its_family(doc):
             continue
         row = _row_from_posting(doc, tz_offset=tz_offset)
         if row is None:
+            continue
+        row.update(ep.public_blocks(doc))
+        if id(doc) not in allowed_ids:
+            policy_dropped += 1
             continue
         if us_only and not us_geo.keep_us_row(row):
             continue
@@ -971,9 +985,13 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     except Exception as exc:  # pragma: no cover - display polish is best effort
         logger.warning("inventory_feed: display names skipped: %s", type(exc).__name__)
 
-    if len(rows) < MIN_ROWS:
+    # "Too thin" is a statement about INVENTORY warmth, so it is judged before
+    # the policy: a warm slice the user's policy narrows is served short and
+    # honest (`policy.excluded_counts`), never handed to the live crawl to
+    # find more of what the user excluded.
+    if len(rows) + policy_dropped < MIN_ROWS:
         logger.info("inventory_feed: %s slice too thin (%d < %d) - deferring to crawl",
-                    source, len(rows), MIN_ROWS)
+                    source, len(rows) + policy_dropped, MIN_ROWS)
         return None
 
     _score_rows(rows, user_email, skills, resume_years, profile=profile)
@@ -1054,6 +1072,7 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
                         "candidates": len(docs)},
         "errors": [],
         "served_from": "inventory",
+        "policy": policy_block,
     }
     if source == SOURCE_CAREER:
         result["ats_available"] = _ats_available()

@@ -199,6 +199,10 @@ _PROJECTION = {
     "seniority": 1, "canonical_url": 1, "posted_at": 1, "source": 1,
     "requirements": 1, "content_hash": 1, "description_ref": 1,
     "description_text": 1, "first_seen_at": 1,
+    # employer-policy-1.0.0: what the shared policy reads.
+    "canonical_employer_id": 1, "canonical_url": 1, "board_kind": 1,
+    "status": 1, "last_verified_at": 1, "last_seen_at": 1, "valid_through": 1,
+    "closed_reason": 1, "posting_signals": 1, "source_job_id": 1,
 }
 
 
@@ -262,7 +266,8 @@ def _jd_body(doc: Dict[str, Any]) -> str:
         return ""
 
 
-def _hydrate(docs: List[Dict[str, Any]], limit: int = HYDRATE_LIMIT
+def _hydrate(docs: List[Dict[str, Any]], limit: int = HYDRATE_LIMIT,
+             excluded_ids: Optional[set] = None
              ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]], int,
                         Optional[datetime]]:
     """Inventory docs -> scoreable rows.
@@ -322,6 +327,12 @@ def _hydrate(docs: List[Dict[str, Any]], limit: int = HYDRATE_LIMIT
         # we APPLY TO can never disagree.
         if not us_geo.keep_us_posting(doc):
             dropped_non_us += 1
+            _examined(doc)
+            continue
+        # The user's direct-employer policy, decided by the caller with the
+        # SAME function the feed uses. EXAMINED, so the watermark moves past
+        # it: a window of excluded postings must not pin the cursor forever.
+        if excluded_ids and job_id in excluded_ids:
             _examined(doc)
             continue
         row = _row_from_posting(doc, tz_offset=0)
@@ -507,7 +518,17 @@ def run_user_sweep(user_email: str) -> Dict[str, Any]:
     # rows only) livelocked the cursor whenever a whole window was dropped for no
     # readable evidence. `_hydrate` still stops short of anything it did not
     # examine (its I/O budget), so the cursor stays lossless.
-    rows, context, dropped, examined_max = _hydrate(docs)
+    # What the user SEES is what we APPLY TO: the same policy, the same
+    # prefs, before a single JD body is fetched.
+    from services import employer_policy as ep
+    allowed, policy_block = ep.apply([dict(d) for d in docs], ep.get_prefs(user_email))
+    allowed_ids = {str(d.get("job_id") or "") for d in allowed}
+    excluded_ids = {str(d.get("job_id") or "") for d in docs} - allowed_ids
+    out["policy_excluded"] = len(excluded_ids)
+    out["policy_excluded_counts"] = {k: v for k, v in
+                                     policy_block["excluded_counts"].items() if v}
+
+    rows, context, dropped, examined_max = _hydrate(docs, excluded_ids=excluded_ids)
     out["no_evidence"] = dropped
     out["scored"] = len(rows)
 

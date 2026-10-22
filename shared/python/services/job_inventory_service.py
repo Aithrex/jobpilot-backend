@@ -1183,6 +1183,14 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
     # knows the employer's own level codes), so the card mirrors it.
     if isinstance(doc.get("tech"), dict) and doc.get("seniority") not in (None, "", SENIORITY_UNKNOWN):
         doc["tech"]["seniority"] = doc["seniority"]
+    # employer-policy-1.0.0: client-placement / task / talent-community
+    # wording read from the FULL body here, because the body is offloaded to
+    # S3 above and serve time never fetches it. Codes only, never prose.
+    try:
+        from services import posting_profile
+        doc["posting_signals"] = posting_profile.signals_from_text(title_raw, description_text)
+    except Exception as exc:  # pragma: no cover - ingest must never fail on this
+        logger.warning("normalize_posting: posting signals failed (%s)", type(exc).__name__)
     return doc
 
 
@@ -2267,6 +2275,9 @@ _CARD_PROJECTION = {
     # FAMILY LIMITED PARTNERSHIP NO. 5"); the canonical id is the same for all
     # three. Not projected, it may as well not exist for any read path.
     "canonical_employer_id": 1,
+    # employer-policy-1.0.0: what availability / relationship read.
+    "last_seen_at": 1, "valid_through": 1, "closed_reason": 1,
+    "board_kind": 1, "posting_signals": 1,
 }
 
 

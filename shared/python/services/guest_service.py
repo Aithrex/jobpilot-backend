@@ -1029,6 +1029,11 @@ def get_cached_matches(
     }
     pool = list(cached.get("pool") or [])
     if pool:
+        # Re-applied at READ time: a pool cached before the policy shipped
+        # (or before its seed changed) must not serve what it now excludes.
+        from services import employer_policy as _ep
+        pool, out["policy"] = _ep.apply([dict(c) for c in pool], _ep.default_prefs())
+        _ep.strip_internal(pool)
         view = normalize_seniority(seniority) if seniority else (
             cached.get("default_seniority") or "any"
         )
@@ -2302,6 +2307,23 @@ def compute_guest_matches(
         logger.warning("guest matches: sponsorship lookup unavailable: %s", e)
         signal_cache = {}
 
+    # employer-policy-1.0.0: a guest has no stored choice, so the DOCUMENTED
+    # DEFAULT (strict_direct, unknown shown as unverified) applies - decided
+    # on the scored row (it still has the JD body for client-placement
+    # wording) and annotated onto the public card.
+    from services import employer_policy as _ep
+    _probes = [dict(row, company=card.get("company"), title=card.get("title"),
+                    apply_link=card.get("apply_link") or card.get("url"))
+               for card, row in pool_pairs]
+    _allowed, guest_policy = _ep.apply(_probes, _ep.default_prefs())
+    _allowed_ids = {id(p) for p in _allowed}
+    _pairs = []
+    for (card, row), probe in zip(pool_pairs, _probes):
+        if id(probe) in _allowed_ids:
+            card.update(_ep.public_blocks(probe))
+            _pairs.append((card, row))
+    pool_pairs = _pairs
+
     pool: List[Dict[str, Any]] = []
     jd_sources: Dict[str, Dict[str, Any]] = {}
     for card, row in pool_pairs:
@@ -2380,6 +2402,7 @@ def compute_guest_matches(
         "seniority_counts": seniority_counts,
         "pool_total": pool_total,
         "locked_count": max(0, pool_total - len(top)),
+        "policy": guest_policy,
     }
     if empty_reason:
         result["empty_reason"] = empty_reason

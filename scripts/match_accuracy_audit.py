@@ -175,11 +175,16 @@ def survivor_set(req: Dict[str, Any], now: datetime, true_total: int
     profile, skills, years = tfs._load_profile(req)
 
     docs, _diag = tfs.retrieve(req, limit=recall_limit, now=now)
+    from services import employer_business_model as ebm
+    ebm.resolve_rows(docs)
     kept, _ = tfs.hard_filter(docs, req, suppressed=suppressed)
     tfs._resolve_employers(kept)
     kept, _ = tfs.filter_company_categories(kept, req)
     if req["employer_scope"] == tfs.EMPLOYER_SCOPE_TECH:
         kept, _ = tfs._apply_employer_scope(kept)
+    # The user's direct-employer policy, exactly as the feed applies it: a
+    # posting the policy hides is not one the feed should have returned.
+    kept, _ = tfs._apply_policy(kept, req, tfs._load_policy_prefs(req))
     kept = inventory_feed._dedupe(kept)
     kept = tfs._collapse_location_variants(kept)
     tfs.hydrate_requirements(kept)

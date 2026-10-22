@@ -1,0 +1,549 @@
+{
+ "version": "ebm-holdout-1.0.0",
+ "source": "docs/audit/jobright-2026-10-21/company-research-register.json",
+ "reviewed_on": "2026-10-21",
+ "split_rule": "per disposition stratum (staffing, consultancy, intermediary, direct, review queue): the ceil(n/3) companies with the lowest sha1(company); assembled before classification rules were written",
+ "binary_labels": "staffing | consultancy | talent_marketplace | operating; review-queue rows are 'ambiguous' and never enter binary ground truth",
+ "rows": [
+  {
+   "company": "AAR",
+   "domain": "aarcorp.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.aarcorp.com/en/careers/jobs/",
+   "held_out": true
+  },
+  {
+   "company": "AARATECH",
+   "domain": "aaratechinc.com",
+   "register_disposition": "mixed_review",
+   "label": "ambiguous",
+   "review_label": "mixed",
+   "evidence_url": "https://www.aaratechinc.com/",
+   "held_out": true
+  },
+  {
+   "company": "Agento",
+   "domain": "agento.au",
+   "register_disposition": "identity_unresolved",
+   "label": "ambiguous",
+   "review_label": "unknown",
+   "evidence_url": "https://www.agento.au/",
+   "held_out": true
+  },
+  {
+   "company": "Amazon Web Services (AWS)",
+   "domain": "amazon.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://aws.amazon.com/careers/",
+   "held_out": true
+  },
+  {
+   "company": "Apollo Solutions",
+   "domain": "apollo-solutions.com",
+   "register_disposition": "exclude_staffing",
+   "label": "staffing",
+   "review_label": "staffing",
+   "evidence_url": "https://www.apollo-solutions.com/about-us/join-us/",
+   "held_out": true
+  },
+  {
+   "company": "Applied Systems",
+   "domain": "appliedsystems.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www1.appliedsystems.com/en-us/about-us/careers/",
+   "held_out": true
+  },
+  {
+   "company": "Ascent Developer Solutions",
+   "domain": "ascentds.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.ascentds.com/about-us",
+   "held_out": true
+  },
+  {
+   "company": "BLN24",
+   "domain": "bln24.com",
+   "register_disposition": "exclude_consultancy",
+   "label": "consultancy",
+   "review_label": "consultancy",
+   "evidence_url": "https://bln24.com/node/2309",
+   "held_out": true
+  },
+  {
+   "company": "Booker DiMaio",
+   "domain": "bookerdimaio.com",
+   "register_disposition": "exclude_consultancy",
+   "label": "consultancy",
+   "review_label": "consultancy",
+   "evidence_url": "https://bookerdimaio.com/about-us/",
+   "held_out": true
+  },
+  {
+   "company": "Brain Co.",
+   "domain": "braincompany.ai",
+   "register_disposition": "mixed_review",
+   "label": "ambiguous",
+   "review_label": "mixed",
+   "evidence_url": "https://www.braincompany.ai/join",
+   "held_out": true
+  },
+  {
+   "company": "CGI",
+   "domain": "cgi.com",
+   "register_disposition": "exclude_consultancy",
+   "label": "consultancy",
+   "review_label": "consultancy",
+   "evidence_url": "https://www.cgi.com/en",
+   "held_out": true
+  },
+  {
+   "company": "Chalk",
+   "domain": "chalk.ai",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://chalk.ai/careers",
+   "held_out": true
+  },
+  {
+   "company": "ClarityPay",
+   "domain": "claritypay.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.claritypay.com/careers",
+   "held_out": true
+  },
+  {
+   "company": "CrossTalent",
+   "domain": null,
+   "register_disposition": "mixed_review",
+   "label": "ambiguous",
+   "review_label": "mixed",
+   "evidence_url": "https://www.crosstalent.io/",
+   "held_out": true
+  },
+  {
+   "company": "Dark Wolf",
+   "domain": "darkwolfsolutions.com",
+   "register_disposition": "mixed_review",
+   "label": "ambiguous",
+   "review_label": "mixed",
+   "evidence_url": "https://darkwolfsolutions.com/",
+   "held_out": true
+  },
+  {
+   "company": "Destro",
+   "domain": "destroai.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.destroai.com/careers/robotics-system-engineer-field-deployment-support",
+   "held_out": true
+  },
+  {
+   "company": "ECI",
+   "domain": null,
+   "register_disposition": "mixed_review",
+   "label": "ambiguous",
+   "review_label": "mixed",
+   "evidence_url": "https://www.eci.com/index.php/who-eci",
+   "held_out": true
+  },
+  {
+   "company": "FDM Group",
+   "domain": "fdmgroup.com",
+   "register_disposition": "exclude_consultancy",
+   "label": "consultancy",
+   "review_label": "consultancy",
+   "evidence_url": "https://www.fdmgroup.com/wp-content/uploads/2024/07/FDM-Group-Interim-Report-2024.pdf",
+   "held_out": true
+  },
+  {
+   "company": "FieldAI",
+   "domain": "fieldai.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.fieldai.com/careers",
+   "held_out": true
+  },
+  {
+   "company": "Flexcompute",
+   "domain": "flexcompute.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.flexcompute.com/about/career/",
+   "held_out": true
+  },
+  {
+   "company": "Fueled",
+   "domain": "fueled.com",
+   "register_disposition": "exclude_consultancy",
+   "label": "consultancy",
+   "review_label": "consultancy",
+   "evidence_url": "https://fueled.com/about/",
+   "held_out": true
+  },
+  {
+   "company": "GMI Cloud",
+   "domain": "gmicloud.ai",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.gmicloud.ai/en/company/about",
+   "held_out": true
+  },
+  {
+   "company": "HavocAI",
+   "domain": "havocai.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.havocai.com/careers",
+   "held_out": true
+  },
+  {
+   "company": "Haystack",
+   "domain": null,
+   "register_disposition": "mixed_review",
+   "label": "ambiguous",
+   "review_label": "mixed",
+   "evidence_url": "https://www.haystackrecruitment.com/",
+   "held_out": true
+  },
+  {
+   "company": "Hover",
+   "domain": "hover.to",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://hover.to/careers/",
+   "held_out": true
+  },
+  {
+   "company": "Infinite Computer Solutions",
+   "domain": "infinite.com",
+   "register_disposition": "exclude_consultancy",
+   "label": "consultancy",
+   "review_label": "consultancy",
+   "evidence_url": "https://www.infinite.com/application-services/",
+   "held_out": true
+  },
+  {
+   "company": "Inspira Financial",
+   "domain": "inspirafinancial.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://inspirafinancial.com/about/careers",
+   "held_out": true
+  },
+  {
+   "company": "Iperium",
+   "domain": "iperium.com",
+   "register_disposition": "exclude_staffing",
+   "label": "staffing",
+   "review_label": "staffing",
+   "evidence_url": "https://iperium.com/about/",
+   "held_out": true
+  },
+  {
+   "company": "KTek Resourcing",
+   "domain": "ktekresourcing.com",
+   "register_disposition": "exclude_staffing",
+   "label": "staffing",
+   "review_label": "staffing",
+   "evidence_url": "https://www.ktekresourcing.com/",
+   "held_out": true
+  },
+  {
+   "company": "MANTECH",
+   "domain": "mantech.com",
+   "register_disposition": "mixed_review",
+   "label": "ambiguous",
+   "review_label": "mixed",
+   "evidence_url": "https://www.mantech.com/careers-/",
+   "held_out": true
+  },
+  {
+   "company": "Morales Professional, a morales group company",
+   "domain": "moralesgroup.net",
+   "register_disposition": "exclude_staffing",
+   "label": "staffing",
+   "review_label": "staffing",
+   "evidence_url": "https://moralesgroup.net/professional-search/",
+   "held_out": true
+  },
+  {
+   "company": "mroads",
+   "domain": "mroads.com",
+   "register_disposition": "exclude_consultancy",
+   "label": "consultancy",
+   "review_label": "consultancy",
+   "evidence_url": "https://www.mroads.com/about-us",
+   "held_out": true
+  },
+  {
+   "company": "NexGen Tech Solutions",
+   "domain": "nexgts.com",
+   "register_disposition": "exclude_staffing",
+   "label": "staffing",
+   "review_label": "staffing",
+   "evidence_url": "https://nexgts.com/",
+   "held_out": true
+  },
+  {
+   "company": "OPENLANE",
+   "domain": "openlane.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://corporate.openlane.com/careers/",
+   "held_out": true
+  },
+  {
+   "company": "Optomi",
+   "domain": "optomi.com",
+   "register_disposition": "exclude_staffing",
+   "label": "staffing",
+   "review_label": "staffing",
+   "evidence_url": "https://www.optomi.com/",
+   "held_out": true
+  },
+  {
+   "company": "PSEG Long Island LLC",
+   "domain": "psegliny.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.psegliny.com/careers",
+   "held_out": true
+  },
+  {
+   "company": "Recruiting from Scratch",
+   "domain": "recruitingfromscratch.com",
+   "register_disposition": "exclude_staffing",
+   "label": "staffing",
+   "review_label": "staffing",
+   "evidence_url": "https://www.recruitingfromscratch.com/",
+   "held_out": true
+  },
+  {
+   "company": "RevSpring",
+   "domain": "revspringinc.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://revspringinc.com/careers/",
+   "held_out": true
+  },
+  {
+   "company": "Rhoda AI",
+   "domain": "rhoda.ai",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.rhoda.ai/careers",
+   "held_out": true
+  },
+  {
+   "company": "Rise Internet",
+   "domain": "risebroadband.com",
+   "register_disposition": "identity_unresolved",
+   "label": "ambiguous",
+   "review_label": "unknown",
+   "evidence_url": "https://www.risebroadband.com/careers/",
+   "held_out": true
+  },
+  {
+   "company": "SEI",
+   "domain": "seic.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.seic.com/careers/our-locations",
+   "held_out": true
+  },
+  {
+   "company": "SimVentions",
+   "domain": "simventions.com",
+   "register_disposition": "mixed_review",
+   "label": "ambiguous",
+   "review_label": "mixed",
+   "evidence_url": "https://www.simventions.com/careers/",
+   "held_out": true
+  },
+  {
+   "company": "SolutionHealth",
+   "domain": "solutionhealth.org",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://careers.solutionhealth.org/",
+   "held_out": true
+  },
+  {
+   "company": "SoTalent",
+   "domain": "sotalent.us",
+   "register_disposition": "exclude_intermediary",
+   "label": "talent_marketplace",
+   "review_label": "talent_marketplace",
+   "evidence_url": "https://sotalent.us/jobs",
+   "held_out": true
+  },
+  {
+   "company": "Spring Venture Group",
+   "domain": "springventuregroup.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://springventuregroup.com/careers/",
+   "held_out": true
+  },
+  {
+   "company": "Swift",
+   "domain": "swift.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.swift.com/de/node/310558",
+   "held_out": true
+  },
+  {
+   "company": "TalentAlly",
+   "domain": "talentally.com",
+   "register_disposition": "exclude_intermediary",
+   "label": "talent_marketplace",
+   "review_label": "talent_marketplace",
+   "evidence_url": "https://talentally.com/about-us",
+   "held_out": true
+  },
+  {
+   "company": "TalentOla",
+   "domain": "talentola.com",
+   "register_disposition": "exclude_staffing",
+   "label": "staffing",
+   "review_label": "staffing",
+   "evidence_url": "https://www.talentola.com/about-us/",
+   "held_out": true
+  },
+  {
+   "company": "TaskVerse",
+   "domain": "taskverse.com",
+   "register_disposition": "exclude_intermediary",
+   "label": "talent_marketplace",
+   "review_label": "talent_marketplace",
+   "evidence_url": "https://www.taskus.com/locations/taskverse/",
+   "held_out": true
+  },
+  {
+   "company": "Tech Consulting",
+   "domain": "techconsultingacademy.com",
+   "register_disposition": "exclude_staffing",
+   "label": "staffing",
+   "review_label": "staffing",
+   "evidence_url": "https://www.linkedin.com/company/techconsultingusa/",
+   "held_out": true
+  },
+  {
+   "company": "Texas Windstorm Insurance Association",
+   "domain": "twia.org",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.twia.org/careers/",
+   "held_out": true
+  },
+  {
+   "company": "Troon",
+   "domain": "troon.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.troon.com/",
+   "held_out": true
+  },
+  {
+   "company": "UICGS / Bowhead Family of Companies",
+   "domain": "uicalaska.com",
+   "register_disposition": "mixed_review",
+   "label": "ambiguous",
+   "review_label": "mixed",
+   "evidence_url": "https://www.uicalaska.com/",
+   "held_out": true
+  },
+  {
+   "company": "Unison",
+   "domain": "unisonglobal.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.unisonglobal.com/careers",
+   "held_out": true
+  },
+  {
+   "company": "Universal Background Screening",
+   "domain": "universalbackground.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://universalbackground.com/",
+   "held_out": true
+  },
+  {
+   "company": "Upwind Security",
+   "domain": "upwind.io",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.upwind.io/careers",
+   "held_out": true
+  },
+  {
+   "company": "Vantor",
+   "domain": "vantor.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://vantor.com/careers/",
+   "held_out": true
+  },
+  {
+   "company": "Vaspire Technologies Inc.",
+   "domain": "vaspiretech.com",
+   "register_disposition": "exclude_staffing",
+   "label": "staffing",
+   "review_label": "staffing",
+   "evidence_url": "https://vaspiretech.com/",
+   "held_out": true
+  },
+  {
+   "company": "Ventures Unlimited Inc",
+   "domain": "vui-inc.com",
+   "register_disposition": "exclude_staffing",
+   "label": "staffing",
+   "review_label": "staffing",
+   "evidence_url": "https://vui-inc.com/about/",
+   "held_out": true
+  },
+  {
+   "company": "Verisk",
+   "domain": "verisk.com",
+   "register_disposition": "eligible_direct",
+   "label": "operating",
+   "review_label": "operating",
+   "evidence_url": "https://www.verisk.com/company/careers/",
+   "held_out": true
+  }
+ ]
+}

@@ -1013,6 +1013,59 @@ def tech_feed_telemetry():
 # Server-owned, with the client keeping a local mirror. Same subpath as the
 # rest of the tech feed, so no new edge route is needed.
 
+@jobs_bp.route("/tech-feed/employer-preferences", methods=["GET"])
+@jwt_required()
+def tech_feed_employer_preferences_get():
+    """The user's direct-employer policy (`employer-policy-1.0.0`).
+
+    `{preset, exclude{...}, set_by: "user"|"default", version}`. A user with
+    no stored choice gets the documented default (`strict_direct`, unknown
+    shown as unverified) with `set_by: "default"` - nothing is written.
+    """
+    try:
+        from services import employer_policy
+        prefs = employer_policy.get_prefs(get_jwt_identity())
+        prefs.pop("updated_at", None)
+        return jsonify(prefs), 200
+    except Exception as e:
+        logger.error(f"Employer preferences read error: {type(e).__name__}")
+        return jsonify({"error": "Failed to load employer preferences"}), 500
+
+
+@jobs_bp.route("/tech-feed/employer-preferences", methods=["PUT"])
+@jwt_required()
+def tech_feed_employer_preferences_put():
+    """Store the user's choice. Body: `{preset?, exclude?{bool...}}`.
+
+    400 on an unusable body (never 401 - that is reserved for a bad token).
+    The preset is derived from the toggles, so `strict_direct` with a toggle
+    changed is stored as `custom`.
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Body must be a JSON object"}), 400
+    # Whitelist + InputSanitizer: only these keys survive, strings bounded.
+    body = {}
+    if "preset" in data:
+        body["preset"] = InputSanitizer.sanitize_string(str(data.get("preset") or ""),
+                                                        max_length=20)
+    if isinstance(data.get("exclude"), dict):
+        body["exclude"] = {str(k)[:40]: bool(v) for k, v in list(data["exclude"].items())[:20]
+                           if not isinstance(v, (dict, list))}
+    try:
+        from services import employer_policy
+        stored = employer_policy.put_prefs(get_jwt_identity(), body)
+        if stored is None:
+            return jsonify({"error": "invalid_preferences",
+                            "message": "Send a preset (strict_direct, custom, off) "
+                                       "and/or an exclude object of booleans."}), 400
+        stored.pop("updated_at", None)
+        return jsonify(stored), 200
+    except Exception as e:
+        logger.error(f"Employer preferences write error: {type(e).__name__}")
+        return jsonify({"error": "Failed to save employer preferences"}), 500
+
+
 @jobs_bp.route("/tech-feed/saved-searches", methods=["GET"])
 @jwt_required()
 def tech_feed_saved_searches_list():

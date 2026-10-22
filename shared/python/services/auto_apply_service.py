@@ -2051,6 +2051,36 @@ def submit(application_id: str, user_email: str) -> Dict[str, Any]:
         return {"status": "skipped_duplicate", "application_id": application_id,
                 "reason": _dup_reason}
 
+    # employer-policy-1.0.0: the SAME gate the worker's pre-submit re-check
+    # runs - the user's direct-employer policy, hard expiry, verification age.
+    # A policy exclusion or a closed posting CANCELS the row (it can never
+    # become submittable); a stale/unverified posting is left approved and
+    # retried, because the crawl re-verifying it is the expected outcome.
+    # Fails CLOSED.
+    try:
+        from services import employer_policy as _ep
+        gate = _ep.submission_gate(user_email, _ledger_row_with_posting(user_email, app))
+    except Exception as e:
+        logger.warning("auto_apply submit %s: policy gate error (%s) — not submitting",
+                       application_id, type(e).__name__)
+        return {"status": "policy_gate_error", "application_id": application_id,
+                "ledger_status": status}
+    if not gate["ok"]:
+        terminal = [r for r in gate["reasons"]
+                    if r.startswith("employer_policy:") or r == "posting_closed_or_expired"]
+        logger.info("auto_apply submit %s: BLOCKED by policy gate (%s)",
+                    application_id, gate["reasons"])
+        if terminal:
+            try:
+                ledger.transition(user_email, application_id, ledger.STATUS_CANCELLED)
+            except Exception as e:  # pragma: no cover - refusal stands either way
+                logger.warning("auto_apply submit %s: cancel after policy refusal failed (%s)",
+                               application_id, type(e).__name__)
+            return {"status": "blocked_by_policy", "application_id": application_id,
+                    "reasons": gate["reasons"]}
+        return {"status": "posting_unverified", "application_id": application_id,
+                "ledger_status": status, "reasons": gate["reasons"]}
+
     executor = get_executor()
     # Probe availability BEFORE grabbing the row, so an absent fleet leaves the
     # row in its approved state (there is no legal running→approved undo).
@@ -2292,6 +2322,24 @@ def _entitlement_reservation_held(user_email: str, app: Dict[str, Any]) -> bool:
     return True
 
 
+def _ledger_row_with_posting(user_email: str, app: Dict[str, Any]) -> Dict[str, Any]:
+    """The ledger row plus its `posting_job_id`, which the lean ledger
+    projection omits (same read `_resolve_jd_text` makes)."""
+    row = dict(app or {})
+    if row.get("posting_job_id"):
+        return row
+    try:
+        raw = DBConnect().get_db().applications.find_one(
+            {"user_email": user_email,
+             "application_id": _clean(row.get("application_id"), 64)},
+            {"_id": 0, "posting_job_id": 1, "posting_closes_at": 1})
+        if raw:
+            row.update({k: v for k, v in raw.items() if v is not None})
+    except Exception:
+        pass
+    return row
+
+
 def _posting_available(app: Dict[str, Any]) -> bool:
     """Seam: the posting is still live (not pulled/closed). Defaults to True."""
     return not bool(app.get("posting_closed"))
@@ -2384,6 +2432,18 @@ def presubmit_recheck(application_id: str, user_email: str) -> Dict[str, Any]:
         _check("adapter_enabled", True, "adapter_enabled_check_error")
 
     _check("posting_available", _posting_available(app), "posting_closed")
+
+    # employer-policy-1.0.0: the user's direct-employer policy, hard expiry and
+    # verification age, re-checked from STORED fields immediately before the
+    # click (no network). Fails CLOSED: an error is a block, never a pass.
+    try:
+        from services import employer_policy as _ep
+        gate = _ep.submission_gate(user_email, _ledger_row_with_posting(user_email, app))
+        for name, passed in gate["checks"].items():
+            checks["policy_" + name] = bool(passed)
+        reasons.extend(gate["reasons"])
+    except Exception:
+        _check("policy_gate", False, "policy_gate_error")
 
     ok = all(checks.values())
     if not ok:
