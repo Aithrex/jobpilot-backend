@@ -129,6 +129,16 @@ _NOT_A_ROLE = frozenset({
 })
 
 
+#: Specialties staffed from one pool: the same posting is titled DevOps, SRE
+#: or Platform Engineer depending on the employer. A candidate the taxonomy
+#: read as one of them searches the others too, after their own.
+_ADJACENT_SPECIALTIES = {
+    "devops": ("sre", "platform_engineering"),
+    "sre": ("devops", "platform_engineering"),
+    "platform_engineering": ("devops", "sre"),
+}
+
+
 #: A presentable role name ends in one of these. It is what separates
 #: "Backend Engineer" from "MTS Software" inside the same vocabulary.
 _ROLE_NOUNS = frozenset({
@@ -550,19 +560,50 @@ def canonical_search_titles(titles: Sequence[Any],
     from services import fit_score
 
     home = {f for f in (fit_score.classify_role(t) for t in out) if f}
-    for phrase in tx.title_phrases(specialties=specialties) if specialties else []:
+
+    def _admissible(phrase: str) -> bool:
         low = phrase.lower()
         if low in _NOT_A_ROLE or any(bad in low for bad in _NEVER_SEARCH):
-            continue
+            return False
         if not keep_intern and "intern" in low:
-            continue
+            return False
         words = low.split()
         if not (2 <= len(words) <= 4) or words[-1] not in _ROLE_NOUNS:
-            continue
+            return False
         fam = fit_score.classify_role(phrase)
-        if home and fam is not None and fam not in home:
-            continue
-        _add(_display_title(low))
+        return not (home and fam is not None and fam not in home | stated_home)
+
+    # ROUND-ROBIN across specialties, the ones the candidate's own titles
+    # name first. Walking them in taxonomy order let the first specialty's
+    # long tail take the whole cap: measured live, a "Software Engineer II -
+    # Platform Engineering" resume searched fourteen frontend spellings and
+    # never "Platform Engineer", and a DevOps resume never "Site Reliability
+    # Engineer" - 421 of one user's 453 misses in three days were titles the
+    # search did not contain.
+    held = " ".join(re.sub(r"\s+", " ", str(t or "")).lower() for t in titles or [])
+    order: List[str] = []
+    for spec in list(specialties or ()) + [
+            a for s in specialties or () for a in _ADJACENT_SPECIALTIES.get(str(s), ())]:
+        if str(spec) not in order:
+            order.append(str(spec))
+    stated = {s for s in order if any(
+        re.search(r"(?<![a-z0-9_])" + re.escape(p.lower()) + r"(?![a-z0-9_])", held)
+        for p in tx.title_phrases(specialties=[s]))}
+    order.sort(key=lambda s: s not in stated)
+    # A specialty the candidate's own title names brings its HEAD phrase's
+    # family into the gate: "Platform Engineer" reads as legacy `devops`
+    # while a platform engineer's home family is `software_engineering`.
+    # Only the head phrase - a whole specialty would readmit "Server Side
+    # Engineer" (hospitality) for anyone whose title says backend.
+    stated_home = {f for f in (
+        fit_score.classify_role(tx.title_phrases(specialties=[s])[0])
+        for s in stated if tx.title_phrases(specialties=[s])) if f}
+    buckets = [[p for p in tx.title_phrases(specialties=[s]) if _admissible(p)]
+               for s in order]
+    for i in range(max((len(b) for b in buckets), default=0)):
+        for bucket in buckets:
+            if i < len(bucket):
+                _add(_display_title(bucket[i].lower()))
 
     return out[:cap]
 

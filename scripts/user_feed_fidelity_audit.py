@@ -41,7 +41,7 @@ import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "shared" / "python"))
@@ -104,10 +104,13 @@ DOMAINS: Dict[str, Dict[str, Any]] = {
     },
     "electrical_power": {
         "title": (r"\b(electrical|power systems?|power studies|power engineer|"
-                  r"substation|protection (and|&) control|relay|transmission|"
-                  r"distribution (planning|engineer)|grid|interconnection|"
-                  r"high voltage|switchgear|scada|energy systems?|utility|"
-                  r"electric(al)? design|ee)\b"),
+                  r"substation|protection (and|&) control|relay (engineer|technician|settings)|"
+                  r"transmission (engineer|planning|line)|"
+                  r"distribution (planning|engineer)|grid (engineer|modernization|integration)|"
+                  r"interconnection|"
+                  r"high voltage|switchgear|scada|energy systems?|"
+                  r"utility (engineer|engineering|planner|designer)|"
+                  r"electric(al)? design|ee engineer)\b"),
     },
     "hris": {
         "title": (r"\b(workday|hcm|hris|hr systems?|hr technology|people systems|"
@@ -259,7 +262,8 @@ def _domain_query(domains: List[str]) -> Optional[Dict[str, Any]]:
 
 def missed_in_domain(domains: List[str], levels: List[str], board: Dict[str, Any],
                      match_titles: List[str], days: int,
-                     cap: int = 5000) -> Dict[str, Any]:
+                     cap: int = 5000, *, prefs: Optional[Dict[str, Any]] = None,
+                     own_families: Sequence[str] = ()) -> Dict[str, Any]:
     """G2, per user: the in-domain postings they SHOULD be able to reach and
     are not shown.
 
@@ -275,6 +279,16 @@ def missed_in_domain(domains: List[str], levels: List[str], board: Dict[str, Any
     search when no match title occurs in its title (a vocabulary gap) and to
     serving otherwise (ranking window, scoring, eligibility). Bounded by `cap`
     and says so when it is hit.
+
+    A miss the user's employer preference hides ON PURPOSE (a talent
+    marketplace, a staffing agency) is not a miss: it is counted as
+    `policy_hidden` and leaves the population. The first scorecard after the
+    policy shipped charged Jobgether reposts as misses for every user.
+
+    `own_recall` is the same measurement over postings whose role family is
+    one of the candidate's own (`own_families`). The domain is broad on
+    purpose - "software" holds aerospace Systems Engineers - so `recall` is a
+    floor, and a vocabulary gap shows up as low `own_recall`, not low recall.
     """
     from services import us_geo
 
@@ -291,37 +305,71 @@ def missed_in_domain(domains: List[str], levels: List[str], board: Dict[str, Any
     shown_groups = {str(r.get("dedupe_group_id") or "") for r in board["rows"]} - {""}
     patterns = [re.compile(r"(?<![A-Za-z0-9_])" + re.escape(t) + r"(?![A-Za-z0-9_])",
                            re.IGNORECASE) for t in match_titles if t]
-    population = shown = 0
-    reasons: Dict[str, int] = {}
-    sample: List[Dict[str, Any]] = []
+    own = set(own_families or ())
+    judged: List[Dict[str, Any]] = []
     scanned = 0
     for doc in _db().job_postings.find(q, proj).limit(cap):
         scanned += 1
         if not us_geo.keep_us_posting(doc) or not _in_levels(doc, levels):
             continue
-        if judge(str(doc.get("title_raw") or ""), domains) != "on":
+        title = str(doc.get("title_raw") or "")
+        if judge(title, domains) != "on":
+            continue
+        is_shown = (str(doc.get("job_id") or "") in shown_ids
+                    or str(doc.get("dedupe_group_id") or "") in shown_groups)
+        judged.append({
+            "job_id": str(doc.get("job_id") or ""), "title": title,
+            "company": doc.get("employer_name"), "shown": is_shown,
+            "own": fit_score.classify_role(title) in own,
+            "why": (None if is_shown else "searched_not_served"
+                    if any(p.search(title) for p in patterns) else "not_searched"),
+        })
+    hidden = _policy_hidden([j["job_id"] for j in judged if not j["shown"]], prefs)
+    population = shown = own_pop = own_shown = 0
+    reasons: Dict[str, int] = {}
+    sample: List[Dict[str, Any]] = []
+    for j in judged:
+        if j["job_id"] in hidden:
             continue
         population += 1
-        if (str(doc.get("job_id") or "") in shown_ids
-                or str(doc.get("dedupe_group_id") or "") in shown_groups):
+        own_pop += j["own"]
+        if j["shown"]:
             shown += 1
+            own_shown += j["own"]
             continue
-        title = str(doc.get("title_raw") or "")
-        why = ("searched_not_served" if any(p.search(title) for p in patterns)
-               else "not_searched")
-        reasons[why] = reasons.get(why, 0) + 1
-        if len(sample) < 12:
-            sample.append({"title": title[:90], "company": doc.get("employer_name"),
-                           "why": why})
+        reasons[j["why"]] = reasons.get(j["why"], 0) + 1
+        # Own-family misses first: they are the ones a fix is owed for.
+        if len(sample) < 12 and (j["own"] or not own):
+            sample.append({"title": j["title"][:90], "company": j["company"],
+                           "why": j["why"], "own": j["own"]})
     return {
         "days": days,
         "population": population,
         "shown": shown,
         "recall": round(shown / population, 3) if population else None,
+        "own_population": own_pop,
+        "own_recall": round(own_shown / own_pop, 3) if own_pop else None,
+        "policy_hidden": len(hidden),
         "missed_by_reason": reasons,
         "missed_sample": sample,
         "truncated": scanned >= cap,
     }
+
+
+def _policy_hidden(job_ids: List[str], prefs: Optional[Dict[str, Any]]) -> set:
+    """The job ids among these that the employer preference hides - the same
+    `employer_policy.apply` every served list runs, over the full documents."""
+    from services import employer_policy
+
+    if not job_ids:
+        return set()
+    out: set = set()
+    for i in range(0, len(job_ids), 500):
+        rows = list(_db().job_postings.find({"job_id": {"$in": job_ids[i:i + 500]}}))
+        kept, _block = employer_policy.apply(rows, prefs)
+        kept_ids = {str(r.get("job_id") or "") for r in kept}
+        out |= {str(r.get("job_id") or "") for r in rows} - kept_ids
+    return out
 
 
 def auto_domains(email: str) -> List[str]:
@@ -339,6 +387,12 @@ def auto_domains(email: str) -> List[str]:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+def _user_prefs(email: str) -> Dict[str, Any]:
+    from services import employer_policy
+
+    return employer_policy.get_prefs(email)
+
 
 def audit_user(email: str, domains: List[str], top: int, show: int) -> Dict[str, Any]:
     seed = board_titles(email)
@@ -374,7 +428,8 @@ def audit_user(email: str, domains: List[str], top: int, show: int) -> Dict[str,
         "off_top10": verdicts[:10].count("off"),
         "held_in_domain": held_in_domain(domains),
         "missed": missed_in_domain(domains, levels, board, seed["match_titles"],
-                                   days=RECALL_DAYS),
+                                   days=RECALL_DAYS, prefs=_user_prefs(email),
+                                   own_families=resume_families),
         "sample": [{"title": r.get("title"), "company": r.get("company"),
                     "score": r.get("match_score"), "verdict": v}
                    for r, v in list(zip(rows, verdicts))[:show]],
@@ -385,8 +440,8 @@ def _markdown(run: str, results: List[Dict[str, Any]]) -> str:
     lines = [f"# Feed fidelity scorecard {run}", "",
              "Read-only replay of the inventory-served For-you tabs. "
              "on/off = share of shown rows in / out of the user's domain.", "",
-             "| user | domains | resume fams | shown | on@25 | off@25 | off@10 | on@100 | held in-domain | recall (new, own levels) | missed: not searched / not served |",
-             "|---|---|---|---|---|---|---|---|---|---|---|"]
+             "| user | domains | resume fams | shown | on@25 | off@25 | off@10 | on@100 | held in-domain | recall (new, own levels) | own-family recall | policy hidden | missed: not searched / not served |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in results:
         if r.get("error"):
             lines.append(f"| {r['user']} | error: {r['error']} |||||||")
@@ -397,6 +452,8 @@ def _markdown(run: str, results: List[Dict[str, Any]]) -> str:
             f"{r['on_top25']} | {r['off_top25']} | {r['off_top10']} | "
             f"{r['on_top100']} | {r['held_in_domain']} | "
             f"{(r.get('missed') or {}).get('recall')} of {(r.get('missed') or {}).get('population')} | "
+            f"{(r.get('missed') or {}).get('own_recall')} of {(r.get('missed') or {}).get('own_population')} | "
+            f"{(r.get('missed') or {}).get('policy_hidden')} | "
             f"{((r.get('missed') or {}).get('missed_by_reason') or {}).get('not_searched', 0)} / "
             f"{((r.get('missed') or {}).get('missed_by_reason') or {}).get('searched_not_served', 0)} |")
     for r in results:
@@ -411,7 +468,8 @@ def _markdown(run: str, results: List[Dict[str, Any]]) -> str:
         if missed.get("missed_sample"):
             lines.append(f"- missed (new in {missed.get('days')}d, own levels, US):")
             for m in missed["missed_sample"]:
-                lines.append(f"  - [{m['why']}] {m['title']} · {m['company']}")
+                own_tag = " (own family)" if m.get("own") else ""
+                lines.append(f"  - [{m['why']}{own_tag}] {m['title']} · {m['company']}")
     return "\n".join(lines) + "\n"
 
 
@@ -445,7 +503,10 @@ def main() -> int:
               f"on@25={r.get('on_top25')} off@10={r.get('off_top10')} "
               f"held={r.get('held_in_domain')} "
               f"recall={(r.get('missed') or {}).get('recall')}/"
-              f"{(r.get('missed') or {}).get('population')} {r.get('error') or ''}", flush=True)
+              f"{(r.get('missed') or {}).get('population')} "
+              f"own={(r.get('missed') or {}).get('own_recall')}/"
+              f"{(r.get('missed') or {}).get('own_population')} "
+              f"hidden={(r.get('missed') or {}).get('policy_hidden')} {r.get('error') or ''}", flush=True)
 
     run = _utc_run_id()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
