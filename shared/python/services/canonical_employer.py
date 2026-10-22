@@ -434,6 +434,22 @@ def cached_board_ownership(db=None, *, ttl: Optional[float] = None
     return built
 
 
+def warm_board_ownership(*, ttl: Optional[float] = None) -> Optional[BoardOwnership]:
+    """The cached board map ONLY if it is already built and fresh; never builds.
+
+    For serving paths. `build_board_ownership` reads every `career_sources`
+    row, and at our traffic most API requests land on a cold Lambda container,
+    so building it inside a feed request would put a full collection scan in
+    front of most users. A request that finds no warm map simply skips the
+    checks that need it (the trust block's `ownership_conflict`); the ingest
+    path, which needs it for correctness, still builds it."""
+    window = CACHE_TTL_SECONDS if ttl is None else float(ttl)
+    with _CACHE_LOCK:
+        if _CACHE is not None and (time.monotonic() - _CACHE[0]) < window:
+            return _CACHE[1]
+    return None
+
+
 def reset_cache() -> None:
     """Drop the cached map. Called by tests and after a verification sweep."""
     global _CACHE

@@ -237,6 +237,9 @@ def _resolve_trust_fn():
     if _TRUST_RESOLVED:
         return _TRUST_FN, _TRUST_KW
     _TRUST_RESOLVED = True
+    # A re-resolution starts from nothing; otherwise a function resolved
+    # earlier survives a module that no longer qualifies.
+    _TRUST_FN, _TRUST_KW = None, None
     try:
         import inspect
         from services import job_legitimacy_service as _jl  # type: ignore
@@ -258,11 +261,13 @@ def _resolve_trust_fn():
 
 
 def _board_ownership() -> Any:
-    """The in-memory board map (`canonical_employer.cached_board_ownership`),
-    or None. Read once per `apply` call, never per row."""
+    """The in-memory board map when it is ALREADY warm, or None. Read once per
+    `apply` call, never per row, and never built here: building it scans every
+    `career_sources` row, which a cold Lambda would do inside a feed request
+    (`canonical_employer.warm_board_ownership`)."""
     try:
         from services import canonical_employer
-        return canonical_employer.cached_board_ownership()
+        return canonical_employer.warm_board_ownership()
     except Exception:
         return None
 
