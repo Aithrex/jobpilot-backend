@@ -37,12 +37,14 @@ Decisions that are not obvious, and why:
   on evidence) is kept and labelled: it is a direct job at that firm.
 * A marketplace BOARD (Jobgether-style reposts) counts as
   `talent_marketplace` whatever employer name the repost prints.
-* Availability is not a preference, but strict/custom never serve a CLOSED
-  posting, and strict/custom never recommend one whose last verification is
-  older than `posting_profile.ACCEPTABLE_VERIFICATION_AGE_HOURS`
-  (`excluded_counts.closed` / `excluded_counts.stale_verification`, additive
-  keys). A posting with no verification record at all (a live-fetched legacy
-  row) is shown and counted in `availability_unverified_shown`.
+* Availability is not a preference, but strict/custom never serve a CLOSED or
+  hard-expired posting (`excluded_counts.closed`, additive). A posting whose
+  last verification is older than
+  `posting_profile.ACCEPTABLE_VERIFICATION_AGE_HOURS`, or that has no
+  verification record at all, is SHOWN labelled unverified and counted in
+  `availability_unverified_shown`; `excluded_counts.stale_verification` stays
+  0 on serving paths. Verification age is ENFORCED at the submission gate,
+  where acting on a dead posting costs the user something.
 * `direct_apply` (an application-path fact) is never read here: applying on
   the employer's own ATS does not make the employer a direct employer.
 """
@@ -193,15 +195,45 @@ def effective_prefs(prefs: Dict[str, Any], *, employer_kind: Any = None
 # ---------------------------------------------------------------------------
 # Per-row evaluation
 # ---------------------------------------------------------------------------
-def _trust_block(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """§C4 trust, from the legitimacy agent's function when it is present.
-    Guarded: the function lives on another branch; absent -> no block."""
+_TRUST_FN: Any = None
+_TRUST_KW: Optional[Dict[str, Any]] = None
+_TRUST_RESOLVED = False
+#: Keyword arguments that put the trust assessment in an OFFLINE mode. The
+#: serving path calls it once per card, so it may only run if it can promise
+#: no network fetch (its redirect-following is for ingest, not for a feed).
+_OFFLINE_KWARGS = (("allow_network", False), ("network", False), ("offline", True),
+                   ("fetch", False))
+
+
+def _resolve_trust_fn():
+    global _TRUST_FN, _TRUST_KW, _TRUST_RESOLVED
+    if _TRUST_RESOLVED:
+        return _TRUST_FN, _TRUST_KW
+    _TRUST_RESOLVED = True
     try:
+        import inspect
         from services.job_legitimacy_service import assess_posting_trust  # type: ignore
+        params = inspect.signature(assess_posting_trust).parameters
+        for name, value in _OFFLINE_KWARGS:
+            if name in params:
+                _TRUST_FN, _TRUST_KW = assess_posting_trust, {name: value}
+                break
+        else:
+            logger.warning("employer_policy: assess_posting_trust has no offline "
+                           "switch; trust block omitted on serving paths")
     except Exception:
+        _TRUST_FN, _TRUST_KW = None, None
+    return _TRUST_FN, _TRUST_KW
+
+
+def _trust_block(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """§C4 trust, from the legitimacy agent's function when it is present AND
+    offers an offline mode. Absent, or network-only -> no block."""
+    fn, kw = _resolve_trust_fn()
+    if fn is None:
         return None
     try:
-        block = assess_posting_trust(row)
+        block = fn(row, **(kw or {}))
         return block if isinstance(block, dict) else None
     except Exception as exc:     # a trust heuristic must never 500 a feed
         logger.warning("employer_policy: trust assessment failed (%s)", type(exc).__name__)
@@ -308,8 +340,11 @@ def apply(rows: Sequence[Dict[str, Any]], prefs: Optional[Dict[str, Any]] = None
             charged = "closed"
         elif reasons:
             charged = reasons[0]
-        elif preset != PRESET_OFF and av.get("reason") == "verification_stale":
-            charged = "stale_verification"
+        # A STALE verification is shown, labelled (`availability.state:
+        # unknown`, `reason: verification_stale`) and counted in
+        # `availability_unverified_shown` - never hidden on a serving path. A
+        # crawl that lags for a day must not empty every user's feed; the
+        # submission gate is where verification age is enforced.
         row["policy"] = {"excluded": charged is not None, "reasons": reasons,
                          "charged": charged}
         if charged is not None:

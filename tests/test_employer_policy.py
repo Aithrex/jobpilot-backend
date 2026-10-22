@@ -231,14 +231,51 @@ def test_undated_posting_rests_on_last_seen_not_posted_at():
     assert pp.availability(row, now=NOW)["state"] == "unknown"
 
 
-def test_strict_excludes_closed_and_stale():
+def test_strict_excludes_closed_but_shows_stale_as_unverified():
+    """A lagging crawl must never empty the default feed: stale is SHOWN and
+    labelled; only closed / hard-expired is hidden. (Submission still refuses
+    stale - see test_employer_policy_application.py.)"""
     rows = [_op(job_id="a", status="closed"),
             _op(job_id="b", last_verified_at=NOW - timedelta(hours=100)),
             _op(job_id="c")]
     kept, block = ep.apply(rows, ep.default_prefs(), now=NOW, resolve=False)
-    assert [r["job_id"] for r in kept] == ["c"]
+    assert [r["job_id"] for r in kept] == ["b", "c"]
     assert block["excluded_counts"]["closed"] == 1
-    assert block["excluded_counts"]["stale_verification"] == 1
+    assert block["excluded_counts"]["stale_verification"] == 0
+    assert block["availability_unverified_shown"] == 1
+    assert kept[0]["availability"]["reason"] == "verification_stale"
+
+
+def test_default_never_hides_unknown_employers():
+    rows = [_fresh(job_id=f"u{i}", employer_name=f"Unheard Of Co {i}") for i in range(5)]
+    kept, block = ep.apply(rows, ep.default_prefs(), now=NOW, resolve=False)
+    assert len(kept) == 5 and block["unverified_shown"] == 5
+
+
+def test_trust_hook_requires_an_offline_mode(monkeypatch):
+    import sys, types
+    calls = []
+    mod = types.ModuleType("services.job_legitimacy_service")
+
+    def assess_posting_trust(row):            # no offline switch
+        calls.append(row)
+        return {"state": "warnings"}
+    mod.assess_posting_trust = assess_posting_trust
+    monkeypatch.setitem(sys.modules, "services.job_legitimacy_service", mod)
+    monkeypatch.setattr(ep, "_TRUST_RESOLVED", False)
+    row = _op()
+    ep.apply([row], ep.default_prefs(), now=NOW, resolve=False)
+    assert "trust" not in row and calls == []
+
+    def offline_trust(row, *, allow_network=True):
+        assert allow_network is False
+        return {"state": "no_warnings_found", "warnings": [], "version": "t"}
+    mod.assess_posting_trust = offline_trust
+    monkeypatch.setattr(ep, "_TRUST_RESOLVED", False)
+    row = _op()
+    ep.apply([row], ep.default_prefs(), now=NOW, resolve=False)
+    assert row["trust"]["state"] == "no_warnings_found"
+    monkeypatch.setattr(ep, "_TRUST_RESOLVED", False)
 
 
 def test_direct_apply_is_not_proof_of_direct_employer():

@@ -72,7 +72,7 @@ def _seed(per_shape=4):
             inv.mark_requirements_parsed("career-pages", sjid, doc["content_hash"],
                                          fit_score.extract_requirements(JD, title), now=NOW)
             expected[doc["job_id"]] = shown
-    # One stale posting from an operating employer: hidden in strict mode.
+    # One stale posting from an operating employer: SHOWN, labelled unverified.
     inv.upsert_posting({
         "source": "career-pages", "source_job_id": "stale-0",
         "url": "https://boards.greenhouse.io/etsy/jobs/777", "company": "Etsy",
@@ -85,7 +85,7 @@ def _seed(per_shape=4):
         "canonical_employer_id": employer_id_for(domain="etsy.com"),
         "last_verified_at": NOW - timedelta(hours=100),
         "last_seen_at": NOW - timedelta(hours=100)}})
-    expected[stale["job_id"]] = False
+    expected[stale["job_id"]] = True
     return expected
 
 
@@ -133,8 +133,11 @@ def test_tech_feed_ranked_and_keyset_enforce_the_same_policy(db, monkeypatch):
     first = ranked[0]["policy"]["excluded_counts"]
     assert first["consultancy"] >= 8          # Capgemini + IBM (mixed)
     assert first["staffing"] == 4 and first["talent_community"] == 4
-    assert first["stale_verification"] == 1
+    assert first["stale_verification"] == 0
     assert ranked[0]["policy"]["unverified_shown"] == 4
+    stale_cards = [j for p in ranked for j in p["jobs"]
+                   if j["availability"].get("reason") == "verification_stale"]
+    assert len(stale_cards) == 1
     # Facets are post-policy for the windowed keys, and say which are not.
     kinds = {b.get("value") for b in ranked[0]["facets"].get("employer_kind") or []}
     assert "consultancy" not in kinds and "staffing" not in kinds
