@@ -1,0 +1,59 @@
+{
+ "_comment": "trimmed from https://dish.jibeapply.com/api/jobs captured 2026-10-22",
+ "jobs": [
+  {
+   "data": {
+    "slug": "104915",
+    "client_code": "dish",
+    "req_id": "104915",
+    "title": "Finance Analyst II - Human Resources",
+    "description": "<br><strong>What Success Looks Like (Objectives):</strong><br><br><p style=\"margin: 0px;\" data-path-to-node=\"5\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\">EchoStar and DISH are reimagining the future of connectivity. Within Human Resources, we collaborate with the inno",
+    "city": "Englewood",
+    "state": "Colorado",
+    "country": "United States",
+    "location_type": "LAT_LNG",
+    "department": "",
+    "salary_min_value": 0,
+    "salary_max_value": 0,
+    "employment_type": "FULL_TIME",
+    "qualifications": "<h4 data-path-to-node=\"10\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\"><strong data-path-to-node=\"10\" data-index-in-node=\"0\">Core Skills &amp; Competencies:</strong></span></h4><ul data-path-to-node=\"11\"><li><p style=\"margin: 0px;\" data-path-to-node=\"11,0,0\"><span style",
+    "hiring_organization": "EchoStar",
+    "responsibilities": "<p style=\"margin: 0px;\" data-path-to-node=\"5\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\">EchoStar and DISH are reimagining the future of connectivity. Within Human Resources, we collaborate with the innovators who drive our creative ambition. As a <strong data-path-to-",
+    "posted_date": "2026-10-20T21:32:00+0000",
+    "apply_url": "https://attract-careers1-echostar.icims.com/jobs/104915/login",
+    "internal": false,
+    "external": false,
+    "create_date": "2026-10-20T21:32:37+0000",
+    "full_location": "Englewood, Colorado"
+   }
+  },
+  {
+   "data": {
+    "slug": "100377",
+    "client_code": "dish",
+    "req_id": "100377",
+    "title": "Head of Engineering, Manufacturing and Distribution Modernization",
+    "description": "<br><strong>What Success Looks Like (Objectives):</strong><br><br><p style=\"margin-top: 0pt; margin-bottom: 0pt;\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\"><span style=\"color: #000000; font-weight: 400;\">Leading multi-site manufacturing and distribution operations\u2014spa",
+    "city": "Englewood",
+    "state": "Colorado",
+    "country": "United States",
+    "location_type": "LAT_LNG",
+    "department": "",
+    "salary_min_value": 0,
+    "salary_max_value": 0,
+    "employment_type": "FULL_TIME",
+    "qualifications": "<ul style=\"margin-top: 0; margin-bottom: 0;\"><li style=\"font-size: 11pt; font-family: Arial,sans-serif; color: #000000; font-weight: 400;\" aria-level=\"1\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\"><strong><span style=\"color: #000000;\">Bachelor's degree in Mechanical, I",
+    "hiring_organization": "EchoStar",
+    "responsibilities": "<p style=\"margin-top: 0pt; margin-bottom: 0pt;\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\"><span style=\"color: #000000; font-weight: 400;\">Leading multi-site manufacturing and distribution operations&mdash;spanning multi-disciplined engineering, maintenance, and machin",
+    "posted_date": "2026-10-20T21:17:00+0000",
+    "apply_url": "https://attract-careers1-echostar.icims.com/jobs/100377/login",
+    "internal": false,
+    "external": false,
+    "create_date": "2026-10-13T13:14:14+0000",
+    "full_location": "Englewood, Colorado; Englewood, Colorado"
+   }
+  }
+ ],
+ "totalCount": 656,
+ "count": 656
+}

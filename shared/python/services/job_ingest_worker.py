@@ -1012,6 +1012,93 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {"vendor": "successfactors", "tenant": "westinghousenuclear", "site": "",
      "host": "careers.westinghousenuclear.com", "display_name": "Westinghouse Electric",
      "industry": "energy"},
+    # Direct-employer sources on shared providers added 2026-10-21
+    # (`docs/audit/jobright-2026-10-21`, rules 9-10). Each employer's OWN
+    # careers page embeds or links the exact endpoint below, and each was
+    # listed live through its provider before being added here; the counts are
+    # what that run returned, not a promise about today.
+    #
+    # Paycor Recruiting: the exact clientId from the employer's embed.
+    # RevSpring's aggregate lists two business units, "RevSpring Inc" (58) and
+    # "Apex Revenue Technologies" (18) - Apex combined into RevSpring in 2018
+    # and its brand was folded in 2019, so both are RevSpring's own roles and
+    # each row keeps its unit. Spring Arbor's embed carries `test=testing`,
+    # which the embed script never forwards (38 postings either way).
+    {"vendor": "paycor", "tenant": "8a7883d0798f66af0179905b7890010b",
+     "site": "aggregate", "host": "recruitingbypaycor.com",
+     "display_name": "RevSpring", "industry": "tech"},
+    {"vendor": "paycor", "tenant": "8a7883c66ee9a5cc016ef0ea2d5b06cb",
+     "site": "", "host": "recruitingbypaycor.com",
+     "display_name": "Spring Arbor University", "industry": "education"},
+    # BreezyHR: destroai.com/careers links destro-ai.breezy.hr/. The research
+    # matrix recorded one role; the board held 13 (two same-title roles in
+    # different cities are different requisitions).
+    {"vendor": "breezy", "tenant": "destro-ai", "site": "",
+     "host": "destro-ai.breezy.hr", "display_name": "Destro AI",
+     "industry": "tech"},
+    # Paycom: lincolninst.edu careers links the exact clientkey below. 7 of a
+    # reported 7; the listing date is relative ("2 days ago") and the detail's
+    # JSON-LD date replaces it. Center for Geospatial Solutions roles are a
+    # Lincoln Institute program, on the Institute's own board.
+    {"vendor": "paycom", "tenant": "AC25DFC6E5002C200B92C92109B3F768",
+     "site": "", "host": "www.paycomonline.net",
+     "display_name": "Lincoln Institute of Land Policy", "industry": "other"},
+    # AppOne / Paychex Recruiting: universalbackground.com links the exact
+    # ServerVar; its search page's own "browse all by category" link (client
+    # 18117) lists every requisition. 10 parsed, 10 distinct ids.
+    {"vendor": "appone", "tenant": "universalbackgroundscreening.appone.com",
+     "site": "", "host": "www2.appone.com",
+     "display_name": "Universal Background Screening", "industry": "other"},
+    # Own careers pages (`careers_page`), read live through the extended
+    # own-site reader on 2026-10-22. Counts are what that run returned.
+    # MATS Research: 8 staff vacancies (cards; fellowships live under /program, not here).
+    {"vendor": "careers_page", "tenant": "matsprogram.org", "site": "",
+     "host": "matsprogram.org", "display_name": "MATS Research", "industry": "other",
+     "extra": {"listing_url": "https://www.matsprogram.org/careers"}},
+    # Orange Logic: 8 (two invisible leftover links excluded; one of them 404s).
+    {"vendor": "careers_page", "tenant": "orangelogic.com", "site": "",
+     "host": "orangelogic.com", "display_name": "Orange Logic", "industry": "tech",
+     "extra": {"listing_url": "https://www.orangelogic.com/about/careers"}},
+    # Rugged Science: 4 ('Learn more' cards titled from the card heading).
+    {"vendor": "careers_page", "tenant": "ruggedscience.com", "site": "",
+     "host": "ruggedscience.com", "display_name": "Rugged Science", "industry": "manufacturing",
+     "extra": {"listing_url": "https://ruggedscience.com/careers/"}},
+    # Nous Research: 13 (apply by email: manual handoff, never sent).
+    {"vendor": "careers_page", "tenant": "nousresearch.com", "site": "",
+     "host": "nousresearch.com", "display_name": "Nous Research", "industry": "tech",
+     "extra": {"listing_url": "https://nousresearch.com/careers"}},
+    # GMI Cloud: 8 (LinkedIn apply links: discovery only, manual handoff).
+    {"vendor": "careers_page", "tenant": "gmicloud.ai", "site": "",
+     "host": "gmicloud.ai", "display_name": "GMI Cloud", "industry": "tech",
+     "extra": {"listing_url": "https://www.gmicloud.ai/en/company/career"}},
+    # Attune: 4 (LinkedIn apply links: discovery only, manual handoff).
+    {"vendor": "careers_page", "tenant": "attune.ai", "site": "",
+     "host": "attune.ai", "display_name": "Attune", "industry": "tech",
+     "extra": {"listing_url": "https://www.attune.ai/company"}},
+    # Upwind Security: the Comeet WordPress plugin renders all positions on
+    # upwind.io itself (/careers/co/<loc>/<uid>/<slug>/all); 94 of 94, id =
+    # Comeet position uid. No Comeet API token was needed or guessed.
+    {"vendor": "careers_page", "tenant": "upwind.io", "site": "",
+     "host": "upwind.io", "display_name": "Upwind Security", "industry": "tech",
+     "extra": {"listing_url": "https://www.upwind.io/careers"}},
+    # Avature, server-rendered SearchJobs/JobDetail. Frequentis: 64 of 64
+    # reported. Flint Hills Resources: the SHARED Koch board through the exact
+    # FHR-filtered link fhr.com's careers page (now kochinc.com) prints, 31 of
+    # 31, each row also required to name "Flint Hills Resources" - never all
+    # of Koch attributed to FHR.
+    {"vendor": "avature", "tenant": "jobs.frequentis.com", "site": "careers",
+     "host": "jobs.frequentis.com", "display_name": "Frequentis",
+     "industry": "tech"},
+    {"vendor": "avature", "tenant": "koch.avature.net",
+     "site": "en_US/careers?732=6297&tags=rm.kcm.web.kcm-004",
+     "host": "koch.avature.net", "display_name": "Flint Hills Resources",
+     "industry": "other", "extra": {"entity_name": "Flint Hills Resources"}},
+    # iCIMS Jibe: echostar.com/careers -> jobs.echostar.com/jobs, whose page
+    # declares canonical dish.jibeapply.com. 656 of 656, all dated; apply
+    # links go to the iCIMS tenant attract-careers1-echostar.
+    {"vendor": "jibe", "tenant": "dish", "site": "",
+     "host": "dish.jibeapply.com", "display_name": "EchoStar",
+     "industry": "telecom"},
 )
 
 

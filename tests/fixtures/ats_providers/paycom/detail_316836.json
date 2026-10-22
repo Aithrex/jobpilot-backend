@@ -1,0 +1,22 @@
+{
+ "jobPosting": {
+  "jobId": 316836,
+  "clientCode": "10A07",
+  "jobTitle": "Backend Software Engineer I/II (55745)",
+  "location": "Washington DC - Washington, DC 20005",
+  "secondaryLocations": [],
+  "city": "Washington",
+  "remoteType": "Fully Remote",
+  "salaryRange": "$76,000.00 - $96,000.00 Salary",
+  "level": "Experienced",
+  "positionType": "Fixed Term",
+  "educationLevel": "4 Year Degree",
+  "jobCategory": "Information Technology",
+  "description": "<p><strong>Who We Are&nbsp;&nbsp;&nbsp;</strong></p>\n\n<p>The&nbsp;<a href=\"https://cgsearth.org/\" target=\"_blank\">Center for Geospatial Solutions</a>&nbsp;(CGS) is a&nbsp;self-sustaining&nbsp;nonprofit enterprise.&nbsp;Founded to&nbsp;help bridge the gap between policy and practice, our mission is to&nbsp;enable&nbsp;people and the planet to meet the pace of change&nbsp;by expanding access to&nbsp;new technologies&nbsp;that power&nbsp;more sustainable and&nbsp;equitable&nbsp;outcomes.&nbsp;&nbsp;&nbsp;&nbsp;</p>\n\n<p>We are a&nbsp;fully&nbsp;remote team of award-winning&nbsp;professionals with&nbsp;decades of applied&nbsp;expertise&nbsp;and&nbsp;end-to-end GIS capabilities.&nbsp;By embracing&",
+  "descriptionTitle": "Backend Software Engineer I",
+  "qualifications": "<p><strong>Logistical and/or&nbsp;Technical Skills&nbsp;</strong></p>\n\n<ul>\n\t<li>\n\t<p>Bachelor&#39;s degree in computer science or a related field or equivalent practical experience&nbsp;</p>\n\t</li>\n</ul>\n\n<ul>\n\t<li>\n\t<p>2-4 years of API development and documentation experience, including complying with&nbsp;OpenAPI&nbsp;3.0 or other standards-based APIs&nbsp;</p>\n\t</li>\n</ul>\n\n<ul>\n\t<li>\n\t<p>Experience building data pipelines for large, heterogeneous datasets from diverse sources&nbsp;</p>\n\t</l",
+  "qualificationsTitle": "Qualifications",
+  "applyAvailable": true,
+  "googleJobJson": "{\"@context\": \"https://schema.org/\", \"@type\": \"JobPosting\", \"title\": \"Backend Software Engineer I/II (55745)\", \"identifier\": \"J10A07316836\", \"url\": \"https://www.paycomonline.net/v4/ats/web.php/portal/AC25DFC6E5002C200B92C92109B3F768/jobs/316836\", \"image\": \"https://www.paycomonline.net/v4/ats/web.php/application/style/logo?clientkey=AC25DFC6E5002C200B92C92109B3F768\", \"baseSalary\": {\"@type\": \"MonetaryAmount\", \"currency\": \"USD\", \"value\": {\"@type\": \"QuantitativeValue\", \"minValue\": 76000, \"maxValue\": 96000, \"unitText\": \"YEAR\"}}, \"datePosted\": \"2026-10-19\", \"description\": \"Job Details: Level: Experienced, Job Location: Washington DC - Washington, DC 20005, Position Type: Fixed Term, Education Level: 4 Year Degree, Salary Range: $76,000.00 - $96,000.00 Salary, Travel Per\", \"responsibilities\": \"Who We Are&nbsp;&nbsp;&nbsp;\\n\\nThe&nbsp;Center for Geospatial Solutions&nbsp;(CGS) is a&nbsp;self-sustaining&nbsp;nonprofit enterprise.&nbsp;Founded to&nbsp;help bridge the gap between policy and pract\", \"employmentType\": \"OTHER\", \"hiringOrganization\": {\"@type\": \"Organization\", \"name\": \"Lincoln Institute of Land Policy\", \"logo\": \"https://www.paycomonline.net/v4/ats/web.php/application/style/logo?clientkey=AC25DFC6E5002C200B92C92109B3F768\"}, \"jobLocation\": {\"@type\": \"Place\", \"address\": {\"streetAddress\": \"1200 G Street NW, Suite 240\", \"addressLocality\": \"Washington\", \"addressRegion\": \"DC\", \"postalCode\": 20005, \"addressCountry\": \"USA\"}}, \"qualifications\": \"Logistical and/or&nbsp;Technical Skills&nbsp;\\n\\n\\n\\t\\n\\tBachelor&#39;s degree in computer science or a related field or equivalent practical experience&nbsp;\\n\\t\\n\\n\\n\\n\\t\\n\\t2-4 years of API development and docume\", \"industry\": \"Information Technology\", \"validThrough\": \"2026-10-31\", \"educationRequirements\": {\"@type\": \"EducationalOccupationalCredential\", \"credentialCategory\": \"bachelor degree\"}}"
+ }
+}
