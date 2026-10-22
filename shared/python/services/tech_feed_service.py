@@ -952,17 +952,21 @@ def _drop_user_suppressed(docs: Sequence[Dict[str, Any]],
     """
     if not suppressed:
         return list(docs), 0
-    job_ids = set(suppressed.get("job_ids") or ())
-    group_ids = set(suppressed.get("dedupe_group_ids") or ())
-    if not job_ids and not group_ids:
+    # Layered, explainable match (`posting_identity.EngagementIndex`): HIDE on
+    # job_id / dedupe group / apply-URL key / (board, requisition id); only
+    # ANNOTATE prior applications and possible reposts. Never company + title.
+    from services.posting_identity import EngagementIndex
+    index = EngagementIndex(suppressed)
+    if index.empty():
         return list(docs), 0
     kept: List[Dict[str, Any]] = []
     dropped = 0
     for doc in docs:
-        gid = str(doc.get("dedupe_group_id") or "")
-        if str(doc.get("job_id") or "") in job_ids or (gid and gid in group_ids):
+        keys = index._keys(doc)
+        if index.hides(doc, keys):
             dropped += 1
             continue
+        index.annotate(doc, keys)
         kept.append(doc)
     return kept, dropped
 
@@ -2091,6 +2095,10 @@ def _card(row: Dict[str, Any], *, now: datetime) -> Dict[str, Any]:
         "source_variants": row.get("source_variants") or [],
         "location_variants": row.get("location_variants") or [],
         "duplicate_count": row.get("duplicate_count") or 0,
+        # identity-1.0.0 hints - never a reason the card is hidden.
+        "previously_applied": row.get("_previously_applied") or None,
+        "possible_repost_of": row.get("_possible_repost_of") or None,
+        "possible_duplicate_of": row.get("possible_duplicate_of") or None,
     }
     for key in ("employer_name_original", "employer_name_confidence",
                 "employer_name_conflict", "employer_name_variants"):

@@ -383,36 +383,121 @@ def annotate_possible_duplicates(rows: List[Dict[str, Any]]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Suppression (dismissed / not interested)
+# Repost hint - a REVIEW signal, never a hide
+# ---------------------------------------------------------------------------
+
+def location_key_of(row: Dict[str, Any]) -> str:
+    locs = row.get("locations") or []
+    if isinstance(locs, list) and locs and isinstance(locs[0], dict):
+        loc = _norm_text(locs[0].get("raw") or locs[0].get("key"))
+        if loc:
+            return loc
+    return _norm_text(row.get("location"))
+
+
+def repost_key(row: Dict[str, Any]) -> str:
+    """Board-owner + normalized title + location.
+
+    Production probe 2026-10-21: of 579 applied saved_jobs whose posting is
+    gone, ZERO live postings carry the same normalized apply link - an
+    employer that reposts issues a NEW requisition id and URL (Rippling uuid,
+    JazzHR id). This key is how such a repost is RECOGNISED; it is never how
+    it is hidden, because the same shape also describes genuine multiple
+    openings (JazzHR: 91 tenant+title+location groups / 207 active rows).
+    Requires a proven board owner - a company NAME never qualifies.
+    """
+    board = board_key_of(row)
+    title = _norm_text(row.get("title") or row.get("title_raw"))
+    if not (board and title):
+        return ""
+    return f"{board}|{title}|{location_key_of(row)}"
+
+
+# ---------------------------------------------------------------------------
+# Suppression (dismissed / not interested) and prior applications
 # ---------------------------------------------------------------------------
 
 def suppression_keys(row: Dict[str, Any]) -> Dict[str, str]:
     """The keys a dismissal of THIS row is remembered under."""
     return {"apply_url_key": str(row.get("apply_url_key") or "")
             or apply_url_key(original_url_of(row)),
-            "requisition_key": requisition_key(row)}
+            "requisition_key": requisition_key(row),
+            "repost_key": repost_key(row)}
 
 
-def is_suppressed(row: Dict[str, Any], suppressed: Optional[Dict[str, Any]],
-                  *, _cache: Optional[Dict[str, set]] = None) -> bool:
-    """Does a stored dismissal cover this row? job_id, dedupe group, apply-URL
-    key or (board, requisition) - never company + title."""
-    if not suppressed:
-        return False
-    jid = str(row.get("job_id") or "")
-    gid = str(row.get("dedupe_group_id") or "")
-    if jid and jid in set(suppressed.get("job_ids") or ()):
-        return True
-    if gid and gid in set(suppressed.get("dedupe_group_ids") or ()):
-        return True
-    urls = suppressed.get("apply_url_keys") or ()
-    reqs = suppressed.get("requisition_keys") or ()
-    if not urls and not reqs:
-        return False
-    keys = suppression_keys(row)
-    return bool((keys["apply_url_key"] and keys["apply_url_key"] in set(urls))
-                or (keys["requisition_key"] and keys["requisition_key"] in set(reqs)))
+class EngagementIndex:
+    """What this user already said no to or applied to, matched in layers.
+
+    HIDE (dismissals only): job_id -> dedupe group -> apply-URL key ->
+    (board, requisition id). ANNOTATE (never hide): a prior application
+    matched the same way -> ``previously_applied``; a dismissal or application
+    whose board + title + location matches -> ``possible_repost_of``.
+    Company + title alone never matches anything.
+    """
+
+    def __init__(self, suppressed: Optional[Dict[str, Any]]):
+        s = suppressed or {}
+        self.job_ids = set(s.get("job_ids") or ())
+        self.groups = set(s.get("dedupe_group_ids") or ())
+        self.urls = set(s.get("apply_url_keys") or ())
+        self.reqs = set(s.get("requisition_keys") or ())
+        self.dismissed_reposts: Dict[str, str] = dict(s.get("repost_keys") or {})
+        applied = s.get("applied") or {}
+        self.applied: Dict[str, Dict[str, Any]] = dict(applied.get("keys") or {})
+        self.applied_reposts: Dict[str, Dict[str, Any]] = dict(applied.get("repost") or {})
+
+    def empty(self) -> bool:
+        return not (self.job_ids or self.groups or self.urls or self.reqs
+                    or self.dismissed_reposts or self.applied or self.applied_reposts)
+
+    def _keys(self, row: Dict[str, Any]) -> Dict[str, str]:
+        if self.urls or self.reqs or self.applied or self.dismissed_reposts \
+                or self.applied_reposts:
+            return suppression_keys(row)
+        return {"apply_url_key": "", "requisition_key": "", "repost_key": ""}
+
+    def hides(self, row: Dict[str, Any], keys: Optional[Dict[str, str]] = None) -> str:
+        """The layer that hides this row ("" = not hidden)."""
+        if str(row.get("job_id") or "") in self.job_ids:
+            return "job_id"
+        gid = str(row.get("dedupe_group_id") or "")
+        if gid and gid in self.groups:
+            return "dedupe_group"
+        keys = keys if keys is not None else self._keys(row)
+        if keys["apply_url_key"] and keys["apply_url_key"] in self.urls:
+            return "apply_url"
+        if keys["requisition_key"] and keys["requisition_key"] in self.reqs:
+            return "requisition"
+        return ""
+
+    def annotate(self, row: Dict[str, Any], keys: Optional[Dict[str, str]] = None) -> None:
+        keys = keys if keys is not None else self._keys(row)
+        for layer, key in (("job_id", "job|" + str(row.get("job_id") or "")),
+                           ("apply_url", "url|" + keys["apply_url_key"]),
+                           ("requisition", "req|" + keys["requisition_key"])):
+            if key.endswith("|"):
+                continue
+            hit = self.applied.get(key)
+            if hit:
+                row["_previously_applied"] = {"status": hit.get("status"),
+                                              "matched_on": layer,
+                                              "job_id": hit.get("job_id")}
+                return
+        rk = keys["repost_key"]
+        if not rk:
+            return
+        hit = self.applied_reposts.get(rk)
+        if hit and hit.get("job_id") != row.get("job_id"):
+            row["_possible_repost_of"] = {"kind": "applied", "job_id": hit.get("job_id"),
+                                          "status": hit.get("status"),
+                                          "basis": "same employer board, title and location"}
+            return
+        dismissed = self.dismissed_reposts.get(rk)
+        if dismissed and dismissed != row.get("job_id"):
+            row["_possible_repost_of"] = {"kind": "dismissed", "job_id": dismissed,
+                                          "basis": "same employer board, title and location"}
 
 
-def iter_keys(values: Iterable[Any]) -> List[str]:
-    return [str(v) for v in values if isinstance(v, str) and v]
+def is_suppressed(row: Dict[str, Any], suppressed: Optional[Dict[str, Any]]) -> bool:
+    """Does a stored dismissal cover this row? Convenience over EngagementIndex."""
+    return bool(EngagementIndex(suppressed).hides(row))
