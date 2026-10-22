@@ -98,8 +98,27 @@ EMPLOYER_KIND_ANY = "any"
 EMPLOYER_KIND_DIRECT = "direct_employer"
 EMPLOYER_KIND_STAFFING = "staffing"
 EMPLOYER_KIND_MARKETPLACE = "marketplace"
+#: Added with `employer_business_model` (ebm-1.0.0). Before it the kinds were
+#: direct/staffing/marketplace and anything the short name regex missed was
+#: DIRECT - Accenture, Deloitte, Cognizant, Hays and any unknown name all
+#: read "Direct employer posting". `unknown` is now a real answer and is never
+#: rendered as direct.
+EMPLOYER_KIND_CONSULTANCY = "consultancy"
+EMPLOYER_KIND_MIXED = "mixed"
+EMPLOYER_KIND_UNKNOWN = "unknown"
 EMPLOYER_KINDS = (EMPLOYER_KIND_ANY, EMPLOYER_KIND_DIRECT,
-                  EMPLOYER_KIND_STAFFING, EMPLOYER_KIND_MARKETPLACE)
+                  EMPLOYER_KIND_STAFFING, EMPLOYER_KIND_MARKETPLACE,
+                  EMPLOYER_KIND_CONSULTANCY, EMPLOYER_KIND_MIXED,
+                  EMPLOYER_KIND_UNKNOWN)
+#: business model kind -> the feed's employer_kind vocabulary.
+_KIND_FROM_MODEL = {
+    "operating": EMPLOYER_KIND_DIRECT,
+    "staffing": EMPLOYER_KIND_STAFFING,
+    "consultancy": EMPLOYER_KIND_CONSULTANCY,
+    "talent_marketplace": EMPLOYER_KIND_MARKETPLACE,
+    "mixed": EMPLOYER_KIND_MIXED,
+    "unknown": EMPLOYER_KIND_UNKNOWN,
+}
 
 #: Occupation SECTOR — which slice of the technical market leads the feed when
 #: the user has not named a role family.
@@ -1154,14 +1173,6 @@ def hard_filter(docs: Sequence[Dict[str, Any]], req: Dict[str, Any],
     return kept, drops
 
 
-_MARKETPLACE_HINT_RE = re.compile(
-    r"(jobgether|jobot|dice|ziprecruiter|talent\.com|adzuna|jooble|"
-    r"whatjobs|lensa|snagajob)", re.IGNORECASE)
-_STAFFING_HINT_RE = re.compile(
-    r"(staffing|consulting group|recruit(?:ing|ment)|talent solutions|"
-    r"workforce solutions|manpower|randstad|adecco|kforce|robert half|"
-    r"insight global|teksystems|apex systems|collabera|infosys bpm|"
-    r"cybercoders|motion recruitment|beacon hill)", re.IGNORECASE)
 _CLEARANCE_RE = re.compile(
     r"(?<![a-z])(ts/sci|top secret|secret clearance|security clearance|"
     r"polygraph|poly\b|q clearance|l clearance|public trust)", re.IGNORECASE)
@@ -1267,14 +1278,33 @@ def _salary_band(doc: Dict[str, Any]) -> Tuple[Optional[float], bool]:
 
 
 def _employer_kind_of(doc: Dict[str, Any]) -> str:
+    """The feed's employer kind, from the employer BUSINESS MODEL.
+
+    `direct_employer` means one thing only: the business model is
+    `operating`, on evidence (an override, the research register, a declared
+    registry category). It used to be the FALLBACK after a short name regex,
+    so every employer the regex did not name - Accenture, Deloitte,
+    Cognizant, Hays, any unknown name - was "direct". An unknown employer is
+    now `unknown`; a marketplace BOARD still reads marketplace whoever the
+    posting names.
+
+    The profile is attached once per request by
+    `employer_business_model.resolve_rows` (one registry `$in`); a row that
+    never went through it is classified offline (seed by domain + name rule,
+    no database), which can only ever be LESS confident, never more.
+    """
     if str(doc.get("board_kind") or "").lower() == "marketplace":
         return EMPLOYER_KIND_MARKETPLACE
-    name = str(doc.get("employer_name") or "")
-    if _MARKETPLACE_HINT_RE.search(name):
-        return EMPLOYER_KIND_MARKETPLACE
-    if _STAFFING_HINT_RE.search(name):
-        return EMPLOYER_KIND_STAFFING
-    return EMPLOYER_KIND_DIRECT
+    from services import employer_business_model as ebm
+    prof = doc.get("_employer_profile")
+    if not (isinstance(prof, dict) and prof.get("version") == ebm.EBM_VERSION):
+        # Cached under a DIFFERENT key, so a later `resolve_rows` still does
+        # the registry read instead of mistaking this for the real answer.
+        prof = doc.get("_employer_profile_offline")
+        if not isinstance(prof, dict):
+            prof = ebm.profile_for_row(doc, employers=None)
+            doc["_employer_profile_offline"] = prof
+    return _KIND_FROM_MODEL.get(str(prof.get("kind") or ""), EMPLOYER_KIND_UNKNOWN)
 
 
 def _is_direct_apply(doc: Dict[str, Any]) -> bool:
