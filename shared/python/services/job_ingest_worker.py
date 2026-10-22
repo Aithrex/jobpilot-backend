@@ -836,6 +836,12 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {"vendor": "paycom", "tenant": "AC25DFC6E5002C200B92C92109B3F768",
      "site": "", "host": "www.paycomonline.net",
      "display_name": "Lincoln Institute of Land Policy", "industry": "other"},
+    # AppOne / Paychex Recruiting: universalbackground.com links the exact
+    # ServerVar; its search page's own "browse all by category" link (client
+    # 18117) lists every requisition. 10 parsed, 10 distinct ids.
+    {"vendor": "appone", "tenant": "universalbackgroundscreening.appone.com",
+     "site": "", "host": "www2.appone.com",
+     "display_name": "Universal Background Screening", "industry": "other"},
 )
 
 
