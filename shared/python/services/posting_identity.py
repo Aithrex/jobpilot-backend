@@ -234,10 +234,12 @@ def board_key_of(row: Dict[str, Any]) -> str:
     """Who owns the requisition number space: canonical employer, else the
     ATS tenant. "" when neither is proven - a bare company NAME never is."""
     canonical = str(row.get("canonical_employer_id") or "").strip()
-    if canonical:
-        return f"emp:{canonical}"
     ats = str(row.get("ats") or "").strip().lower()
     tenant = str(row.get("tenant") or "").strip().lower()
+    if canonical:
+        # Scoped by ATS: one employer on Workday AND Greenhouse has two
+        # unrelated requisition-number spaces, and "12345" may exist in both.
+        return f"emp:{canonical}:{ats}" if ats else f"emp:{canonical}"
     if ats and tenant:
         return f"ats:{ats}:{tenant}"
     return ""

@@ -219,3 +219,9 @@ class TestServedDedupe:
         out = self._feed()._dedupe(rows)
         assert len(out) == 2
         assert not any(r.get("possible_duplicate_of") for r in out)
+
+
+def test_one_employer_on_two_ats_has_two_requisition_spaces():
+    a = {"canonical_employer_id": "emp_abc", "ats": "workday", "source_job_id": "wd:12345"}
+    b = {"canonical_employer_id": "emp_abc", "ats": "greenhouse", "source_job_id": "gh:12345"}
+    assert pid.requisition_key(a) and pid.requisition_key(a) != pid.requisition_key(b)
