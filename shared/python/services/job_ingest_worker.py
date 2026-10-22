@@ -2014,6 +2014,23 @@ _LEGACY_LISTING_VENDORS = frozenset({
     "workable", "recruitee", "neogov",
 })
 
+#: Vendors whose `site` names a REGION ("eu"). The legacy listing and detail
+#: paths below hard-code each vendor's US API host and ignore `site`, so an EU
+#: Greenhouse or Lever member sent down them would silently query the US region
+#: - reading nothing, or somebody else's board, as this employer's. A regional
+#: member therefore always goes through its provider, and never falls back.
+_REGIONAL_VENDORS = frozenset({"greenhouse", "lever"})
+
+
+def _is_regional_member(member: Dict[str, Any]) -> bool:
+    return (_vendor_of(member) in _REGIONAL_VENDORS
+            and bool(str(member.get("site") or "").strip()))
+
+
+def _uses_legacy_listing(member: Dict[str, Any]) -> bool:
+    return (_vendor_of(member) in _LEGACY_LISTING_VENDORS
+            and not _is_regional_member(member))
+
 
 def _endpoint_from_member(member: Dict[str, Any]):
     from services.ats_providers.base import Endpoint
@@ -2222,12 +2239,15 @@ def list_member(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy,
     # prove we read the whole board"), so a path that forgets to set it cannot
     # cause `_close_stale_in_shard` to delete live inventory.
     member["_listing_truncated"] = True
-    vendor = _vendor_of(member)
-    if USE_PROVIDERS and vendor not in _LEGACY_LISTING_VENDORS:
+    regional = _is_regional_member(member)
+    if (USE_PROVIDERS or regional) and not _uses_legacy_listing(member):
         listed = _list_via_provider(member, cutoff=cutoff, deadline=deadline,
                                     stop=stop)
         if listed is not None:
             return listed
+        if regional:
+            # No provider to speak the region: nothing, never the US API.
+            return []
     if member.get("source") == SOURCE_WORKDAY:
         return _list_workday(member, cutoff=cutoff, policy=policy,
                              deadline=deadline, stop=stop, now=now)
@@ -2393,12 +2413,14 @@ def fetch_detail(row: Dict[str, Any], member: Dict[str, Any], *, policy: HostPol
     if _listing_description_is_complete(row, member):
         return listing_desc
     source = member["source"]
-    vendor = _vendor_of(member)
-    if USE_PROVIDERS and vendor not in _LEGACY_LISTING_VENDORS:
+    regional = _is_regional_member(member)
+    if (USE_PROVIDERS or regional) and not _uses_legacy_listing(member):
         body = _detail_via_provider(row, member, deadline=deadline, stop=stop)
         if body is not None:
             fetched = str(body).strip()
             return fetched if len(fetched) >= len(listing_desc) else listing_desc
+        if regional:
+            return listing_desc
 
     if source == SOURCE_WORKDAY:
         path = row.get("_detail_ref") or ""

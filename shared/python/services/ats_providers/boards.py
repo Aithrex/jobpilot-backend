@@ -228,10 +228,45 @@ class GreenhouseProvider(_BoardProvider):
     # keeps their allowlists separate for that reason (`_HOST_ALLOW` vs
     # `_PROBE_HOST_ALLOW`). `job-boards.greenhouse.io` is the newer public host;
     # both still serve live employers.
-    api_hosts = ("boards-api.greenhouse.io",)
-    portal_hosts = ("boards.greenhouse.io", "job-boards.greenhouse.io")
+    api_hosts = ("boards-api.greenhouse.io", "job-boards.eu.greenhouse.io")
+    portal_hosts = ("boards.greenhouse.io", "job-boards.greenhouse.io",
+                    "job-boards.eu.greenhouse.io", "boards.eu.greenhouse.io")
+
+    #: Greenhouse runs a SEPARATE EU region, and a board lives in exactly one
+    #: of them. `endpoint.site` carries the region ("" = US, "eu" = EU),
+    #: exactly as Lever does, so `greenhouse-cognite-eu` is a different member
+    #: from a (non-existent) US `greenhouse-cognite`.
+    #:
+    #: What the EU region actually exposes, observed 2026-10-21 on Cognite
+    #: (the board its official careers page links): `boards-api.eu.greenhouse.io`
+    #: does NOT resolve (NXDOMAIN), and `api.eu.greenhouse.io` is the
+    #: recruiter app (302 to /users/sign_in) - there is no public EU JSON board
+    #: API to call. The public board `job-boards.eu.greenhouse.io/<token>` is a
+    #: server-rendered Remix page whose `window.__remixContext` carries the
+    #: listing as `jobPosts` {count, page, total, total_pages, data[]} and pages
+    #: with `?page=N` (50 per page); a job page carries `jobPost` with the full
+    #: `content`. That is what an EU board is read from.
+    #:
+    #: The US API also answered for `cognite` that day (51 jobs whose
+    #: absolute_url is on the EU host). That is an observation about one board,
+    #: not a contract, and the region rule here is "never query the US region
+    #: for an EU board": an EU endpoint never touches `boards-api.greenhouse.io`.
+    REGION_BOARD_HOSTS = {"": "job-boards.greenhouse.io",
+                          "eu": "job-boards.eu.greenhouse.io"}
+    #: Page cap for the EU board walk. 50 rows a page, so 40 pages is 2,000
+    #: postings - far beyond any EU board we read - and hitting it is reported
+    #: as truncation, never as a complete census.
+    EU_MAX_PAGES = 40
 
     fingerprints = (
+        # EU region FIRST and at higher confidence, so `boards.eu.greenhouse.io`
+        # is never read as a US board. (The US patterns cannot match an EU URL
+        # anyway - `boards.eu.` is not `boards.greenhouse.` - but ordering makes
+        # the intent explicit.)
+        fp(r"https?://(?:job-)?boards\.(?P<site>eu)\.greenhouse\.io/embed/job_board"
+           r"[^\"'\s]*[?&]for=(?P<tenant>[A-Za-z0-9_\-]+)", confidence=93),
+        fp(r"https?://(?:job-)?boards\.(?P<site>eu)\.greenhouse\.io/"
+           r"(?P<tenant>[A-Za-z0-9_\-]+)", confidence=86),
         # The API URL itself, occasionally linked by careers pages that render
         # their board client-side.
         fp(r"https?://boards-api\.greenhouse\.io/v\d+/boards/"
@@ -260,7 +295,73 @@ class GreenhouseProvider(_BoardProvider):
         tenant = (fields.get("tenant") or "").strip()
         if not tenant or tenant.lower() in self._RESERVED:
             return None
-        return Endpoint(vendor=self.vendor, tenant=tenant)
+        region = (fields.get("site") or "").strip().lower()
+        if region and region not in self.REGION_BOARD_HOSTS:
+            return None
+        return Endpoint(vendor=self.vendor, tenant=tenant, site=region)
+
+    # -- region --------------------------------------------------------------
+
+    def region_of(self, endpoint: Endpoint) -> Optional[str]:
+        """"" (US), "eu", or None for a region we do not know.
+
+        None is deliberately NOT the US: an unknown region is a board we
+        cannot reach, and quietly asking the US API about it would read
+        someone else's board - or none - as this employer's.
+        """
+        region = str(endpoint.site or "").strip().lower()
+        return region if region in self.REGION_BOARD_HOSTS else None
+
+    def board_url(self, endpoint: Endpoint) -> str:
+        region = self.region_of(endpoint)
+        tenant = str(endpoint.tenant or "").strip()
+        if region is None or not tenant:
+            return ""
+        return f"https://{self.REGION_BOARD_HOSTS[region]}/{tenant}"
+
+    @staticmethod
+    def _remix_route(html: str, route_prefix: str) -> Optional[Dict[str, Any]]:
+        """The loader data of one Remix route out of a job-boards page.
+
+        Returns None when the page carries no parsable context - a schema
+        change, a challenge page or an error page. The caller then yields
+        FEWER rows (none), never raises.
+        """
+        if not html:
+            return None
+        marker = "window.__remixContext"
+        at = html.find(marker)
+        if at < 0:
+            return None
+        eq = html.find("=", at + len(marker))
+        if eq < 0:
+            return None
+        try:
+            import json as _json
+            ctx_obj, _end = _json.JSONDecoder().raw_decode(html[eq + 1:].lstrip())
+        except (ValueError, TypeError):
+            return None
+        loader = (((ctx_obj or {}).get("state") or {}).get("loaderData") or {}) \
+            if isinstance(ctx_obj, dict) else {}
+        if not isinstance(loader, dict):
+            return None
+        for key, value in loader.items():
+            if str(key).startswith(route_prefix) and isinstance(value, dict):
+                return value
+        return None
+
+    def _eu_board_page(self, endpoint: Endpoint, ctx: FetchContext,
+                       page: int) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
+        host = self.REGION_BOARD_HOSTS["eu"]
+        url = f"https://{host}/{endpoint.tenant}"
+        status, body = ctx.get_text(url, params={"page": page} if page > 1 else None,
+                                    timeout=self.policy.timeout, vendor=self.vendor)
+        if self.policy.is_challenge(status):
+            raise ChallengeError(self.vendor, status)
+        if status != 200:
+            return status, None
+        route = self._remix_route(body or "", "routes/$url_token")
+        return status, route
 
     def board_owner(self, endpoint: Endpoint,
                     ctx: FetchContext) -> Optional[str]:
@@ -268,6 +369,15 @@ class GreenhouseProvider(_BoardProvider):
         what makes a guessed slug checkable here rather than merely plausible.
         `/v1/boards/super` returns `{"name": "Super Technologies"}` - not Super
         Micro Computer, whose name produced that guess."""
+        region = self.region_of(endpoint)
+        if region is None:
+            return None
+        if region == "eu":
+            _status, route = self._eu_board_page(endpoint, ctx, 1)
+            board = (route or {}).get("board") if isinstance(route, dict) else None
+            name = str((board or {}).get("name") or "").strip() \
+                if isinstance(board, dict) else ""
+            return name or None
         status, payload = ctx.get_json(
             f"https://boards-api.greenhouse.io/v1/boards/{endpoint.tenant}",
             params=None, timeout=self.policy.timeout, vendor=self.vendor)
@@ -277,6 +387,14 @@ class GreenhouseProvider(_BoardProvider):
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
+        region = self.region_of(endpoint)
+        if region is None:
+            ctx.log("warning", "greenhouse: unknown region %r for %s; skipped",
+                    endpoint.site, endpoint.tenant)
+            return
+        if region == "eu":
+            yield from self._list_eu(endpoint, ctx)
+            return
         payload = self._get_json(
             ctx, f"https://boards-api.greenhouse.io/v1/boards/"
                  f"{endpoint.tenant}/jobs",
@@ -313,8 +431,120 @@ class GreenhouseProvider(_BoardProvider):
                             f"{endpoint.tenant}/jobs/{rid}"),
             )
 
+    def _list_eu(self, endpoint: Endpoint,
+                 ctx: FetchContext) -> Iterator[RawJob]:
+        """Walk an EU board's public pages. See `REGION_BOARD_HOSTS`.
+
+        Stops on the board's own `total_pages`, on an empty page, or on the
+        cap. Anything short of the board's own end - a failed later page, the
+        cap, the deadline - sets `ctx.listing_truncated`, because a partial
+        census read as complete would close live postings. A row id seen on
+        an earlier page is not yielded twice (a board that shifts while we
+        page can repeat a row across the boundary).
+        """
+        host = self.REGION_BOARD_HOSTS["eu"]
+        seen: set = set()
+        total_pages: Optional[int] = None
+        page = 1
+        while True:
+            if ctx.should_stop():
+                ctx.listing_truncated = True
+                return
+            if page > self.EU_MAX_PAGES:
+                ctx.listing_truncated = True
+                return
+            status, route = self._eu_board_page(endpoint, ctx, page)
+            posts = (route or {}).get("jobPosts") if isinstance(route, dict) else None
+            if not isinstance(posts, dict):
+                # Page 1 with no listing: unreadable board (404, schema
+                # change). Later page: the walk was cut short.
+                if page > 1:
+                    ctx.listing_truncated = True
+                elif status == 200:
+                    ctx.log("warning", "greenhouse-eu: %s page has no jobPosts; "
+                            "schema change?", endpoint.tenant)
+                return
+            if total_pages is None:
+                try:
+                    total_pages = max(1, int(posts.get("total_pages") or 1))
+                except (TypeError, ValueError):
+                    total_pages = 1
+            data = [r for r in (posts.get("data") or []) if isinstance(r, dict)]
+            if not data:
+                return
+            for job in data:
+                if ctx.should_stop():
+                    ctx.listing_truncated = True
+                    return
+                title = str(job.get("title") or "").strip()
+                rid = str(job.get("id") or "").strip()
+                if not rid or not title or rid in seen:
+                    continue
+                seen.add(rid)
+                # `published_at` is the public board's first-publication
+                # stamp (it equals the US API's `first_published` for the same
+                # post; `updated_at` is an edit time and is never used).
+                posted = to_iso(job.get("published_at"))
+                if self._too_old(ctx, posted):
+                    continue
+                location = job.get("location")
+                if isinstance(location, dict):
+                    location = location.get("name")
+                location = str(location or "")
+                dept = job.get("department")
+                yield RawJob(
+                    source_job_id=rid,
+                    title=title,
+                    apply_url=str(job.get("absolute_url")
+                                  or f"https://{host}/{endpoint.tenant}/jobs/{rid}"),
+                    location=location,
+                    posted_at=posted,
+                    date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
+                    raw_posted_text=str(job.get("published_at") or ""),
+                    department=str((dept or {}).get("name") or "")
+                    if isinstance(dept, dict) else "",
+                    remote=looks_remote(location),
+                    detail_url=f"https://{host}/{endpoint.tenant}/jobs/{rid}",
+                    extra={"region": "eu",
+                           "requisition_id": str(job.get("requisition_id") or "")},
+                )
+            if page >= total_pages:
+                return
+            page += 1
+
+    def _fetch_detail_eu(self, endpoint: Endpoint, job: RawJob,
+                         ctx: FetchContext) -> Optional[RawJob]:
+        host = self.REGION_BOARD_HOSTS["eu"]
+        url = job.detail_url or f"https://{host}/{endpoint.tenant}/jobs/{job.source_job_id}"
+        if not url.startswith(f"https://{host}/"):
+            # A detail ref from anywhere else is not this board's job page.
+            return None
+        status, body = ctx.get_text(url, timeout=self.policy.detail_timeout,
+                                    vendor=self.vendor)
+        if self.policy.is_challenge(status):
+            raise ChallengeError(self.vendor, status)
+        if status != 200:
+            return None
+        route = self._remix_route(body or "", "routes/$url_token_.jobs_")
+        post = (route or {}).get("jobPost") if isinstance(route, dict) else None
+        if not isinstance(post, dict):
+            return None
+        parts = [html_to_text(post.get(k) or "")
+                 for k in ("introduction", "content", "conclusion")]
+        text = "\n\n".join(p for p in parts if p.strip())
+        if not text.strip():
+            return None
+        return RawJob(source_job_id=job.source_job_id, title=job.title,
+                      apply_url=job.apply_url, description=text[:40000],
+                      compensation=post.get("pay_ranges") or None)
+
     def fetch_detail(self, endpoint: Endpoint, job: RawJob,
                      ctx: FetchContext) -> Optional[RawJob]:
+        region = self.region_of(endpoint)
+        if region is None:
+            return None
+        if region == "eu":
+            return self._fetch_detail_eu(endpoint, job, ctx)
         url = job.detail_url or (
             f"https://boards-api.greenhouse.io/v1/boards/"
             f"{endpoint.tenant}/jobs/{job.source_job_id}")
