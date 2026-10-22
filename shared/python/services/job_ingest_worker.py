@@ -829,6 +829,13 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {"vendor": "breezy", "tenant": "destro-ai", "site": "",
      "host": "destro-ai.breezy.hr", "display_name": "Destro AI",
      "industry": "tech"},
+    # Paycom: lincolninst.edu careers links the exact clientkey below. 7 of a
+    # reported 7; the listing date is relative ("2 days ago") and the detail's
+    # JSON-LD date replaces it. Center for Geospatial Solutions roles are a
+    # Lincoln Institute program, on the Institute's own board.
+    {"vendor": "paycom", "tenant": "AC25DFC6E5002C200B92C92109B3F768",
+     "site": "", "host": "www.paycomonline.net",
+     "display_name": "Lincoln Institute of Land Policy", "industry": "other"},
 )
 
 
