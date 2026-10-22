@@ -72,4 +72,37 @@ class DayforceProvider(ParkedProvider):
     )
 
 
+class AdpMyJobsProvider(ParkedProvider):
+    """ADP MyJobs career sites, `myjobs.adp.com/<site>`.
+
+    A DIFFERENT product from ADP Workforce Now (`adp_wfn`, keyed by a `cid`
+    GUID on workforcenow.adp.com); the two must never be confused, and the
+    fingerprints below are disjoint by host.
+
+    Observed 2026-10-22 on `myjobs.adp.com/inspiracareers` (linked from
+    inspirafinancial.com/about/careers): every route, including
+    `/cx/job-listing`, serves the same 2,394-byte Angular shell. The app's
+    bootstrap `GET /public/staffing/v1/career-site/inspiracareers` answers
+    200 JSON naming the owner (`clientName: "Inspira Financial"`,
+    `isiClientId: inspiravth`, `hideDaysPosted: true`). The 2.7 MB main
+    bundle exposes, as literals, only that bootstrap, a per-requisition
+    `my.adp.com/myadp_prefix/mycareer/public/staffing/v1/job-requisitions/
+    search-meta/<reqId>` and candidate-auth calls; the request that LISTS
+    requisitions is assembled at runtime and was not observable without
+    executing the app. We do not invent it, so: unverified.
+    """
+
+    vendor = "adp_myjobs"
+    label = "ADP MyJobs"
+    readiness_note = ("observed 2026-10-22: myjobs.adp.com is a JS shell; the "
+                      "career-site config is public (owner named) but the "
+                      "listing request is built at runtime and could not be "
+                      "established without a browser; unverified, not empty")
+    fingerprints = (
+        fp(r"https?://myjobs\.adp\.com/(?P<tenant>[A-Za-z0-9_-]{2,80})(?:[/?#]|$)",
+           confidence=90),
+    )
+
+
 register(DayforceProvider())
+register(AdpMyJobsProvider())
