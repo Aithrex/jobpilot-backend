@@ -804,6 +804,25 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {"vendor": "icims", "tenant": "uscareers-pepsico", "site": "",
      "host": "uscareers-pepsico.icims.com", "display_name": "PepsiCo",
      "industry": "ecommerce_retail"},
+
+    # Direct-employer sources on shared providers added 2026-10-21
+    # (`docs/audit/jobright-2026-10-21`, rules 9-10). Each employer's OWN
+    # careers page embeds or links the exact endpoint below, and each was
+    # listed live through its provider before being added here; the counts are
+    # what that run returned, not a promise about today.
+    #
+    # Paycor Recruiting: the exact clientId from the employer's embed.
+    # RevSpring's aggregate lists two business units, "RevSpring Inc" (58) and
+    # "Apex Revenue Technologies" (18) - Apex combined into RevSpring in 2018
+    # and its brand was folded in 2019, so both are RevSpring's own roles and
+    # each row keeps its unit. Spring Arbor's embed carries `test=testing`,
+    # which the embed script never forwards (38 postings either way).
+    {"vendor": "paycor", "tenant": "8a7883d0798f66af0179905b7890010b",
+     "site": "aggregate", "host": "recruitingbypaycor.com",
+     "display_name": "RevSpring", "industry": "tech"},
+    {"vendor": "paycor", "tenant": "8a7883c66ee9a5cc016ef0ea2d5b06cb",
+     "site": "", "host": "recruitingbypaycor.com",
+     "display_name": "Spring Arbor University", "industry": "education"},
 )
 
 

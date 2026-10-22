@@ -90,8 +90,17 @@ def _clean(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+_VOLUNTEER_RE = re.compile(r"\bvolunteer\b", re.IGNORECASE)
+
+
 def _purpose_hint(*parts: str) -> str:
-    return "talent_community" if any(_POOL_RE.search(p or "") for p in parts) else ""
+    """A hint for `posting_profile.purpose`, never a verdict: a job pool or a
+    volunteer form is listed beside requisitions and is not one."""
+    if any(_POOL_RE.search(p or "") for p in parts):
+        return "talent_community"
+    if any(_VOLUNTEER_RE.search(p or "") for p in parts):
+        return "volunteer"
+    return ""
 
 
 def parse_listing(body: str) -> Tuple[List[Dict[str, str]], Dict[str, Any]]:
