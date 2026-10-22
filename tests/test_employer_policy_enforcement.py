@@ -110,6 +110,7 @@ def _ids(pages):
 
 def test_tech_feed_ranked_and_keyset_enforce_the_same_policy(db, monkeypatch):
     expected = _seed()
+    ep.put_prefs(USER, {"preset": "strict_direct"})
     hidden = {j for j, shown in expected.items() if not shown}
     # Whole result inside the ranked window...
     ranked = _walk(5)
@@ -122,6 +123,7 @@ def test_tech_feed_ranked_and_keyset_enforce_the_same_policy(db, monkeypatch):
         assert not (set(served) & hidden), "an excluded posting was served"
         for p in pages:
             assert p["policy"]["preset"] == "strict_direct"
+            assert p["policy"]["set_by"] == "user"
             assert p["policy"]["version"] == ep.POLICY_VERSION
         for job in (j for p in pages for j in p["jobs"]):
             assert job["employer_profile"]["kind"] in ("operating", "unknown")
@@ -142,6 +144,25 @@ def test_tech_feed_ranked_and_keyset_enforce_the_same_policy(db, monkeypatch):
     kinds = {b.get("value") for b in ranked[0]["facets"].get("employer_kind") or []}
     assert "consultancy" not in kinds and "staffing" not in kinds
     assert "seniority" in ranked[0]["facets"]["_policy"]["not_applied"]
+
+
+def test_default_user_sees_consultancy_and_mixed_labelled(db):
+    """No stored choice -> DEFAULT_EXCLUDE: Capgemini / IBM SHOWN with their
+    kind on the card and counted; staffing and talent communities hidden."""
+    expected = _seed()
+    pages = _walk(50)
+    jobs = [j for p in pages for j in p["jobs"]]
+    kinds = {j["employer_profile"]["kind"] for j in jobs}
+    assert {"consultancy", "mixed", "operating", "unknown"} <= kinds
+    assert "staffing" not in kinds
+    assert all(j["posting_profile"]["purpose"] != "resume_collection" for j in jobs)
+    pol = pages[0]["policy"]
+    assert pol["preset"] == "custom" and pol["set_by"] == "default"
+    assert pol["excluded_counts"]["consultancy"] == 0
+    assert pol["shown_counts"]["consultancy"] == 4 and pol["shown_counts"]["mixed"] == 4
+    assert pol["excluded_counts"]["staffing"] == 4
+    assert pol["excluded_counts"]["talent_community"] == 4
+    assert len(jobs) == len(expected) - 8          # 4 Hays + 4 general applications
 
 
 def test_stored_off_preference_shows_everything_and_survives(db):
@@ -186,6 +207,7 @@ def test_policy_change_mid_scroll_applies_to_the_next_page(db, monkeypatch):
 
 def test_inventory_tabs_enforce_the_same_policy(db, monkeypatch):
     expected = _seed()
+    ep.put_prefs(USER, {"preset": "strict_direct"})
     monkeypatch.setattr(feed, "MIN_ROWS", 1)
     res = feed.build_feed("career-pages", {
         "titles": ["Backend Engineer"], "us_only": True, "user_email": USER,
@@ -207,7 +229,7 @@ def test_legacy_payload_path_filters_and_counts():
          "description": "Our client is seeking a Java developer."},
         {"company": "Zyxwv Labs", "title": "Python Dev", "apply_link": "https://linkedin.com/jobs/3"},
     ], "total": 4}
-    out = ep.apply_to_payload(payload, ep.default_prefs())
+    out = ep.apply_to_payload(payload, ep.normalize_prefs({"preset": "strict_direct"}))
     assert [j["title"] for j in out["jobs"]] == ["Python Dev"]
     assert out["total"] == 1
     c = out["policy"]["excluded_counts"]
@@ -218,6 +240,7 @@ def test_legacy_payload_path_filters_and_counts():
 def test_legacy_async_results_and_raw_cache_are_filtered(db):
     """`/api/jobs/search`, the crawl fallbacks and the pipeline complete through
     `resume_service._apply_employer_policy`; `_raw_jobs` must not leak."""
+    ep.put_prefs(USER, {"preset": "strict_direct"})
     from services.resume_service import _apply_employer_policy
     rows = lambda: [  # noqa: E731
         {"company": "Capgemini", "title": "Dev", "apply_link": "https://careers.capgemini.com/1"},

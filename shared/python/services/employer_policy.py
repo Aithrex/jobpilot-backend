@@ -15,11 +15,15 @@ Preferences (`user_preferences.employer_policy`)::
                  "unknown_business_model"},
      "set_by": "user|default", "version": "employer-policy-1.0.0"}
 
-DEFAULT for a user with no stored choice: `strict_direct`, with
-`unknown_business_model: false` - an employer we cannot classify is SHOWN and
-labelled unverified, never silently treated as direct and never silently
-hidden. A stored choice is never overwritten by a default; only a PUT from
-the user writes it.
+DEFAULT for a user with no stored choice (owner decision 2026-10-21, see
+`DEFAULT_EXCLUDE`): preset `custom` that hides staffing agencies, client
+placements, talent marketplaces, task/gig work and talent communities, and
+SHOWS consultancies, mixed businesses and unknown employers - each labelled
+on the card (`employer_profile.kind`) and counted (`policy.shown_counts`).
+`strict_direct` (consultancy + mixed hidden too) is one click away and
+unchanged. An unknown employer is never silently treated as direct and never
+silently hidden. A stored choice is never overwritten by a default; only a
+PUT from the user writes it.
 
 What the policy is NOT: a score. It never touches `match_score` / `fit_score`
 and never reorders; it removes rows and says how many, by reason. It is
@@ -71,6 +75,25 @@ STRICT_EXCLUDE = {"staffing": True, "consultancy": True, "client_placement": Tru
                   "talent_community": True, "unknown_business_model": False}
 OFF_EXCLUDE = {k: False for k in EXCLUDE_KEYS}
 
+#: THE DEFAULT for every user with no stored choice (and every guest).
+#:
+#: Owner decision, 2026-10-21: NOT the full strict preset. The primary users
+#: are Indian F-1 students who need H-1B sponsorship, and Infosys, TCS,
+#: Cognizant, Accenture, Deloitte, Capgemini and IBM are among the largest
+#: sponsors in the USCIS data. Hiding them overnight, for every user, with no
+#: way yet to measure per-user impact, is the worse error. So consultancies
+#: and mixed businesses (charged under `consultancy`) are SHOWN and labelled,
+#: unknown employers are SHOWN and labelled unverified, and the clear-cut
+#: preference exclusions stay on.
+#:
+#: Flipping the default to the full strict preset is the one-line change
+#: `DEFAULT_EXCLUDE = dict(STRICT_EXCLUDE)` (and `DEFAULT_PRESET =
+#: PRESET_STRICT`). Users who already stored a choice are unaffected either way.
+DEFAULT_EXCLUDE = {"staffing": True, "consultancy": False, "client_placement": True,
+                   "talent_marketplace": True, "task_gig": True,
+                   "talent_community": True, "unknown_business_model": False}
+DEFAULT_PRESET = PRESET_CUSTOM
+
 #: Additive count keys beyond the seven preference reasons.
 AVAILABILITY_KEYS = ("closed", "stale_verification")
 
@@ -97,7 +120,8 @@ def _now() -> datetime:
 # Preferences
 # ---------------------------------------------------------------------------
 def default_prefs() -> Dict[str, Any]:
-    return {"preset": PRESET_STRICT, "exclude": dict(STRICT_EXCLUDE),
+    """The documented default (`DEFAULT_EXCLUDE`) for a user with no choice."""
+    return {"preset": DEFAULT_PRESET, "exclude": dict(DEFAULT_EXCLUDE),
             "set_by": "default", "version": POLICY_VERSION}
 
 
@@ -182,7 +206,7 @@ def effective_prefs(prefs: Dict[str, Any], *, employer_kind: Any = None
     kind (a saved search's `employer_kind: staffing`) is the user's
     intentional choice for that request, so the matching exclusion is lifted
     for it - and the policy block says so."""
-    out = {**prefs, "exclude": dict(prefs.get("exclude") or STRICT_EXCLUDE)}
+    out = {**prefs, "exclude": dict(prefs.get("exclude") or DEFAULT_EXCLUDE)}
     lifted = _KIND_OVERRIDES.get(str(employer_kind or "").lower(), ())
     if lifted and out.get("preset") != PRESET_OFF:
         for k in lifted:
@@ -287,12 +311,16 @@ def reasons_for(row: Dict[str, Any], exclude: Dict[str, bool]) -> List[str]:
 
 def _empty_block(prefs: Dict[str, Any]) -> Dict[str, Any]:
     block = {
-        "preset": prefs.get("preset") or PRESET_STRICT,
-        "exclude": dict(prefs.get("exclude") or STRICT_EXCLUDE),
+        "preset": prefs.get("preset") or DEFAULT_PRESET,
+        "exclude": dict(prefs.get("exclude") or DEFAULT_EXCLUDE),
         "set_by": prefs.get("set_by") or "default",
         "version": POLICY_VERSION,
         "excluded_counts": {k: 0 for k in EXCLUDE_KEYS + AVAILABILITY_KEYS},
         "unverified_shown": 0,
+        # What was SHOWN, by the business-model kinds a card labels, so the UI
+        # can say "12 consultancy roles shown" under the default.
+        "shown_counts": {"consultancy": 0, "mixed": 0, "staffing": 0,
+                         "talent_marketplace": 0, "unknown": 0},
         "availability_unverified_shown": 0,
         "examined": 0,
         "kept": 0,
@@ -355,7 +383,10 @@ def apply(rows: Sequence[Dict[str, Any]], prefs: Optional[Dict[str, Any]] = None
             block["reason_counts"][detail] = block["reason_counts"].get(detail, 0) + 1
             continue
         kept.append(row)
-        if row["employer_profile"].get("kind") == "unknown":
+        _kind = str(row["employer_profile"].get("kind") or "unknown")
+        if _kind in block["shown_counts"]:
+            block["shown_counts"][_kind] += 1
+        if _kind == "unknown":
             block["unverified_shown"] += 1
         if av.get("state") != pp.AV_OPEN:
             block["availability_unverified_shown"] += 1
@@ -371,12 +402,16 @@ def merge_blocks(blocks: Iterable[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
             continue
         if out is None:
             out = {**b, "excluded_counts": dict(b["excluded_counts"]),
-                   "reason_counts": dict(b.get("reason_counts") or {})}
+                   "reason_counts": dict(b.get("reason_counts") or {}),
+                   "shown_counts": dict(b.get("shown_counts") or {})}
             continue
         for k, v in (b.get("excluded_counts") or {}).items():
             out["excluded_counts"][k] = out["excluded_counts"].get(k, 0) + int(v or 0)
         for k, v in (b.get("reason_counts") or {}).items():
             out["reason_counts"][k] = out["reason_counts"].get(k, 0) + int(v or 0)
+        for k, v in (b.get("shown_counts") or {}).items():
+            out.setdefault("shown_counts", {})
+            out["shown_counts"][k] = out["shown_counts"].get(k, 0) + int(v or 0)
         for k in ("unverified_shown", "availability_unverified_shown", "examined", "kept"):
             out[k] = int(out.get(k) or 0) + int(b.get(k) or 0)
     return out

@@ -2308,7 +2308,7 @@ def compute_guest_matches(
         signal_cache = {}
 
     # employer-policy-1.0.0: a guest has no stored choice, so the DOCUMENTED
-    # DEFAULT (strict_direct, unknown shown as unverified) applies - decided
+    # DEFAULT (`employer_policy.DEFAULT_EXCLUDE`) applies - decided
     # on the scored row (it still has the JD body for client-placement
     # wording) and annotated onto the public card.
     from services import employer_policy as _ep
