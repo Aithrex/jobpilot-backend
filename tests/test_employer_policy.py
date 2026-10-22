@@ -288,10 +288,22 @@ def test_trust_hook_requires_an_offline_mode(monkeypatch):
         return {"state": "warnings"}
     mod.assess_posting_trust = assess_posting_trust
     monkeypatch.setitem(sys.modules, "services.job_legitimacy_service", mod)
+    import services
+    monkeypatch.setattr(services, "job_legitimacy_service", mod, raising=False)
     monkeypatch.setattr(ep, "_TRUST_RESOLVED", False)
     row = _op()
     ep.apply([row], ep.default_prefs(), now=NOW, resolve=False)
     assert "trust" not in row and calls == []
+
+    # A module that declares the C4 contract is documented pure: used, and
+    # the ownership marker is stamped first when a board map is available.
+    mod.TRUST_VERSION = "trust-1.0.0"
+    mod.board_ownership_conflict = lambda doc, own: own == "contested"
+    monkeypatch.setattr(ep, "_TRUST_RESOLVED", False)
+    row = _op()
+    ep.annotate(row, now=NOW, ownership="contested")
+    assert row["trust"] == {"state": "warnings"} and row["ownership_conflict"] is True
+    del mod.TRUST_VERSION
 
     def offline_trust(row, *, allow_network=True):
         assert allow_network is False

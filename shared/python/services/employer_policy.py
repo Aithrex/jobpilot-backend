@@ -222,9 +222,12 @@ def effective_prefs(prefs: Dict[str, Any], *, employer_kind: Any = None
 _TRUST_FN: Any = None
 _TRUST_KW: Optional[Dict[str, Any]] = None
 _TRUST_RESOLVED = False
-#: Keyword arguments that put the trust assessment in an OFFLINE mode. The
-#: serving path calls it once per card, so it may only run if it can promise
-#: no network fetch (its redirect-following is for ingest, not for a feed).
+#: The serving path calls the trust assessment once per card, so it may only
+#: run if it promises no network fetch: either it exposes one of these
+#: OFFLINE switches, or its module declares the C4 contract (`TRUST_VERSION`),
+#: whose `assess_posting_trust` is documented pure - no network, no DB, no LLM
+#: (verified on dej/trust: it imports only codecs/logging/re/unicodedata and
+#: parses hosts with `ssrf_guard.url_host`).
 _OFFLINE_KWARGS = (("allow_network", False), ("network", False), ("offline", True),
                    ("fetch", False))
 
@@ -236,13 +239,17 @@ def _resolve_trust_fn():
     _TRUST_RESOLVED = True
     try:
         import inspect
-        from services.job_legitimacy_service import assess_posting_trust  # type: ignore
+        from services import job_legitimacy_service as _jl  # type: ignore
+        assess_posting_trust = _jl.assess_posting_trust
         params = inspect.signature(assess_posting_trust).parameters
         for name, value in _OFFLINE_KWARGS:
             if name in params:
                 _TRUST_FN, _TRUST_KW = assess_posting_trust, {name: value}
                 break
         else:
+            if str(getattr(_jl, "TRUST_VERSION", "")).startswith("trust-"):
+                _TRUST_FN, _TRUST_KW = assess_posting_trust, {}
+        if _TRUST_FN is None:
             logger.warning("employer_policy: assess_posting_trust has no offline "
                            "switch; trust block omitted on serving paths")
     except Exception:
@@ -250,13 +257,31 @@ def _resolve_trust_fn():
     return _TRUST_FN, _TRUST_KW
 
 
-def _trust_block(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """§C4 trust, from the legitimacy agent's function when it is present AND
-    offers an offline mode. Absent, or network-only -> no block."""
+def _board_ownership() -> Any:
+    """The in-memory board map (`canonical_employer.cached_board_ownership`),
+    or None. Read once per `apply` call, never per row."""
+    try:
+        from services import canonical_employer
+        return canonical_employer.cached_board_ownership()
+    except Exception:
+        return None
+
+
+def _trust_block(row: Dict[str, Any], ownership: Any = None) -> Optional[Dict[str, Any]]:
+    """§C4 trust, from the legitimacy agent's PURE function when present.
+
+    Stamps `ownership_conflict` first (true only for an unresolved contested
+    board, O(1) against the cached map), because `canonical_employer` writes
+    no marker onto postings. Absent / unusable -> no block."""
     fn, kw = _resolve_trust_fn()
     if fn is None:
         return None
     try:
+        if ownership is not None and "ownership_conflict" not in row:
+            from services import job_legitimacy_service as _jl  # type: ignore
+            conflict = getattr(_jl, "board_ownership_conflict", None)
+            if conflict is not None:
+                row["ownership_conflict"] = bool(conflict(row, ownership))
         block = fn(row, **(kw or {}))
         return block if isinstance(block, dict) else None
     except Exception as exc:     # a trust heuristic must never 500 a feed
@@ -264,7 +289,8 @@ def _trust_block(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
-def annotate(row: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, Any]:
+def annotate(row: Dict[str, Any], *, now: Optional[datetime] = None,
+             ownership: Any = None) -> Dict[str, Any]:
     """Attach `employer_profile` / `posting_profile` / `availability` (+ `trust`)
     to a row whose `_employer_profile` is already resolved. Returns the row."""
     from services import employer_business_model as ebm
@@ -275,7 +301,7 @@ def annotate(row: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str
     row["employer_profile"] = ebm.public_profile(model)
     row["posting_profile"] = pp.classify_posting(row, str(model.get("kind") or "unknown"))
     row["availability"] = pp.availability(row, now=now)
-    trust = _trust_block(row)
+    trust = _trust_block(row, ownership)
     if trust is not None:
         row["trust"] = trust
     return row
@@ -358,8 +384,9 @@ def apply(rows: Sequence[Dict[str, Any]], prefs: Optional[Dict[str, Any]] = None
     preset = block["preset"]
     exclude = block["exclude"]
     kept: List[Dict[str, Any]] = []
+    ownership = _board_ownership() if (rows and resolve and _resolve_trust_fn()[0]) else None
     for row in rows:
-        annotate(row, now=now)
+        annotate(row, now=now, ownership=ownership)
         block["examined"] += 1
         av = row["availability"]
         reasons = reasons_for(row, exclude) if preset != PRESET_OFF else []
