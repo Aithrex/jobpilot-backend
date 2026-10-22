@@ -868,6 +868,12 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {"vendor": "careers_page", "tenant": "attune.ai", "site": "",
      "host": "attune.ai", "display_name": "Attune", "industry": "tech",
      "extra": {"listing_url": "https://www.attune.ai/company"}},
+    # Upwind Security: the Comeet WordPress plugin renders all positions on
+    # upwind.io itself (/careers/co/<loc>/<uid>/<slug>/all); 94 of 94, id =
+    # Comeet position uid. No Comeet API token was needed or guessed.
+    {"vendor": "careers_page", "tenant": "upwind.io", "site": "",
+     "host": "upwind.io", "display_name": "Upwind Security", "industry": "tech",
+     "extra": {"listing_url": "https://www.upwind.io/careers"}},
     # Avature, server-rendered SearchJobs/JobDetail. Frequentis: 64 of 64
     # reported. Flint Hills Resources: the SHARED Koch board through the exact
     # FHR-filtered link fhr.com's careers page (now kochinc.com) prints, 31 of
