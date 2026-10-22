@@ -958,6 +958,14 @@ class OwnSiteCareersProvider(AtsProvider):
             extra=extra,
         )
 
+    #: A date the page itself STATES, for pages with no JSON-LD. AGAP
+    #: Technologies' page reads "Date Posted:December 12, 2025" and was served
+    #: as new ten months later, dated only by our first sighting.
+    _STATED_DATE_RE = re.compile(
+        r"\b(?:date posted|posted on|posting date|date of posting)\s*[:\-]?\s*"
+        r"((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}|"
+        r"\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})", re.IGNORECASE)
+
     def fetch_detail(self, endpoint: Endpoint, job: RawJob,
                      ctx: FetchContext) -> Optional[RawJob]:
         host, _listing = self._listing(endpoint)
@@ -989,6 +997,12 @@ class OwnSiteCareersProvider(AtsProvider):
         extra = self._application_from_detail(main, posting, url)
         out = RawJob(source_job_id=job.source_job_id, title=job.title,
                      apply_url=job.apply_url, description=text[:15000], extra=extra)
+        if not posting:
+            m = self._STATED_DATE_RE.search(page_text)
+            stated = to_iso(m.group(1)) if m else ""
+            if stated:
+                out.posted_at, out.raw_posted_text = stated, _ws(m.group(0))
+                out.date_confidence = DATE_EXACT
         if posting:
             posted, raw = _ld_date(posting)
             if posted:

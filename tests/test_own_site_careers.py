@@ -187,3 +187,18 @@ class TestTheSiteMustBeTheEmployers:
     def test_evidence(self, name, host, page, ok):
         from services import career_portal_discovery as d
         assert d.site_is_the_employers(name, host, [page]) is ok
+
+
+def test_a_date_the_page_states_dates_the_posting():
+    # AGAP Technologies, 2026-10-22: "Date Posted:December 12, 2025" on a page
+    # with no JSON-LD, served as new because only our first sighting dated it.
+    body = ("<html><main><h1>SOFTWARE DEVELOPER</h1>Job Title: SOFTWARE DEVELOPER "
+            "Date Posted:December 12, 2025 Job Type: Full Time Job Location: Irving TX. "
+            + "Design and develop CI/CD pipelines, responsibilities and requirements. " * 8
+            + "</main></html>")
+    ctx = _ctx({"https://hectorsystems.com/jobs/software-developer/": body}, [])
+    job = RawJob(source_job_id="software-developer", title="SOFTWARE DEVELOPER",
+                 apply_url="https://hectorsystems.com/jobs/software-developer/")
+    out = own_site.OwnSiteCareersProvider().fetch_detail(_endpoint(), job, ctx)
+    assert out is not None and out.posted_at.startswith("2025-12-12")
+    assert "Date Posted" in out.raw_posted_text
