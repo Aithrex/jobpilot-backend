@@ -48,8 +48,12 @@ class TestReadinessIsDerived:
         assert blocker is None or "USAJOBS_API_KEY" in blocker
 
     def test_a_vendor_with_no_provider_still_reports_its_recorded_reason(self):
-        assert "Common Crawl" in (etc.provider_blocker("dayforce") or "")
-        assert etc.provider_blocker("zohorecruit")
+        assert "61 tenants" in (etc.provider_blocker("zohorecruit") or "")
+
+    def test_a_parked_vendor_reports_the_evidence_it_was_parked_on(self):
+        # Dayforce was a written-down "not probed" until 2026-10-22; it is now
+        # a parked provider carrying what was observed (a 403 bot wall).
+        assert "403" in (etc.provider_blocker("dayforce") or "")
 
     def test_asking_about_readiness_does_not_PARK_a_vendor(self):
         """`_credentials` mutates `enabled` by design, so the crawl path can
