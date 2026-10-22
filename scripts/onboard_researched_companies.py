@@ -380,6 +380,14 @@ def validate_endpoint(endpoint: Dict[str, Any], *, cap: int = 400,
     out["unique_ids"] = len(seen)
     out["source_reported"] = first_total[0] if first_total else None
     out["http_statuses"] = sorted({str(s) for s in statuses})[:8]
+    if (status == V_COMPLETE and out["source_reported"]
+            and len(seen) < int(out["source_reported"])):
+        # The vendor said there is more than we read: the provider stopped on
+        # its own page cap without flagging truncation. Never call that
+        # complete.
+        status = V_BUDGET
+        out["detail"] = (f"provider read {len(seen)} of "
+                         f"{out['source_reported']} the vendor reported")
     if status == V_COMPLETE and not rows:
         status = classify_zero(parsed=0, source_reported=out["source_reported"],
                                source_kind=(kinds[0] if kinds else "json"),

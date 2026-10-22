@@ -1350,6 +1350,29 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
     {"display_name": "City of Portland", "ats": "neogov", "slug": "portlandor", "industry": "government"},
     {"display_name": "City of San Diego", "ats": "neogov", "slug": "sandiego", "industry": "government"},
     {"display_name": "City of Las Vegas", "ats": "neogov", "slug": "lasvegas", "industry": "government"},
+    # ── Direct-employer onboarding, 2026-10-21 ───────────────────────────
+    # Each tenant came from the employer's OWN official link/embed chain or
+    # employer-hosted configuration (docs/audit/direct-employer-onboarding.md),
+    # never from a slug guess, and each returned real postings through its
+    # provider on 2026-10-21. Case is preserved as the employer links it.
+    {"display_name": "Ascent Developer Solutions", "ats": "greenhouse", "slug": "ascentds", "industry": "fintech"},
+    {"display_name": "Clear Street", "ats": "greenhouse", "slug": "clearstreet", "industry": "fintech"},
+    {"display_name": "Hover", "ats": "greenhouse", "slug": "hover", "industry": "tech"},
+    {"display_name": "Re:Build Manufacturing", "ats": "greenhouse", "slug": "rebuildmanufacturing", "industry": "manufacturing_automotive"},
+    {"display_name": "Chalk", "ats": "ashby", "slug": "chalk", "industry": "tech"},
+    {"display_name": "ClarityPay", "ats": "ashby", "slug": "claritypay", "industry": "fintech"},
+    {"display_name": "Fluidstack", "ats": "ashby", "slug": "fluidstack", "industry": "tech"},
+    {"display_name": "HavocAI", "ats": "ashby", "slug": "havocai", "industry": "aerospace_defense"},
+    {"display_name": "Northwood Space", "ats": "ashby", "slug": "NorthwoodSpace", "industry": "aerospace_defense"},
+    {"display_name": "Quantcast", "ats": "ashby", "slug": "quantcast", "industry": "tech"},
+    {"display_name": "Quindar", "ats": "ashby", "slug": "quindar", "industry": "aerospace_defense"},
+    {"display_name": "Rhoda AI", "ats": "ashby", "slug": "rhoda-ai", "industry": "tech"},
+    {"display_name": "Unison", "ats": "ashby", "slug": "unison-software", "industry": "tech"},
+    {"display_name": "WisdomAI", "ats": "ashby", "slug": "Wisdom-AI", "industry": "tech"},
+    {"display_name": "Flexcompute", "ats": "workable", "slug": "flexcompute", "industry": "tech"},
+    {"display_name": "Trexquant", "ats": "workable", "slug": "trexquant", "industry": "fintech"},
+    {"display_name": "Intuitive", "ats": "smartrecruiters", "slug": "Intuitive", "industry": "healthtech"},
+    {"display_name": "Spring Venture Group", "ats": "smartrecruiters", "slug": "SpringVentureGroup1", "industry": "insurance"},
 ]
 
 INDUSTRIES: List[str] = sorted({r["industry"] for r in CAREER_PAGES_CATALOG})

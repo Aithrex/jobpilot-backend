@@ -89,10 +89,10 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
                        where="career_pages_catalog", industry="tech"),
     "HavocAI": dict(domain="havocai.com", state="CHAIN", plan="added",
                     endpoint=_ep("ashby", "havocai"), where="career_pages_catalog",
-                    industry="aerospace"),
+                    industry="aerospace_defense"),
     "Northwood": dict(domain="northwoodspace.io", state="CHAIN", plan="added",
                       endpoint=_ep("ashby", "NorthwoodSpace"),
-                      where="career_pages_catalog", industry="aerospace",
+                      where="career_pages_catalog", industry="aerospace_defense",
                       note="Board carries a 'General Application' posting; it is "
                            "counted as non-requisition, not as a role."),
     "Quantcast": dict(domain="quantcast.com", state="CHAIN", plan="added",
@@ -102,7 +102,7 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
                            "careers page's static 'No jobs found' template is not a zero."),
     "Quindar": dict(domain="quindar.space", state="CONFIG", plan="added",
                     endpoint=_ep("ashby", "quindar"), where="career_pages_catalog",
-                    industry="aerospace",
+                    industry="aerospace_defense",
                     note="`${job.id}` in the official config is a template "
                          "placeholder, not a job id."),
     "Rhoda AI": dict(domain="rhoda.ai", state="CHAIN", plan="added",
@@ -146,7 +146,7 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
                            "ext_us is the US board."),
     "Vantor": dict(domain="vantor.com", state="CHAIN", plan="candidate",
                    endpoint=_ep("workday", "maxar", site="Vantor", wd_host="wd1"),
-                   where="workday_tenant_catalog", industry="aerospace",
+                   where="workday_tenant_catalog", industry="aerospace_defense",
                    note="Maxar's tenant, Vantor's site: attributed to Vantor only."),
     "Vertex Pharmaceuticals": dict(
         domain="vrtx.com", state="CHAIN", plan="candidate",
@@ -155,7 +155,7 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
     "OPENLANE": dict(domain="openlane.com", state="CHAIN", plan="candidate",
                      endpoint=_ep("workday", "openlane", site="OPENLANE_Careers",
                                   wd_host="wd115"),
-                     where="workday_tenant_catalog", industry="automotive",
+                     where="workday_tenant_catalog", industry="manufacturing_automotive",
                      note="The linked URL carries q=Onsite/Field Operations; that "
                           "sample filter is NOT part of the source."),
     "SEI": dict(domain="seic.com", state="CHAIN", plan="candidate",
@@ -177,14 +177,14 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
         domain="honeywell.com", state="CHAIN", plan="candidate",
         endpoint=_ep("oracle_orc", "ibqbjb", site="Honeywell",
                      host="ibqbjb.fa.ocs.oraclecloud.com"),
-        where="seed", industry="manufacturing",
+        where="seed", industry="manufacturing_automotive",
         note="A seed for the same pod with site CX_1 already exists; the "
              "official link names site 'Honeywell'."),
     "Howmet Aerospace": dict(
         domain="howmet.com", state="CHAIN", plan="candidate",
         endpoint=_ep("oracle_orc", "fa-exty-saasfaprod1", site="CX_1",
                      host="fa-exty-saasfaprod1.fa.ocs.oraclecloud.com"),
-        where="seed", industry="aerospace"),
+        where="seed", industry="aerospace_defense"),
     "The Depository Trust & Clearing Corporation (DTCC)": dict(
         domain="dtcc.com", state="CHAIN", plan="candidate",
         endpoint=_ep("oracle_orc", "ebxr", site="CX_1",
@@ -206,7 +206,7 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
         domain="delta-americas.com", state="CHAIN", plan="candidate",
         endpoint=_ep("icims", "careers-delta-americas",
                      host="careers-delta-americas.icims.com"),
-        where="seed", industry="manufacturing"),
+        where="seed", industry="manufacturing_automotive"),
     "EchoStar Corporation": dict(
         domain="echostar.com", state="CHAIN", plan="candidate",
         endpoint=_ep("radancy", "echostar", host="jobs.echostar.com"),
@@ -268,7 +268,7 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
     "Celestica": dict(domain="celestica.com", state="FRONTEND", plan="candidate",
                       endpoint=_ep("successfactors", "celestica",
                                    host="careers.celestica.com"),
-                      where="seed", industry="manufacturing"),
+                      where="seed", industry="manufacturing_automotive"),
     "Nomura": dict(domain="nomura.com", state="FRONTEND", plan="candidate",
                    endpoint=_ep("successfactors", "nomura",
                                 host="careers.nomura.com"),
@@ -286,7 +286,7 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
     "The Lubrizol Corporation": dict(
         domain="lubrizol.com", state="FRONTEND", plan="candidate",
         endpoint=_ep("successfactors", "lubrizol", host="jobs.lubrizol.com"),
-        where="seed", industry="manufacturing"),
+        where="seed", industry="manufacturing_automotive"),
     "Ventura Foods": dict(domain="venturafoods.com", state="FRONTEND",
                           plan="candidate",
                           endpoint=_ep("successfactors", "venturafoods",
@@ -299,7 +299,7 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
     "BAE Systems, Inc.": dict(
         domain="baesystems.com", state="FRONTEND", plan="candidate",
         endpoint=_ep("phenom", "baesystems", host="jobs.baesystems.com"),
-        where="seed", industry="aerospace",
+        where="seed", industry="aerospace_defense",
         note="A Taleo seed `baesystems` already exists; health is checked "
              "separately and it is not this US Phenom front end."),
     "SolutionHealth": dict(

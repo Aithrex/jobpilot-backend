@@ -1,0 +1,4022 @@
+{
+ "version": "direct-employer-onboarding-1.0.0",
+ "generated_at": "2026-10-22T02:00:13Z",
+ "research_reviewed_on": "2026-10-21",
+ "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
+ "cohorts": {
+  "leads": {
+   "denominator": 174,
+   "counts": {
+    "existing_covered": 4,
+    "existing_unhealthy_or_moved": 0,
+    "new_validated": 19,
+    "excluded": 61,
+    "review": 31,
+    "blocked": 29,
+    "unsupported": 22,
+    "pending": 8
+   },
+   "rows": [
+    {
+     "company": "7Seventy Recruiting",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "AAR",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "aarcorp.com",
+     "provider": "taleo",
+     "endpoint": {
+      "vendor": "taleo",
+      "tenant": "aarcorp",
+      "site": "",
+      "host": "aarcorp.taleo.net",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "taleo-aarcorp",
+     "provider_needed": "",
+     "note": "Taleo seed already present (career section 2 is the portal the provider discovers).",
+     "validation": {
+      "at": "2026-10-22T01:59:32Z",
+      "vendor": "taleo",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 190,
+      "unique_ids": 190,
+      "duplicate_rows": 0,
+      "requisitions": 190,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Sheetmetal Apprentice",
+       "Sr Generalist, Human Resources",
+       "VP, Quality & Safety"
+      ],
+      "detail": "",
+      "member_key": "taleo-aarcorp"
+     }
+    },
+    {
+     "company": "AARATECH",
+     "disposition": "mixed_review",
+     "evidence_state": "identity_or_business_model_review",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "AbilityLinks",
+     "disposition": "exclude_intermediary",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "intermediary",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Accenture Federal Services",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Acrisure",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "acrisure.com",
+     "provider": "phenom",
+     "endpoint": {
+      "vendor": "phenom",
+      "tenant": "acrisure",
+      "site": "",
+      "host": "careers.acrisure.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Agento",
+     "disposition": "identity_unresolved",
+     "evidence_state": "identity_unresolved",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "identity_unresolved",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Alt",
+     "disposition": "mixed_review",
+     "evidence_state": "identity_unresolved",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Amazon Web Services (AWS)",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "amazon.com",
+     "provider": "amazon",
+     "endpoint": {
+      "vendor": "amazon",
+      "tenant": "amazon",
+      "site": "",
+      "host": "www.amazon.jobs",
+      "extra": {}
+     },
+     "where": "enterprise_catalog",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "amazon-amazon",
+     "provider_needed": "",
+     "note": "AWS is an Amazon business unit on amazon.jobs; no second employer.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Amentum",
+     "disposition": "mixed_review",
+     "evidence_state": "official_career_provider_unresolved",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "American Airlines",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "aa.com",
+     "provider": "Unresolved; SAP RMK candidate only",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "jobs.aa.com answered 403; SAP RMK is a candidate only, never inferred from an HR job description",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Amtex Systems Inc",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Anchorstacktech",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Annapurna Labs",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "amazon.com",
+     "provider": "amazon",
+     "endpoint": {
+      "vendor": "amazon",
+      "tenant": "amazon",
+      "site": "",
+      "host": "www.amazon.jobs",
+      "extra": {}
+     },
+     "where": "enterprise_catalog",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "amazon-amazon",
+     "provider_needed": "",
+     "note": "Annapurna Labs is an Amazon team page on amazon.jobs.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Apollo Solutions",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Applied Systems",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "appliedsystems.com",
+     "provider": "icims",
+     "endpoint": {
+      "vendor": "icims",
+      "tenant": "globalcareers-appliedsystems",
+      "site": "",
+      "host": "globalcareers-appliedsystems.icims.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "ApTask",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Ascent Developer Solutions",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "ascentds.com",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "ascentds",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "greenhouse-ascentds",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T01:59:20Z",
+      "vendor": "greenhouse",
+      "status": "complete",
+      "source_reported": 11,
+      "parsed": 11,
+      "unique_ids": 11,
+      "duplicate_rows": 0,
+      "requisitions": 11,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Client Acquisition Associate",
+       "Construction Risk Associate",
+       "Director, IT Operations"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-ascentds"
+     }
+    },
+    {
+     "company": "Astrion",
+     "disposition": "mixed_review",
+     "evidence_state": "identity_or_business_model_review",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Atlys",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "atlys.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official site links only a LinkedIn company-jobs page",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Attune",
+     "disposition": "eligible_direct",
+     "evidence_state": "MANUAL",
+     "domain": "attune.ai",
+     "provider": "own_site",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:own_site",
+     "member_key": "",
+     "provider_needed": "own_site",
+     "note": "Official roles apply via LinkedIn: manual handoff only.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Avalore.ai",
+     "disposition": "mixed_review",
+     "evidence_state": "official_ats_chain",
+     "domain": "",
+     "provider": "Workable",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "BAE Systems, Inc.",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "baesystems.com",
+     "provider": "phenom",
+     "endpoint": {
+      "vendor": "phenom",
+      "tenant": "baesystems",
+      "site": "",
+      "host": "jobs.baesystems.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "A Taleo seed `baesystems` already exists; health is checked separately and it is not this US Phenom front end.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "BeaconFire Inc.",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Bixal",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "BLN24",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Booker DiMaio",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Bowman Consulting",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Brain Co.",
+     "disposition": "mixed_review",
+     "evidence_state": "official_ats_chain",
+     "domain": "",
+     "provider": "Ashby",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "BrickRed Systems",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Brooksource",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Carvana",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "carvana.com",
+     "provider": "Greenhouse disclosed; Tenstreet also disclosed; exact endpoint unresolved",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "Greenhouse and Tenstreet disclosed; board token unresolved (pages 403); `carvana` is not inferred",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Cbase Inc",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Celestica",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "celestica.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "celestica",
+      "site": "",
+      "host": "careers.celestica.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "CGI",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Chalk",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "chalk.ai",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "chalk",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-chalk",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T01:59:25Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 19,
+      "unique_ids": 19,
+      "duplicate_rows": 0,
+      "requisitions": 19,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Product Manager",
+       "Technical Program Management",
+       "Software Engineer"
+      ],
+      "detail": "",
+      "member_key": "ashby-chalk"
+     }
+    },
+    {
+     "company": "ClarityPay",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "claritypay.com",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "claritypay",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-claritypay",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T01:59:25Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 12,
+      "unique_ids": 12,
+      "duplicate_rows": 0,
+      "requisitions": 12,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Machine Learning Engineer",
+       "Financial Controller",
+       "Analytics Manager / Senior Manager"
+      ],
+      "detail": "",
+      "member_key": "ashby-claritypay"
+     }
+    },
+    {
+     "company": "Clear Street",
+     "disposition": "eligible_direct",
+     "evidence_state": "CONFIG",
+     "domain": "clearstreet.io",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "clearstreet",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "greenhouse-clearstreet",
+     "provider_needed": "",
+     "note": "Official /_nuxt/ module fetches boards-api.greenhouse.io/v1/boards/clearstreet.",
+     "validation": {
+      "at": "2026-10-22T01:59:22Z",
+      "vendor": "greenhouse",
+      "status": "complete",
+      "source_reported": 47,
+      "parsed": 47,
+      "unique_ids": 47,
+      "duplicate_rows": 0,
+      "requisitions": 47,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "AML Onboarding Associate",
+       "Associate - Client Onboarding",
+       "Associate Counsel, Commercial Retail"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-clearstreet"
+     }
+    },
+    {
+     "company": "Clinisoltech",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Code Connect Inc",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Cognite",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "cognite.com",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "cognite",
+      "site": "eu",
+      "host": "",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "greenhouse-cognite-eu",
+     "provider_needed": "",
+     "note": "EU Greenhouse region (job-boards.eu.greenhouse.io/cognite). Read through the region-aware Greenhouse provider; never the US API.",
+     "validation": {
+      "at": "2026-10-22T01:59:23Z",
+      "vendor": "greenhouse",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 51,
+      "unique_ids": 51,
+      "duplicate_rows": 0,
+      "requisitions": 51,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Business Development Director \u2013 Supply Chain Center of Excellence (CoE)",
+       "Business Development Director \u2013 Supply Chain Center of Excellence (CoE)",
+       "Business Development Director \u2013 Supply Chain Center of Excellence (CoE)"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-cognite-eu"
+     }
+    },
+    {
+     "company": "ComResource",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Creative Global Consulting",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "crewlia",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "CrossTalent",
+     "disposition": "mixed_review",
+     "evidence_state": "identity_or_business_model_review",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Dark Wolf",
+     "disposition": "mixed_review",
+     "evidence_state": "official_ats_chain",
+     "domain": "",
+     "provider": "Greenhouse",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "DataVisor",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "datavisor.com",
+     "provider": "Workable",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "Workable whr_embed(56790); account-to-slug link for datavisor-jobs not observed",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Delta Electronics Americas",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "delta-americas.com",
+     "provider": "icims",
+     "endpoint": {
+      "vendor": "icims",
+      "tenant": "careers-delta-americas",
+      "site": "",
+      "host": "careers-delta-americas.icims.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Destro",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "destroai.com",
+     "provider": "breezyhr",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:breezyhr",
+     "member_key": "",
+     "provider_needed": "breezyhr",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Digivance Solutions",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "E-Solutions",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "EchoStar Corporation",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "echostar.com",
+     "provider": "radancy",
+     "endpoint": {
+      "vendor": "radancy",
+      "tenant": "echostar",
+      "site": "",
+      "host": "jobs.echostar.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "jobs.echostar.com is an iCIMS Jibe front end (canonical dish.jibeapply.com). Its public /api/jobs is the contract the `radancy` provider already reads for AMD and Rivian.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "ECI",
+     "disposition": "mixed_review",
+     "evidence_state": "identity_or_business_model_review",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "ECS",
+     "disposition": "mixed_review",
+     "evidence_state": "identity_or_business_model_review",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Enlighten",
+     "disposition": "mixed_review",
+     "evidence_state": "identity_or_business_model_review",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Epic",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "epic.com",
+     "provider": "avature",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:avature",
+     "member_key": "",
+     "provider_needed": "avature",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Evlo AI",
+     "disposition": "identity_unresolved",
+     "evidence_state": "identity_unresolved",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "identity_unresolved",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "FDE Times",
+     "disposition": "identity_unresolved",
+     "evidence_state": "identity_or_business_model_review",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "identity_unresolved",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "FDM Group",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Fervo Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "OWN",
+     "domain": "fervoenergy.com",
+     "provider": "own_site",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:own_site",
+     "member_key": "",
+     "provider_needed": "own_site",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "FieldAI",
+     "disposition": "eligible_direct",
+     "evidence_state": "CONFIG",
+     "domain": "fieldai.com",
+     "provider": "lever",
+     "endpoint": {
+      "vendor": "lever",
+      "tenant": "field-ai",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "lever-field-ai",
+     "provider_needed": "",
+     "note": "Already in CAREER_PAGES_CATALOG as 'Field AI' (the exact-name miss was a spelling difference).",
+     "validation": {
+      "at": "2026-10-22T01:59:29Z",
+      "vendor": "lever",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 109,
+      "unique_ids": 109,
+      "duplicate_rows": 0,
+      "requisitions": 108,
+      "filtered_non_requisition": 1,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "3D Machine Learning Engineer",
+       "3D/AR/VR Software Engineer",
+       "Agentic AI/ML Engineer, Multimodal"
+      ],
+      "detail": "",
+      "member_key": "lever-field-ai"
+     }
+    },
+    {
+     "company": "First Citizens Bank",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "firstcitizens.com",
+     "provider": "radancy",
+     "endpoint": {
+      "vendor": "radancy",
+      "tenant": "firstcitizens",
+      "site": "",
+      "host": "jobs.firstcitizens.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "iCIMS-branded Jibe front end; listing verified through /api/jobs.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "firstPRO US",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Flexcompute",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "flexcompute.com",
+     "provider": "workable",
+     "endpoint": {
+      "vendor": "workable",
+      "tenant": "flexcompute",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "workable-flexcompute",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T01:59:29Z",
+      "vendor": "workable",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 20,
+      "unique_ids": 20,
+      "duplicate_rows": 0,
+      "requisitions": 20,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Executive - Physics Intelligence",
+       "Agentic Photonic Design Engineer",
+       "CAE Application Engineer (Structural, Thermal, RF/SI-PI)"
+      ],
+      "detail": "",
+      "member_key": "workable-flexcompute"
+     }
+    },
+    {
+     "company": "Flint Hills Resources",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "fhr.com",
+     "provider": "avature",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:avature",
+     "member_key": "",
+     "provider_needed": "avature",
+     "note": "Shared Koch Avature front end; must filter to FHR when built.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Fluidstack",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "fluidstack.io",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "fluidstack",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-fluidstack",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T01:59:25Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 254,
+      "unique_ids": 254,
+      "duplicate_rows": 0,
+      "requisitions": 253,
+      "filtered_non_requisition": 1,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "MEP & Structural Sourcing, Director",
+       "Controls Engineer, Energy Management",
+       "Software Engineer, Energy Management"
+      ],
+      "detail": "",
+      "member_key": "ashby-fluidstack"
+     }
+    },
+    {
+     "company": "Fonzi AI",
+     "disposition": "exclude_intermediary",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "intermediary",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Frequentis",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "frequentis.com",
+     "provider": "avature",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:avature",
+     "member_key": "",
+     "provider_needed": "avature",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Fueled",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Fulcronix",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "GM Performance Power Units",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "gmppu.com",
+     "provider": "dayforce",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:dayforce",
+     "member_key": "",
+     "provider_needed": "dayforce",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "GMI Cloud",
+     "disposition": "eligible_direct",
+     "evidence_state": "MANUAL",
+     "domain": "gmicloud.ai",
+     "provider": "own_site",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:own_site",
+     "member_key": "",
+     "provider_needed": "own_site",
+     "note": "Official roles apply via LinkedIn: manual handoff only.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Harnham",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Harrison Clarke",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "HavocAI",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "havocai.com",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "havocai",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-havocai",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T01:59:26Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 26,
+      "unique_ids": 26,
+      "duplicate_rows": 0,
+      "requisitions": 26,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Mission Software Engineer - Honolulu, HI",
+       "Mission Software Engineer - San Diego",
+       "Embedded Perception Engineer"
+      ],
+      "detail": "",
+      "member_key": "ashby-havocai"
+     }
+    },
+    {
+     "company": "Haystack",
+     "disposition": "mixed_review",
+     "evidence_state": "identity_or_business_model_review",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Honeywell Technologies",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "honeywell.com",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "ibqbjb",
+      "site": "Honeywell",
+      "host": "ibqbjb.fa.ocs.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "A seed for the same pod with site CX_1 already exists; the official link names site 'Honeywell'.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Hover",
+     "disposition": "eligible_direct",
+     "evidence_state": "CONFIG",
+     "domain": "hover.to",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "hover",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "greenhouse-hover",
+     "provider_needed": "",
+     "note": "Official job-post module inserts embed/job_board/js?for=hover. Its careers page also renders a static 'No jobs found' template next to real jobs; that template is not a zero.",
+     "validation": {
+      "at": "2026-10-22T01:59:22Z",
+      "vendor": "greenhouse",
+      "status": "complete",
+      "source_reported": 19,
+      "parsed": 19,
+      "unique_ids": 19,
+      "duplicate_rows": 0,
+      "requisitions": 19,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Content Marketing Manager",
+       "Customer Experience Manager",
+       "Customer Success Manager"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-hover"
+     }
+    },
+    {
+     "company": "Howmet Aerospace",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "howmet.com",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "fa-exty-saasfaprod1",
+      "site": "CX_1",
+      "host": "fa-exty-saasfaprod1.fa.ocs.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "ICE",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "ice.com",
+     "provider": "radancy",
+     "endpoint": {
+      "vendor": "radancy",
+      "tenant": "ice",
+      "site": "",
+      "host": "careers.ice.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "iCIMS-branded Jibe front end; listing verified through /api/jobs.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Infinite Computer Solutions",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Innovative Defense Technologies (IDT)",
+     "disposition": "mixed_review",
+     "evidence_state": "official_ats_chain",
+     "domain": "",
+     "provider": "Pinpoint",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Inspira Financial",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "inspirafinancial.com",
+     "provider": "adp_myjobs",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:adp_myjobs",
+     "member_key": "",
+     "provider_needed": "adp_myjobs",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "InstantServe LLC",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Intuitive",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "intuitive.com",
+     "provider": "smartrecruiters",
+     "endpoint": {
+      "vendor": "smartrecruiters",
+      "tenant": "Intuitive",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "smartrecruiters-intuitive",
+     "provider_needed": "",
+     "note": "The separate SmartRecruiters talent-community link is not a source.",
+     "validation": {
+      "at": "2026-10-22T02:00:10Z",
+      "vendor": "smartrecruiters",
+      "status": "budget_limited",
+      "source_reported": 450,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Clinical Scientist Intern",
+       "Senior Clinical Data Scientist",
+       "Urology Gynecology Sales Representative- Grand Rapids, MI"
+      ],
+      "detail": "provider read 200 of 450 the vendor reported",
+      "member_key": "smartrecruiters-intuitive"
+     }
+    },
+    {
+     "company": "Iperium",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "KTek Resourcing",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Largeton Group",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "LendingTree",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "lendingtree.com",
+     "provider": "Greenhouse integration suspected; tenant unresolved",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "gh_jid hints only; no board token observed",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Lincoln Institute of Land Policy",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "lincolninst.edu",
+     "provider": "paycom",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:paycom",
+     "member_key": "",
+     "provider_needed": "paycom",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Longbridge",
+     "disposition": "eligible_direct",
+     "evidence_state": "OWN",
+     "domain": "longbridge.com",
+     "provider": "own_site",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:own_site",
+     "member_key": "",
+     "provider_needed": "own_site",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "MANTECH",
+     "disposition": "mixed_review",
+     "evidence_state": "official_career_provider_unresolved",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Maritz",
+     "disposition": "mixed_review",
+     "evidence_state": "official_ats_chain",
+     "domain": "",
+     "provider": "Workday",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Marlin Selection Recruitment",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "MatchPoint",
+     "disposition": "mixed_review",
+     "evidence_state": "identity_or_business_model_review",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "MATS Research",
+     "disposition": "eligible_direct",
+     "evidence_state": "OWN",
+     "domain": "matsprogram.org",
+     "provider": "own_site",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:own_site",
+     "member_key": "",
+     "provider_needed": "own_site",
+     "note": "Staff roles only; fellowships are not jobs.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Mission Technologies, a division of HII",
+     "disposition": "mixed_review",
+     "evidence_state": "official_career_provider_unresolved",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Morales Professional, a morales group company",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Motion Recruitment",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "mroads",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "NCR Voyix",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "ncrvoyix.com",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "ncr",
+      "site": "ext_us",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "workday_tenant_catalog",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "Official page links ext_us, ext_non_us and ext_apac; ext_us is the US board.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Netrolynx AI",
+     "disposition": "identity_unresolved",
+     "evidence_state": "identity_unresolved",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "identity_unresolved",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "NexGen Tech Solutions",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Nomura",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "nomura.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "nomura",
+      "site": "",
+      "host": "careers.nomura.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "Americas channel only; early careers on Tal.net is a separate channel and is not this source.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Northwood",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "northwoodspace.io",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "NorthwoodSpace",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-northwoodspace",
+     "provider_needed": "",
+     "note": "Board carries a 'General Application' posting; it is counted as non-requisition, not as a role.",
+     "validation": {
+      "at": "2026-10-22T01:59:26Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 63,
+      "unique_ids": 63,
+      "duplicate_rows": 0,
+      "requisitions": 62,
+      "filtered_non_requisition": 1,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Software Engineer \u2013 General (new grad / early career)",
+       "Senior DSP Engineer",
+       "Senior Software Engineer - Backend"
+      ],
+      "detail": "",
+      "member_key": "ashby-northwoodspace"
+     }
+    },
+    {
+     "company": "Nous Research",
+     "disposition": "eligible_direct",
+     "evidence_state": "MANUAL",
+     "domain": "nousresearch.com",
+     "provider": "own_site",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:own_site",
+     "member_key": "",
+     "provider_needed": "own_site",
+     "note": "Inline roles with email apply: manual handoff; never email automatically.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "OPENLANE",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "openlane.com",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "openlane",
+      "site": "OPENLANE_Careers",
+      "host": "",
+      "extra": {
+       "wd_host": "wd115"
+      }
+     },
+     "where": "workday_tenant_catalog",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "The linked URL carries q=Onsite/Field Operations; that sample filter is NOT part of the source.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Optomi",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Orange Logic",
+     "disposition": "eligible_direct",
+     "evidence_state": "OWN",
+     "domain": "orangelogic.com",
+     "provider": "own_site",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:own_site",
+     "member_key": "",
+     "provider_needed": "own_site",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Peraton",
+     "disposition": "mixed_review",
+     "evidence_state": "official_ats_chain",
+     "domain": "",
+     "provider": "iCIMS",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Premier Global Links LLC",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Productive Playhouse",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "productiveplayhouse.com",
+     "provider": "jazzhr",
+     "endpoint": {
+      "vendor": "jazzhr",
+      "tenant": "productiveplayhouse",
+      "site": "",
+      "host": "productiveplayhouse.applytojob.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "PSEG Long Island LLC",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "psegliny.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "psegliny",
+      "site": "",
+      "host": "jobs.psegliny.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Quantcast",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "quantcast.com",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "quantcast",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-quantcast",
+     "provider_needed": "",
+     "note": "Official /careers/proxy JSON names Ashby/quantcast; the careers page's static 'No jobs found' template is not a zero.",
+     "validation": {
+      "at": "2026-10-22T01:59:27Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 15,
+      "unique_ids": 15,
+      "duplicate_rows": 0,
+      "requisitions": 15,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Software Engineer",
+       "Senior Software Engineer, Payments & Incentives",
+       "Software Engineer (Cloud Infrastructure)"
+      ],
+      "detail": "",
+      "member_key": "ashby-quantcast"
+     }
+    },
+    {
+     "company": "Quindar",
+     "disposition": "eligible_direct",
+     "evidence_state": "CONFIG",
+     "domain": "quindar.space",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "quindar",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-quindar",
+     "provider_needed": "",
+     "note": "`${job.id}` in the official config is a template placeholder, not a job id.",
+     "validation": {
+      "at": "2026-10-22T01:59:27Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 20,
+      "unique_ids": 20,
+      "duplicate_rows": 0,
+      "requisitions": 20,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Vice President of Programs",
+       "Forward Deployed Engineer",
+       "Full Stack Engineer"
+      ],
+      "detail": "",
+      "member_key": "ashby-quindar"
+     }
+    },
+    {
+     "company": "Radiant Systems Inc",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Raft",
+     "disposition": "mixed_review",
+     "evidence_state": "official_career_provider_unresolved",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Re:Build",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "rebuildmanufacturing.com",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "rebuildmanufacturing",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "greenhouse-rebuildmanufacturing",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T01:59:22Z",
+      "vendor": "greenhouse",
+      "status": "complete",
+      "source_reported": 130,
+      "parsed": 130,
+      "unique_ids": 130,
+      "duplicate_rows": 0,
+      "requisitions": 130,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Advanced Manufacturing Engineer",
+       "Assembler",
+       "Assembly Operator"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-rebuildmanufacturing"
+     }
+    },
+    {
+     "company": "Recruiting from Scratch",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Reflex",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "reflex.dev",
+     "provider": "YC jobs publisher; ATS unresolved",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "YC jobs publisher only; not workreflex.com or greenhouse/reflex",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "RemoteHunter",
+     "disposition": "exclude_intermediary",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "intermediary",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "RevSpring",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "revspringinc.com",
+     "provider": "newton_paycor",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:newton_paycor",
+     "member_key": "",
+     "provider_needed": "newton_paycor",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Rhoda AI",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "rhoda.ai",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "rhoda-ai",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-rhoda-ai",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T01:59:28Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 45,
+      "unique_ids": 45,
+      "duplicate_rows": 0,
+      "requisitions": 45,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Research Member of Technical Staff- Training Systems",
+       "Staff Data Infrastructure Engineer",
+       "Senior Inference Optimization ML Engineer"
+      ],
+      "detail": "",
+      "member_key": "ashby-rhoda-ai"
+     }
+    },
+    {
+     "company": "Rise Internet",
+     "disposition": "identity_unresolved",
+     "evidence_state": "identity_unresolved",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "identity_unresolved",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Rugged Science",
+     "disposition": "eligible_direct",
+     "evidence_state": "OWN",
+     "domain": "ruggedscience.com",
+     "provider": "own_site",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:own_site",
+     "member_key": "",
+     "provider_needed": "own_site",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Saragossa",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Schaeffler",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "schaeffler.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "schaeffler",
+      "site": "",
+      "host": "jobs.schaeffler.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Schurz Communications",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "schurz.com",
+     "provider": "ukg",
+     "endpoint": {
+      "vendor": "ukg",
+      "tenant": "SCH1012SHRZ",
+      "site": "",
+      "host": "recruiting.ultipro.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "UKG needs the JobBoard GUID; it must come from an official link.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "SEI",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "seic.com",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "seic",
+      "site": "SEI_Global_Services",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "workday_tenant_catalog",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Sigma Defense Systems LLC",
+     "disposition": "mixed_review",
+     "evidence_state": "official_career_provider_unresolved",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "SimVentions",
+     "disposition": "mixed_review",
+     "evidence_state": "official_ats_chain",
+     "domain": "",
+     "provider": "iCIMS",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "SoftWriters",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "softwriters.com",
+     "provider": "ukg",
+     "endpoint": {
+      "vendor": "ukg",
+      "tenant": "ROP1001ROPER",
+      "site": "cf088029-453b-46f8-bcab-46ffb10fdf54",
+      "host": "recruiting.ultipro.com",
+      "extra": {}
+     },
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "shared Roper UKG board; the UKG provider cannot filter to the hiring entity, and importing every Roper job as SoftWriters is wrong",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "SolutionHealth",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "solutionhealth.org",
+     "provider": "radancy_talentbrew",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:radancy_talentbrew",
+     "member_key": "",
+     "provider_needed": "radancy_talentbrew",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "SoTalent",
+     "disposition": "exclude_intermediary",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "intermediary",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Spring Arbor University",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "springarbor.edu",
+     "provider": "newton_paycor",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:newton_paycor",
+     "member_key": "",
+     "provider_needed": "newton_paycor",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Spring Venture Group",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "springventuregroup.com",
+     "provider": "smartrecruiters",
+     "endpoint": {
+      "vendor": "smartrecruiters",
+      "tenant": "SpringVentureGroup1",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "smartrecruiters-springventuregroup1",
+     "provider_needed": "",
+     "note": "Talent-community link excluded; only requisitions are counted.",
+     "validation": {
+      "at": "2026-10-22T01:59:32Z",
+      "vendor": "smartrecruiters",
+      "status": "complete",
+      "source_reported": 6,
+      "parsed": 6,
+      "unique_ids": 6,
+      "duplicate_rows": 0,
+      "requisitions": 6,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "DevOps Engineer I",
+       "Financial Analyst",
+       "Sr. Product Manager, Digital Products"
+      ],
+      "detail": "",
+      "member_key": "smartrecruiters-springventuregroup1"
+     }
+    },
+    {
+     "company": "STR",
+     "disposition": "mixed_review",
+     "evidence_state": "official_ats_chain",
+     "domain": "",
+     "provider": "Greenhouse",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Suron",
+     "disposition": "mixed_review",
+     "evidence_state": "identity_or_business_model_review",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Swift",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "swift.com",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "swift",
+      "site": "Join-Swift",
+      "host": "",
+      "extra": {
+       "wd_host": "wd3"
+      }
+     },
+     "where": "workday_tenant_catalog",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "TalentAlly",
+     "disposition": "exclude_intermediary",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "intermediary",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "TalentHop",
+     "disposition": "mixed_review",
+     "evidence_state": "identity_or_business_model_review",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "TalentOla",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "TaskVerse",
+     "disposition": "exclude_intermediary",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "intermediary",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Tech Consulting",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Tecology, Inc.",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Temple Health \u2013 Temple University Health System",
+     "disposition": "eligible_direct",
+     "evidence_state": "OWN",
+     "domain": "templehealth.org",
+     "provider": "own_site",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:own_site",
+     "member_key": "",
+     "provider_needed": "own_site",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Texas Windstorm Insurance Association",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "twia.org",
+     "provider": "adp_wfn",
+     "endpoint": {
+      "vendor": "adp_wfn",
+      "tenant": "5a22940c-3629-44d9-813a-0ccee8ac9aac",
+      "site": "19000101_000001",
+      "host": "workforcenow.adp.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "The Depository Trust & Clearing Corporation (DTCC)",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "dtcc.com",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "ebxr",
+      "site": "CX_1",
+      "host": "ebxr.fa.us2.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "The official link carries a category facet; the source is the whole CX_1 site (all categories).",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "The Home Depot",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "homedepot.com",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "homedepot",
+      "site": "CareerDepot",
+      "host": "",
+      "extra": {
+       "wd_host": "wd5"
+      }
+     },
+     "where": "workday_tenant_catalog",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "CareerDepot is the corporate/salaried board proven by Req185723's Apply link. Hourly in-store roles use BrassRing and the associate site is internal; neither is this source.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "The Lubrizol Corporation",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "lubrizol.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "lubrizol",
+      "site": "",
+      "host": "jobs.lubrizol.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "TikTok USDS Joint Venture",
+     "disposition": "eligible_direct",
+     "evidence_state": "OWN",
+     "domain": "tiktokusds.com",
+     "provider": "tiktok_usds",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:tiktok_usds",
+     "member_key": "",
+     "provider_needed": "tiktok_usds",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Torentify",
+     "disposition": "exclude_intermediary",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "intermediary",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Trexquant Investment LP",
+     "disposition": "eligible_direct",
+     "evidence_state": "CONFIG",
+     "domain": "trexquant.com",
+     "provider": "workable",
+     "endpoint": {
+      "vendor": "workable",
+      "tenant": "trexquant",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "workable-trexquant",
+     "provider_needed": "",
+     "note": "Workable widget repeats one shortcode per location (50 rows, 34 distinct ids on 2026-10-21); requisitions are counted by id.",
+     "validation": {
+      "at": "2026-10-22T01:59:29Z",
+      "vendor": "workable",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 50,
+      "unique_ids": 34,
+      "duplicate_rows": 16,
+      "requisitions": 34,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Associate General Counsel - Investment and Trading (USA)",
+       "C++ Trading & Simulator Engineer (USA)",
+       "Chief Operating Officer"
+      ],
+      "detail": "",
+      "member_key": "workable-trexquant"
+     }
+    },
+    {
+     "company": "Troon",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "troon.com",
+     "provider": "ukg",
+     "endpoint": {
+      "vendor": "ukg",
+      "tenant": "TRO1001TROO",
+      "site": "2b13054b-60bb-410d-9136-e52c1c7d9720",
+      "host": "recruiting2.ultipro.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "UICGS / Bowhead Family of Companies",
+     "disposition": "mixed_review",
+     "evidence_state": "official_ats_chain",
+     "domain": "",
+     "provider": "iCIMS",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Unison",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "unisonglobal.com",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "unison-software",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-unison-software",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T01:59:28Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 13,
+      "unique_ids": 13,
+      "duplicate_rows": 0,
+      "requisitions": 13,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Linux Middleware Systems Administrator (Remote - Occasional Office Visits Requir",
+       "Security Governance Manager",
+       "Testing Lead - Federal ERP System"
+      ],
+      "detail": "",
+      "member_key": "ashby-unison-software"
+     }
+    },
+    {
+     "company": "Universal Background Screening",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "universalbackground.com",
+     "provider": "appone",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:appone",
+     "member_key": "",
+     "provider_needed": "appone",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Uplight",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "uplight.com",
+     "provider": "jobvite",
+     "endpoint": {
+      "vendor": "jobvite",
+      "tenant": "uplight",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "General Application posting is not a requisition.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Upwind Security",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "upwind.io",
+     "provider": "Comeet plugin",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "Comeet plugin observed; company token/API unresolved (official page 403)",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "V-Soft Consulting Group, Inc.",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Vantor",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "vantor.com",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "maxar",
+      "site": "Vantor",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "workday_tenant_catalog",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "Maxar's tenant, Vantor's site: attributed to Vantor only.",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Vaspire Technologies Inc.",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Ventura Foods",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "venturafoods.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "venturafoods",
+      "site": "",
+      "host": "jobs.venturafoods.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Ventures Unlimited Inc",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Verint",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "verint.com",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "fa-epcb-saasfaprod1",
+      "site": "CX",
+      "host": "fa-epcb-saasfaprod1.fa.ocs.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Verisk",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "verisk.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "corporate page challenged; SmartRecruiters/Oracle candidates unproven",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Vertex Pharmaceuticals",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "vrtx.com",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "vrtx",
+      "site": "vertex_careers",
+      "host": "",
+      "extra": {
+       "wd_host": "wd501"
+      }
+     },
+     "where": "workday_tenant_catalog",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation not_run",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Visionist, Inc.",
+     "disposition": "mixed_review",
+     "evidence_state": "official_ats_chain",
+     "domain": "",
+     "provider": "Jobvite",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "review",
+     "why": "mixed_review",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Vizient",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Voto Consulting LLC",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Wiraa",
+     "disposition": "exclude_intermediary",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "intermediary",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "WisdomAI",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "wisdom.ai",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "Wisdom-AI",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-wisdom-ai",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T01:59:29Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 19,
+      "unique_ids": 19,
+      "duplicate_rows": 0,
+      "requisitions": 19,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Technical Support Engineer",
+       "Software Engineer, Platforms",
+       "Machine Learning Engineer"
+      ],
+      "detail": "",
+      "member_key": "ashby-wisdom-ai"
+     }
+    },
+    {
+     "company": "WTW",
+     "disposition": "exclude_consultancy",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "consultancy",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    },
+    {
+     "company": "Xforia Global Talent  & Technology Solutions",
+     "disposition": "exclude_staffing",
+     "evidence_state": "excluded_by_preference",
+     "domain": "",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "",
+     "outcome": "excluded",
+     "why": "staffing",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     }
+    }
+   ]
+  },
+  "top": {
+   "denominator": 0,
+   "counts": {
+    "existing_covered": 0,
+    "existing_unhealthy_or_moved": 0,
+    "new_validated": 0,
+    "excluded": 0,
+    "review": 0,
+    "blocked": 0,
+    "unsupported": 0,
+    "pending": 0
+   },
+   "rows": []
+  },
+  "health": {
+   "denominator": 3,
+   "counts": {
+    "existing_covered": 2,
+    "existing_unhealthy_or_moved": 1,
+    "new_validated": 0,
+    "excluded": 0,
+    "review": 0,
+    "blocked": 0,
+    "unsupported": 0,
+    "pending": 0
+   },
+   "rows": [
+    {
+     "company": "Duolingo",
+     "disposition": "",
+     "evidence_state": "",
+     "domain": "duolingo.com",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "duolingo",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-duolingo",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T01:59:41Z",
+      "vendor": "greenhouse",
+      "status": "complete",
+      "source_reported": 61,
+      "parsed": 61,
+      "unique_ids": 61,
+      "duplicate_rows": 0,
+      "requisitions": 61,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Ad Sales Lead, Programmatic",
+       "Ad Sales Lead - West",
+       "AI Research Engineer, New PhD Graduate"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-duolingo"
+     }
+    },
+    {
+     "company": "Nordstrom",
+     "disposition": "",
+     "evidence_state": "",
+     "domain": "nordstrom.com",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "nordstrom",
+      "site": "nordstrom_careers",
+      "host": "",
+      "extra": {
+       "wd_host": "wd501"
+      }
+     },
+     "where": "workday_tenant_catalog",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "nordstrom",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T01:59:41Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 1519,
+      "parsed": 400,
+      "unique_ids": 400,
+      "duplicate_rows": 0,
+      "requisitions": 400,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Restaurant Host - Marketplace Caf\u00e9 - Washington Square",
+       "Seasonal Administrative Assistant Top Seller - Fashion Valley",
+       "Seasonal Sales Floor Support - Clovis Crossing Rack"
+      ],
+      "detail": "",
+      "member_key": "workday-nordstrom-nordstrom_careers"
+     }
+    },
+    {
+     "company": "Garmin",
+     "disposition": "",
+     "evidence_state": "",
+     "domain": "garmin.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "official_registry",
+     "plan": "existing",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "Only an official_career_registry row (careers.garmin.com); no crawlable catalog row in the repo.",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "Only an official_career_registry row (careers.garmin.com); no crawlable catalog row in the repo.",
+     "validation": {
+      "status": "not_run"
+     }
+    }
+   ]
+  }
+ },
+ "next_batch": []
+}

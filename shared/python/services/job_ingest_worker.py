@@ -804,6 +804,21 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {"vendor": "icims", "tenant": "uscareers-pepsico", "site": "",
      "host": "uscareers-pepsico.icims.com", "display_name": "PepsiCo",
      "industry": "ecommerce_retail"},
+
+    # Direct-employer onboarding, 2026-10-21. Every row below is the exact
+    # endpoint an employer's OWN career page links (or its employer-hosted
+    # config names), validated live through its provider the same day; the
+    # record and counts are in docs/audit/direct-employer-onboarding.md and
+    # `scripts/onboard_researched_companies.py` re-checks that each one is
+    # still served by these tables. Seeds rather than a catalog because these
+    # vendors have no Python catalog (ADR-004: their registry is
+    # `company_ats_endpoints`, which the owner fills with `--apply`).
+    #
+    # Cognite's board is in Greenhouse's EU region: `site` carries the region,
+    # and `list_member` routes a regional member through the provider, never
+    # the US board API.
+    {"vendor": "greenhouse", "tenant": "cognite", "site": "eu", "host": "",
+     "display_name": "Cognite", "industry": "tech"},
 )
 
 
