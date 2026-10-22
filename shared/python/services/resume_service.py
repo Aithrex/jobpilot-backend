@@ -68,6 +68,55 @@ _SHORT_LIVED_JOB_TYPES = ("career_pages", "workday_jobs", "mnc_jobs")
 #: `window_hours` and would stop counting these types if they vanished sooner.
 FEED_RESULT_TTL_HOURS = _env_int("RESUME_JOBS_FEED_TTL_HOURS", 24)
 
+#: Ceiling on a feed result as the poll route serves it. Lambda refuses a
+#: response over 6 MB, and the body is a JSON string inside Lambda's own JSON
+#: envelope, so every quote is escaped again on the way out. On 2026-10-22 the
+#: per-card employer/posting/availability/trust blocks took a 1,500-card
+#: Workday result from 5.66 MB to 6.63 MB: the poll failed, the client kept
+#: only the small MNC list, and every 80+ match in the inventory tabs vanished
+#: from the page with no error shown. 4.5 MB leaves room for that escaping.
+POLL_RESULT_MAX_BYTES = _env_int("POLL_RESULT_MAX_BYTES", 4_500_000)
+
+
+def fit_feed_result(result: Any, max_bytes: int = POLL_RESULT_MAX_BYTES) -> Any:
+    """A feed result that fits the poll response, losing its WEAKEST cards.
+
+    Cards are dropped lowest `match_score` first (oldest first on a tie), the
+    survivors keep their order, and `trimmed_for_size` says how many went.
+    Anything that is not a dict with a `jobs` list is returned untouched.
+    """
+    if not isinstance(result, dict) or not isinstance(result.get("jobs"), list):
+        return result
+    total = len(json.dumps(result, default=str))
+    if total <= max_bytes:
+        return result
+    jobs = result["jobs"]
+    sizes = [len(json.dumps(j, default=str)) + 2 for j in jobs]
+
+    def _weakest(i: int) -> Tuple[float, float]:
+        row = jobs[i] if isinstance(jobs[i], dict) else {}
+        try:
+            score = float(row.get("match_score") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        days = row.get("days_ago")
+        return (score, -(days if isinstance(days, (int, float)) else 999))
+
+    drop: set = set()
+    freed = 0
+    for i in sorted(range(len(jobs)), key=_weakest):
+        if freed >= total - max_bytes:
+            break
+        drop.add(i)
+        freed += sizes[i]
+    out = dict(result)
+    out["jobs"] = [j for i, j in enumerate(jobs) if i not in drop]
+    out["trimmed_for_size"] = {"dropped": len(drop), "kept": len(out["jobs"]),
+                               "max_bytes": max_bytes}
+    logger.warning("feed result trimmed for the poll response: %d of %d cards dropped "
+                   "(%d bytes over %d)", len(drop), len(jobs), total, max_bytes)
+    return out
+
 
 class ResumeService:
     """Central orchestrator for resume processing.
@@ -190,6 +239,9 @@ class ResumeService:
             return None
         job.pop("_id", None)
         job.pop("payload", None)  # Don't send payload back to client
+        if job.get("job_type") in _SHORT_LIVED_JOB_TYPES:
+            # Applied on READ, so results already stored fit too.
+            job["result"] = fit_feed_result(job.get("result"))
         return job
 
     def _job_quota_entry_id(self, job_id: str) -> Optional[str]:
