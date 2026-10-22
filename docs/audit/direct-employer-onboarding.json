@@ -1,6 +1,6 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T05:28:59Z",
+ "generated_at": "2026-10-22T05:46:26Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
@@ -10820,42 +10820,269 @@
   }
  },
  "next_batch": [
-  "Shopify",
-  "Bloomberg",
-  "Google DeepMind",
-  "Groq",
-  "Figure AI",
-  "Teradata",
-  "Domo",
-  "ThoughtSpot",
-  "Two Sigma",
-  "Nielsen",
-  "DigitalOcean",
-  "Akamai",
-  "Nutanix",
-  "Digital Realty",
-  "Arista Networks",
-  "Supermicro",
-  "Southern Company",
-  "National Grid",
-  "Schneider Electric",
-  "Eaton",
-  "Burns & McDonnell",
-  "POWER Engineers",
-  "Evergy",
-  "Sempra",
-  "Tennessee Valley Authority",
-  "Littelfuse",
-  "Avangrid",
-  "Oncor",
-  "Kiewit",
-  "Stantec",
-  "Mott MacDonald",
-  "Jacobs",
-  "NRG Energy",
-  "Enphase Energy",
-  "Mitsubishi Electric Power Products",
-  "Wabtec",
-  "Fluor"
+  {
+   "company": "Microsoft",
+   "domain_group": "software",
+   "outcome": "existing_unhealthy_or_moved",
+   "why": "validation blocked"
+  },
+  {
+   "company": "Shopify",
+   "domain_group": "software",
+   "outcome": "pending",
+   "why": "official careers page served no ATS link"
+  },
+  {
+   "company": "Bloomberg",
+   "domain_group": "software",
+   "outcome": "blocked",
+   "why": "PerimeterX captcha (mnc_catalog record); not bypassed"
+  },
+  {
+   "company": "Qualcomm",
+   "domain_group": "software",
+   "outcome": "existing_unhealthy_or_moved",
+   "why": "validation blocked"
+  },
+  {
+   "company": "Google DeepMind",
+   "domain_group": "ai_ml",
+   "outcome": "pending",
+   "why": "official careers page is client-rendered; board link not in served HTML"
+  },
+  {
+   "company": "Groq",
+   "domain_group": "ai_ml",
+   "outcome": "pending",
+   "why": "groq.com/careers redirects to the homepage; no board link served"
+  },
+  {
+   "company": "Figure AI",
+   "domain_group": "ai_ml",
+   "outcome": "pending",
+   "why": "official careers page served no ATS link"
+  },
+  {
+   "company": "Aurora Innovation",
+   "domain_group": "ai_ml",
+   "outcome": "existing_unhealthy_or_moved",
+   "why": "validation failed"
+  },
+  {
+   "company": "Confluent",
+   "domain_group": "data_science",
+   "outcome": "existing_unhealthy_or_moved",
+   "why": "validation blocked"
+  },
+  {
+   "company": "dbt Labs",
+   "domain_group": "data_science",
+   "outcome": "existing_unhealthy_or_moved",
+   "why": "validation failed"
+  },
+  {
+   "company": "Teradata",
+   "domain_group": "data_science",
+   "outcome": "pending",
+   "why": "official careers page served no ATS link"
+  },
+  {
+   "company": "Domo",
+   "domain_group": "data_science",
+   "outcome": "blocked",
+   "why": "domo.com/company/careers answered 405 on 2026-10-21"
+  },
+  {
+   "company": "ThoughtSpot",
+   "domain_group": "data_science",
+   "outcome": "pending",
+   "why": "official careers page served no ATS link"
+  },
+  {
+   "company": "Hex",
+   "domain_group": "data_science",
+   "outcome": "existing_unhealthy_or_moved",
+   "why": "validation failed"
+  },
+  {
+   "company": "ClickHouse",
+   "domain_group": "data_science",
+   "outcome": "existing_unhealthy_or_moved",
+   "why": "validation failed"
+  },
+  {
+   "company": "Two Sigma",
+   "domain_group": "data_science",
+   "outcome": "pending",
+   "why": "official careers page served no ATS link"
+  },
+  {
+   "company": "Nielsen",
+   "domain_group": "data_science",
+   "outcome": "pending",
+   "why": "careers URL answered 404; NielsenIQ (crawled) is a different company"
+  },
+  {
+   "company": "DigitalOcean",
+   "domain_group": "cloud",
+   "outcome": "pending",
+   "why": "open-roles page is a JS shell (XHRs Greenhouse per CLAUDE.md); token not observed in served HTML"
+  },
+  {
+   "company": "Akamai",
+   "domain_group": "cloud",
+   "outcome": "blocked",
+   "why": "akamai.com/careers answered 403 on 2026-10-21"
+  },
+  {
+   "company": "Nutanix",
+   "domain_group": "cloud",
+   "outcome": "blocked",
+   "why": "careers.nutanix.com answered 403 on 2026-10-21"
+  },
+  {
+   "company": "Digital Realty",
+   "domain_group": "cloud",
+   "outcome": "blocked",
+   "why": "TLS error fetching digitalrealty.com/about/careers on 2026-10-21"
+  },
+  {
+   "company": "Arista Networks",
+   "domain_group": "cloud",
+   "outcome": "blocked",
+   "why": "arista.com/en/careers answered 406 on 2026-10-21"
+  },
+  {
+   "company": "Supermicro",
+   "domain_group": "cloud",
+   "outcome": "pending",
+   "why": "official careers URL answered 404; current page unknown"
+  },
+  {
+   "company": "Southern Company",
+   "domain_group": "electrical_power",
+   "outcome": "pending",
+   "why": "only a DirectEmployers .jobs site (southerncompany.jobs) observed; employer ATS not established"
+  },
+  {
+   "company": "National Grid",
+   "domain_group": "electrical_power",
+   "outcome": "blocked",
+   "why": "careers.nationalgrid.com answered 403 on 2026-10-21"
+  },
+  {
+   "company": "Schneider Electric",
+   "domain_group": "electrical_power",
+   "outcome": "blocked",
+   "why": "careers.se.com answered 403 on 2026-10-21"
+  },
+  {
+   "company": "Eaton",
+   "domain_group": "electrical_power",
+   "outcome": "blocked",
+   "why": "not added; validation blocked"
+  },
+  {
+   "company": "Burns & McDonnell",
+   "domain_group": "electrical_power",
+   "outcome": "pending",
+   "why": "official link is burnsmcd.jobs (DirectEmployers); underlying ATS not established"
+  },
+  {
+   "company": "POWER Engineers",
+   "domain_group": "electrical_power",
+   "outcome": "blocked",
+   "why": "powereng.com/careers redirects to wsp.com (now WSP), which answered 403 on 2026-10-21"
+  },
+  {
+   "company": "Evergy",
+   "domain_group": "electrical_power",
+   "outcome": "blocked",
+   "why": "not added; validation blocked"
+  },
+  {
+   "company": "Sempra",
+   "domain_group": "electrical_power",
+   "outcome": "blocked",
+   "why": "sempra.com/careers answered 403 on 2026-10-21"
+  },
+  {
+   "company": "Tennessee Valley Authority",
+   "domain_group": "electrical_power",
+   "outcome": "blocked",
+   "why": "tva.com/careers answered 403 on 2026-10-21"
+  },
+  {
+   "company": "Littelfuse",
+   "domain_group": "electrical_power",
+   "outcome": "blocked",
+   "why": "littelfuse.com/careers answered 403 on 2026-10-21"
+  },
+  {
+   "company": "Avangrid",
+   "domain_group": "electrical_power",
+   "outcome": "blocked",
+   "why": "avangrid.com/careers timed out on 2026-10-21"
+  },
+  {
+   "company": "Oncor",
+   "domain_group": "electrical_power",
+   "outcome": "blocked",
+   "why": "oncor.com careers page timed out on 2026-10-21"
+  },
+  {
+   "company": "Kiewit",
+   "domain_group": "electrical_power",
+   "outcome": "pending",
+   "why": "official link goes to an AllCraftJobs craft board only; the professional board was not observed"
+  },
+  {
+   "company": "Stantec",
+   "domain_group": "electrical_power",
+   "outcome": "pending",
+   "why": "official careers page served no ATS link"
+  },
+  {
+   "company": "Mott MacDonald",
+   "domain_group": "electrical_power",
+   "outcome": "pending",
+   "why": "official careers page served no ATS link"
+  },
+  {
+   "company": "Jacobs",
+   "domain_group": "electrical_power",
+   "outcome": "pending",
+   "why": "jobs.jacobs.com does not resolve; current board not observed"
+  },
+  {
+   "company": "NRG Energy",
+   "domain_group": "electrical_power",
+   "outcome": "pending",
+   "why": "nrg.com/careers.html answered 404"
+  },
+  {
+   "company": "Enphase Energy",
+   "domain_group": "electrical_power",
+   "outcome": "pending",
+   "why": "official page uses a Jobvite link builder; tenant not in served HTML"
+  },
+  {
+   "company": "Mitsubishi Electric Power Products",
+   "domain_group": "electrical_power",
+   "outcome": "pending",
+   "why": "Greenhouse referenced but no board token in served HTML"
+  },
+  {
+   "company": "Wabtec",
+   "domain_group": "electrical_power",
+   "outcome": "pending",
+   "why": "careers.wabtec.com is a custom front end over SmartRecruiters; company id not observed"
+  },
+  {
+   "company": "Fluor",
+   "domain_group": "electrical_power",
+   "outcome": "blocked",
+   "why": "careers.fluor.com is disallowed to our agent by robots.txt"
+  }
  ]
 }

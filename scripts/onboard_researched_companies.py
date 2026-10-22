@@ -517,8 +517,10 @@ def build_report(*, validations: Dict[str, Dict[str, Any]],
             row["domain_group"] = top["domain_group"]
             rows.append(row)
         report["cohorts"]["top"] = _with_counts(rows)
-        report["next_batch"] = [r["company"] for r in rows
-                                if r["outcome"] in (PENDING, BLOCKED)]
+        report["next_batch"] = [
+            {"company": r["company"], "domain_group": r.get("domain_group", ""),
+             "outcome": r["outcome"], "why": r["why"] or r["note"]}
+            for r in rows if r["outcome"] in (PENDING, BLOCKED, EXISTING_UNHEALTHY)]
     if "health" in cohorts:
         rows = []
         for name, entry in plan_mod.HEALTH_CHECKS.items():
@@ -610,7 +612,9 @@ def render_markdown(report: Dict[str, Any]) -> str:
             if key == "top":
                 cells.append(r.get("domain_group", ""))
             cells += [r["evidence_state"], r["provider"] or "", f"`{ident}`" if ident else "",
-                      r["outcome"], (r["why"] or "")[:120],
+                      r["outcome"], ((r["why"] or "") + (
+                          f" - {r['note']}" if r.get("note") and r["outcome"] in (
+                              EXISTING_UNHEALTHY, BLOCKED, UNSUPPORTED) else ""))[:220],
                       v.get("at", "") if v.get("status") != V_NOT_RUN else "",
                       v.get("status", ""), "" if v.get("source_reported") is None
                       else str(v.get("source_reported")),
@@ -623,15 +627,85 @@ def render_markdown(report: Dict[str, Any]) -> str:
     if report.get("next_batch"):
         out.append("## Next batch (work these regularly)")
         out.append("")
-        out.append("Run `--validate --only <name>` after recording the official "
-                   "career page and the exact ATS endpoint in "
-                   "`scripts/data/direct_employer_plan.py`; add the row only when "
-                   "the run returns requisitions. See the script docstring.")
+        out.append("Top-employer rows that are pending, blocked, or whose existing "
+                   "board no longer answers. For each: record the official career "
+                   "page and the exact ATS endpoint in "
+                   "`scripts/data/direct_employer_plan.py` (`plan=\"candidate\"`), run "
+                   "`--validate --only <name>`, add the catalog/seed row only when the "
+                   "run returns requisitions, flip `plan` to \"added\", re-run "
+                   "`--write-docs`. Unsupported rows wait for the provider named.")
         out.append("")
-        for name in report["next_batch"]:
-            out.append(f"- {name}")
+        for item in report["next_batch"]:
+            out.append(f"- **{item['company']}** ({item['domain_group']}, "
+                       f"{item['outcome']}): {item['why'][:200]}")
         out.append("")
+    out.extend(_STATIC_SECTIONS)
     return "\n".join(out) + "\n"
+
+
+_STATIC_SECTIONS: List[str] = """
+## How an added row reaches the Oracle ingester
+
+`services/ingest_runner` (systemd on the Oracle A1 box) -> `job_ingest_worker.
+dispatch_due_shards` -> `run_shard(source, shard)` -> `shard_members` =
+`registry_members(source)`, the union of `WORKDAY_TENANT_CATALOG` (+MNC Workday
+rows), `CAREER_PAGES_CATALOG` / `ENTERPRISE_CATALOG` / MNC rows, the
+`_SEED_ENDPOINTS` table, and `company_ats_endpoints` (validated|empty). Each
+member hashes to a shard by `blake2b(member_key)`; `list_member` lists it via
+`ats_providers.registry.get(vendor).list_jobs` (or the legacy US board path), the
+outbound guard allows only the provider's declared hosts, and every row is
+written by `job_inventory_service.upsert_posting`, which stamps
+`canonical_employer_id` only when `career_sources` holds owner-verified evidence.
+Rows added here live in the catalogs/seeds (ship with the deploy); `--apply`
+writes the ownership half (`company_discovery_candidates`, `employers`,
+`career_sources`).
+
+## Owner steps (in order) and rollback
+
+1. Merge `dej/onboard`; let CI deploy the ingest runner (`deploy/ingest-runner`).
+   The new rows are crawled from the next tick.
+2. Garmin first: `db.company_ats_endpoints.find({display_name: /garmin/i})` - if
+   no Garmin row exists, add a `radancy` seed for `careers.garmin.com`.
+3. `PYTHONPATH=shared/python python3 scripts/onboard_researched_companies.py`
+   (dry-run, prints what it would register), then `... --apply`.
+4. `python3 scripts/verify_career_sources.py --mode content --apply` (ONE network
+   pass at a time), then `--mode backlink --apply`.
+5. `python3 scripts/employer_coverage_report.py --markdown --persist`.
+
+Rollback: revert the commit (catalog/seed rows and provider host entries go with
+it; members drop out on the next registry refresh, and their postings expire by
+TTL). `--apply` writes are additive: delete `career_sources` rows whose
+`ownership_evidence.source` is an onboarding evidence URL and
+`company_discovery_candidates` rows with `discovery_method: operator_review`
+written on the apply date; `scripts/backfill_canonical_employer_id.py --apply
+--unstamp` reverses attribution.
+
+## Defects found while onboarding (fixed here)
+
+- `job_ingest_worker` slugged catalog board tokens for the URL: `mistral.ai`,
+  `fathom.video`, `kraken.com`, `rivianvw.tech`, `arch.co`, `magic.dev` were
+  requested as `mistral-ai` & co. and 404'd every crawl. Member keys unchanged.
+- Phenom read at most 100 rows and never reported truncation; UKG likewise at its
+  1,000-row cap. A capped read was treated as a full census by
+  `_close_stale_in_shard`. Both now set `listing_truncated`; Phenom dedupes ids
+  across pages and stops at `totalHits`.
+- Greenhouse had no EU region: `boards-api.eu.greenhouse.io` does not exist; EU
+  boards are read from `job-boards.eu.greenhouse.io` pages, and a regional
+  Greenhouse/Lever member can no longer fall back to the US legacy path.
+
+## Not fixed here (follow-ups)
+
+- Phenom's 5x20 page budget reads 100 of e.g. BAE's 2,042 / ABB's 2,067 /
+  Bechtel's 1,150 postings (performance-engineer: raise `max_pages` or sort).
+- SmartRecruiters stopped at 200 of Intuitive's 450 without flagging truncation.
+- Oracle ORC, iCIMS and Taleo providers never set `listing_truncated`.
+- Workable's widget repeats a shortcode per location (Trexquant 50 rows / 34 ids);
+  the last location wins at upsert.
+- Eightfold answered 403 to this run for Microsoft, Qualcomm and Eaton (may be
+  IP-specific; the Oracle box's own inventory is the authority).
+- SuccessFactors RMK rows carry no location from the listing on several hosts
+  (PSEG, PSEG LI).
+""".strip("\n").split("\n")
 
 
 # ---------------------------------------------------------------------------
