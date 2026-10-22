@@ -418,5 +418,18 @@ HEALTH_CHECKS: Dict[str, Dict[str, Any]] = {
     "Garmin": dict(domain="garmin.com", plan="existing", endpoint=None,
                    where="official_registry",
                    note="Only an official_career_registry row (careers.garmin.com); "
-                        "no crawlable catalog row in the repo."),
+                        "no crawlable catalog row in the repo. careers.garmin.com "
+                        "is an iCIMS Jibe front end whose public /api/jobs reported "
+                        "434 jobs on 2026-10-21 (readable by `radancy`). Not added: "
+                        "production may already crawl Garmin through a discovered "
+                        "iCIMS row in company_ats_endpoints, which this repo cannot "
+                        "see, and a second vendor row would duplicate every Garmin "
+                        "posting. Owner check before adding: "
+                        "db.company_ats_endpoints.find({display_name: /garmin/i})."),
+    "BAE Systems (Taleo seed)": dict(
+        domain="baesystems.com", plan="existing",
+        endpoint=_ep("taleo", "baesystems", host="baesystems.taleo.net"),
+        where="seed",
+        note="Pre-existing Taleo seed; the US Phenom front end is onboarded "
+             "separately as BAE Systems, Inc."),
 }

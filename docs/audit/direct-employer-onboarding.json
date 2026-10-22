@@ -1,6 +1,6 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T02:06:15Z",
+ "generated_at": "2026-10-22T02:07:03Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
@@ -4451,9 +4451,9 @@
    "rows": []
   },
   "health": {
-   "denominator": 3,
+   "denominator": 4,
    "counts": {
-    "existing_covered": 2,
+    "existing_covered": 3,
     "existing_unhealthy_or_moved": 1,
     "new_validated": 0,
     "excluded": 0,
@@ -4561,12 +4561,55 @@
      "where": "official_registry",
      "plan": "existing",
      "outcome": "existing_unhealthy_or_moved",
-     "why": "Only an official_career_registry row (careers.garmin.com); no crawlable catalog row in the repo.",
+     "why": "Only an official_career_registry row (careers.garmin.com); no crawlable catalog row in the repo. careers.garmin.com is an iCIMS Jibe front end whose public /api/jobs reported 434 jobs on 2026-10-21 (readable by `radancy`). Not added: production may already crawl Garmin through a discovered iCIMS row in company_ats_endpoints, which this repo cannot see, and a second vendor row would duplicate every Garmin posting. Owner check before adding: db.company_ats_endpoints.find({display_name: /garmin/i}).",
      "member_key": "",
      "provider_needed": "",
-     "note": "Only an official_career_registry row (careers.garmin.com); no crawlable catalog row in the repo.",
+     "note": "Only an official_career_registry row (careers.garmin.com); no crawlable catalog row in the repo. careers.garmin.com is an iCIMS Jibe front end whose public /api/jobs reported 434 jobs on 2026-10-21 (readable by `radancy`). Not added: production may already crawl Garmin through a discovered iCIMS row in company_ats_endpoints, which this repo cannot see, and a second vendor row would duplicate every Garmin posting. Owner check before adding: db.company_ats_endpoints.find({display_name: /garmin/i}).",
      "validation": {
       "status": "not_run"
+     }
+    },
+    {
+     "company": "BAE Systems (Taleo seed)",
+     "disposition": "",
+     "evidence_state": "",
+     "domain": "baesystems.com",
+     "provider": "taleo",
+     "endpoint": {
+      "vendor": "taleo",
+      "tenant": "baesystems",
+      "site": "",
+      "host": "baesystems.taleo.net",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "taleo-baesystems",
+     "provider_needed": "",
+     "note": "Pre-existing Taleo seed; the US Phenom front end is onboarded separately as BAE Systems, Inc.",
+     "validation": {
+      "at": "2026-10-22T02:06:57Z",
+      "vendor": "taleo",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 146,
+      "unique_ids": 146,
+      "duplicate_rows": 0,
+      "requisitions": 146,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Metrology Engineer (Calibration)",
+       "Senior Mission & Info Systems Engineer",
+       "Supplier Development Professional"
+      ],
+      "detail": "",
+      "member_key": "taleo-baesystems"
      }
     }
    ]

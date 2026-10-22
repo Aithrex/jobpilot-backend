@@ -1,6 +1,6 @@
 # Direct-employer onboarding — outcomes per company
 
-Generated 2026-10-22T02:06:15Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
+Generated 2026-10-22T02:07:03Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
 
 **Coverage basis:** in-repo catalogs and seed tables the crawler loads (no production inventory was read). `existing_covered` means the crawl tables already carry the exact endpoint; it is not a claim about live inventory counts.
 
@@ -196,11 +196,12 @@ Denominator: **0**.
 
 ## Existing rows health-checked (no duplicates added)
 
-Denominator: **3**. existing_covered: 2, existing_unhealthy_or_moved: 1
+Denominator: **4**. existing_covered: 3, existing_unhealthy_or_moved: 1
 
 | company | evidence | provider | endpoint | outcome | why | validated at | status | source | parsed | req | non-req |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Duolingo |  | greenhouse | `greenhouse/duolingo` | existing_covered | row already in the crawl tables | 2026-10-22T01:59:41Z | complete | 61 | 61 | 61 | 0 |
 | Nordstrom |  | workday | `workday/nordstrom/nordstrom_careers/wd501` | existing_covered | row already in the crawl tables | 2026-10-22T01:59:41Z | budget_limited | 1519 | 400 | 400 | 0 |
-| Garmin |  |  |  | existing_unhealthy_or_moved | Only an official_career_registry row (careers.garmin.com); no crawlable catalog row in the repo. |  | not_run |  |  |  |  |
+| Garmin |  |  |  | existing_unhealthy_or_moved | Only an official_career_registry row (careers.garmin.com); no crawlable catalog row in the repo. careers.garmin.com is a |  | not_run |  |  |  |  |
+| BAE Systems (Taleo seed) |  | taleo | `taleo/baesystems.taleo.net/baesystems` | existing_covered | row already in the crawl tables | 2026-10-22T02:06:57Z | complete |  | 146 | 146 | 0 |
 
