@@ -79,7 +79,7 @@ def _load_builtins() -> None:
         for mod in ("boards", "workday", "oracle_orc", "icims", "taleo",
                     "payroll", "enterprise", "amazon", "radancy", "usajobs",
                     "successfactors", "config_boards", "direct_boards",
-                    "adp", "own_site"):
+                    "adp", "own_site", "paycor"):
             try:
                 __import__(f"services.ats_providers.{mod}")
             except Exception as exc:  # pragma: no cover - defensive
