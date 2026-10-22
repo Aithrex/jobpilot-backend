@@ -124,7 +124,7 @@ class TestAtsVendorHost:
         "https://greenhouse.io@attacker.example/apply",
         "https://attacker.example\\@boards.greenhouse.io/apply",
         "https://greenhouse-io.com/apply",
-        "https://xn--greenhuse-q6g.io/apply",
+        "https://xn--greenhuse-52h.io/apply",
         "http://evilgreenhouse.io/apply",
         "javascript:alert('boards.greenhouse.io')",
         # Oracle Cloud object storage is anyone's bucket, not an ATS.
@@ -288,7 +288,7 @@ class TestImpersonation:
         "https://greenhouse.io.attacker.example/apply",
         "https://boards.greenhouse.io.jobs-portal.example/acme",
         "https://greenhouse.io@attacker.example/apply",
-        "https://xn--greenhuse-q6g.io/apply",
+        "https://xn--greenhuse-52h.io/apply",
     ])
     def test_vendor_impersonation_is_suspected_fraud(self, url):
         t = jl.assess_posting_trust(_doc(canonical_url=url))
