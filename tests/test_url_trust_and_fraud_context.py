@@ -448,8 +448,14 @@ def test_big_text_is_bounded_and_fast():
 
 
 # ---------------------------------------------------------------------------
-# Liveness probe: redirects followed hop-by-hop through the SSRF guard
+# Liveness probe: redirects followed hop-by-hop through the SSRF guard,
+# each request pinned to the address the guard validated.
 # ---------------------------------------------------------------------------
+import time  # noqa: E402
+
+PUBLIC = "104.18.1.1"
+
+
 class _Resp:
     def __init__(self, status, location=""):
         self.status_code = status
@@ -459,94 +465,175 @@ class _Resp:
         pass
 
 
-class TestProbeRedirects:
-    def _policy(self):
-        from services.job_ingest_worker import HostPolicy
-        return HostPolicy()
+def _public_dns(host, port, **kw):
+    return [(2, 1, 6, "", (PUBLIC, port))]
 
-    def test_redirect_to_metadata_is_refused(self, monkeypatch):
+
+def _probe(url="https://boards.greenhouse.io/acme/jobs/1"):
+    from services import job_ingest_worker as w
+    return w.http_probe_status("career-pages", url, w.HostPolicy(),
+                               deadline=time.monotonic() + 20)
+
+
+class TestProbeRedirects:
+    def test_probe_never_lets_requests_follow_redirects(self, monkeypatch):
         import requests
-        from services import job_ingest_worker as w
+
+        def boom(*a, **k):
+            raise AssertionError("probe must not call requests directly")
+
+        monkeypatch.setattr(requests, "head", boom)
+        monkeypatch.setattr(requests, "get", boom)
+        from services import jd_fetcher
+        monkeypatch.setattr(jd_fetcher.socket, "getaddrinfo", _public_dns)
+        monkeypatch.setattr(jd_fetcher, "_pinned_request",
+                            lambda m, u, ip, **k: _Resp(200))
+        assert _probe() == 200
+
+    def test_redirect_to_metadata_is_refused_before_it_is_requested(self, monkeypatch):
         from services import jd_fetcher
         calls = []
 
-        def fake(method, url, **kw):
-            calls.append(url)
-            assert kw.get("allow_redirects") is False
+        def fake(method, url, ip, **kw):
+            calls.append((method, url, ip))
             return _Resp(302, "http://169.254.169.254/latest/meta-data/")
 
-        monkeypatch.setattr(requests, "request", fake)
-        monkeypatch.setattr(jd_fetcher.socket, "getaddrinfo",
-                            lambda h, p, **k: [(2, 1, 6, "", ("104.18.1.1", p))])
-        import time
-        status = w.http_probe_status(
-            "greenhouse", "https://boards.greenhouse.io/acme/jobs/1", self._policy(),
-            deadline=time.monotonic() + 20)
-        assert status is None
-        assert calls == ["https://boards.greenhouse.io/acme/jobs/1"]
+        monkeypatch.setattr(jd_fetcher.socket, "getaddrinfo", _public_dns)
+        monkeypatch.setattr(jd_fetcher, "_pinned_request", fake)
+        assert _probe() is None
+        assert calls == [("HEAD", "https://boards.greenhouse.io/acme/jobs/1", PUBLIC)]
+
+    @pytest.mark.parametrize("target", [
+        "http://10.0.0.8/", "http://127.0.0.1:8080/", "http://[::1]/",
+        "http://[fd00:ec2::254]/", "http://100.64.0.1/", "http://192.168.1.1/",
+        "http://172.16.0.1/", "file:///etc/passwd",
+    ])
+    def test_redirect_to_private_ranges_is_refused(self, monkeypatch, target):
+        from services import jd_fetcher
+        calls = []
+
+        def fake(method, url, ip, **kw):
+            calls.append(url)
+            return _Resp(301, target)
+
+        monkeypatch.setattr(jd_fetcher.socket, "getaddrinfo", _public_dns)
+        monkeypatch.setattr(jd_fetcher, "_pinned_request", fake)
+        assert _probe() is None
+        assert len(calls) == 1
 
     def test_public_redirect_is_followed_and_final_status_returned(self, monkeypatch):
-        import requests
-        from services import job_ingest_worker as w
         from services import jd_fetcher
         seq = [_Resp(301, "https://job-boards.greenhouse.io/acme/jobs/1"), _Resp(404)]
         calls = []
 
-        def fake(method, url, **kw):
+        def fake(method, url, ip, **kw):
             calls.append((method, url))
             return seq.pop(0)
 
-        monkeypatch.setattr(requests, "request", fake)
-        monkeypatch.setattr(jd_fetcher.socket, "getaddrinfo",
-                            lambda h, p, **k: [(2, 1, 6, "", ("104.18.1.1", p))])
-        import time
-        status = w.http_probe_status(
-            "greenhouse", "https://boards.greenhouse.io/acme/jobs/1", self._policy(),
-            deadline=time.monotonic() + 20)
-        assert status == 404
-        assert [c[1] for c in calls] == ["https://boards.greenhouse.io/acme/jobs/1",
-                                         "https://job-boards.greenhouse.io/acme/jobs/1"]
-        assert calls[0][0] == "HEAD"
+        monkeypatch.setattr(jd_fetcher.socket, "getaddrinfo", _public_dns)
+        monkeypatch.setattr(jd_fetcher, "_pinned_request", fake)
+        assert _probe() == 404
+        assert calls == [("HEAD", "https://boards.greenhouse.io/acme/jobs/1"),
+                         ("HEAD", "https://job-boards.greenhouse.io/acme/jobs/1")]
 
-    def test_redirect_loop_is_bounded(self, monkeypatch):
-        import requests
-        from services import job_ingest_worker as w
-        from services import jd_fetcher
-        n = {"c": 0}
-
-        def fake(method, url, **kw):
-            n["c"] += 1
-            return _Resp(302, f"https://boards.greenhouse.io/acme/jobs/{n['c']}")
-
-        monkeypatch.setattr(requests, "request", fake)
-        monkeypatch.setattr(jd_fetcher.socket, "getaddrinfo",
-                            lambda h, p, **k: [(2, 1, 6, "", ("104.18.1.1", p))])
-        import time
-        status = w.http_probe_status(
-            "greenhouse", "https://boards.greenhouse.io/acme/jobs/1", self._policy(),
-            deadline=time.monotonic() + 20)
-        assert status is None
-        assert n["c"] <= 6
-
-    def test_dns_rebinding_hop_is_refused(self, monkeypatch):
-        """A public-looking hop whose name resolves to a private address."""
-        import requests
-        from services import job_ingest_worker as w
+    def test_head_405_retries_with_get_through_the_same_guard(self, monkeypatch):
         from services import jd_fetcher
         calls = []
 
-        def fake(method, url, **kw):
+        def fake(method, url, ip, **kw):
+            calls.append(method)
+            return _Resp(405 if method == "HEAD" else 200)
+
+        monkeypatch.setattr(jd_fetcher.socket, "getaddrinfo", _public_dns)
+        monkeypatch.setattr(jd_fetcher, "_pinned_request", fake)
+        assert _probe() == 200
+        assert calls == ["HEAD", "GET"]
+
+    def test_redirect_loop_is_bounded(self, monkeypatch):
+        from services import jd_fetcher
+        n = {"c": 0}
+
+        def fake(method, url, ip, **kw):
+            n["c"] += 1
+            return _Resp(302, f"https://boards.greenhouse.io/acme/jobs/{n['c']}")
+
+        monkeypatch.setattr(jd_fetcher.socket, "getaddrinfo", _public_dns)
+        monkeypatch.setattr(jd_fetcher, "_pinned_request", fake)
+        assert _probe() is None
+        assert n["c"] == jd_fetcher._MAX_REDIRECTS + 1
+
+    def test_hop_resolving_private_is_refused(self, monkeypatch):
+        """A public-looking hop whose name resolves to a private address."""
+        from services import jd_fetcher
+        calls = []
+
+        def fake(method, url, ip, **kw):
             calls.append(url)
             return _Resp(302, "https://rebind.attacker.example/x")
 
         def resolve(host, port, **kw):
-            ip = "10.0.0.5" if host == "rebind.attacker.example" else "104.18.1.1"
+            ip = "10.0.0.5" if host == "rebind.attacker.example" else PUBLIC
             return [(2, 1, 6, "", (ip, port))]
 
-        monkeypatch.setattr(requests, "request", fake)
         monkeypatch.setattr(jd_fetcher.socket, "getaddrinfo", resolve)
-        import time
-        assert w.http_probe_status(
-            "greenhouse", "https://boards.greenhouse.io/acme/jobs/1", self._policy(),
-            deadline=time.monotonic() + 20) is None
+        monkeypatch.setattr(jd_fetcher, "_pinned_request", fake)
+        assert _probe() is None
         assert calls == ["https://boards.greenhouse.io/acme/jobs/1"]
+
+    def test_connection_is_pinned_to_the_validated_address(self, monkeypatch):
+        """DNS rebinding: the name is resolved ONCE per hop and the request
+        connects to that address; a second resolution is never consulted."""
+        from services import jd_fetcher
+        # 1st answer: assert_probe_url's check; 2nd: the hop check that the
+        # connection is pinned to; 3rd (private) must never be consulted.
+        answers = iter(["104.18.1.1", "104.18.1.1", "10.0.0.5"])
+        pinned = []
+
+        def resolve(host, port, **kw):
+            return [(2, 1, 6, "", (next(answers), port))]
+
+        def fake(method, url, ip, **kw):
+            pinned.append(ip)
+            return _Resp(200)
+
+        monkeypatch.setattr(jd_fetcher.socket, "getaddrinfo", resolve)
+        monkeypatch.setattr(jd_fetcher, "_pinned_request", fake)
+        assert _probe() == 200
+        assert pinned == ["104.18.1.1"]
+
+    def test_pinned_request_keeps_sni_cert_and_host_header(self, monkeypatch):
+        import urllib3
+        from services import jd_fetcher
+        seen = {}
+
+        class FakeResp:
+            status = 204
+            headers = {}
+
+            def release_conn(self):
+                seen["released"] = True
+
+        class FakePool:
+            def __init__(self, host, port, **kw):
+                seen.update(pool_host=host, port=port, **kw)
+
+            def urlopen(self, method, path, **kw):
+                seen.update(method=method, path=path, **kw)
+                return FakeResp()
+
+            def close(self):
+                seen["closed"] = True
+
+        monkeypatch.setattr(urllib3, "HTTPSConnectionPool", FakePool)
+        hop = jd_fetcher._pinned_request(
+            "HEAD", "https://boards.greenhouse.io/acme/jobs/1?gh_jid=9", "104.18.1.1",
+            timeout=5, headers={"User-Agent": "x"})
+        assert hop.status_code == 204
+        assert seen["pool_host"] == "104.18.1.1"
+        assert seen["server_hostname"] == "boards.greenhouse.io"
+        assert seen["assert_hostname"] == "boards.greenhouse.io"
+        assert seen["cert_reqs"] == "CERT_REQUIRED"
+        assert seen["headers"]["Host"] == "boards.greenhouse.io"
+        assert seen["path"] == "/acme/jobs/1?gh_jid=9"
+        assert seen["redirect"] is False and seen["retries"] is False
+        assert seen.get("released") and seen.get("closed")

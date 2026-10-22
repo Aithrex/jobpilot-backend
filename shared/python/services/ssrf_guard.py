@@ -178,6 +178,9 @@ def host_on_allowlist(host: Optional[str]) -> bool:
     return False
 
 
+_SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")
+
+
 def _ip_is_public(ip) -> bool:
     """False for loopback / private (10/8, 172.16/12, 192.168/16, fc00::/7) /
     link-local (169.254/16 incl. 169.254.169.254, fe80::/10) / reserved (incl.
@@ -192,6 +195,10 @@ def _ip_is_public(ip) -> bool:
         or ip.is_multicast
         or ip.is_reserved
         or ip.is_unspecified
+        # RFC 6598 shared address space (100.64/10): CGNAT and some clouds'
+        # internal service endpoints. `ipaddress` calls it neither private
+        # nor reserved, so it has to be named.
+        or (ip.version == 4 and ip in _SHARED_ADDRESS_SPACE)
     )
 
 

@@ -1427,8 +1427,6 @@ def http_probe_status(source: str, url: str, policy: HostPolicy, *,
     "no information", never as dead - which is the whole reason this returns an
     Optional instead of a bool.
     """
-    import requests
-
     assert_probe_url(source, url)
     host = HostPolicy.host_of(url)
     if (stop is not None and stop.is_set()) or time.monotonic() >= deadline:
@@ -1439,20 +1437,26 @@ def http_probe_status(source: str, url: str, policy: HostPolicy, *,
     if remaining <= 0.5:
         return None
     eff_timeout = max(0.5, min(float(timeout), remaining))
+    # Redirects are followed by `jd_fetcher.safe_status`, never by `requests`:
+    # every hop is SSRF-checked BEFORE it is requested and the connection goes
+    # to the address that check validated (no DNS rebinding window). This used
+    # to be `allow_redirects=True`, so a 302 from any probe host to
+    # 169.254.169.254 or an RFC1918 address was fetched unchecked. A refused
+    # hop returns None, which this function already means "no information".
+    from services.jd_fetcher import safe_status
     try:
-        resp = requests.head(url, headers=_PROBE_HEADERS, timeout=eff_timeout,
-                             allow_redirects=True)
-        if resp.status_code == 405 or resp.status_code == 501:
-            resp = requests.get(url, headers=_PROBE_HEADERS, timeout=eff_timeout,
-                                allow_redirects=True, stream=True)
-            resp.close()
+        status = safe_status("HEAD", url, timeout=eff_timeout, headers=_PROBE_HEADERS)
+        if status in (405, 501):
+            status = safe_status("GET", url, timeout=eff_timeout, headers=_PROBE_HEADERS)
     except Exception as exc:
         policy.note_failure(host)
         logger.debug("probe %s: network error on %s (%s)", source, host,
                      type(exc).__name__)
         return None
+    if status is None:
+        return None
     policy.note_success(host)
-    return int(resp.status_code)
+    return int(status)
 
 
 # ---------------------------------------------------------------------------
