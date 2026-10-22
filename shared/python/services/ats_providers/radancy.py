@@ -79,7 +79,13 @@ class RadancyProvider(AtsProvider):
     #: Verified tenants only - see the SSRF note in the module docstring.
     # careers.rivian.com: probed live 2026-10-07, the same /api/jobs contract,
     # totalCount 819. Rivian left iCIMS (see the seed note in the worker).
-    api_hosts = ("careers.amd.com", "careers.rivian.com")
+    api_hosts = ("careers.amd.com", "careers.rivian.com",
+                 # iCIMS Jibe front ends linked from each employer's own careers
+                 # page, same public /api/jobs contract, verified 2026-10-21
+                 # (docs/audit/direct-employer-onboarding.md). Named hosts only.
+                 "jobs.echostar.com", "jobs.firstcitizens.com", "careers.ice.com",
+                 "jobs.exeloncorp.com", "jobs.constellationenergy.com",
+                 "careers.pplweb.com")
     portal_hosts = api_hosts
 
     policy = CrawlPolicy(

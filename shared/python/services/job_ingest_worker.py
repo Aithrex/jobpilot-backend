@@ -529,6 +529,21 @@ def _skip_unknown_vendor(ats: str, display_name: str, catalog: str) -> None:
         catalog, ats, display_name)
 
 
+#: A board token as the VENDOR spells it, for the URL. `_slug` turns "." into
+#: "-", which is right for a member KEY and wrong for a URL: the catalog's
+#: `mistral.ai`, `fathom.video`, `kraken.com`, `rivianvw.tech`, `arch.co` and
+#: `magic.dev` Ashby boards were requested as `mistral-ai` & co. and 404'd on
+#: every crawl (measured 2026-10-21: jobs.ashbyhq.com/mistral.ai holds 222
+#: postings, /mistral-ai none). The member key is unchanged, so no posting id
+#: moves; only the address the provider is handed is now the real one.
+_BOARD_TOKEN_RE = re.compile(r"[^a-z0-9._-]+")
+
+
+def _board_token(value: Any, limit: int = 120) -> str:
+    raw = str(value or "").strip().lower()
+    return _BOARD_TOKEN_RE.sub("-", raw).strip("-.")[:limit]
+
+
 def _load_career_members() -> List[Dict[str, Any]]:
     from services.career_pages_catalog import CAREER_PAGES_CATALOG
 
@@ -554,7 +569,7 @@ def _load_career_members() -> List[Dict[str, Any]]:
             "source": SOURCE_CAREER,
             "vendor": ats,
             "ats": ats,
-            "slug": slug,
+            "slug": _board_token(row.get("slug")) or slug,
             "display_name": str(row.get("display_name") or slug),
             "industry": str(row.get("industry") or "other"),
         })
@@ -618,7 +633,7 @@ def _load_career_members() -> List[Dict[str, Any]]:
                 "source": SOURCE_CAREER,
                 "vendor": ats,
                 "ats": ats,
-                "slug": slug,
+                "slug": _board_token(row.get("slug")) or slug,
                 "display_name": name,
                 "industry": _mnc_industry(row),
             })
@@ -804,6 +819,199 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {"vendor": "icims", "tenant": "uscareers-pepsico", "site": "",
      "host": "uscareers-pepsico.icims.com", "display_name": "PepsiCo",
      "industry": "ecommerce_retail"},
+
+    # Direct-employer onboarding, 2026-10-21. Every row below is the exact
+    # endpoint an employer's OWN career page links (or its employer-hosted
+    # config names), validated live through its provider the same day; the
+    # record and counts are in docs/audit/direct-employer-onboarding.md and
+    # `scripts/onboard_researched_companies.py` re-checks that each one is
+    # still served by these tables. Seeds rather than a catalog because these
+    # vendors have no Python catalog (ADR-004: their registry is
+    # `company_ats_endpoints`, which the owner fills with `--apply`).
+    #
+    # Cognite's board is in Greenhouse's EU region: `site` carries the region,
+    # and `list_member` routes a regional member through the provider, never
+    # the US board API.
+    {"vendor": "greenhouse", "tenant": "cognite", "site": "eu", "host": "",
+     "display_name": "Cognite", "industry": "tech"},
+    # Oracle Recruiting Cloud: exact pod host + site from the official link.
+    # DTCC's link carries a category facet; the source is the whole site.
+    {"vendor": "oracle_orc", "tenant": "fa-exty-saasfaprod1", "site": "CX_1",
+     "host": "fa-exty-saasfaprod1.fa.ocs.oraclecloud.com",
+     "display_name": "Howmet Aerospace", "industry": "aerospace_defense"},
+    {"vendor": "oracle_orc", "tenant": "ebxr", "site": "CX_1",
+     "host": "ebxr.fa.us2.oraclecloud.com",
+     "display_name": "The Depository Trust & Clearing Corporation (DTCC)",
+     "industry": "fintech"},
+    {"vendor": "oracle_orc", "tenant": "fa-epcb-saasfaprod1", "site": "CX",
+     "host": "fa-epcb-saasfaprod1.fa.ocs.oraclecloud.com",
+     "display_name": "Verint", "industry": "tech"},
+    # iCIMS tenants linked from the employers' own careers pages.
+    {"vendor": "icims", "tenant": "globalcareers-appliedsystems", "site": "",
+     "host": "globalcareers-appliedsystems.icims.com",
+     "display_name": "Applied Systems", "industry": "tech"},
+    {"vendor": "icims", "tenant": "careers-delta-americas", "site": "",
+     "host": "careers-delta-americas.icims.com",
+     "display_name": "Delta Electronics Americas",
+     "industry": "manufacturing_automotive"},
+    # iCIMS Jibe front ends: the public /api/jobs contract `radancy` reads.
+    {"vendor": "radancy", "tenant": "echostar", "site": "",
+     "host": "jobs.echostar.com", "display_name": "EchoStar",
+     "industry": "telecom"},
+    {"vendor": "radancy", "tenant": "firstcitizens", "site": "",
+     "host": "jobs.firstcitizens.com", "display_name": "First Citizens Bank",
+     "industry": "banking"},
+    {"vendor": "radancy", "tenant": "ice", "site": "",
+     "host": "careers.ice.com", "display_name": "Intercontinental Exchange (ICE)",
+     "industry": "fintech"},
+    # Phenom front ends (US).
+    {"vendor": "phenom", "tenant": "acrisure", "site": "",
+     "host": "careers.acrisure.com", "display_name": "Acrisure",
+     "industry": "insurance"},
+    {"vendor": "phenom", "tenant": "baesystems", "site": "",
+     "host": "jobs.baesystems.com", "display_name": "BAE Systems, Inc.",
+     "industry": "aerospace_defense"},
+    # SAP SuccessFactors RMK sites on the employers' own hosts.
+    {"vendor": "successfactors", "tenant": "celestica", "site": "",
+     "host": "careers.celestica.com", "display_name": "Celestica",
+     "industry": "manufacturing_automotive"},
+    {"vendor": "successfactors", "tenant": "nomura", "site": "",
+     "host": "careers.nomura.com", "display_name": "Nomura",
+     "industry": "banking"},
+    {"vendor": "successfactors", "tenant": "psegliny", "site": "",
+     "host": "jobs.psegliny.com", "display_name": "PSEG Long Island",
+     "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "schaeffler", "site": "",
+     "host": "jobs.schaeffler.com", "display_name": "Schaeffler",
+     "industry": "manufacturing_automotive"},
+    {"vendor": "successfactors", "tenant": "lubrizol", "site": "",
+     "host": "jobs.lubrizol.com", "display_name": "The Lubrizol Corporation",
+     "industry": "manufacturing_automotive"},
+    {"vendor": "successfactors", "tenant": "venturafoods", "site": "",
+     "host": "jobs.venturafoods.com", "display_name": "Ventura Foods",
+     "industry": "other"},
+    # UKG boards: customer code + JobBoard GUID from the official link (or its
+    # redirect). Roper's shared board (SoftWriters) is deliberately absent:
+    # the provider cannot filter it to the hiring entity.
+    {"vendor": "ukg", "tenant": "SCH1012SHRZ",
+     "site": "813f24f9-0154-46d6-bbb4-966dd708b1ff",
+     "host": "recruiting.ultipro.com", "display_name": "Schurz Communications",
+     "industry": "media"},
+    {"vendor": "ukg", "tenant": "TRO1001TROO",
+     "site": "2b13054b-60bb-410d-9136-e52c1c7d9720",
+     "host": "recruiting2.ultipro.com", "display_name": "Troon",
+     "industry": "hospitality"},
+    {"vendor": "jobvite", "tenant": "uplight", "site": "", "host": "",
+     "display_name": "Uplight", "industry": "energy"},
+    {"vendor": "jazzhr", "tenant": "productiveplayhouse", "site": "",
+     "host": "productiveplayhouse.applytojob.com",
+     "display_name": "Productive Playhouse", "industry": "tech"},
+    {"vendor": "adp_wfn", "tenant": "5a22940c-3629-44d9-813a-0ccee8ac9aac",
+     "site": "19000101_000001", "host": "workforcenow.adp.com",
+     "display_name": "Texas Windstorm Insurance Association",
+     "industry": "insurance"},
+
+    # Owner priority list (software / AI / data / cloud / electrical-power),
+    # 2026-10-21: the employers in it that no crawl table carried, each read
+    # from the board its own careers page links. Power utilities first: the
+    # feed-fidelity audit measured them as the gap for electrical users.
+    {"vendor": "successfactors", "tenant": "dominionenergy", "site": "",
+     "host": "careers.dominionenergy.com", "display_name": "Dominion Energy",
+     "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "entergy", "site": "",
+     "host": "jobs.entergy.com", "display_name": "Entergy", "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "dteenergy", "site": "",
+     "host": "careers.dteenergy.com", "display_name": "DTE Energy",
+     "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "consumersenergy", "site": "",
+     "host": "careers.consumersenergy.com", "display_name": "Consumers Energy",
+     "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "nexteraenergy", "site": "",
+     "host": "jobs.nexteraenergy.com", "display_name": "NextEra Energy",
+     "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "pseg", "site": "",
+     "host": "jobs.pseg.com", "display_name": "PSEG", "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "hubbell", "site": "",
+     "host": "careers.hubbell.com", "display_name": "Hubbell",
+     "industry": "manufacturing_automotive"},
+    {"vendor": "successfactors", "tenant": "bv", "site": "",
+     "host": "careers.bv.com", "display_name": "Black & Veatch",
+     "industry": "energy"},
+    {"vendor": "oracle_orc", "tenant": "ejcu", "site": "CX_1033",
+     "host": "ejcu.fa.us6.oraclecloud.com", "display_name": "Con Edison",
+     "industry": "energy"},
+    {"vendor": "radancy", "tenant": "exeloncorp", "site": "",
+     "host": "jobs.exeloncorp.com", "display_name": "Exelon", "industry": "energy"},
+    {"vendor": "phenom", "tenant": "abb", "site": "", "host": "careers.abb",
+     "display_name": "ABB", "industry": "manufacturing_automotive"},
+    {"vendor": "icims", "tenant": "allcareers-quanta", "site": "",
+     "host": "allcareers-quanta.icims.com", "display_name": "Quanta Services",
+     "industry": "energy"},
+    {"vendor": "icims", "tenant": "careers-sargentlundy", "site": "",
+     "host": "careers-sargentlundy.icims.com", "display_name": "Sargent & Lundy",
+     "industry": "energy"},
+    {"vendor": "phenom", "tenant": "snowflake", "site": "",
+     "host": "careers.snowflake.com", "display_name": "Snowflake",
+     "industry": "tech"},
+    {"vendor": "eightfold", "tenant": "netapp", "site": "",
+     "host": "netapp.eightfold.ai", "display_name": "NetApp", "industry": "tech",
+     "extra": {"domain": "netapp.com"}},
+    # Power, second pass: utilities, grid equipment, A/E power-design and EE
+    # manufacturers, each from the board its own careers page links.
+    {"vendor": "oracle_orc", "tenant": "fa-etjd-saasfaprod1", "site": "CX_1",
+     "host": "fa-etjd-saasfaprod1.fa.ocs.oraclecloud.com", "display_name": "FirstEnergy",
+     "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "pacificorp", "site": "",
+     "host": "careers.pacificorp.com", "display_name": "PacifiCorp",
+     "industry": "energy"},
+    {"vendor": "radancy", "tenant": "pplweb", "site": "",
+     "host": "careers.pplweb.com", "display_name": "PPL",
+     "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "wecenergygroup", "site": "",
+     "host": "careers.wecenergygroup.com", "display_name": "WEC Energy Group",
+     "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "aps", "site": "",
+     "host": "careers.aps.com", "display_name": "Arizona Public Service",
+     "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "centerpointenergy", "site": "",
+     "host": "careers.centerpointenergy.com", "display_name": "CenterPoint Energy",
+     "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "pse", "site": "",
+     "host": "jobs.pse.com", "display_name": "Puget Sound Energy",
+     "industry": "energy"},
+    {"vendor": "radancy", "tenant": "constellationenergy", "site": "",
+     "host": "jobs.constellationenergy.com", "display_name": "Constellation Energy",
+     "industry": "energy"},
+    {"vendor": "oracle_orc", "tenant": "ejia", "site": "CX_1001",
+     "host": "ejia.fa.us6.oraclecloud.com", "display_name": "S&C Electric",
+     "industry": "energy"},
+    {"vendor": "ukg", "tenant": "ULT1008ULTE", "site": "71bc1da6-c7b0-4b37-9f7b-076d7d68c57b",
+     "host": "recruiting2.ultipro.com", "display_name": "Ulteig",
+     "industry": "energy"},
+    {"vendor": "taleo", "tenant": "hdr", "site": "",
+     "host": "hdr.taleo.net", "display_name": "HDR",
+     "industry": "energy"},
+    {"vendor": "phenom", "tenant": "bechtel", "site": "",
+     "host": "jobs.bechtel.com", "display_name": "Bechtel",
+     "industry": "energy"},
+    {"vendor": "oracle_orc", "tenant": "hdjq", "site": "CX_1",
+     "host": "hdjq.fa.us2.oraclecloud.com", "display_name": "Emerson",
+     "industry": "manufacturing_automotive"},
+    {"vendor": "oracle_orc", "tenant": "egup", "site": "CX",
+     "host": "egup.fa.us2.oraclecloud.com", "display_name": "Vertiv",
+     "industry": "manufacturing_automotive"},
+    {"vendor": "oracle_orc", "tenant": "fa-esbv-saasfaprod1", "site": "CX_1",
+     "host": "fa-esbv-saasfaprod1.fa.ocs.oraclecloud.com", "display_name": "First Solar",
+     "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "landisgyr", "site": "",
+     "host": "careers.landisgyr.com", "display_name": "Landis+Gyr",
+     "industry": "energy"},
+    {"vendor": "successfactors", "tenant": "southwire", "site": "",
+     "host": "careers.southwire.com", "display_name": "Southwire",
+     "industry": "manufacturing_automotive"},
+    {"vendor": "successfactors", "tenant": "westinghousenuclear", "site": "",
+     "host": "careers.westinghousenuclear.com", "display_name": "Westinghouse Electric",
+     "industry": "energy"},
 )
 
 
@@ -2018,6 +2226,23 @@ _LEGACY_LISTING_VENDORS = frozenset({
     "workable", "recruitee", "neogov",
 })
 
+#: Vendors whose `site` names a REGION ("eu"). The legacy listing and detail
+#: paths below hard-code each vendor's US API host and ignore `site`, so an EU
+#: Greenhouse or Lever member sent down them would silently query the US region
+#: - reading nothing, or somebody else's board, as this employer's. A regional
+#: member therefore always goes through its provider, and never falls back.
+_REGIONAL_VENDORS = frozenset({"greenhouse", "lever"})
+
+
+def _is_regional_member(member: Dict[str, Any]) -> bool:
+    return (_vendor_of(member) in _REGIONAL_VENDORS
+            and bool(str(member.get("site") or "").strip()))
+
+
+def _uses_legacy_listing(member: Dict[str, Any]) -> bool:
+    return (_vendor_of(member) in _LEGACY_LISTING_VENDORS
+            and not _is_regional_member(member))
+
 
 def _endpoint_from_member(member: Dict[str, Any]):
     from services.ats_providers.base import Endpoint
@@ -2226,12 +2451,15 @@ def list_member(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy,
     # prove we read the whole board"), so a path that forgets to set it cannot
     # cause `_close_stale_in_shard` to delete live inventory.
     member["_listing_truncated"] = True
-    vendor = _vendor_of(member)
-    if USE_PROVIDERS and vendor not in _LEGACY_LISTING_VENDORS:
+    regional = _is_regional_member(member)
+    if (USE_PROVIDERS or regional) and not _uses_legacy_listing(member):
         listed = _list_via_provider(member, cutoff=cutoff, deadline=deadline,
                                     stop=stop)
         if listed is not None:
             return listed
+        if regional:
+            # No provider to speak the region: nothing, never the US API.
+            return []
     if member.get("source") == SOURCE_WORKDAY:
         return _list_workday(member, cutoff=cutoff, policy=policy,
                              deadline=deadline, stop=stop, now=now)
@@ -2397,12 +2625,14 @@ def fetch_detail(row: Dict[str, Any], member: Dict[str, Any], *, policy: HostPol
     if _listing_description_is_complete(row, member):
         return listing_desc
     source = member["source"]
-    vendor = _vendor_of(member)
-    if USE_PROVIDERS and vendor not in _LEGACY_LISTING_VENDORS:
+    regional = _is_regional_member(member)
+    if (USE_PROVIDERS or regional) and not _uses_legacy_listing(member):
         body = _detail_via_provider(row, member, deadline=deadline, stop=stop)
         if body is not None:
             fetched = str(body).strip()
             return fetched if len(fetched) >= len(listing_desc) else listing_desc
+        if regional:
+            return listing_desc
 
     if source == SOURCE_WORKDAY:
         path = row.get("_detail_ref") or ""

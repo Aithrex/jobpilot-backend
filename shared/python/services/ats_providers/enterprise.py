@@ -107,6 +107,13 @@ class PhenomProvider(AtsProvider):
         # From MNC_CATALOG, which the background crawl now loads. Verified
         # 2026-08-27: POST /widgets returns real postings.
         "careers.toyota.com",
+        # Official Phenom front ends, 2026-10-21 onboarding (see
+        # docs/audit/direct-employer-onboarding.md). Named hosts only.
+        "careers.acrisure.com",
+        "jobs.baesystems.com",
+        "careers.snowflake.com",
+        "careers.abb",
+        "jobs.bechtel.com",
         ".phenompeople.com",
     )
     portal_hosts = api_hosts
@@ -163,8 +170,10 @@ class PhenomProvider(AtsProvider):
             return
         size = int(self.policy.page_size)
         url = f"https://{host}/widgets"
+        seen: set = set()
         for page in range(int(self.policy.max_pages)):
             if ctx.should_stop():
+                ctx.listing_truncated = True
                 return
             body = {
                 "lang": "en_us", "deviceType": "desktop", "country": "us",
@@ -185,22 +194,43 @@ class PhenomProvider(AtsProvider):
             if self.policy.is_challenge(status):
                 raise ChallengeError(self.vendor, status)
             if status != 200 or not isinstance(payload, dict):
+                if page > 0:
+                    # A later page failed: what we read is not the board.
+                    ctx.listing_truncated = True
                 return
-            data = ((payload.get("refineSearch") or {}).get("data") or {})
+            refine = payload.get("refineSearch") or {}
+            data = (refine.get("data") or {}) if isinstance(refine, dict) else {}
             jobs = [j for j in (data.get("jobs") or []) if isinstance(j, dict)]
             if not jobs:
                 return
             for job in jobs:
                 if ctx.should_stop():
+                    ctx.listing_truncated = True
                     return
                 raw = self._to_raw(host, job)
-                if raw is None:
+                if raw is None or raw.source_job_id in seen:
+                    # A row repeated across pages (the result set shifted
+                    # while we paged) is yielded once.
                     continue
+                seen.add(raw.source_job_id)
                 if _too_old(ctx, raw.posted_at):
                     continue
                 yield raw
             if len(jobs) < size:
                 return
+            try:
+                total = int(refine.get("totalHits") or 0)
+            except (TypeError, ValueError, AttributeError):
+                total = 0
+            if total and (page + 1) * size >= total:
+                return
+        # Fell out of the loop on the page cap with the board not exhausted.
+        # Saying so matters: `_close_stale_in_shard` treats an untruncated
+        # listing as a complete census and closes everything it did not see,
+        # so a capped Phenom read (100 rows) used to close live postings on
+        # any board larger than that. Measured 2026-10-21: BAE Systems and
+        # Acrisure each returned exactly 100 rows, "complete".
+        ctx.listing_truncated = True
 
     @staticmethod
     def _to_raw(host: str, job: Dict[str, Any]) -> Optional[RawJob]:

@@ -284,6 +284,32 @@ class SuccessFactorsProvider(AtsProvider):
         # Unified-search boards, verified live 2026-10-07.
         "careers.wipro.com",
         "careers.hcltech.com",
+        # Employer-hosted RMK sites from the 2026-10-21 onboarding, each the
+        # host the employer's own careers page links (docs/audit/
+        # direct-employer-onboarding.md). Kept only where validation read jobs.
+        "careers.celestica.com",
+        "careers.nomura.com",
+        "jobs.psegliny.com",
+        "jobs.schaeffler.com",
+        "jobs.lubrizol.com",
+        "jobs.venturafoods.com",
+        # Electric utilities / power engineering (owner priority list).
+        "careers.dominionenergy.com",
+        "jobs.entergy.com",
+        "careers.dteenergy.com",
+        "careers.consumersenergy.com",
+        "jobs.nexteraenergy.com",
+        "jobs.pseg.com",
+        "careers.hubbell.com",
+        "careers.bv.com",
+        "careers.pacificorp.com",
+        "careers.wecenergygroup.com",
+        "careers.aps.com",
+        "careers.centerpointenergy.com",
+        "jobs.pse.com",
+        "careers.landisgyr.com",
+        "careers.southwire.com",
+        "careers.westinghousenuclear.com",
     )
     portal_hosts = api_hosts
 
