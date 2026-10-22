@@ -259,7 +259,10 @@ def _url_findings(url: str, employer_domain: str) -> List[Tuple[str, str]]:
     for domain in claimed:
         # The whole domain appears as a LABEL SEQUENCE but the host is not
         # under it: greenhouse.io.attacker.example, google.com.careers.example.
-        if "." + domain + "." in dotted:
+        # A country variant is the brand's own (google.com.au, amazon.com.br):
+        # the embedded domain followed only by a two-letter ccTLD is skipped.
+        if "." + domain + "." in dotted and not re.search(
+                r"(?:^|\.)" + re.escape(domain) + r"\.[a-z]{2}$", host):
             out.append((W_IMPERSONATED_HOST, host))
             return out
     labels = host.split(".")
@@ -268,7 +271,8 @@ def _url_findings(url: str, employer_domain: str) -> List[Tuple[str, str]]:
             out.append((W_IMPERSONATED_HOST, host))
             return out
     for domain in ATS_VENDOR_DOMAINS:
-        if domain.replace(".", "-") in host:
+        # Label-boundary only: "greenhouse-io.com" yes, "clever-co.com" no.
+        if re.search(r"(?:^|[.-])" + re.escape(domain.replace(".", "-")) + r"(?:$|[.-])", host):
             out.append((W_LOOKALIKE_HOST, host))
             return out
     return out

@@ -308,6 +308,17 @@ class TestImpersonation:
             canonical_url="https://www.google.com/about/careers/applications/jobs/1"))
         assert t["state"] == "no_warnings_found"
 
+    @pytest.mark.parametrize("url", ["https://www.google.com.au/careers/1",
+                                     "https://careers.google.com.br/jobs/1"])
+    def test_country_variant_of_employer_domain_is_not_impersonation(self, url):
+        t = jl.assess_posting_trust(_doc(employer_name="Google",
+                                         employer_domain="google.com", canonical_url=url))
+        assert t["state"] == "no_warnings_found", t
+
+    def test_vendor_slug_inside_another_word_is_not_a_lookalike(self):
+        t = jl.assess_posting_trust(_doc(canonical_url="https://jobs.clever-co.com/apply"))
+        assert t["state"] == "no_warnings_found", t
+
     def test_query_string_trick_is_not_fraud_just_not_trusted(self):
         t = jl.assess_posting_trust(_doc(
             canonical_url="https://attacker.example/apply?return=greenhouse.io"))
