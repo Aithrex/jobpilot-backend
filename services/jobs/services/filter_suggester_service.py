@@ -352,6 +352,10 @@ def suggest_filters(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
     `exclude_title_terms` is the negative list, and it is applied as a hard
     drop before scoring. Nothing may ever move a term from one to the other.
     """
+    discipline_bundle = _discipline_suggestions(structured_resume)
+    if discipline_bundle is not None:
+        return discipline_bundle
+
     profile = build_profile(structured_resume)
     primary = profile["primary_intent"]
     secondary = profile.get("secondary_intent")
@@ -546,6 +550,81 @@ def suggest_filters(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
     coerced["groups"] = groups
 
     return coerced
+
+
+#: Exclusions for a physical-engineering résumé with no software evidence.
+#: Applied as a hard title drop by the pipeline; every one is a different
+#: occupation, never a level variant of the candidate's own.
+_DISCIPLINE_EXCLUDES = (
+    "Software Engineer", "Software Developer", "Software Development Engineer",
+    "Backend", "Frontend", "Full Stack", "Web Developer",
+    "IT Support", "Help Desk", "Desktop Support", "Service Desk",
+)
+
+
+def _discipline_suggestions(structured_resume: Dict[str, Any]) -> Dict[str, Any] | None:
+    """The bundle for a résumé in a physical engineering discipline, or None.
+
+    Every intent the profiler and the synthesizer know is a SOFTWARE intent,
+    so an electrical-power graduate scored under 5 everywhere, became a
+    "generalist", was classified `backend`, and got the generic SWE safety net
+    plus a "senior tech recruiter" prompt that ends "ALWAYS include Software
+    Engineer". "Suggest from résumé" then filled her chips with SDE and
+    IT-support titles (reported 2026-10-21).
+
+    No LLM: the discipline's titles are a fixed, literal vocabulary
+    (`job_title_seed._DISCIPLINE_TITLES`), so the answer is deterministic,
+    free and testable, and nothing can drift back toward software.
+    """
+    from services.job_title_seed import (
+        TITLE_SUGGESTION_VERSION, _NOT_A_TARGET, domain_title_plan)
+
+    titles = [str((e or {}).get("title") or "").strip()
+              for e in (structured_resume.get("experience") or []) if isinstance(e, dict)]
+    degrees = [" ".join(str((e or {}).get(k) or "") for k in
+                        ("degree", "field_of_study", "major")).strip()
+               for e in (structured_resume.get("education") or []) if isinstance(e, dict)]
+    plan = domain_title_plan([t for t in titles if t],
+                             [d for d in degrees if d],
+                             structured_resume.get("target_roles") or ())
+    discipline = plan.get("discipline")
+    if not discipline:
+        return None
+
+    held = [t for t in titles if t and not _NOT_A_TARGET.search(t)]
+    workday_titles = _merge_preserving_order(list(plan["titles"]), held)[:45]
+    lead = plan["titles"][0]
+    linkedin_phrases = [lead, f"entry level {lead.lower()}"] + [
+        t for t in plan["titles"][1:6]]
+    flat_skills: List[str] = []
+    skills = structured_resume.get("skills") or {}
+    if isinstance(skills, dict):
+        for v in skills.values():
+            if isinstance(v, list):
+                flat_skills.extend(str(s) for s in v)
+    elif isinstance(skills, list):
+        flat_skills = [str(s) for s in skills]
+    label = f"{discipline.title()} Engineering"
+    return {
+        "headline": label,
+        "rationale": (f"Your degree and experience are in {discipline} "
+                      "engineering, so these are the titles that field is posted "
+                      "under. Software and IT-support titles are excluded."),
+        "linkedin_keyword_sets": linkedin_phrases[:8],
+        "workday_titles": workday_titles,
+        "custom_role_terms": [s.strip() for s in flat_skills if s.strip()][:8],
+        "exclude_title_terms": list(_DISCIPLINE_EXCLUDES),
+        "past_days": 1,
+        "preset_tags": [discipline],
+        "intent": {
+            "primary": discipline, "primary_label": label, "secondary": None,
+            "secondary_label": None, "confidence": 1.0, "is_generalist": False,
+        },
+        "synth_meta": {"used_synth": False, "resume_sig": _resume_signature(structured_resume),
+                       "basis": "discipline"},
+        "groups": [],
+        "suggester_version": TITLE_SUGGESTION_VERSION,
+    }
 
 
 def _clean_terms(values: Any, max_items: int = 12, max_len: int = 60) -> List[str]:

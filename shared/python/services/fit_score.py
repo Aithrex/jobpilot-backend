@@ -58,7 +58,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.3"
+FIT_SCORE_VERSION = "fit-v2.4"
 
 # The cliff described below is REAL, and this is how 2.1 crosses it.
 #
@@ -102,8 +102,14 @@ FIT_SCORE_VERSION = "fit-v2.3"
 # input but under-reports both until re-extracted, which
 # `job_inventory_service.EXTRACTOR_VERSION` 5 and
 # `scripts/rederive_posting_levels.py` do.
+#
+# 2.4 keeps the contract again. It adds electrical / power-engineering skills
+# to `SKILL_LEXICON` and caps technician / support-desk titles at the adjacent
+# rung for an engineering-level résumé. Stored 2.3 profiles stay valid input;
+# they under-report the new skills until re-extracted, which
+# `scripts/reextract_requirements.py` does for the families that use them.
 _COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset(
-    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3"})
+    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
@@ -327,6 +333,67 @@ SKILL_LEXICON: Dict[str, List[str]] = {
     "embedded protocols": ["i2c", "spi", "uart", "can bus", "modbus", "mqtt"],
     "hardware debug": ["oscilloscope", "logic analyzer", "logic analyser",
                        "jtag", "in-circuit"],
+    # --- electrical / power engineering (fit-v2.4) ------------------------
+    # The lexicon had MATLAB and nothing else a power engineer writes. A live
+    # electrical-power graduate's résumé read as nearly skill-less, her best
+    # matches topped out in the 70s against 97 for software users, and the
+    # required-skills component could not tell an Electrical Engineer
+    # requisition from a field-service or IT-support one (2026-10-21).
+    #
+    # Collisions avoided on purpose, because a lexicon entry fires on EVERY
+    # posting: bare "relay" is the GraphQL client, bare "plc" is a company
+    # suffix ("Barclays PLC"), bare "transformer(s)" is the ML model, "p&c" is
+    # property-and-casualty insurance and "ems" is emergency medical services.
+    # Each is therefore matched only in a multi-word form that cannot mean
+    # anything else.
+    "power systems analysis": ["power systems analysis", "power system analysis",
+                               "power flow", "load flow", "power system studies",
+                               "power systems studies", "power system modeling"],
+    "short circuit analysis": ["short circuit analysis", "short-circuit analysis",
+                               "short circuit studies", "fault analysis"],
+    "arc flash": ["arc flash", "arc-flash", "incident energy analysis", "ieee 1584"],
+    "protection and control": ["protection and control", "protective relaying",
+                               "relay settings", "relay coordination",
+                               "protection coordination", "protection schemes"],
+    "substation design": ["substation design", "substation engineering", "substation",
+                          "substations"],
+    "etap": ["etap"],
+    "pscad": ["pscad", "emtp"],
+    "pss/e": ["pss/e", "psse", "pss e"],
+    "powerworld": ["powerworld", "power world simulator"],
+    "skm": ["skm power tools", "skm powertools"],
+    "easypower": ["easypower"],
+    "cyme": ["cyme", "cymdist"],
+    "scada": ["scada"],
+    "plc programming": ["plc programming", "programmable logic controller",
+                        "programmable logic controllers", "ladder logic",
+                        "allen bradley", "allen-bradley", "rslogix", "studio 5000"],
+    "autocad": ["autocad", "autocad electrical", "autodesk autocad"],
+    "microstation": ["microstation"],
+    "revit": ["revit"],
+    "simulink": ["simulink"],
+    "labview": ["labview"],
+    "power electronics": ["power electronics", "inverter design", "converter design",
+                          "dc-dc converter", "dc dc converter", "motor drives"],
+    "renewable energy": ["renewable energy", "solar pv", "photovoltaic",
+                         "wind energy", "battery energy storage", "bess",
+                         "energy storage systems"],
+    "grid interconnection": ["grid interconnection", "interconnection studies",
+                             "generator interconnection", "der interconnection"],
+    "electrical design": ["electrical design", "one-line diagram", "one line diagram",
+                          "single line diagram", "single-line diagram",
+                          "electrical drawings", "wiring diagrams"],
+    "electrical codes": ["national electrical code", "nfpa 70", "nfpa 70e", "nesc",
+                         "ieee standards"],
+    "transformer design": ["transformer design", "power transformers",
+                           "transformer sizing", "distribution transformers"],
+    "switchgear": ["switchgear", "switchboards", "motor control centers",
+                   "motor control center"],
+    "high voltage": ["high voltage", "medium voltage", "low voltage design"],
+    "circuit design": ["circuit design", "circuit analysis", "circuit simulation",
+                       "ltspice", "pspice", "multisim"],
+    "distribution planning": ["distribution planning", "distribution system planning",
+                              "transmission planning", "feeder design"],
     # --- robotics ---------------------------------------------------------
     "ros": ["ros", "ros2", "robot operating system"],
     "slam": ["slam", "simultaneous localization", "localization and mapping"],
@@ -2798,6 +2865,27 @@ def _score_role(reqs: Dict[str, Any], prof: Dict[str, Any], job_title: str,
             align["source"] = "legacy_families"
             align["cross_domain"] = tier == "unrelated"
 
+    # Role LEVEL, not role family. "Field Service Technician, Electrical
+    # Controls" is in an electrical engineer's family and specialty, so both
+    # classifiers call it a specialty match - and it was #1 on a live
+    # electrical-power graduate's board at 80, above "Electrical Engineer 1".
+    # IT-support desks reached the same board the same way. A technician,
+    # trade or support-desk job is a different job from the professional role
+    # the résumé holds, so for a résumé that is engineering-level and has never
+    # held such a title, the match is capped at the adjacent rung. It is still
+    # shown and still eligible: this is ordering evidence, not a verdict.
+    if (tier in _ROLE_LEVEL_CAPPED_TIERS
+            and _TECHNICIAN_TITLE.search(_norm(job_title))
+            and _engineering_level_resume(prof)):
+        tier = "adjacent_family"
+        weight = min(weight, 0.46)
+        align = dict(align)
+        align["tier"] = tier
+        align["weight"] = weight
+        align["detail"] = ("A technician or support role; your background is "
+                           "engineering-level work.")
+        align["source"] = "role_level"
+
     # Tie-break, capped so it can never promote a tier.
     job_tokens = _title_tokens(job_title)
     res_tokens: Set[str] = set()
@@ -2817,6 +2905,39 @@ def _score_role(reqs: Dict[str, Any], prof: Dict[str, Any], job_title: str,
     align["overlap_tokens"] = sorted(overlap)[:6]
     align["effective_weight"] = round(weight, 3)
     return mx * weight, detail, tier == "unrelated", align
+
+
+#: Job titles that name technician, trade or support-desk work. Bare "tech" is
+#: deliberately absent - "Tech Lead" is an engineering title.
+_TECHNICIAN_TITLE = re.compile(
+    r"(?<![a-z])(technicians?|installers?|electricians?|linem[ae]n|lineworkers?|"
+    r"line workers?|apprentices?|mechanics?|assemblers?|wiremen|wireman|"
+    r"help ?desk|desktop support|service desk|it support|technical support)"
+    r"(?![a-z])")
+#: Engineering-level work in a held or declared title.
+_ENGINEERING_LEVEL_TITLE = re.compile(
+    r"(?<![a-z])(engineer|engineering|scientist|developer|architect|designer)(?![a-z])")
+_ROLE_LEVEL_CAPPED_TIERS = frozenset(
+    {"exact_specialty", "adjacent_specialty", "same_family", "unknown"})
+
+
+def _engineering_level_resume(prof: Dict[str, Any]) -> bool:
+    """Engineering-level background that has never held a technician title.
+
+    Engineering-level means an engineering title held or declared, or a
+    bachelor's degree or higher next to an engineering specialty the degrees
+    name (`legacy_specialties`) - a power-systems graduate whose titles were
+    assistantships qualifies through her degree. A résumé that HAS held a
+    technician title never qualifies: for them a technician role is their own
+    work."""
+    titles = [_norm(t) for t in (prof.get("titles") or [])]
+    if any(_TECHNICIAN_TITLE.search(t) for t in titles):
+        return False
+    declared = [_norm(t) for t in (prof.get("declared_target_roles") or [])]
+    if any(_ENGINEERING_LEVEL_TITLE.search(t) and not _TECHNICIAN_TITLE.search(t)
+           for t in titles + declared):
+        return True
+    return int(prof.get("degree_level") or 0) >= 2 and bool(prof.get("legacy_specialties"))
 
 
 #: Specialties inside a coarse legacy family.
