@@ -80,6 +80,15 @@ SUPPRESSING_REASONS = frozenset({"not_interested", "irrelevant_role", "duplicate
 DATA_QUALITY_REASONS = frozenset(set(REASONS) - SUPPRESSING_REASONS)
 
 DEFAULT_TTL_DAYS = 180
+
+#: How long a prior application or dismissal may flag a look-alike posting as a
+#: "possible repost". A hint only; nothing is hidden on it.
+REPOST_HINT_DAYS = 90
+
+#: saved_jobs statuses that mean "I applied" (or later). `interested` and
+#: `saved` are not applications and never produce `previously_applied`.
+APPLIED_STATUSES = frozenset({"applied", "interview", "interviewing", "offer",
+                              "rejected", "ghosted", "withdrawn"})
 MAX_NOTE_CHARS = 500
 
 #: Cap on each list returned by `suppressed_for`.
@@ -208,6 +217,11 @@ def record(user_email: str, *, job_id: str, reason: str,
     doc = {
         "reason": rsn,
         "suppresses": rsn in SUPPRESSING_REASONS,
+        # Identity of the posting AS WE STORE IT, read server-side - never from
+        # the client. A dismissal keyed on job_id alone did not survive the
+        # same requisition arriving under a new id (a repost, a new aggregator
+        # copy); these keys are what `suppressed_for` matches on as well.
+        **_posting_identity_keys(jid),
         "dedupe_group_id": _ident(dedupe_group_id),
         "employer_id": _ident(employer_id),
         "search_id": _ident(search_id, max_length=64),
@@ -227,6 +241,27 @@ def record(user_email: str, *, job_id: str, reason: str,
     out.update(doc)
     out["created_at"] = now
     return out
+
+
+def _posting_identity_keys(job_id: str) -> Dict[str, str]:
+    """apply_url_key / requisition_key / repost_key of a stored posting, or
+    empty strings. Best-effort: a lookup failure records the job_id alone."""
+    empty = {"apply_url_key": "", "requisition_key": "", "repost_key": ""}
+    try:
+        from services import posting_identity as pid
+        doc = _db().job_postings.find_one(
+            {"job_id": job_id},
+            {"_id": 0, "job_id": 1, "canonical_url": 1, "canonical_apply_url": 1,
+             "original_job_url": 1, "apply_url_key": 1, "canonical_employer_id": 1,
+             "ats": 1, "tenant": 1, "source_job_id": 1, "requisition_id": 1,
+             "title_raw": 1, "locations": 1})
+    except Exception as exc:
+        logger.warning("tech_feed_feedback: posting lookup failed (%s)", type(exc).__name__)
+        return empty
+    if not doc:
+        return empty
+    keys = pid.suppression_keys(doc)
+    return {k: _ident(v, max_length=600) for k, v in keys.items()}
 
 
 def undo(user_email: str, job_id: str) -> bool:
@@ -270,7 +305,9 @@ def suppressed_for(user_email: str) -> Dict[str, Any]:
     every posting from a company the user may well want.
     """
     empty: Dict[str, Any] = {"job_ids": [], "dedupe_group_ids": [],
-                             "employer_ids": [], "updated_at": None}
+                             "employer_ids": [], "updated_at": None,
+                             "apply_url_keys": [], "requisition_keys": [],
+                             "repost_keys": {}, "applied": {"keys": {}, "repost": {}}}
     email = _email(user_email)
     if not email:
         # Guest / unauthenticated: nothing to look up, and no query to run.
@@ -282,7 +319,8 @@ def suppressed_for(user_email: str) -> Dict[str, Any]:
                            # this operator's argument.
                            "reason": {"$in": list(SUPPRESSING_REASONS)}},
                           {"_id": 0, "job_id": 1, "dedupe_group_id": 1,
-                           "updated_at": 1})
+                           "updated_at": 1, "apply_url_key": 1,
+                           "requisition_key": 1, "repost_key": 1})
                     .sort("updated_at", -1)
                     .limit(MAX_SUPPRESSED))
     except Exception as exc:
@@ -292,6 +330,10 @@ def suppressed_for(user_email: str) -> Dict[str, Any]:
                        type(exc).__name__)
         return empty
 
+    urls: List[str] = []
+    reqs: List[str] = []
+    reposts: Dict[str, str] = {}
+    hint_cutoff = _now() - timedelta(days=REPOST_HINT_DAYS)
     job_ids: List[str] = []
     seen_jobs: Set[str] = set()
     groups: List[str] = []
@@ -306,18 +348,86 @@ def suppressed_for(user_email: str) -> Dict[str, Any]:
         if gid and gid not in seen_groups:
             seen_groups.add(gid)
             groups.append(gid)
+        for field, bucket in (("apply_url_key", urls), ("requisition_key", reqs)):
+            val = str(row.get(field) or "")
+            if val and val not in bucket:
+                bucket.append(val)
         upd = row.get("updated_at")
         if isinstance(upd, datetime):
             if upd.tzinfo is None:
                 upd = upd.replace(tzinfo=timezone.utc)
             if latest is None or upd > latest:
                 latest = upd
+        rk = str(row.get("repost_key") or "")
+        if rk and rk not in reposts and (not isinstance(upd, datetime) or upd >= hint_cutoff):
+            reposts[rk] = jid
     return {
         "job_ids": job_ids[:MAX_SUPPRESSED],
         "dedupe_group_ids": groups[:MAX_SUPPRESSED],
         "employer_ids": [],
         "updated_at": latest,
+        "apply_url_keys": urls[:MAX_SUPPRESSED],
+        "requisition_keys": reqs[:MAX_SUPPRESSED],
+        "repost_keys": reposts,
+        "applied": applied_index(email),
     }
+
+
+def applied_index(user_email: str) -> Dict[str, Any]:
+    """The user's prior applications, keyed for matching - never for hiding.
+
+    ``{"keys": {"job|<id>"|"url|<key>"|"req|<key>": {status, job_id}},
+       "repost": {"<repost_key>": {status, job_id}}}``
+
+    Read from `saved_jobs` (the tracker). Their `job_data` is the card the
+    user acted on; when the posting still exists its stored identity is used
+    too, because a card snapshot rarely carries the requisition id. Bounded
+    to the newest `MAX_SUPPRESSED` rows. Production 2026-10-21: 778 of 1,145
+    saved job_ids no longer exist in `job_postings`, so the snapshot is what
+    most matches rely on.
+    """
+    out: Dict[str, Any] = {"keys": {}, "repost": {}}
+    email = _email(user_email)
+    if not email:
+        return out
+    try:
+        from services import posting_identity as pid
+        db = _db()
+        rows = list(db.saved_jobs.find(
+            {"user_email": email},
+            {"_id": 0, "job_id": 1, "status": 1, "job_data": 1, "saved_at": 1,
+             "applied_at": 1, "updated_at": 1})
+            .sort("saved_at", -1).limit(MAX_SUPPRESSED))
+        ids = [str(r.get("job_id")) for r in rows if isinstance(r.get("job_id"), str)]
+        stored = {d["job_id"]: d for d in db.job_postings.find(
+            {"job_id": {"$in": ids}},
+            {"_id": 0, "job_id": 1, "canonical_url": 1, "canonical_employer_id": 1,
+             "ats": 1, "tenant": 1, "source_job_id": 1, "requisition_id": 1,
+             "title_raw": 1, "locations": 1})} if ids else {}
+    except Exception as exc:
+        logger.warning("tech_feed_feedback: applied_index failed (%s)", type(exc).__name__)
+        return out
+    cutoff = _now() - timedelta(days=REPOST_HINT_DAYS)
+    for row in rows:
+        status = str(row.get("status") or "").lower()
+        if status not in APPLIED_STATUSES:
+            continue
+        jid = str(row.get("job_id") or "")
+        info = {"status": status, "job_id": jid}
+        snapshot = dict(row.get("job_data") or {}) if isinstance(row.get("job_data"), dict) else {}
+        snapshot["job_id"] = jid
+        for view in (stored.get(jid), snapshot):
+            if not view:
+                continue
+            for key in pid.identity_keys(view):
+                out["keys"].setdefault(key, info)
+            when = row.get("applied_at") or row.get("updated_at") or row.get("saved_at")
+            if isinstance(when, datetime) and when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            rk = pid.repost_key(view)
+            if rk and (not isinstance(when, datetime) or when >= cutoff):
+                out["repost"].setdefault(rk, info)
+    return out
 
 
 def counts(db=None, *, hours: int = 24) -> Dict[str, Any]:

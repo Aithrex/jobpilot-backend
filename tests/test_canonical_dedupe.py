@@ -77,10 +77,12 @@ class TestDedupeIdentity:
         b = _identity(canonical_url="", content_hash="different")
         assert a["dedupe_group_id"] == b["dedupe_group_id"] != ""
 
-    def test_content_hash_is_the_last_resort(self):
+    def test_content_hash_is_a_review_hint_never_a_merge(self):
+        """identity-1.0.0: content similarity is supporting evidence only."""
         a = _identity(canonical_url="", source_job_id="")
         b = _identity(canonical_url="", source_job_id="", ats="lever")
-        assert a["dedupe_group_id"] == b["dedupe_group_id"] != ""
+        assert a["dedupe_group_id"] == b["dedupe_group_id"] == ""
+        assert a["possible_duplicate_group_id"] == b["possible_duplicate_group_id"] != ""
 
     def test_no_identity_at_all_yields_no_group(self):
         got = _identity(canonical_url="", source_job_id="", content_hash="")
@@ -168,16 +170,23 @@ class TestFeedDedupe:
         ])
         assert len(out) == 2
 
-    def test_rows_without_a_stored_id_keep_the_legacy_rule(self):
-        """227,914 live rows predate `dedupe_group_id`. Until the backfill
-        lands they must still collapse, or shipping this shows every duplicate
-        the feed currently hides."""
-        out = feed._dedupe([
+    def test_rows_without_a_stored_id_merge_only_on_proven_identity(self):
+        """Rows predating `dedupe_group_id` used to collapse on company + title
+        + city. identity-1.0.0: they collapse on the same apply URL; display
+        look-alikes are kept and flagged `possible_duplicate_of`."""
+        same_url = feed._dedupe([
+            dict(_row("Google LLC", "Software Engineer", "New York, NY", days_ago=9),
+                 url="https://careers.google.com/jobs/results/1-swe"),
+            dict(_row("Google", "Software Engineer (Remote)", "New York, NY", days_ago=1),
+                 url="https://careers.google.com/jobs/results/1-swe?utm_source=x"),
+        ])
+        assert len(same_url) == 1 and same_url[0]["days_ago"] == 1
+        look_alike = feed._dedupe([
             _row("Google LLC", "Software Engineer", "New York, NY", days_ago=9),
             _row("Google", "Software Engineer (Remote)", "New York, NY", days_ago=1),
         ])
-        assert len(out) == 1
-        assert out[0]["days_ago"] == 1
+        assert len(look_alike) == 2
+        assert look_alike[1]["possible_duplicate_of"] == look_alike[0]["job_id"]
 
     def test_mixed_stored_and_legacy_rows_coexist(self):
         out = feed._dedupe([

@@ -13,6 +13,7 @@ Provides:
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -452,6 +453,23 @@ _JSEARCH_STOPWORDS = {
 }
 
 
+#: Rows JSearch returns per page. A page shorter than this with no cursor is
+#: the end of the result set.
+_JSEARCH_PAGE_SIZE = 10
+#: Hard ceiling on pages per query, whatever the env says: each is a metered call.
+_JSEARCH_MAX_PAGES_CAP = 5
+
+
+def _jsearch_page_budget(requested: Optional[int]) -> int:
+    """Pages one JSearch query may spend. Default 1 (the historical cost)."""
+    if requested is None:
+        try:
+            requested = int(os.getenv("JSEARCH_MAX_PAGES") or 1)
+        except (TypeError, ValueError):
+            requested = 1
+    return max(1, min(int(requested), _JSEARCH_MAX_PAGES_CAP))
+
+
 def _simplify_jsearch_query(query: str) -> str:
     """Drop filter-style tokens that confuse JSearch's keyword scoring."""
     parts = [p for p in re.split(r"\s+", query.lower()) if p]
@@ -658,6 +676,11 @@ class JobService:
             "use_resume_recommendations": use_resume_recommendations,
             "user_email": user_email if use_resume_recommendations else "",
         }
+        page = max(1, int(page or 1))
+        if page != 1:
+            # Page 1 keeps its historical cache key; any other page is a
+            # different fetch and must not be served page 1's rows.
+            wide_params["page"] = page
         cache_key = _make_cache_key(wide_params)
 
         result: Optional[Dict[str, Any]] = None
@@ -688,6 +711,7 @@ class JobService:
                 user_email=user_email if use_resume_recommendations else "",
                 force_refresh=force_refresh,
                 partial_cb=partial_cb,
+                page=page,
             )
             result["cache_bypassed"] = bool(force_refresh)
             self._write_cache(cache_key, result)
@@ -728,8 +752,25 @@ class JobService:
         date_posted: str,
         remote_only: bool,
         employment_type: str,
+        *,
+        start_page: int = 1,
+        max_pages: Optional[int] = None,
+        meta_out: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Run one JSearch query and return normalized jobs (no scoring/caching).
+
+        PAGINATION (CLAUDE-PROMPT gap 7). This used to send `page=1,
+        num_pages=1` and discard `data.cursor`, so no search could see past
+        its first page and a request for page 2 got page 1 again. It now
+        starts at ``start_page``, follows the provider's cursor (else the next
+        page number) for at most ``max_pages`` calls (``JSEARCH_MAX_PAGES``,
+        default 1 - JSearch is metered, so the default cost is unchanged), and
+        reports into ``meta_out``: requested vs effective pages, whether the
+        source was exhausted (``complete``) and why it stopped
+        (``exhausted | budget_limited | pagination_not_honored | error``).
+        A page that repeats the previous one stops the loop rather than paying
+        for duplicates. A failure after page 1 keeps what was fetched and is
+        reported as partial; a failure on page 1 raises, as before.
 
         JSearch's relevance drops sharply on filter-style tokens (e.g. "h1b
         sponsor", "new grad"). We strip those before the request and apply
@@ -765,43 +806,81 @@ class JobService:
             "X-RapidAPI-Key": api_key,
             "X-RapidAPI-Host": "jsearch.p.rapidapi.com",
         }
-        api_params = {
-            "query": f"{clean_query} in {location}" if location else clean_query,
-            "page": "1",
-            "num_pages": "1",
-            "country": "us",
-            "language": "en",
-            "date_posted": effective_date,
+        start = max(1, int(start_page or 1))
+        budget = _jsearch_page_budget(max_pages)
+        meta: Dict[str, Any] = {
+            "requested_start_page": start, "requested_pages": budget,
+            "effective_pages": 0, "items": 0, "complete": False,
+            "stop_reason": "budget_limited", "cursor_followed": False,
         }
-        if remote_only:
-            api_params["remote_jobs_only"] = "true"
-            api_params["work_from_home"] = "true"
-        if employment_type:
-            api_params["employment_types"] = employment_type
-
-        resp = requests.get(
-            f"{self.JSEARCH_BASE}/search-v2",
-            headers=headers,
-            params=api_params,
-            timeout=20,
-        )
-        if not resp.ok:
-            raise RuntimeError(f"JSearch returned {resp.status_code} {resp.reason}")
-        data = resp.json()
-        # JSearch retired the flat `/search` endpoint (now 404) in favor of
-        # `/search-v2`, whose payload nests jobs under data.jobs (with a
-        # data.cursor for pagination). Tolerate both shapes so a future
-        # revert or a cached legacy response still parses.
-        payload = data.get("data")
-        if isinstance(payload, dict):
-            items = payload.get("jobs") or []
-        else:
-            items = payload or []
-        logger.info(
-            "JSearch query=%r date=%s returned %d items",
-            clean_query, effective_date, len(items),
-        )
-        return [self._normalize_job(j) for j in items]
+        out: List[Dict[str, Any]] = []
+        cursor = ""
+        page = start
+        prev_ids: Optional[set] = None
+        for call in range(budget):
+            api_params = {
+                "query": f"{clean_query} in {location}" if location else clean_query,
+                "page": str(page),
+                "num_pages": "1",
+                "country": "us",
+                "language": "en",
+                "date_posted": effective_date,
+            }
+            if cursor:
+                api_params["cursor"] = cursor
+                meta["cursor_followed"] = True
+            if remote_only:
+                api_params["remote_jobs_only"] = "true"
+                api_params["work_from_home"] = "true"
+            if employment_type:
+                api_params["employment_types"] = employment_type
+            try:
+                resp = requests.get(
+                    f"{self.JSEARCH_BASE}/search-v2",
+                    headers=headers,
+                    params=api_params,
+                    timeout=20,
+                )
+                if not resp.ok:
+                    raise RuntimeError(f"JSearch returned {resp.status_code} {resp.reason}")
+                data = resp.json() or {}
+            except Exception:
+                if call == 0:
+                    raise
+                meta["stop_reason"] = "error"
+                break
+            # JSearch retired the flat `/search` endpoint (now 404) in favor of
+            # `/search-v2`, whose payload nests jobs under data.jobs (with a
+            # data.cursor for pagination). Tolerate both shapes so a future
+            # revert or a cached legacy response still parses.
+            payload = data.get("data")
+            if isinstance(payload, dict):
+                items = payload.get("jobs") or []
+                next_cursor = str(payload.get("cursor") or payload.get("next_cursor") or "")
+            else:
+                items = payload or []
+                next_cursor = ""
+            ids = {str((j or {}).get("job_id") or "") for j in items if isinstance(j, dict)}
+            if prev_ids is not None and ids and ids == prev_ids:
+                meta["stop_reason"] = "pagination_not_honored"
+                break
+            meta["effective_pages"] += 1
+            out.extend(self._normalize_job(j) for j in items if isinstance(j, dict))
+            logger.info(
+                "JSearch query=%r date=%s page=%d returned %d items",
+                clean_query, effective_date, page, len(items),
+            )
+            if not items or (not next_cursor and len(items) < _JSEARCH_PAGE_SIZE):
+                meta["complete"] = True
+                meta["stop_reason"] = "exhausted"
+                break
+            prev_ids = ids
+            cursor = next_cursor
+            page += 1
+        meta["items"] = len(out)
+        if meta_out is not None:
+            meta_out.update(meta)
+        return out
 
     # ------------------------------------------------------------------
     # Batch Search (multiple queries in parallel)
@@ -1083,6 +1162,7 @@ class JobService:
         user_email: str,
         force_refresh: bool = False,
         partial_cb: Optional[Any] = None,
+        page: int = 1,
     ) -> Dict[str, Any]:
         """Parallel multi-source job search.
 
@@ -1174,8 +1254,21 @@ class JobService:
                     else f"APIFY_{source.upper()}_ACTOR not configured"
                 )
 
+        # What was ASKED for vs what will RUN. A specific source that is not
+        # configured used to be replaced by JSearch with only a skipped-source
+        # note; the response now says so in a field a client can act on.
+        requested_source = source
+        fallback: Optional[Dict[str, Any]] = None
+        if source not in ("all",) and selected and source not in selected:
+            fallback = {"from": source, "to": list(selected),
+                        "reason": skipped_sources.get(source, "")}
+        provenance = {"requested_source": requested_source,
+                      "effective_sources": list(selected),
+                      "source_fallback": fallback}
+
         if not selected:
             return {
+                **provenance,
                 "jobs": [], "total": 0, "page": 1, "total_pages": 1,
                 "queries_executed": len(queries), "cache_hits": 0,
                 "errors": ["Set JSEARCH_API_KEY or configure an APIFY_*_ACTOR source"],
@@ -1247,16 +1340,23 @@ class JobService:
                         logger.warning(f"Company career scrape failed for {url}: {e}")
             return [self._normalize_apify_job(item, src) for item in raw_items]
 
+        jsearch_pages: List[Dict[str, Any]] = []
+
         def _collect_jsearch(q: str) -> List[Dict[str, Any]]:
             """Run one JSearch query and return normalized jobs (no scoring yet)."""
-            result = self._search_jsearch_raw(
-                query=q,
-                location=location,
-                date_posted=date_posted,
-                remote_only=remote_only,
-                employment_type=employment_type,
-            )
-            return result
+            meta: Dict[str, Any] = {"query": q}
+            try:
+                return self._search_jsearch_raw(
+                    query=q,
+                    location=location,
+                    date_posted=date_posted,
+                    remote_only=remote_only,
+                    employment_type=employment_type,
+                    start_page=page,
+                    meta_out=meta,
+                )
+            finally:
+                jsearch_pages.append(meta)
 
         def _collect_workday_direct(q: str) -> List[Dict[str, Any]]:
             """Hit each curated Workday tenant's public CXS endpoint in parallel."""
@@ -1426,7 +1526,11 @@ class JobService:
 
         matched = self.match_jobs(all_jobs, user_email=user_email,
                                   profile=fit_profile)
+        filters_relaxed: List[str] = []
         if not matched and fallback_jobs and not h1b_only:
+            filters_relaxed = [f for f, on in (("visa_or_contract", visa_or_contract),
+                                               ("experience_level", bool(experience_level)))
+                               if on]
             logger.info(
                 "Strict job filters produced no rows; showing %d closest matches",
                 len(fallback_jobs),
@@ -1456,6 +1560,16 @@ class JobService:
             "filtered_reasons": filtered_reasons,
             "selected_sources": selected,
             "skipped_sources": skipped_sources,
+            **provenance,
+            # Candidate filters that were DROPPED to show "closest matches"
+            # because the strict set returned nothing. Empty = none relaxed.
+            "filters_relaxed": filters_relaxed,
+            "pagination": {
+                "requested_page": page,
+                "sources": {"jsearch": jsearch_pages} if jsearch_pages else {},
+                "complete": all(m.get("complete") for m in jsearch_pages)
+                if jsearch_pages else None,
+            },
         }
 
     @staticmethod
@@ -2135,6 +2249,23 @@ class JobService:
             "h1b_sponsor": self._check_h1b(company, raw.get("job_description", "")),
             "source": "JSearch",
             "posted_text": raw.get("job_posted_at", ""),
+            # Provenance. JSearch is a DISCOVERY source: it can say where a
+            # job was seen and where its apply link points; it does not prove
+            # the posting. Keep what it told us instead of discarding it.
+            "source_job_id": str(raw.get("job_id") or ""),
+            "source_publisher": str(raw.get("job_publisher") or ""),
+            "original_job_url": str(raw.get("job_apply_link") or ""),
+            "source_url": str(raw.get("job_google_link") or ""),
+            "apply_is_direct": raw.get("job_apply_is_direct"),
+            "apply_options": [
+                {"publisher": str(o.get("publisher") or ""),
+                 "apply_link": str(o.get("apply_link") or ""),
+                 "is_direct": o.get("is_direct")}
+                for o in (raw.get("apply_options") or [])[:8] if isinstance(o, dict)
+            ],
+            # Numbers as stated: 0 stays 0 and absent stays None.
+            "salary_min": raw.get("job_min_salary"),
+            "salary_max": raw.get("job_max_salary"),
         }
         normalized["contract_friendly"] = self._is_contract_friendly(normalized)
         return normalized

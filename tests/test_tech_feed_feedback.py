@@ -458,7 +458,10 @@ class TestServiceDetails:
         for identity in ("", None, "not-an-email", {"$ne": None}):
             assert tff.suppressed_for(identity) == {
                 "job_ids": [], "dedupe_group_ids": [], "employer_ids": [],
-                "updated_at": None}
+                "updated_at": None,
+                # identity-1.0.0 keys (additive): empty, same shape.
+                "apply_url_keys": [], "requisition_keys": [], "repost_keys": {},
+                "applied": {"keys": {}, "repost": {}}}
 
     def test_a_feedback_outage_degrades_to_no_suppression(self, db, monkeypatch):
         """Better to show a job twice than to fail the whole search."""

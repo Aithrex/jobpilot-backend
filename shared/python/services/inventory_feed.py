@@ -661,13 +661,19 @@ def _collapse_locations(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def dedupe_key_of(row: Dict[str, Any]) -> str:
-    """Stored identity when we have it, the display-string rule otherwise.
+    """The row's PROVEN identity (`posting_identity`, identity-1.0.0).
 
-    The fallback is not decoration. 227,914 active postings were written
-    before `dedupe_group_id` existed and carry none until the backfill
-    (docs/ops/tech-feed-rollout.md step 3) reaches them. Without this
-    branch every one of those rows becomes its own group on the day this
-    ships, and the feed shows every duplicate it currently collapses.
+    Order: same tenant + requisition id, the stored `dedupe_group_id`, the
+    normalized original apply URL, the row's own `job_id`.
+
+    Rows without a stored group used to fall back to a display-string key -
+    `(employer_id_of(company), title_key, location_key)` - i.e. company +
+    title + city. That merged distinct requisitions sharing a title and city
+    (the 2026-10-21 capture has several, e.g. Intuit "Software Engineer 2" and
+    two Microsoft "Software Engineer" cards) and hid all but one. Look-alikes
+    are now kept and marked `possible_duplicate_of` by `_dedupe`, which is the
+    reviewable form the spec asks for; showing a job twice is a blemish,
+    hiding one is a lost application.
     """
     # SAME TENANT + SAME REQUISITION ID is the same job, whatever name
     # the board printed on it. JPMorgan's Oracle instance serves one
@@ -679,7 +685,7 @@ def dedupe_key_of(row: Dict[str, Any]) -> str:
     # shown three times. Platform-wide this is 11,837 redundant copies
     # across 9,436 (tenant, requisition) groups, 4,216 of them wearing
     # more than one employer name.
-    from services import job_inventory_service as inv
+    from services import posting_identity
 
     req = str(row.get("_req_key") or "")
     if req:
@@ -687,13 +693,29 @@ def dedupe_key_of(row: Dict[str, Any]) -> str:
     stored = str(row.get("dedupe_group_id") or "")
     if stored:
         return stored
+    url = posting_identity.apply_url_key(
+        row.get("canonical_url") or row.get("url") or row.get("apply_link"))
+    if url:
+        return "url|" + url
+    jid = str(row.get("job_id") or "")
+    if jid:
+        return "job|" + jid
+    return f"row|{id(row)}"
+
+
+def look_alike_key_of(row: Dict[str, Any]) -> str:
+    """Company + title + city, normalized for display. A REVIEW HINT only -
+    never an identity (see `dedupe_key_of`)."""
+    from services import job_inventory_service as inv
+
     location = str(row.get("location") or "").strip()
-    return "|".join((
-        "legacy",
-        inv.employer_id_of(row.get("company")),
-        _title_key(row.get("title")),
-        inv.normalize_location(location)["key"] if location else "",
-    ))
+    employer = (str(row.get("canonical_employer_id") or "")
+                or inv.employer_id_of(row.get("company")))
+    title = _title_key(row.get("title"))
+    if not (employer and title):
+        return ""
+    return "|".join((employer, title,
+                     inv.normalize_location(location)["key"] if location else ""))
 
 
 def _dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -769,7 +791,24 @@ def _dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             row["source_variants"] = vs[:8]
             row["duplicate_count"] = len(vs)
         out.append(row)
+    _flag_look_alikes(out)
     return out
+
+
+def _flag_look_alikes(rows: List[Dict[str, Any]]) -> None:
+    """Stamp `possible_duplicate_of` (the earlier card's job_id) on a card that
+    shares company + title + city with an earlier card of a DIFFERENT
+    identity. Nothing is removed or reordered."""
+    first: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        key = look_alike_key_of(row)
+        if not key:
+            continue
+        prev = first.get(key)
+        if prev is None:
+            first[key] = row
+        elif prev.get("job_id") and prev.get("job_id") != row.get("job_id"):
+            row["possible_duplicate_of"] = prev.get("job_id")
 
 
 def _window_counts(jobs: List[Dict[str, Any]]) -> Dict[str, int]:
