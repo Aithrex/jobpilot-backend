@@ -1,0 +1,85 @@
+{
+ "_comment": "trimmed from https://dish.jibeapply.com/api/jobs captured 2026-10-22",
+ "jobs": [
+  {
+   "data": {
+    "slug": "105216",
+    "client_code": "dish",
+    "req_id": "105216",
+    "title": "Automation and Process  Engineer II",
+    "description": "<br><strong>What Success Looks Like (Objectives):</strong><br><br><p style=\"margin-top: 0pt; margin-bottom: 0pt;\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\"><strong><span style=\"color: #000000;\">Key Responsibilities:</span></strong></span></p><ul style=\"margin-top: 0; ",
+    "city": "Spartanburg",
+    "state": "South Carolina",
+    "country": "United States",
+    "location_type": "LAT_LNG",
+    "department": "",
+    "salary_min_value": 0,
+    "salary_max_value": 0,
+    "employment_type": "FULL_TIME",
+    "qualifications": "<p style=\"margin-top: 0pt; margin-bottom: 0pt;\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\"><strong><span style=\"color: #000000;\">Education and Experience:</span></strong></span></p><ul style=\"margin-top: 0; margin-bottom: 0;\"><li style=\"font-size: 12pt; font-family: Ar",
+    "hiring_organization": "EchoStar",
+    "responsibilities": "<p style=\"margin-top: 0pt; margin-bottom: 0pt;\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\"><strong><span style=\"color: #000000;\">Key Responsibilities:</span></strong></span></p><ul style=\"margin-top: 0; margin-bottom: 0;\"><li style=\"font-size: 10pt; font-family: 'Noto ",
+    "posted_date": "2026-10-21T20:24:00+0000",
+    "apply_url": "https://attract-careers1-echostar.icims.com/jobs/105216/login",
+    "internal": false,
+    "external": false,
+    "create_date": "2026-10-21T20:24:37+0000",
+    "full_location": "Spartanburg, South Carolina"
+   }
+  },
+  {
+   "data": {
+    "slug": "101051",
+    "client_code": "dish",
+    "req_id": "101051",
+    "title": "Director, Indirect Sales - West",
+    "description": "<br><strong>What Success Looks Like (Objectives):</strong><br><br><p style=\"margin: 0px;\"><span style=\"font-size: 11pt; font-family: 'Proxima Nova', sans-serif;\">We are looking for a dynamic and seasoned sales management executive to lead the West Region field sales team of 35+ people, deliver on ke",
+    "city": "Littleton",
+    "state": "Colorado",
+    "country": "United States",
+    "location_type": "LAT_LNG",
+    "department": "",
+    "salary_min_value": 0,
+    "salary_max_value": 0,
+    "employment_type": "FULL_TIME",
+    "qualifications": "<p style=\"line-height: 1.2; margin-bottom: 14pt;\"><strong><span style=\"font-size: 11pt; font-family: 'Proxima Nova', sans-serif;\">Job Duties and Responsibilities</span></strong></p><p style=\"line-height: 1.2; margin-bottom: 14pt;\"><span style=\"font-size: 11pt; font-family: 'Proxima Nova', sans-serif",
+    "hiring_organization": "EchoStar",
+    "responsibilities": "<p style=\"margin: 0px;\"><span style=\"font-size: 11pt; font-family: 'Proxima Nova', sans-serif;\">We are looking for a dynamic and seasoned sales management executive to lead the West Region field sales team of 35+ people, deliver on key sales and operational metrics and serve as the subject matter ex",
+    "posted_date": "2026-10-21T18:42:00+0000",
+    "apply_url": "https://attract-careers1-echostar.icims.com/jobs/101051/login",
+    "internal": false,
+    "external": false,
+    "create_date": "2026-10-21T18:44:37+0000",
+    "full_location": "Littleton, Colorado"
+   }
+  },
+  {
+   "data": {
+    "slug": "101062",
+    "client_code": "dish",
+    "req_id": "101062",
+    "title": "Benefits Specialist",
+    "description": "<br><strong>What Success Looks Like (Objectives):</strong><br><br><h4 data-path-to-node=\"12\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\">Key Responsibilities</span></h4><ul data-path-to-node=\"13\"><li><p style=\"margin: 0px;\" data-path-to-node=\"13,0,0\"><span style=\"font-f",
+    "city": "Englewood",
+    "state": "Colorado",
+    "country": "United States",
+    "location_type": "LAT_LNG",
+    "department": "",
+    "salary_min_value": 0,
+    "salary_max_value": 0,
+    "employment_type": "FULL_TIME",
+    "qualifications": "<h4 data-path-to-node=\"14\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\">Requirements</span></h4><ul data-path-to-node=\"15\"><li><p style=\"margin: 0px;\" data-path-to-node=\"15,0,0\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\"><strong data-path-t",
+    "hiring_organization": "EchoStar",
+    "responsibilities": "<h4 data-path-to-node=\"12\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\">Key Responsibilities</span></h4><ul data-path-to-node=\"13\"><li><p style=\"margin: 0px;\" data-path-to-node=\"13,0,0\"><span style=\"font-family: arial, helvetica, sans-serif; font-size: 12pt;\"><strong dat",
+    "posted_date": "2026-10-21T17:20:00+0000",
+    "apply_url": "https://attract-careers1-echostar.icims.com/jobs/101062/login",
+    "internal": false,
+    "external": false,
+    "create_date": "2026-10-13T13:14:56+0000",
+    "full_location": "Englewood, Colorado"
+   }
+  }
+ ],
+ "totalCount": 656,
+ "count": 656
+}

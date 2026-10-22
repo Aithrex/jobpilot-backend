@@ -880,6 +880,12 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
      "site": "en_US/careers?732=6297&tags=rm.kcm.web.kcm-004",
      "host": "koch.avature.net", "display_name": "Flint Hills Resources",
      "industry": "other", "extra": {"entity_name": "Flint Hills Resources"}},
+    # iCIMS Jibe: echostar.com/careers -> jobs.echostar.com/jobs, whose page
+    # declares canonical dish.jibeapply.com. 656 of 656, all dated; apply
+    # links go to the iCIMS tenant attract-careers1-echostar.
+    {"vendor": "jibe", "tenant": "dish", "site": "",
+     "host": "dish.jibeapply.com", "display_name": "EchoStar",
+     "industry": "telecom"},
 )
 
 
