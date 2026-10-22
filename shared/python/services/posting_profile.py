@@ -69,8 +69,8 @@ def _env_int(name: str, default: int) -> int:
 #: backstop CLOSES an unseen posting) and well above the crawl cycle (~2h), so
 #: a healthy board is always inside it and a board we have not been able to
 #: read for two days is visibly not. Older than this is `unknown` with
-#: `reason: verification_stale` - strict mode does not recommend it and the
-#: submission gate does not submit to it.
+#: `reason: verification_stale`: feeds SHOW it labelled unverified (a lagging
+#: crawl must never empty a feed) and the submission gate refuses it.
 ACCEPTABLE_VERIFICATION_AGE_HOURS = _env_int("EMPLOYER_POLICY_MAX_VERIFICATION_AGE_HOURS", 48)
 
 _CLOSED_STATUSES = ("closed", "expired")
