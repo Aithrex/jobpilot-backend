@@ -1062,6 +1062,19 @@ WORKDAY_TENANT_CATALOG: List[Dict[str, str]] = [
     {"display_name": "City of Steamboat Springs, Colorado", "tenant": "steamboatsprings", "wd_host": "wd12", "site": "External", "industry": "government"},
     {"display_name": "Superior Court of California, County of Alameda", "tenant": "alamedacourts", "wd_host": "wd5", "site": "alamedacourts", "industry": "government"},
     {"display_name": "Harris Central Appraisal District, Texas", "tenant": "hcad", "wd_host": "wd5", "site": "HCADCareers", "industry": "government"},
+    # ── Direct-employer onboarding, 2026-10-21 ───────────────────────────
+    # Tenant, wdN pod and site exactly as each employer's own careers page
+    # links them (site case preserved; no wd1 guessed), each validated live
+    # through WorkdayProvider the same day. OPENLANE's link carried a sample
+    # q= filter, which is not part of the source; Maxar's tenant hosts the
+    # Vantor site and is attributed to Vantor only.
+    {"display_name": "NCR Voyix", "tenant": "ncr", "wd_host": "wd1", "site": "ext_us", "industry": "tech"},
+    {"display_name": "Vantor", "tenant": "maxar", "wd_host": "wd1", "site": "Vantor", "industry": "aerospace_defense"},
+    {"display_name": "Vertex Pharmaceuticals", "tenant": "vrtx", "wd_host": "wd501", "site": "vertex_careers", "industry": "pharma"},
+    {"display_name": "OPENLANE", "tenant": "openlane", "wd_host": "wd115", "site": "OPENLANE_Careers", "industry": "manufacturing_automotive"},
+    {"display_name": "SEI", "tenant": "seic", "wd_host": "wd1", "site": "SEI_Global_Services", "industry": "fintech"},
+    {"display_name": "Swift", "tenant": "swift", "wd_host": "wd3", "site": "Join-Swift", "industry": "fintech"},
+    {"display_name": "The Home Depot", "tenant": "homedepot", "wd_host": "wd5", "site": "CareerDepot", "industry": "ecommerce_retail"},
 ]
 
 INDUSTRIES: List[str] = sorted({row["industry"] for row in WORKDAY_TENANT_CATALOG})

@@ -262,6 +262,9 @@ def _sniff_total(payload: Any) -> Optional[int]:
     meta = payload.get("meta")
     if isinstance(meta, dict) and isinstance(meta.get("total"), int):
         return meta["total"]
+    refine = payload.get("refineSearch")
+    if isinstance(refine, dict) and isinstance(refine.get("totalHits"), int):
+        return refine["totalHits"]
     items = payload.get("items")
     if isinstance(items, list) and items and isinstance(items[0], dict):
         v = items[0].get("TotalJobsCount")

@@ -1,6 +1,6 @@
 # Direct-employer onboarding — outcomes per company
 
-Generated 2026-10-22T02:00:13Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
+Generated 2026-10-22T02:06:15Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
 
 **Coverage basis:** in-repo catalogs and seed tables the crawler loads (no production inventory was read). `existing_covered` means the crawl tables already carry the exact endpoint; it is not a claim about live inventory counts.
 
@@ -8,7 +8,7 @@ Validation counts: `source` = total the vendor reported (blank when the API repo
 
 ## 174 researched LinkedIn leads
 
-Denominator: **174**. existing_covered: 4, new_validated: 19, excluded: 61, review: 31, blocked: 29, unsupported: 22, pending: 8
+Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, review: 31, unsupported: 22, pending: 8
 
 | company | evidence | provider | endpoint | outcome | why | validated at | status | source | parsed | req | non-req |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -17,7 +17,7 @@ Denominator: **174**. existing_covered: 4, new_validated: 19, excluded: 61, revi
 | AARATECH | identity_or_business_model_review |  |  | review | mixed_review |  | not_run |  |  |  |  |
 | AbilityLinks | excluded_by_preference |  |  | excluded | intermediary |  | not_run |  |  |  |  |
 | Accenture Federal Services | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
-| Acrisure | FRONTEND | phenom | `phenom/careers.acrisure.com/acrisure` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Acrisure | FRONTEND | phenom | `phenom/careers.acrisure.com/acrisure` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:04:59Z | budget_limited | 224 | 100 | 100 | 0 |
 | Agento | identity_unresolved |  |  | review | identity_unresolved |  | not_run |  |  |  |  |
 | Alt | identity_unresolved |  |  | review | mixed_review |  | not_run |  |  |  |  |
 | Amazon Web Services (AWS) | FRONTEND | amazon | `amazon/www.amazon.jobs/amazon` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
@@ -27,14 +27,14 @@ Denominator: **174**. existing_covered: 4, new_validated: 19, excluded: 61, revi
 | Anchorstacktech | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
 | Annapurna Labs | FRONTEND | amazon | `amazon/www.amazon.jobs/amazon` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
 | Apollo Solutions | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
-| Applied Systems | CHAIN | icims | `icims/globalcareers-appliedsystems.icims.com/globalcareers-appliedsystems` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Applied Systems | CHAIN | icims | `icims/globalcareers-appliedsystems.icims.com/globalcareers-appliedsystems` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:02:22Z | complete |  | 19 | 19 | 0 |
 | ApTask | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
 | Ascent Developer Solutions | CHAIN | greenhouse | `greenhouse/ascentds` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:20Z | complete | 11 | 11 | 11 | 0 |
 | Astrion | identity_or_business_model_review |  |  | review | mixed_review |  | not_run |  |  |  |  |
 | Atlys | PENDING |  |  | pending | official site links only a LinkedIn company-jobs page |  | not_run |  |  |  |  |
 | Attune | MANUAL | own_site |  | unsupported | unsupported_pending_provider:own_site |  | not_run |  |  |  |  |
 | Avalore.ai | official_ats_chain | Workable |  | review | mixed_review |  | not_run |  |  |  |  |
-| BAE Systems, Inc. | FRONTEND | phenom | `phenom/jobs.baesystems.com/baesystems` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| BAE Systems, Inc. | FRONTEND | phenom | `phenom/jobs.baesystems.com/baesystems` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:05:05Z | budget_limited | 2042 | 100 | 100 | 0 |
 | BeaconFire Inc. | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
 | Bixal | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
 | BLN24 | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
@@ -45,7 +45,7 @@ Denominator: **174**. existing_covered: 4, new_validated: 19, excluded: 61, revi
 | Brooksource | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
 | Carvana | PENDING | Greenhouse disclosed; Tenstreet also disclosed; exact endpoint unresolved |  | pending | Greenhouse and Tenstreet disclosed; board token unresolved (pages 403); `carvana` is not inferred |  | not_run |  |  |  |  |
 | Cbase Inc | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
-| Celestica | FRONTEND | successfactors | `successfactors/careers.celestica.com/celestica` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Celestica | FRONTEND | successfactors | `successfactors/careers.celestica.com/celestica` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:03:52Z | budget_limited |  | 200 | 200 | 0 |
 | CGI | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
 | Chalk | CHAIN | ashby | `ashby/chalk` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:25Z | complete |  | 19 | 19 | 0 |
 | ClarityPay | CHAIN | ashby | `ashby/claritypay` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:25Z | complete |  | 12 | 12 | 0 |
@@ -59,11 +59,11 @@ Denominator: **174**. existing_covered: 4, new_validated: 19, excluded: 61, revi
 | CrossTalent | identity_or_business_model_review |  |  | review | mixed_review |  | not_run |  |  |  |  |
 | Dark Wolf | official_ats_chain | Greenhouse |  | review | mixed_review |  | not_run |  |  |  |  |
 | DataVisor | PENDING | Workable |  | pending | Workable whr_embed(56790); account-to-slug link for datavisor-jobs not observed |  | not_run |  |  |  |  |
-| Delta Electronics Americas | CHAIN | icims | `icims/careers-delta-americas.icims.com/careers-delta-americas` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Delta Electronics Americas | CHAIN | icims | `icims/careers-delta-americas.icims.com/careers-delta-americas` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:02:26Z | complete |  | 187 | 187 | 0 |
 | Destro | CHAIN | breezyhr |  | unsupported | unsupported_pending_provider:breezyhr |  | not_run |  |  |  |  |
 | Digivance Solutions | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
 | E-Solutions | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
-| EchoStar Corporation | CHAIN | radancy | `radancy/jobs.echostar.com/echostar` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| EchoStar Corporation | CHAIN | radancy | `radancy/jobs.echostar.com/echostar` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:03:42Z | budget_limited | 656 | 200 | 200 | 0 |
 | ECI | identity_or_business_model_review |  |  | review | mixed_review |  | not_run |  |  |  |  |
 | ECS | identity_or_business_model_review |  |  | review | mixed_review |  | not_run |  |  |  |  |
 | Enlighten | identity_or_business_model_review |  |  | review | mixed_review |  | not_run |  |  |  |  |
@@ -73,7 +73,7 @@ Denominator: **174**. existing_covered: 4, new_validated: 19, excluded: 61, revi
 | FDM Group | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
 | Fervo Energy | OWN | own_site |  | unsupported | unsupported_pending_provider:own_site |  | not_run |  |  |  |  |
 | FieldAI | CONFIG | lever | `lever/field-ai` | existing_covered | row already in the crawl tables | 2026-10-22T01:59:29Z | complete |  | 109 | 108 | 1 |
-| First Citizens Bank | FRONTEND | radancy | `radancy/jobs.firstcitizens.com/firstcitizens` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| First Citizens Bank | FRONTEND | radancy | `radancy/jobs.firstcitizens.com/firstcitizens` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:03:47Z | budget_limited | 389 | 200 | 200 | 0 |
 | firstPRO US | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
 | Flexcompute | CHAIN | workable | `workable/flexcompute` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:29Z | complete |  | 20 | 20 | 0 |
 | Flint Hills Resources | FRONTEND | avature |  | unsupported | unsupported_pending_provider:avature |  | not_run |  |  |  |  |
@@ -88,10 +88,10 @@ Denominator: **174**. existing_covered: 4, new_validated: 19, excluded: 61, revi
 | Harrison Clarke | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
 | HavocAI | CHAIN | ashby | `ashby/havocai` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:26Z | complete |  | 26 | 26 | 0 |
 | Haystack | identity_or_business_model_review |  |  | review | mixed_review |  | not_run |  |  |  |  |
-| Honeywell Technologies | CHAIN | oracle_orc | `oracle_orc/ibqbjb.fa.ocs.oraclecloud.com/ibqbjb/Honeywell` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Honeywell Technologies | CHAIN | oracle_orc | `oracle_orc/ibqbjb.fa.ocs.oraclecloud.com/ibqbjb/CX_1` | existing_covered | row already in the crawl tables | 2026-10-22T02:03:36Z | budget_limited | 1288 | 200 | 200 | 0 |
 | Hover | CONFIG | greenhouse | `greenhouse/hover` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:22Z | complete | 19 | 19 | 19 | 0 |
-| Howmet Aerospace | CHAIN | oracle_orc | `oracle_orc/fa-exty-saasfaprod1.fa.ocs.oraclecloud.com/fa-exty-saasfaprod1/CX_1` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
-| ICE | FRONTEND | radancy | `radancy/careers.ice.com/ice` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Howmet Aerospace | CHAIN | oracle_orc | `oracle_orc/fa-exty-saasfaprod1.fa.ocs.oraclecloud.com/fa-exty-saasfaprod1/CX_1` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:02:15Z | budget_limited | 790 | 200 | 200 | 0 |
+| ICE | FRONTEND | radancy | `radancy/careers.ice.com/ice` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:03:50Z | budget_limited | 293 | 200 | 200 | 0 |
 | Infinite Computer Solutions | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
 | Innovative Defense Technologies (IDT) | official_ats_chain | Pinpoint |  | review | mixed_review |  | not_run |  |  |  |  |
 | Inspira Financial | CHAIN | adp_myjobs |  | unsupported | unsupported_pending_provider:adp_myjobs |  | not_run |  |  |  |  |
@@ -112,19 +112,19 @@ Denominator: **174**. existing_covered: 4, new_validated: 19, excluded: 61, revi
 | Morales Professional, a morales group company | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
 | Motion Recruitment | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
 | mroads | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
-| NCR Voyix | CHAIN | workday | `workday/ncr/ext_us/wd1` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| NCR Voyix | CHAIN | workday | `workday/ncr/ext_us/wd1` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:01:17Z | complete |  | 175 | 175 | 0 |
 | Netrolynx AI | identity_unresolved |  |  | review | identity_unresolved |  | not_run |  |  |  |  |
 | NexGen Tech Solutions | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
-| Nomura | FRONTEND | successfactors | `successfactors/careers.nomura.com/nomura` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Nomura | FRONTEND | successfactors | `successfactors/careers.nomura.com/nomura` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:03:58Z | budget_limited |  | 200 | 200 | 0 |
 | Northwood | CHAIN | ashby | `ashby/NorthwoodSpace` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:26Z | complete |  | 63 | 62 | 1 |
 | Nous Research | MANUAL | own_site |  | unsupported | unsupported_pending_provider:own_site |  | not_run |  |  |  |  |
-| OPENLANE | CHAIN | workday | `workday/openlane/OPENLANE_Careers/wd115` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| OPENLANE | CHAIN | workday | `workday/openlane/OPENLANE_Careers/wd115` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:01:46Z | complete |  | 139 | 139 | 0 |
 | Optomi | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
 | Orange Logic | OWN | own_site |  | unsupported | unsupported_pending_provider:own_site |  | not_run |  |  |  |  |
 | Peraton | official_ats_chain | iCIMS |  | review | mixed_review |  | not_run |  |  |  |  |
 | Premier Global Links LLC | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
-| Productive Playhouse | CHAIN | jazzhr | `jazzhr/productiveplayhouse.applytojob.com/productiveplayhouse` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
-| PSEG Long Island LLC | FRONTEND | successfactors | `successfactors/jobs.psegliny.com/psegliny` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Productive Playhouse | CHAIN | jazzhr | `jazzhr/productiveplayhouse.applytojob.com/productiveplayhouse` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:02:42Z | complete |  | 79 | 79 | 0 |
+| PSEG Long Island LLC | FRONTEND | successfactors | `successfactors/jobs.psegliny.com/psegliny` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:04:04Z | complete |  | 32 | 32 | 0 |
 | Quantcast | CHAIN | ashby | `ashby/quantcast` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:27Z | complete |  | 15 | 15 | 0 |
 | Quindar | CONFIG | ashby | `ashby/quindar` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:27Z | complete |  | 20 | 20 | 0 |
 | Radiant Systems Inc | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
@@ -138,9 +138,9 @@ Denominator: **174**. existing_covered: 4, new_validated: 19, excluded: 61, revi
 | Rise Internet | identity_unresolved |  |  | review | identity_unresolved |  | not_run |  |  |  |  |
 | Rugged Science | OWN | own_site |  | unsupported | unsupported_pending_provider:own_site |  | not_run |  |  |  |  |
 | Saragossa | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
-| Schaeffler | FRONTEND | successfactors | `successfactors/jobs.schaeffler.com/schaeffler` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
-| Schurz Communications | CHAIN | ukg | `ukg/recruiting.ultipro.com/SCH1012SHRZ` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
-| SEI | CHAIN | workday | `workday/seic/SEI_Global_Services/wd1` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Schaeffler | FRONTEND | successfactors | `successfactors/jobs.schaeffler.com/schaeffler` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:04:06Z | budget_limited |  | 200 | 200 | 0 |
+| Schurz Communications | CHAIN | ukg | `ukg/recruiting.ultipro.com/SCH1012SHRZ/813f24f9-0154-46d6-bbb4-966dd708b1ff` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:03:52Z | complete | 18 | 18 | 18 | 0 |
+| SEI | CHAIN | workday | `workday/seic/SEI_Global_Services/wd1` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:01:54Z | complete | 78 | 78 | 78 | 0 |
 | Sigma Defense Systems LLC | official_career_provider_unresolved |  |  | review | mixed_review |  | not_run |  |  |  |  |
 | SimVentions | official_ats_chain | iCIMS |  | review | mixed_review |  | not_run |  |  |  |  |
 | SoftWriters | CHAIN | ukg | `ukg/recruiting.ultipro.com/ROP1001ROPER/cf088029-453b-46f8-bcab-46ffb10fdf54` | unsupported | shared Roper UKG board; the UKG provider cannot filter to the hiring entity, and importing every Roper job as SoftWriter |  | not_run |  |  |  |  |
@@ -150,7 +150,7 @@ Denominator: **174**. existing_covered: 4, new_validated: 19, excluded: 61, revi
 | Spring Venture Group | CHAIN | smartrecruiters | `smartrecruiters/SpringVentureGroup1` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:32Z | complete | 6 | 6 | 6 | 0 |
 | STR | official_ats_chain | Greenhouse |  | review | mixed_review |  | not_run |  |  |  |  |
 | Suron | identity_or_business_model_review |  |  | review | mixed_review |  | not_run |  |  |  |  |
-| Swift | CHAIN | workday | `workday/swift/Join-Swift/wd3` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Swift | CHAIN | workday | `workday/swift/Join-Swift/wd3` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:01:58Z | complete |  | 47 | 47 | 0 |
 | TalentAlly | excluded_by_preference |  |  | excluded | intermediary |  | not_run |  |  |  |  |
 | TalentHop | identity_or_business_model_review |  |  | review | mixed_review |  | not_run |  |  |  |  |
 | TalentOla | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
@@ -158,27 +158,27 @@ Denominator: **174**. existing_covered: 4, new_validated: 19, excluded: 61, revi
 | Tech Consulting | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
 | Tecology, Inc. | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
 | Temple Health – Temple University Health System | OWN | own_site |  | unsupported | unsupported_pending_provider:own_site |  | not_run |  |  |  |  |
-| Texas Windstorm Insurance Association | CHAIN | adp_wfn | `adp_wfn/workforcenow.adp.com/5a22940c-3629-44d9-813a-0ccee8ac9aac/19000101_000001` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
-| The Depository Trust & Clearing Corporation (DTCC) | CHAIN | oracle_orc | `oracle_orc/ebxr.fa.us2.oraclecloud.com/ebxr/CX_1` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
-| The Home Depot | CHAIN | workday | `workday/homedepot/CareerDepot/wd5` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
-| The Lubrizol Corporation | FRONTEND | successfactors | `successfactors/jobs.lubrizol.com/lubrizol` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Texas Windstorm Insurance Association | CHAIN | adp_wfn | `adp_wfn/workforcenow.adp.com/5a22940c-3629-44d9-813a-0ccee8ac9aac/19000101_000001` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:02:42Z | complete |  | 5 | 5 | 0 |
+| The Depository Trust & Clearing Corporation (DTCC) | CHAIN | oracle_orc | `oracle_orc/ebxr.fa.us2.oraclecloud.com/ebxr/CX_1` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:02:19Z | budget_limited | 452 | 200 | 200 | 0 |
+| The Home Depot | CHAIN | workday | `workday/homedepot/CareerDepot/wd5` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:02:01Z | budget_limited | 985 | 200 | 200 | 0 |
+| The Lubrizol Corporation | FRONTEND | successfactors | `successfactors/jobs.lubrizol.com/lubrizol` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:04:15Z | budget_limited |  | 200 | 200 | 0 |
 | TikTok USDS Joint Venture | OWN | tiktok_usds |  | unsupported | unsupported_pending_provider:tiktok_usds |  | not_run |  |  |  |  |
 | Torentify | excluded_by_preference |  |  | excluded | intermediary |  | not_run |  |  |  |  |
 | Trexquant Investment LP | CONFIG | workable | `workable/trexquant` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:29Z | complete |  | 50 | 34 | 0 |
-| Troon | CHAIN | ukg | `ukg/recruiting2.ultipro.com/TRO1001TROO/2b13054b-60bb-410d-9136-e52c1c7d9720` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Troon | CHAIN | ukg | `ukg/recruiting2.ultipro.com/TRO1001TROO/2b13054b-60bb-410d-9136-e52c1c7d9720` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:02:38Z | budget_limited | 2115 | 200 | 200 | 0 |
 | UICGS / Bowhead Family of Companies | official_ats_chain | iCIMS |  | review | mixed_review |  | not_run |  |  |  |  |
 | Unison | CHAIN | ashby | `ashby/unison-software` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:28Z | complete |  | 13 | 13 | 0 |
 | Universal Background Screening | CHAIN | appone |  | unsupported | unsupported_pending_provider:appone |  | not_run |  |  |  |  |
-| Uplight | CHAIN | jobvite | `jobvite/uplight` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Uplight | CHAIN | jobvite | `jobvite/uplight` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:02:38Z | complete |  | 12 | 12 | 0 |
 | Upwind Security | PENDING | Comeet plugin |  | pending | Comeet plugin observed; company token/API unresolved (official page 403) |  | not_run |  |  |  |  |
 | V-Soft Consulting Group, Inc. | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
-| Vantor | CHAIN | workday | `workday/maxar/Vantor/wd1` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Vantor | CHAIN | workday | `workday/maxar/Vantor/wd1` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:01:31Z | complete | 143 | 143 | 143 | 0 |
 | Vaspire Technologies Inc. | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
-| Ventura Foods | FRONTEND | successfactors | `successfactors/jobs.venturafoods.com/venturafoods` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Ventura Foods | FRONTEND | successfactors | `successfactors/jobs.venturafoods.com/venturafoods` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:04:23Z | complete |  | 98 | 98 | 0 |
 | Ventures Unlimited Inc | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
-| Verint | CHAIN | oracle_orc | `oracle_orc/fa-epcb-saasfaprod1.fa.ocs.oraclecloud.com/fa-epcb-saasfaprod1/CX` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Verint | CHAIN | oracle_orc | `oracle_orc/fa-epcb-saasfaprod1.fa.ocs.oraclecloud.com/fa-epcb-saasfaprod1/CX` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:02:21Z | complete | 33 | 33 | 33 | 0 |
 | Verisk | PENDING |  |  | pending | corporate page challenged; SmartRecruiters/Oracle candidates unproven |  | not_run |  |  |  |  |
-| Vertex Pharmaceuticals | CHAIN | workday | `workday/vrtx/vertex_careers/wd501` | blocked | not added; validation not_run |  | not_run |  |  |  |  |
+| Vertex Pharmaceuticals | CHAIN | workday | `workday/vrtx/vertex_careers/wd501` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:01:36Z | budget_limited | 281 | 200 | 199 | 1 |
 | Visionist, Inc. | official_ats_chain | Jobvite |  | review | mixed_review |  | not_run |  |  |  |  |
 | Vizient | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
 | Voto Consulting LLC | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |

@@ -1,18 +1,18 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T02:00:13Z",
+ "generated_at": "2026-10-22T02:06:15Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
   "leads": {
    "denominator": 174,
    "counts": {
-    "existing_covered": 4,
+    "existing_covered": 5,
     "existing_unhealthy_or_moved": 0,
-    "new_validated": 19,
+    "new_validated": 47,
     "excluded": 61,
     "review": 31,
-    "blocked": 29,
+    "blocked": 0,
     "unsupported": 22,
     "pending": 8
    },
@@ -146,14 +146,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "phenom-acrisure",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:04:59Z",
+      "vendor": "phenom",
+      "status": "budget_limited",
+      "source_reported": 224,
+      "parsed": 100,
+      "unique_ids": 100,
+      "duplicate_rows": 0,
+      "requisitions": 100,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Employee Benefits Account Manager",
+       "Payroll Division Manager",
+       "Account Manager"
+      ],
+      "detail": "",
+      "member_key": "phenom-acrisure"
      }
     },
     {
@@ -344,14 +363,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "icims-globalcareers-appliedsystems",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:02:22Z",
+      "vendor": "icims",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 19,
+      "unique_ids": 19,
+      "duplicate_rows": 0,
+      "requisitions": 19,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Data Migration Engineer",
+       "Sr. Technical Consultant",
+       "Lead Vendor Solution Consultant"
+      ],
+      "detail": "",
+      "member_key": "icims-globalcareers-appliedsystems"
      }
     },
     {
@@ -501,14 +539,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "phenom-baesystems",
      "provider_needed": "",
      "note": "A Taleo seed `baesystems` already exists; health is checked separately and it is not this US Phenom front end.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:05:05Z",
+      "vendor": "phenom",
+      "status": "budget_limited",
+      "source_reported": 2042,
+      "parsed": 100,
+      "unique_ids": 100,
+      "duplicate_rows": 0,
+      "requisitions": 100,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Process Automation Specialist",
+       "Field Service Tech IV",
+       "Counsel, IT & Data Law"
+      ],
+      "detail": "",
+      "member_key": "phenom-baesystems"
      }
     },
     {
@@ -705,14 +762,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-celestica",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:03:52Z",
+      "vendor": "successfactors",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Lead Engineer, FPGA Design (Advanced Technology Solutions)",
+       "Manager, Supply Chain Purchasing 1",
+       "Manager, Supply Chain Purchasing 1"
+      ],
+      "detail": "",
+      "member_key": "successfactors-celestica"
      }
     },
     {
@@ -1063,14 +1139,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "icims-careers-delta-americas",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:02:26Z",
+      "vendor": "icims",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 187,
+      "unique_ids": 187,
+      "duplicate_rows": 0,
+      "requisitions": 187,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Service Sales Analyst - AM Region Service",
+       "Senior Business Analyst",
+       "Technical Service Technician \u2013 Entry Level (UPS / HVAC) - Houston, TX/ Ohio/ Ind"
+      ],
+      "detail": "",
+      "member_key": "icims-careers-delta-americas"
      }
     },
     {
@@ -1141,14 +1236,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy-echostar",
      "provider_needed": "",
      "note": "jobs.echostar.com is an iCIMS Jibe front end (canonical dish.jibeapply.com). Its public /api/jobs is the contract the `radancy` provider already reads for AMD and Rivian.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:03:42Z",
+      "vendor": "radancy",
+      "status": "budget_limited",
+      "source_reported": 656,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Automation and Process  Engineer II",
+       "Director, Indirect Sales - West",
+       "Benefits Specialist"
+      ],
+      "detail": "",
+      "member_key": "radancy-echostar"
      }
     },
     {
@@ -1352,14 +1466,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy-firstcitizens",
      "provider_needed": "",
      "note": "iCIMS-branded Jibe front end; listing verified through /api/jobs.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:03:47Z",
+      "vendor": "radancy",
+      "status": "budget_limited",
+      "source_reported": 389,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Relationship Advisor II",
+       "Senior Financial Analyst - FP&A",
+       "Commercial Business Rotational Development Internship (Jacksonville, FL)"
+      ],
+      "detail": "",
+      "member_key": "radancy-firstcitizens"
      }
     },
     {
@@ -1698,19 +1831,38 @@
      "endpoint": {
       "vendor": "oracle_orc",
       "tenant": "ibqbjb",
-      "site": "Honeywell",
+      "site": "CX_1",
       "host": "ibqbjb.fa.ocs.oraclecloud.com",
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "oracle_orc-ibqbjb-cx_1",
      "provider_needed": "",
-     "note": "A seed for the same pod with site CX_1 already exists; the official link names site 'Honeywell'.",
+     "note": "The official link names site 'Honeywell' on pod ibqbjb; the existing CX_1 seed on the same pod serves the SAME requisitions (first 50 ids identical on 2026-10-21, 1,288 reported). Not added twice: a second site would duplicate every Honeywell posting.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:03:36Z",
+      "vendor": "oracle_orc",
+      "status": "budget_limited",
+      "source_reported": 1288,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Field Service Engr II",
+       "Sr Software Eng Supervisor",
+       "Sr Program Specialist"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-ibqbjb-cx_1"
      }
     },
     {
@@ -1770,14 +1922,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "oracle_orc-fa-exty-saasfaprod1-cx_1",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:02:15Z",
+      "vendor": "oracle_orc",
+      "status": "budget_limited",
+      "source_reported": 790,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Machine Operator CNC Set up",
+       "Production Technician III - 2nd or 3rd Shift",
+       "Production Technician II - Blind Products (2nd Shift)"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-fa-exty-saasfaprod1-cx_1"
      }
     },
     {
@@ -1794,14 +1965,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy-ice",
      "provider_needed": "",
      "note": "iCIMS-branded Jibe front end; listing verified through /api/jobs.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:03:50Z",
+      "vendor": "radancy",
+      "status": "budget_limited",
+      "source_reported": 293,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Lead Developer",
+       "Analyst, EUC",
+       "Analyst, Infrastructure Development & Automation"
+      ],
+      "detail": "",
+      "member_key": "radancy-ice"
      }
     },
     {
@@ -2205,14 +2395,34 @@
       }
      },
      "where": "workday_tenant_catalog",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ncr",
      "provider_needed": "",
      "note": "Official page links ext_us, ext_non_us and ext_apac; ext_us is the US board.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:01:17Z",
+      "vendor": "workday",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 175,
+      "unique_ids": 175,
+      "duplicate_rows": 0,
+      "requisitions": 175,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Software Engineer \u2013 NCR Voyix for Department and Specialty Retail",
+       "Field Service Technician - Nashville, TN",
+       "Field Service Technician II"
+      ],
+      "detail": "",
+      "member_key": "workday-ncr-ext_us"
      }
     },
     {
@@ -2265,14 +2475,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-nomura",
      "provider_needed": "",
      "note": "Americas channel only; early careers on Tal.net is a separate channel and is not this source.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:03:58Z",
+      "vendor": "successfactors",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Associate, Diversity, Equity & Inclusion Specialist",
+       "Lead Infrastructure and Platform Engineer",
+       "Associate, HR Advisory"
+      ],
+      "detail": "",
+      "member_key": "successfactors-nomura"
      }
     },
     {
@@ -2352,14 +2581,34 @@
       }
      },
      "where": "workday_tenant_catalog",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "openlane",
      "provider_needed": "",
      "note": "The linked URL carries q=Onsite/Field Operations; that sample filter is NOT part of the source.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:01:46Z",
+      "vendor": "workday",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 139,
+      "unique_ids": 139,
+      "duplicate_rows": 0,
+      "requisitions": 139,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Staff Software Engineer (Remote)",
+       "Inside Sales Representative",
+       "Revenue Management Analyst"
+      ],
+      "detail": "",
+      "member_key": "workday-openlane-openlane_careers"
      }
     },
     {
@@ -2448,14 +2697,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "jazzhr-productiveplayhouse",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:02:42Z",
+      "vendor": "jazzhr",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 79,
+      "unique_ids": 79,
+      "duplicate_rows": 0,
+      "requisitions": 79,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Afrikaans - AI Product Evaluator",
+       "Albanian - AI Product Evaluator",
+       "Amharic - AI Product Evaluator"
+      ],
+      "detail": "",
+      "member_key": "jazzhr-productiveplayhouse"
      }
     },
     {
@@ -2472,14 +2740,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-psegliny",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:04:04Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 32,
+      "unique_ids": 32,
+      "duplicate_rows": 0,
+      "requisitions": 32,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "9942L Cyber Security Associate PSEG LI",
+       "Customer Service Associate (Non-Bilingual)",
+       "Customer Service Associate (Bilingual in Spanish/English)"
+      ],
+      "detail": "",
+      "member_key": "successfactors-psegliny"
      }
     },
     {
@@ -2830,14 +3117,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-schaeffler",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:04:06Z",
+      "vendor": "successfactors",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Key Account Manager for Nissan",
+       "\u041c\u043e\u043d\u0442\u044c\u043e\u0440 \u043d\u0430 \u0435\u043b\u0435\u043a\u0442\u0440\u043e-\u043c\u0435\u0445\u0430\u043d\u0438\u0447\u043d\u0438 \u0438 \u0437\u0430\u0434\u0432\u0438\u0436\u0432\u0430\u0449\u0438 \u0441\u0438\u0441\u0442\u0435\u043c\u0438 (\u043b\u0438\u0437\u0438\u043d\u0433)",
+       "Engineer Senior - Industrial Engineering"
+      ],
+      "detail": "",
+      "member_key": "successfactors-schaeffler"
      }
     },
     {
@@ -2849,19 +3155,38 @@
      "endpoint": {
       "vendor": "ukg",
       "tenant": "SCH1012SHRZ",
-      "site": "",
+      "site": "813f24f9-0154-46d6-bbb4-966dd708b1ff",
       "host": "recruiting.ultipro.com",
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ukg-sch1012shrz-813f24f9-0154-46d6-bbb4-966dd708b1ff",
      "provider_needed": "",
-     "note": "UKG needs the JobBoard GUID; it must come from an official link.",
+     "note": "The official link recruiting.ultipro.com/SCH1012SHRZ/ redirects to JobBoard/813f24f9-... (observed 2026-10-21); the GUID is from that redirect, not guessed.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:03:52Z",
+      "vendor": "ukg",
+      "status": "complete",
+      "source_reported": 18,
+      "parsed": 18,
+      "unique_ids": 18,
+      "duplicate_rows": 0,
+      "requisitions": 18,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Solution Architect",
+       "Customer Care Representative 1",
+       "Construction Technician"
+      ],
+      "detail": "",
+      "member_key": "ukg-sch1012shrz-813f24f9-0154-46d6-bbb4-966dd708b1ff"
      }
     },
     {
@@ -2880,14 +3205,33 @@
       }
      },
      "where": "workday_tenant_catalog",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "seic",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:01:54Z",
+      "vendor": "workday",
+      "status": "complete",
+      "source_reported": 78,
+      "parsed": 78,
+      "unique_ids": 78,
+      "duplicate_rows": 0,
+      "requisitions": 78,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Fund Accountant, Alternative Investment Funds",
+       "Manager, Private Equity and Hedge Fund Accounting (REMOTE)",
+       "Sales Executive, Professional Services"
+      ],
+      "detail": "",
+      "member_key": "workday-seic-sei_global_services"
      }
     },
     {
@@ -3099,14 +3443,34 @@
       }
      },
      "where": "workday_tenant_catalog",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "swift",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:01:58Z",
+      "vendor": "workday",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 47,
+      "unique_ids": 47,
+      "duplicate_rows": 0,
+      "requisitions": 47,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "400"
+      ],
+      "sample_titles": [
+       "Chapter Lead for Back Office Development",
+       "Graduate Management Programme",
+       "Data Management Specialist"
+      ],
+      "detail": "",
+      "member_key": "workday-swift-join-swift"
      }
     },
     {
@@ -3249,14 +3613,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "adp_wfn-5a22940c-3629-44d9-813a-0ccee8ac9aac-19000101_000001",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:02:42Z",
+      "vendor": "adp_wfn",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 5,
+      "unique_ids": 5,
+      "duplicate_rows": 0,
+      "requisitions": 5,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Talent Acquisition Specialist",
+       "QA Analyst",
+       "IT Security and Systems Analyst"
+      ],
+      "detail": "",
+      "member_key": "adp_wfn-5a22940c-3629-44d9-813a-0ccee8ac9aac-19000101_000001"
      }
     },
     {
@@ -3273,14 +3656,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "oracle_orc-ebxr-cx_1",
      "provider_needed": "",
      "note": "The official link carries a category facet; the source is the whole CX_1 site (all categories).",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:02:19Z",
+      "vendor": "oracle_orc",
+      "status": "budget_limited",
+      "source_reported": 452,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Oracle Fusion Financials Lead",
+       "Operational Risk Senior Associate",
+       "Senior Application Support Engineer \u2013 Distributed & Mainframe"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-ebxr-cx_1"
      }
     },
     {
@@ -3299,14 +3701,33 @@
       }
      },
      "where": "workday_tenant_catalog",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "homedepot",
      "provider_needed": "",
      "note": "CareerDepot is the corporate/salaried board proven by Req185723's Apply link. Hourly in-store roles use BrassRing and the associate site is internal; neither is this source.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:02:01Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 985,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "DC Area Supervisor-2",
+       "Merchandising Assistant Store Manager",
+       "Operations Experience Manager"
+      ],
+      "detail": "",
+      "member_key": "workday-homedepot-careerdepot"
      }
     },
     {
@@ -3323,14 +3744,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-lubrizol",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:04:15Z",
+      "vendor": "successfactors",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Sales Assistant",
+       "Production Leader",
+       "Marketing Communication Intern"
+      ],
+      "detail": "",
+      "member_key": "successfactors-lubrizol"
      }
     },
     {
@@ -3426,14 +3866,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ukg-tro1001troo-2b13054b-60bb-410d-9136-e52c1c7d9720",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:02:38Z",
+      "vendor": "ukg",
+      "status": "budget_limited",
+      "source_reported": 2115,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Accounting Lead",
+       "Marina Market Attendant",
+       "Line Cook"
+      ],
+      "detail": "",
+      "member_key": "ukg-tro1001troo-2b13054b-60bb-410d-9136-e52c1c7d9720"
      }
     },
     {
@@ -3528,15 +3987,34 @@
       "host": "",
       "extra": {}
      },
-     "where": "career_pages_catalog",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "jobvite-uplight",
      "provider_needed": "",
      "note": "General Application posting is not a requisition.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:02:38Z",
+      "vendor": "jobvite",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 12,
+      "unique_ids": 12,
+      "duplicate_rows": 0,
+      "requisitions": 12,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Associate Product Marketing Manager",
+       "Business Development Associate",
+       "Commercial Strategy Manager"
+      ],
+      "detail": "",
+      "member_key": "jobvite-uplight"
      }
     },
     {
@@ -3591,14 +4069,33 @@
       }
      },
      "where": "workday_tenant_catalog",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "maxar",
      "provider_needed": "",
      "note": "Maxar's tenant, Vantor's site: attributed to Vantor only.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:01:31Z",
+      "vendor": "workday",
+      "status": "complete",
+      "source_reported": 143,
+      "parsed": 143,
+      "unique_ids": 143,
+      "duplicate_rows": 0,
+      "requisitions": 143,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Sr. Manager, Strategic Finance & Business Operations",
+       "Model Based Systems Engineering (MBSE) Engineer",
+       "Senior Cloud Systems Administrator"
+      ],
+      "detail": "",
+      "member_key": "workday-maxar-vantor"
      }
     },
     {
@@ -3633,14 +4130,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-venturafoods",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:04:23Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 98,
+      "unique_ids": 98,
+      "duplicate_rows": 0,
+      "requisitions": 98,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Corporate Reliability Manager",
+       "Plant Facilities Technician",
+       "Material Inspector"
+      ],
+      "detail": "",
+      "member_key": "successfactors-venturafoods"
      }
     },
     {
@@ -3675,14 +4191,33 @@
       "extra": {}
      },
      "where": "seed",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "oracle_orc-fa-epcb-saasfaprod1-cx",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:02:21Z",
+      "vendor": "oracle_orc",
+      "status": "complete",
+      "source_reported": 33,
+      "parsed": 33,
+      "unique_ids": 33,
+      "duplicate_rows": 0,
+      "requisitions": 33,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior FP&A Manager",
+       "Sr. SRE Engineer",
+       "Team Lead"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-fa-epcb-saasfaprod1-cx"
      }
     },
     {
@@ -3719,14 +4254,33 @@
       }
      },
      "where": "workday_tenant_catalog",
-     "plan": "candidate",
-     "outcome": "blocked",
-     "why": "not added; validation not_run",
-     "member_key": "",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "vrtx",
      "provider_needed": "",
      "note": "",
      "validation": {
-      "status": "not_run"
+      "at": "2026-10-22T02:01:36Z",
+      "vendor": "workday",
+      "status": "budget_limited",
+      "source_reported": 281,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 199,
+      "filtered_non_requisition": 1,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Executive Director, Performance Excellence & Business Transformation",
+       "Delivery Biology Principal Research Associate",
+       "Supply Chain Analytics and Insights Manager"
+      ],
+      "detail": "",
+      "member_key": "workday-vrtx-vertex_careers"
      }
     },
     {

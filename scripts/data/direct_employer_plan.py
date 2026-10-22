@@ -139,34 +139,34 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
         where="career_pages_catalog", industry="insurance",
         note="Talent-community link excluded; only requisitions are counted."),
     # --- Workday (tenant, wdN pod, site case as linked) --------------------
-    "NCR Voyix": dict(domain="ncrvoyix.com", state="CHAIN", plan="candidate",
+    "NCR Voyix": dict(domain="ncrvoyix.com", state="CHAIN", plan="added",
                       endpoint=_ep("workday", "ncr", site="ext_us", wd_host="wd1"),
                       where="workday_tenant_catalog", industry="tech",
                       note="Official page links ext_us, ext_non_us and ext_apac; "
                            "ext_us is the US board."),
-    "Vantor": dict(domain="vantor.com", state="CHAIN", plan="candidate",
+    "Vantor": dict(domain="vantor.com", state="CHAIN", plan="added",
                    endpoint=_ep("workday", "maxar", site="Vantor", wd_host="wd1"),
                    where="workday_tenant_catalog", industry="aerospace_defense",
                    note="Maxar's tenant, Vantor's site: attributed to Vantor only."),
     "Vertex Pharmaceuticals": dict(
-        domain="vrtx.com", state="CHAIN", plan="candidate",
+        domain="vrtx.com", state="CHAIN", plan="added",
         endpoint=_ep("workday", "vrtx", site="vertex_careers", wd_host="wd501"),
         where="workday_tenant_catalog", industry="pharma"),
-    "OPENLANE": dict(domain="openlane.com", state="CHAIN", plan="candidate",
+    "OPENLANE": dict(domain="openlane.com", state="CHAIN", plan="added",
                      endpoint=_ep("workday", "openlane", site="OPENLANE_Careers",
                                   wd_host="wd115"),
                      where="workday_tenant_catalog", industry="manufacturing_automotive",
                      note="The linked URL carries q=Onsite/Field Operations; that "
                           "sample filter is NOT part of the source."),
-    "SEI": dict(domain="seic.com", state="CHAIN", plan="candidate",
+    "SEI": dict(domain="seic.com", state="CHAIN", plan="added",
                 endpoint=_ep("workday", "seic", site="SEI_Global_Services",
                              wd_host="wd1"),
                 where="workday_tenant_catalog", industry="fintech"),
-    "Swift": dict(domain="swift.com", state="CHAIN", plan="candidate",
+    "Swift": dict(domain="swift.com", state="CHAIN", plan="added",
                   endpoint=_ep("workday", "swift", site="Join-Swift", wd_host="wd3"),
                   where="workday_tenant_catalog", industry="fintech"),
     "The Home Depot": dict(
-        domain="homedepot.com", state="CHAIN", plan="candidate",
+        domain="homedepot.com", state="CHAIN", plan="added",
         endpoint=_ep("workday", "homedepot", site="CareerDepot", wd_host="wd5"),
         where="workday_tenant_catalog", industry="ecommerce_retail",
         note="CareerDepot is the corporate/salaried board proven by Req185723's "
@@ -174,53 +174,55 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
              "site is internal; neither is this source."),
     # --- Oracle Recruiting Cloud -------------------------------------------
     "Honeywell Technologies": dict(
-        domain="honeywell.com", state="CHAIN", plan="candidate",
-        endpoint=_ep("oracle_orc", "ibqbjb", site="Honeywell",
+        domain="honeywell.com", state="CHAIN", plan="existing",
+        endpoint=_ep("oracle_orc", "ibqbjb", site="CX_1",
                      host="ibqbjb.fa.ocs.oraclecloud.com"),
         where="seed", industry="manufacturing_automotive",
-        note="A seed for the same pod with site CX_1 already exists; the "
-             "official link names site 'Honeywell'."),
+        note="The official link names site 'Honeywell' on pod ibqbjb; the "
+             "existing CX_1 seed on the same pod serves the SAME requisitions "
+             "(first 50 ids identical on 2026-10-21, 1,288 reported). Not added "
+             "twice: a second site would duplicate every Honeywell posting."),
     "Howmet Aerospace": dict(
-        domain="howmet.com", state="CHAIN", plan="candidate",
+        domain="howmet.com", state="CHAIN", plan="added",
         endpoint=_ep("oracle_orc", "fa-exty-saasfaprod1", site="CX_1",
                      host="fa-exty-saasfaprod1.fa.ocs.oraclecloud.com"),
         where="seed", industry="aerospace_defense"),
     "The Depository Trust & Clearing Corporation (DTCC)": dict(
-        domain="dtcc.com", state="CHAIN", plan="candidate",
+        domain="dtcc.com", state="CHAIN", plan="added",
         endpoint=_ep("oracle_orc", "ebxr", site="CX_1",
                      host="ebxr.fa.us2.oraclecloud.com"),
         where="seed", industry="fintech",
         note="The official link carries a category facet; the source is the "
              "whole CX_1 site (all categories)."),
-    "Verint": dict(domain="verint.com", state="CHAIN", plan="candidate",
+    "Verint": dict(domain="verint.com", state="CHAIN", plan="added",
                    endpoint=_ep("oracle_orc", "fa-epcb-saasfaprod1", site="CX",
                                 host="fa-epcb-saasfaprod1.fa.ocs.oraclecloud.com"),
                    where="seed", industry="tech"),
     # --- iCIMS / Jibe ------------------------------------------------------
     "Applied Systems": dict(
-        domain="appliedsystems.com", state="CHAIN", plan="candidate",
+        domain="appliedsystems.com", state="CHAIN", plan="added",
         endpoint=_ep("icims", "globalcareers-appliedsystems",
                      host="globalcareers-appliedsystems.icims.com"),
         where="seed", industry="tech"),
     "Delta Electronics Americas": dict(
-        domain="delta-americas.com", state="CHAIN", plan="candidate",
+        domain="delta-americas.com", state="CHAIN", plan="added",
         endpoint=_ep("icims", "careers-delta-americas",
                      host="careers-delta-americas.icims.com"),
         where="seed", industry="manufacturing_automotive"),
     "EchoStar Corporation": dict(
-        domain="echostar.com", state="CHAIN", plan="candidate",
+        domain="echostar.com", state="CHAIN", plan="added",
         endpoint=_ep("radancy", "echostar", host="jobs.echostar.com"),
         where="seed", industry="tech",
         note="jobs.echostar.com is an iCIMS Jibe front end (canonical "
              "dish.jibeapply.com). Its public /api/jobs is the contract the "
              "`radancy` provider already reads for AMD and Rivian."),
     "First Citizens Bank": dict(
-        domain="firstcitizens.com", state="FRONTEND", plan="candidate",
+        domain="firstcitizens.com", state="FRONTEND", plan="added",
         endpoint=_ep("radancy", "firstcitizens", host="jobs.firstcitizens.com"),
         where="seed", industry="banking",
         note="iCIMS-branded Jibe front end; listing verified through /api/jobs."),
     "ICE": dict(
-        domain="ice.com", state="FRONTEND", plan="candidate",
+        domain="ice.com", state="FRONTEND", plan="added",
         endpoint=_ep("radancy", "ice", host="careers.ice.com"),
         where="seed", industry="fintech",
         note="iCIMS-branded Jibe front end; listing verified through /api/jobs."),
@@ -230,17 +232,20 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
                 where="seed",
                 note="Taleo seed already present (career section 2 is the "
                      "portal the provider discovers)."),
-    "Uplight": dict(domain="uplight.com", state="CHAIN", plan="candidate",
-                    endpoint=_ep("jobvite", "uplight"), where="career_pages_catalog",
+    "Uplight": dict(domain="uplight.com", state="CHAIN", plan="added",
+                    endpoint=_ep("jobvite", "uplight"), where="seed",
                     industry="energy",
                     note="General Application posting is not a requisition."),
     "Schurz Communications": dict(
-        domain="schurz.com", state="CHAIN", plan="candidate",
-        endpoint=_ep("ukg", "SCH1012SHRZ", site="",
+        domain="schurz.com", state="CHAIN", plan="added",
+        endpoint=_ep("ukg", "SCH1012SHRZ",
+                     site="813f24f9-0154-46d6-bbb4-966dd708b1ff",
                      host="recruiting.ultipro.com"),
         where="seed", industry="media",
-        note="UKG needs the JobBoard GUID; it must come from an official link."),
-    "Troon": dict(domain="troon.com", state="CHAIN", plan="candidate",
+        note="The official link recruiting.ultipro.com/SCH1012SHRZ/ redirects "
+             "to JobBoard/813f24f9-... (observed 2026-10-21); the GUID is from "
+             "that redirect, not guessed."),
+    "Troon": dict(domain="troon.com", state="CHAIN", plan="added",
                   endpoint=_ep("ukg", "TRO1001TROO",
                                site="2b13054b-60bb-410d-9136-e52c1c7d9720",
                                host="recruiting2.ultipro.com"),
@@ -255,49 +260,49 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
         reason="shared Roper UKG board; the UKG provider cannot filter to the "
                "hiring entity, and importing every Roper job as SoftWriters is wrong"),
     "Productive Playhouse": dict(
-        domain="productiveplayhouse.com", state="CHAIN", plan="candidate",
+        domain="productiveplayhouse.com", state="CHAIN", plan="added",
         endpoint=_ep("jazzhr", "productiveplayhouse",
                      host="productiveplayhouse.applytojob.com"),
         where="seed", industry="tech"),
     "Texas Windstorm Insurance Association": dict(
-        domain="twia.org", state="CHAIN", plan="candidate",
+        domain="twia.org", state="CHAIN", plan="added",
         endpoint=_ep("adp_wfn", "5a22940c-3629-44d9-813a-0ccee8ac9aac",
                      site="19000101_000001", host="workforcenow.adp.com"),
         where="seed", industry="insurance"),
     # --- SAP SuccessFactors RMK (employer-hosted) ---------------------------
-    "Celestica": dict(domain="celestica.com", state="FRONTEND", plan="candidate",
+    "Celestica": dict(domain="celestica.com", state="FRONTEND", plan="added",
                       endpoint=_ep("successfactors", "celestica",
                                    host="careers.celestica.com"),
                       where="seed", industry="manufacturing_automotive"),
-    "Nomura": dict(domain="nomura.com", state="FRONTEND", plan="candidate",
+    "Nomura": dict(domain="nomura.com", state="FRONTEND", plan="added",
                    endpoint=_ep("successfactors", "nomura",
                                 host="careers.nomura.com"),
                    where="seed", industry="banking",
                    note="Americas channel only; early careers on Tal.net is a "
                         "separate channel and is not this source."),
     "PSEG Long Island LLC": dict(
-        domain="psegliny.com", state="FRONTEND", plan="candidate",
+        domain="psegliny.com", state="FRONTEND", plan="added",
         endpoint=_ep("successfactors", "psegliny", host="jobs.psegliny.com"),
         where="seed", industry="energy"),
-    "Schaeffler": dict(domain="schaeffler.com", state="FRONTEND", plan="candidate",
+    "Schaeffler": dict(domain="schaeffler.com", state="FRONTEND", plan="added",
                        endpoint=_ep("successfactors", "schaeffler",
                                     host="jobs.schaeffler.com"),
                        where="seed", industry="manufacturing_automotive"),
     "The Lubrizol Corporation": dict(
-        domain="lubrizol.com", state="FRONTEND", plan="candidate",
+        domain="lubrizol.com", state="FRONTEND", plan="added",
         endpoint=_ep("successfactors", "lubrizol", host="jobs.lubrizol.com"),
         where="seed", industry="manufacturing_automotive"),
     "Ventura Foods": dict(domain="venturafoods.com", state="FRONTEND",
-                          plan="candidate",
+                          plan="added",
                           endpoint=_ep("successfactors", "venturafoods",
                                        host="jobs.venturafoods.com"),
                           where="seed", industry="other"),
     # --- Phenom / Radancy TalentBrew / Amazon -------------------------------
-    "Acrisure": dict(domain="acrisure.com", state="FRONTEND", plan="candidate",
+    "Acrisure": dict(domain="acrisure.com", state="FRONTEND", plan="added",
                      endpoint=_ep("phenom", "acrisure", host="careers.acrisure.com"),
                      where="seed", industry="insurance"),
     "BAE Systems, Inc.": dict(
-        domain="baesystems.com", state="FRONTEND", plan="candidate",
+        domain="baesystems.com", state="FRONTEND", plan="added",
         endpoint=_ep("phenom", "baesystems", host="jobs.baesystems.com"),
         where="seed", industry="aerospace_defense",
         note="A Taleo seed `baesystems` already exists; health is checked "

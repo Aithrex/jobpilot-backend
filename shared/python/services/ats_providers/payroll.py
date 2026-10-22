@@ -186,6 +186,7 @@ class UkgProvider(AtsProvider):
 
         for page in range(int(self.policy.max_pages)):
             if ctx.should_stop():
+                ctx.listing_truncated = True
                 return
             status, payload = ctx.post_json(
                 url, params={}, json_body=self._body(page * page_size,
@@ -195,6 +196,8 @@ class UkgProvider(AtsProvider):
             if self.policy.is_challenge(status):
                 raise ChallengeError(self.vendor, status)
             if status != 200 or not isinstance(payload, dict):
+                if page > 0:
+                    ctx.listing_truncated = True
                 return
             rows = [r for r in (payload.get("opportunities") or [])
                     if isinstance(r, dict)]
@@ -223,6 +226,10 @@ class UkgProvider(AtsProvider):
                 return
             if total and (page + 1) * page_size >= total:
                 return
+        # The page cap ended the walk with the board not exhausted (Troon's
+        # board reported 2,115 on 2026-10-21 against a 1,000-row cap). A
+        # capped read is not a census; see `_close_stale_in_shard`.
+        ctx.listing_truncated = True
 
     def _to_raw(self, board: str, raw: Dict[str, Any]) -> Optional[RawJob]:
         rid = str(raw.get("Id") or "").strip()
