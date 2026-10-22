@@ -127,17 +127,21 @@ def _company_in_set(company: str, token_set: set) -> bool:
     return bool(_company_set_regex(token_set).search(company))
 
 
-def _load_applied_index(user_email: str) -> Dict[Tuple[str, str], Dict[str, Any]]:
-    """Build a (normalized_company, normalized_title) → {status, ts} map from saved_jobs.
+def _load_applied_index(user_email: str) -> Dict[str, Dict[str, Any]]:
+    """Map PROVEN identity keys (see `posting_identity.identity_keys`) of the
+    user's saved/applied jobs to ``{status, ts}``.
 
     Used to tag pipeline rows the user has already engaged with, so the UI
     can show "Already applied 3d ago" instead of presenting the same row as
-    fresh. We only consider statuses that mean "I've moved on this" — e.g.
-    interested means they clicked Open but never confirmed; applied / interview
-    / offer mean they actually submitted. "rejected" and "withdrawn" still
-    count as "engaged" so the user doesn't waste another click.
+    fresh. It used to be keyed on (company, title): applying to one Stripe
+    "Software Engineer" tagged every other Stripe "Software Engineer", and a
+    repost under a new aggregator id with a re-worded title was not tagged at
+    all. Keys are now the stored job id, the normalized original apply URL
+    and (board, requisition id) - never the company and title.
     """
-    out: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    from services import posting_identity as pid
+
+    out: Dict[str, Dict[str, Any]] = {}
     if not user_email:
         return out
     try:
@@ -145,30 +149,29 @@ def _load_applied_index(user_email: str) -> Dict[Tuple[str, str], Dict[str, Any]
         db = DBConnect().get_db()
         rows = db.saved_jobs.find(
             {"user_email": user_email},
-            {"job_data": 1, "status": 1, "saved_at": 1, "applied_at": 1, "updated_at": 1},
+            {"job_id": 1, "job_data": 1, "status": 1, "saved_at": 1,
+             "applied_at": 1, "updated_at": 1},
         )
     except Exception as e:
         logger.warning(f"_load_applied_index: {e}")
         return out
+    # Prefer the most-engaged status. Order: applied/interview/offer >
+    # rejected > interested > withdrawn.
+    rank = {"offer": 4, "interview": 3, "applied": 2, "rejected": 1, "interested": 0, "withdrawn": -1}
     for row in rows:
-        jd = (row.get("job_data") or {})
-        company = _norm_company(jd.get("company") or "").strip()
-        title = (jd.get("title") or "").strip().lower()
-        if not company or not title:
+        jd = dict(row.get("job_data") or {})
+        jd.setdefault("job_id", row.get("job_id"))
+        keys = pid.identity_keys(jd)
+        if not keys:
             continue
         ts = row.get("applied_at") or row.get("updated_at") or row.get("saved_at")
-        if hasattr(ts, "isoformat"):
-            ts_iso = ts.isoformat()
-        else:
-            ts_iso = ""
-        key = (company, title)
-        existing = out.get(key)
-        # Prefer the most-engaged status. Order: applied/interview/offer >
-        # rejected > interested > withdrawn.
-        rank = {"offer": 4, "interview": 3, "applied": 2, "rejected": 1, "interested": 0, "withdrawn": -1}
+        ts_iso = ts.isoformat() if hasattr(ts, "isoformat") else ""
         new_status = str(row.get("status") or "interested")
-        if not existing or rank.get(new_status, 0) > rank.get(existing.get("status", ""), 0):
-            out[key] = {"status": new_status, "ts": ts_iso}
+        for key in keys:
+            existing = out.get(key)
+            if not existing or rank.get(new_status, 0) > rank.get(existing.get("status", ""), 0):
+                out[key] = {"status": new_status, "ts": ts_iso,
+                            "matched_on": key.split("|", 1)[0]}
     return out
 
 
@@ -762,7 +765,11 @@ def _fetch_greenhouse(slug: str, display: str, title_filter=None) -> List[Dict[s
             "company": display,
             "title": title,
             "location": _clean_str(j.get("location")),
-            "posted": _normalize_posted(j.get("updated_at")),
+            # `first_published` is the employer's publication date; `updated_at`
+            # moves on every edit and made an old requisition read as new.
+            "posted": _normalize_posted(j.get("first_published") or j.get("updated_at")),
+            "source_job_id": _clean_str(j.get("id")),
+            "ats": "greenhouse", "tenant": slug,
             "salary": "—",
             "applicants": "",
             "url": _clean_str(j.get("absolute_url")),
@@ -821,6 +828,8 @@ def _fetch_lever(slug: str, display: str, title_filter=None) -> List[Dict[str, A
             "salary": "—",
             "applicants": "",
             "url": _clean_str(j.get("hostedUrl") or j.get("applyUrl")),
+            "source_job_id": _clean_str(j.get("id")),
+            "ats": "lever", "tenant": slug,
             "description": description[:6000],
         })
     return out
@@ -855,6 +864,8 @@ def _fetch_ashby(slug: str, display: str, title_filter=None) -> List[Dict[str, A
             "salary": "—",
             "applicants": "",
             "url": _clean_str(j.get("jobUrl") or j.get("applyUrl")),
+            "source_job_id": _clean_str(j.get("id")),
+            "ats": "ashby", "tenant": slug,
             "description": plain[:6000],
         })
     return out
@@ -1267,6 +1278,18 @@ def _normalize_posted(raw: Any, now: Optional[datetime] = None) -> str:
     return ""
 
 
+def _count_or_blank(value: Any) -> Any:
+    """A non-negative integer count, or "" when the source gave none.
+    0 stays 0 - it is information, not absence."""
+    if value is None or value == "" or isinstance(value, bool):
+        return ""
+    try:
+        n = int(str(value).replace(",", "").replace("+", "").strip())
+    except (TypeError, ValueError):
+        return ""
+    return n if n >= 0 else ""
+
+
 def _linkedin_to_record(j: dict) -> dict:
     return {
         "source": "LinkedIn",
@@ -1275,8 +1298,11 @@ def _linkedin_to_record(j: dict) -> dict:
         "location": _clean_str(j.get("location")),
         "posted": _normalize_posted(j.get("postedAt") or j.get("postedDate") or j.get("listedAt")),
         "salary": _clean_str(j.get("salary")) or "—",
-        "applicants": j.get("applicantsCount") or "",
+        # `or ""` turned a real 0 into "unknown", and 0 applicants is exactly
+        # the posting the low-competition bonus exists for.
+        "applicants": _count_or_blank(j.get("applicantsCount")),
         "url": _clean_str(j.get("link")),
+        "source_job_id": _clean_str(j.get("id") or j.get("jobId") or j.get("job_id")),
         "description": _clean_str(j.get("descriptionText")),
     }
 
@@ -1483,14 +1509,13 @@ def _summer_intern_block(rec: dict) -> Optional[str]:
 
 
 def _ghost_job_reason(rec: dict) -> Optional[str]:
-    """Heuristics for low-quality / ghost postings."""
-    # Very high applicant count = saturated, often reposted
-    try:
-        apc = int(rec.get("applicants") or 0)
-    except (ValueError, TypeError):
-        apc = 0
-    if apc >= 500:
-        return f"saturated posting ({apc}+ applicants)"
+    """Heuristics for low-quality / ghost postings.
+
+    Applicant COUNT is deliberately not one of them. A ">= 500 applicants"
+    rule used to exclude the row as a ghost job, but popularity is evidence
+    that people want the job, not that it is fake or closed (CLAUDE-PROMPT
+    gap 7). Ghost hiring intent is not observable from a counter.
+    """
     # Reposted-from-old indicator on LinkedIn descriptions
     desc = _clean_str(rec.get("description")).lower()
     if "reposted" in desc and ("month" in desc or "30 days" in desc):
@@ -1683,7 +1708,8 @@ def _score(rec: dict, today_iso: Optional[str] = None, profile: Optional[Dict[st
             pass
 
     try:
-        apc = int(rec["applicants"]) if rec["applicants"] else None
+        raw_apc = rec.get("applicants")
+        apc = int(raw_apc) if raw_apc not in ("", None) else None
         if apc is not None and apc < 30:
             s += 8; flags.append(f"<30 apps ({apc})")
     except (ValueError, TypeError):
@@ -1727,7 +1753,7 @@ def _filter_and_score(
     domain_strict: bool = False,
     h1b_only: bool = False,
     exclude_no_sponsorship: bool = False,
-    applied_index: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
+    applied_index: Optional[Dict[str, Dict[str, Any]]] = None,
     past_days: int = 1,
 ):
     apply_now: List[dict] = []
@@ -1735,34 +1761,14 @@ def _filter_and_score(
     excluded: List[dict] = []
     today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # Cross-source dedupe — when LinkedIn and Workday both surface the same role
-    # at the same company, keep one canonical copy. Prefer the entry that has a
-    # parseable date or a non-empty description (more useful for tailoring).
-    seen: Dict[Tuple[str, str], dict] = {}
-    for r in records:
-        key = (
-            _norm_company(r.get("company") or ""),
-            (r.get("title") or "").strip().lower(),
-        )
-        if not key[0] or not key[1]:
-            # Anything missing both fields gets a synthetic key so it isn't
-            # collapsed with other empty-field rows.
-            seen[(r.get("source", ""), r.get("url") or id(r))] = r
-            continue
-        existing = seen.get(key)
-        if existing is None:
-            seen[key] = r
-        else:
-            # Choose whichever copy is "richer".
-            def _quality(x: dict) -> int:
-                q = 0
-                if x.get("posted"): q += 2
-                if (x.get("description") or "").strip(): q += 1
-                if x.get("url"): q += 1
-                return q
-            if _quality(r) > _quality(existing):
-                seen[key] = r
-    deduped = list(seen.values())
+    # Cross-source dedupe on PROVEN identity (`posting_identity`,
+    # identity-1.0.0): the same normalized original apply URL or the same
+    # (board, requisition id). It was (company, title), which collapsed two
+    # different requisitions sharing a title - the second silently vanished -
+    # and is now never sufficient. Rows that only SHARE company, title and city
+    # are kept and flagged `possible_duplicate_of` for review. Within a proven
+    # group the "richer" copy wins and the losers' sources are kept.
+    deduped = _dedupe_records(records)
 
     # Pre-compute domain-strict matchers ONCE if domain_strict is enabled,
     # so per-record filtering is cheap regex .search() calls. We track the
@@ -1965,14 +1971,14 @@ def _filter_and_score(
         # to the SRE role at the same company") — but we do mark them so the
         # UI can show an "Already applied" badge.
         if applied_index:
-            ai_key = (
-                _norm_company(r.get("company") or "").strip(),
-                (r.get("title") or "").strip().lower(),
-            )
-            ai_hit = applied_index.get(ai_key)
-            if ai_hit:
-                r["previously_applied_status"] = ai_hit.get("status")
-                r["previously_applied_at"] = ai_hit.get("ts") or ""
+            from services import posting_identity as _pid
+            for ai_key in _pid.identity_keys(r):
+                ai_hit = applied_index.get(ai_key)
+                if ai_hit:
+                    r["previously_applied_status"] = ai_hit.get("status")
+                    r["previously_applied_at"] = ai_hit.get("ts") or ""
+                    r["previously_applied_match"] = ai_hit.get("matched_on") or ""
+                    break
         if exclude_no_sponsorship and visa_status == "no_sponsorship":
             excluded.append({**r, "reason": "JD says no visa sponsorship",
                              "tier": "Skip", "score": 0, "flags": ""}); continue
@@ -2050,6 +2056,52 @@ def _filter_and_score(
     apply_now.sort(key=lambda x: -x["score"])
     verify.sort(key=lambda x: -x["score"])
     return apply_now, verify, excluded
+
+
+def _record_quality(x: dict) -> int:
+    q = 0
+    if x.get("posted"): q += 2
+    if (x.get("description") or "").strip(): q += 1
+    if x.get("url"): q += 1
+    return q
+
+
+def _dedupe_records(records: List[dict]) -> List[dict]:
+    """Collapse rows that are provably one requisition; flag look-alikes."""
+    from services import posting_identity as pid
+
+    rows = [dict(r) for r in records]
+    grouping = pid.group_rows(rows)
+    order: List[str] = []
+    best: Dict[str, int] = {}
+    members: Dict[str, List[int]] = {}
+    for i, gid in enumerate(grouping["group_of"]):
+        if gid not in best:
+            best[gid] = i
+            order.append(gid)
+            members[gid] = [i]
+            continue
+        members[gid].append(i)
+        if _record_quality(rows[i]) > _record_quality(rows[best[gid]]):
+            best[gid] = i
+    out: List[dict] = []
+    survivor_of_index: Dict[int, int] = {}
+    for gid in order:
+        lead = rows[best[gid]]
+        others = [rows[j] for j in members[gid] if j != best[gid]]
+        if others:
+            lead["duplicate_sources"] = [str(o.get("source") or "") for o in others]
+            lead["duplicate_urls"] = [str(o.get("url") or "") for o in others][:8]
+        for j in members[gid]:
+            survivor_of_index[j] = best[gid]
+        out.append(lead)
+    for i, j in enumerate(grouping["possible_duplicate_of"]):
+        if j is None:
+            continue
+        lead_i, lead_j = rows[survivor_of_index[i]], rows[survivor_of_index[j]]
+        if lead_i is not lead_j and not lead_i.get("possible_duplicate_of"):
+            lead_i["possible_duplicate_of"] = lead_j.get("url") or lead_j.get("title") or ""
+    return out
 
 
 def _cap_per_company(
