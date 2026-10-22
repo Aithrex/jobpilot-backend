@@ -111,6 +111,8 @@ class PhenomProvider(AtsProvider):
         # docs/audit/direct-employer-onboarding.md). Named hosts only.
         "careers.acrisure.com",
         "jobs.baesystems.com",
+        "careers.snowflake.com",
+        "careers.abb",
         ".phenompeople.com",
     )
     portal_hosts = api_hosts

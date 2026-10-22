@@ -83,7 +83,8 @@ class RadancyProvider(AtsProvider):
                  # iCIMS Jibe front ends linked from each employer's own careers
                  # page, same public /api/jobs contract, verified 2026-10-21
                  # (docs/audit/direct-employer-onboarding.md). Named hosts only.
-                 "jobs.echostar.com", "jobs.firstcitizens.com", "careers.ice.com")
+                 "jobs.echostar.com", "jobs.firstcitizens.com", "careers.ice.com",
+                 "jobs.exeloncorp.com")
     portal_hosts = api_hosts
 
     policy = CrawlPolicy(

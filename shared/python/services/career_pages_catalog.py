@@ -1373,6 +1373,7 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Trexquant", "ats": "workable", "slug": "trexquant", "industry": "fintech"},
     {"display_name": "Intuitive", "ats": "smartrecruiters", "slug": "Intuitive", "industry": "healthtech"},
     {"display_name": "Spring Venture Group", "ats": "smartrecruiters", "slug": "SpringVentureGroup1", "industry": "insurance"},
+    {"display_name": "Runway", "ats": "ashby", "slug": "runway-ml", "industry": "tech"},
 ]
 
 INDUSTRIES: List[str] = sorted({r["industry"] for r in CAREER_PAGES_CATALOG})

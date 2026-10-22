@@ -293,6 +293,15 @@ class SuccessFactorsProvider(AtsProvider):
         "jobs.schaeffler.com",
         "jobs.lubrizol.com",
         "jobs.venturafoods.com",
+        # Electric utilities / power engineering (owner priority list).
+        "careers.dominionenergy.com",
+        "jobs.entergy.com",
+        "careers.dteenergy.com",
+        "careers.consumersenergy.com",
+        "jobs.nexteraenergy.com",
+        "jobs.pseg.com",
+        "careers.hubbell.com",
+        "careers.bv.com",
     )
     portal_hosts = api_hosts
 

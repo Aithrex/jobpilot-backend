@@ -424,6 +424,8 @@ def outcome_for(entry: Dict[str, Any], *, disposition: str,
         return {"outcome": UNSUPPORTED, "why": refusal, "provider_needed": "entity_filter"}
     if plan == "pending":
         return {"outcome": PENDING, "why": entry.get("reason") or "evidence missing"}
+    if plan == "blocked":
+        return {"outcome": BLOCKED, "why": entry.get("reason") or "fetch refused"}
     if plan == "unsupported":
         need = entry.get("provider_needed")
         if need:

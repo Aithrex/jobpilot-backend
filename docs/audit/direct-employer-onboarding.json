@@ -1,6 +1,6 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T02:07:03Z",
+ "generated_at": "2026-10-22T02:17:09Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
@@ -4437,18 +4437,3491 @@
    ]
   },
   "top": {
-   "denominator": 0,
+   "denominator": 130,
    "counts": {
-    "existing_covered": 0,
+    "existing_covered": 84,
     "existing_unhealthy_or_moved": 0,
-    "new_validated": 0,
+    "new_validated": 17,
     "excluded": 0,
     "review": 0,
-    "blocked": 0,
-    "unsupported": 0,
-    "pending": 0
+    "blocked": 10,
+    "unsupported": 7,
+    "pending": 12
    },
-   "rows": []
+   "rows": [
+    {
+     "company": "Microsoft",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "eightfold",
+     "endpoint": {
+      "vendor": "eightfold",
+      "tenant": "microsoft",
+      "site": "",
+      "host": "apply.careers.microsoft.com",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "eightfold-microsoft",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Google",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "google_careers",
+     "endpoint": {
+      "vendor": "google_careers",
+      "tenant": "google",
+      "site": "",
+      "host": "www.google.com",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "google_careers-google",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Apple",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "custom_apple",
+     "endpoint": {
+      "vendor": "custom_apple",
+      "tenant": "apple",
+      "site": "",
+      "host": "jobs.apple.com",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "custom_apple-apple",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Amazon",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "amazon",
+     "endpoint": {
+      "vendor": "amazon",
+      "tenant": "amazon",
+      "site": "",
+      "host": "www.amazon.jobs",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "amazon-amazon",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Meta",
+     "disposition": "eligible_direct",
+     "evidence_state": "OWN",
+     "domain": "meta.com",
+     "provider": "meta_careers",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:meta_careers",
+     "member_key": "",
+     "provider_needed": "meta_careers",
+     "note": "metacareers.com is a JS app needing a browser session (mnc_catalog record); left on the metered path.",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Oracle",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "eeho",
+      "site": "CX_1",
+      "host": "eeho.fa.us2.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "oracle_orc-eeho-cx_1",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Salesforce",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "salesforce",
+      "site": "External_Career_Site",
+      "host": "",
+      "extra": {
+       "wd_host": "wd12"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "salesforce",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Adobe",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "adobe",
+      "site": "external_experienced",
+      "host": "",
+      "extra": {
+       "wd_host": "wd5"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "adobe",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "IBM",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "custom_ibm",
+     "endpoint": {
+      "vendor": "custom_ibm",
+      "tenant": "ibm",
+      "site": "",
+      "host": "www-api.ibm.com",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "custom_ibm-ibm",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Intuit",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "intuit.com",
+     "provider": "radancy_talentbrew",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:radancy_talentbrew",
+     "member_key": "",
+     "provider_needed": "radancy_talentbrew",
+     "note": "jobs.intuit.com is TalentBrew (/search-jobs).",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "ServiceNow",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "smartrecruiters",
+     "endpoint": {
+      "vendor": "smartrecruiters",
+      "tenant": "servicenow",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "smartrecruiters-servicenow",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Workday",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "workday",
+      "site": "Workday",
+      "host": "",
+      "extra": {
+       "wd_host": "wd5"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "workday",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Atlassian",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "custom_atlassian",
+     "endpoint": {
+      "vendor": "custom_atlassian",
+      "tenant": "atlassian",
+      "site": "",
+      "host": "www.atlassian.com",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "custom_atlassian-atlassian",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Uber",
+     "disposition": "eligible_direct",
+     "evidence_state": "OWN",
+     "domain": "uber.com",
+     "provider": "uber_careers",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:uber_careers",
+     "member_key": "",
+     "provider_needed": "uber_careers",
+     "note": "MNC catalog engine `uber` has no termless provider (only Uber Freight, a separate company, is crawled).",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Airbnb",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "airbnb",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-airbnb",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Stripe",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "stripe",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-stripe",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Shopify",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "shopify.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official careers page served no ATS link",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Cisco",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "cisco",
+      "site": "Cisco_Careers",
+      "host": "",
+      "extra": {
+       "wd_host": "wd5"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "cisco",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Autodesk",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "autodesk",
+      "site": "Ext",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "autodesk",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "PayPal",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "paypal",
+      "site": "jobs",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "paypal",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Block",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "block",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-block",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Netflix",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "eightfold",
+     "endpoint": {
+      "vendor": "eightfold",
+      "tenant": "netflix",
+      "site": "",
+      "host": "explore.jobs.netflix.net",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "eightfold-netflix",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "DoorDash",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "doordashusa",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-doordashusa",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Bloomberg",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "bloomberg.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "PerimeterX captcha (mnc_catalog record); not bypassed",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "Qualcomm",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "eightfold",
+     "endpoint": {
+      "vendor": "eightfold",
+      "tenant": "qualcomm",
+      "site": "",
+      "host": "careers.qualcomm.com",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "eightfold-qualcomm",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "software"
+    },
+    {
+     "company": "OpenAI",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "openai",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-openai",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Anthropic",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "anthropic",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-anthropic",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Google DeepMind",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "deepmind.google",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official careers page is client-rendered; board link not in served HTML",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "NVIDIA",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "nvidia",
+      "site": "NVIDIAExternalCareerSite",
+      "host": "",
+      "extra": {
+       "wd_host": "wd5"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "nvidia",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "xAI",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "xai",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-xai",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Scale AI",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "scaleai",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-scaleai",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Cohere",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "cohere",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-cohere",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Perplexity",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "perplexity",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-perplexity",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Character.AI",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "character",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-character",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Cursor",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "cursor",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-cursor",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Hugging Face",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workable",
+     "endpoint": {
+      "vendor": "workable",
+      "tenant": "huggingface",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "workable-huggingface",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Runway",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "runwayml.com",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "runway-ml",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-runway-ml",
+     "provider_needed": "",
+     "note": "runwayml.com/careers -> runway.com/careers links jobs.ashbyhq.com/runway-ml.",
+     "validation": {
+      "at": "2026-10-22T02:14:37Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 48,
+      "unique_ids": 48,
+      "duplicate_rows": 0,
+      "requisitions": 48,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Sr./Staff Product Designer, Growth",
+       "Sr./Staff Product Designer",
+       "Member of Technical Staff, Backend Engineer, API"
+      ],
+      "detail": "",
+      "member_key": "ashby-runway-ml"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Glean",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "gleanwork",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-gleanwork",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Harvey",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "harvey",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-harvey",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Cerebras",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "cerebras",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-cerebras",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "SambaNova",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "sambanovasystems",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-sambanovasystems",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Groq",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "groq.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "groq.com/careers redirects to the homepage; no board link served",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Together AI",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "togetherai",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-togetherai",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Figure AI",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "figure.ai",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official careers page served no ATS link",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Waymo",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "waymo",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-waymo",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Aurora Innovation",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "aurorainnovation",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-aurorainnovation",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Physical Intelligence",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "physicalintelligence",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-physicalintelligence",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Mistral AI",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "mistral-ai",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-mistral-ai",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "ElevenLabs",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "elevenlabs",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-elevenlabs",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Abridge",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "abridge",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-abridge",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "ai_ml"
+    },
+    {
+     "company": "Databricks",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "databricks",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-databricks",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Snowflake",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "snowflake.com",
+     "provider": "phenom",
+     "endpoint": {
+      "vendor": "phenom",
+      "tenant": "snowflake",
+      "site": "",
+      "host": "careers.snowflake.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "phenom-snowflake",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T02:14:41Z",
+      "vendor": "phenom",
+      "status": "budget_limited",
+      "source_reported": 361,
+      "parsed": 100,
+      "unique_ids": 100,
+      "duplicate_rows": 0,
+      "requisitions": 100,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Staff Software Engineer - FDB Platform",
+       "Senior Solution Engineer",
+       "Senior Solutions Engineer - FSI"
+      ],
+      "detail": "",
+      "member_key": "phenom-snowflake"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Palantir",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "lever",
+     "endpoint": {
+      "vendor": "lever",
+      "tenant": "palantir",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "lever-palantir",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Confluent",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "confluent",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-confluent",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "MongoDB",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "mongodb",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-mongodb",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Datadog",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "datadog",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-datadog",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Elastic",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "elastic",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-elastic",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Fivetran",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "fivetran",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-fivetran",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "dbt Labs",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "dbtlabsinc",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-dbtlabsinc",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Teradata",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "teradata.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official careers page served no ATS link",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Cloudera",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "cloudera",
+      "site": "External_Career",
+      "host": "",
+      "extra": {
+       "wd_host": "wd5"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "cloudera",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Informatica",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "salesforce",
+      "site": "External_Career_Site",
+      "host": "",
+      "extra": {
+       "wd_host": "wd12"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "salesforce",
+     "provider_needed": "",
+     "note": "informatica.com/careers redirects to Salesforce careers (search=informatica), observed 2026-10-21.",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Alteryx",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "alteryx.com",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "alteryx",
+      "site": "AlteryxCareers",
+      "host": "",
+      "extra": {
+       "wd_host": "wd108"
+      }
+     },
+     "where": "workday_tenant_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "alteryx",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T02:14:38Z",
+      "vendor": "workday",
+      "status": "complete",
+      "source_reported": 50,
+      "parsed": 50,
+      "unique_ids": 50,
+      "duplicate_rows": 0,
+      "requisitions": 50,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Sales Enablement Professional \u2013 Sales Leadership",
+       "Sales Development Representative (Remote USA  based)",
+       "Sr. Software Engineer, Dataplane"
+      ],
+      "detail": "",
+      "member_key": "workday-alteryx-alteryxcareers"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Domo",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "domo.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "domo.com/company/careers answered 405 on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "ThoughtSpot",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "thoughtspot.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official careers page served no ATS link",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Sigma Computing",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "sigmacomputing",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-sigmacomputing",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Hex",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "hextechnologies",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-hextechnologies",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Starburst",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "starburst",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-starburst",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "ClickHouse",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "clickhouse",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-clickhouse",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Amplitude",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "amplitude",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-amplitude",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Two Sigma",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "twosigma.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official careers page served no ATS link",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Capital One",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "capitalone",
+      "site": "Capital_One",
+      "host": "",
+      "extra": {
+       "wd_host": "wd12"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "capitalone",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Nielsen",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "nielsen.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "careers URL answered 404; NielsenIQ (crawled) is a different company",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Experian",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "smartrecruiters",
+     "endpoint": {
+      "vendor": "smartrecruiters",
+      "tenant": "experian",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "smartrecruiters-experian",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Splunk",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "cisco",
+      "site": "Cisco_Careers",
+      "host": "",
+      "extra": {
+       "wd_host": "wd5"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "cisco",
+     "provider_needed": "",
+     "note": "Splunk is a Cisco company.",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "data_science"
+    },
+    {
+     "company": "Cloudflare",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "cloudflare",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-cloudflare",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "DigitalOcean",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "digitalocean.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "open-roles page is a JS shell (XHRs Greenhouse per CLAUDE.md); token not observed in served HTML",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "CoreWeave",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "coreweave",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-coreweave",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Akamai",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "akamai.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "akamai.com/careers answered 403 on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Fastly",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "fastly",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-fastly",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "HashiCorp",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "custom_ibm",
+     "endpoint": {
+      "vendor": "custom_ibm",
+      "tenant": "ibm",
+      "site": "",
+      "host": "www-api.ibm.com",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "custom_ibm-ibm",
+     "provider_needed": "",
+     "note": "HashiCorp is an IBM company.",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Broadcom",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "broadcom",
+      "site": "External_Career",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "broadcom",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Red Hat",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "redhat",
+      "site": "jobs",
+      "host": "",
+      "extra": {
+       "wd_host": "wd5"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "redhat",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Nutanix",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "nutanix.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "careers.nutanix.com answered 403 on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "NetApp",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "netapp.com",
+     "provider": "eightfold",
+     "endpoint": {
+      "vendor": "eightfold",
+      "tenant": "netapp",
+      "site": "",
+      "host": "netapp.eightfold.ai",
+      "extra": {
+       "domain": "netapp.com"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "eightfold-netapp",
+     "provider_needed": "",
+     "note": "careers.netapp.com (TalentBrew front end) links netapp.eightfold.ai.",
+     "validation": {
+      "at": "2026-10-22T02:14:45Z",
+      "vendor": "eightfold",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 136,
+      "unique_ids": 136,
+      "duplicate_rows": 0,
+      "requisitions": 136,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Sr. Product Manager",
+       "Enterprise Client Executive - Florida",
+       "Partner Technical Lead - Insight"
+      ],
+      "detail": "",
+      "member_key": "eightfold-netapp"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Equinix",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "equinix",
+      "site": "External",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "equinix",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Digital Realty",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "digitalrealty.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "TLS error fetching digitalrealty.com/about/careers on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Rackspace",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "rackspace",
+      "site": "External",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "rackspace",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Lambda",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "lambda",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-lambda",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Crusoe",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "ashby",
+     "endpoint": {
+      "vendor": "ashby",
+      "tenant": "crusoe",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "ashby-crusoe",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Vercel",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "vercel",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-vercel",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Okta",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "okta",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-okta",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Zscaler",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "zscaler",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-zscaler",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Palo Alto Networks",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "paloaltonetworks",
+      "site": "panwexternalcareers",
+      "host": "",
+      "extra": {
+       "wd_host": "wd5"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "paloaltonetworks",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Dell Technologies",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "dell",
+      "site": "CX_1001",
+      "host": "enterpriseplatform.dell.com",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "oracle_orc-dell-cx_1001",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Hewlett Packard Enterprise",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "hpe",
+      "site": "Jobsathpe",
+      "host": "",
+      "extra": {
+       "wd_host": "wd5"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "hpe",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Arista Networks",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "arista.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "arista.com/en/careers answered 406 on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Pure Storage",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "purestorage",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-purestorage",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Twilio",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "twilio",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "greenhouse-twilio",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Supermicro",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "supermicro.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official careers URL answered 404; current page unknown",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "cloud"
+    },
+    {
+     "company": "Duke Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "dukeenergy",
+      "site": "Search",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "dukeenergy",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Southern Company",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "southerncompany.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "only a DirectEmployers .jobs site (southerncompany.jobs) observed; employer ATS not established",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "NextEra Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "nexteraenergy.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "nexteraenergy",
+      "site": "",
+      "host": "jobs.nexteraenergy.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-nexteraenergy",
+     "provider_needed": "",
+     "note": "Includes Florida Power & Light (an NextEra company).",
+     "validation": {
+      "at": "2026-10-22T02:15:20Z",
+      "vendor": "successfactors",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Director Underwriting",
+       "Nuclear Project Manager",
+       "Manager Structuring"
+      ],
+      "detail": "",
+      "member_key": "successfactors-nexteraenergy"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Dominion Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "dominionenergy.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "dominionenergy",
+      "site": "",
+      "host": "careers.dominionenergy.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-dominionenergy",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T02:14:56Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 145,
+      "unique_ids": 145,
+      "duplicate_rows": 0,
+      "requisitions": 145,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Consulting Engineer-Nuclear Strategic Projects",
+       "Intern-Device Support Innsbrook VA",
+       "Intern - System Protection Electrical Engineer"
+      ],
+      "detail": "",
+      "member_key": "successfactors-dominionenergy"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "American Electric Power",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "aep",
+      "site": "AEPCareerSite",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "aep",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Xcel Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "xcelenergy",
+      "site": "External",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "xcelenergy",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Exelon",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "exeloncorp.com",
+     "provider": "radancy",
+     "endpoint": {
+      "vendor": "radancy",
+      "tenant": "exeloncorp",
+      "site": "",
+      "host": "jobs.exeloncorp.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy-exeloncorp",
+     "provider_needed": "",
+     "note": "iCIMS Jibe front end (careers-exeloncorp.icims.com behind it).",
+     "validation": {
+      "at": "2026-10-22T02:15:51Z",
+      "vendor": "radancy",
+      "status": "complete",
+      "source_reported": 124,
+      "parsed": 124,
+      "unique_ids": 124,
+      "duplicate_rows": 0,
+      "requisitions": 124,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Nurse Practitioner",
+       "Benefit Communications Manager",
+       "Sr Fleet Administrator, Parts & Warranty"
+      ],
+      "detail": "",
+      "member_key": "radancy-exeloncorp"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "PG&E",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "pge.com",
+     "provider": "radancy_talentbrew",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:radancy_talentbrew",
+     "member_key": "",
+     "provider_needed": "radancy_talentbrew",
+     "note": "jobs.pge.com is TalentBrew over an SAP RCM tenant (C0000161245P); RCM is not anonymously listable.",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Southern California Edison",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "edison.com",
+     "provider": "symphony_cws",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:symphony_cws",
+     "member_key": "",
+     "provider_needed": "symphony_cws",
+     "note": "edisoncareers.com is a Symphony/CWS front end (jobsapi-google.m-cloud.io) over SAP RCM C0003043182P.",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Entergy",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "entergy.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "entergy",
+      "site": "",
+      "host": "jobs.entergy.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-entergy",
+     "provider_needed": "",
+     "note": "entergy.com/careers redirects to jobs.entergy.com (RMK).",
+     "validation": {
+      "at": "2026-10-22T02:15:02Z",
+      "vendor": "successfactors",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Apprentice 1st Step - Journeyman Serviceman",
+       "Sales Lighting Rep",
+       "Student, Intern, Project Delivery, Summer 2027"
+      ],
+      "detail": "",
+      "member_key": "successfactors-entergy"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Con Edison",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "coned.com",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "ejcu",
+      "site": "CX_1033",
+      "host": "ejcu.fa.us6.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "oracle_orc-ejcu-cx_1033",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T02:15:49Z",
+      "vendor": "oracle_orc",
+      "status": "complete",
+      "source_reported": 49,
+      "parsed": 49,
+      "unique_ids": 49,
+      "duplicate_rows": 0,
+      "requisitions": 49,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Project Construction Specialist - Public Improvement",
+       "Section Manager Clean Energy Networks",
+       "Strategy Senior Specialist -(2L)"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-ejcu-cx_1033"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "National Grid",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "nationalgrid.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "careers.nationalgrid.com answered 403 on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Eversource",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "eversource",
+      "site": "ExternalSite",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "eversource",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "PSEG",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "pseg.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "pseg",
+      "site": "",
+      "host": "jobs.pseg.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-pseg",
+     "provider_needed": "",
+     "note": "PSEG Long Island's own host (jobs.psegliny.com) is a separate source.",
+     "validation": {
+      "at": "2026-10-22T02:15:31Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 32,
+      "unique_ids": 32,
+      "duplicate_rows": 0,
+      "requisitions": 32,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Associate Engineer Electric Delivery & Planning",
+       "9553 Continuous Improvement Prj Ldr",
+       "5046 Sr Accounts Payable Analyst"
+      ],
+      "detail": "",
+      "member_key": "successfactors-pseg"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "DTE Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "dteenergy.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "dteenergy",
+      "site": "",
+      "host": "careers.dteenergy.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-dteenergy",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T02:15:12Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 83,
+      "unique_ids": 83,
+      "duplicate_rows": 0,
+      "requisitions": 83,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "O&M Technician Lv 4",
+       "Engineering Technician Field- L223 OPT",
+       "Sales Consultant - Electric"
+      ],
+      "detail": "",
+      "member_key": "successfactors-dteenergy"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Consumers Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "consumersenergy.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "consumersenergy",
+      "site": "",
+      "host": "careers.consumersenergy.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-consumersenergy",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T02:15:16Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 52,
+      "unique_ids": 52,
+      "duplicate_rows": 0,
+      "requisitions": 52,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Forestry Supv - Timebound",
+       "Sr Mgr Digital Prod Mgmt",
+       "Mgr Elec Operations"
+      ],
+      "detail": "",
+      "member_key": "successfactors-consumersenergy"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "GE Vernova",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "gevernova",
+      "site": "Vernova_ExternalSite",
+      "host": "",
+      "extra": {
+       "wd_host": "wd5"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "gevernova",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Siemens Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "siemens-energy.com",
+     "provider": "avature",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "unsupported_pending_provider:avature",
+     "member_key": "",
+     "provider_needed": "avature",
+     "note": "jobs.siemens-energy.com is Avature.",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Hitachi Energy",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "hitachienergy.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "unsupported",
+     "outcome": "unsupported",
+     "why": "links Hitachi's shared Workday board (hitachi.wd1/hitachi); needs an entity filter",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Schneider Electric",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "se.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "careers.se.com answered 403 on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "ABB",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "abb.com",
+     "provider": "phenom",
+     "endpoint": {
+      "vendor": "phenom",
+      "tenant": "abb",
+      "site": "",
+      "host": "careers.abb",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "phenom-abb",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T02:15:53Z",
+      "vendor": "phenom",
+      "status": "budget_limited",
+      "source_reported": 2067,
+      "parsed": 100,
+      "unique_ids": 100,
+      "duplicate_rows": 0,
+      "requisitions": 100,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Industry & Account Manager",
+       "Regional Sales Manager HVACR - West",
+       "Channel/OEM Sales Manager"
+      ],
+      "detail": "",
+      "member_key": "phenom-abb"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Eaton",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "eaton.com",
+     "provider": "eightfold",
+     "endpoint": {
+      "vendor": "eightfold",
+      "tenant": "eaton",
+      "site": "",
+      "host": "eaton.eightfold.ai",
+      "extra": {
+       "domain": "eaton.com"
+      }
+     },
+     "where": "seed",
+     "plan": "candidate",
+     "outcome": "blocked",
+     "why": "not added; validation blocked",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "jobs.eaton.com redirects to eaton.eightfold.ai/careers. The Eightfold API answered 403 to our validation on 2026-10-21, so no row was added.",
+     "validation": {
+      "at": "2026-10-22T02:15:53Z",
+      "vendor": "eightfold",
+      "status": "blocked",
+      "source_reported": null,
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "403"
+      ],
+      "sample_titles": [],
+      "detail": "",
+      "member_key": "eightfold-eaton"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Hubbell",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "hubbell.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "hubbell",
+      "site": "",
+      "host": "careers.hubbell.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-hubbell",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T02:15:33Z",
+      "vendor": "successfactors",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "CNC Manufacturing Engineer (2nd Shift) - Leeds, AL",
+       "Lead Master Scheduler (Switching & Fusing) - Leeds, AL",
+       "Almacenista"
+      ],
+      "detail": "",
+      "member_key": "successfactors-hubbell"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Quanta Services",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "quantaservices.com",
+     "provider": "icims",
+     "endpoint": {
+      "vendor": "icims",
+      "tenant": "allcareers-quanta",
+      "site": "",
+      "host": "allcareers-quanta.icims.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "icims-allcareers-quanta",
+     "provider_needed": "",
+     "note": "Quanta's all-companies board; Quanta operating companies hire under the Quanta family.",
+     "validation": {
+      "at": "2026-10-22T02:15:56Z",
+      "vendor": "icims",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 19,
+      "unique_ids": 19,
+      "duplicate_rows": 0,
+      "requisitions": 18,
+      "filtered_non_requisition": 1,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "NCCCO Crane Operator",
+       "Project Manager",
+       "Accounts Payable Lead"
+      ],
+      "detail": "",
+      "member_key": "icims-allcareers-quanta"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Burns & McDonnell",
+     "disposition": "eligible_direct",
+     "evidence_state": "PENDING",
+     "domain": "burnsmcd.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "pending",
+     "outcome": "pending",
+     "why": "official link is burnsmcd.jobs (DirectEmployers); underlying ATS not established",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Black & Veatch",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "bv.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "bv",
+      "site": "",
+      "host": "careers.bv.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-bv",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "at": "2026-10-22T02:15:41Z",
+      "vendor": "successfactors",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Associate Engineering Technician - Civil",
+       "Site Manager - Simple/Combined Cycle",
+       "Electrical Superintendent - Simple/Combined Cycle"
+      ],
+      "detail": "",
+      "member_key": "successfactors-bv"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Sargent & Lundy",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "sargentlundy.com",
+     "provider": "icims",
+     "endpoint": {
+      "vendor": "icims",
+      "tenant": "careers-sargentlundy",
+      "site": "",
+      "host": "careers-sargentlundy.icims.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "icims-careers-sargentlundy",
+     "provider_needed": "",
+     "note": "US board; international-sargentlundy is separate.",
+     "validation": {
+      "at": "2026-10-22T02:15:59Z",
+      "vendor": "icims",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 200,
+      "unique_ids": 200,
+      "duplicate_rows": 0,
+      "requisitions": 200,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Electrical Engineer 1 (Entry-Level) - Nuclear (Summer 2027)",
+       "Senior Underground Transmission Line Engineer 2 - Grid",
+       "Electrical Engineering Intern - Nuclear (Summer 2027)"
+      ],
+      "detail": "",
+      "member_key": "icims-careers-sargentlundy"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "POWER Engineers",
+     "disposition": "eligible_direct",
+     "evidence_state": "BLOCKED",
+     "domain": "powereng.com",
+     "provider": "",
+     "endpoint": null,
+     "where": "",
+     "plan": "blocked",
+     "outcome": "blocked",
+     "why": "powereng.com/careers redirects to wsp.com (now WSP), which answered 403 on 2026-10-21",
+     "member_key": "",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Texas Instruments",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "edbz",
+      "site": "CX_1",
+      "host": "edbz.fa.us2.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "oracle_orc-edbz-cx_1",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    },
+    {
+     "company": "Analog Devices",
+     "disposition": "eligible_direct",
+     "evidence_state": "EXISTING",
+     "domain": "",
+     "provider": "workday",
+     "endpoint": {
+      "vendor": "workday",
+      "tenant": "analogdevices",
+      "site": "External",
+      "host": "",
+      "extra": {
+       "wd_host": "wd1"
+      }
+     },
+     "where": "catalog_or_seed",
+     "plan": "existing",
+     "outcome": "existing_covered",
+     "why": "row already in the crawl tables",
+     "member_key": "analogdevices",
+     "provider_needed": "",
+     "note": "",
+     "validation": {
+      "status": "not_run"
+     },
+     "domain_group": "electrical_power"
+    }
+   ]
   },
   "health": {
    "denominator": 4,
@@ -4615,5 +8088,28 @@
    ]
   }
  },
- "next_batch": []
+ "next_batch": [
+  "Shopify",
+  "Bloomberg",
+  "Google DeepMind",
+  "Groq",
+  "Figure AI",
+  "Teradata",
+  "Domo",
+  "ThoughtSpot",
+  "Two Sigma",
+  "Nielsen",
+  "DigitalOcean",
+  "Akamai",
+  "Nutanix",
+  "Digital Realty",
+  "Arista Networks",
+  "Supermicro",
+  "Southern Company",
+  "National Grid",
+  "Schneider Electric",
+  "Eaton",
+  "Burns & McDonnell",
+  "POWER Engineers"
+ ]
 }
