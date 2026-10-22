@@ -33,7 +33,7 @@ import ipaddress
 import logging
 import re
 import socket
-from typing import Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -65,6 +65,9 @@ _MAX_REDIRECTS = 5
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 
+_SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")
+
+
 def _ip_is_public(ip) -> bool:
     """False for loopback / private (10/8, 172.16/12, 192.168/16, fc00::/7) /
     link-local (169.254/16 incl. 169.254.169.254, fe80::/10) / reserved /
@@ -78,6 +81,10 @@ def _ip_is_public(ip) -> bool:
         or ip.is_multicast
         or ip.is_reserved
         or ip.is_unspecified
+        # RFC 6598 shared address space (100.64/10): CGNAT and some clouds'
+        # internal service endpoints. `ipaddress` calls it neither private
+        # nor reserved, so it has to be named.
+        or (ip.version == 4 and ip in _SHARED_ADDRESS_SPACE)
     )
 
 
@@ -88,18 +95,28 @@ def url_is_safe(url: str) -> Tuple[bool, str]:
     DNS resolution failure fails CLOSED (we refuse rather than let requests
     resolve it a second time unchecked).
     """
+    ok, reason, _ips = resolve_public(url)
+    return ok, reason
+
+
+def resolve_public(url: str) -> Tuple[bool, str, List[str]]:
+    """`url_is_safe` plus the public addresses it validated.
+
+    The addresses are what `safe_status` CONNECTS to, so the name is resolved
+    exactly once per hop: a rebinding resolver that answers public to the check
+    and private to the connection never gets the second question."""
     if not url or not isinstance(url, str):
-        return False, "empty_url"
+        return False, "empty_url", []
     try:
         parsed = urlparse(url.strip())
     except Exception:
-        return False, "unparseable_url"
+        return False, "unparseable_url", []
     scheme = (parsed.scheme or "").lower()
     if scheme not in _ALLOWED_SCHEMES:
-        return False, f"scheme_not_allowed:{scheme or 'none'}"
+        return False, f"scheme_not_allowed:{scheme or 'none'}", []
     host = parsed.hostname
     if not host:
-        return False, "no_host"
+        return False, "no_host", []
 
     # Literal IP (incl. bracketed IPv6) — validate directly, no DNS.
     try:
@@ -107,27 +124,124 @@ def url_is_safe(url: str) -> Tuple[bool, str]:
     except ValueError:
         literal = None
     if literal is not None:
-        return (True, "") if _ip_is_public(literal) else (False, "private_ip_literal")
+        if _ip_is_public(literal):
+            return True, "", [str(literal)]
+        return False, "private_ip_literal", []
 
     try:
         port = parsed.port or (443 if scheme == "https" else 80)
     except ValueError:
-        return False, "bad_port"
+        return False, "bad_port", []
     try:
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except (socket.gaierror, OSError, UnicodeError, ValueError):
-        return False, "dns_failure"
+        return False, "dns_failure", []
     if not infos:
-        return False, "dns_empty"
+        return False, "dns_empty", []
+    ips: List[str] = []
     for info in infos:
         addr = str(info[4][0]).split("%")[0]
         try:
             resolved = ipaddress.ip_address(addr)
         except ValueError:
-            return False, "unparseable_resolved_addr"
+            return False, "unparseable_resolved_addr", []
         if not _ip_is_public(resolved):
-            return False, "resolves_to_private_ip"
-    return True, ""
+            return False, "resolves_to_private_ip", []
+        if str(resolved) not in ips:
+            ips.append(str(resolved))
+    return True, "", ips
+
+
+def _follow_safely(url: str, send: Callable[[str, str], Any], *,
+                   max_hops: int = _MAX_REDIRECTS, label: str = "jd_fetcher"):
+    """THE redirect loop: validate, send, and on a 3xx validate the next hop
+    BEFORE it is requested. `send(url, pinned_ip)` must not follow redirects
+    itself. Returns the final response, or None when a hop was blocked or the
+    chain ran past `max_hops`."""
+    current = url
+    for _ in range(max_hops + 1):
+        allowed, reason, ips = resolve_public(current)
+        if not allowed:
+            logger.warning("%s: blocked outbound fetch (%s)", label, reason)
+            return None
+        r = send(current, ips[0])
+        if r is None:
+            return None
+        if r.status_code in _REDIRECT_STATUSES:
+            location = (getattr(r, "headers", None) or {}).get("Location") or ""
+            if not location:
+                return r
+            try:
+                r.close()
+            except Exception:
+                pass
+            current = urljoin(current, location)
+            continue
+        return r
+    logger.warning("%s: redirect chain exceeded %d hops", label, max_hops)
+    return None
+
+
+class _Hop:
+    """Status + headers of one pinned request (body never read)."""
+
+    def __init__(self, status_code: int, headers: Dict[str, str]):
+        self.status_code = int(status_code)
+        self.headers = headers
+
+    def close(self) -> None:
+        pass
+
+
+def _pinned_request(method: str, url: str, ip: str, *, timeout: float,
+                    headers: Optional[dict] = None) -> _Hop:
+    """One request to `url` CONNECTED TO `ip` (the address `resolve_public`
+    validated), with SNI, certificate verification and the Host header all
+    still naming the URL's host. No redirects, no retries, body not read."""
+    import urllib3
+    from requests.certs import where as _ca_bundle
+
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    host = parsed.hostname or ""
+    port = parsed.port or (443 if scheme == "https" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+    host_header = f"[{host}]" if ":" in host else host
+    if parsed.port and parsed.port != (443 if scheme == "https" else 80):
+        host_header += f":{parsed.port}"
+    hdrs = dict(headers or {})
+    hdrs["Host"] = host_header
+    tmo = urllib3.Timeout(connect=timeout, read=timeout)
+    if scheme == "https":
+        pool = urllib3.HTTPSConnectionPool(
+            ip, port, timeout=tmo, retries=False, cert_reqs="CERT_REQUIRED",
+            ca_certs=_ca_bundle(), server_hostname=host, assert_hostname=host)
+    else:
+        pool = urllib3.HTTPConnectionPool(ip, port, timeout=tmo, retries=False)
+    try:
+        resp = pool.urlopen(method, path, headers=hdrs, redirect=False, retries=False,
+                            preload_content=False, assert_same_host=False)
+        try:
+            return _Hop(resp.status, {"Location": resp.headers.get("Location") or ""})
+        finally:
+            resp.release_conn()
+    finally:
+        pool.close()
+
+
+def safe_status(method: str, url: str, *, timeout: float = _TIMEOUT_S,
+                headers: Optional[dict] = None,
+                max_hops: int = _MAX_REDIRECTS) -> Optional[int]:
+    """Final HTTP status of `url` after bounded, SSRF-checked, IP-pinned
+    redirects — or None when any hop is refused, the chain is too long, or the
+    network failed. Used by the liveness probe, which needs only the status."""
+    def send(u: str, ip: str):
+        return _pinned_request(method, u, ip, timeout=timeout, headers=headers)
+
+    r = _follow_safely(url, send, max_hops=max_hops, label="safe_status")
+    return None if r is None else int(r.status_code)
 
 
 def _safe_get(url: str, *, timeout: int = _TIMEOUT_S, headers: Optional[dict] = None):
@@ -136,26 +250,15 @@ def _safe_get(url: str, *, timeout: int = _TIMEOUT_S, headers: Optional[dict] = 
     re-validated before it is fetched). Returns the final Response, or None
     when the URL/a hop was blocked or the redirect chain is too long.
 
-    Note: validate-then-fetch has an inherent DNS TOCTOU window (rebinding);
-    per-hop re-validation + private-range rejection is the accepted posture
-    here (no connection pinning without new deps).
+    Note: this path re-resolves each hop inside `requests`, so it keeps a DNS
+    TOCTOU window that `safe_status` (IP-pinned) does not have; it needs the
+    body and a `requests.Response`, which pinning would change for every JD
+    caller. Per-hop re-validation + private-range rejection is the posture.
     """
-    current = url
-    for _ in range(_MAX_REDIRECTS + 1):
-        allowed, reason = url_is_safe(current)
-        if not allowed:
-            logger.warning("jd_fetcher: blocked outbound fetch (%s)", reason)
-            return None
-        r = requests.get(current, timeout=timeout, headers=headers, allow_redirects=False)
-        if r.status_code in _REDIRECT_STATUSES:
-            location = r.headers.get("Location") or ""
-            if not location:
-                return r
-            current = urljoin(current, location)
-            continue
-        return r
-    logger.warning("jd_fetcher: redirect chain exceeded %d hops", _MAX_REDIRECTS)
-    return None
+    return _follow_safely(
+        url,
+        lambda u, _ip: requests.get(u, timeout=timeout, headers=headers, allow_redirects=False),
+    )
 
 
 # ---------------------------------------------------------------------------
