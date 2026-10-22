@@ -842,6 +842,32 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {"vendor": "appone", "tenant": "universalbackgroundscreening.appone.com",
      "site": "", "host": "www2.appone.com",
      "display_name": "Universal Background Screening", "industry": "other"},
+    # Own careers pages (`careers_page`), read live through the extended
+    # own-site reader on 2026-10-22. Counts are what that run returned.
+    # MATS Research: 8 staff vacancies (cards; fellowships live under /program, not here).
+    {"vendor": "careers_page", "tenant": "matsprogram.org", "site": "",
+     "host": "matsprogram.org", "display_name": "MATS Research", "industry": "other",
+     "extra": {"listing_url": "https://www.matsprogram.org/careers"}},
+    # Orange Logic: 8 (two invisible leftover links excluded; one of them 404s).
+    {"vendor": "careers_page", "tenant": "orangelogic.com", "site": "",
+     "host": "orangelogic.com", "display_name": "Orange Logic", "industry": "tech",
+     "extra": {"listing_url": "https://www.orangelogic.com/about/careers"}},
+    # Rugged Science: 4 ('Learn more' cards titled from the card heading).
+    {"vendor": "careers_page", "tenant": "ruggedscience.com", "site": "",
+     "host": "ruggedscience.com", "display_name": "Rugged Science", "industry": "manufacturing",
+     "extra": {"listing_url": "https://ruggedscience.com/careers/"}},
+    # Nous Research: 13 (apply by email: manual handoff, never sent).
+    {"vendor": "careers_page", "tenant": "nousresearch.com", "site": "",
+     "host": "nousresearch.com", "display_name": "Nous Research", "industry": "tech",
+     "extra": {"listing_url": "https://nousresearch.com/careers"}},
+    # GMI Cloud: 8 (LinkedIn apply links: discovery only, manual handoff).
+    {"vendor": "careers_page", "tenant": "gmicloud.ai", "site": "",
+     "host": "gmicloud.ai", "display_name": "GMI Cloud", "industry": "tech",
+     "extra": {"listing_url": "https://www.gmicloud.ai/en/company/career"}},
+    # Attune: 4 (LinkedIn apply links: discovery only, manual handoff).
+    {"vendor": "careers_page", "tenant": "attune.ai", "site": "",
+     "host": "attune.ai", "display_name": "Attune", "industry": "tech",
+     "extra": {"listing_url": "https://www.attune.ai/company"}},
 )
 
 
