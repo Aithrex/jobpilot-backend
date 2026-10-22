@@ -476,13 +476,24 @@ def run_ordering() -> Dict[str, Any]:
     base = dict(tech_scope=["core", "adjacent"], page_size=100,
                 personalize=False, posted_within_days=90)
 
-    needs = _search(**base, work_authorization_status="needs_sponsorship_future")
-    unknown = _search(**base, work_authorization_status="unknown")
-    citizen = _search(**base, work_authorization_status="us_citizen")
-    hidden = _search(**base, work_authorization_status="needs_sponsorship_future",
-                     hide_sponsorship_restricted=True,
-                     hide_clearance_required=True)
-    software = _search(**base, sector="software")
+    # These are RANKING measurements, so they run with the employer policy
+    # off: under the default preference (employer-policy-1.0.0) a marketplace
+    # repost is excluded before ranking, which is the policy's job and is
+    # measured separately below (`mkt_*_default`).
+    from services import employer_policy as ep
+    default_unknown = _search(**base, work_authorization_status="unknown")
+    load_prefs = tfs._load_policy_prefs
+    tfs._load_policy_prefs = lambda req: ep.normalize_prefs({"preset": "off"})
+    try:
+        needs = _search(**base, work_authorization_status="needs_sponsorship_future")
+        unknown = _search(**base, work_authorization_status="unknown")
+        citizen = _search(**base, work_authorization_status="us_citizen")
+        hidden = _search(**base, work_authorization_status="needs_sponsorship_future",
+                         hide_sponsorship_restricted=True,
+                         hide_clearance_required=True)
+        software = _search(**base, sector="software")
+    finally:
+        tfs._load_policy_prefs = load_prefs
 
     def card(result: Dict[str, Any], key: str) -> Optional[Dict[str, Any]]:
         by_url = {f"https://example.test/{r['tenant']}/{r['key']}": r["key"]
@@ -519,6 +530,10 @@ def run_ordering() -> Dict[str, Any]:
         "clearance_present_when_hidden": _position(hidden, "wa-clearance") is not None,
         # Aggregator versus direct board.
         "marketplace_pos": _position(unknown, "mkt-repost"),
+        "mkt_pos_default": _position(default_unknown, "mkt-repost"),
+        "mkt_excluded_default": int(((default_unknown.get("policy") or {})
+                                     .get("excluded_counts") or {})
+                                    .get("talent_marketplace") or 0),
         "direct_backend_pos": _position(unknown, "swe-backend"),
         # The badge and the reachability verdict on the card.
         "badges_no_sponsor_needs": [b["key"] for b in

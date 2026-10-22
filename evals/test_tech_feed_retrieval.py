@@ -178,7 +178,14 @@ class TestAggregatorsDoNotOutrankDirectBoards:
         assert ordering["marketplace_pos"] > ordering["direct_backend_pos"]
 
     def test_the_repost_is_still_reachable(self, ordering):
+        """With the employer policy off, nothing drops it."""
         assert ordering["marketplace_pos"] is not None
+
+    def test_the_default_preference_hides_the_repost_and_counts_it(self, ordering):
+        """employer-policy-1.0.0: talent marketplaces are excluded by default,
+        never silently - the exclusion is counted where the client shows it."""
+        assert ordering["mkt_pos_default"] is None
+        assert ordering["mkt_excluded_default"] >= 1
 
 
 class TestEmployerDisplayName:
