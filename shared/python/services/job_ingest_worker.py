@@ -868,6 +868,18 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {"vendor": "careers_page", "tenant": "attune.ai", "site": "",
      "host": "attune.ai", "display_name": "Attune", "industry": "tech",
      "extra": {"listing_url": "https://www.attune.ai/company"}},
+    # Avature, server-rendered SearchJobs/JobDetail. Frequentis: 64 of 64
+    # reported. Flint Hills Resources: the SHARED Koch board through the exact
+    # FHR-filtered link fhr.com's careers page (now kochinc.com) prints, 31 of
+    # 31, each row also required to name "Flint Hills Resources" - never all
+    # of Koch attributed to FHR.
+    {"vendor": "avature", "tenant": "jobs.frequentis.com", "site": "careers",
+     "host": "jobs.frequentis.com", "display_name": "Frequentis",
+     "industry": "tech"},
+    {"vendor": "avature", "tenant": "koch.avature.net",
+     "site": "en_US/careers?732=6297&tags=rm.kcm.web.kcm-004",
+     "host": "koch.avature.net", "display_name": "Flint Hills Resources",
+     "industry": "other", "extra": {"entity_name": "Flint Hills Resources"}},
 )
 
 
