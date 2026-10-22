@@ -21,6 +21,7 @@ NOW = datetime.now(timezone.utc)
 # --- auto-apply selection ----------------------------------------------------
 def test_match_sweep_never_selects_what_the_feed_hides(sw):
     _rewind_watermark(sw, hours=2)
+    ep.put_prefs(USER, {"preset": "strict_direct"})
     _seed_posting(sjid="cap-1", company="Capgemini", parse=True,
                   first_seen=NOW - timedelta(minutes=50))
     _seed_posting(sjid="acme-1", company="Acme Corp", parse=True,
@@ -34,6 +35,16 @@ def test_match_sweep_never_selects_what_the_feed_hides(sw):
     wm = sw.auto_submit_settings.find_one({"user_email": USER})[sweep.WATERMARK_FIELD]
     wm = wm if wm.tzinfo else wm.replace(tzinfo=timezone.utc)
     assert wm >= NOW - timedelta(minutes=41)
+    current_db().user_preferences.delete_many({})
+
+
+def test_match_sweep_default_does_not_hide_consultancies(sw):
+    _rewind_watermark(sw, hours=2)
+    current_db().user_preferences.delete_many({})
+    _seed_posting(sjid="cap-d", company="Capgemini", parse=True,
+                  first_seen=NOW - timedelta(minutes=50))
+    out = sweep.run_user_sweep(USER)
+    assert out["policy_excluded"] == 0
 
 
 def test_match_sweep_honours_a_stored_off_choice(sw):
@@ -94,7 +105,17 @@ def test_gate_passes_a_fresh_operating_posting(clean_inv):
     assert g["ok"], g
 
 
+def test_gate_default_lets_a_consultancy_through_strict_does_not(clean_inv):
+    _posting("capd", employer_name="Capgemini", canonical_employer_id=None,
+             canonical_url="https://careers.capgemini.com/job/9")
+    assert ep.submission_gate(USER, {"posting_job_id": "capd"})["ok"]
+    ep.put_prefs(USER, {"preset": "strict_direct"})
+    assert ep.submission_gate(USER, {"posting_job_id": "capd"})["reasons"] == \
+        ["employer_policy:consultancy"]
+
+
 def test_gate_blocks_policy_closed_expired_and_stale(clean_inv):
+    ep.put_prefs(USER, {"preset": "strict_direct"})
     _posting("cap", employer_name="Capgemini", canonical_employer_id=None,
              canonical_url="https://careers.capgemini.com/job/1")
     _posting("closed", status="closed", closed_reason="not-seen")
@@ -124,6 +145,7 @@ def test_gate_without_an_inventory_record_still_applies_policy_and_expiry(clean_
 
 
 def test_presubmit_recheck_carries_the_policy_gate(clean_inv, monkeypatch):
+    ep.put_prefs(USER, {"preset": "strict_direct"})
     from services import auto_apply_service as aas
     _posting("cap2", employer_name="Capgemini", canonical_employer_id=None,
              canonical_url="https://careers.capgemini.com/job/2")
@@ -137,6 +159,7 @@ def test_presubmit_recheck_carries_the_policy_gate(clean_inv, monkeypatch):
 
 
 def test_submit_cancels_a_policy_excluded_row_before_the_executor(clean_inv, monkeypatch):
+    ep.put_prefs(USER, {"preset": "strict_direct"})
     from services import auto_apply_service as aas
     _posting("cap3", employer_name="Capgemini", canonical_employer_id=None,
              canonical_url="https://careers.capgemini.com/job/3")
@@ -185,6 +208,7 @@ def test_saved_search_alert_never_emails_an_excluded_posting(clean_inv, monkeypa
 
 
 def test_daily_digest_reapplies_policy_at_send_time(clean_inv):
+    ep.put_prefs(USER, {"preset": "strict_direct"})
     from services.notifications import digests
     db = current_db()
     db.resume_jobs.delete_many({"user_email": USER})

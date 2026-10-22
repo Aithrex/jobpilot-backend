@@ -1019,8 +1019,10 @@ def tech_feed_employer_preferences_get():
     """The user's direct-employer policy (`employer-policy-1.0.0`).
 
     `{preset, exclude{...}, set_by: "user"|"default", version}`. A user with
-    no stored choice gets the documented default (`strict_direct`, unknown
-    shown as unverified) with `set_by: "default"` - nothing is written.
+    no stored choice gets the documented default
+    (`employer_policy.DEFAULT_EXCLUDE`: preset `custom`, consultancies, mixed
+    businesses and unknown employers shown and labelled) with
+    `set_by: "default"` - nothing is written.
     """
     try:
         from services import employer_policy

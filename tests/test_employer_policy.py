@@ -21,6 +21,10 @@ def _fresh(**kw):
     return row
 
 
+def STRICT():
+    return ep.normalize_prefs({"preset": "strict_direct"})
+
+
 def _op(**kw):
     """A posting on an owner-verified board of an OPERATING employer."""
     return _fresh(employer_name="Etsy", canonical_employer_id=employer_id_for(domain="etsy.com"), **kw)
@@ -37,12 +41,34 @@ def _clean():
 
 
 # --- preferences -----------------------------------------------------------
-def test_default_is_strict_with_unknown_shown():
+def test_default_is_the_owner_default_not_strict():
+    """Owner decision 2026-10-21: consultancies / mixed / unknown are SHOWN by
+    default (F-1 users' largest H-1B sponsors); the clear-cut exclusions stay."""
     p = ep.get_prefs(USER)
-    assert p["preset"] == "strict_direct" and p["set_by"] == "default"
+    assert p["preset"] == "custom" and p["set_by"] == "default"
+    assert p["exclude"] == ep.DEFAULT_EXCLUDE
+    assert p["exclude"]["consultancy"] is False
     assert p["exclude"]["unknown_business_model"] is False
-    assert all(p["exclude"][k] for k in ep.EXCLUDE_KEYS if k != "unknown_business_model")
+    for k in ("staffing", "client_placement", "talent_marketplace", "task_gig",
+              "talent_community"):
+        assert p["exclude"][k] is True
     assert current_db().user_preferences.count_documents({}) == 0   # nothing written
+    # strict_direct is unchanged and one PUT away.
+    strict = ep.normalize_prefs({"preset": "strict_direct"})
+    assert strict["preset"] == "strict_direct" and strict["exclude"] == ep.STRICT_EXCLUDE
+
+
+def test_default_shows_consultancy_and_mixed_labelled_and_counted():
+    rows = [_fresh(job_id="c", employer_name="Capgemini", title_raw="Java Developer",
+                   canonical_url="https://careers.capgemini.com/job/1"),
+            _fresh(job_id="m", employer_name="IBM", canonical_url="https://careers.ibm.com/job/1"),
+            _fresh(job_id="s", employer_name="Hays")]
+    kept, block = ep.apply(rows, ep.default_prefs(), now=NOW, resolve=False)
+    assert [r["job_id"] for r in kept] == ["c", "m"]
+    assert kept[0]["employer_profile"]["kind"] == "consultancy"
+    assert kept[1]["employer_profile"]["kind"] == "mixed"
+    assert block["shown_counts"]["consultancy"] == 1 and block["shown_counts"]["mixed"] == 1
+    assert block["excluded_counts"]["staffing"] == 1
 
 
 def test_put_persists_and_is_never_overwritten_by_default():
@@ -104,7 +130,7 @@ def test_routes_round_trip_and_never_401_on_bad_body():
 def test_consultancy_internal_role_keeps_both_facts():
     row = _fresh(employer_name="Accenture", title_raw="Talent Acquisition Recruiter",
                  canonical_url="https://www.accenture.com/careers/1")
-    kept, block = ep.apply([row], ep.default_prefs(), now=NOW, resolve=False)
+    kept, block = ep.apply([row], STRICT(), now=NOW, resolve=False)
     assert row["employer_profile"]["kind"] == "consultancy"
     assert row["posting_profile"]["relationship"] == "own_role"
     assert kept == [row]
@@ -113,14 +139,14 @@ def test_consultancy_internal_role_keeps_both_facts():
 def test_consultancy_delivery_role_is_excluded():
     row = _fresh(employer_name="Capgemini", title_raw="Java Developer",
                  canonical_url="https://careers.capgemini.com/job/1")
-    kept, block = ep.apply([row], ep.default_prefs(), now=NOW, resolve=False)
+    kept, block = ep.apply([row], STRICT(), now=NOW, resolve=False)
     assert kept == [] and block["excluded_counts"]["consultancy"] == 1
 
 
 def test_mixed_business_hidden_in_strict_and_itemised():
     row = _fresh(employer_name="IBM", title_raw="AI Back-End Developer",
                  canonical_url="https://careers.ibm.com/job/1")
-    kept, block = ep.apply([row], ep.default_prefs(), now=NOW, resolve=False)
+    kept, block = ep.apply([row], STRICT(), now=NOW, resolve=False)
     assert kept == [] and block["excluded_counts"]["consultancy"] == 1
     assert block["reason_counts"]["mixed_unresolved"] == 1
 
@@ -262,10 +288,22 @@ def test_trust_hook_requires_an_offline_mode(monkeypatch):
         return {"state": "warnings"}
     mod.assess_posting_trust = assess_posting_trust
     monkeypatch.setitem(sys.modules, "services.job_legitimacy_service", mod)
+    import services
+    monkeypatch.setattr(services, "job_legitimacy_service", mod, raising=False)
     monkeypatch.setattr(ep, "_TRUST_RESOLVED", False)
     row = _op()
     ep.apply([row], ep.default_prefs(), now=NOW, resolve=False)
     assert "trust" not in row and calls == []
+
+    # A module that declares the C4 contract is documented pure: used, and
+    # the ownership marker is stamped first when a board map is available.
+    mod.TRUST_VERSION = "trust-1.0.0"
+    mod.board_ownership_conflict = lambda doc, own: own == "contested"
+    monkeypatch.setattr(ep, "_TRUST_RESOLVED", False)
+    row = _op()
+    ep.annotate(row, now=NOW, ownership="contested")
+    assert row["trust"] == {"state": "warnings"} and row["ownership_conflict"] is True
+    del mod.TRUST_VERSION
 
     def offline_trust(row, *, allow_network=True):
         assert allow_network is False
