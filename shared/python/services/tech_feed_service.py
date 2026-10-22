@@ -3073,6 +3073,13 @@ def _run_search(req: Dict[str, Any], started: float, *,
                   total_matched=total_matched or len(order),
                   total_is_exact=total_is_exact, policy=policy_block)
 
+    _policy_hidden = sum(int(v or 0) for v in policy_block["excluded_counts"].values())
+    if _policy_hidden:
+        # Said on every search it applies to, and never "fixed" by relaxing
+        # the policy to fill the page.
+        warnings.append(
+            f"{_policy_hidden:,} matching posting(s) hidden by your direct-employer "
+            f"preferences ({policy_block['preset']}). See `policy.excluded_counts`.")
     if not order:
         suggestions = broadening_suggestions(req, diagnostics.get("filtered_out") or {})
         diagnostics["broadening_suggestions"] = suggestions
