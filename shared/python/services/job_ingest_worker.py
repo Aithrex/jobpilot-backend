@@ -953,9 +953,13 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
     {"vendor": "phenom", "tenant": "snowflake", "site": "",
      "host": "careers.snowflake.com", "display_name": "Snowflake",
      "industry": "tech"},
-    {"vendor": "eightfold", "tenant": "netapp", "site": "",
-     "host": "netapp.eightfold.ai", "display_name": "NetApp", "industry": "tech",
-     "extra": {"domain": "netapp.com"}},
+    # NetApp moved its board to SAP SuccessFactors (jobs.netapp.com, linked
+    # from careers.netapp.com - 296 openings on 2026-10-23). The old Eightfold
+    # tenant's v2 API still LISTS a frozen set of jobs whose pages all read
+    # "The job you are looking for may have closed", and its pcsx search
+    # returns nothing - so reading it served closed jobs as open.
+    {"vendor": "successfactors", "tenant": "netapp", "site": "",
+     "host": "jobs.netapp.com", "display_name": "NetApp", "industry": "tech"},
     # Power, second pass: utilities, grid equipment, A/E power-design and EE
     # manufacturers, each from the board its own careers page links.
     {"vendor": "oracle_orc", "tenant": "fa-etjd-saasfaprod1", "site": "CX_1",
