@@ -176,7 +176,9 @@ def test_unanticipated_client_sites_is_a_placement():
                              "unanticipated client sites throughout USA is required.")
     kept, block = ep.apply([row], ep.default_prefs(), now=NOW, resolve=False)
     assert row["posting_profile"]["relationship"] == "undisclosed_client"
-    assert kept == [] and block["excluded_counts"]["client_placement"] == 1
+    # AGAP is also a verified consultancy now, which is the reason charged.
+    assert kept == [] and "client_placement" in row["policy"]["reasons"]
+    assert block["excluded_counts"]["consultancy"] == 1
 
 
 def test_a_visa_filing_notice_is_a_placement_but_not_at_an_operating_employer():

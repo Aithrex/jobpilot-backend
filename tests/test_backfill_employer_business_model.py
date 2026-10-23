@@ -62,4 +62,4 @@ def test_apply_is_idempotent_domain_joined_and_reversible(db):
     undo = m.run(db, unstamp=True, apply=True)
     assert undo["written"] == 5
     assert db.employers.count_documents({"business_model": {"$exists": True}}) == 0
-    assert ebm.EBM_VERSION == "ebm-1.0.0"
+    assert ebm.EBM_VERSION == "ebm-1.1.0"

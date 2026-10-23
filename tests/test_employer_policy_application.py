@@ -61,7 +61,7 @@ def test_hourly_scheduler_skips_saved_jobs_the_policy_excludes(monkeypatch):
     from services import apply_scheduler as sched
     created = []
     monkeypatch.setattr(sched, "_saved_jobs", lambda email: [
-        {"status": "saved", "job_data": {"company": "Robert Half", "title": "Java Dev",
+        {"status": "saved", "job_data": {"company": "Acme Staffing Group", "title": "Java Dev",
                                          "apply_link": "https://roberthalf.com/job/1"}},
         {"status": "saved", "job_data": {"company": "Zyxwv Labs", "title": "Java Dev",
                                          "apply_link": "https://boards.greenhouse.io/z/1"}},
@@ -138,7 +138,7 @@ def test_gate_blocks_policy_closed_expired_and_stale(clean_inv):
 def test_gate_without_an_inventory_record_still_applies_policy_and_expiry(clean_inv):
     ok = ep.submission_gate(USER, {"company": "Zyxwv Labs", "title": "Dev"})
     assert ok["ok"]
-    assert not ep.submission_gate(USER, {"company": "Hays", "title": "Dev"})["ok"]
+    assert not ep.submission_gate(USER, {"company": "Acme Staffing Group", "title": "Dev"})["ok"]
     expired = ep.submission_gate(USER, {"company": "Zyxwv Labs",
                                         "posting_closes_at": (NOW - timedelta(days=1)).isoformat()})
     assert "posting_closed_or_expired" in expired["reasons"]
