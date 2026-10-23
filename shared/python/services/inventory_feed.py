@@ -182,6 +182,52 @@ def _own_level_slice(docs: List[Dict[str, Any]], user_email: str,
         return []
 
 
+#: Per-family guaranteed candidates for a user who searches several families.
+FAMILY_SLICE = int(os.getenv("FEED_INVENTORY_FAMILY_SLICE", "1500") or 1500)
+
+
+def _family_slices(docs: List[Dict[str, Any]], families: List[str],
+                   **retrieval: Any) -> List[Dict[str, Any]]:
+    """Older postings of a family the shared window crowded out.
+
+    The window is the newest `CANDIDATE_LIMIT` rows across ALL of a user's
+    families, so a big family fills it and a small one loses everything past
+    its first day or two. Measured 2026-10-23: a data-science user whose
+    search also carries software titles had "Data Scientist" at Booz Allen,
+    JPMorgan, AbbVie and PayPal - three days old, title searched - never
+    scored, and own-family recall of 0.59 against 0.81-0.93 for everyone
+    else. Software posts ~1,500 rows a day; data science ~500.
+
+    A family holding less than its even share of a FULL window gets up to
+    `FAMILY_SLICE` of its own rows older than the window, newest first.
+    """
+    if len(families) < 2 or len(docs) < CANDIDATE_LIMIT:
+        return []
+    try:
+        from services import job_inventory_service as inv
+        dated = [d["posted_at"] for d in docs if isinstance(d.get("posted_at"), datetime)]
+        if not dated:
+            return []
+        oldest = min(dated)
+        have = {d.get("job_id") for d in docs}
+        fair = CANDIDATE_LIMIT // (2 * len(families))
+        out: List[Dict[str, Any]] = []
+        for fam in families:
+            if sum(1 for d in docs if d.get("role_family") == fam) >= fair:
+                continue
+            older = inv.find_active_fresh(role_families=[fam], posted_before=oldest,
+                                          max_age_days=WINDOW_DAYS, limit=FAMILY_SLICE,
+                                          **retrieval)
+            for d in older:
+                if d.get("job_id") not in have:
+                    have.add(d.get("job_id"))
+                    out.append(d)
+        return out
+    except Exception as exc:
+        logger.warning("inventory_feed: family slice failed (%s)", type(exc).__name__)
+        return []
+
+
 #: How many rows at the user's own level may take a place from rows at levels
 #: they have filtered away, when the cap would otherwise cut them.
 OWN_LEVEL_KEEP = int(os.getenv("FEED_INVENTORY_OWN_LEVEL_KEEP", "600") or 600)
@@ -902,13 +948,21 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         logger.warning("inventory_feed: retrieval failed for %s: %s",
                        source, type(exc).__name__)
         return None
+    window = docs
     docs = docs + _own_level_slice(
-        docs, user_email,
+        window, user_email,
         source=None if source == SOURCE_CAREER else source,
         sources=CAREER_FEED_SOURCES if source == SOURCE_CAREER else None,
         role_families=families or None, industries=industries or None,
         tenants=companies or None,
         work_mode="remote" if remote_only else None)
+    seen_ids = {d.get("job_id") for d in docs}
+    docs = docs + [d for d in _family_slices(
+        window, list(families or []),
+        source=None if source == SOURCE_CAREER else source,
+        sources=CAREER_FEED_SOURCES if source == SOURCE_CAREER else None,
+        industries=industries or None, tenants=companies or None,
+        work_mode="remote" if remote_only else None) if d.get("job_id") not in seen_ids]
 
     # Geo is decided by the ONE shared rule (`us_geo`), not a country-code
     # check: most inventory rows carry no parsed country (boards ship a
