@@ -13,7 +13,7 @@ The record (`employers.business_model`)::
 
     {"kind": "operating|staffing|consultancy|talent_marketplace|mixed|unknown",
      "confidence": 0.0-1.0,
-     "basis": "owner_override|research_register|registry_category|naics|name_rule|none",
+     "basis": "owner_override|research_register|registry_category|naics|site_self_description|name_rule|none",
      "evidence": [{"kind": "url|naics|category|rule|register", "value": ..., "source": ...}],
      "version": "ebm-1.0.0", "classified_at": ISO-8601}
 
@@ -58,7 +58,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
-EBM_VERSION = "ebm-1.0.0"
+EBM_VERSION = "ebm-1.1.0"
 
 KIND_OPERATING = "operating"
 KIND_STAFFING = "staffing"
@@ -74,6 +74,7 @@ BASIS_REGISTER = "research_register"
 BASIS_CATEGORY = "registry_category"
 BASIS_NAICS = "naics"
 BASIS_NAME = "name_rule"
+BASIS_SITE = "site_self_description"
 BASIS_NONE = "none"
 BASES = (BASIS_OVERRIDE, BASIS_REGISTER, BASIS_CATEGORY, BASIS_NAICS,
          BASIS_NAME, BASIS_NONE)
@@ -274,6 +275,22 @@ _NAME_STAFFING_RE = re.compile(
 _NAME_CONSULTANCY_RE = re.compile(
     r"\b(consulting|consultancy|consultants|it services|outsourcing|"
     r"systems integrators?)\b", re.IGNORECASE)
+#: IT-services naming. Owner decision 2026-10-23: small IT consultancies are
+#: hidden by default. Every one the 2026-10-22 link scan found on the board
+#: was classified UNKNOWN - AGAP Technologies, ANJI Technologies, SVASTHA
+#: Infotech, REVEL IT, PIT Solutions, GANTEC Publishing Solutions, AKZAC
+#: Global, ACMESOFT Global - so no preference could hide them. This is the
+#: weakest rule there is and is applied ONLY when nothing better is known: a
+#: product company with a registry category is never reached here, and a
+#: recognized firm (`is_recognized`) is never hidden for it.
+_NAME_IT_SERVICES_RE = re.compile(
+    r"\b((?:info ?tech\w*|infotek|infosoft|info ?solutions|it ?(?:solutions|services|consulting)|"
+    r"soft ?tech\w*|software (?:solutions|services))(?:,?\s+(?:inc|llc|corp|ltd)\.?)?|"
+    r"it,?\s+(?:inc|llc|corp)\.?|"
+    r"tech(?:nology)? solutions|solutions,?\s+(?:inc|llc|corp|corporation)\.?|"
+    r"global,?\s+(?:inc|llc)\.?|consulting group)$", re.IGNORECASE)
+#: NOT "Technologies, Inc." / "Systems, Inc.": Cisco Systems, Bentley Systems,
+#: Unity Technologies and many startups are named that way.
 _NAME_MARKETPLACE_RE = re.compile(
     r"\b(jobgether|ziprecruiter|talent\.com|adzuna|jooble|whatjobs|lensa|"
     r"snagajob|dice|mercor|toptal|upwork|fiverr|remotehunter|torentify|wiraa|"
@@ -317,7 +334,55 @@ def name_rule(name: Any) -> Optional[Tuple[str, float, List[Dict[str, Any]]]]:
         return KIND_STAFFING, 0.3, [_ev("rule", "staffing_word", raw)]
     if _NAME_CONSULTANCY_RE.search(raw):
         return KIND_CONSULTANCY, 0.3, [_ev("rule", "consultancy_word", raw)]
+    if key in _VERIFIED_IT_SERVICES:
+        return KIND_CONSULTANCY, NAME_RULE_CONFIDENCE, [
+            {"kind": "rule", "value": "verified_by_link_scan_2026_10_22", "source": raw[:120]}]
+    if _NAME_IT_SERVICES_RE.search(raw.strip(" ,.")):
+        return KIND_CONSULTANCY, 0.25, [{"kind": "rule", "value": "it_services_name",
+                                         "source": raw[:120]}]
     return None
+
+
+#: Small IT consultancies the 2026-10-22 link scan of every user's board
+#: proved, page by page: recruitment notices posted months or years earlier
+#: (CURATE PARTNERS 38 stale of 72 cards, AGAP, GANTEC, TECHTIERA, SELECT
+#: MINDS, INTELLYK), pages with no way to apply (TEC FRAMES, TKZUS, ACMESOFT),
+#: closed roles (AKZAC), or a site that sells staffing (VBridgeIT, ALFVO).
+_VERIFIED_IT_SERVICES = frozenset({
+    "curate partners", "tec frames", "agap technologies", "techtiera", "select minds",
+    "tkzus", "akzac global", "gantec publishing solutions", "intellyk", "vbridgeit",
+    "alfvo", "anji technologies", "svastha infotech", "revel it", "acmesoft global",
+    "transcend street solutions", "wintrio", "pit solutions",
+})
+
+
+#: Firms the owner wants SHOWN although they are staffing agencies or
+#: consultancies (2026-10-23): the large, recognized names candidates apply to
+#: on purpose and that sponsor at scale. `name_key` exact matches only.
+RECOGNIZED_FIRMS = frozenset(_STAFFING_BRANDS | _CONSULTANCY_BRANDS | {
+    "ibm", "booz allen hamilton", "booz allen", "leidos", "saic", "caci",
+    "guidehouse", "slalom", "thoughtworks", "globant", "globallogic", "luxoft",
+    "endava", "grid dynamics", "perficient", "mckinsey", "mckinsey company",
+    "boston consulting group", "bcg", "bain", "bain company", "publicis sapient",
+    "kyndryl", "dxc technology", "virtusa", "hexaware", "hexaware technologies",
+    "persistent systems", "zs associates", "protiviti", "huron", "huron consulting group",
+    "ernst young", "pricewaterhousecoopers", "deloitte consulting", "accenture federal",
+    "ltimindtree", "larsen toubro infotech", "tata consultancy", "infosys limited",
+    "cognizant technology solutions", "wipro limited", "hcl america", "capgemini america",
+    "ntt data americas", "cgi technologies and solutions", "kforce", "robert half international",
+    "randstad usa", "randstad digital", "adecco usa", "manpower", "experis",
+    "insight global", "teksystems", "aerotek", "apex systems", "kelly services",
+    "akkodis", "modis", "collabera", "cybercoders", "vaco", "motion recruitment",
+    "beacon hill", "jobot", "brooksource", "optomi", "harnham", "hays", "allegis group",
+    "mantech", "peraton", "general dynamics information technology", "gdit",
+})
+
+
+def is_recognized(name: Any) -> bool:
+    """A staffing or consulting firm the owner keeps visible by default."""
+    from services.employer_registry import name_key
+    key = name_key(str(name or ""))
+    return bool(key) and key in RECOGNIZED_FIRMS
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +438,11 @@ def classify_employer(employer: Optional[Dict[str, Any]], *,
 
     if cat is not None:
         kind, conf, ev = cat
-        weaker = [w for w in (code, named) if w is not None and w[0] != KIND_OPERATING]
+        # The IT-services naming rule is too weak to dispute a category.
+        weaker = [w for w in (code, named) if w is not None and w[0] != KIND_OPERATING
+                  and not any(e.get("value") == "it_services_name" or
+                              (e.get("kind") == "rule" and e.get("value") == "it_services_name")
+                              for e in w[2])]
         if kind == KIND_OPERATING and weaker:
             evidence = list(ev)
             for w in weaker:
@@ -384,6 +453,14 @@ def classify_employer(employer: Optional[Dict[str, Any]], *,
         return _model(kind, conf, BASIS_CATEGORY, ev, now=now)
     if code is not None:
         return _model(code[0], code[1], BASIS_NAICS, code[2], now=now)
+    site = emp.get("site_self_description") if emp else None
+    if isinstance(site, dict) and site.get("kind") in (KIND_STAFFING, KIND_CONSULTANCY):
+        # What the employer's OWN website says it is ("a leading technical
+        # staffing and recruitment agency", "an IT consulting firm"), read by
+        # scripts/classify_employer_sites.py. Outranks the name.
+        return _model(site["kind"], 0.6, BASIS_SITE,
+                      [_ev("site", str(site.get("phrase") or "")[:160],
+                           str(site.get("url") or ""))], now=now)
     if named is not None:
         return _model(named[0], min(named[1], NAME_RULE_CONFIDENCE), BASIS_NAME,
                       named[2], now=now)
@@ -396,7 +473,8 @@ def classify_employer(employer: Optional[Dict[str, Any]], *,
 _EMPLOYER_FIELDS = {"_id": 0, "employer_id": 1, "display_name": 1,
                     "canonical_domain": 1, "verified_domains": 1,
                     "employer_categories": 1, "category_evidence": 1,
-                    "business_model": 1, "business_model_override": 1}
+                    "business_model": 1, "business_model_override": 1,
+                    "site_self_description": 1}
 
 
 def _row_name(row: Dict[str, Any]) -> str:

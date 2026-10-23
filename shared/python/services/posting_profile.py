@@ -97,6 +97,19 @@ _CLIENT_SITE_PLACEMENT_RE = re.compile(
     r"\b(unanticipated\s+(?:client\s+)?(?:work\s+)?(?:sites?|locations?)|"
     r"(?:placed|deployed|assigned)\s+(?:at|to|on)\s+(?:our\s+|various\s+|multiple\s+)?"
     r"client(?:s'|'s)?\s+(?:sites?|locations?|projects?))", re.IGNORECASE)
+#: Labor-condition / PERM notice wording. Two or more of these in one body is
+#: a recruitment notice an H-1B consultancy publishes for a placement role
+#: (AGAP Technologies: "Job Duties: ... Work under supervision. Travel and/or
+#: relocation to unanticipated client sites ..."), not a desk at the poster.
+_VISA_NOTICE_RES = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"\bor (?:its |a )?foreign (?:degree )?equivalent\b",
+    r"\bwork(?:s)? under (?:general |close |direct )?supervision\b",
+    r"\bjob duties\s*:",
+    r"\bunanticipated\s+(?:client\s+)?(?:work\s+)?(?:sites?|locations?)\b",
+    r"\b(?:travel|relocat\w*)(?:\s+and/or\s+relocat\w*)?\s+(?:to|throughout)\s+"
+    r"(?:various|different|multiple)\s+(?:client\s+)?(?:sites?|locations?)\b",
+    r"\bnumber of (?:openings|positions)\s*:",
+))
 _NAMED_CLIENT_RE = re.compile(
     r"\b(?i:end[- ]client|client(?: name)?)\s*[:\-–]\s*([A-Z][\w&.,' -]{1,40})")
 _C2C_RE = re.compile(r"\b(c2c|corp[- ]?to[- ]?corp|corp2corp)\b", re.IGNORECASE)
@@ -145,6 +158,7 @@ def signals_from_text(title: Any, text: Any = "") -> List[str]:
     """Reason codes from a title + body. Stored at ingest as `posting_signals`.
 
     Codes, never prose: `undisclosed_client`, `named_client`, `c2c`,
+    `visa_filing_notice`,
     `w2_through_vendor`, `w2_only`, `contract_wording`, `task_work`,
     `talent_community`, `resume_collection`.
     """
@@ -166,6 +180,8 @@ def signals_from_text(title: Any, text: Any = "") -> List[str]:
             add("undisclosed_client")
         else:
             add("named_client")
+    if sum(1 for rx in _VISA_NOTICE_RES if rx.search(both)) >= 2:
+        add("visa_filing_notice")
     if _C2C_RE.search(both):
         add("c2c")
     if _W2_THROUGH_RE.search(both):
@@ -218,6 +234,9 @@ def classify_posting(row: Dict[str, Any], employer_kind: str) -> Dict[str, Any]:
     elif "named_client" in sig:
         rel = REL_NAMED
         evidence.append("client_named_in_posting")
+    elif "visa_filing_notice" in sig and employer_kind != "operating":
+        rel = REL_UNDISCLOSED
+        evidence.append("visa_filing_notice_wording")
     elif {"undisclosed_client", "c2c", "w2_through_vendor"} & set(sig):
         rel = REL_UNDISCLOSED
         evidence.extend(s for s in ("undisclosed_client", "c2c", "w2_through_vendor")

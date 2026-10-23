@@ -89,7 +89,15 @@ OFF_EXCLUDE = {k: False for k in EXCLUDE_KEYS}
 #: Flipping the default to the full strict preset is the one-line change
 #: `DEFAULT_EXCLUDE = dict(STRICT_EXCLUDE)` (and `DEFAULT_PRESET =
 #: PRESET_STRICT`). Users who already stored a choice are unaffected either way.
-DEFAULT_EXCLUDE = {"staffing": True, "consultancy": False, "client_placement": True,
+#:
+#: Owner decision, 2026-10-23, superseding the above: "I don't want staffing
+#: consultancy jobs at all - Insight Global, Randstad are ok". Consultancies
+#: are now HIDDEN by default too, and the large recognized staffing and
+#: consulting firms (`employer_business_model.RECOGNIZED_FIRMS`: Insight
+#: Global, Randstad, Robert Half, TEKsystems, Deloitte, Accenture, IBM,
+#: Infosys, TCS, Cognizant...) are SHOWN, labelled, under every preset that
+#: does not exclude them by name.
+DEFAULT_EXCLUDE = {"staffing": True, "consultancy": True, "client_placement": True,
                    "talent_marketplace": True, "task_gig": True,
                    "talent_community": True, "unknown_business_model": False}
 DEFAULT_PRESET = PRESET_CUSTOM
@@ -312,7 +320,8 @@ def annotate(row: Dict[str, Any], *, now: Optional[datetime] = None,
     return row
 
 
-def reasons_for(row: Dict[str, Any], exclude: Dict[str, bool]) -> List[str]:
+def reasons_for(row: Dict[str, Any], exclude: Dict[str, bool], *,
+                allow_recognized: bool = True) -> List[str]:
     """Every preference reason this row matches under `exclude` (ordered)."""
     model = row.get("employer_profile") or {}
     prof = row.get("posting_profile") or {}
@@ -321,10 +330,17 @@ def reasons_for(row: Dict[str, Any], exclude: Dict[str, bool]) -> List[str]:
     purpose = str(prof.get("purpose") or "unknown")
     internal = rel == "own_role"
     marketplace_board = str(row.get("board_kind") or "").lower() == "marketplace"
+    from services import employer_business_model as ebm
+    # "Direct employers only" means exactly that: the recognized-firm
+    # exception is for the default / custom preferences.
+    recognized = allow_recognized and any(ebm.is_recognized(n) for n in (
+        row.get("employer_name"), row.get("company"), row.get("employer_display_name"))
+        if n)
     hits: List[str] = []
-    if exclude.get("staffing") and kind == "staffing" and not internal:
+    if exclude.get("staffing") and kind == "staffing" and not internal and not recognized:
         hits.append("staffing")
-    if exclude.get("consultancy") and kind in ("consultancy", "mixed") and not internal:
+    if exclude.get("consultancy") and kind in ("consultancy", "mixed") and not internal \
+            and not recognized:
         hits.append("consultancy")
     if exclude.get("talent_marketplace") and (kind == "talent_marketplace" or marketplace_board) \
             and not (internal and not marketplace_board):
@@ -394,7 +410,8 @@ def apply(rows: Sequence[Dict[str, Any]], prefs: Optional[Dict[str, Any]] = None
         annotate(row, now=now, ownership=ownership)
         block["examined"] += 1
         av = row["availability"]
-        reasons = reasons_for(row, exclude) if preset != PRESET_OFF else []
+        reasons = (reasons_for(row, exclude, allow_recognized=preset != PRESET_STRICT)
+                   if preset != PRESET_OFF else [])
         charged: Optional[str] = None
         if preset != PRESET_OFF and av.get("state") == pp.AV_CLOSED:
             charged = "closed"

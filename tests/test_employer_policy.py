@@ -42,15 +42,14 @@ def _clean():
 
 # --- preferences -----------------------------------------------------------
 def test_default_is_the_owner_default_not_strict():
-    """Owner decision 2026-10-21: consultancies / mixed / unknown are SHOWN by
-    default (F-1 users' largest H-1B sponsors); the clear-cut exclusions stay."""
+    """Owner decision 2026-10-23: staffing AND consultancies are hidden by
+    default, recognized firms are not; unknown employers are shown."""
     p = ep.get_prefs(USER)
     assert p["preset"] == "custom" and p["set_by"] == "default"
     assert p["exclude"] == ep.DEFAULT_EXCLUDE
-    assert p["exclude"]["consultancy"] is False
     assert p["exclude"]["unknown_business_model"] is False
-    for k in ("staffing", "client_placement", "talent_marketplace", "task_gig",
-              "talent_community"):
+    for k in ("staffing", "consultancy", "client_placement", "talent_marketplace",
+              "task_gig", "talent_community"):
         assert p["exclude"][k] is True
     assert current_db().user_preferences.count_documents({}) == 0   # nothing written
     # strict_direct is unchanged and one PUT away.
@@ -58,17 +57,28 @@ def test_default_is_the_owner_default_not_strict():
     assert strict["preset"] == "strict_direct" and strict["exclude"] == ep.STRICT_EXCLUDE
 
 
-def test_default_shows_consultancy_and_mixed_labelled_and_counted():
+def test_default_hides_body_shops_and_shows_recognized_firms():
     rows = [_fresh(job_id="c", employer_name="Capgemini", title_raw="Java Developer",
                    canonical_url="https://careers.capgemini.com/job/1"),
             _fresh(job_id="m", employer_name="IBM", canonical_url="https://careers.ibm.com/job/1"),
-            _fresh(job_id="s", employer_name="Hays")]
+            _fresh(job_id="h", employer_name="Hays"),
+            _fresh(job_id="i", employer_name="Insight Global"),
+            _fresh(job_id="b", employer_name="PIT SOLUTIONS LLC", title_raw="Java Developer"),
+            _fresh(job_id="s", employer_name="Acme Staffing LLC")]
     kept, block = ep.apply(rows, ep.default_prefs(), now=NOW, resolve=False)
-    assert [r["job_id"] for r in kept] == ["c", "m"]
+    assert [r["job_id"] for r in kept] == ["c", "m", "h", "i"]
     assert kept[0]["employer_profile"]["kind"] == "consultancy"
     assert kept[1]["employer_profile"]["kind"] == "mixed"
-    assert block["shown_counts"]["consultancy"] == 1 and block["shown_counts"]["mixed"] == 1
-    assert block["excluded_counts"]["staffing"] == 1
+    assert kept[2]["employer_profile"]["kind"] == "staffing"
+    assert block["excluded_counts"]["consultancy"] == 1      # PIT SOLUTIONS
+    assert block["excluded_counts"]["staffing"] == 1         # Acme Staffing
+
+
+def test_strict_still_hides_recognized_firms_only_by_their_own_toggle():
+    rows = [_fresh(job_id="i", employer_name="Insight Global")]
+    off = ep.normalize_prefs({"preset": "custom", "exclude": {**ep.DEFAULT_EXCLUDE}})
+    kept, _ = ep.apply(rows, off, now=NOW, resolve=False)
+    assert [r["job_id"] for r in kept] == ["i"]
 
 
 def test_put_persists_and_is_never_overwritten_by_default():
@@ -167,6 +177,19 @@ def test_unanticipated_client_sites_is_a_placement():
     kept, block = ep.apply([row], ep.default_prefs(), now=NOW, resolve=False)
     assert row["posting_profile"]["relationship"] == "undisclosed_client"
     assert kept == [] and block["excluded_counts"]["client_placement"] == 1
+
+
+def test_a_visa_filing_notice_is_a_placement_but_not_at_an_operating_employer():
+    body = ("POSITION: SOFTWARE DEVELOPER NUMBER OF OPENINGS: 5 JOB DUTIES: Design and "
+            "develop CI/CD pipelines. Work under supervision. Requires a Master's degree in "
+            "Computer Science or foreign equivalent.")
+    assert "visa_filing_notice" in pp.signals_from_text("SOFTWARE DEVELOPER", body)
+    row = _fresh(employer_name="Somefirm LLC", title_raw="SOFTWARE DEVELOPER", description=body)
+    assert pp.classify_posting(row, "unknown")["relationship"] == "undisclosed_client"
+    assert pp.classify_posting(row, "operating")["relationship"] != "undisclosed_client"
+    # One phrase alone is ordinary job-ad wording.
+    assert "visa_filing_notice" not in pp.signals_from_text(
+        "Engineer", "Bachelor's degree or foreign equivalent required.")
 
 
 def test_a_consultant_travelling_to_clients_is_not_a_placement():
