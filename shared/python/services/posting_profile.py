@@ -74,6 +74,8 @@ def _env_int(name: str, default: int) -> int:
 ACCEPTABLE_VERIFICATION_AGE_HOURS = _env_int("EMPLOYER_POLICY_MAX_VERIFICATION_AGE_HOURS", 48)
 
 _CLOSED_STATUSES = ("closed", "expired")
+#: How long a "the page itself says closed" reading (`page_closed_at`) holds.
+PAGE_CLOSED_DAYS = _env_int("EMPLOYER_POLICY_PAGE_CLOSED_DAYS", 14)
 _BLOCKED_OUTCOMES = frozenset({"blocked", "rate_limited", "timeout", "challenge",
                                "unverifiable", "forbidden", "captcha", "error"})
 
@@ -312,6 +314,14 @@ def availability(row: Dict[str, Any], *, now: Optional[datetime] = None,
         method = "liveness_probe" if reason == "link-dead" else (
             "listing_seen" if reason in ("not-seen", "not_seen") else "none")
         return out(AV_CLOSED, method, _dt(row.get("closed_at")) or last_verified, reason)
+
+    # The job's OWN page said it is closed (or 404s) while its board still
+    # lists it - Qualtrics and Entergy on 2026-10-25. A re-crawl does not clear
+    # this, so the listing cannot reopen it; it simply ages out after
+    # PAGE_CLOSED_DAYS, after which the next check decides again.
+    page_closed = _dt(row.get("page_closed_at"))
+    if page_closed is not None and (now - page_closed).total_seconds() <= PAGE_CLOSED_DAYS * 86400:
+        return out(AV_CLOSED, "detail_fetch", page_closed, "page_says_closed")
 
     valid_through = _dt(row.get("valid_through") or row.get("posting_closes_at")
                         or row.get("job_offer_expiration_datetime_utc"))

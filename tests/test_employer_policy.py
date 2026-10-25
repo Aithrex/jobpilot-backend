@@ -391,3 +391,16 @@ def test_a_stored_choice_is_ignored_while_user_choice_is_off(monkeypatch):
     monkeypatch.setattr(ep, "USER_CHOICE_ENABLED", False)
     p = ep.get_prefs(USER)
     assert p["set_by"] == "default" and p["exclude"] == ep.DEFAULT_EXCLUDE
+
+
+def test_a_page_that_says_closed_is_closed_while_its_board_still_lists_it():
+    """Qualtrics / Entergy, 2026-10-25: the list API kept the job while its own
+    page said closed. `page_closed_at` holds for PAGE_CLOSED_DAYS."""
+    from datetime import timedelta as _td
+    row = _fresh(employer_name="Qualtrics", title_raw="Data Analyst",
+                 page_closed_at=NOW - _td(days=1))
+    assert pp.availability(row, now=NOW)["state"] == pp.AV_CLOSED
+    kept, block = ep.apply([row], ep.default_prefs(), now=NOW, resolve=False)
+    assert kept == [] and block["excluded_counts"]["closed"] == 1
+    old = _fresh(page_closed_at=NOW - _td(days=pp.PAGE_CLOSED_DAYS + 1))
+    assert pp.availability(old, now=NOW)["state"] != pp.AV_CLOSED

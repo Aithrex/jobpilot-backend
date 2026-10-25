@@ -188,7 +188,8 @@ def main():
             verdict = audit.judge(title, domains)
             if verdict == "off":
                 flags.append("G6 off-field")
-            cards.append({"title": title, "company": name, "score": r.get("match_score"),
+            cards.append({"job_id": r.get("job_id"), "title": title, "company": name,
+                          "score": r.get("match_score"),
                           "days_ago": r.get("days_ago"), "seniority": sen, "kind": kind,
                           "skills_overlap": overlap, "skills_needed": len(need),
                           "link": lk.get("verdict"), "page_posted": page,

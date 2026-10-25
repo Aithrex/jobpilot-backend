@@ -202,7 +202,7 @@ _PROJECTION = {
     # employer-policy-1.0.0: what the shared policy reads.
     "canonical_employer_id": 1, "canonical_url": 1, "board_kind": 1,
     "status": 1, "last_verified_at": 1, "last_seen_at": 1, "valid_through": 1,
-    "closed_reason": 1, "posting_signals": 1, "source_job_id": 1,
+    "closed_reason": 1, "posting_signals": 1, "source_job_id": 1, "page_closed_at": 1,
 }
 
 

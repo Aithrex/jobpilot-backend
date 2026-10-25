@@ -792,6 +792,7 @@ _PROJECTION = {
     # relationship classifier read. All stored scalars; no body.
     "last_seen_at": 1, "closed_at": 1, "closed_reason": 1,
     "liveness_probed_at": 1, "liveness_dead_strikes": 1, "posting_signals": 1,
+    "page_closed_at": 1,
 }
 
 #: The retrieval projection. `requirements` is DELIBERATELY absent.

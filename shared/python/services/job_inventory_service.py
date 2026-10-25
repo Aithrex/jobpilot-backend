@@ -2277,7 +2277,7 @@ _CARD_PROJECTION = {
     "canonical_employer_id": 1,
     # employer-policy-1.0.0: what availability / relationship read.
     "last_seen_at": 1, "valid_through": 1, "closed_reason": 1,
-    "board_kind": 1, "posting_signals": 1,
+    "board_kind": 1, "posting_signals": 1, "page_closed_at": 1,
 }
 
 
