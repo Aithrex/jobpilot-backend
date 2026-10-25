@@ -356,10 +356,10 @@ _VERIFIED_IT_SERVICES = frozenset({
 })
 
 
-#: Large, well-known staffing and consulting names. NOT a visibility rule any
-#: more - since 2026-10-24 the default hides every staffing agency and
-#: consultancy, these included. `scripts/classify_employer_sites.py` uses it
-#: to skip firms whose kind is already known. `name_key` exact matches only.
+#: The large, recognized staffing and consulting firms the board SHOWS (owner
+#: decision 2026-10-24: "Insight Global, Randstad, Deloitte, Infosys, TCS,
+#: HCLTech are fine"). Every other staffing agency and consultancy is left out
+#: by `employer_policy.reasons_for`. `name_key` exact matches only.
 RECOGNIZED_FIRMS = frozenset(_STAFFING_BRANDS | _CONSULTANCY_BRANDS | {
     "ibm", "booz allen hamilton", "booz allen", "leidos", "saic", "caci",
     "guidehouse", "slalom", "thoughtworks", "globant", "globallogic", "luxoft",
@@ -380,10 +380,16 @@ RECOGNIZED_FIRMS = frozenset(_STAFFING_BRANDS | _CONSULTANCY_BRANDS | {
 
 
 def is_recognized(name: Any) -> bool:
-    """One of the large, well-known staffing or consulting names."""
+    """A large, recognized staffing or consulting firm the board shows."""
     from services.employer_registry import name_key
     key = name_key(str(name or ""))
-    return bool(key) and key in RECOGNIZED_FIRMS
+    if not key:
+        return False
+    # The brand, or the brand followed by more words: the boards print
+    # "Deloitte & Touche LLP", "Cognizant Technology Solutions US Corp",
+    # "Tata Consultancy Services Limited". Safe as a prefix because recognition
+    # only ever UN-hides a staffing or consulting firm; it never hides anyone.
+    return key in RECOGNIZED_FIRMS or any(key.startswith(b + " ") for b in RECOGNIZED_FIRMS)
 
 
 # ---------------------------------------------------------------------------

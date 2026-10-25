@@ -146,24 +146,22 @@ def test_tech_feed_ranked_and_keyset_enforce_the_same_policy(db, monkeypatch):
     assert "seniority" in ranked[0]["facets"]["_policy"]["not_applied"]
 
 
-def test_default_user_sees_no_staffing_or_consultancy(db):
-    """No stored choice -> DEFAULT_EXCLUDE (2026-10-24): Capgemini
-    (consultancy) and Hays (staffing) hidden; IBM (mixed) shown with its
-    kind; talent communities hidden."""
+def test_default_user_sees_recognized_firms(db):
+    """No stored choice -> DEFAULT_EXCLUDE (2026-10-24, final): Capgemini and
+    Hays are recognized firms and IBM is mixed - all shown with their kind;
+    talent communities hidden."""
     expected = _seed()
     pages = _walk(50)
     jobs = [j for p in pages for j in p["jobs"]]
     kinds = {j["employer_profile"]["kind"] for j in jobs}
-    assert {"mixed", "operating", "unknown"} <= kinds
-    assert not {"consultancy", "staffing"} & kinds
+    assert {"consultancy", "staffing", "mixed", "operating", "unknown"} <= kinds
     assert all(j["posting_profile"]["purpose"] != "resume_collection" for j in jobs)
     pol = pages[0]["policy"]
     assert pol["preset"] == "custom" and pol["set_by"] == "default"
-    assert pol["excluded_counts"]["consultancy"] == 4
-    assert pol["excluded_counts"]["staffing"] == 4
-    assert pol["shown_counts"]["mixed"] == 4
+    assert pol["excluded_counts"]["consultancy"] == 0
+    assert pol["excluded_counts"]["staffing"] == 0
     assert pol["excluded_counts"]["talent_community"] == 4
-    assert len(jobs) == len(expected) - 12         # 4 Capgemini + 4 Hays + 4 general applications
+    assert len(jobs) == len(expected) - 4          # 4 general applications
 
 
 def test_stored_off_preference_shows_everything_and_survives(db):

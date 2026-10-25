@@ -90,10 +90,11 @@ OFF_EXCLUDE = {k: False for k in EXCLUDE_KEYS}
 #: `DEFAULT_EXCLUDE = dict(STRICT_EXCLUDE)` (and `DEFAULT_PRESET =
 #: PRESET_STRICT`). Users who already stored a choice are unaffected either way.
 #:
-#: Owner decision, 2026-10-24, superseding the above: no staffing agencies
-#: and no consultancies at all ("dont include staffing and consultancies at
-#: all"). Engineering design firms and mixed product / government-technology
-#: employers are not that and stay shown - see `reasons_for`.
+#: Owner decision, 2026-10-24 (final), superseding the above: there is no
+#: user-facing employer filter. The server shows company career pages and the
+#: large recognized staffing / consulting firms, and leaves out small staffing
+#: agencies, IT body shops, marketplaces, talent pools, gig work and client
+#: placements for everyone - see `reasons_for`.
 DEFAULT_EXCLUDE = {"staffing": True, "consultancy": True, "client_placement": True,
                    "talent_marketplace": True, "task_gig": True,
                    "talent_community": True, "unknown_business_model": False}
@@ -321,14 +322,14 @@ def reasons_for(row: Dict[str, Any], exclude: Dict[str, bool], *,
                 strict: bool = False) -> List[str]:
     """Every preference reason this row matches under `exclude` (ordered).
 
-    Owner decision 2026-10-24: staffing agencies and consultancies are not
-    shown AT ALL by default - no recognized-firm exception. Two kinds of
-    employer are not that and stay shown outside "Direct employers only"
-    (`strict`): engineering design firms (A/E/EPC - Burns & McDonnell, Black
-    & Veatch, Jacobs; their engineers design in house, and hiding them took
-    the core of an electrical-power graduate's market away on 2026-10-23),
-    and MIXED product/government-technology employers (IBM, MITRE, CACI,
-    Leidos, Amentum), which the 2026-10-23 default had hidden as consultancy.
+    Owner decision 2026-10-24 (final): the board shows company career pages
+    and the large, recognized staffing and consulting firms (Insight Global,
+    Randstad, Deloitte, Infosys, TCS, HCLTech...: `RECOGNIZED_FIRMS`), and
+    silently leaves out small staffing agencies and IT body shops. Engineering
+    design firms (Burns & McDonnell, Black & Veatch, Jacobs - their engineers
+    design in house) and MIXED product/government-technology employers (IBM,
+    MITRE, CACI, Amentum) are neither and are shown. `strict` ("Direct
+    employers only", no longer offered in the product) hides all of them.
     """
     model = row.get("employer_profile") or {}
     prof = row.get("posting_profile") or {}
@@ -337,18 +338,26 @@ def reasons_for(row: Dict[str, Any], exclude: Dict[str, bool], *,
     purpose = str(prof.get("purpose") or "unknown")
     internal = rel == "own_role"
     marketplace_board = str(row.get("board_kind") or "").lower() == "marketplace"
+    from services import employer_business_model as ebm
+    recognized = not strict and any(ebm.is_recognized(n) for n in (
+        row.get("employer_name"), row.get("company"), row.get("employer_display_name"))
+        if n)
     engineering_design = model.get("subtype") == "engineering_design_services"
     hits: List[str] = []
-    if exclude.get("staffing") and kind == "staffing" and not internal:
+    if exclude.get("staffing") and kind == "staffing" and not internal and not recognized:
         hits.append("staffing")
-    if exclude.get("consultancy") and not internal and (
+    if exclude.get("consultancy") and not internal and not recognized and (
             (kind == "consultancy" and (strict or not engineering_design))
             or (kind == "mixed" and strict)):
         hits.append("consultancy")
     if exclude.get("talent_marketplace") and (kind == "talent_marketplace" or marketplace_board) \
             and not (internal and not marketplace_board):
         hits.append("talent_marketplace")
-    if exclude.get("client_placement") and rel in ("named_client", "undisclosed_client"):
+    # A recognized firm's own postings carry labor-condition wording too
+    # (Infosys, TCS: "relocation to various unanticipated locations"); the
+    # owner keeps those firms, so that wording does not hide them either.
+    if exclude.get("client_placement") and rel in ("named_client", "undisclosed_client") \
+            and not recognized:
         hits.append("client_placement")
     if exclude.get("task_gig") and rel == "freelance_task":
         hits.append("task_gig")
