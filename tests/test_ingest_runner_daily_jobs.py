@@ -114,6 +114,19 @@ class TestTheRunnerRecordsItsDailyJobs:
             {"job": "maintenance", "ok": True})
 
 
+    def test_maintenance_runs_the_unseen_posting_backstop(self, runner, mock_db, monkeypatch):
+        """The 72h backstop only runs when a verify limit is passed, and the
+        runner never passed one: 65,290 of 335,137 active postings had not
+        been seen in over 72 hours on 2026-10-25."""
+        from services import job_ingest_worker as worker
+        seen = {}
+        monkeypatch.setattr(worker, "run_maintenance",
+                            lambda **kw: seen.update(kw) or {"expired": 0, "purged": 0})
+        runner.run_maintenance()
+        runner.pool.shutdown(wait=True)
+        assert seen.get("verify_limit", 0) > 0
+
+
 def _watchdog():
     path = Path(__file__).resolve().parents[1] / "scripts" / "retention_watchdog.py"
     spec = importlib.util.spec_from_file_location("retention_watchdog", path)

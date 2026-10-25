@@ -294,6 +294,15 @@ class Runner:
     #: double-checks each doc is closed before deleting it.
     MAINTENANCE_PURGE_LIMIT = int(os.getenv("INGEST_MAINTENANCE_PURGE_LIMIT", "50000"))
     MAINTENANCE_EXPIRE_LIMIT = int(os.getenv("INGEST_MAINTENANCE_EXPIRE_LIMIT", "50000"))
+    #: The 72h unseen-posting backstop (`worker.verify_liveness`). It runs only
+    #: when a limit is passed, and this call never passed one: measured
+    #: 2026-10-25, 65,290 of 335,137 active postings (19.5%) had not been seen
+    #: by the crawl in over 72 hours and were still served - dead Lever links,
+    #: "position closed" pages. A closed posting REOPENS the moment the crawl
+    #: sees it again (`upsert_posting`), so a board we merely failed to read
+    #: comes back on its next good crawl. Bounded per day so a backlog drains
+    #: over days instead of in one sweep.
+    MAINTENANCE_VERIFY_LIMIT = int(os.getenv("INGEST_MAINTENANCE_VERIFY_LIMIT", "30000"))
 
     def run_maintenance(self) -> None:
         from services import job_ingest_worker as worker
@@ -302,6 +311,7 @@ class Runner:
             self._daily("maintenance", lambda: worker.run_maintenance(
                 purge_limit=self.MAINTENANCE_PURGE_LIMIT,
                 expire_limit=self.MAINTENANCE_EXPIRE_LIMIT,
+                verify_limit=self.MAINTENANCE_VERIFY_LIMIT,
             )),
         )
 
