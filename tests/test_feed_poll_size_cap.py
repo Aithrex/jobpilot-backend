@@ -72,3 +72,12 @@ def test_the_poll_route_trims_feed_jobs_but_not_user_work(mock_db):
     own_id = svc.create_job("tailor", {}, "a@b.com")
     svc.complete_job(own_id, {"jobs": big["jobs"][:3]})
     assert "trimmed_for_size" not in svc.get_job(own_id, "a@b.com")["result"]
+
+
+def test_feed_cards_do_not_carry_the_taxonomy_verdict():
+    """The stored `tech` block scores the row and is read by no card; at ~680
+    bytes it was a fifth of a 1,500-card tab (2026-10-24)."""
+    import inspect
+    from services import inventory_feed
+    src = inspect.getsource(inventory_feed.build_feed)
+    assert 'row.pop("tech", None)' in src

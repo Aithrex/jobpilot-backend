@@ -1102,6 +1102,11 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
     for row in rows:
         row.pop("_requirements", None)
         row.pop("_req_key", None)
+        # The stored taxonomy verdict was needed to SCORE the row and is read
+        # by no card. At ~680 bytes it was a fifth of every card, and a
+        # 1,500-card tab is what crossed Lambda's 6 MB response limit on
+        # 2026-10-22 (6.63 MB) and silently emptied the Workday tab.
+        row.pop("tech", None)
 
     result: Dict[str, Any] = {
         "ok": True,
