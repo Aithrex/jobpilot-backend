@@ -15,6 +15,13 @@ from services.employer_registry import employer_id_for
 from test_apply_match_sweep import (  # noqa: F401  (pytest fixture import)
     USER, sw, _seed_posting, _rewind_watermark)
 
+
+@pytest.fixture(autouse=True)
+def _stored_choices_honoured(monkeypatch):
+    """These tests exercise the stored-choice machinery, which the product
+    keeps switched off (`USER_CHOICE_ENABLED`)."""
+    monkeypatch.setattr(ep, "USER_CHOICE_ENABLED", True)
+
 NOW = datetime.now(timezone.utc)
 
 

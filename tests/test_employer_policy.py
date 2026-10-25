@@ -9,6 +9,14 @@ from services import employer_policy as ep
 from services import posting_profile as pp
 from services.employer_registry import employer_id_for
 
+
+@pytest.fixture(autouse=True)
+def _stored_choices_honoured(monkeypatch):
+    """These tests exercise the stored-choice machinery, which the product
+    keeps switched off (`USER_CHOICE_ENABLED`)."""
+    monkeypatch.setattr(ep, "USER_CHOICE_ENABLED", True)
+
+
 USER = "policy.user@example.com"
 NOW = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
 
@@ -374,3 +382,12 @@ def test_direct_apply_is_not_proof_of_direct_employer():
     kept, _ = ep.apply([row], ep.default_prefs(), now=NOW, resolve=False)
     assert row["employer_profile"]["kind"] == "unknown"
     assert tfs._employer_kind_of(row) == "unknown"
+
+
+def test_a_stored_choice_is_ignored_while_user_choice_is_off(monkeypatch):
+    """Owner decision 2026-10-24: no user-facing filter, so a choice stored
+    earlier (consultancies switched ON) must not shape the feed."""
+    ep.put_prefs(USER, {"preset": "off"})
+    monkeypatch.setattr(ep, "USER_CHOICE_ENABLED", False)
+    p = ep.get_prefs(USER)
+    assert p["set_by"] == "default" and p["exclude"] == ep.DEFAULT_EXCLUDE

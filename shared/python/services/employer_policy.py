@@ -55,6 +55,7 @@ Decisions that are not obvious, and why:
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -170,10 +171,21 @@ def _prefs_col():
     return DBConnect().get_db().user_preferences
 
 
+#: Owner decision 2026-10-24: there is no user-facing employer filter, so a
+#: choice stored while there was one must not keep shaping a feed (one account
+#: had consultancies switched ON, which would let body shops back in). Off by
+#: default; set EMPLOYER_POLICY_USER_CHOICE=1 to honour stored choices again.
+USER_CHOICE_ENABLED = os.getenv("EMPLOYER_POLICY_USER_CHOICE", "0").strip() == "1"
+
+
 def get_prefs(user_email: Optional[str]) -> Dict[str, Any]:
-    """The user's stored choice, or the documented default. Never raises."""
+    """The user's stored choice, or the documented default. Never raises.
+
+    While `USER_CHOICE_ENABLED` is off (the product default) every user gets
+    the documented default and a stored choice is ignored, not deleted.
+    """
     email = str(user_email or "").strip()[:200]
-    if not email:
+    if not email or not USER_CHOICE_ENABLED:
         return default_prefs()
     try:
         doc = _prefs_col().find_one({"user_email": email}, {"_id": 0, PREFS_FIELD: 1}) or {}

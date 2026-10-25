@@ -20,6 +20,14 @@ from services import job_inventory_service as inv
 from services import tech_feed_service as tfs
 from services.employer_registry import employer_id_for
 
+
+@pytest.fixture(autouse=True)
+def _stored_choices_honoured(monkeypatch):
+    """These tests exercise the stored-choice machinery, which the product
+    keeps switched off (`USER_CHOICE_ENABLED`)."""
+    monkeypatch.setattr(ep, "USER_CHOICE_ENABLED", True)
+
+
 USER = "strict.seeker@example.com"
 NOW = datetime.now(timezone.utc)
 JD = ("Backend Engineer. Build services with Python, AWS and PostgreSQL. "
