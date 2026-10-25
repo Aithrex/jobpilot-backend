@@ -585,23 +585,27 @@ def canonical_search_titles(titles: Sequence[Any],
         fam = fit_score.classify_role(phrase)
         return not (home and fam is not None and fam not in home | stated_home)
 
-    # ROUND-ROBIN across specialties, the ones the candidate's own titles
-    # name first. Walking them in taxonomy order let the first specialty's
-    # long tail take the whole cap: measured live, a "Software Engineer II -
-    # Platform Engineering" resume searched fourteen frontend spellings and
-    # never "Platform Engineer", and a DevOps resume never "Site Reliability
-    # Engineer" - 421 of one user's 453 misses in three days were titles the
-    # search did not contain.
+    # The specialties the candidate's OWN titles name come first, then their
+    # close neighbours (DevOps / SRE / Platform are staffed from one pool),
+    # then everything else in the ORIGINAL taxonomy order. Measured live on
+    # 2026-10-22: a "Software Engineer II - Platform Engineering" resume never
+    # searched "Platform Engineer", and a DevOps resume never "Site Reliability
+    # Engineer", because frontend's spellings came first and the cap cut the
+    # rest. A round-robin over EVERY specialty fixed that and broke everyone
+    # else (2026-10-24): "Postgres Engineer", "Mysql Engineer" and "ETL
+    # Engineer" rose into a general software engineer's top ten, pulling a
+    # different family into retrieval. Only the stated part is reordered.
     held = " ".join(re.sub(r"\s+", " ", str(t or "")).lower() for t in titles or [])
-    order: List[str] = []
-    for spec in list(specialties or ()) + [
-            a for s in specialties or () for a in _ADJACENT_SPECIALTIES.get(str(s), ())]:
-        if str(spec) not in order:
-            order.append(str(spec))
-    stated = {s for s in order if any(
+    given = [str(s) for s in specialties or ()]
+    # `general_software` is every software search's floor already
+    # (`_ALWAYS_MATCHABLE`); promoting its long tail is not a correction.
+    stated = [s for s in given if s != "general_software" and any(
         re.search(r"(?<![a-z0-9_])" + re.escape(p.lower()) + r"(?![a-z0-9_])", held)
-        for p in tx.title_phrases(specialties=[s]))}
-    order.sort(key=lambda s: s not in stated)
+        for p in tx.title_phrases(specialties=[s]))]
+    first: List[str] = []
+    for spec in stated + [a for s in stated for a in _ADJACENT_SPECIALTIES.get(s, ())]:
+        if spec not in first:
+            first.append(spec)
     # A specialty the candidate's own title names brings its HEAD phrase's
     # family into the gate: "Platform Engineer" reads as legacy `devops`
     # while a platform engineer's home family is `software_engineering`.
@@ -609,13 +613,16 @@ def canonical_search_titles(titles: Sequence[Any],
     # Engineer" (hospitality) for anyone whose title says backend.
     stated_home = {f for f in (
         fit_score.classify_role(tx.title_phrases(specialties=[s])[0])
-        for s in stated if tx.title_phrases(specialties=[s])) if f}
-    buckets = [[p for p in tx.title_phrases(specialties=[s]) if _admissible(p)]
-               for s in order]
+        for s in first if tx.title_phrases(specialties=[s])) if f}
+    # Within the stated group, one head title each before any long tail.
+    buckets = [[p for p in tx.title_phrases(specialties=[s]) if _admissible(p)] for s in first]
     for i in range(max((len(b) for b in buckets), default=0)):
         for bucket in buckets:
             if i < len(bucket):
                 _add(_display_title(bucket[i].lower()))
+    for phrase in tx.title_phrases(specialties=given) if given else []:
+        if _admissible(phrase):
+            _add(_display_title(phrase.lower()))
 
     return out[:cap]
 

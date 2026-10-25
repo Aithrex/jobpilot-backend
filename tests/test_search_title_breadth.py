@@ -63,3 +63,19 @@ def test_the_software_floor_still_leads():
     out = canonical_search_titles(["Software Engineer"], _PLATFORM_SPECS, level="mid")
     assert out[:3] == ["Software Engineer", "Software Developer",
                        "Software Development Engineer"]
+
+
+def test_a_plain_software_resume_searches_what_it_did_before_the_reorder():
+    """2026-10-24: a round-robin over every specialty put "Postgres Engineer",
+    "Mysql Engineer" and "ETL Engineer" in a general software engineer's top
+    ten. Only specialties the resume NAMES are reordered; this is the list a
+    plain software resume searched before any of that (115f538)."""
+    out = canonical_search_titles(
+        ["Software Engineer", "Server Debug Technician", "Network Analyst"],
+        ["general_software", "backend", "frontend", "full_stack", "data_engineering",
+         "database", "devops", "platform_engineering", "cloud_engineering"], level="mid")
+    assert out[:6] == ["Software Engineer", "Software Developer", "Software Development Engineer",
+                       "Backend Engineer", "Back End Engineer", "Back-End Engineer"]
+    low = _lower(out[:15])
+    for odd in ("postgres engineer", "mysql engineer", "etl engineer", "data pipeline engineer"):
+        assert odd not in low, odd
