@@ -205,8 +205,10 @@ CORPUS: Tuple[Dict[str, Any], ...] = (
          families=[], specialties=[], ambiguous=True),
     dict(key="amb-analyst", title="Technology Analyst",
          desc="Support enterprise applications and reporting.",
-         company="Infosys", cohort="mnc", source="workday", ats="workday",
-         tenant="infosys", loc="Richardson, TX, USA", days=3,
+         # A direct employer: this case measures TITLE ambiguity, and the
+         # default employer policy hides consultancies (2026-10-24).
+         company="Capital One", cohort="mnc", source="workday", ats="workday",
+         tenant="capitalone", loc="Richardson, TX, USA", days=3,
          families=[], specialties=[], ambiguous=True),
 
     # ---- seniority ---------------------------------------------------------
