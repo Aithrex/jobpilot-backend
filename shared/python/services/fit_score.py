@@ -856,6 +856,18 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
         # HCM Software Engineer" here.
         "workday analyst", "hcm analyst", "workday consultant",
         "hcm consultant", "hr systems", "people systems",
+        # The HRIS market's own titles (2026-10-24 feed check: an HRIS
+        # analyst's top 25 was padded with HR managers while "Workday Systems
+        # Analyst" filed as it_support and "Workday HCM Specialist" as
+        # nothing - retrieval never reached them). Each names an HR platform
+        # AND an HR-systems role noun, so "Workday HCM Software Engineer"
+        # still reads as software.
+        "workday systems analyst", "workday hcm analyst", "workday hcm specialist",
+        "workday hcm administrator", "workday hcm consultant", "workday administrator",
+        "workday specialist", "workday hris", "hcm specialist", "hcm administrator",
+        "successfactors consultant", "successfactors analyst", "successfactors administrator",
+        "employee central consultant", "ukg administrator", "ukg analyst", "ukg specialist",
+        "oracle hcm analyst", "oracle hcm consultant", "hris specialist", "hris administrator",
     ],
     "marketing": [
         "marketing manager", "marketing specialist", "marketing coordinator",

@@ -75,7 +75,14 @@ class TestRoleVocabulary:
     def test_power_and_discipline_titles_are_engineering(self, title):
         assert fit_score.classify_role(title) == "hardware_engineering"
 
-    @pytest.mark.parametrize("title", ["Workday Analyst", "HCM Analyst", "Workday Consultant"])
+    @pytest.mark.parametrize("title", [
+        "Workday Analyst", "HCM Analyst", "Workday Consultant",
+        # The HRIS market's own titles, filed as it_support or nothing before
+        # 2026-10-24 and so never retrieved for an HRIS analyst.
+        "Workday Systems Analyst - Benefits & HCM", "Workday HCM Specialist",
+        "Workday HCM Administrator - Benefits", "SAP SuccessFactors Employee Central Consultant",
+        "UKG Administrator",
+    ])
     def test_hr_systems_titles_are_hr(self, title):
         assert fit_score.classify_role(title) == "hr"
 
