@@ -59,14 +59,14 @@ import re
 import threading
 from typing import Any, Dict, Iterator, Optional, Set, Tuple
 
-from services.ats_providers.base import (DATE_RELATIVE, DATE_UNKNOWN,
+from services.ats_providers.base import (DATE_EXACT, DATE_RELATIVE, DATE_UNKNOWN,
                                          STATUS_BLOCKED, STATUS_DEAD,
                                          STATUS_EMPTY, STATUS_VALIDATED,
                                          AtsProvider, ChallengeError,
                                          CrawlPolicy, Endpoint, FetchContext,
                                          RawJob, ValidationResult, fp)
 from services.ats_providers.registry import register
-from services.ats_providers.util import from_relative, html_to_text, looks_remote
+from services.ats_providers.util import from_relative, html_to_text, looks_remote, to_iso
 
 
 def _env_int(name: str, default: int) -> int:
@@ -513,17 +513,24 @@ class WorkdayProvider(AtsProvider):
         body = html_to_text(info.get("jobDescription") or "")
         if not body:
             return None
-        return RawJob(
+        out = RawJob(
             source_job_id=job.source_job_id,
             title=job.title,
             apply_url=job.apply_url,
             description=body[:40000],
             location=str(info.get("location") or "").strip(),
             employment_type=str(info.get("timeType") or "").strip(),
-            # Deliberately no date: the detail payload repeats the same relative
-            # `postedOn` text, so re-reading it here would add a request without
-            # improving ADR-001 confidence.
         )
+        # The detail repeats the relative `postedOn` text AND carries
+        # `startDate` (an ISO date: Citi "2025-12-23" behind "Posted 30+ Days
+        # Ago", checked live 2026-10-23). That one is exact, so a lower-bound
+        # "30+" row gets its real age.
+        start = str(info.get("startDate") or "").strip()
+        if re.match(r"^\d{4}-\d{2}-\d{2}", start):
+            out.posted_at = to_iso(start[:10])
+            out.raw_posted_text = f"startDate {start[:10]}"
+            out.date_confidence = DATE_EXACT
+        return out
 
     # -- validation ----------------------------------------------------------
 

@@ -2532,7 +2532,39 @@ def _detail_via_provider(row: Dict[str, Any], member: Dict[str, Any], *,
         return ""
     if detailed is None:
         return ""
+    _adopt_detail_date(row, detailed)
     return str(detailed.description or "")[:15000]
+
+
+#: Listing date texts that are only an approximation of the posting date.
+_RELATIVE_POSTED_RE = re.compile(r"\b(ago|today|yesterday|\d+\s*\+|just posted|new)\b",
+                                 re.IGNORECASE)
+
+
+def _adopt_detail_date(row: Dict[str, Any], detailed: Any) -> None:
+    """Keep an EXACT date the detail page states when the listing had none or
+    only a relative one.
+
+    This path used to keep the description and drop everything else, so a
+    provider that reads a stated date from the detail - own-site pages
+    ("Date Posted: December 12, 2025", AGAP Technologies), Workday's
+    `startDate` behind a "Posted 30+ Days Ago" listing - changed nothing in
+    production: the 2026-10-22 link scan found 33 of 84 own-site cards from
+    2021 to August 2026 shown as new.
+    """
+    from services.ats_providers.base import DATE_EXACT
+    if str(getattr(detailed, "date_confidence", "") or "") != DATE_EXACT:
+        return
+    stated = _parse_iso(str(getattr(detailed, "posted_at", "") or ""))
+    if stated is None:
+        return
+    current = row.get("posted_at")
+    approximate = bool(_RELATIVE_POSTED_RE.search(str(row.get("raw_posted_text") or "")))
+    if current is not None and not approximate:
+        return
+    row["posted_at"] = stated
+    row["posted_at_confidence"] = inv.CONFIDENCE_EXACT
+    row["raw_posted_text"] = str(getattr(detailed, "raw_posted_text", "") or "")[:200]
 
 
 def list_member(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy,
