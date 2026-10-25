@@ -277,11 +277,23 @@ _SOFTWARE_DEGREE = re.compile(
     r"computer applications)(?![a-z])", re.IGNORECASE)
 
 
+#: A title that names no technology at all. "Systems Engineer" is aerospace,
+#: defense and power-systems work as often as it is IT, and an electrical
+#: graduate who DECLARED it as a target (2026-10-23, bbo***) was switched onto
+#: the software branch by it: the electrical plan vanished and "Software
+#: Engineer / Developer / SDE" were searched. A bare one is not evidence of
+#: software; "Linux / Cloud / IT Systems Engineer" still is.
+_AMBIGUOUS_SYSTEMS_TITLE = re.compile(
+    r"^\s*(?:(?:associate|junior|jr\.?|senior|sr\.?|lead|staff|principal|entry[- ]level|"
+    r"graduate|early career)\s+)*systems?\s+engineer(?:ing)?(?:\s+(?:intern|co-?op|"
+    r"i{1,3}|iv|[1-4]|trainee|associate))*\s*$", re.IGNORECASE)
+
+
 def _is_software_title(title: Any) -> bool:
     from services import fit_score
 
     text = str(title or "").strip()
-    if not text:
+    if not text or _AMBIGUOUS_SYSTEMS_TITLE.match(text):
         return False
     return (fit_score.classify_role(text) in _OFF_DISCIPLINE_FAMILIES
             and not _PHYSICAL_QUALIFIER.search(text))
@@ -795,6 +807,20 @@ def search_titles_view(user_email: str, assets: List[Dict[str, Any]],
     off_keys = {t.lower() for t in off}
     synth = [t for t in synth if t.lower() not in off_keys]
     match = match_titles_for(user_email, resume_titles + synth, degrees=degrees)
+    if plan.get("discipline"):
+        # A discipline search keeps NO software / IT title, the software floor
+        # included: one of them adds its whole family to retrieval
+        # (`inventory_feed._role_families`), which is how an electrical user's
+        # board filled with software roles. Their own discipline's postings are
+        # retrieved through the discipline's family whatever the title says.
+        from services import fit_score
+
+        plan_keys = {t.lower() for t in plan.get("titles") or []}
+        kept = [t for t in match if t.lower() in plan_keys or not (
+            fit_score.classify_role(t) in _OFF_DISCIPLINE_FAMILIES
+            and not _PHYSICAL_QUALIFIER.search(t))]
+        off = sorted(set(off) | (set(match) - set(kept)), key=str.lower)
+        match = kept
     for title in plan.get("titles") or []:
         if len(match) >= TITLE_CAP:
             break

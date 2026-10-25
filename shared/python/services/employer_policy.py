@@ -90,13 +90,10 @@ OFF_EXCLUDE = {k: False for k in EXCLUDE_KEYS}
 #: `DEFAULT_EXCLUDE = dict(STRICT_EXCLUDE)` (and `DEFAULT_PRESET =
 #: PRESET_STRICT`). Users who already stored a choice are unaffected either way.
 #:
-#: Owner decision, 2026-10-23, superseding the above: "I don't want staffing
-#: consultancy jobs at all - Insight Global, Randstad are ok". Consultancies
-#: are now HIDDEN by default too, and the large recognized staffing and
-#: consulting firms (`employer_business_model.RECOGNIZED_FIRMS`: Insight
-#: Global, Randstad, Robert Half, TEKsystems, Deloitte, Accenture, IBM,
-#: Infosys, TCS, Cognizant...) are SHOWN, labelled, under every preset that
-#: does not exclude them by name.
+#: Owner decision, 2026-10-24, superseding the above: no staffing agencies
+#: and no consultancies at all ("dont include staffing and consultancies at
+#: all"). Engineering design firms and mixed product / government-technology
+#: employers are not that and stay shown - see `reasons_for`.
 DEFAULT_EXCLUDE = {"staffing": True, "consultancy": True, "client_placement": True,
                    "talent_marketplace": True, "task_gig": True,
                    "talent_community": True, "unknown_business_model": False}
@@ -321,8 +318,18 @@ def annotate(row: Dict[str, Any], *, now: Optional[datetime] = None,
 
 
 def reasons_for(row: Dict[str, Any], exclude: Dict[str, bool], *,
-                allow_recognized: bool = True) -> List[str]:
-    """Every preference reason this row matches under `exclude` (ordered)."""
+                strict: bool = False) -> List[str]:
+    """Every preference reason this row matches under `exclude` (ordered).
+
+    Owner decision 2026-10-24: staffing agencies and consultancies are not
+    shown AT ALL by default - no recognized-firm exception. Two kinds of
+    employer are not that and stay shown outside "Direct employers only"
+    (`strict`): engineering design firms (A/E/EPC - Burns & McDonnell, Black
+    & Veatch, Jacobs; their engineers design in house, and hiding them took
+    the core of an electrical-power graduate's market away on 2026-10-23),
+    and MIXED product/government-technology employers (IBM, MITRE, CACI,
+    Leidos, Amentum), which the 2026-10-23 default had hidden as consultancy.
+    """
     model = row.get("employer_profile") or {}
     prof = row.get("posting_profile") or {}
     kind = str(model.get("kind") or "unknown")
@@ -330,17 +337,13 @@ def reasons_for(row: Dict[str, Any], exclude: Dict[str, bool], *,
     purpose = str(prof.get("purpose") or "unknown")
     internal = rel == "own_role"
     marketplace_board = str(row.get("board_kind") or "").lower() == "marketplace"
-    from services import employer_business_model as ebm
-    # "Direct employers only" means exactly that: the recognized-firm
-    # exception is for the default / custom preferences.
-    recognized = allow_recognized and any(ebm.is_recognized(n) for n in (
-        row.get("employer_name"), row.get("company"), row.get("employer_display_name"))
-        if n)
+    engineering_design = model.get("subtype") == "engineering_design_services"
     hits: List[str] = []
-    if exclude.get("staffing") and kind == "staffing" and not internal and not recognized:
+    if exclude.get("staffing") and kind == "staffing" and not internal:
         hits.append("staffing")
-    if exclude.get("consultancy") and kind in ("consultancy", "mixed") and not internal \
-            and not recognized:
+    if exclude.get("consultancy") and not internal and (
+            (kind == "consultancy" and (strict or not engineering_design))
+            or (kind == "mixed" and strict)):
         hits.append("consultancy")
     if exclude.get("talent_marketplace") and (kind == "talent_marketplace" or marketplace_board) \
             and not (internal and not marketplace_board):
@@ -410,7 +413,7 @@ def apply(rows: Sequence[Dict[str, Any]], prefs: Optional[Dict[str, Any]] = None
         annotate(row, now=now, ownership=ownership)
         block["examined"] += 1
         av = row["availability"]
-        reasons = (reasons_for(row, exclude, allow_recognized=preset != PRESET_STRICT)
+        reasons = (reasons_for(row, exclude, strict=preset == PRESET_STRICT)
                    if preset != PRESET_OFF else [])
         charged: Optional[str] = None
         if preset != PRESET_OFF and av.get("state") == pp.AV_CLOSED:

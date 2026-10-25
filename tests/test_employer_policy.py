@@ -57,28 +57,34 @@ def test_default_is_the_owner_default_not_strict():
     assert strict["preset"] == "strict_direct" and strict["exclude"] == ep.STRICT_EXCLUDE
 
 
-def test_default_hides_body_shops_and_shows_recognized_firms():
+def test_default_hides_staffing_and_consultancy_but_not_engineering_or_mixed():
+    """Owner decision 2026-10-24: no staffing and no consultancies at all -
+    recognized names included. Engineering design firms and mixed product /
+    government-technology employers are neither, and stay shown."""
     rows = [_fresh(job_id="c", employer_name="Capgemini", title_raw="Java Developer",
                    canonical_url="https://careers.capgemini.com/job/1"),
             _fresh(job_id="m", employer_name="IBM", canonical_url="https://careers.ibm.com/job/1"),
+            _fresh(job_id="e", employer_name="Burns & McDonnell", title_raw="Electrical Engineer",
+                   canonical_url="https://www.burnsmcd.com/careers/job/1"),
             _fresh(job_id="h", employer_name="Hays"),
             _fresh(job_id="i", employer_name="Insight Global"),
             _fresh(job_id="b", employer_name="PIT SOLUTIONS LLC", title_raw="Java Developer"),
             _fresh(job_id="s", employer_name="Acme Staffing LLC")]
     kept, block = ep.apply(rows, ep.default_prefs(), now=NOW, resolve=False)
-    assert [r["job_id"] for r in kept] == ["c", "m", "h", "i"]
-    assert kept[0]["employer_profile"]["kind"] == "consultancy"
-    assert kept[1]["employer_profile"]["kind"] == "mixed"
-    assert kept[2]["employer_profile"]["kind"] == "staffing"
-    assert block["excluded_counts"]["consultancy"] == 1      # PIT SOLUTIONS
-    assert block["excluded_counts"]["staffing"] == 1         # Acme Staffing
+    assert [r["job_id"] for r in kept] == ["m", "e"]
+    assert kept[0]["employer_profile"]["kind"] == "mixed"
+    assert kept[1]["employer_profile"]["subtype"] == "engineering_design_services"
+    assert block["excluded_counts"]["consultancy"] == 2      # Capgemini, PIT SOLUTIONS
+    assert block["excluded_counts"]["staffing"] == 3         # Hays, Insight Global, Acme
 
 
-def test_strict_still_hides_recognized_firms_only_by_their_own_toggle():
-    rows = [_fresh(job_id="i", employer_name="Insight Global")]
-    off = ep.normalize_prefs({"preset": "custom", "exclude": {**ep.DEFAULT_EXCLUDE}})
-    kept, _ = ep.apply(rows, off, now=NOW, resolve=False)
-    assert [r["job_id"] for r in kept] == ["i"]
+def test_strict_also_hides_engineering_design_and_mixed():
+    rows = [_fresh(job_id="m", employer_name="IBM", canonical_url="https://careers.ibm.com/job/1"),
+            _fresh(job_id="e", employer_name="Burns & McDonnell",
+                   canonical_url="https://www.burnsmcd.com/careers/job/1")]
+    kept, block = ep.apply(rows, ep.normalize_prefs({"preset": "strict_direct"}),
+                           now=NOW, resolve=False)
+    assert kept == [] and block["excluded_counts"]["consultancy"] == 2
 
 
 def test_put_persists_and_is_never_overwritten_by_default():

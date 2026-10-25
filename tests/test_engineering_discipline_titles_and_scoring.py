@@ -108,6 +108,37 @@ class TestDomainTitlePlan:
                                       ["BS Electrical Engineering"])
         assert plan["discipline"] is None, "an EE who writes software keeps software titles"
 
+    def test_a_declared_systems_engineer_target_keeps_the_discipline(self):
+        """2026-10-23 (bbo***): the same electrical graduate who declared
+        "Systems Engineer" was switched onto the software branch by it."""
+        plan = seed.domain_title_plan(
+            ["Graduate Service Assistant", "Entry-Level Electrical Design Trainee"],
+            ["Bachelor of Engineering in Electrical and Electronics Engineering"],
+            ["Systems Engineer"])
+        assert plan["discipline"] == "electrical" and not plan["software"]
+        for title in ("Systems Engineer", "Associate Systems Engineer", "Systems Engineer II"):
+            assert not seed._is_software_title(title), title
+        for title in ("Linux Systems Engineer", "Cloud Systems Engineer", "Software Engineer"):
+            assert seed._is_software_title(title), title
+
+    def test_a_discipline_search_carries_no_software_family(self, monkeypatch):
+        from services import fit_score as fs
+        from services import inventory_feed
+        monkeypatch.setattr(fs, "load_target_roles", lambda email: ["Systems Engineer"])
+        monkeypatch.setattr(fs, "load_profiles_for_user", lambda email: [])
+        monkeypatch.setattr(seed, "_declared_targets", lambda email: ["Systems Engineer"])
+        assets = [{"structured": {
+            "experience": [{"title": "Graduate Service Assistant"},
+                           {"title": "Entry-Level Electrical Design Trainee"}],
+            "education": [{"degree": "Bachelor of Engineering",
+                           "field": "Electrical and Electronics Engineering"}]}}]
+        view = seed.search_titles_view("ee@example.com", assets, {})
+        assert view["discipline"] == "electrical"
+        fams = inventory_feed._role_families(view["match_titles"], [], ["hardware_engineering"])
+        assert not set(fams) & seed._OFF_DISCIPLINE_FAMILIES, (fams, view["match_titles"])
+        assert "Electrical Engineer" in view["match_titles"]
+        assert "Software Engineer" not in view["match_titles"]
+
     def test_mechanical_and_unknown(self):
         assert seed.domain_title_plan(["Design Intern"],
                                       ["BS Mechanical Engineering"])["discipline"] == "mechanical"

@@ -38,13 +38,14 @@ def test_match_sweep_never_selects_what_the_feed_hides(sw):
     current_db().user_preferences.delete_many({})
 
 
-def test_match_sweep_default_does_not_hide_consultancies(sw):
+def test_match_sweep_default_hides_consultancies(sw):
+    """Owner decision 2026-10-24: no consultancies at all by default."""
     _rewind_watermark(sw, hours=2)
     current_db().user_preferences.delete_many({})
     _seed_posting(sjid="cap-d", company="Capgemini", parse=True,
                   first_seen=NOW - timedelta(minutes=50))
     out = sweep.run_user_sweep(USER)
-    assert out["policy_excluded"] == 0
+    assert out["policy_excluded"] == 1
 
 
 def test_match_sweep_honours_a_stored_off_choice(sw):
@@ -105,12 +106,16 @@ def test_gate_passes_a_fresh_operating_posting(clean_inv):
     assert g["ok"], g
 
 
-def test_gate_default_lets_a_consultancy_through_strict_does_not(clean_inv):
+def test_gate_default_blocks_a_consultancy_and_lets_a_mixed_employer_through(clean_inv):
     _posting("capd", employer_name="Capgemini", canonical_employer_id=None,
              canonical_url="https://careers.capgemini.com/job/9")
-    assert ep.submission_gate(USER, {"posting_job_id": "capd"})["ok"]
-    ep.put_prefs(USER, {"preset": "strict_direct"})
     assert ep.submission_gate(USER, {"posting_job_id": "capd"})["reasons"] == \
+        ["employer_policy:consultancy"]
+    _posting("ibmd", employer_name="IBM", canonical_employer_id=None,
+             canonical_url="https://careers.ibm.com/job/9")
+    assert ep.submission_gate(USER, {"posting_job_id": "ibmd"})["ok"]
+    ep.put_prefs(USER, {"preset": "strict_direct"})
+    assert ep.submission_gate(USER, {"posting_job_id": "ibmd"})["reasons"] == \
         ["employer_policy:consultancy"]
 
 

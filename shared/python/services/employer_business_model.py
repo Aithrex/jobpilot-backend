@@ -356,9 +356,10 @@ _VERIFIED_IT_SERVICES = frozenset({
 })
 
 
-#: Firms the owner wants SHOWN although they are staffing agencies or
-#: consultancies (2026-10-23): the large, recognized names candidates apply to
-#: on purpose and that sponsor at scale. `name_key` exact matches only.
+#: Large, well-known staffing and consulting names. NOT a visibility rule any
+#: more - since 2026-10-24 the default hides every staffing agency and
+#: consultancy, these included. `scripts/classify_employer_sites.py` uses it
+#: to skip firms whose kind is already known. `name_key` exact matches only.
 RECOGNIZED_FIRMS = frozenset(_STAFFING_BRANDS | _CONSULTANCY_BRANDS | {
     "ibm", "booz allen hamilton", "booz allen", "leidos", "saic", "caci",
     "guidehouse", "slalom", "thoughtworks", "globant", "globallogic", "luxoft",
@@ -379,7 +380,7 @@ RECOGNIZED_FIRMS = frozenset(_STAFFING_BRANDS | _CONSULTANCY_BRANDS | {
 
 
 def is_recognized(name: Any) -> bool:
-    """A staffing or consulting firm the owner keeps visible by default."""
+    """One of the large, well-known staffing or consulting names."""
     from services.employer_registry import name_key
     key = name_key(str(name or ""))
     return bool(key) and key in RECOGNIZED_FIRMS
