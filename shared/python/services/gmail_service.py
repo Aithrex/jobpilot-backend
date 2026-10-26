@@ -702,6 +702,21 @@ def _is_job_recommendation(msg: Dict[str, Any]) -> bool:
         r"if (?:you['’]?re|you are) interested)\b", text, re.IGNORECASE))
 
 
+def _is_irrelevant_mail(msg: Dict[str, Any]) -> bool:
+    """Known authentication notices never describe an application outcome.
+
+    Keep this subject-only and narrow: application portal updates, interview
+    logistics and consent documents still need evidence review.
+    """
+    subject = html.unescape(str(msg.get("subject") or "")).strip()
+    auth_notice = any(re.search(pattern, subject, re.I) for pattern in (
+        r"^you shared some google account data with\b",
+        r"^(?:your\s+.{1,100}\s+)?(?:verification|security|authentication|sign[- ]in|login|one[- ]time) code(?:\b.*)?$",
+        r"^please confirm your identity[.!]?$",
+    ))
+    return auth_notice or _is_job_recommendation(msg)
+
+
 def _candidate_record(rec: Dict[str, Any]) -> Dict[str, Any]:
     candidate = {key: rec.get(key, "") for key in ("record_id", "company", "title")}
     for key in ("applied_date", "created_at"):
@@ -744,7 +759,7 @@ def _build_record_index(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def _requisition_ids(text: str) -> set:
     ids = {re.sub(r"[^A-Z0-9]", "", match.upper()) for match in re.findall(
         r"(?<![A-Za-z0-9])(?:JR|R)[-_ ]?\d{4,}(?!\d)", text, re.I)}
-    ids.update(re.findall(r"\b(?:requisition|req|job)\s*(?:id|number|#)?\s*[:#-]?\s*(\d{5,})\b", text, re.I))
+    ids.update(re.findall(r"\b(?:requisition|req|job)\.?\s*(?:id|number|#)?\s*[:#-]?\s*(\d{5,})\b", text, re.I))
     return ids
 
 
@@ -757,6 +772,23 @@ _EXPLICIT_ROLE_PATTERNS = [re.compile(pattern, re.I) for pattern in (
 )]
 
 
+def _clean_role_title(role: str) -> str:
+    """Remove ATS sentence wrappers, never role levels/specialties/locations.
+
+    Also accepts normalized titles retained by earlier scans, so a parsing
+    correction can recover manual review choices without re-fetching mail.
+    """
+    role = re.split(r"\b(?:thank you|thanks|please do not reply|do not reply|this is an automated)\b",
+                    str(role), maxsplit=1, flags=re.I)[0]
+    role = re.sub(r"^(?:(?:taking the time to )?(?:apply|applying)\s+(?:for|to)\s+)", "", role, flags=re.I)
+    role = re.sub(r"^(?:your\s+)?interview logistics for\s+", "", role, flags=re.I)
+    role = re.sub(r"^(?:(?:the|our|current|available)\s+)+", "", role, flags=re.I)
+    role = re.sub(r"^(?:(?:req(?:uisition)?\.?\s*(?:id|number|#)?\s*[:#-]?\s*)?(?:JR|R)[- ]?\d+\s*[-:]?\s*)", "", role, flags=re.I)
+    role = re.sub(r"[\[(]?\b(?:req(?:uisition)?\.?)\s*(?:id|number|#)?\s*[:#-]?\s*(?:(?:JR|R)[- ]?)?\d+\s*[\])]?", "", role, flags=re.I)
+    role = re.sub(r"\s+(?:role|position|opening|open)\s*[.,:;–—-]*$", "", role.strip(), flags=re.I)
+    return _normalize(role)
+
+
 def _explicit_role_titles(msg: Dict[str, Any], index: List[Dict[str, Any]]) -> List[str]:
     """Extract complete application titles, preserving seniority and specialty.
 
@@ -764,6 +796,9 @@ def _explicit_role_titles(msg: Dict[str, Any], index: List[Dict[str, Any]]) -> L
     Only bounded application prose is considered, never recommendation footers.
     """
     text = _application_text(msg)
+    # Req. contains a period but is not the end of a role sentence. Preserve
+    # the identifier separately from the original email during matching.
+    text = re.sub(r"[\[(]\s*req(?:uisition)?\.?\s*(?:id|number|#)?\s*[:#-]?\s*(?:(?:JR|R)[- ]?)?\d+\s*[\])]", "", text, flags=re.I)
     roles = []
     for pattern in _EXPLICIT_ROLE_PATTERNS:
         roles.extend(match.group(1).strip(" ,:–—-\"'") for match in pattern.finditer(text))
@@ -781,10 +816,8 @@ def _explicit_role_titles(msg: Dict[str, Any], index: List[Dict[str, Any]]) -> L
             found = re.search(pattern, subject, re.I)
             if found:
                 roles.append(found.group(1))
-    # Requisition identifiers establish a posting but are not part of its title.
-    roles = [re.sub(r"^(?:(?:req(?:uisition)?\s*(?:id|number|#)?\s*[:#-]?\s*)?(?:JR|R)[- ]?\d+\s*[-:]?\s*)", "", role, flags=re.I)
-             for role in roles]
-    return list(dict.fromkeys(_normalize(role) for role in roles if _ROLE_NOUN.search(role)))
+    cleaned = (_clean_role_title(role) for role in roles if _ROLE_NOUN.search(role))
+    return list(dict.fromkeys(role for role in cleaned if role))
 
 
 def _exact_role_in_text(text: str, title: str, company: str = "") -> bool:
@@ -817,7 +850,7 @@ def _match_message_to_record(msg: Dict[str, Any], index: List[Dict[str, Any]]) -
     to. Company-only mail stays a review item; automatic changes require an
     exact employer and role match with no equally plausible application.
     """
-    if not index or _is_job_recommendation(msg):
+    if not index or _is_irrelevant_mail(msg):
         return None
     haystack = _normalize(_application_text(msg))
     primary_employers = _primary_employers(msg, index)
@@ -1228,7 +1261,7 @@ def extract_deterministic_signals(messages: List[Dict[str, Any]]) -> Dict[str, A
     found_receipt: Optional[Tuple[str, Dict[str, Any]]] = None
 
     for msg in sorted(messages, key=lambda m: m.get("internal_date") or 0, reverse=True):
-        if _is_job_recommendation(msg):
+        if _is_irrelevant_mail(msg):
             continue
         text = _application_text(msg)[:4000]
         if found_rejection is None:
@@ -1384,7 +1417,7 @@ def reconcile_classification(
 
 def _heuristic_status(msg: Dict[str, Any]) -> Tuple[Optional[str], float]:
     """Quick keyword pass — if nothing matches we still call the LLM."""
-    if _is_job_recommendation(msg):
+    if _is_irrelevant_mail(msg):
         return None, 0.0
     text = _application_text(msg).lower()
     for status, phrases in _STATUS_KEYWORDS.items():
@@ -1404,7 +1437,7 @@ def classify_record_thread(messages: List[Dict[str, Any]], record_meta: Dict[str
     order — but classifying each email in isolation can leave a record stuck
     on whichever message happened to be processed last.
     """
-    messages = [msg for msg in messages if not _is_job_recommendation(msg)]
+    messages = [msg for msg in messages if not _is_irrelevant_mail(msg)]
     if not messages:
         return None
 
@@ -2019,6 +2052,22 @@ def _serialize_suggestion(s: Dict[str, Any]) -> Dict[str, Any]:
     return s
 
 
+def _unmatched_suggestion(s: Dict[str, Any], index: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Clear stale application metadata without guessing the email's employer."""
+    primary = _primary_employers({"subject": s.get("subject")}, index)
+    names = {rec["company"] for rec in index
+             if primary and len(primary) == 1 and rec["company_token"] in primary}
+    # Use a readable owned-record name only for one evidenced employer. A
+    # legacy primary candidate may be the footer brand that was just excluded.
+    company = sorted(names, key=lambda name: (len(name), name.casefold()))[0] if names else ""
+    result = dict(s)
+    result.update(record_id=None, company=company, current_status=None,
+                  candidate_records=[], requires_record_selection=True,
+                  requires_application_match=True, match_confidence=0.0,
+                  match_reason="No tracked application matches this email's role or requisition")
+    return result
+
+
 def _validated_suggestion(s: Dict[str, Any], index: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Read-only repair of review choices whose retained evidence contradicts them.
 
@@ -2028,30 +2077,35 @@ def _validated_suggestion(s: Dict[str, Any], index: List[Dict[str, Any]]) -> Opt
     """
     if s.get("applied") or s.get("dismissed"):
         return dict(s)
-    if _is_job_recommendation(s):
+    if _is_irrelevant_mail(s):
         return None
-    if s.get("requires_application_match"):
-        # A real outcome for an untracked role remains visible and cannot be
-        # silently reassigned to a different role at the same employer.
-        result = dict(s)
-        result.update(record_id=None, candidate_records=[], requires_record_selection=True)
-        return result
+    recovering_match = bool(s.get("requires_application_match"))
     # Snippets are partial; only a subject employer can reassign legacy choices.
     primary = _primary_employers({"subject": s.get("subject")}, index)
     # A legacy snippet may end halfway through a title. Only complete prose
     # sentences can eliminate a candidate; subject titles are already bounded.
     snippet = str(s.get("snippet") or "")
     complete = re.match(r"(?s)^(.*[.!?\n])", snippet)
-    explicit_roles = s.get("email_roles") or _explicit_role_titles(
+    explicit_roles = list(dict.fromkeys(_clean_role_title(role) for role in s.get("email_roles", [])
+                                       if isinstance(role, str) and _ROLE_NOUN.search(role)))
+    explicit_roles = explicit_roles or _explicit_role_titles(
         {"subject": s.get("subject"), "body": complete.group(1) if complete else ""}, index)
     partial = re.search(r"\b(?:application for|forward for)\s+(?:the\s+)?([^.!?\n]{2,140})$", snippet, re.I)
     partial_role = ""
     if partial and _ROLE_NOUN.search(partial.group(1)):
-        partial_role = _normalize(re.sub(r"^(?:JR|R)[- ]?\d+\s*[-:]?\s*", "", partial.group(1), flags=re.I))
+        partial_role = _clean_role_title(partial.group(1))
     email_requisitions = set(s.get("email_requisition_ids") or _requisition_ids(_application_text(s)))
+    email_requisitions.update(_requisition_ids(" ".join(
+        role for role in s.get("email_roles", []) if isinstance(role, str))))
     records = {rec["record_id"]: rec for rec in index}
     old_candidates = s.get("candidate_records") or [{"record_id": s.get("record_id"),
                                                     "company": s.get("company", ""), "title": s.get("title", "")}]
+    if recovering_match:
+        # Parser fixes may recover choices, but only from retained role evidence
+        # and one evidenced employer. GET never applies a recovered verdict.
+        if not explicit_roles or not primary or len(primary) != 1:
+            return _unmatched_suggestion(s, index)
+        old_candidates = [_candidate_record(rec) for rec in index if rec["company_token"] in primary]
     candidates = []
     eligible_employer_records = []
     for candidate in old_candidates:
@@ -2069,17 +2123,23 @@ def _validated_suggestion(s: Dict[str, Any], index: List[Dict[str, Any]]) -> Opt
             candidates.append(value)
     if not candidates:
         if (explicit_roles or partial_role or email_requisitions) and eligible_employer_records:
-            result = dict(s)
+            result = _unmatched_suggestion(s, index)
             role = explicit_roles[0] if explicit_roles else (partial_role + "…" if partial_role else "Application in email")
-            result.update(record_id=None, candidate_records=[], requires_record_selection=True,
-                          requires_application_match=True, title=role, email_role=role)
+            result.update(title=role, email_role=role)
             return result
+        if recovering_match:
+            return _unmatched_suggestion(s, index)
         return None
     result = dict(s)
     selected = next((r for r in candidates if r["record_id"] == s.get("record_id")), candidates[0])
     result.update({key: selected.get(key, "") for key in ("record_id", "company", "title")})
     result["candidate_records"] = candidates
-    result["requires_record_selection"] = len(candidates) > 1
+    result["requires_record_selection"] = recovering_match or len(candidates) > 1
+    if recovering_match:
+        selected_meta = records[selected["record_id"]]
+        result.update(requires_application_match=False, current_status=selected_meta["current_status"],
+                      match_confidence=0.85,
+                      match_reason="Role evidence identifies a possible application; confirm it before updating")
     return result
 
 
@@ -2174,11 +2234,13 @@ def apply_suggestion(user_email: str, suggestion_id: str,
         s.update({"record_id": selected_id, "company": (selected.get("jd_analysis") or {}).get("company", ""),
                   "title": (selected.get("jd_analysis") or {}).get("job_title", ""),
                   "applied": True, "applied_at": datetime.now(timezone.utc),
-                  "suggested_status": selected_status, "requires_status_selection": False})
+                  "suggested_status": selected_status, "requires_status_selection": False,
+                  "requires_application_match": False, "requires_record_selection": False})
         _suggestions().update_one(
             {"suggestion_id": suggestion_id, "user_email": user_email, "resolution_lock_id": lock_id},
             {"$set": {k: s[k] for k in ("record_id", "company", "title", "applied", "applied_at",
-                                      "suggested_status", "requires_status_selection")}},
+                                      "suggested_status", "requires_status_selection",
+                                      "requires_application_match", "requires_record_selection")}},
         )
     finally:
         _suggestions().update_one(

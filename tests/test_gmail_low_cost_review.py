@@ -226,3 +226,221 @@ def test_legacy_truncated_role_excludes_only_conflicting_titles(db, title, expec
     assert [r["record_id"] for r in row["candidate_records"]] == expected
     if not expected:
         assert row["requires_application_match"]
+
+
+def test_unmatched_legacy_row_replaces_stale_company_and_match_metadata(db):
+    db.tailoring_records.insert_many([
+        record("wrong-company", "Software Engineer", "LinkedIn"),
+        record("same-company-wrong-role", "Cloud Platform Engineer", "GitLab"),
+    ])
+    original = {"suggestion_id": "old-primary", "user_email": USER,
+        "record_id": "wrong-company", "company": "LinkedIn", "title": "Software Engineer",
+        "subject": "Thank you for applying to GitLab",
+        "snippet": "We received your application for Backend Engineer, Knowledge Graph.",
+        "suggested_status": "applied", "current_status": "applied", "confidence": .95,
+        "match_confidence": .6, "match_reason": "Company LinkedIn matched",
+        "applied": False, "dismissed": False,
+        "candidate_records": [{"record_id": "wrong-company"}, {"record_id": "same-company-wrong-role"}]}
+    db.gmail_suggestions.insert_one(dict(original))
+    row = gs.list_suggestions(USER)[0]
+    assert row["company"] == "GitLab"
+    assert row["current_status"] is None
+    assert row["match_confidence"] == 0
+    assert row["match_reason"] == "No tracked application matches this email's role or requisition"
+    assert row["candidate_records"] == []
+    assert row["record_id"] is None
+    assert row["requires_application_match"]
+    assert row["suggested_status"] == "applied"
+    assert row["confidence"] == .95
+    stored = db.gmail_suggestions.find_one({"suggestion_id": "old-primary"})
+    assert stored["company"] == "LinkedIn"
+    assert stored["match_confidence"] == .6
+
+
+@pytest.mark.parametrize("subject,expected_company", [
+    ("Thank you for applying to GitLab", "GitLab"),
+    ("GitLab and LinkedIn application update", ""),
+    ("Application update", ""),
+])
+def test_already_unmatched_rows_clear_stale_metadata_without_guessing_company(db, subject, expected_company):
+    db.tailoring_records.insert_many([
+        record("gitlab", "Cloud Engineer", "GitLab"),
+        record("linkedin", "Cloud Engineer", "LinkedIn"),
+    ])
+    db.gmail_suggestions.insert_one({"suggestion_id": "unmatched", "user_email": USER,
+        "record_id": None, "company": "LinkedIn", "title": "Backend Engineer",
+        "subject": subject, "suggested_status": "rejected", "current_status": "applied",
+        "match_confidence": .6, "match_reason": "Previously matched",
+        "requires_application_match": True, "candidate_records": [],
+        "applied": False, "dismissed": False})
+    row = gs.list_suggestions(USER)[0]
+    assert row["company"] == expected_company
+    assert row["current_status"] is None
+    assert row["match_confidence"] == 0
+    assert row["candidate_records"] == []
+
+
+@pytest.mark.parametrize("resolved", ["applied", "dismissed"])
+def test_resolved_unmatched_history_keeps_original_metadata(db, resolved):
+    db.tailoring_records.insert_one(record(company="GitLab"))
+    original = {"suggestion_id": "historical", "user_email": USER,
+        "record_id": None, "company": "LinkedIn", "title": "Backend Engineer",
+        "subject": "Thank you for applying to GitLab", "suggested_status": "applied",
+        "current_status": "applied", "match_confidence": .6, "match_reason": "Historical match",
+        "requires_application_match": True, "candidate_records": [],
+        "applied": False, "dismissed": False, resolved: True}
+    db.gmail_suggestions.insert_one(dict(original))
+    row = gs.list_suggestions(USER, include_resolved=True)[0]
+    assert row["company"] == original["company"]
+    assert row["current_status"] == original["current_status"]
+    assert row["match_confidence"] == original["match_confidence"]
+    assert row["match_reason"] == original["match_reason"]
+
+
+@pytest.mark.parametrize("title,body,subject", [
+    ("Site Reliability Engineer I", "Unfortunately, we have decided not to proceed with your candidacy for the current Site Reliability Engineer I opening at Acme.", "Acme application update"),
+    ("DevOps Platform Engineer I", "Thank you for taking the time to apply for our DevOps Platform Engineer I role.", "Thank you for applying to Acme"),
+    ("Dev Ops Engineer", "We received your application.", "Your Application for Dev Ops Engineer – Thank You for Your Interest at Acme"),
+    ("Full Stack Engineer", "Thank you for applying to Acme! We have received your application and will review it promptly. Position: Full Stack Engineer Thank you, Acme Please do not reply to this email. It is sent from an unmonitored inbox.", "Thank you for applying to Acme"),
+    ("Software Quality Assurance Engineer I (Full-Time) - United States", "Thank you for applying to the Software Quality Assurance Engineer I (Full-Time) - United States (Req. 2029616) position at Acme.", "Acme application update"),
+])
+def test_ats_prose_wrappers_do_not_exclude_the_actual_role(db, monkeypatch, title, body, subject):
+    db.tailoring_records.insert_one(record(title=title))
+    msg = message(body, subject=subject)
+    index = gs._build_record_index([record(title=title)])
+    match = gs._match_message_to_record(msg, index)
+    assert match is not None
+    assert [r["record_id"] for r in match[0]["candidate_records"]] == ["r1"]
+    assert not match[0].get("requires_application_match")
+    monkeypatch.setattr(gs, "fetch_recent_messages", lambda *_: [msg])
+    gs.sync_user(USER)
+    assert all(not row.get("requires_application_match") for row in gs.list_suggestions(USER, include_resolved=True))
+
+
+@pytest.mark.parametrize("title,retained_role", [
+    ("Site Reliability Engineer I", "current site reliability engineer i opening"),
+    ("DevOps Platform Engineer I", "taking the time to apply for our devops platform engineer i"),
+    ("Dev Ops Engineer", "dev ops engineer thank you for your interest"),
+    ("Full Stack Engineer", "full stack engineer thank you acme please do not reply to this email"),
+    ("Software Quality Assurance Engineer I (Full-Time) - United States", "applying to the software quality assurance engineer i full time united states req 2029616 position"),
+])
+def test_retained_noisy_roles_recover_only_manual_candidates(db, title, retained_role):
+    db.tailoring_records.insert_many([record(title=title), record("wrong", title="Senior Software Engineer")])
+    stored = {"suggestion_id": "retained", "user_email": USER, "subject": "Acme application update",
+              "title": retained_role, "email_roles": [retained_role], "company": "Acme",
+              "record_id": None, "candidate_records": [], "requires_application_match": True,
+              "requires_record_selection": True, "suggested_status": "rejected", "current_status": None,
+              "match_confidence": 0, "source": "deterministic", "applied": False, "dismissed": False}
+    db.gmail_suggestions.insert_one(dict(stored))
+    row = gs.list_suggestions(USER)[0]
+    assert [r["record_id"] for r in row["candidate_records"]] == ["r1"]
+    assert not row["requires_application_match"]
+    assert row["requires_record_selection"]
+    assert row["match_confidence"] < gs.AUTO_APPLY_CONFIDENCE
+    assert row["source"] == "deterministic"
+    assert db.tailoring_records.find_one({"record_id": "r1"})["application"]["status"] == "applied"
+    assert db.gmail_suggestions.find_one({"suggestion_id": "retained"})["candidate_records"] == []
+    with pytest.raises(ValueError, match="Choose the application"):
+        gs.apply_suggestion(USER, "retained")
+    assert gs.apply_suggestion(USER, "retained", record_id="r1")["applied"]
+    history = gs.list_suggestions(USER, include_resolved=True)[0]
+    assert not history["requires_application_match"]
+    assert not history["requires_record_selection"]
+
+
+def test_role_cleanup_keeps_seniority_and_specialty_conflicts(db):
+    db.tailoring_records.insert_one(record(title="Software Engineer"))
+    db.gmail_suggestions.insert_one({"suggestion_id": "retained-conflict", "user_email": USER,
+        "subject": "Acme application update", "email_roles": ["current senior software engineer workflow systems opening"],
+        "record_id": None, "candidate_records": [], "requires_application_match": True,
+        "suggested_status": "rejected", "applied": False, "dismissed": False})
+    row = gs.list_suggestions(USER)[0]
+    assert row["candidate_records"] == []
+    assert row["requires_application_match"]
+
+
+def test_recovered_role_still_rejects_conflicting_retained_requisition(db):
+    rec = record()
+    rec["application"]["job_url"] = "https://acme.example/jobs/Software-Engineer_JR1111111"
+    db.tailoring_records.insert_one(rec)
+    db.gmail_suggestions.insert_one({"suggestion_id": "retained-req", "user_email": USER,
+        "subject": "Acme application update", "email_roles": ["current JR2222222 software engineer opening"],
+        "record_id": None, "candidate_records": [], "requires_application_match": True,
+        "suggested_status": "rejected", "applied": False, "dismissed": False})
+    row = gs.list_suggestions(USER)[0]
+    assert row["candidate_records"] == []
+    assert row["requires_application_match"]
+
+
+def test_recovered_role_needs_unique_employer_evidence(db):
+    db.tailoring_records.insert_many([record(), record("other", company="OtherCo")])
+    db.gmail_suggestions.insert_one({"suggestion_id": "unknown-employer", "user_email": USER,
+        "subject": "Application update", "email_roles": ["current software engineer opening"],
+        "record_id": None, "company": "Acme", "candidate_records": [], "requires_application_match": True,
+        "suggested_status": "rejected", "applied": False, "dismissed": False})
+    row = gs.list_suggestions(USER)[0]
+    assert row["candidate_records"] == []
+    assert row["requires_application_match"]
+    assert row["company"] == ""
+
+
+@pytest.mark.parametrize("subject", [
+    "You shared some Google Account data with Acme",
+    "Your Acme A to Z verification code",
+    "Please confirm your identity",
+    "Security code for your application to Acme",
+])
+def test_auth_notifications_never_become_application_review(db, monkeypatch, subject):
+    db.tailoring_records.insert_one(record())
+    msg = message("A security notification, not an application outcome.", subject=subject)
+    monkeypatch.setattr(gs, "fetch_recent_messages", lambda *_: [msg])
+    result = gs.sync_user(USER)
+    assert result["auto_applied"] == result["suggested"] == result["deferred"] == result["model_calls"] == 0
+    assert gs.extract_deterministic_signals([msg]) == {}
+    assert gs.list_suggestions(USER) == []
+    db.gmail_suggestions.insert_one({"suggestion_id": "legacy-auth", "user_email": USER,
+        "subject": subject, "snippet": msg["snippet"], "record_id": "r1", "candidate_records": [{"record_id": "r1"}],
+        "requires_status_selection": True, "suggested_status": None, "applied": False, "dismissed": False})
+    assert gs.list_suggestions(USER) == []
+    with pytest.raises(ValueError, match="evidence"):
+        gs.apply_suggestion(USER, "legacy-auth", record_id="r1", status="rejected")
+    assert db.tailoring_records.find_one()["application"]["status"] == "applied"
+
+
+@pytest.mark.parametrize("subject,body", [
+    ("Acme application update", "Please check your application portal for an update."),
+    ("Acme interview logistics", "We will share your interview logistics for the Software Engineer role."),
+    ("Acme consent document", "Please review the consent document for your application."),
+])
+def test_unclear_application_and_consent_mail_remain_reviewable(db, monkeypatch, subject, body):
+    db.tailoring_records.insert_one(record())
+    monkeypatch.setattr(gs, "fetch_recent_messages", lambda *_: [message(body, subject=subject)])
+    assert gs.sync_user(USER)["suggested"] == 1
+    assert len(gs.list_suggestions(USER)) == 1
+
+
+@pytest.mark.parametrize("retained", [
+    "taking the time to apply for the backend engineer",
+    "your interview logistics for the software development engineer",
+    "software development engineer open",
+])
+def test_additional_observed_prose_wrappers_are_cleaned(retained):
+    expected = "backend engineer" if "backend" in retained else "software development engineer"
+    assert gs._clean_role_title(retained) == expected
+
+
+def test_role_cleanup_preserves_open_source_specialty():
+    assert gs._clean_role_title("Open Source Software Engineer") == "open source software engineer"
+
+
+def test_retained_roles_and_partial_snippet_use_same_wrapper_rules(db):
+    db.tailoring_records.insert_one(record(title="DevOps Engineer"))
+    db.gmail_suggestions.insert_one({"suggestion_id": "partial-wrapper", "user_email": USER,
+        "subject": "Acme application update", "email_roles": ["our devops engineer"],
+        "snippet": "We received your application for our DevOps Engineer",
+        "record_id": None, "candidate_records": [], "requires_application_match": True,
+        "suggested_status": "applied", "applied": False, "dismissed": False})
+    row = gs.list_suggestions(USER)[0]
+    assert [r["record_id"] for r in row["candidate_records"]] == ["r1"]
+    assert not row["requires_application_match"]
+    assert row["requires_record_selection"]
