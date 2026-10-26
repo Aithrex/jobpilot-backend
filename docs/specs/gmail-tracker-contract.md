@@ -109,6 +109,25 @@ No guessed application is created, and resolved historical decisions remain
 immutable. Unknown outcomes and unmatched roles may be reviewed directly in
 Gmail using their retained message/thread identifiers.
 
+Live batch follow-up also found role captures containing ATS sentence wrappers
+and signatures. Only recognized prose is removed (`our`, `current`, `taking the
+time to apply for`, `interview logistics for`, trailing `role`/`opening`, and
+thank-you/signature text). Seniority, specialties, employment type and location
+remain part of the title; requisition evidence is retained separately. Previously
+unmatched rows can recover candidate choices from corrected retained role
+evidence plus one evidenced employer. Recovery is read-only and always requires
+explicit application selection, even with one candidate. It never applies a
+status during listing, and successful manual resolution clears unmatched flags.
+
+Unmatched rows show no current application status or match confidence. Their
+company label comes from one subject-evidenced employer and an owned record's
+readable name; uncertain employer labels are blank. Resolved history remains
+unchanged. Narrow authentication-notice subject patterns (verification/security
+codes, Google account-data-sharing notices, and the exact identity-confirmation
+notice) are excluded before matching and when reading/applying old pending rows.
+Unclear application portal updates, interview logistics and consent documents
+remain reviewable.
+
 ## Scan behavior and limits
 
 A first connection examines the previous 60 days in bounded batches of up to
