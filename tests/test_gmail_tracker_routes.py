@@ -56,3 +56,14 @@ def test_status_exposes_continuation_without_cursor_token(client, monkeypatch):
     assert data["has_more"] is True
     assert data["last_sync_summary"]["messages_scanned"] == 250
     assert "private-cursor" not in response.get_data(as_text=True)
+
+
+def test_status_count_matches_validated_review_list(client, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(gs, "gmail_configured", lambda: True)
+    monkeypatch.setattr(gs, "gmail_oauth_enabled", lambda: True)
+    monkeypatch.setattr(gs, "get_connection", lambda _: {"gmail_address": USER})
+    monkeypatch.setattr(gs, "_suggestions", lambda: SimpleNamespace(count_documents=lambda _: 7))
+    monkeypatch.setattr(gs, "list_suggestions", lambda _: [{"suggestion_id": "good-1"}, {"suggestion_id": "good-2"}])
+    response = client[0].get("/api/resume/gmail/status", headers=client[1])
+    assert response.get_json()["pending_suggestions"] == 2

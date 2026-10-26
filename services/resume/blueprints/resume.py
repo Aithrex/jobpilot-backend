@@ -4207,9 +4207,9 @@ def gmail_status():
     conn = gmail_service.get_connection(user_email) if configured else None
     pending = 0
     if conn:
-        pending = gmail_service._suggestions().count_documents({
-            "user_email": user_email, "applied": False, "dismissed": False,
-        })
+        # Count the current validated review list (bounded at 100), including
+        # the same evidence exclusions used by GET /gmail/suggestions.
+        pending = len(gmail_service.list_suggestions(user_email))
     return jsonify({
         "configured": configured,
         "connected": bool(conn),

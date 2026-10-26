@@ -23,6 +23,16 @@ choose an application explicitly. Historical or conflicting outcomes and email
 older than a manual status change remain review items. Mail older than an already
 accepted email outcome is ignored.
 
+The 2026-10-26 UTC verification (October 25 in Phoenix) also exposed unrelated company names in ATS social
+footers and job recommendations. Employer identity now comes from the primary
+application subject or explicit application content. An untracked employer in
+that evidence does not fall back to a tracked footer brand. Company words inside
+role titles are not subject employer evidence. Recommendation sections are
+excluded from identity/classification; job-alert messages are ignored before
+model work. Conditional phrases such as "if you're interested" cannot establish
+an application receipt. Explicit application acknowledgements, interviews and
+rejections remain valid, and same-employer duplicate roles still require review.
+
 ## Existing routes, additive fields
 
 All routes remain below `/api/resume/gmail`; no new edge prefix is required.
@@ -35,14 +45,25 @@ token storage, JWT user scope and asynchronous sync remain in place.
   `messages_scanned`, `auto_applied`, `suggested`, `ignored`, `records_with_mail`,
   `skipped_no_match`, and `skipped_already_in_status`. `auto_applied` counts
   **status updates**, not application submissions.
-- `GET /status` adds `has_more` and `last_sync_summary`. The completed
+- `GET /status` adds `has_more` and `last_sync_summary`. `pending_suggestions`
+  counts the same validated review list shown by `GET /suggestions`, bounded
+  at 100 visible items rather than all historical pending documents. The completed
   `last_synced_at` watermark advances only after all pages in a scan complete.
   Continuation tokens remain private to the backend.
 - `GET /suggestions` preserves existing fields and adds `match_confidence`,
-  `match_reason`, `candidate_records: [{record_id, company, title}]`,
+  `match_reason`, `candidate_records: [{record_id, company, title, applied_date?, created_at?}]`,
   `requires_record_selection`, and `email_received_at` (UTC ISO timestamp or
   null). `confidence` describes the status verdict; `match_confidence` describes
   application identity. Existing source/evidence message IDs remain available.
+  Optional candidate dates distinguish repeated applications for the same role;
+  `applied_date` is the stored civil day and `created_at` is an ISO timestamp.
+  Existing pending suggestions are revalidated on read and before apply using
+  retained subject/sender/snippet evidence: clear employer contradictions are
+  pruned and recommendation-only items are excluded. Filtering does not write or
+  delete stored documents; resolved history retains its original identity. The
+  visible cap is applied after filtering, so invalid rows cannot hide older
+  valid review items. Plain-text previews decode HTML entities without rendering
+  HTML.
 - `POST /suggestions/<id>/apply` accepts an optional JSON `record_id`. An
   ambiguous item requires it. A selection must be in the suggestion's candidate
   list and still belong to the JWT user. Invalid/unresolved selections return
