@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import json
 import logging
 import math
@@ -618,6 +619,90 @@ def _contains_phrase(text: str, phrase: str) -> bool:
     return bool(phrase) and f" {phrase} " in f" {text} "
 
 
+_FOOTER_START = re.compile(
+    r"\b(?:(?:recommended|suggested|similar) (?:jobs|roles|opportunities)|"
+    r"jobs you (?:might|may) (?:like|be interested in)|you may also like|"
+    r"(?:follow|connect with) us (?:on|at)|privacy policy|unsubscribe|"
+    r"manage (?:email |notification )?preferences)\b", re.IGNORECASE)
+_PRIMARY_EMPLOYER_PATTERNS = [re.compile(pattern, re.IGNORECASE) for pattern in (
+    r"\b(?:thank you|thanks) for (?:applying to|your application (?:to|at|with))\s+(.{2,120}?)(?=[.!?;\n|]|$)",
+    r"\b(?:your )?application (?:to|at|with)\s+(.{2,120}?)(?=\s+(?:(?:has been|was|is)\s+)?(?:successfully\s+)?(?:submitted|received|rejected|accepted)\b|[.!?;\n|]|$)",
+)]
+_PLATFORM_DOMAINS = ("linkedin.com", "indeed.com", "wellfound.com", "greenhouse-mail.io",
+                     "greenhouse.io", "lever.co", "myworkdayjobs.com", "smartrecruiters.com")
+
+
+def _primary_employer_token(label: str, index: List[Dict[str, Any]]) -> str:
+    token = _company_token(label.strip())
+    if any(rec["company_token"] == token for rec in index):
+        return token
+    # Common subject templates append the role after the employer. Only split
+    # a dash/"for" suffix when it contains a tracked role, not a company suffix.
+    parts = re.split(r"\s+(?:for\s+(?:the\s+|an?\s+)?|[-–—]\s+)", label, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) == 2 and any(_contains_phrase(_normalize(parts[1]), rec["title_norm"])
+                              for rec in index if rec["title_norm"]):
+        return _company_token(parts[0])
+    return token
+
+
+def _application_body(msg: Dict[str, Any]) -> str:
+    """Only application content can establish identity or an outcome."""
+    text = html.unescape(str(msg.get("body") or msg.get("snippet") or ""))[:12000]
+    footer = _FOOTER_START.search(text)
+    return text[:footer.start()] if footer else text
+
+
+def _application_text(msg: Dict[str, Any]) -> str:
+    return html.unescape(str(msg.get("subject") or "")) + "\n" + _application_body(msg)
+
+
+def _primary_employers(msg: Dict[str, Any], index: List[Dict[str, Any]]) -> Optional[set]:
+    subject = html.unescape(str(msg.get("subject") or ""))
+    for pattern in _PRIMARY_EMPLOYER_PATTERNS:
+        match = pattern.search(subject)
+        if match:
+            # Preserve even an UNTRACKED employer: never fall back to a footer
+            # brand simply because the true application isn't in the tracker.
+            return {_primary_employer_token(match.group(1), index)}
+    # Product names can also be employers (e.g. a Guidewire Developer at Acme).
+    # A company word inside the role title cannot establish the employer.
+    subject_without_roles = _normalize(subject)
+    for title in sorted({rec["title_norm"] for rec in index if rec["title_norm"]}, key=len, reverse=True):
+        subject_without_roles = re.sub(r"\b" + re.escape(title) + r"\b", " ", subject_without_roles)
+    named = {r["company_token"] for r in index if r["company_token"]
+             and _contains_phrase(_normalize(subject_without_roles), r["company_token"])}
+    if named:
+        return named
+    for pattern in _PRIMARY_EMPLOYER_PATTERNS:
+        match = pattern.search(_application_body(msg))
+        if match:
+            return {_primary_employer_token(match.group(1), index)}
+    return None
+
+
+def _is_job_recommendation(msg: Dict[str, Any]) -> bool:
+    text = _application_text(msg)
+    # Actual application acknowledgements/outcomes remain valid even when the
+    # platform appends ads. Conditional interest alone is never a receipt.
+    if any(_scan_patterns(text, patterns) for patterns in
+           (_APPLICATION_ACK_REGEX, _REJECTION_REGEX, _OFFER_REGEX, _INTERVIEW_REGEX)):
+        return False
+    sender = str(msg.get("from_address") or "").lower()
+    return sender.endswith("@match.indeed.com") or bool(re.search(
+        r"\b(?:(?:strong|great|good|top) match|(?:job|role) recommendations?|"
+        r"(?:jobs|roles|opportunities) for you|job alerts?|apply now|view (?:this |the )?job|"
+        r"if (?:you['’]?re|you are) interested)\b", text, re.IGNORECASE))
+
+
+def _candidate_record(rec: Dict[str, Any]) -> Dict[str, Any]:
+    candidate = {key: rec.get(key, "") for key in ("record_id", "company", "title")}
+    for key in ("applied_date", "created_at"):
+        value = rec.get(key)
+        if value:
+            candidate[key] = value.isoformat() if hasattr(value, "isoformat") else str(value)
+    return candidate
+
+
 def _build_record_index(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     index = []
     for r in records:
@@ -639,6 +724,8 @@ def _build_record_index(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "gmail_evidence_ms": app.get("gmail_evidence_ms") or 0,
             "status_updated_at": app.get("updated_at"),
             "gmail_updated_at": app.get("gmail_updated_at"),
+            "applied_date": app.get("applied_date"),
+            "created_at": r.get("created_at"),
         })
     return index
 
@@ -650,27 +737,34 @@ def _match_message_to_record(msg: Dict[str, Any], index: List[Dict[str, Any]]) -
     to. Company-only mail stays a review item; automatic changes require an
     exact employer and role match with no equally plausible application.
     """
-    if not index:
+    if not index or _is_job_recommendation(msg):
         return None
-    haystack = _normalize(" ".join(str(msg.get(k) or "") for k in
-                                   ("subject", "snippet", "from_name", "body")))[:12000]
+    haystack = _normalize(_application_text(msg))
+    primary_employers = _primary_employers(msg, index)
     sender_domain = (msg.get("from_domain") or "").lower()
     sender_addr = (msg.get("from_address") or "").lower()
+    platform_sender = any(sender_domain == domain or sender_domain.endswith("." + domain)
+                          for domain in _PLATFORM_DOMAINS)
 
     candidates = []
     for rec in index:
         company = rec["company_token"]
-        company_named = len(company) >= 2 and _contains_phrase(haystack, company)
+        if primary_employers is not None and company not in primary_employers:
+            continue
+        company_named = len(company) >= 2 and (
+            company in (primary_employers or set()) or bool(re.search(
+                r"(?:\b(?:at|to|with|from|company)\s+" + re.escape(company) + r"\b|\b" +
+                re.escape(company) + r"\s+(?:application|careers|recruiting|hiring|team)\b)", haystack)))
         # Exact DNS label only: Box != Dropbox, and United Airlines != United
         # Healthcare. Shared ATS/recruiter domains never establish identity.
-        company_domain = len(company) >= 3 and company.replace(" ", "") in sender_domain.split(".")[:-1]
+        company_domain = not platform_sender and len(company) >= 3 and company.replace(" ", "") in sender_domain.split(".")[:-1]
         recruiter = bool(rec["recruiter_email"] and rec["recruiter_email"] == sender_addr)
         if not (company_named or company_domain or recruiter):
             continue
         title_exact = _contains_phrase(haystack, rec["title_norm"])
         reasons = []
         if company_named:
-            reasons.append("Full company name in email")
+            reasons.append("Company identified in application content")
         if company_domain:
             reasons.append("Company name matches sender domain label")
         if recruiter:
@@ -689,9 +783,7 @@ def _match_message_to_record(msg: Dict[str, Any], index: List[Dict[str, Any]]) -
     close = [item for item in candidates if score - item[1] < 0.15]
     ambiguous = len(close) > 1
     meta = dict(best_rec)
-    meta["candidate_records"] = [
-        {k: item[0][k] for k in ("record_id", "company", "title")} for item in close
-    ]
+    meta["candidate_records"] = [_candidate_record(item[0]) for item in close]
     meta["requires_record_selection"] = ambiguous
     if ambiguous:
         score = min(score, 0.6)
@@ -981,6 +1073,15 @@ _RECEIPT_ONLY_PATTERNS = [
     r"\b(?:we (?:appreciate|thank you for) your patience)\b",
 ]
 _RECEIPT_ONLY_REGEX = [re.compile(p, re.IGNORECASE) for p in _RECEIPT_ONLY_PATTERNS]
+# Boilerplate can prevent a false interview, but cannot prove a submission.
+# A receipt requires an acknowledgement specifically about the application.
+_APPLICATION_ACK_REGEX = [re.compile(p, re.IGNORECASE) for p in (
+    r"\b(?:thanks|thank you|many thanks) for (?:applying|your application|submitting (?:your|an) application|taking the time to apply)\b",
+    r"\bwe(?: have|['’]ve)? (?:received|got) your application\b",
+    r"\byour application (?:has been |is currently |was )?(?:successfully )?(?:received|submitted|on file|in our system)\b",
+    r"\bapplication (?:successfully )?(?:received|submitted|completed)\b",
+    r"\byour application (?:is currently |will be |has been )?(?:being |under |in )?(?:evaluated|reviewed|considered|assessed|in review)\b",
+)]
 
 
 def _scan_patterns(text: str, regexes: List[re.Pattern]) -> Optional[str]:
@@ -1019,11 +1120,9 @@ def extract_deterministic_signals(messages: List[Dict[str, Any]]) -> Dict[str, A
     found_receipt: Optional[Tuple[str, Dict[str, Any]]] = None
 
     for msg in sorted(messages, key=lambda m: m.get("internal_date") or 0, reverse=True):
-        text = " ".join([
-            msg.get("subject") or "",
-            msg.get("snippet") or "",
-            (msg.get("body") or "")[:3500],  # bound CPU; bodies > this are usually footer/quoted-thread
-        ])
+        if _is_job_recommendation(msg):
+            continue
+        text = _application_text(msg)[:4000]
         if found_rejection is None:
             phrase = _scan_patterns(text, _REJECTION_REGEX)
             if phrase:
@@ -1037,7 +1136,7 @@ def extract_deterministic_signals(messages: List[Dict[str, Any]]) -> Dict[str, A
             if phrase:
                 found_interview = (phrase, msg)
         if found_receipt is None:
-            phrase = _scan_patterns(text, _RECEIPT_ONLY_REGEX)
+            phrase = _scan_patterns(text, _APPLICATION_ACK_REGEX)
             if phrase:
                 found_receipt = (phrase, msg)
 
@@ -1177,7 +1276,9 @@ def reconcile_classification(
 
 def _heuristic_status(msg: Dict[str, Any]) -> Tuple[Optional[str], float]:
     """Quick keyword pass — if nothing matches we still call the LLM."""
-    text = (msg.get("subject", "") + " " + msg.get("snippet", "") + " " + msg.get("body", "")).lower()
+    if _is_job_recommendation(msg):
+        return None, 0.0
+    text = _application_text(msg).lower()
     for status, phrases in _STATUS_KEYWORDS.items():
         for phrase in phrases:
             if phrase in text:
@@ -1195,6 +1296,7 @@ def classify_record_thread(messages: List[Dict[str, Any]], record_meta: Dict[str
     order — but classifying each email in isolation can leave a record stuck
     on whichever message happened to be processed last.
     """
+    messages = [msg for msg in messages if not _is_job_recommendation(msg)]
     if not messages:
         return None
 
@@ -1205,8 +1307,7 @@ def classify_record_thread(messages: List[Dict[str, Any]], record_meta: Dict[str
             f"Date: {msg.get('date', '')}\n"
             f"From: {msg.get('from_name','')} <{msg.get('from_address','')}>\n"
             f"Subject: {msg.get('subject', '')}\n"
-            f"Snippet: {msg.get('snippet', '')}\n"
-            f"Body: {(msg.get('body') or '')[:900]}"
+            f"Body: {_application_body(msg)[:900]}"
         )
     emails_text = "\n\n".join(blocks)
 
@@ -1397,6 +1498,8 @@ def _records_for_user(user_email: str) -> List[Dict[str, Any]]:
             "application.gmail_evidence_ms": 1,
             "application.updated_at": 1,
             "application.gmail_updated_at": 1,
+            "application.applied_date": 1,
+            "created_at": 1,
             "_id": 0,
         },
     )
@@ -1795,7 +1898,44 @@ def _serialize_suggestion(s: Dict[str, Any]) -> Dict[str, Any]:
         v = s.get(k)
         if hasattr(v, "isoformat"):
             s[k] = v.isoformat()
+    for k in ("subject", "snippet", "from_name"):
+        if isinstance(s.get(k), str):
+            s[k] = html.unescape(s[k])
     return s
+
+
+def _validated_suggestion(s: Dict[str, Any], index: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Read-only repair of review choices whose retained evidence contradicts them.
+
+    Old rows have subject/sender/snippet, not full bodies. Only clear employer
+    contradictions and recommendations are excluded; absence of evidence alone
+    does not invalidate a legacy review item. Nothing here rewrites history.
+    """
+    if s.get("applied") or s.get("dismissed"):
+        return dict(s)
+    if _is_job_recommendation(s):
+        return None
+    # Snippets are partial; only a subject employer can reassign legacy choices.
+    primary = _primary_employers({"subject": s.get("subject")}, index)
+    records = {rec["record_id"]: rec for rec in index}
+    old_candidates = s.get("candidate_records") or [{"record_id": s.get("record_id"),
+                                                    "company": s.get("company", ""), "title": s.get("title", "")}]
+    candidates = []
+    for candidate in old_candidates:
+        rec = records.get(candidate.get("record_id"))
+        if rec is None:
+            continue
+        value = _candidate_record(rec)
+        if primary is None or _company_token(value.get("company", "")) in primary:
+            candidates.append(value)
+    if not candidates:
+        return None
+    result = dict(s)
+    selected = next((r for r in candidates if r["record_id"] == s.get("record_id")), candidates[0])
+    result.update({key: selected.get(key, "") for key in ("record_id", "company", "title")})
+    result["candidate_records"] = candidates
+    result["requires_record_selection"] = len(candidates) > 1
+    return result
 
 
 def list_suggestions(user_email: str, include_resolved: bool = False) -> List[Dict[str, Any]]:
@@ -1803,8 +1943,16 @@ def list_suggestions(user_email: str, include_resolved: bool = False) -> List[Di
     if not include_resolved:
         q["applied"] = False
         q["dismissed"] = False
-    docs = list(_suggestions().find(q).sort("created_at", -1).limit(100))
-    return [_serialize_suggestion(d) for d in docs]
+    docs = _suggestions().find(q).sort("created_at", -1)
+    index = _build_record_index(_records_for_user(user_email))
+    visible = []
+    for doc in docs:
+        validated = _validated_suggestion(doc, index)
+        if validated is not None:
+            visible.append(_serialize_suggestion(validated))
+            if len(visible) == 100:
+                break
+    return visible
 
 
 def apply_suggestion(user_email: str, suggestion_id: str,
@@ -1814,6 +1962,14 @@ def apply_suggestion(user_email: str, suggestion_id: str,
         raise LookupError("Suggestion not found")
     if s.get("applied") or s.get("dismissed"):
         return _serialize_suggestion(s)
+    # Retain ownership validation for explicitly selected legacy candidates.
+    if record_id and record_id in {r.get("record_id") for r in s.get("candidate_records", [])}:
+        if not DBConnect().get_db().tailoring_records.find_one(
+                {"record_id": record_id, "user_email": user_email}, {"_id": 1}):
+            raise LookupError("Application not found")
+    s = _validated_suggestion(s, _build_record_index(_records_for_user(user_email)))
+    if s is None:
+        raise ValueError("This email's evidence does not support the suggested application update")
     if s.get("requires_record_selection") and not record_id:
         raise ValueError("Choose the application that this email belongs to")
     selected_id = record_id or s["record_id"]
