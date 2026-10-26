@@ -85,6 +85,27 @@ def _list(client, token, query=""):
 
 
 class TestSlimRows:
+    def test_slim_rows_page_without_losing_equal_timestamp_records(self, client, db):
+        for i in range(5):
+            _seed(db, f"rec-{i}")
+        _seed(db, "not-mine", user="another@example.test")
+        token = _token(client)
+        seen = []
+        offset = 0
+        while offset is not None:
+            response = _list(client, token, f"?view=list&page_size=2&offset={offset}")
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data["total"] == 5
+            assert len(data["records"]) <= 2
+            seen.extend(row["record_id"] for row in data["records"])
+            offset = data["next_offset"]
+        assert seen == [f"rec-{i}" for i in range(4, -1, -1)]
+
+    def test_invalid_slim_pagination_returns_400(self, client, db):
+        response = _list(client, _token(client), "?view=list&page_size=bad")
+        assert response.status_code == 400
+
     def test_row_carries_what_a_row_draws_and_drops_the_rest(self, client, db):
         _seed(db, "rec-1")
         resp = _list(client, _token(client), "?view=list")
