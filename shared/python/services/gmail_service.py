@@ -280,7 +280,10 @@ def store_connection(user_email: str, token_payload: Dict[str, Any]) -> Dict[str
     }
     _connections().update_one(
         {"user_email": user_email},
-        {"$set": doc},
+        {"$set": doc, "$unset": {key: "" for key in (
+            "scan_next_page_token", "scan_query", "scan_before", "last_sync_summary",
+            "sync_lock_id", "sync_lock_until",
+        )}},
         upsert=True,
     )
     return {"gmail_address": gmail_address, "linked_at": doc["linked_at"].isoformat()}
@@ -350,9 +353,17 @@ def _gmail_get(path: str, access_token: str, params: Optional[Dict[str, Any]] = 
     return resp.json()
 
 
-def _list_message_ids(access_token: str, query: str, max_results: int) -> List[str]:
-    ids: List[str] = []
-    page_token: Optional[str] = None
+class _MessageBatch(list):
+    """List-compatible batch with a resumable, fixed-window Gmail cursor."""
+
+    next_page_token: Optional[str] = None
+    scan_query: Optional[str] = None
+    scan_before: Optional[datetime] = None
+
+
+def _list_message_ids(access_token: str, query: str, max_results: int,
+                      page_token: Optional[str] = None) -> List[str]:
+    ids = _MessageBatch()
     while len(ids) < max_results:
         params: Dict[str, Any] = {"q": query, "maxResults": min(100, max_results - len(ids))}
         if page_token:
@@ -366,6 +377,7 @@ def _list_message_ids(access_token: str, query: str, max_results: int) -> List[s
         page_token = body.get("nextPageToken")
         if not page_token:
             break
+    ids.next_page_token = page_token
     return ids
 
 
@@ -423,16 +435,26 @@ def _parse_email_address(value: str) -> Tuple[str, str]:
 
 def fetch_recent_messages(user_email: str, since: Optional[datetime]) -> List[Dict[str, Any]]:
     """Return a list of normalized message dicts since the given datetime."""
-    access, _conn = _get_access_token(user_email)
+    access, conn = _get_access_token(user_email)
     if since is None:
         since = datetime.now(timezone.utc) - timedelta(days=INITIAL_LOOKBACK_DAYS)
     # Gmail accepts unix-seconds for `after:` queries.
     after_epoch = int(since.timestamp())
-    query = f"in:anywhere after:{after_epoch} -category:promotions -category:social"
-    ids = _list_message_ids(access, query, MAX_MESSAGES_PER_SYNC)
-    out: List[Dict[str, Any]] = []
+    # Freeze the upper boundary across pages. New mail belongs to the NEXT
+    # scan; a completed watermark must never skip an unprocessed older page.
+    before = conn.get("scan_before") or datetime.now(timezone.utc).replace(microsecond=0)
+    query = conn.get("scan_query") or (
+        f"in:anywhere after:{max(0, after_epoch - 1)} before:{int(before.timestamp())} "
+        "-category:promotions -category:social"
+    )
+    ids = _list_message_ids(access, query, MAX_MESSAGES_PER_SYNC, conn.get("scan_next_page_token"))
+    out = _MessageBatch()
+    out.next_page_token = ids.next_page_token
+    out.scan_query = query
+    out.scan_before = before
     for mid in ids:
-        full = _gmail_get(f"/users/me/messages/{mid}", access, params={"format": "full"})
+        full = _gmail_get(f"/users/me/messages/{mid}", access,
+                          params={"format": "full"}, raise_on_error=True)
         if not full:
             continue
         payload = full.get("payload") or {}
@@ -484,18 +506,19 @@ _STATUS_KEYWORDS = {
 
 
 def _normalize(s: str) -> str:
-    return re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower())
+    return " ".join(re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower()).split())
 
 
 def _company_token(company: str) -> str:
-    """Reduce a company string to a short matching token (drops Inc/LLC/etc.)."""
+    """Normalize the WHOLE employer name, dropping legal suffixes only."""
     if not company or company == "Not specified":
         return ""
     s = _normalize(company)
-    for stop in (" inc", " llc", " corp", " corporation", " ltd", " limited", " co", " gmbh"):
-        if s.endswith(stop):
-            s = s[: -len(stop)]
-    return s.strip().split()[0] if s.strip() else ""
+    return re.sub(r"(?:\s+(?:inc|llc|corp|corporation|ltd|limited|co|gmbh))+$", "", s).strip()
+
+
+def _contains_phrase(text: str, phrase: str) -> bool:
+    return bool(phrase) and f" {phrase} " in f" {text} "
 
 
 def _build_record_index(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -516,6 +539,9 @@ def _build_record_index(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "recruiter_email": recruiter_email,
             "recruiter_domain": recruiter_domain,
             "current_status": app.get("status") or "draft",
+            "gmail_evidence_ms": app.get("gmail_evidence_ms") or 0,
+            "status_updated_at": app.get("updated_at"),
+            "gmail_updated_at": app.get("gmail_updated_at"),
         })
     return index
 
@@ -523,52 +549,57 @@ def _build_record_index(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def _match_message_to_record(msg: Dict[str, Any], index: List[Dict[str, Any]]) -> Optional[Tuple[Dict[str, Any], float, str]]:
     """Pick the best record candidate for this email. Returns (record_meta, score, reason).
 
-    Scoring is intentionally simple — the LLM does the nuanced part. Here we just
-    pick a viable candidate so we don't waste classifier calls on noise.
+    A status classifier cannot establish WHICH application an email belongs
+    to. Company-only mail stays a review item; automatic changes require an
+    exact employer and role match with no equally plausible application.
     """
     if not index:
         return None
-    haystack = _normalize(f"{msg.get('subject','')} {msg.get('snippet','')} {msg.get('from_name','')} {msg.get('from_address','')}")
+    haystack = _normalize(" ".join(str(msg.get(k) or "") for k in
+                                   ("subject", "snippet", "from_name", "body")))[:12000]
     sender_domain = (msg.get("from_domain") or "").lower()
     sender_addr = (msg.get("from_address") or "").lower()
 
-    best: Optional[Tuple[Dict[str, Any], float, str]] = None
+    candidates = []
     for rec in index:
-        score = 0.0
-        reasons: List[str] = []
-
-        if rec["recruiter_email"] and rec["recruiter_email"] == sender_addr:
-            score += 0.6
-            reasons.append("recruiter email matches sender")
-        elif rec["recruiter_domain"] and sender_domain and rec["recruiter_domain"] == sender_domain:
-            score += 0.4
-            reasons.append("recruiter domain matches sender")
-
-        if rec["company_token"] and len(rec["company_token"]) >= 3:
-            if rec["company_token"] in haystack:
-                score += 0.35
-                reasons.append(f"company name '{rec['company_token']}' present")
-            if sender_domain and rec["company_token"] in sender_domain:
-                score += 0.25
-                reasons.append("company present in sender domain")
-
-        if rec["title_norm"]:
-            title_words = [w for w in rec["title_norm"].split() if len(w) >= 4]
-            hits = sum(1 for w in title_words if w in haystack)
-            if title_words:
-                ratio = hits / len(title_words)
-                if ratio >= 0.5:
-                    score += 0.2 * ratio
-                    reasons.append(f"job title overlap {hits}/{len(title_words)}")
-
-        if score > 0 and (best is None or score > best[1]):
-            best = (rec, score, "; ".join(reasons))
-    # 0.3 catches borderline matches (e.g. company name in subject only, no
-    # recruiter signal). The LLM gets a chance to filter these via "ignore"
-    # if the email is actually unrelated noise.
-    if best and best[1] >= 0.3:
-        return best
-    return None
+        company = rec["company_token"]
+        company_named = len(company) >= 2 and _contains_phrase(haystack, company)
+        # Exact DNS label only: Box != Dropbox, and United Airlines != United
+        # Healthcare. Shared ATS/recruiter domains never establish identity.
+        company_domain = len(company) >= 3 and company.replace(" ", "") in sender_domain.split(".")[:-1]
+        recruiter = bool(rec["recruiter_email"] and rec["recruiter_email"] == sender_addr)
+        if not (company_named or company_domain or recruiter):
+            continue
+        title_exact = _contains_phrase(haystack, rec["title_norm"])
+        reasons = []
+        if company_named:
+            reasons.append("Full company name in email")
+        if company_domain:
+            reasons.append("Company name matches sender domain label")
+        if recruiter:
+            reasons.append("Saved recruiter email matches sender")
+        if title_exact:
+            reasons.append("Exact role title in email")
+        else:
+            reasons.append("Role title not confirmed; review before updating")
+        # A recruiter alone can handle many unrelated companies, so needs review.
+        score = 0.97 if title_exact and company_named else 0.85 if title_exact else 0.6
+        candidates.append((rec, score, "; ".join(reasons)))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[1], str(item[0]["record_id"])))
+    best_rec, score, reason = candidates[0]
+    close = [item for item in candidates if score - item[1] < 0.15]
+    ambiguous = len(close) > 1
+    meta = dict(best_rec)
+    meta["candidate_records"] = [
+        {k: item[0][k] for k in ("record_id", "company", "title")} for item in close
+    ]
+    meta["requires_record_selection"] = ambiguous
+    if ambiguous:
+        score = min(score, 0.6)
+        reason += "; Several applications match; choose the correct role"
+    return meta, score, reason
 
 
 # ---------------------------------------------------------------------------
@@ -880,9 +911,8 @@ def extract_deterministic_signals(messages: List[Dict[str, Any]]) -> Dict[str, A
     after an offer is rare but real — withdrawn offer; we surface it as a
     suggestion rather than auto-flipping).
 
-    100%-precision claim: a hit on these patterns means the literal phrase
-    appears in the email; the only failure mode is the upstream Gmail API
-    handing us truncated bodies, which is bounded by `_extract_body_text`.
+    Literal phrases are evidence, not proof of application identity. The
+    matcher separately establishes identity before any automatic update.
     """
     # Newest-first processing so an older "applied" receipt doesn't shadow a
     # later rejection — but we still scan ALL messages for any signal.
@@ -891,7 +921,7 @@ def extract_deterministic_signals(messages: List[Dict[str, Any]]) -> Dict[str, A
     found_interview: Optional[Tuple[str, Dict[str, Any]]] = None
     found_receipt: Optional[Tuple[str, Dict[str, Any]]] = None
 
-    for msg in messages:
+    for msg in sorted(messages, key=lambda m: m.get("internal_date") or 0, reverse=True):
         text = " ".join([
             msg.get("subject") or "",
             msg.get("snippet") or "",
@@ -915,14 +945,11 @@ def extract_deterministic_signals(messages: List[Dict[str, Any]]) -> Dict[str, A
                 found_receipt = (phrase, msg)
 
     out: Dict[str, Any] = {}
-    if found_rejection:
-        out["rejected"] = {"phrase": found_rejection[0], "message_id": found_rejection[1].get("message_id")}
-    if found_offer:
-        out["offer"] = {"phrase": found_offer[0], "message_id": found_offer[1].get("message_id")}
-    if found_interview:
-        out["interviewing"] = {"phrase": found_interview[0], "message_id": found_interview[1].get("message_id")}
-    if found_receipt:
-        out["receipt"] = {"phrase": found_receipt[0], "message_id": found_receipt[1].get("message_id")}
+    for status, found in (("rejected", found_rejection), ("offer", found_offer),
+                          ("interviewing", found_interview), ("receipt", found_receipt)):
+        if found:
+            out[status] = {"phrase": found[0], "message_id": found[1].get("message_id"),
+                           "internal_date": found[1].get("internal_date") or 0}
     return out
 
 
@@ -950,7 +977,22 @@ def reconcile_classification(
       6. Deterministic INTERVIEW only (LLM disagreed) → status=interviewing, conf=0.80
          (we trust the regex but flag for review since LLM saw something else)
     """
-    # 1. Hard rejection — never overridden by anything else.
+    # A historical rejection must not erase a newer outcome. Conflicting
+    # terminal/positive evidence is retained for review instead of guessing.
+    outcomes = {k: v for k, v in deterministic.items() if k in ("rejected", "offer", "interviewing")}
+    if "rejected" in outcomes and len(outcomes) > 1:
+        latest = max(outcomes, key=lambda k: outcomes[k].get("internal_date") or 0)
+        times = [v.get("internal_date") or 0 for v in outcomes.values()]
+        # Equal/missing timestamps cannot establish chronology.
+        uncertain_order = not all(times) or len(set(times)) < len(times)
+        unusual_transition = latest != "rejected" or "offer" in outcomes
+        if uncertain_order or unusual_transition:
+            signal = outcomes[latest]
+            return {"status": latest, "confidence": 0.85, "source": "deterministic",
+                    "evidence_message_id": signal.get("message_id"),
+                    "reason": f'Conflicting outcomes need review. Latest evidence: "{signal["phrase"]}"'}
+
+    # 1. Current rejection.
     if "rejected" in deterministic:
         return {
             "status": "rejected",
@@ -1234,6 +1276,8 @@ def _is_funnel_backwards(current: str, proposed: str) -> bool:
     Used as a soft safety net — a backwards move still goes through, but only
     as a suggestion the user has to confirm, never an auto-apply.
     """
+    if current == "offer" and proposed != "offer":
+        return True
     if current in ("rejected", "ghosted", "withdrawn"):
         # Terminal states — only reopen if very confident, and never auto.
         return proposed not in ("rejected", "ghosted", "withdrawn")
@@ -1253,25 +1297,39 @@ def _records_for_user(user_email: str) -> List[Dict[str, Any]]:
             "jd_analysis.company": 1,
             "application.status": 1,
             "application.recruiter_email": 1,
+            "application.gmail_evidence_ms": 1,
+            "application.updated_at": 1,
+            "application.gmail_updated_at": 1,
             "_id": 0,
         },
     )
     return list(cursor)
 
 
-def _apply_status(user_email: str, record_id: str, status: str) -> bool:
+def _apply_status(user_email: str, record_id: str, status: str,
+                  expected_status: Optional[str] = None,
+                  evidence_ms: Optional[int] = None) -> bool:
     """Persist a status change directly. Mirrors the PATCH /application logic minimally."""
     if status not in VALID_STATUSES:
         return False
     db = DBConnect().get_db()
+    record = db.tailoring_records.find_one({"record_id": record_id, "user_email": user_email}, {"application": 1})
+    if not record:
+        return False
+    application = record.get("application") or {}
     updates: Dict[str, Any] = {
         "application.status": status,
-        "application.updated_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "application.updated_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
     }
-    if status == "applied":
+    if evidence_ms:
+        updates["application.gmail_updated_at"] = updates["application.updated_at"]
+    if status == "applied" and not application.get("applied_at"):
         applied_at = updates.setdefault(
-            "application.applied_at", datetime.utcnow())
+            "application.applied_at",
+            datetime.fromtimestamp(evidence_ms / 1000, timezone.utc) if evidence_ms else datetime.now(timezone.utc))
+        if evidence_ms:
+            updates["application.applied_at_source"] = "gmail_receipt"
         # Label the civil day so Gmail-detected applications are visible to the
         # tracker's applied-date filter. No browser here, so the zone comes from
         # the user's stored preferences. Best-effort — never fail a sync on it.
@@ -1282,9 +1340,18 @@ def _apply_status(user_email: str, record_id: str, status: str) -> bool:
                 applied_at, user_email)
         except Exception as e:
             logger.warning("[gmail-sync] applied_date derivation failed: %s", e)
+    query = {"record_id": record_id, "user_email": user_email}
+    if expected_status is not None:
+        if expected_status == "draft":
+            query["$or"] = [{"application.status": "draft"}, {"application.status": {"$exists": False}}]
+        else:
+            query["application.status"] = expected_status
+    update = {"$set": updates}
+    if evidence_ms:
+        update["$max"] = {"application.gmail_evidence_ms": evidence_ms}
     res = db.tailoring_records.update_one(
-        {"record_id": record_id, "user_email": user_email},
-        {"$set": updates},
+        query,
+        update,
     )
     matched = bool(res.matched_count)
     if matched:
@@ -1304,6 +1371,26 @@ def _apply_status(user_email: str, record_id: str, status: str) -> bool:
 
 
 def sync_user(user_email: str) -> Dict[str, Any]:
+    """One active bounded scan per account, including Lambda retries."""
+    if not get_connection(user_email):
+        raise RuntimeError("Gmail is not connected")
+    now = datetime.now(timezone.utc)
+    lock_id = uuid.uuid4().hex
+    claimed = _connections().update_one(
+        {"user_email": user_email, "$or": [
+            {"sync_lock_until": {"$exists": False}}, {"sync_lock_until": {"$lte": now}}]},
+        {"$set": {"sync_lock_id": lock_id, "sync_lock_until": now + timedelta(minutes=16)}},
+    )
+    if not claimed.modified_count:
+        raise RuntimeError("A Gmail sync is already running. Try again after it finishes.")
+    try:
+        return _sync_user(user_email, lock_id)
+    finally:
+        _connections().update_one({"user_email": user_email, "sync_lock_id": lock_id},
+                                  {"$unset": {"sync_lock_id": "", "sync_lock_until": ""}})
+
+
+def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
     """Pull recent Gmail, match to records, classify, and write applies/suggestions.
 
     Returns a summary dict for the API response.
@@ -1315,11 +1402,8 @@ def sync_user(user_email: str) -> Dict[str, Any]:
     records = _records_for_user(user_email)
     index = _build_record_index(records)
     if not index:
-        _connections().update_one(
-            {"user_email": user_email},
-            {"$set": {"last_synced_at": datetime.now(timezone.utc)}},
-        )
-        return {"messages_scanned": 0, "auto_applied": 0, "suggested": 0, "ignored": 0}
+        return {"messages_scanned": 0, "auto_applied": 0, "suggested": 0,
+                "ignored": 0, "ambiguous_matches": 0, "has_more": False}
 
     since = conn.get("last_synced_at")
     if isinstance(since, datetime) and since.tzinfo is None:
@@ -1332,11 +1416,18 @@ def sync_user(user_email: str) -> Dict[str, Any]:
         logger.warning("[gmail-sync] fetch_failed user=%s status=%s", user_email, e.status)
         raise RuntimeError(f"Gmail API error ({e.status}). Check that the Gmail API is enabled and the OAuth scope is granted.") from e
 
+    def require_same_connection():
+        if not _connections().find_one({"user_email": user_email, "sync_lock_id": lock_id}, {"_id": 1}):
+            raise RuntimeError("Gmail connection changed during sync. Start a new sync for the connected mailbox.")
+
+    require_same_connection()
+
     auto_applied = 0
     suggested = 0
     ignored = 0
     skipped_no_match = 0
     skipped_already_in_status = 0
+    ambiguous_matches = 0
     seen_message_ids = set()
 
     logger.info(
@@ -1349,7 +1440,7 @@ def sync_user(user_email: str) -> Dict[str, Any]:
     # thread and can resolve sequences like applied → interview → rejected
     # correctly regardless of the order Gmail returned them in.
     record_buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    record_meta_by_id: Dict[str, Dict[str, Any]] = {r["record_id"]: r for r in index}
+    record_meta_by_id: Dict[str, Dict[str, Any]] = {}
 
     for msg in messages:
         mid = msg["message_id"]
@@ -1361,13 +1452,15 @@ def sync_user(user_email: str) -> Dict[str, Any]:
         if not match:
             skipped_no_match += 1
             ignored += 1
-            logger.info(
-                "[gmail-sync] no_match subject=%r from=%s",
-                (msg.get("subject") or "")[:80], msg.get("from_address"),
-            )
             continue
         record_meta, match_score, match_reason = match
-        record_buckets[record_meta["record_id"]].append({
+        ambiguous_matches += int(record_meta["requires_record_selection"])
+        # Weak/ambiguous emails get their OWN review item. They must never
+        # contaminate a confidently matched thread for one of those roles.
+        bucket = (record_meta["record_id"] if match_score >= AUTO_APPLY_CONFIDENCE
+                  else f"review:{mid}")
+        record_meta_by_id[bucket] = record_meta
+        record_buckets[bucket].append({
             "msg": msg, "score": match_score, "reason": match_reason,
         })
 
@@ -1377,10 +1470,12 @@ def sync_user(user_email: str) -> Dict[str, Any]:
     # record that was wrongly stuck on "applied" by an older per-message
     # classifier will fix itself the next time sync runs. Skipping when "all
     # messages were seen before" is what trapped users on stale statuses.
-    for record_id, items in record_buckets.items():
-        rec_meta = record_meta_by_id.get(record_id)
+    for bucket, items in record_buckets.items():
+        require_same_connection()
+        rec_meta = record_meta_by_id.get(bucket)
         if not rec_meta:
             continue
+        record_id = rec_meta["record_id"]
 
         # Newest first — the LLM weighs the most recent email most heavily.
         items.sort(key=lambda x: x["msg"].get("internal_date", 0), reverse=True)
@@ -1395,10 +1490,13 @@ def sync_user(user_email: str) -> Dict[str, Any]:
 
         # Tier 2: LLM thread classification. May return None on transient
         # failure — that's fine, deterministic alone can carry the decision.
-        llm_cls = classify_record_thread(msgs_for_llm, rec_meta)
+        # Clear deterministic outcomes need no model call. Ambiguous wording
+        # still uses the existing classifier inside this asynchronous job.
+        llm_cls = None if deterministic else classify_record_thread(msgs_for_llm, rec_meta)
 
         # Reconcile both tiers into a single verdict.
         cls = reconcile_classification(deterministic, llm_cls)
+        require_same_connection()
         if not cls:
             ignored += len(items)
             logger.info(
@@ -1416,27 +1514,56 @@ def sync_user(user_email: str) -> Dict[str, Any]:
 
         new_status = cls["status"]
         confidence = cls["confidence"]
+        match_confidence = min(it["score"] for it in items)
+        evidence = next((it["msg"] for it in items
+                         if it["msg"]["message_id"] == cls.get("evidence_message_id")), items[0]["msg"])
+        evidence_ms = evidence.get("internal_date") or 0
+        if (not rec_meta["requires_record_selection"] and evidence_ms
+                and evidence_ms < rec_meta["gmail_evidence_ms"]):
+            ignored += len(items)
+            continue
+        def epoch_ms(value):
+            if not isinstance(value, datetime):
+                return 0
+            return int(value.replace(tzinfo=value.tzinfo or timezone.utc).timestamp() * 1000)
+        status_updated_ms = epoch_ms(rec_meta["status_updated_at"])
+        gmail_updated_ms = epoch_ms(rec_meta["gmail_updated_at"])
+        if evidence_ms and status_updated_ms > evidence_ms and status_updated_ms > gmail_updated_ms:
+            confidence = min(confidence, 0.85)
+            cls["reason"] = "Email predates your latest status change. " + cls.get("reason", "")
+        identity = "|".join([user_email, new_status, *sorted(msg_ids),
+                             *sorted(r["record_id"] for r in rec_meta["candidate_records"])])
+        suggestion_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        if _suggestions().find_one({"_id": suggestion_id, "user_email": user_email}):
+            continue
 
-        if rec_meta["current_status"] == new_status:
+        if rec_meta["current_status"] == new_status and not rec_meta["requires_record_selection"]:
             skipped_already_in_status += 1
             logger.info(
                 "[gmail-sync] already_in_status record=%s status=%s confidence=%.2f",
                 record_id, new_status, confidence,
             )
-            # Even if the status already matches, we may have a stale
-            # *pending* suggestion proposing a different state — drop it so
-            # the suggestions panel reflects ground truth.
-            _suggestions().update_many(
-                {
-                    "user_email": user_email,
-                    "record_id": record_id,
-                    "applied": False,
-                    "dismissed": False,
-                    "suggested_status": {"$ne": new_status},
-                },
-                {"$set": {"dismissed": True, "dismissed_at": datetime.now(timezone.utc),
-                          "dismissed_reason": "superseded by re-classification"}},
-            )
+            # Confirmation is new chronological evidence even without a status
+            # change. Older pages must not undo it. Do not stamp updated_at: the
+            # user has not changed their application and its age still matters.
+            if match_confidence >= AUTO_APPLY_CONFIDENCE and confidence >= AUTO_APPLY_CONFIDENCE and evidence_ms:
+                DBConnect().get_db().tailoring_records.update_one(
+                    {"record_id": record_id, "user_email": user_email,
+                     "application.status": new_status},
+                    {"$max": {"application.gmail_evidence_ms": evidence_ms}},
+                )
+            # Only supersede verdicts for messages actually reclassified here.
+            # An older receipt must not dismiss a newer pending outcome.
+            if match_confidence >= AUTO_APPLY_CONFIDENCE:
+                _suggestions().update_many(
+                    {"user_email": user_email, "record_id": record_id,
+                     "applied": False, "dismissed": False,
+                     "suggested_status": {"$ne": new_status},
+                     "requires_record_selection": {"$ne": True},
+                     "gmail_message_id": {"$in": msg_ids}},
+                    {"$set": {"dismissed": True, "dismissed_at": datetime.now(timezone.utc),
+                              "dismissed_reason": "superseded by re-classification"}},
+                )
             continue
 
         # Funnel-backwards moves are usually wrong (rejected→interviewing,
@@ -1453,22 +1580,22 @@ def sync_user(user_email: str) -> Dict[str, Any]:
         # suggestions on the same record. This prevents the suggestions panel
         # from accumulating duplicates as we re-classify on every sync, and
         # ensures the user always sees the *current* verdict.
-        _suggestions().update_many(
-            {
-                "user_email": user_email,
-                "record_id": record_id,
-                "applied": False,
-                "dismissed": False,
-            },
-            {"$set": {"dismissed": True, "dismissed_at": datetime.now(timezone.utc),
-                      "dismissed_reason": "superseded by re-classification"}},
-        )
+        if match_confidence >= AUTO_APPLY_CONFIDENCE:
+            _suggestions().update_many(
+                {"user_email": user_email, "record_id": record_id,
+                 "applied": False, "dismissed": False,
+                 "requires_record_selection": {"$ne": True},
+                 "gmail_message_id": {"$in": msg_ids}},
+                {"$set": {"dismissed": True, "dismissed_at": datetime.now(timezone.utc),
+                          "dismissed_reason": "superseded by re-classification"}},
+            )
 
         # Use the newest message as the canonical reference; the suggestion
         # row carries supporting_message_ids so we can show the thread later.
-        primary = items[0]["msg"]
+        primary = evidence
         suggestion = {
-            "suggestion_id": str(uuid.uuid4()),
+            "_id": suggestion_id,
+            "suggestion_id": suggestion_id,
             "user_email": user_email,
             "record_id": record_id,
             "company": rec_meta["company"],
@@ -1482,6 +1609,12 @@ def sync_user(user_email: str) -> Dict[str, Any]:
             "current_status": rec_meta["current_status"],
             "suggested_status": new_status,
             "confidence": confidence,
+            "match_confidence": match_confidence,
+            "match_reason": items[0]["reason"],
+            "candidate_records": rec_meta["candidate_records"],
+            "requires_record_selection": rec_meta["requires_record_selection"],
+            "email_received_at": (datetime.fromtimestamp(primary["internal_date"] / 1000, timezone.utc).isoformat()
+                                  if primary.get("internal_date") else None),
             "reason": cls.get("reason", ""),
             "source": cls.get("source", "llm"),
             "evidence_message_id": cls.get("evidence_message_id"),
@@ -1492,8 +1625,14 @@ def sync_user(user_email: str) -> Dict[str, Any]:
             "created_at": datetime.now(timezone.utc),
         }
 
-        if confidence >= AUTO_APPLY_CONFIDENCE and not backwards \
-                and _apply_status(user_email, record_id, new_status):
+        inserted = _suggestions().update_one(
+            {"_id": suggestion_id}, {"$setOnInsert": suggestion}, upsert=True)
+        if not inserted.upserted_id:
+            continue
+        if confidence >= AUTO_APPLY_CONFIDENCE and match_confidence >= AUTO_APPLY_CONFIDENCE \
+                and not backwards and not rec_meta["requires_record_selection"] \
+                and _apply_status(user_email, record_id, new_status,
+                                  expected_status=rec_meta["current_status"], evidence_ms=evidence_ms):
             suggestion["applied"] = True
             suggestion["auto_applied"] = True
             suggestion["applied_at"] = datetime.now(timezone.utc)
@@ -1511,12 +1650,8 @@ def sync_user(user_email: str) -> Dict[str, Any]:
                 " (backwards)" if backwards else "",
             )
 
-        _suggestions().insert_one(suggestion)
-
-    _connections().update_one(
-        {"user_email": user_email},
-        {"$set": {"last_synced_at": datetime.now(timezone.utc)}},
-    )
+        _suggestions().update_one({"_id": suggestion_id, "user_email": user_email},
+                                  {"$set": {k: v for k, v in suggestion.items() if k != "_id"}})
 
     logger.info(
         "[gmail-sync] done user=%s scanned=%d records_with_mail=%d auto=%d suggest=%d "
@@ -1525,7 +1660,7 @@ def sync_user(user_email: str) -> Dict[str, Any]:
         skipped_no_match, skipped_already_in_status,
     )
 
-    return {
+    summary = {
         "messages_scanned": len(messages),
         "records_with_mail": len(record_buckets),
         "auto_applied": auto_applied,
@@ -1533,7 +1668,21 @@ def sync_user(user_email: str) -> Dict[str, Any]:
         "ignored": ignored,
         "skipped_no_match": skipped_no_match,
         "skipped_already_in_status": skipped_already_in_status,
+        "ambiguous_matches": ambiguous_matches,
+        "has_more": bool(getattr(messages, "next_page_token", None)),
     }
+    state = {"last_sync_summary": summary}
+    if summary["has_more"]:
+        state.update({"scan_next_page_token": messages.next_page_token,
+                      "scan_query": messages.scan_query, "scan_before": messages.scan_before})
+        update = {"$set": state}
+    else:
+        state["last_synced_at"] = getattr(messages, "scan_before", None) or datetime.now(timezone.utc)
+        update = {"$set": state, "$unset": {"scan_next_page_token": "", "scan_query": "", "scan_before": ""}}
+    completed = _connections().update_one({"user_email": user_email, "sync_lock_id": lock_id}, update)
+    if not completed.matched_count:
+        raise RuntimeError("Gmail connection changed during sync. Start a new sync for the connected mailbox.")
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -1542,6 +1691,8 @@ def sync_user(user_email: str) -> Dict[str, Any]:
 
 def _serialize_suggestion(s: Dict[str, Any]) -> Dict[str, Any]:
     s.pop("_id", None)
+    for key in ("resolution_lock_id", "resolution_lock_until", "resolution_record_id"):
+        s.pop(key, None)
     for k in ("created_at", "applied_at"):
         v = s.get(k)
         if hasattr(v, "isoformat"):
@@ -1558,26 +1709,72 @@ def list_suggestions(user_email: str, include_resolved: bool = False) -> List[Di
     return [_serialize_suggestion(d) for d in docs]
 
 
-def apply_suggestion(user_email: str, suggestion_id: str) -> Dict[str, Any]:
+def apply_suggestion(user_email: str, suggestion_id: str,
+                     record_id: Optional[str] = None) -> Dict[str, Any]:
     s = _suggestions().find_one({"suggestion_id": suggestion_id, "user_email": user_email})
     if not s:
         raise LookupError("Suggestion not found")
     if s.get("applied") or s.get("dismissed"):
         return _serialize_suggestion(s)
-    if not _apply_status(user_email, s["record_id"], s["suggested_status"]):
-        raise RuntimeError("Failed to apply status — record may have been deleted")
-    _suggestions().update_one(
-        {"suggestion_id": suggestion_id},
-        {"$set": {"applied": True, "applied_at": datetime.now(timezone.utc)}},
+    if s.get("requires_record_selection") and not record_id:
+        raise ValueError("Choose the application that this email belongs to")
+    selected_id = record_id or s["record_id"]
+    candidates = {r["record_id"] for r in s.get("candidate_records", [])} or {s["record_id"]}
+    if selected_id not in candidates:
+        raise ValueError("Choose one of the matching applications")
+    selected = DBConnect().get_db().tailoring_records.find_one(
+        {"record_id": selected_id, "user_email": user_email}, {"jd_analysis": 1})
+    if not selected:
+        raise LookupError("Application not found")
+    # Claim the decision before touching a record. Two tabs may choose two
+    # different valid roles concurrently; one email must resolve to only one.
+    # Keep the selected role across a failed write so retries cannot apply a
+    # possibly-completed decision to a second application.
+    now = datetime.now(timezone.utc)
+    lock_id = uuid.uuid4().hex
+    claimed = _suggestions().update_one(
+        {"suggestion_id": suggestion_id, "user_email": user_email,
+         "applied": False, "dismissed": False,
+         "$and": [
+             {"$or": [{"resolution_lock_until": {"$exists": False}},
+                       {"resolution_lock_until": {"$lte": now}}]},
+             {"$or": [{"resolution_record_id": {"$exists": False}},
+                       {"resolution_record_id": selected_id}]},
+         ]},
+        {"$set": {"resolution_lock_id": lock_id, "resolution_lock_until": now + timedelta(minutes=2),
+                  "resolution_record_id": selected_id}},
     )
-    s["applied"] = True
-    s["applied_at"] = datetime.now(timezone.utc)
+    if not claimed.modified_count:
+        raise ValueError("This email is already being resolved. Refresh the tracker before trying again.")
+    evidence_ms = None
+    if s.get("email_received_at"):
+        try:
+            evidence_ms = int(datetime.fromisoformat(s["email_received_at"]).timestamp() * 1000)
+        except (TypeError, ValueError):
+            pass
+    try:
+        if not _apply_status(user_email, selected_id, s["suggested_status"], evidence_ms=evidence_ms):
+            raise RuntimeError("Failed to apply status — record may have been deleted")
+        s.update({"record_id": selected_id, "company": (selected.get("jd_analysis") or {}).get("company", ""),
+                  "title": (selected.get("jd_analysis") or {}).get("job_title", ""),
+                  "applied": True, "applied_at": datetime.now(timezone.utc)})
+        _suggestions().update_one(
+            {"suggestion_id": suggestion_id, "user_email": user_email, "resolution_lock_id": lock_id},
+            {"$set": {k: s[k] for k in ("record_id", "company", "title", "applied", "applied_at")}},
+        )
+    finally:
+        _suggestions().update_one(
+            {"suggestion_id": suggestion_id, "user_email": user_email, "resolution_lock_id": lock_id},
+            {"$unset": {"resolution_lock_id": "", "resolution_lock_until": ""}},
+        )
     return _serialize_suggestion(s)
 
 
 def dismiss_suggestion(user_email: str, suggestion_id: str) -> bool:
     res = _suggestions().update_one(
-        {"suggestion_id": suggestion_id, "user_email": user_email, "applied": False},
+        {"suggestion_id": suggestion_id, "user_email": user_email, "applied": False,
+         "$or": [{"resolution_lock_until": {"$exists": False}},
+                   {"resolution_lock_until": {"$lte": datetime.now(timezone.utc)}}]},
         {"$set": {"dismissed": True, "dismissed_at": datetime.now(timezone.utc)}},
     )
     return bool(res.matched_count)

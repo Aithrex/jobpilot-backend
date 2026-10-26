@@ -979,7 +979,7 @@ def list_tailoring_records():
     limit = max(50, min(limit, 5000))
     # Opt-in paging keeps existing API consumers compatible. The browser loads
     # every page; never send its entire history through Lambda's 6 MB envelope.
-    paginated = "page_size" in request.args and not list_view
+    paginated = "page_size" in request.args
     offset = 0
     if paginated:
         try:
@@ -992,13 +992,18 @@ def list_tailoring_records():
         db = DBConnect().get_db()
 
         if list_view:
-            rows = db.tailoring_records.aggregate([
+            rows = list(db.tailoring_records.aggregate([
                 {"$match": {"user_email": user_email}},
-                {"$sort": {"created_at": -1}},
-                {"$limit": limit},
+                {"$sort": {"created_at": -1, "record_id": -1}},
+                {"$skip": offset},
+                {"$limit": limit + 1 if paginated else limit},
                 {"$project": LIST_VIEW_PROJECTION},
-            ])
-            return jsonify({"records": [serialize_list_row(r) for r in rows]}), 200
+            ]))
+            result = {"records": [serialize_list_row(r) for r in rows[:limit]]}
+            if paginated:
+                result["next_offset"] = offset + limit if len(rows) > limit else None
+                result["total"] = db.tailoring_records.count_documents({"user_email": user_email})
+            return jsonify(result), 200
 
         projection = {"_id": 0, "tailoring_source_snapshot": 0}
         if not include_full:
@@ -4211,6 +4216,8 @@ def gmail_status():
         "gmail_address": (conn or {}).get("gmail_address"),
         "last_synced_at": (conn or {}).get("last_synced_at").isoformat() if conn and conn.get("last_synced_at") else None,
         "pending_suggestions": pending,
+        "has_more": bool((conn or {}).get("scan_next_page_token")),
+        "last_sync_summary": (conn or {}).get("last_sync_summary"),
     }), 200
 
 
@@ -4309,9 +4316,20 @@ def gmail_list_suggestions():
 def gmail_apply_suggestion(suggestion_id):
     user_email = get_jwt_identity()
     from services import gmail_service
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected a JSON object"}), 400
+    raw_record_id = data.get("record_id")
+    if raw_record_id is not None and not isinstance(raw_record_id, str):
+        return jsonify({"error": "record_id must be a string"}), 400
+    record_id = InputSanitizer.sanitize_string(raw_record_id or "", max_length=128) or None
     try:
-        s = gmail_service.apply_suggestion(user_email, suggestion_id)
+        s = gmail_service.apply_suggestion(user_email, suggestion_id, record_id=record_id)
         return jsonify({"suggestion": s}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except LookupError:
         return jsonify({"error": "Suggestion not found"}), 404
     except Exception as e:

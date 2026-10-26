@@ -19,6 +19,10 @@ Only `README.md` and `CLAUDE.md` live at the repo root.
 | [`plans/`](plans/) | Dated implementation plans | You want the shape of a past piece of work |
 | [`compass/`](compass/) | Where the deployed product sits against the north-star spec | You are planning what to build next |
 
+The [Gmail tracker contract](specs/gmail-tracker-contract.md) records the
+2026-10-25 matching, review, scan-continuation, and slim-history pagination
+changes, including the 60-day initial scan scope and retained OAuth controls.
+
 ## decisions/ — the ADRs
 
 `ADR-000` predates the numbering and keeps its `000` because it was written
