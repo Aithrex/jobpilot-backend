@@ -411,6 +411,9 @@ def test_auth_notifications_never_become_application_review(db, monkeypatch, sub
     ("Acme application update", "Please check your application portal for an update."),
     ("Acme interview logistics", "We will share your interview logistics for the Software Engineer role."),
     ("Acme consent document", "Please review the consent document for your application."),
+    ("Verify your availability for an interview at Acme", "Please confirm a convenient time for an interview."),
+    ("Verify your assessment submission for Acme", "Your application assessment has a new update in the portal."),
+    ("Verify your candidate account documents before the Acme interview", "Please review the required interview documents."),
 ])
 def test_unclear_application_and_consent_mail_remain_reviewable(db, monkeypatch, subject, body):
     db.tailoring_records.insert_one(record())
@@ -444,3 +447,29 @@ def test_retained_roles_and_partial_snippet_use_same_wrapper_rules(db):
     assert [r["record_id"] for r in row["candidate_records"]] == ["r1"]
     assert not row["requires_application_match"]
     assert row["requires_record_selection"]
+
+
+@pytest.mark.parametrize("subject,body,sender", [
+    ("Verify your candidate account", "Click this link to confirm your email address and complete setup for your candidate account: https://careers.example.test/activate/example", "notifications@otp.workday.com"),
+    ("Reset your password", "We received a request to change your password.", "no-reply@icims.com"),
+])
+def test_account_setup_and_password_notices_are_excluded_from_saved_review(db, monkeypatch, subject, body, sender):
+    db.tailoring_records.insert_one(record())
+    msg = message(body, subject=subject)
+    msg.update(from_address=sender, from_domain=sender.split("@")[-1])
+    # A legacy company-only association must not turn an account event into a
+    # status verdict, even when the provider is also used for applications.
+    db.gmail_suggestions.insert_one({"suggestion_id": "old-account-notice", "user_email": USER,
+        "subject": subject, "snippet": body, "from_address": sender,
+        "record_id": "r1", "candidate_records": [{"record_id": "r1"}],
+        "requires_status_selection": True, "suggested_status": None,
+        "applied": False, "dismissed": False})
+    assert gs.list_suggestions(USER) == []
+    with pytest.raises(ValueError, match="evidence"):
+        gs.apply_suggestion(USER, "old-account-notice", record_id="r1", status="rejected")
+    assert db.tailoring_records.find_one()["application"]["status"] == "applied"
+    assert gs._is_irrelevant_mail(msg)
+    assert gs.extract_deterministic_signals([msg]) == {}
+    monkeypatch.setattr(gs, "fetch_recent_messages", lambda *_: [msg])
+    result = gs.sync_user(USER)
+    assert result["auto_applied"] == result["suggested"] == result["deferred"] == result["model_calls"] == 0
