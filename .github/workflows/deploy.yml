@@ -338,21 +338,18 @@ jobs:
 
   # ---------------------------------------------------------------------------
   verify:
-    name: Verify
+    name: Verify resume API via edge
     runs-on: ubuntu-latest
-    needs: [deploy-services]
-    if: always() && needs.deploy-services.result == 'success'
+    timeout-minutes: 2
+    needs: [deploy-services, detect-changes]
+    if: >-
+      always() && needs.deploy-services.result == 'success'
+      && contains(fromJSON(needs.detect-changes.outputs.services), 'resume')
     steps:
-      - name: Health check via the edge
-        continue-on-error: true
-        run: |
-          set +e
-          for i in 1 2 3; do
-            if curl -fsS --max-time 15 https://aspirely.me/api/health; then
-              echo "health ok"
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "health check pending (edge/DNS not live yet)"
-          exit 0
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Check public resume API JSON through the edge
+        # Public, read-only, and under an existing API Gateway prefix. This is
+        # a resume-service smoke check, not proof of all APIs or the commit SHA.
+        run: python scripts/check_deployed_api.py

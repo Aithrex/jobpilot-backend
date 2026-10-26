@@ -52,7 +52,7 @@ token storage, JWT user scope and asynchronous sync remain in place.
 ## Scan behavior and limits
 
 A first connection examines the previous 60 days in bounded batches of up to
-250 messages. A fixed date window plus Gmail page token lets **Continue sync**
+50 messages. A fixed date window plus Gmail page token lets **Continue sync**
 resume older pages without skipping them. New arrivals belong to the next scan.
 Listing or message-fetch errors leave the completed watermark unchanged. A
 per-account lease prevents concurrent scans from racing that cursor; its expiry
@@ -62,6 +62,25 @@ Relinking clears the old mailbox cursor; workers fence their writes by the
 original lease. Resolving a suggestion also claims it atomically before updating
 an application, so competing role choices cannot update two applications. A
 failed resolution can retry the same selected application.
+
+Live verification on 2026-10-25 (America/Phoenix) found a per-user query-cost quota error during a
+full-message read. The previous generic 403 message incorrectly suggested an
+OAuth setup failure. Google's current [quota table](https://developers.google.com/workspace/gmail/api/reference/quota)
+charges 60 units for a full-message read, against a default of 6,000 units per
+minute per user for new projects. The former 250-message burst could consume
+15,000 units before list requests. The actual project's quota value was not
+present in the truncated provider log; no cloud quota or OAuth settings changed.
+
+Reads are now spaced at least one second apart. Listing, full-message reads,
+and all retries share a 180-second fetch budget, leaving the async worker time
+for classification. Transient 403 rate limits, 429s, and transient 5xx responses
+use up to seven attempts with exponential backoff and jitter. `Retry-After`
+seconds or HTTP dates are respected; a delay beyond the remaining budget stops
+the job rather than retrying early. Exhausted quota errors tell the user to try
+again later while retaining the connected state and previous scan position.
+Disabled API, missing permission, domain policy, and daily quota errors remain
+distinct and do not trigger transient retries. Logs retain only status and a
+known reason category, never raw provider bodies or mailbox message IDs.
 
 Gmail remains unavailable when deployment credentials or `GMAIL_OAUTH_ENABLED`
 do not permit it. This code does not change Google verification or deployment
@@ -82,6 +101,7 @@ total.
 Offline regressions cover same-employer roles, first-word collisions, role text
 in the message body, generic recruiter domains, ambiguous selection, cross-user
 access, replay, old/new conflicting outcomes, preservation of known application
-dates, scan continuation, failed message fetches, API validation, and slim-list
+dates, scan continuation, failed message fetches, quota backoff and deadlines,
+preserved cursors after partial fetch failures, API validation, and slim-list
 paging. All fixtures use the repository's mongomock guard. No live mailbox or
 database is required.
