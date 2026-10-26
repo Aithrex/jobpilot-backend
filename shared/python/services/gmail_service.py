@@ -20,13 +20,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
+import math
 import re
 import secrets
 import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
@@ -64,10 +67,14 @@ GMAIL_SCOPES = [
 # (0.60-0.92) lands in the user-review queue where they approve/reject.
 AUTO_APPLY_CONFIDENCE = 0.92
 
-# Cap how many messages we look at per sync. Bumped along with the 60-day
-# lookback so a freshly-linked inbox gets enough headroom to scan two months
-# of recruiter mail in one pass.
-MAX_MESSAGES_PER_SYNC = 250
+# Gmail's current quota table charges 60 units for messages.get(format=full).
+# Keep each resumable batch below the 6,000-unit/min/user default, with room
+# for other clients. Pacing also avoids consuming the entire allowance at once.
+# https://developers.google.com/workspace/gmail/api/reference/quota
+MAX_MESSAGES_PER_SYNC = 50
+GMAIL_REQUEST_INTERVAL_SECONDS = 1.0
+GMAIL_FETCH_BUDGET_SECONDS = 180.0
+GMAIL_MAX_REQUEST_ATTEMPTS = 7
 
 # Connection age beyond which we ignore older messages on the very first sync.
 # 60d covers the typical "applied → first-round → final-round → outcome" arc
@@ -323,34 +330,123 @@ def _get_access_token(user_email: str) -> Tuple[str, Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 class GmailAPIError(RuntimeError):
-    """Raised when a Gmail API call returns a non-200 we don't want to swallow."""
-    def __init__(self, status: int, body: str):
+    """Classified provider error; raw bodies never become client text or logs."""
+    def __init__(self, status: int, body: str, retry_after_seconds: Optional[float] = None):
         self.status = status
         self.body = body
-        super().__init__(f"Gmail API returned {status}: {body[:200]}")
+        self.retry_after_seconds = retry_after_seconds
+        try:
+            error = json.loads(body).get("error", {})
+            if not isinstance(error, dict):
+                error = {}
+        except (ValueError, AttributeError):
+            error = {}
+        reasons = {
+            item.get("reason") for key in ("errors", "details")
+            for item in (error.get(key) or []) if isinstance(item, dict)
+            and isinstance(item.get("reason"), str)
+        }
+        known_reasons = (
+            "accessNotConfigured", "SERVICE_DISABLED", "insufficientPermissions",
+            "ACCESS_TOKEN_SCOPE_INSUFFICIENT", "domainPolicy", "dailyLimitExceeded",
+            "userRateLimitExceeded", "rateLimitExceeded", "RATE_LIMIT_EXCEEDED",
+        )
+        self.reason = next((reason for reason in known_reasons if reason in reasons), "unknown")
+        quota_message = str(error.get("message") or "").lower()
+        # Some newer Google quota responses omit the legacy errors[].reason.
+        minute_quota = "quota exceeded" in quota_message and "per minute" in quota_message
+        self.rate_limited = status == 429 or (status == 403 and (
+            self.reason in {"userRateLimitExceeded", "rateLimitExceeded", "RATE_LIMIT_EXCEEDED"}
+            or (self.reason == "unknown" and minute_quota)))
+        self.retryable = self.rate_limited or status in {500, 502, 503, 504}
+        super().__init__(self.user_message())
+
+    def user_message(self) -> str:
+        if self.rate_limited:
+            delay = math.ceil(self.retry_after_seconds or 60)
+            return ("Gmail temporarily reached its request limit. Your connection is still active. "
+                    f"Try syncing again in {delay} seconds; your previous scan position is unchanged.")
+        if self.reason in {"accessNotConfigured", "SERVICE_DISABLED"}:
+            return "Gmail API is unavailable for this app. The app owner needs to enable the Gmail API."
+        if self.reason in {"insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}:
+            return "Gmail read permission was not granted. Reconnect Gmail and allow read access."
+        if self.reason == "domainPolicy":
+            return "Your Google Workspace policy blocks Gmail access. Contact your administrator."
+        if self.reason == "dailyLimitExceeded":
+            return "The app's daily Gmail quota has been reached. Try syncing again later."
+        if self.status == 401:
+            return "Your Gmail authorization has expired. Reconnect Gmail to continue syncing."
+        return (f"Gmail could not complete this sync (HTTP {self.status}). "
+                "Try syncing again later; your previous scan position is unchanged.")
 
 
-def _gmail_get(path: str, access_token: str, params: Optional[Dict[str, Any]] = None, raise_on_error: bool = False) -> Dict[str, Any]:
-    resp = requests.get(
-        f"{GMAIL_API_BASE}{path}",
-        headers={"Authorization": f"Bearer {access_token}"},
-        params=params or {},
-        timeout=15,
-    )
-    if resp.status_code == 429:
-        time.sleep(1.5)
+def _retry_after_seconds(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            seconds = (retry_at - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return max(0.0, seconds) if math.isfinite(seconds) else None
+
+
+class _GmailReadBudget:
+    """One bounded read window across list pages, full reads, and every retry."""
+    def __init__(self):
+        self.deadline = time.monotonic() + GMAIL_FETCH_BUDGET_SECONDS
+        self.next_request_at = time.monotonic()
+
+    def before_request(self, last_error: Optional[GmailAPIError]) -> float:
+        now = time.monotonic()
+        delay = max(0.0, self.next_request_at - now)
+        if now + delay + 1 >= self.deadline:
+            if last_error:
+                raise last_error
+            raise RuntimeError("Gmail sync reached its time limit. Try syncing again; "
+                               "your previous scan position is unchanged.")
+        if delay:
+            time.sleep(delay)
+        self.next_request_at = time.monotonic() + GMAIL_REQUEST_INTERVAL_SECONDS
+        return min(15.0, self.deadline - time.monotonic())
+
+    def retry(self, error: GmailAPIError, attempt: int) -> bool:
+        delay = max(min(2 ** attempt, 32) + secrets.randbelow(1001) / 1000,
+                    error.retry_after_seconds or 0.0)
+        # Never shorten Retry-After to fit our budget or sleep until Lambda dies.
+        if time.monotonic() + delay + 1 >= self.deadline:
+            return False
+        time.sleep(delay)
+        return True
+
+
+def _gmail_get(path: str, access_token: str, params: Optional[Dict[str, Any]] = None,
+               raise_on_error: bool = False, budget: Optional[_GmailReadBudget] = None) -> Dict[str, Any]:
+    budget = budget or _GmailReadBudget()
+    error = None
+    for attempt in range(GMAIL_MAX_REQUEST_ATTEMPTS):
         resp = requests.get(
             f"{GMAIL_API_BASE}{path}",
             headers={"Authorization": f"Bearer {access_token}"},
             params=params or {},
-            timeout=15,
+            timeout=budget.before_request(error),
         )
-    if resp.status_code != 200:
-        logger.warning("Gmail API %s failed: %s %s", path, resp.status_code, resp.text[:300])
-        if raise_on_error:
-            raise GmailAPIError(resp.status_code, resp.text)
-        return {}
-    return resp.json()
+        if resp.status_code == 200:
+            return resp.json()
+        error = GmailAPIError(resp.status_code, resp.text,
+                              _retry_after_seconds(resp.headers.get("Retry-After")))
+        if not error.retryable or attempt + 1 == GMAIL_MAX_REQUEST_ATTEMPTS or not budget.retry(error, attempt):
+            break
+    logger.warning("Gmail request failed status=%s reason=%s retryable=%s",
+                   error.status, error.reason, error.retryable)
+    if raise_on_error:
+        raise error
+    return {}
 
 
 class _MessageBatch(list):
@@ -362,7 +458,7 @@ class _MessageBatch(list):
 
 
 def _list_message_ids(access_token: str, query: str, max_results: int,
-                      page_token: Optional[str] = None) -> List[str]:
+                      page_token: Optional[str] = None, budget: Optional[_GmailReadBudget] = None) -> List[str]:
     ids = _MessageBatch()
     while len(ids) < max_results:
         params: Dict[str, Any] = {"q": query, "maxResults": min(100, max_results - len(ids))}
@@ -370,7 +466,7 @@ def _list_message_ids(access_token: str, query: str, max_results: int,
             params["pageToken"] = page_token
         # raise_on_error=True so a transient 4xx/5xx surfaces as an exception in
         # sync_user — otherwise we'd swallow the failure and poison last_synced_at.
-        body = _gmail_get("/users/me/messages", access_token, params=params, raise_on_error=True)
+        body = _gmail_get("/users/me/messages", access_token, params=params, raise_on_error=True, budget=budget)
         for m in body.get("messages") or []:
             if m.get("id"):
                 ids.append(m["id"])
@@ -436,6 +532,7 @@ def _parse_email_address(value: str) -> Tuple[str, str]:
 def fetch_recent_messages(user_email: str, since: Optional[datetime]) -> List[Dict[str, Any]]:
     """Return a list of normalized message dicts since the given datetime."""
     access, conn = _get_access_token(user_email)
+    budget = _GmailReadBudget()
     if since is None:
         since = datetime.now(timezone.utc) - timedelta(days=INITIAL_LOOKBACK_DAYS)
     # Gmail accepts unix-seconds for `after:` queries.
@@ -447,14 +544,14 @@ def fetch_recent_messages(user_email: str, since: Optional[datetime]) -> List[Di
         f"in:anywhere after:{max(0, after_epoch - 1)} before:{int(before.timestamp())} "
         "-category:promotions -category:social"
     )
-    ids = _list_message_ids(access, query, MAX_MESSAGES_PER_SYNC, conn.get("scan_next_page_token"))
+    ids = _list_message_ids(access, query, MAX_MESSAGES_PER_SYNC, conn.get("scan_next_page_token"), budget)
     out = _MessageBatch()
     out.next_page_token = ids.next_page_token
     out.scan_query = query
     out.scan_before = before
     for mid in ids:
         full = _gmail_get(f"/users/me/messages/{mid}", access,
-                          params={"format": "full"}, raise_on_error=True)
+                          params={"format": "full"}, raise_on_error=True, budget=budget)
         if not full:
             continue
         payload = full.get("payload") or {}
@@ -1413,8 +1510,9 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
     except GmailAPIError as e:
         # Don't poison last_synced_at — caller (route) can show a user-facing
         # error and the next sync will retry the same window.
-        logger.warning("[gmail-sync] fetch_failed user=%s status=%s", user_email, e.status)
-        raise RuntimeError(f"Gmail API error ({e.status}). Check that the Gmail API is enabled and the OAuth scope is granted.") from e
+        logger.warning("[gmail-sync] fetch_failed status=%s reason=%s retryable=%s",
+                       e.status, e.reason, e.retryable)
+        raise RuntimeError(e.user_message()) from e
 
     def require_same_connection():
         if not _connections().find_one({"user_email": user_email, "sync_lock_id": lock_id}, {"_id": 1}):

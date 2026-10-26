@@ -27,7 +27,7 @@ def db(monkeypatch):
 def test_scan_continuation_keeps_watermark_until_last_page(db, monkeypatch):
     list_params = []
 
-    def gmail(path, access, params=None, raise_on_error=False):
+    def gmail(path, access, params=None, raise_on_error=False, **_):
         if path.endswith("/messages"):
             list_params.append(dict(params))
             if params.get("pageToken") == "next-page":
@@ -51,7 +51,7 @@ def test_message_fetch_failure_does_not_advance_watermark(db, monkeypatch):
     last = datetime(2026, 10, 1, tzinfo=timezone.utc)
     db.gmail_connections.update_one({"user_email": USER}, {"$set": {"last_synced_at": last}})
 
-    def gmail(path, access, params=None, raise_on_error=False):
+    def gmail(path, access, params=None, raise_on_error=False, **_):
         if path.endswith("/messages"):
             return {"messages": [{"id": "failed"}]}
         assert raise_on_error
