@@ -4207,9 +4207,9 @@ def gmail_status():
     conn = gmail_service.get_connection(user_email) if configured else None
     pending = 0
     if conn:
-        # Count the current validated review list (bounded at 100), including
+        # Count the complete validated review list, including
         # the same evidence exclusions used by GET /gmail/suggestions.
-        pending = len(gmail_service.list_suggestions(user_email))
+        pending = len(gmail_service.list_suggestions(user_email, limit=None))
     return jsonify({
         "configured": configured,
         "connected": bool(conn),
@@ -4304,8 +4304,15 @@ def gmail_list_suggestions():
     include_resolved = request.args.get("include_resolved", "false").lower() == "true"
     from services import gmail_service
     try:
-        items = gmail_service.list_suggestions(user_email, include_resolved=include_resolved)
-        return jsonify({"suggestions": items}), 200
+        offset = int(request.args.get("offset", "0"))
+        if offset < 0:
+            raise ValueError()
+    except (TypeError, ValueError):
+        return jsonify({"error": "offset must be a nonnegative integer"}), 400
+    try:
+        items = gmail_service.list_suggestions(user_email, include_resolved=include_resolved, limit=None)
+        return jsonify({"suggestions": items[offset:offset + 100], "total": len(items),
+                        "has_more": offset + 100 < len(items), "offset": offset}), 200
     except Exception as e:
         logger.exception("gmail suggestions error: %s", e)
         return jsonify({"error": "Failed to load suggestions"}), 500
@@ -4325,8 +4332,14 @@ def gmail_apply_suggestion(suggestion_id):
     if raw_record_id is not None and not isinstance(raw_record_id, str):
         return jsonify({"error": "record_id must be a string"}), 400
     record_id = InputSanitizer.sanitize_string(raw_record_id or "", max_length=128) or None
+    status = data.get("status")
+    if status is not None and (not isinstance(status, str) or status not in gmail_service.VALID_STATUSES):
+        return jsonify({"error": "Choose a valid application status"}), 400
     try:
-        s = gmail_service.apply_suggestion(user_email, suggestion_id, record_id=record_id)
+        options = {"record_id": record_id}
+        if status is not None:
+            options["status"] = status
+        s = gmail_service.apply_suggestion(user_email, suggestion_id, **options)
         return jsonify({"suggestion": s}), 200
     except ValueError as e:
         return jsonify({"error": str(e)}), 400

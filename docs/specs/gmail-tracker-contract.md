@@ -46,8 +46,8 @@ token storage, JWT user scope and asynchronous sync remain in place.
   `skipped_no_match`, and `skipped_already_in_status`. `auto_applied` counts
   **status updates**, not application submissions.
 - `GET /status` adds `has_more` and `last_sync_summary`. `pending_suggestions`
-  counts the same validated review list shown by `GET /suggestions`, bounded
-  at 100 visible items rather than all historical pending documents. The completed
+  counts the complete validated pending review list, including later pages.
+  The completed
   `last_synced_at` watermark advances only after all pages in a scan complete.
   Continuation tokens remain private to the backend.
 - `GET /suggestions` preserves existing fields and adds `match_confidence`,
@@ -61,14 +61,53 @@ token storage, JWT user scope and asynchronous sync remain in place.
   retained subject/sender/snippet evidence: clear employer contradictions are
   pruned and recommendation-only items are excluded. Filtering does not write or
   delete stored documents; resolved history retains its original identity. The
-  visible cap is applied after filtering, so invalid rows cannot hide older
-  valid review items. Plain-text previews decode HTML entities without rendering
+  page cap is applied after filtering, so invalid rows cannot hide older
+  valid review items. `GET /suggestions?offset=0` returns
+  `{suggestions, total, has_more, offset}` with up to 100 rows per page and a
+  stable creation-time/id order. `offset` must be a nonnegative integer.
+  Plain-text previews decode HTML entities without rendering
   HTML.
 - `POST /suggestions/<id>/apply` accepts an optional JSON `record_id`. An
   ambiguous item requires it. A selection must be in the suggestion's candidate
   list and still belong to the JWT user. Invalid/unresolved selections return
   400; inaccessible suggestions or records return 404. The result remains
   `{suggestion}`. Empty-body requests remain valid for unambiguous suggestions.
+
+## Low-cost evidence review (2026-10-26 UTC)
+
+The remaining mailbox scan uses deterministic rules with **zero model calls by
+default**. `GMAIL_MODEL_CALLS_PER_BATCH` optionally enables 0–3 FLASH attempts per
+batch; invalid configuration becomes zero. There is no PRO fallback or model
+retry. The full bounded batch is evaluated by rules; only optional model context
+is capped at ten messages. Summary fields `model_calls` and `deferred` report
+attempts and newly retained unknown-outcome review rows respectively.
+
+When matched application mail has no reliable verdict (including an unavailable
+model or exhausted optional budget), the evidence is persisted before advancing
+the cursor. Such rows have `suggested_status: null` and
+`requires_status_selection: true`. Applying one requires **both** an explicit
+owned candidate `record_id` and a `status` from `applied`, `interviewing`, `offer`,
+`rejected`, `ghosted`, or `withdrawn`. A known suggested status cannot be
+overridden by that parameter. Resolution locks retain both selected application
+and status across retries, preventing conflicting decisions from two tabs.
+
+Complete role titles now preserve seniority and specialty: Software Engineer
+does not establish Senior Software Engineer, Software Engineer II, or Software
+Engineer, Workflow Systems. Known conflicting requisition IDs in stored job
+URLs exclude candidates; an email requisition not confirmed in a record requires
+review. Duplicate same-title applications still require a user choice unless
+other identity evidence uniquely distinguishes them. Positive decisions such as
+"decided to offer" no longer trigger the rejection rules' former optional
+negation patterns.
+
+Mail for an explicit untracked/conflicting role remains reviewable with
+`requires_application_match: true`, `record_id: null`, and no candidate records.
+It cannot update a different same-company application. Retained `email_roles`
+and `email_requisition_ids` support read/apply revalidation; legacy truncated
+role snippets only exclude candidates that contradict the known title prefix.
+No guessed application is created, and resolved historical decisions remain
+immutable. Unknown outcomes and unmatched roles may be reviewed directly in
+Gmail using their retained message/thread identifiers.
 
 ## Scan behavior and limits
 

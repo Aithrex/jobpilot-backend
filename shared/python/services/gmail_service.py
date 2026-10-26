@@ -1,6 +1,6 @@
 """
 Gmail integration — OAuth, encrypted-token storage, message sync, and
-LLM-classified status suggestions for application tracking.
+evidence-based status suggestions for application tracking.
 
 Design notes
 ------------
@@ -8,12 +8,12 @@ Design notes
 - Refresh tokens are encrypted at rest (Fernet); the encryption key comes
   from `GMAIL_TOKEN_ENCRYPTION_KEY` (SSM/env). Access tokens are never
   persisted — they are minted on demand from the refresh token.
-- Sync is incremental: we remember `last_history_id` per user so we only
-  process new messages on each run. Falls back to a date-bounded list
-  query on first sync.
-- Classification is delegated to the LLM (FLASH tier) with a strict JSON schema.
-  High-confidence results auto-apply; lower-confidence ones land in a
-  per-user "suggestions" inbox the user reviews from the UI.
+- Sync is incremental through a frozen date query, page cursor and completed
+  watermark. The initial scan covers 60 days in bounded batches.
+- Deterministic evidence runs first; inconclusive matched mail is retained
+  for review with no invented status. Model calls are disabled by default.
+  An operator can enable at most three FLASH attempts per batch; model-only
+  verdicts never automatically update an application.
 """
 
 from __future__ import annotations
@@ -76,6 +76,14 @@ MAX_MESSAGES_PER_SYNC = 50
 GMAIL_REQUEST_INTERVAL_SECONDS = 1.0
 GMAIL_FETCH_BUDGET_SECONDS = 180.0
 GMAIL_MAX_REQUEST_ATTEMPTS = 7
+
+
+def _model_call_limit() -> int:
+    """Rules-only by default; an operator may enable at most three cheap calls."""
+    try:
+        return max(0, min(3, int(_get_config_value("GMAIL_MODEL_CALLS_PER_BATCH", "0"))))
+    except (TypeError, ValueError):
+        return 0
 
 # Connection age beyond which we ignore older messages on the very first sync.
 # 60d covers the typical "applied → first-round → final-round → outcome" arc
@@ -718,6 +726,9 @@ def _build_record_index(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "company_token": _company_token(company),
             "title": title,
             "title_norm": _normalize(title),
+            "requisition_ids": _requisition_ids(" ".join(str(value or "") for value in (
+                app.get("job_url"), jd.get("job_url"), r.get("job_url"),
+                app.get("requisition_id"), jd.get("requisition_id")))),
             "recruiter_email": recruiter_email,
             "recruiter_domain": recruiter_domain,
             "current_status": app.get("status") or "draft",
@@ -728,6 +739,75 @@ def _build_record_index(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "created_at": r.get("created_at"),
         })
     return index
+
+
+def _requisition_ids(text: str) -> set:
+    ids = {re.sub(r"[^A-Z0-9]", "", match.upper()) for match in re.findall(
+        r"(?<![A-Za-z0-9])(?:JR|R)[-_ ]?\d{4,}(?!\d)", text, re.I)}
+    ids.update(re.findall(r"\b(?:requisition|req|job)\s*(?:id|number|#)?\s*[:#-]?\s*(\d{5,})\b", text, re.I))
+    return ids
+
+
+_ROLE_NOUN = re.compile(r"\b(?:engineer|developer|analyst|architect|scientist|manager|designer|specialist|consultant|administrator|researcher|director|intern|technician)\b", re.I)
+_EXPLICIT_ROLE_PATTERNS = [re.compile(pattern, re.I) for pattern in (
+    r"\b(?:application|applying|interest)\s+(?:for|in)\s+(?:the\s+)?(.{2,140}?)(?=\s+(?:at|with)\s|\s+(?:position|role|was|has|is)\b|[.!?\n]|$)",
+    r"\b(?:regarding|for)\s+(?:the\s+)?(?!applying\b)(.{2,140}?)\s+(?:role|position)\b",
+    r"\b(?:regarding|for)\s+(?:the\s+)?(.{2,140}?)\s+at\s",
+    r"\b(?:role|position|job title)\s*(?:of|:)\s*(.{2,140}?)(?=\s+at\s|[.!?\n]|$)",
+)]
+
+
+def _explicit_role_titles(msg: Dict[str, Any], index: List[Dict[str, Any]]) -> List[str]:
+    """Extract complete application titles, preserving seniority and specialty.
+
+    A generic title occurring inside a different title is not exact evidence.
+    Only bounded application prose is considered, never recommendation footers.
+    """
+    text = _application_text(msg)
+    roles = []
+    for pattern in _EXPLICIT_ROLE_PATTERNS:
+        roles.extend(match.group(1).strip(" ,:–—-\"'") for match in pattern.finditer(text))
+    # Common ATS subjects: "Acme Senior Engineer application update" and
+    # "Your application to Acme - Senior Engineer".
+    subject = html.unescape(str(msg.get("subject") or ""))
+    title_subject = re.search(r"^(.{2,140}?)\s*[-–—:]\s*(?:application (?:decision|update)|application|decision|update)\b", subject, re.I)
+    if title_subject:
+        roles.append(title_subject.group(1))
+    for company in {rec["company"] for rec in index if rec["company"]}:
+        for pattern in (
+            r"^" + re.escape(company) + r"\s+(.{2,140}?)\s+application\b",
+            r"\bapplication to\s+" + re.escape(company) + r"\s*[-–—:]\s*(.{2,140})$",
+        ):
+            found = re.search(pattern, subject, re.I)
+            if found:
+                roles.append(found.group(1))
+    # Requisition identifiers establish a posting but are not part of its title.
+    roles = [re.sub(r"^(?:(?:req(?:uisition)?\s*(?:id|number|#)?\s*[:#-]?\s*)?(?:JR|R)[- ]?\d+\s*[-:]?\s*)", "", role, flags=re.I)
+             for role in roles]
+    return list(dict.fromkeys(_normalize(role) for role in roles if _ROLE_NOUN.search(role)))
+
+
+def _exact_role_in_text(text: str, title: str, company: str = "") -> bool:
+    if not title:
+        return False
+    text = "\n".join(_normalize(part) for part in re.split(r"[\n.!?:]", text))
+    # Fallback for nonstandard templates. Reject titles embedded in a longer
+    # level/specialty phrase even when the explicit-role parser missed it.
+    for match in re.finditer(r"\b" + re.escape(title) + r"\b", text):
+        before = text[:match.start()].rsplit("\n", 1)[-1]
+        after = text[match.end():].split("\n", 1)[0]
+        if re.search(r"\b(?:senior|junior|staff|principal|lead|sr|jr|associate)\s+$", before):
+            continue
+        if re.match(r"\s+(?:i{1,3}|iv|[1-9]|senior|junior|lead)\b", after):
+            continue
+        before_word = before.strip().split()[-1:] or [""]
+        after_word = after.strip().split()[:1] or [""]
+        if before_word[0] not in {"", "for", "the", "of", "as", "regarding", "role", "position", "application", "a", "an", "is", "our", "your", *company.split()[-1:]}:
+            continue
+        if after_word[0] not in {"", "at", "with", "position", "role", "application", "we", "your", "thank", "thanks", "is", "was", "has", "have", "our", "to", "and", "the"}:
+            continue
+        return True
+    return False
 
 
 def _match_message_to_record(msg: Dict[str, Any], index: List[Dict[str, Any]]) -> Optional[Tuple[Dict[str, Any], float, str]]:
@@ -741,12 +821,15 @@ def _match_message_to_record(msg: Dict[str, Any], index: List[Dict[str, Any]]) -
         return None
     haystack = _normalize(_application_text(msg))
     primary_employers = _primary_employers(msg, index)
+    explicit_roles = _explicit_role_titles(msg, index)
+    email_requisitions = _requisition_ids(_application_text(msg))
     sender_domain = (msg.get("from_domain") or "").lower()
     sender_addr = (msg.get("from_address") or "").lower()
     platform_sender = any(sender_domain == domain or sender_domain.endswith("." + domain)
                           for domain in _PLATFORM_DOMAINS)
 
     candidates = []
+    employer_records = []
     for rec in index:
         company = rec["company_token"]
         if primary_employers is not None and company not in primary_employers:
@@ -761,7 +844,13 @@ def _match_message_to_record(msg: Dict[str, Any], index: List[Dict[str, Any]]) -
         recruiter = bool(rec["recruiter_email"] and rec["recruiter_email"] == sender_addr)
         if not (company_named or company_domain or recruiter):
             continue
-        title_exact = _contains_phrase(haystack, rec["title_norm"])
+        employer_records.append(rec)
+        if explicit_roles and rec["title_norm"] not in explicit_roles:
+            continue
+        if email_requisitions and rec["requisition_ids"] and not email_requisitions.intersection(rec["requisition_ids"]):
+            continue
+        title_exact = (rec["title_norm"] in explicit_roles if explicit_roles
+                       else _exact_role_in_text(_application_text(msg), rec["title_norm"], company))
         reasons = []
         if company_named:
             reasons.append("Company identified in application content")
@@ -775,8 +864,26 @@ def _match_message_to_record(msg: Dict[str, Any], index: List[Dict[str, Any]]) -
             reasons.append("Role title not confirmed; review before updating")
         # A recruiter alone can handle many unrelated companies, so needs review.
         score = 0.97 if title_exact and company_named else 0.85 if title_exact else 0.6
+        if email_requisitions:
+            if len(email_requisitions) > 1 or not email_requisitions.intersection(rec["requisition_ids"]):
+                score = min(score, 0.85)
+                reasons.append("Email requisition is not uniquely confirmed in this application")
+            else:
+                reasons.append("Application requisition matches email")
+        if len(explicit_roles) > 1:
+            score = min(score, 0.85)
         candidates.append((rec, score, "; ".join(reasons)))
     if not candidates:
+        if employer_records and (explicit_roles or email_requisitions):
+            # Keep true application mail whose role is not tracked, but never
+            # offer an unrelated same-company record as a plausible match.
+            meta = dict(employer_records[0])
+            role = explicit_roles[0] if explicit_roles else "Application in email"
+            meta.update(record_id=None, title=role, email_role=role,
+                        current_status=None, candidate_records=[], requires_record_selection=True,
+                        requires_application_match=True, gmail_evidence_ms=0,
+                        status_updated_at=None, gmail_updated_at=None)
+            return meta, 0.0, "Email role or requisition does not match a tracked application"
         return None
     candidates.sort(key=lambda item: (-item[1], str(item[0]["record_id"])))
     best_rec, score, reason = candidates[0]
@@ -857,11 +964,11 @@ _REJECTION_PATTERNS = [
     r"\bnot (?:be |going to be )?(?:moving|proceeding|progressing|advancing) (?:forward|further) (?:with your|in (?:our|the))",
 
     # ── "decision not to" / "decision (was) made" family — Veeva, Workday ─
-    r"\b(?:made (?:the |a )?)?decision (?:not |against )?to (?:move|go|proceed|continue) forward\b",
-    r"\bwe['’]?ve (?:made the |come to a |reached a )?decision (?:not |against )?to\b",
-    r"\b(?:we have )?decided (?:not |against )?to (?:offer|proceed|continue|move forward)\b",
+    r"\b(?:made (?:the |a )?)?decision (?:not |against )to (?:move|go|proceed|continue) forward\b",
+    r"\bwe['’]?ve (?:made the |come to a |reached a )?decision (?:not |against )to\b",
+    r"\b(?:we have )?decided (?:not |against )to (?:offer|proceed|continue|move forward)\b",
     r"\bnot to (?:move|go|proceed) forward (?:at this time|with your|in (?:our|the))",
-    r"\bdecision has been made (?:not )?to\b",
+    r"\bdecision has been made not to\b",
 
     # ── "regret / unfortunately" family ───────────────────────────────────
     r"\bwe regret to (?:inform|let you know|share)\b",
@@ -875,6 +982,7 @@ _REJECTION_PATTERNS = [
 
     # ── "your application was not selected" family ───────────────────────
     r"\byour application (?:was|has been) (?:not selected|unsuccessful|declined|rejected)\b",
+    r"\byour application for [^.!?\n]{2,180}? (?:was|has been) (?:not selected|unsuccessful|declined|rejected)\b",
     r"\b(?:we are|we['’]?re|i am|i['’]?m) unable to (?:move forward|proceed|offer|continue|advance)\b",
     r"\bwe['’]ll keep your (?:resume|application|profile|materials) on file\b",
     r"\b(?:keep|hold) your (?:resume|application|profile) (?:on file )?for future\b",
@@ -907,7 +1015,7 @@ _REJECTION_PATTERNS = [
     # Greenhouse: "we've decided to pursue other candidates whose qualifications…"
     r"\bdecided to pursue other (?:candidates|applicants)\b",
     # Generic ATS bulk rejection: "Thank you for your interest. We have decided not to proceed."
-    r"\bthank you for your (?:interest|application|time)[\.\,]?\s+(?:we (?:have )?(?:decided|concluded)|after|unfortunately)\b",
+    r"\bthank you for your (?:interest|application|time)[\.\,]?\s+we (?:have )?decided not to (?:proceed|continue|move forward)\b",
     # iCIMS: "we have determined that other candidates are better suited"
     r"\b(?:determined|concluded) that (?:other|another) candidate",
     # Lever: "we won't be progressing with your application"
@@ -1417,40 +1525,28 @@ suggestion the user reviews instead of auto-applying):
 Output strict JSON: {{"status": "...", "confidence": 0.0-1.0, "reason": "one short sentence quoting the specific phrase or email that drove the decision"}}.
 """
 
-    # Two-tier model approach: Pro first for accuracy on nuanced cases
-    # (politely-phrased rejections, soft interview signals, multi-message
-    # threads where status flips mid-conversation). Flash as fallback when
-    # Pro rate-limits / times out — still better than no classification.
-    # Temperature stays at 0.0 for deterministic output.
+    # Optional bounded assistance only. Inconclusive mail is retained for
+    # review, so neither a premium model nor retry spending is necessary.
     result: Optional[Dict[str, Any]] = None
     try:
-        from services.claude_client import claude_json, CLAUDE_PRO, CLAUDE_FLASH
-        try:
-            result = claude_json(
-                prompt=prompt,
-                max_tokens=400,
-                temperature=0.0,
-                model=CLAUDE_PRO,
-                max_retries=1,
-            )
-        except Exception as pro_err:
-            logger.info("classify_record_thread Pro failed (%s); retrying with Flash", pro_err)
-            result = claude_json(
-                prompt=prompt,
-                max_tokens=400,
-                temperature=0.0,
-                model=CLAUDE_FLASH,
-                max_retries=1,
-            )
-    except Exception as e:
-        logger.warning("classify_record_thread LLM call failed (both tiers): %s", e)
+        from services.claude_client import claude_json, CLAUDE_FLASH
+        result = claude_json(prompt=prompt, max_tokens=400, temperature=0.0,
+                             model=CLAUDE_FLASH, max_retries=0)
+    except Exception:
+        logger.warning("classify_record_thread model unavailable; retaining evidence for review")
         return None
     if not isinstance(result, dict):
         return None
 
-    status = (result.get("status") or "").lower()
-    confidence = float(result.get("confidence") or 0.0)
-    reason = (result.get("reason") or "")[:240]
+    status = str(result.get("status") or "").lower()
+    try:
+        confidence = float(result.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(confidence):
+        return None
+    confidence = max(0.0, min(1.0, confidence))
+    reason = str(result.get("reason") or "")[:240]
 
     if status == "ignore":
         return {"status": "ignore", "confidence": confidence, "reason": reason}
@@ -1493,8 +1589,13 @@ def _records_for_user(user_email: str) -> List[Dict[str, Any]]:
             "record_id": 1,
             "jd_analysis.job_title": 1,
             "jd_analysis.company": 1,
+            "jd_analysis.job_url": 1,
+            "jd_analysis.requisition_id": 1,
+            "job_url": 1,
             "application.status": 1,
             "application.recruiter_email": 1,
+            "application.job_url": 1,
+            "application.requisition_id": 1,
             "application.gmail_evidence_ms": 1,
             "application.updated_at": 1,
             "application.gmail_updated_at": 1,
@@ -1603,7 +1704,8 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
     index = _build_record_index(records)
     if not index:
         return {"messages_scanned": 0, "auto_applied": 0, "suggested": 0,
-                "ignored": 0, "ambiguous_matches": 0, "has_more": False}
+                "ignored": 0, "ambiguous_matches": 0, "has_more": False,
+                "deferred": 0, "model_calls": 0}
 
     since = conn.get("last_synced_at")
     if isinstance(since, datetime) and since.tzinfo is None:
@@ -1629,6 +1731,9 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
     skipped_no_match = 0
     skipped_already_in_status = 0
     ambiguous_matches = 0
+    deferred = 0
+    model_calls = 0
+    model_call_limit = _model_call_limit()
     seen_message_ids = set()
 
     logger.info(
@@ -1666,11 +1771,9 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         })
 
     # ── Phase 2: classify each record's thread as a whole ─────────────────
-    # We deliberately re-classify every record that has matched mail on every
-    # sync — the per-record thread call is cheap and self-correcting, so a
-    # record that was wrongly stuck on "applied" by an older per-message
-    # classifier will fix itself the next time sync runs. Skipping when "all
-    # messages were seen before" is what trapped users on stale statuses.
+    # Re-run cheap deterministic rules for matched mail on replay, allowing
+    # corrected rules to recover an earlier uncertain classification. Model
+    # attempts are optional, bounded, and skipped for already-reviewed mail.
     for bucket, items in record_buckets.items():
         require_same_connection()
         rec_meta = record_meta_by_id.get(bucket)
@@ -1687,31 +1790,35 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         # Tier 1: deterministic regex extraction. Runs even if the LLM call
         # later fails, so a clear "we have decided to move forward with other
         # candidates" still resolves to rejected.
-        deterministic = extract_deterministic_signals(msgs_for_llm)
+        deterministic = extract_deterministic_signals([it["msg"] for it in items])
 
         # Tier 2: LLM thread classification. May return None on transient
         # failure — that's fine, deterministic alone can carry the decision.
-        # Clear deterministic outcomes need no model call. Ambiguous wording
-        # still uses the existing classifier inside this asynchronous job.
-        llm_cls = None if deterministic else classify_record_thread(msgs_for_llm, rec_meta)
+        # Clear deterministic outcomes need no model call. Optional assistance
+        # cannot exceed the batch budget; all other wording stays reviewable.
+        llm_cls = None
+        # Existing evidence must not repeatedly consume model budget on cursor
+        # replays. Rules still run, allowing improved deterministic verdicts.
+        previously_reviewed = None
+        if not deterministic:
+            previously_reviewed = _suggestions().find_one({"user_email": user_email,
+                "supporting_message_ids": {"$all": msg_ids},
+                "candidate_records.record_id": {"$all": [r["record_id"] for r in rec_meta["candidate_records"]]}})
+            if previously_reviewed:
+                continue
+        if not deterministic and not previously_reviewed and model_calls < model_call_limit:
+            model_calls += 1
+            llm_cls = classify_record_thread(msgs_for_llm, rec_meta)
 
         # Reconcile both tiers into a single verdict.
         cls = reconcile_classification(deterministic, llm_cls)
         require_same_connection()
-        if not cls:
-            ignored += len(items)
-            logger.info(
-                "[gmail-sync] no_verdict record=%s emails=%d (LLM and regex both inconclusive)",
-                record_id, len(items),
-            )
-            continue
-        if cls["status"] == "ignore":
-            ignored += len(items)
-            logger.info(
-                "[gmail-sync] classified=ignore record=%s emails=%d reason=%s",
-                record_id, len(items), cls.get("reason"),
-            )
-            continue
+        if not cls or cls["status"] == "ignore":
+            # The page cursor can safely advance only after uncertain matched
+            # application evidence is durable. No status is invented here.
+            cls = {"status": None, "confidence": 0.0, "source": "review",
+                   "reason": "Outcome is unclear. Review this email and choose the application status.",
+                   "evidence_message_id": items[0]["msg"]["message_id"]}
 
         new_status = cls["status"]
         confidence = cls["confidence"]
@@ -1732,13 +1839,13 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         if evidence_ms and status_updated_ms > evidence_ms and status_updated_ms > gmail_updated_ms:
             confidence = min(confidence, 0.85)
             cls["reason"] = "Email predates your latest status change. " + cls.get("reason", "")
-        identity = "|".join([user_email, new_status, *sorted(msg_ids),
+        identity = "|".join([user_email, new_status or "needs_review", *sorted(msg_ids),
                              *sorted(r["record_id"] for r in rec_meta["candidate_records"])])
         suggestion_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         if _suggestions().find_one({"_id": suggestion_id, "user_email": user_email}):
             continue
 
-        if rec_meta["current_status"] == new_status and not rec_meta["requires_record_selection"]:
+        if new_status and rec_meta["current_status"] == new_status and not rec_meta["requires_record_selection"]:
             skipped_already_in_status += 1
             logger.info(
                 "[gmail-sync] already_in_status record=%s status=%s confidence=%.2f",
@@ -1770,7 +1877,7 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         # Funnel-backwards moves are usually wrong (rejected→interviewing,
         # offer→applied). We still SUGGEST them but never auto-apply, so the
         # user has a chance to confirm.
-        backwards = _is_funnel_backwards(rec_meta["current_status"], new_status)
+        backwards = bool(new_status and _is_funnel_backwards(rec_meta["current_status"], new_status))
         if backwards:
             logger.info(
                 "[gmail-sync] backwards_move record=%s %s→%s — suggesting only",
@@ -1781,7 +1888,7 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         # suggestions on the same record. This prevents the suggestions panel
         # from accumulating duplicates as we re-classify on every sync, and
         # ensures the user always sees the *current* verdict.
-        if match_confidence >= AUTO_APPLY_CONFIDENCE:
+        if new_status and match_confidence >= AUTO_APPLY_CONFIDENCE:
             _suggestions().update_many(
                 {"user_email": user_email, "record_id": record_id,
                  "applied": False, "dismissed": False,
@@ -1809,6 +1916,11 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
             "snippet": primary.get("snippet"),
             "current_status": rec_meta["current_status"],
             "suggested_status": new_status,
+            "requires_status_selection": new_status is None,
+            "requires_application_match": rec_meta.get("requires_application_match", False),
+            "email_role": rec_meta.get("email_role"),
+            "email_roles": _explicit_role_titles(primary, index),
+            "email_requisition_ids": sorted(_requisition_ids(_application_text(primary))),
             "confidence": confidence,
             "match_confidence": match_confidence,
             "match_reason": items[0]["reason"],
@@ -1830,6 +1942,7 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
             {"_id": suggestion_id}, {"$setOnInsert": suggestion}, upsert=True)
         if not inserted.upserted_id:
             continue
+        deferred += int(new_status is None)
         if confidence >= AUTO_APPLY_CONFIDENCE and match_confidence >= AUTO_APPLY_CONFIDENCE \
                 and not backwards and not rec_meta["requires_record_selection"] \
                 and _apply_status(user_email, record_id, new_status,
@@ -1870,6 +1983,8 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
         "skipped_no_match": skipped_no_match,
         "skipped_already_in_status": skipped_already_in_status,
         "ambiguous_matches": ambiguous_matches,
+        "deferred": deferred,
+        "model_calls": model_calls,
         "has_more": bool(getattr(messages, "next_page_token", None)),
     }
     state = {"last_sync_summary": summary}
@@ -1892,7 +2007,7 @@ def _sync_user(user_email: str, lock_id: str) -> Dict[str, Any]:
 
 def _serialize_suggestion(s: Dict[str, Any]) -> Dict[str, Any]:
     s.pop("_id", None)
-    for key in ("resolution_lock_id", "resolution_lock_until", "resolution_record_id"):
+    for key in ("resolution_lock_id", "resolution_lock_until", "resolution_record_id", "resolution_status"):
         s.pop(key, None)
     for k in ("created_at", "applied_at"):
         v = s.get(k)
@@ -1915,20 +2030,50 @@ def _validated_suggestion(s: Dict[str, Any], index: List[Dict[str, Any]]) -> Opt
         return dict(s)
     if _is_job_recommendation(s):
         return None
+    if s.get("requires_application_match"):
+        # A real outcome for an untracked role remains visible and cannot be
+        # silently reassigned to a different role at the same employer.
+        result = dict(s)
+        result.update(record_id=None, candidate_records=[], requires_record_selection=True)
+        return result
     # Snippets are partial; only a subject employer can reassign legacy choices.
     primary = _primary_employers({"subject": s.get("subject")}, index)
+    # A legacy snippet may end halfway through a title. Only complete prose
+    # sentences can eliminate a candidate; subject titles are already bounded.
+    snippet = str(s.get("snippet") or "")
+    complete = re.match(r"(?s)^(.*[.!?\n])", snippet)
+    explicit_roles = s.get("email_roles") or _explicit_role_titles(
+        {"subject": s.get("subject"), "body": complete.group(1) if complete else ""}, index)
+    partial = re.search(r"\b(?:application for|forward for)\s+(?:the\s+)?([^.!?\n]{2,140})$", snippet, re.I)
+    partial_role = ""
+    if partial and _ROLE_NOUN.search(partial.group(1)):
+        partial_role = _normalize(re.sub(r"^(?:JR|R)[- ]?\d+\s*[-:]?\s*", "", partial.group(1), flags=re.I))
+    email_requisitions = set(s.get("email_requisition_ids") or _requisition_ids(_application_text(s)))
     records = {rec["record_id"]: rec for rec in index}
     old_candidates = s.get("candidate_records") or [{"record_id": s.get("record_id"),
                                                     "company": s.get("company", ""), "title": s.get("title", "")}]
     candidates = []
+    eligible_employer_records = []
     for candidate in old_candidates:
         rec = records.get(candidate.get("record_id"))
         if rec is None:
             continue
         value = _candidate_record(rec)
-        if primary is None or _company_token(value.get("company", "")) in primary:
+        if primary is not None and _company_token(value.get("company", "")) not in primary:
+            continue
+        eligible_employer_records.append(rec)
+        if (
+                not explicit_roles or _normalize(value.get("title", "")) in explicit_roles) and (
+                not partial_role or _normalize(value.get("title", "")).startswith(partial_role)) and (
+                not email_requisitions or not rec["requisition_ids"] or email_requisitions.intersection(rec["requisition_ids"])):
             candidates.append(value)
     if not candidates:
+        if (explicit_roles or partial_role or email_requisitions) and eligible_employer_records:
+            result = dict(s)
+            role = explicit_roles[0] if explicit_roles else (partial_role + "…" if partial_role else "Application in email")
+            result.update(record_id=None, candidate_records=[], requires_record_selection=True,
+                          requires_application_match=True, title=role, email_role=role)
+            return result
         return None
     result = dict(s)
     selected = next((r for r in candidates if r["record_id"] == s.get("record_id")), candidates[0])
@@ -1938,30 +2083,43 @@ def _validated_suggestion(s: Dict[str, Any], index: List[Dict[str, Any]]) -> Opt
     return result
 
 
-def list_suggestions(user_email: str, include_resolved: bool = False) -> List[Dict[str, Any]]:
+def list_suggestions(user_email: str, include_resolved: bool = False,
+                     limit: Optional[int] = 100) -> List[Dict[str, Any]]:
     q: Dict[str, Any] = {"user_email": user_email}
     if not include_resolved:
         q["applied"] = False
         q["dismissed"] = False
-    docs = _suggestions().find(q).sort("created_at", -1)
+    docs = _suggestions().find(q).sort([("created_at", -1), ("_id", -1)])
     index = _build_record_index(_records_for_user(user_email))
     visible = []
     for doc in docs:
         validated = _validated_suggestion(doc, index)
         if validated is not None:
             visible.append(_serialize_suggestion(validated))
-            if len(visible) == 100:
+            if limit is not None and len(visible) >= limit:
                 break
     return visible
 
 
 def apply_suggestion(user_email: str, suggestion_id: str,
-                     record_id: Optional[str] = None) -> Dict[str, Any]:
+                     record_id: Optional[str] = None, status: Optional[str] = None) -> Dict[str, Any]:
     s = _suggestions().find_one({"suggestion_id": suggestion_id, "user_email": user_email})
     if not s:
         raise LookupError("Suggestion not found")
     if s.get("applied") or s.get("dismissed"):
         return _serialize_suggestion(s)
+    if status is not None and (not isinstance(status, str) or status not in VALID_STATUSES):
+        raise ValueError("Choose a valid application status")
+    if s.get("requires_status_selection"):
+        if not status:
+            raise ValueError("Choose the application status shown by this email")
+        if not record_id:
+            raise ValueError("Choose the application that this email belongs to")
+        selected_status = status
+    else:
+        selected_status = s.get("suggested_status")
+        if selected_status not in VALID_STATUSES or (status and status != selected_status):
+            raise ValueError("The selected status does not match this suggestion")
     # Retain ownership validation for explicitly selected legacy candidates.
     if record_id and record_id in {r.get("record_id") for r in s.get("candidate_records", [])}:
         if not DBConnect().get_db().tailoring_records.find_one(
@@ -1970,6 +2128,8 @@ def apply_suggestion(user_email: str, suggestion_id: str,
     s = _validated_suggestion(s, _build_record_index(_records_for_user(user_email)))
     if s is None:
         raise ValueError("This email's evidence does not support the suggested application update")
+    if s.get("requires_application_match"):
+        raise ValueError("This email has no matching application in the tracker")
     if s.get("requires_record_selection") and not record_id:
         raise ValueError("Choose the application that this email belongs to")
     selected_id = record_id or s["record_id"]
@@ -1994,9 +2154,11 @@ def apply_suggestion(user_email: str, suggestion_id: str,
                        {"resolution_lock_until": {"$lte": now}}]},
              {"$or": [{"resolution_record_id": {"$exists": False}},
                        {"resolution_record_id": selected_id}]},
+             {"$or": [{"resolution_status": {"$exists": False}},
+                       {"resolution_status": selected_status}]},
          ]},
         {"$set": {"resolution_lock_id": lock_id, "resolution_lock_until": now + timedelta(minutes=2),
-                  "resolution_record_id": selected_id}},
+                  "resolution_record_id": selected_id, "resolution_status": selected_status}},
     )
     if not claimed.modified_count:
         raise ValueError("This email is already being resolved. Refresh the tracker before trying again.")
@@ -2007,14 +2169,16 @@ def apply_suggestion(user_email: str, suggestion_id: str,
         except (TypeError, ValueError):
             pass
     try:
-        if not _apply_status(user_email, selected_id, s["suggested_status"], evidence_ms=evidence_ms):
+        if not _apply_status(user_email, selected_id, selected_status, evidence_ms=evidence_ms):
             raise RuntimeError("Failed to apply status — record may have been deleted")
         s.update({"record_id": selected_id, "company": (selected.get("jd_analysis") or {}).get("company", ""),
                   "title": (selected.get("jd_analysis") or {}).get("job_title", ""),
-                  "applied": True, "applied_at": datetime.now(timezone.utc)})
+                  "applied": True, "applied_at": datetime.now(timezone.utc),
+                  "suggested_status": selected_status, "requires_status_selection": False})
         _suggestions().update_one(
             {"suggestion_id": suggestion_id, "user_email": user_email, "resolution_lock_id": lock_id},
-            {"$set": {k: s[k] for k in ("record_id", "company", "title", "applied", "applied_at")}},
+            {"$set": {k: s[k] for k in ("record_id", "company", "title", "applied", "applied_at",
+                                      "suggested_status", "requires_status_selection")}},
         )
     finally:
         _suggestions().update_one(
