@@ -713,6 +713,8 @@ def _is_irrelevant_mail(msg: Dict[str, Any]) -> bool:
         r"^you shared some google account data with\b",
         r"^(?:your\s+.{1,100}\s+)?(?:verification|security|authentication|sign[- ]in|login|one[- ]time) code(?:\b.*)?$",
         r"^please confirm your identity[.!]?$",
+        r"^verify your candidate account[.!]?$",
+        r"^reset your password[.!]?$",
     ))
     return auth_notice or _is_job_recommendation(msg)
 

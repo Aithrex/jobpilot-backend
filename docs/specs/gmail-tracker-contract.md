@@ -123,8 +123,11 @@ Unmatched rows show no current application status or match confidence. Their
 company label comes from one subject-evidenced employer and an owned record's
 readable name; uncertain employer labels are blank. Resolved history remains
 unchanged. Narrow authentication-notice subject patterns (verification/security
-codes, Google account-data-sharing notices, and the exact identity-confirmation
-notice) are excluded before matching and when reading/applying old pending rows.
+codes, Google account-data-sharing notices, and exact identity-confirmation,
+candidate-account verification and password-reset notices) are excluded before
+matching and when reading/applying old pending rows. This is not a general
+`verify` filter: interview availability and assessment-verification messages
+remain eligible for review.
 Unclear application portal updates, interview logistics and consent documents
 remain reviewable.
 
