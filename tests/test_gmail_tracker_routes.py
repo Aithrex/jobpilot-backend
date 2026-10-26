@@ -64,6 +64,47 @@ def test_status_count_matches_validated_review_list(client, monkeypatch):
     monkeypatch.setattr(gs, "gmail_oauth_enabled", lambda: True)
     monkeypatch.setattr(gs, "get_connection", lambda _: {"gmail_address": USER})
     monkeypatch.setattr(gs, "_suggestions", lambda: SimpleNamespace(count_documents=lambda _: 7))
-    monkeypatch.setattr(gs, "list_suggestions", lambda _: [{"suggestion_id": "good-1"}, {"suggestion_id": "good-2"}])
+    monkeypatch.setattr(gs, "list_suggestions", lambda _, **__: [{"suggestion_id": "good-1"}, {"suggestion_id": "good-2"}])
     response = client[0].get("/api/resume/gmail/status", headers=client[1])
     assert response.get_json()["pending_suggestions"] == 2
+
+
+def test_apply_forwards_explicit_unknown_outcome(client, monkeypatch):
+    seen = []
+    def apply(user, sid, **kwargs):
+        seen.append((user, sid, kwargs))
+        return {"applied": True}
+    monkeypatch.setattr(gs, "apply_suggestion", apply)
+    response = client[0].post("/api/resume/gmail/suggestions/s1/apply", headers=client[1],
+                              json={"record_id": "r1", "status": "rejected"})
+    assert response.status_code == 200
+    assert seen == [(USER, "s1", {"record_id": "r1", "status": "rejected"})]
+
+
+@pytest.mark.parametrize("status", [{"$ne": ""}, ["rejected"], "unknown", "", 1])
+def test_invalid_outcome_never_reaches_service(client, monkeypatch, status):
+    monkeypatch.setattr(gs, "apply_suggestion", lambda *_args, **_kwargs: pytest.fail("Invalid status reached service"))
+    response = client[0].post("/api/resume/gmail/suggestions/s1/apply", headers=client[1], json={"status": status})
+    assert response.status_code == 400
+
+
+def test_review_paging_counts_all_validated_items(client, monkeypatch):
+    items = [{"suggestion_id": f"s{i}"} for i in range(121)]
+    calls = []
+    def rows(user, **kwargs):
+        calls.append(kwargs)
+        return items
+    monkeypatch.setattr(gs, "list_suggestions", rows)
+    first = client[0].get("/api/resume/gmail/suggestions", headers=client[1]).get_json()
+    second = client[0].get("/api/resume/gmail/suggestions?offset=100", headers=client[1]).get_json()
+    assert len(first["suggestions"]) == 100
+    assert first["total"] == second["total"] == 121
+    assert first["has_more"] and not second["has_more"]
+    assert len(second["suggestions"]) == 21
+    assert all(call["limit"] is None for call in calls)
+
+
+@pytest.mark.parametrize("offset", ["-1", "oops", "1.5"])
+def test_invalid_review_offset_is_400(client, offset):
+    response = client[0].get(f"/api/resume/gmail/suggestions?offset={offset}", headers=client[1])
+    assert response.status_code == 400
