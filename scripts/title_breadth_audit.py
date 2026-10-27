@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -93,11 +94,16 @@ def main() -> int:
                     specs.append(s)
         added = [t for t in after if t not in before]
         removed = [t for t in before if t not in after]
-        real_lost = [t for t in removed if t.lower() not in JUNK]
+        # Lost = no spelling of it is searched any more ("Back-End Engineer"
+        # going while "Back End Engineer" stays is the same search).
+        key = getattr(new_seed, "_spelling_key", lambda t: re.sub(r"[\s\-]+", " ", t.lower()).strip())
+        kept_keys = {key(t) for t in after}
+        real_lost = [t for t in removed if t.lower() not in JUNK and key(t) not in kept_keys]
         g_before, g_after = gaps(before, specs), gaps(after, specs)
         j_before = [t for t in before if t.lower() in JUNK]
         j_after = [t for t in after if t.lower() in JUNK]
         rec = {"user": audit._mask(email), "resumes": len(assets), "specialties": specs,
+               "real_lost": real_lost,
                "before": before, "after": after, "added": added, "removed": removed,
                "gaps_before": g_before, "gaps_after": g_after,
                "junk_before": j_before, "junk_after": j_after}
@@ -113,6 +119,8 @@ def main() -> int:
         print(f"  evidences: {', '.join(specs) or '-'}")
         print(f"  + {', '.join(added) or '-'}")
         print(f"  - {', '.join(removed) or '-'}")
+        if real_lost:
+            print(f"  LOST (no spelling kept): {', '.join(real_lost)}")
         if g_before or g_after:
             print(f"  specialties with no title: before {g_before or '-'}  after {g_after or '-'}")
         print(f"  searches now: {', '.join(after)}")

@@ -126,3 +126,23 @@ def test_another_occupation_still_keeps_only_its_own_titles():
     out = canonical_search_titles(["Registered Nurse"], ["general_software"],
                                   degrees=["BSN Nursing"])
     assert out == ["Registered Nurse"]
+
+
+def test_making_room_drops_a_second_spelling_before_a_real_title():
+    """Title breadth audit, 2026-10-27: adding missing heads dropped React
+    Developer and Full Stack Developer on live accounts. A second spelling of
+    a kept title goes first - the same search, so nothing is lost."""
+    from services.job_title_seed import _cover_every_specialty, _presentable_title, _spelling_key
+
+    full = (["Software Engineer", "Software Developer", "Software Development Engineer",
+             "Frontend Engineer", "Front End Engineer", "Front-End Engineer",
+             "React Developer", "Angular Developer", "NLP Engineer",
+             "Natural Language Processing Engineer"] + [f"Filler Role {i} Engineer" for i in range(30)])
+    out = _cover_every_specialty(full[:TITLE_CAP], ["frontend", "devops"], TITLE_CAP, protected=3,
+                                 presentable=lambda p: _presentable_title(p, keep_intern=False))
+    assert "DevOps Engineer" in out
+    assert "React Developer" in out and "Angular Developer" in out
+    removed = [t for t in full[:TITLE_CAP] if t not in out]
+    assert removed == ["Natural Language Processing Engineer"]   # "NLP Engineer" stays
+    kept = {_spelling_key(t) for t in out}
+    assert all(_spelling_key(t) in kept for t in removed)

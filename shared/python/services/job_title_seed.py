@@ -704,14 +704,61 @@ def _cover_every_specialty(out: List[str], specialties: Sequence[str], cap: int,
         if len(final) < cap:
             final.append(_display_title(head))
             continue
-        for i in range(len(final) - 1, protected - 1, -1):
-            owners = _specs_of(final[i])
-            sole = any(sum(1 for t in final if t.lower() in phrases[s]) == 1 for s in owners)
-            if not sole:
-                del final[i]
-                final.append(_display_title(head))
-                break
+        victim = _least_needed(final, protected, phrases, _specs_of)
+        if victim is not None:
+            del final[victim]
+            final.append(_display_title(head))
     return final
+
+
+#: Abbreviations that name the same role as their long form.
+_ROLE_ABBREVIATIONS = {
+    "nlp": "natural language processing", "ml": "machine learning",
+    "genai": "generative ai", "cv": "computer vision", "k8s": "kubernetes",
+    "ai": "artificial intelligence",
+}
+
+
+def _spelling_key(title: str) -> str:
+    """"Back-End Engineer" / "Back End Engineer", "NLP Engineer" / "Natural
+    Language Processing Engineer" -> one key: the same role, spelled twice.
+    The feed retrieves by role family, so one spelling finds what both did."""
+    words = re.sub(r"[\s\-]+", " ", title.lower()).strip().split()
+    return " ".join(_ROLE_ABBREVIATIONS.get(w, w) for w in words)
+
+
+def _least_needed(final: List[str], protected: int, phrases, specs_of) -> Optional[int]:
+    """The title to give up for a missing specialty head, least useful first.
+
+    Making room used to drop whatever ranked last, and on live accounts that
+    was real searches - React Developer, Full Stack Developer (title breadth
+    audit, 2026-10-27). In order:
+      1. another spelling of a title that stays ("Back-End Engineer" when
+         "Back End Engineer" is kept) - the same search, so nothing is lost;
+      2. general-software filler beyond the floor ("Programmer Analyst",
+         "Computer Programmer");
+      3. the lowest-ranked title.
+    Never a protected title, and never the last title of its own specialty.
+    """
+    from services import tech_taxonomy as tx
+
+    def _sole(i: int) -> bool:
+        return any(sum(1 for t in final if t.lower() in phrases[s]) == 1
+                   for s in specs_of(final[i]))
+
+    candidates = [i for i in range(len(final) - 1, protected - 1, -1) if not _sole(i)]
+    seen: Dict[str, int] = {}
+    for i, title in enumerate(final):
+        seen.setdefault(_spelling_key(title), i)
+    for i in candidates:
+        if seen[_spelling_key(final[i])] != i:
+            return i
+    floor = {t.lower() for t in _ALWAYS_MATCHABLE}
+    filler = {p.lower() for p in tx.title_phrases(specialties=["general_software"])} - floor
+    for i in candidates:
+        if final[i].lower() in filler:
+            return i
+    return candidates[0] if candidates else None
 
 
 def merge_structured_for_titles(assets: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
