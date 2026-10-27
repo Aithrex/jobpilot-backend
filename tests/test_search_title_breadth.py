@@ -146,3 +146,30 @@ def test_making_room_drops_a_second_spelling_before_a_real_title():
     assert removed == ["Natural Language Processing Engineer"]   # "NLP Engineer" stays
     kept = {_spelling_key(t) for t in out}
     assert all(_spelling_key(t) in kept for t in removed)
+
+
+def test_a_side_title_does_not_stand_in_for_the_specialty_head():
+    """Title breadth audit, 2026-10-27: DevOps + cloud resumes searched
+    "GitOps Engineer" and "Aws Engineer" - which the family gate let through -
+    but never "DevOps Engineer" or "Cloud Engineer", the titles most of those
+    postings carry, so that family was never retrieved."""
+    from services.job_title_seed import _cover_every_specialty, _presentable_title, _spelling_key
+
+    current = (["Software Engineer", "Software Developer", "Software Development Engineer",
+                "Backend Engineer", "Frontend Engineer", "Front End Engineer", "Front-End Engineer",
+                "Cloud Developer", "Aws Engineer", "CI/CD Engineer", "GitOps Engineer",
+                "Programmer Analyst", "Computer Programmer"]
+               + [f"Filler Role {i} Engineer" for i in range(27)])
+    out = _cover_every_specialty(current, ["general_software", "backend", "devops",
+                                           "cloud_engineering", "frontend"], TITLE_CAP, protected=3,
+                                 presentable=lambda p: _presentable_title(p, keep_intern=False))
+    assert "DevOps Engineer" in out and "Cloud Engineer" in out
+    # Room came from a second spelling, then general-software filler.
+    assert [t for t in current if t not in out] == ["Front-End Engineer", "Computer Programmer"]
+
+
+def test_a_cloud_network_engineer_searches_cloud_engineer():
+    out = canonical_search_titles(["Cloud Network Engineer"], ["cloud_engineering", "networking"],
+                                  level="entry")
+    assert "cloud engineer" in _lower(out)
+    assert "network engineer" in _lower(out)

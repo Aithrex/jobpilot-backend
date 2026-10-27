@@ -685,26 +685,27 @@ def _cover_every_specialty(out: List[str], specialties: Sequence[str], cap: int,
     from services import tech_taxonomy as tx
 
     final = list(out[:cap])
-    phrases = {s: {p.lower() for p in tx.title_phrases(specialties=[s])} for s in specialties}
-
-    def _specs_of(title: str) -> List[str]:
-        low = title.lower()
-        return [s for s, ph in phrases.items() if low in ph]
-
-    def _covered(spec: str) -> bool:
-        return any(t.lower() in phrases[spec] for t in final)
-
+    # A specialty counts as searched only when its HEAD title is: "GitOps
+    # Engineer" and "Aws Engineer" used to stand in for "DevOps Engineer" and
+    # "Cloud Engineer", which the family gate had refused - so a DevOps or
+    # cloud resume never searched the title most of those postings carry, and
+    # never retrieved that family at all (title breadth audit, 2026-10-27).
+    heads: Dict[str, str] = {}
     for spec in specialties:
-        if not phrases.get(spec) or _covered(spec):
-            continue
         head = next((p.lower() for p in tx.title_phrases(specialties=[spec])
                      if presentable(p)), None)
-        if not head:
+        if head:
+            heads[spec] = head
+    head_keys = {_spelling_key(h) for h in heads.values()}
+
+    for spec, head in heads.items():
+        keys = {_spelling_key(t) for t in final}
+        if _spelling_key(head) in keys:
             continue
         if len(final) < cap:
             final.append(_display_title(head))
             continue
-        victim = _least_needed(final, protected, phrases, _specs_of)
+        victim = _least_needed(final, protected, head_keys)
         if victim is not None:
             del final[victim]
             final.append(_display_title(head))
@@ -723,11 +724,11 @@ def _spelling_key(title: str) -> str:
     """"Back-End Engineer" / "Back End Engineer", "NLP Engineer" / "Natural
     Language Processing Engineer" -> one key: the same role, spelled twice.
     The feed retrieves by role family, so one spelling finds what both did."""
-    words = re.sub(r"[\s\-]+", " ", title.lower()).strip().split()
+    words = re.sub(r"[\s\-/]+", " ", title.lower()).strip().split()
     return " ".join(_ROLE_ABBREVIATIONS.get(w, w) for w in words)
 
 
-def _least_needed(final: List[str], protected: int, phrases, specs_of) -> Optional[int]:
+def _least_needed(final: List[str], protected: int, head_keys) -> Optional[int]:
     """The title to give up for a missing specialty head, least useful first.
 
     Making room used to drop whatever ranked last, and on live accounts that
@@ -738,18 +739,17 @@ def _least_needed(final: List[str], protected: int, phrases, specs_of) -> Option
       2. general-software filler beyond the floor ("Programmer Analyst",
          "Computer Programmer");
       3. the lowest-ranked title.
-    Never a protected title, and never the last title of its own specialty.
+    Never a protected title, and never the head title of an evidenced
+    specialty.
     """
     from services import tech_taxonomy as tx
 
-    def _sole(i: int) -> bool:
-        return any(sum(1 for t in final if t.lower() in phrases[s]) == 1
-                   for s in specs_of(final[i]))
-
-    candidates = [i for i in range(len(final) - 1, protected - 1, -1) if not _sole(i)]
     seen: Dict[str, int] = {}
     for i, title in enumerate(final):
         seen.setdefault(_spelling_key(title), i)
+    candidates = [i for i in range(len(final) - 1, protected - 1, -1)
+                  if not (_spelling_key(final[i]) in head_keys
+                          and seen[_spelling_key(final[i])] == i)]
     for i in candidates:
         if seen[_spelling_key(final[i])] != i:
             return i
