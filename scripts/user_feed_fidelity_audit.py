@@ -169,12 +169,16 @@ def _in_levels(row: Dict[str, Any], levels: List[str]) -> bool:
     return _VIEW_OF_BAND.get(band, "mid") in levels
 
 
-def replay_board(email: str, titles: List[str], levels: List[str]) -> Dict[str, Any]:
+def replay_board(email: str, titles: List[str], levels: List[str],
+                 tz_offset_minutes: int = 0) -> Dict[str, Any]:
+    """`tz_offset_minutes` is the viewer's (browser `-getTimezoneOffset()`).
+    UTC (0) is the one offset where a calendar-day bug cannot show, so
+    `recency_label_audit.py` replays in US zones."""
     merged: Dict[str, Dict[str, Any]] = {}
     tab_counts: Dict[str, Any] = {}
     for tab in TABS:
         payload = {"titles": titles, "user_email": email, "us_only": True,
-                   "tz_offset_minutes": 0}
+                   "tz_offset_minutes": tz_offset_minutes}
         result = inventory_feed.build_feed(tab, payload)
         if result is None:
             tab_counts[tab] = "deferred_to_crawl"

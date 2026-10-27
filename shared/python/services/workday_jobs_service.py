@@ -293,6 +293,35 @@ def _clamp_tz_offset(minutes: Any) -> int:
         return 0
 
 
+def _calendar_date_of(d: datetime):
+    """The calendar date a timestamp ENCODES, or None when it is an instant.
+
+    Most boards publish a posting DATE, and every ingest path stores one as a
+    midnight: `ats_providers.util.to_iso` turns "2026-10-26" (and "10/26/2026",
+    "October 26, 2026") into `2026-10-26T00:00:00+00:00`, Oracle ORC writes
+    that string itself, and NeoGov / `_parse_iso` do the same. Read as an
+    INSTANT, midnight UTC is 5pm the previous day in Phoenix, so a job dated
+    today counted as "1 day old" all day for every viewer west of UTC - it
+    only appeared under "Since yesterday" (reported 2026-10-26).
+
+    Two shapes are dates, not instants:
+      * wall-clock midnight in the value's OWN offset - our midnight-UTC
+        encoding, or a vendor's `2026-10-26T00:00:00-04:00`;
+      * a whole-hour (or :30) UTC stamp between 01:00 and 11:30 with zero
+        seconds - midnight somewhere in the Western Hemisphere published as
+        UTC, e.g. iCIMS `2026-08-14T04:00:00.000Z` (midnight EDT). Real
+        instants carry seconds; see `ats_providers.util.looks_minted_now`.
+    """
+    if d.second or d.microsecond:
+        return None
+    if d.hour == 0 and d.minute == 0:
+        return d.date()
+    u = d.astimezone(timezone.utc)
+    if 1 <= u.hour <= 11 and u.minute in (0, 30):
+        return u.date()
+    return None
+
+
 def _days_ago(iso_date: str, tz_offset_minutes: int = 0) -> Optional[int]:
     """Calendar-day age of a posting in the VIEWER's timezone.
 
@@ -303,6 +332,12 @@ def _days_ago(iso_date: str, tz_offset_minutes: int = 0) -> Optional[int]:
     viewer's frame before the date diff. Date-ONLY strings (len 10) are the
     source's calendar date already — they diff directly against the
     viewer-local today, never shifted.
+
+    A timestamp that ENCODES a date (`_calendar_date_of`) is aged by that
+    date too, but only when it reads newer than the instant does: the date
+    reading can rescue a posting from the viewer's previous evening, never
+    make one older, so no row ever leaves a window it was in. For viewers
+    at or east of UTC the two readings agree and nothing changes.
     """
     if not iso_date:
         return None
@@ -313,7 +348,13 @@ def _days_ago(iso_date: str, tz_offset_minutes: int = 0) -> Optional[int]:
         if d.tzinfo is None:
             d = d.replace(tzinfo=timezone.utc)
         local_today = (datetime.now(timezone.utc) + offset).date()
-        posted_date = d.date() if len(raw) == 10 else (d.astimezone(timezone.utc) + offset).date()
+        if len(raw) == 10:
+            posted_date = d.date()
+        else:
+            posted_date = (d.astimezone(timezone.utc) + offset).date()
+            calendar_date = _calendar_date_of(d)
+            if calendar_date is not None and calendar_date > posted_date:
+                posted_date = calendar_date
         return max(0, (local_today - posted_date).days)
     except ValueError:
         return None
