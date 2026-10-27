@@ -79,3 +79,50 @@ def test_a_plain_software_resume_searches_what_it_did_before_the_reorder():
     low = _lower(out[:15])
     for odd in ("postgres engineer", "mysql engineer", "etl engineer", "data pipeline engineer"):
         assert odd not in low, odd
+
+
+# --- 2026-10-27: no evidenced specialty loses every title; no junk chips -----
+
+def test_every_evidenced_specialty_keeps_its_head_without_moving_the_top():
+    """A "Software Engineer" resume with DevOps, platform and cloud evidence
+    searched none of the three: general-software filler held the slots."""
+    specs = ["general_software", "backend", "frontend", "full_stack", "data_engineering",
+             "database", "devops", "platform_engineering", "cloud_engineering"]
+    out = canonical_search_titles(
+        ["Software Engineer", "Server Debug Technician", "Network Analyst"], specs, level="mid")
+    low = _lower(out)
+    assert len(out) == TITLE_CAP
+    for head in ("devops engineer", "platform engineer", "cloud engineer", "etl engineer"):
+        assert head in low, head
+    assert out[:6] == ["Software Engineer", "Software Developer", "Software Development Engineer",
+                       "Backend Engineer", "Back End Engineer", "Back-End Engineer"]
+
+
+def test_the_expansion_never_offers_junk_spellings():
+    out = canonical_search_titles(["Software Engineer"], ["general_software", "backend"],
+                                  level="mid")
+    for junk in ("polyglot engineer", "software craftsperson", "mts software",
+                 "software engr", "development engineer software", "product engineer"):
+        assert junk not in _lower(out), junk
+
+
+def test_a_title_the_seeker_held_is_still_searched():
+    out = canonical_search_titles(["Product Engineer"], ["general_software"], level="mid")
+    assert "product engineer" in _lower(out)
+
+
+def test_unhelpful_titles_with_tool_evidence_search_the_evidenced_work():
+    """"Technical Associate" running Terraform and Kubernetes searched only
+    "Technical Associate" and "Analyst"."""
+    out = canonical_search_titles(["Technical Associate", "Analyst"],
+                                  ["devops", "kubernetes_containers"], level="entry")
+    low = _lower(out)
+    assert low[:2] == ["technical associate", "analyst"]
+    assert "devops engineer" in low
+
+
+def test_another_occupation_still_keeps_only_its_own_titles():
+    """The nurse-plus-one-stray-specialty guard holds."""
+    out = canonical_search_titles(["Registered Nurse"], ["general_software"],
+                                  degrees=["BSN Nursing"])
+    assert out == ["Registered Nurse"]

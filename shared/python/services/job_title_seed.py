@@ -129,6 +129,17 @@ _NOT_A_ROLE = frozenset({
 })
 
 
+#: Spellings the taxonomy keeps because they CLASSIFY a posting, but that the
+#: expansion must never offer as a search title: almost no posting is titled
+#: this way, and a chip reading "Polyglot Engineer" makes the whole list look
+#: generated (reported 2026-10-27). A title the seeker actually HELD is still
+#: searched - this gates only what the expansion invents.
+_NOT_A_SEARCH_TITLE = frozenset({
+    "polyglot engineer", "software craftsperson", "mts software", "software engr",
+    "development engineer software", "product engineer",
+})
+
+
 #: Specialties staffed from one pool: the same posting is titled DevOps, SRE
 #: or Platform Engineer depending on the employer. A candidate the taxonomy
 #: read as one of them searches the others too, after their own.
@@ -444,6 +455,9 @@ def canonical_search_titles(titles: Sequence[Any],
     vocab = list(tx.title_phrases())
     vocab.extend(tx.title_phrases(specialties=specialties) if specialties else [])
     keep_intern = str(level or "").lower() == "intern"
+
+    def _presentable(phrase: str) -> bool:
+        return _presentable_title(phrase, keep_intern=keep_intern)
     usable = []
     for phrase in {str(p).lower() for p in vocab}:
         if phrase in _NOT_A_ROLE:
@@ -546,6 +560,17 @@ def canonical_search_titles(titles: Sequence[Any],
                 passed.append(text)
         targets = [t for t in passed if not _NOT_A_TARGET.search(t)]
         kept.extend(targets if (targets or kept) else passed)
+        # Held titles that name no canonical role ("Technical Associate",
+        # "Analyst") on a resume whose TOOLS evidence a technical specialty
+        # (Terraform, Kubernetes) searched only those titles - "Analyst" alone.
+        # The specialty's head titles are added after them. Never for a title
+        # history that reads as another occupation: that is the nurse with one
+        # stray tech specialty above, whose own titles must stay the search.
+        if specialties and not any(
+                tx.classify(str(t or "")).tech_scope == tx.SCOPE_NON_TECH
+                for t in titles or [] if str(t or "").strip()):
+            kept = _cover_every_specialty(kept, [str(s) for s in specialties], cap,
+                                          protected=len(kept), presentable=_presentable)
         return kept[:cap]
 
     # Breadth from the SPECIALTIES the taxonomy read off the resume, not only
@@ -571,16 +596,13 @@ def canonical_search_titles(titles: Sequence[Any],
     # kind of work the candidate's own titles do.
     from services import fit_score
 
+    # The resume's own canonical titles and the software floor are never
+    # given up to make room for an expansion head.
+    core = len(out)
     home = {f for f in (fit_score.classify_role(t) for t in out) if f}
 
     def _admissible(phrase: str) -> bool:
-        low = phrase.lower()
-        if low in _NOT_A_ROLE or any(bad in low for bad in _NEVER_SEARCH):
-            return False
-        if not keep_intern and "intern" in low:
-            return False
-        words = low.split()
-        if not (2 <= len(words) <= 4) or words[-1] not in _ROLE_NOUNS:
+        if not _presentable(phrase):
             return False
         fam = fit_score.classify_role(phrase)
         return not (home and fam is not None and fam not in home | stated_home)
@@ -624,7 +646,72 @@ def canonical_search_titles(titles: Sequence[Any],
         if _admissible(phrase):
             _add(_display_title(phrase.lower()))
 
-    return out[:cap]
+    return _cover_every_specialty(out, given, cap, protected=core, presentable=_presentable)
+
+
+def _presentable_title(phrase: str, *, keep_intern: bool) -> bool:
+    """A phrase the expansion may offer as a search chip: a role, not a
+    discipline, a management job, an intern post for a non-intern, or a
+    spelling nobody posts under."""
+    low = phrase.lower()
+    if low in _NOT_A_ROLE or low in _NOT_A_SEARCH_TITLE:
+        return False
+    if any(bad in low for bad in _NEVER_SEARCH):
+        return False
+    if not keep_intern and "intern" in low:
+        return False
+    words = low.split()
+    return 2 <= len(words) <= 4 and words[-1] in _ROLE_NOUNS
+
+
+def _cover_every_specialty(out: List[str], specialties: Sequence[str], cap: int, *,
+                           protected: int, presentable) -> List[str]:
+    """Every specialty the resume evidences keeps at least its HEAD title
+    inside the cap.
+
+    The expansion appends whole specialties in taxonomy order, so whichever
+    came last lost every title to the cap: a "Software Engineer" resume with
+    DevOps, platform and cloud evidence searched none of the three, while
+    general-software filler ("Programmer Analyst", "Computer Programmer")
+    held the slots. Measured on the eval resumes, 2026-10-27.
+
+    Heads go at the END, replacing the lowest-ranked title that is not the
+    last one standing for its own specialty, so the top of the list - what a
+    seeker reads first, and what the 2026-10-24 regression was about - does
+    not move. The family gate is not re-applied to a head: `classify_resume`
+    already dropped every specialty whose family carries under a fifth of the
+    resume's evidence, so an evidenced specialty IS the seeker's own work.
+    """
+    from services import tech_taxonomy as tx
+
+    final = list(out[:cap])
+    phrases = {s: {p.lower() for p in tx.title_phrases(specialties=[s])} for s in specialties}
+
+    def _specs_of(title: str) -> List[str]:
+        low = title.lower()
+        return [s for s, ph in phrases.items() if low in ph]
+
+    def _covered(spec: str) -> bool:
+        return any(t.lower() in phrases[spec] for t in final)
+
+    for spec in specialties:
+        if not phrases.get(spec) or _covered(spec):
+            continue
+        head = next((p.lower() for p in tx.title_phrases(specialties=[spec])
+                     if presentable(p)), None)
+        if not head:
+            continue
+        if len(final) < cap:
+            final.append(_display_title(head))
+            continue
+        for i in range(len(final) - 1, protected - 1, -1):
+            owners = _specs_of(final[i])
+            sole = any(sum(1 for t in final if t.lower() in phrases[s]) == 1 for s in owners)
+            if not sole:
+                del final[i]
+                final.append(_display_title(head))
+                break
+    return final
 
 
 def merge_structured_for_titles(assets: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
