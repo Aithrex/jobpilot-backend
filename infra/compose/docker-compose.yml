@@ -1,0 +1,101 @@
+# The whole site on one host. Nothing listens publicly: the only way in is the
+# outbound Cloudflare Tunnel. The crawler, on the host, reaches the store at
+# its fixed private address.
+#
+# Memory limits add up to fit a 2 OCPU / 12 GB box alongside the crawler.
+# deploy.sh chooses the image tags (compose.env) and which API colour is live.
+name: jobpilot
+
+x-logging: &logging
+  driver: json-file
+  options: {max-size: 20m, max-file: "5"}
+
+x-hardened: &hardened
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging: *logging
+
+x-app: &app
+  <<: *hardened
+  env_file: [/etc/jobpilot/stack.env]
+  tmpfs: ["/tmp:size=256m"]
+  networks: [internal, egress]
+  stop_grace_period: 5m
+
+x-api: &api
+  <<: *app
+  command: ["gunicorn", "-c", "infra/compose/gunicorn.conf.py", "services.gateway.wsgi:app"]
+  mem_limit: 2g
+  cpu_shares: 2048
+  depends_on: {s3: {condition: service_started}}
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+    interval: 5s
+    timeout: 4s
+    retries: 3
+    start_period: 20s
+
+services:
+  api_blue:
+    <<: *api
+    image: jobpilot-app:${BLUE_TAG:-none}
+    environment: {APP_REVISION: "${BLUE_TAG:-none}"}
+
+  api_green:
+    <<: *api
+    image: jobpilot-app:${GREEN_TAG:-none}
+    environment: {APP_REVISION: "${GREEN_TAG:-none}"}
+
+  worker:
+    <<: *app
+    image: jobpilot-app:${WORKER_TAG:-none}
+    command: ["python", "services/scheduler/runner.py"]
+    environment: {APP_REVISION: "${WORKER_TAG:-none}"}
+    mem_limit: 2g
+    cpu_shares: 1024
+    depends_on: {s3: {condition: service_started}}
+
+  s3:
+    <<: *hardened
+    image: versity/versitygw:v1.10.0
+    command: ["--port", ":7070", "posix", "/data"]
+    user: "10002:10002"
+    env_file: [/etc/jobpilot/s3.env]
+    volumes: ["/mnt/jobpilot-data/s3:/data"]
+    networks:
+      internal: {ipv4_address: 172.30.0.10}
+    mem_limit: 512m
+    cpu_shares: 2048
+
+  web:
+    <<: *hardened
+    image: nginxinc/nginx-unprivileged:1.29-alpine
+    tmpfs: ["/tmp:size=64m"]
+    volumes:
+      - ./nginx/site.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/jobpilot/nginx:/etc/jobpilot/nginx:ro
+      - /srv/jobpilot/web:/usr/share/nginx/html:ro
+    networks: [internal, edge]
+    mem_limit: 128m
+    cpu_shares: 2048
+
+  cloudflared:
+    <<: *hardened
+    image: cloudflare/cloudflared:2026.10.0
+    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
+    volumes: ["/etc/jobpilot/cloudflared:/etc/cloudflared:ro"]
+    networks: [edge, egress]
+    mem_limit: 256m
+    cpu_shares: 2048
+
+networks:
+  # No route out: the store and the API's path to it never reach the internet.
+  # The fixed subnet is how the crawler, on the host, reaches the store.
+  internal:
+    internal: true
+    ipam:
+      config: [{subnet: 172.30.0.0/24}]
+  edge: {internal: true}
+  egress: {}

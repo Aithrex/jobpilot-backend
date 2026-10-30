@@ -1,0 +1,2 @@
+-r /app/deps/requirements-shared.txt
+gunicorn>=23.0.0

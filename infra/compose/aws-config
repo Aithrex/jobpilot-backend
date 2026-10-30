@@ -1,0 +1,8 @@
+# Applies to every boto3 S3 client in the app. The store is reached by path,
+# and it does not need the checksum trailers newer SDKs add by default.
+[default]
+region = us-east-1
+s3 =
+  addressing_style = path
+request_checksum_calculation = when_required
+response_checksum_validation = when_required

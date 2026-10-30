@@ -24,6 +24,7 @@ def _redact_key(s3_key: str) -> str:
 class ResumeStorageService:
     def __init__(self):
         self._client = None
+        self._presign_client = None
         self._bucket = os.getenv("RESUME_S3_BUCKET", "")
 
     @property
@@ -41,6 +42,28 @@ class ResumeStorageService:
                 "s3", config=Config(signature_version="s3v4")
             )
         return self._client
+
+    @property
+    def presign_client(self):
+        """Client for URLs a browser or Worker will open.
+
+        SigV4 signs the host, so these must be minted for the public address.
+        S3_PUBLIC_ENDPOINT_URL is that address when the store is self-hosted
+        (the app reaches it privately); unset, S3 itself is public.
+        """
+        endpoint = os.getenv("S3_PUBLIC_ENDPOINT_URL", "").strip()
+        if not endpoint:
+            return self.client
+        if self._presign_client is None:
+            import boto3
+            from botocore.config import Config
+
+            self._presign_client = boto3.client(
+                "s3",
+                endpoint_url=endpoint,
+                config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+            )
+        return self._presign_client
 
     @property
     def bucket(self):
@@ -433,7 +456,7 @@ class ResumeStorageService:
             if not self.bucket:
                 raise ValueError("RESUME_S3_BUCKET is not configured")
 
-            url = self.client.generate_presigned_url(
+            url = self.presign_client.generate_presigned_url(
                 "get_object",
                 Params={"Bucket": self.bucket, "Key": s3_key},
                 ExpiresIn=expiry,
@@ -481,7 +504,7 @@ class ResumeStorageService:
             params["SSEKMSKeyId"] = kms_key_id
             headers["x-amz-server-side-encryption"] = "aws:kms"
             headers["x-amz-server-side-encryption-aws-kms-key-id"] = kms_key_id
-        url = self.client.generate_presigned_url(
+        url = self.presign_client.generate_presigned_url(
             "put_object", Params=params, ExpiresIn=expiry
         )
         logger.info("Generated presigned PUT for %s (expiry=%ds)", _redact_key(s3_key), expiry)
@@ -503,7 +526,7 @@ class ResumeStorageService:
         target = bucket or self.bucket
         if not target:
             raise ValueError("presigned GET requires a bucket")
-        url = self.client.generate_presigned_url(
+        url = self.presign_client.generate_presigned_url(
             "get_object",
             Params={"Bucket": target, "Key": s3_key},
             ExpiresIn=expiry,

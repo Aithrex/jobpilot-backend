@@ -34,6 +34,7 @@ import base64
 import json
 import logging
 import os
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -116,6 +117,26 @@ def fit_feed_result(result: Any, max_bytes: int = POLL_RESULT_MAX_BYTES) -> Any:
     logger.warning("feed result trimmed for the poll response: %d of %d cards dropped "
                    "(%d bytes over %d)", len(drop), len(jobs), total, max_bytes)
     return out
+
+
+_ASYNC_POOL = None
+_ASYNC_POOL_LOCK = threading.Lock()
+
+
+def _async_pool():
+    """Pool for async jobs off Lambda. Bounded so a burst queues instead of
+    exhausting the box. Its threads are joined at interpreter exit, so a
+    deploy's graceful stop finishes running jobs instead of dropping them."""
+    global _ASYNC_POOL
+    if _ASYNC_POOL is None:
+        with _ASYNC_POOL_LOCK:
+            if _ASYNC_POOL is None:
+                from concurrent.futures import ThreadPoolExecutor
+                _ASYNC_POOL = ThreadPoolExecutor(
+                    max_workers=int(os.getenv("ASYNC_JOB_WORKERS", "16")),
+                    thread_name_prefix="async-job",
+                )
+    return _ASYNC_POOL
 
 
 class ResumeService:
@@ -382,7 +403,7 @@ class ResumeService:
         In production (AWS Lambda): uses boto3 to invoke the same Lambda
         function asynchronously via InvocationType='Event'.
 
-        In local dev: spawns a daemon thread to process the job immediately.
+        Off Lambda (Oracle box, local dev): runs on a bounded in-process pool.
 
         Args:
             job_id: UUID of the job to process.
@@ -391,15 +412,8 @@ class ResumeService:
         """
         func_name = os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
         if not func_name:
-            import threading
-
-            t = threading.Thread(
-                target=_process_job,
-                args=(job_id, job_type, payload),
-                daemon=True,
-            )
-            t.start()
-            logger.info(f"Async job {job_id} ({job_type}) dispatched to background thread")
+            _async_pool().submit(_process_job, job_id, job_type, payload)
+            logger.info(f"Async job {job_id} ({job_type}) dispatched to background pool")
             return
 
         import re

@@ -69,7 +69,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from utils.db_connect import DBConnect
-from services.kms_cipher import KmsEnvelopeCipher, KmsCipherError
+from services.kms_cipher import credential_cipher, KmsCipherError
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ SHARED_PASSWORD_FAMILIES = frozenset({WORKDAY})
 #: employer tenant can never collide with it.
 SHARED_TENANT = ""
 
-_cipher = KmsEnvelopeCipher()
+_cipher = credential_cipher()
 
 # Lazy one-time index ensure (job_service precedent). Matches the
 # migrate_indexes.py spec name so the migration re-assert is a no-op.
