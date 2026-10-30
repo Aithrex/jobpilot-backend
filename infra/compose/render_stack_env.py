@@ -78,6 +78,11 @@ def main() -> None:
         else:
             missing.append(name)
 
+    # A replacement key the owner saved by hand beats the one from SSM.
+    override = backup / "secrets" / "gemini-api-key.txt"
+    if override.exists() and override.read_text(encoding="utf-8-sig").strip():
+        env["GEMINI_API_KEY"] = override.read_text(encoding="utf-8-sig").strip()
+
     gen = generated(backup)
     env.update({
         "ENVIRONMENT": "prod",
