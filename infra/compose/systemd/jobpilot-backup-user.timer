@@ -1,0 +1,10 @@
+[Unit]
+Description=JobPilot backup (user) schedule
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

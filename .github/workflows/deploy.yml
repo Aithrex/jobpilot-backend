@@ -1,4 +1,10 @@
-name: Deploy Backend to AWS
+name: Deploy Backend to Oracle
+
+# The box PULLS (infra/oracle/pull-deploy.sh): this workflow never touches it.
+# It holds no server credentials and the box opens no port for it. CI moves
+# `deploy/ingest-runner` to a commit the suite passed, then refuses to call it
+# deployed until the live site reports that commit. The swap itself has no
+# downtime (infra/compose/deploy.sh).
 
 on:
   push:
@@ -9,94 +15,8 @@ concurrency:
   group: backend-deploy-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  AWS_REGION: us-east-1
-  PROJECT: jobpilot
-  ENVIRONMENT: prod
-  PY_VERSION: "3.12"
-
 jobs:
   # ---------------------------------------------------------------------------
-  detect-changes:
-    name: Detect changes
-    runs-on: ubuntu-latest
-    outputs:
-      services: ${{ steps.resolve.outputs.services }}
-      any: ${{ steps.resolve.outputs.any }}
-      shared: ${{ steps.baseline.outputs.full == 'true' || steps.filter.outputs.shared == 'true' }}
-      executor: ${{ steps.baseline.outputs.full == 'true' || steps.filter.outputs.executor == 'true' }}
-      ingest: ${{ steps.baseline.outputs.full == 'true' || steps.filter.outputs.ingest == 'true' }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - id: baseline
-        name: Find the last successful deployment
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # A blocked/failed release must remain in the next deployment's diff,
-          # even when the next push only repairs tests. Comparing with the
-          # previous push silently left those application changes undeployed.
-          BASE=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/deploy.yml/runs?branch=main&status=success&per_page=1" \
-            --jq '.workflow_runs[0].head_sha // ""')
-          echo "sha=$BASE" >> "$GITHUB_OUTPUT"
-          if [ -z "$BASE" ]; then
-            echo "full=true" >> "$GITHUB_OUTPUT"
-          fi
-      - id: filter
-        if: steps.baseline.outputs.sha != ''
-        uses: dorny/paths-filter@v3
-        with:
-          base: ${{ steps.baseline.outputs.sha }}
-          filters: |
-            shared:  ['shared/**', 'infra/**', '.github/workflows/**', 'scripts/build_layer.sh', 'scripts/package.sh']
-            # The image does `COPY shared/python /opt/python` — the WHOLE tree —
-            # so it depends on every shared module, not a hand-picked few. The
-            # old three-file list silently shipped a stale executor: fixes to
-            # application_question_bank / apply_forms / ats_adapters deployed to
-            # the four zip Lambdas but never reached the container that actually
-            # fills forms, so prod ran old fill logic (2026-07-29). Keep this in
-            # step with the COPY above, not with a guess about imports.
-            executor: ['services/apply_executor/**', 'shared/python/**']
-            # The crawler's installer tars exactly these trees (see
-            # infra/ec2/install-ingest-runner.sh), so this filter mirrors the
-            # tarball rather than guessing at imports -- the same lesson the
-            # executor filter above learned the hard way.
-            ingest:  ['services/ingest_runner/**', 'shared/python/**', 'infra/ec2/**', 'infra/oracle/**', 'scripts/**']
-            auth:    ['services/auth/**']
-            jobs:    ['services/jobs/**']
-            resume:  ['services/resume/**']
-            billing: ['services/billing/**']
-      - id: resolve
-        run: |
-          MANUAL=${{ github.event_name == 'workflow_dispatch' }}
-          SHARED=${{ steps.baseline.outputs.full == 'true' || steps.filter.outputs.shared == 'true' }}
-          declare -a S=()
-          # A shared-layer or manual change => redeploy ALL services (layer version bump).
-          if [ "$MANUAL" = "true" ] || [ "$SHARED" = "true" ]; then
-            S=(auth jobs resume billing)
-          else
-            [ "${{ steps.filter.outputs.auth }}" = "true" ]    && S+=(auth)
-            [ "${{ steps.filter.outputs.jobs }}" = "true" ]    && S+=(jobs)
-            [ "${{ steps.filter.outputs.resume }}" = "true" ]  && S+=(resume)
-            [ "${{ steps.filter.outputs.billing }}" = "true" ] && S+=(billing)
-          fi
-          if [ ${#S[@]} -gt 0 ]; then
-            echo "any=true" >> "$GITHUB_OUTPUT"
-            printf '%s\n' "${S[@]}" | jq -R . | jq -sc . | sed 's/^/services=/' >> "$GITHUB_OUTPUT"
-          else
-            echo "any=false" >> "$GITHUB_OUTPUT"
-            echo "services=[]" >> "$GITHUB_OUTPUT"
-          fi
-
-  # ---------------------------------------------------------------------------
-  # Deploys used to race the suite. `needs:` cannot cross workflows, so this
-  # waits on the tests RUN for this exact SHA. Not "the latest run on main":
-  # that would let a green run from a different commit wave this one through.
-  # A failed, cancelled, timed-out, or missing suite refuses to deploy.
-  # workflow_dispatch is not a bypass — the same SHA must be green.
   await-tests:
     name: Wait for the offline suite
     runs-on: ubuntu-latest
@@ -130,226 +50,31 @@ jobs:
           exit 1
 
   # ---------------------------------------------------------------------------
-  deploy-layer:
-    name: Build & publish shared layer
+  deploy:
+    name: Deploy to the Oracle box
     runs-on: ubuntu-latest
-    needs: [detect-changes, await-tests]
-    if: >-
-      (needs.detect-changes.outputs.shared == 'true' || github.event_name == 'workflow_dispatch')
-      && needs.await-tests.result == 'success'
-    outputs:
-      layer_arn: ${{ steps.publish.outputs.layer_arn }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - name: Build layer
-        run: bash scripts/build_layer.sh "${{ env.PY_VERSION }}"
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-      - id: publish
-        name: Publish layer version
-        run: |
-          ARN=$(aws lambda publish-layer-version \
-            --layer-name "${PROJECT}-shared-${ENVIRONMENT}" \
-            --zip-file fileb://build/layer.zip \
-            --compatible-runtimes "python${PY_VERSION}" \
-            --query 'LayerVersionArn' --output text)
-          echo "layer_arn=${ARN}" >> "$GITHUB_OUTPUT"
-          echo "Published $ARN"
-
-  # ---------------------------------------------------------------------------
-  deploy-services:
-    name: Deploy ${{ matrix.service }}
-    runs-on: ubuntu-latest
-    needs: [detect-changes, deploy-layer, await-tests]
-    # deploy-layer may be skipped (no shared change); only fail if it actually failed.
-    #
-    # `await-tests` is checked EXPLICITLY for success, not merely listed in
-    # `needs`. `!cancelled()` runs this job even when a dependency was skipped,
-    # so without the explicit check a failed gate would skip `deploy-layer`
-    # and then deploy the services anyway -- a gate that stops the layer and
-    # waves the code through is worse than no gate, because it looks like one.
-    if: >-
-      needs.detect-changes.outputs.any == 'true' && !cancelled()
-      && needs.deploy-layer.result != 'failure'
-      && needs.await-tests.result == 'success'
-    strategy:
-      fail-fast: false
-      matrix:
-        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-
-      - name: Smoke test (import create_app)
-        env:
-          ENVIRONMENT: development   # don't trigger the prod-secret guard in CI
-          USE_SSM_SECRETS: "false"
-        run: |
-          python -m pip install --quiet -r shared/python/requirements.txt
-          cd "services/${{ matrix.service }}"
-          PYTHONPATH="${GITHUB_WORKSPACE}/shared/python:${PWD}" \
-            python -c "import app; app.create_app(); print('${{ matrix.service }}: import OK')"
-
-      - name: Package
-        run: bash scripts/package.sh "${{ matrix.service }}"
-
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Update function code
-        run: |
-          FN="${PROJECT}-${{ matrix.service }}-${ENVIRONMENT}"
-          aws lambda update-function-code \
-            --function-name "$FN" \
-            --zip-file "fileb://build/${{ matrix.service }}.zip" \
-            --publish --no-cli-pager
-          aws lambda wait function-updated --function-name "$FN"
-
-      - name: Point function at new layer (only if layer was republished)
-        if: needs.deploy-layer.result == 'success' && needs.deploy-layer.outputs.layer_arn != ''
-        run: |
-          FN="${PROJECT}-${{ matrix.service }}-${ENVIRONMENT}"
-          aws lambda update-function-configuration \
-            --function-name "$FN" \
-            --layers "${{ needs.deploy-layer.outputs.layer_arn }}" --no-cli-pager
-          aws lambda wait function-updated --function-name "$FN"
-
-  # ---------------------------------------------------------------------------
-  # The auto-apply browser fleet is a CONTAINER-image Lambda (Playwright +
-  # Chromium), deployed separately from the four zip services. Rebuilt on a
-  # change to services/apply_executor/** or the executor's shared modules.
-  deploy-apply-executor:
-    name: Build & deploy apply-executor image
-    runs-on: ubuntu-latest
-    needs: [detect-changes, await-tests]
-    if: >-
-      (needs.detect-changes.outputs.executor == 'true' || github.event_name == 'workflow_dispatch')
-      && needs.await-tests.result == 'success'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-      - id: login
-        uses: aws-actions/amazon-ecr-login@v2
-      - name: Build & push image
-        env:
-          REGISTRY: ${{ steps.login.outputs.registry }}
-        run: |
-          REPO="${REGISTRY}/${PROJECT}-apply-executor-${ENVIRONMENT}"
-          # --provenance/--sbom=false: attestation manifests make an OCI index
-          # that Lambda rejects ("image manifest ... not supported").
-          docker build --platform linux/amd64 --provenance=false --sbom=false \
-            -f services/apply_executor/Dockerfile -t "$REPO:prod" .
-          docker push "$REPO:prod"
-      - name: Update function code
-        env:
-          REGISTRY: ${{ steps.login.outputs.registry }}
-        run: |
-          FN="${PROJECT}-apply-executor-${ENVIRONMENT}"
-          aws lambda update-function-code --function-name "$FN" \
-            --image-uri "${REGISTRY}/${PROJECT}-apply-executor-${ENVIRONMENT}:prod" \
-            --publish --no-cli-pager
-          aws lambda wait function-updated --function-name "$FN"
-
-  # ---------------------------------------------------------------------------
-  # The Oracle Always Free box PULLS (infra/oracle/pull-deploy.sh): CI's whole
-  # job is to move `deploy/ingest-runner` to a SHA the suite passed, and then
-  # to refuse to call it deployed until the box's heartbeat reports that SHA.
-  # Enabled by the repo variable ORACLE_INGEST_ENABLED=true.
-  deploy-ingest-runner-oracle:
-    name: Deploy ingest runner (Oracle)
-    runs-on: ubuntu-latest
-    needs: [detect-changes, await-tests]
-    if: >-
-      (needs.detect-changes.outputs.ingest == 'true' || github.event_name == 'workflow_dispatch')
-      && needs.await-tests.result == 'success'
-      && vars.ORACLE_INGEST_ENABLED == 'true'
+    needs: [await-tests]
+    if: needs.await-tests.result == 'success'
     permissions:
       contents: write
-    env:
-      SSM_MONGODB_URI: /jobpilot/prod/mongodb-uri
-      DB_NAME: aspirely_db
-      ORACLE_HOSTNAME: ${{ vars.ORACLE_INGEST_HOSTNAME || 'jobpilot-ingest' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Publish this SHA to the deploy branch
         run: git push --force origin "HEAD:refs/heads/deploy/ingest-runner"
 
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Resolve Mongo URI
-        env:
-          MONGO_URI_SECRET: ${{ secrets.MONGO_URI }}
+      - name: Wait for the live site to report this SHA
         run: |
-          if [ -n "$MONGO_URI_SECRET" ]; then
-            uri="$MONGO_URI_SECRET"
-          elif ! uri=$(aws ssm get-parameter --name "$SSM_MONGODB_URI" \
-                --with-decryption --query Parameter.Value --output text); then
-            echo "::error::Cannot read $SSM_MONGODB_URI; add a MONGO_URI repository secret."
-            exit 1
-          fi
-          echo "::add-mask::$uri"
-          echo "MONGO_URI=$uri" >> "$GITHUB_ENV"
-
-      - name: Wait for the box to report this SHA
-        run: |
-          pip install -q pymongo
-          python - <<'PY'
-          import os, sys, time
-          from datetime import datetime, timedelta, timezone
-          from pymongo import MongoClient
-          sha = os.environ["GITHUB_SHA"]
-          # The HOST matters, not just the SHA: while EC2 still deploys, its
-          # heartbeat reports the same SHA, and the first version of this
-          # check went green on the EC2 box while Oracle could not even fetch.
-          host = os.environ["ORACLE_HOSTNAME"]
-          hb = MongoClient(os.environ["MONGO_URI"])[os.environ["DB_NAME"]]["ingest_runner_heartbeat"]
-          # Poll every 2 min + pip + a 150s drain on restart.
-          deadline = time.time() + 20 * 60
-          while time.time() < deadline:
-              fresh = datetime.now(timezone.utc) - timedelta(minutes=3)
-              row = hb.find_one({"revision": sha, "hostname": host,
-                                 "updated_at": {"$gte": fresh}})
-              if row:
-                  print(f"running {sha[:7]} on {row['hostname']}")
-                  sys.exit(0)
-              time.sleep(30)
-          print(f"::error::No heartbeat from {host} reports {sha[:7]} after 20 min. "
-                "On the box: journalctl -u jobpilot-pull-deploy -u ingest-runner")
-          sys.exit(1)
-          PY
-
-  # ---------------------------------------------------------------------------
-  verify:
-    name: Verify resume API via edge
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    needs: [deploy-services, detect-changes]
-    if: >-
-      always() && needs.deploy-services.result == 'success'
-      && contains(fromJSON(needs.detect-changes.outputs.services), 'resume')
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - name: Check public resume API JSON through the edge
-        # Public, read-only, and under an existing API Gateway prefix. This is
-        # a resume-service smoke check, not proof of all APIs or the commit SHA.
-        run: python scripts/check_deployed_api.py
+          TAG="${GITHUB_SHA:0:12}"
+          # Poll every 2 min on the box + image build + health gate.
+          for attempt in $(seq 1 60); do
+            REV=$(curl -fsS --max-time 10 https://aspirely.me/api/health | jq -r .revision || true)
+            echo "attempt ${attempt}: live=${REV}"
+            if [ "$REV" = "$TAG" ]; then
+              echo "### Backend live: \`$TAG\`" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::The site does not report $TAG after 15 minutes; the previous version is still serving. On the box: journalctl -u jobpilot-pull-deploy"
+          exit 1

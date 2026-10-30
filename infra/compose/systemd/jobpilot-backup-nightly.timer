@@ -1,0 +1,10 @@
+[Unit]
+Description=JobPilot backup (nightly) schedule
+
+[Timer]
+OnCalendar=*-*-* 07:30:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

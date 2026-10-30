@@ -27,6 +27,12 @@ exec 9>/run/jobpilot-pull-deploy.lock
 flock -n 9 || exit 0
 install -d "$STATE_DIR"
 
+# The site's frontend ships on its own branch, so a frontend-only change must
+# not wait for a backend commit.
+if [ -f /etc/jobpilot/stack-enabled ]; then
+  bash "$SRC/infra/compose/pull-web.sh" || echo "web deploy failed; previous build still serving" >&2
+fi
+
 git -C "$SRC" fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
 NEW=$(git -C "$SRC" rev-parse "refs/remotes/origin/$BRANCH")
 
@@ -43,7 +49,13 @@ install -D -m 0644 "$SRC/infra/oracle/ingest-runner.oracle.conf" \
 install -m 0644 "$SRC/infra/oracle/jobpilot-pull-deploy.service" \
   "$SRC/infra/oracle/jobpilot-pull-deploy.timer" /etc/systemd/system/
 
-if APP_SRC="$SRC" REVISION="$NEW" bash "$SRC/infra/ec2/install-ingest-runner.sh"; then
+deploy_all() {
+  APP_SRC="$SRC" REVISION="$NEW" bash "$SRC/infra/ec2/install-ingest-runner.sh" || return 1
+  [ -f /etc/jobpilot/stack-enabled ] || return 0
+  SRC="$SRC" bash "$SRC/infra/compose/deploy.sh" "$NEW"
+}
+
+if deploy_all; then
   echo "$NEW" > "$DEPLOYED"
   rm -f "$FAILED"
   # The installer restarts the unit; on the first deploy it is not yet
