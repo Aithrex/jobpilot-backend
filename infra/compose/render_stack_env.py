@@ -28,7 +28,7 @@ def lambda_settings(backup: Path) -> dict:
     merged: dict = {}
     conflicts = set()
     # Resume last: it is the function that ran the async jobs.
-    names = sorted(p.name for p in (backup / "lambda").glob("*.json"))
+    names = sorted(p.name for p in (backup / "lambda").glob("*.json") if "apply-executor" not in p.name)
     names.sort(key=lambda n: "resume" in n)
     ssm_map: dict = {}
     for name in names:
