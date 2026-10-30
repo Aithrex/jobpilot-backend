@@ -93,7 +93,8 @@ echo "$NEXT" > "$ACTIVE_FILE"
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 write_env "$BLUE_TAG" "$GREEN_TAG" "$TAG"
-compose up -d --no-deps worker
+# While the old host still owns the schedules, this one must not run them.
+[ -f /etc/jobpilot/hold-worker ] || compose up -d --no-deps worker
 [ "$ACTIVE" = none ] || compose stop "api_$ACTIVE"
 
 # Keep this image and the previous one for a hand rollback.
