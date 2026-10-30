@@ -1,7 +1,8 @@
 # One image for the API and the worker. Built on the box (linux/arm64).
 FROM python:3.12-slim
 
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+# HOME is /tmp because the root filesystem is read-only at runtime.
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HOME=/tmp
 
 WORKDIR /app
 COPY shared/python/requirements.txt ./deps/requirements-shared.txt
