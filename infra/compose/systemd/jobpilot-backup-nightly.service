@@ -1,0 +1,10 @@
+[Unit]
+Description=JobPilot backup (nightly)
+OnFailure=jobpilot-alert@%n.service
+
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+CPUWeight=10
+ExecStart=/opt/jobpilot/src/infra/compose/backup.sh nightly

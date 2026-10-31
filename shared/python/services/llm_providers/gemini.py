@@ -23,6 +23,11 @@ Request shape (single-shot JSON):
 Default models (override via env): 2.5 Flash for FLASH/PREVIEW (fast
 structured extraction and repair), 2.5 Pro for PRO (tailoring, JD analysis,
 scoring).
+
+Privacy: contact details are masked before every call and restored in the
+reply (see pii_mask); GEMINI_PII_MASKING=false turns that off. Quota: when a
+model is out of quota the call moves down GEMINI_FALLBACK_MODELS, because free
+limits are per model.
 """
 import json
 import logging
@@ -33,6 +38,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .base import LLMProvider, LLMRetriesExhaustedError
 from ._json_repair import try_parse_json, clean_json_response
+from .pii_mask import MaskedParts, PiiMasker
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +77,31 @@ class GeminiProvider(LLMProvider):
         "gemini-2.5-flash": 65535,
         "gemini-2.5-pro": 65535,
         "gemini-2.5-flash-lite": 64000,
+        "gemini-3": 65535,
     }
     _DEFAULT_MAX_OUTPUT_TOKENS = 8192
 
     def __init__(self):
         self._client = None
+
+    @staticmethod
+    def _masker() -> Optional[PiiMasker]:
+        if os.getenv("GEMINI_PII_MASKING", "true").strip().lower() == "false":
+            return None
+        return PiiMasker()
+
+    @staticmethod
+    def _thinking_config(model: str):
+        """Thinking tokens count against max_output_tokens, so an unset budget
+        can spend the whole allowance and cut a JSON reply in half. Off by
+        default for flash models; GEMINI_THINKING_BUDGET overrides."""
+        from google.genai import types
+
+        raw = os.getenv("GEMINI_THINKING_BUDGET", "").strip()
+        if not raw and "flash" not in model:
+            return None
+        budget = int(raw) if raw else 0
+        return types.ThinkingConfig(thinking_budget=budget)
 
     # ------------------------------------------------------------------
     # Client lifecycle
@@ -152,7 +178,10 @@ class GeminiProvider(LLMProvider):
         response loses whole résumé sections that the repair pass cannot
         reconstruct.
         """
-        ceiling = self._MAX_OUTPUT_TOKENS.get(model, self._DEFAULT_MAX_OUTPUT_TOKENS)
+        ceiling = self._MAX_OUTPUT_TOKENS.get(model) or next(
+            (v for k, v in self._MAX_OUTPUT_TOKENS.items() if model.startswith(k)),
+            self._DEFAULT_MAX_OUTPUT_TOKENS,
+        )
         if requested > ceiling:
             logger.info("Clamping max_tokens %d → %d for model %s", requested, ceiling, model)
             return ceiling
@@ -193,7 +222,29 @@ class GeminiProvider(LLMProvider):
                 return min(float(secs), 30.0)
         return (2 ** attempt) + random.uniform(0, 0.5)
 
+    @staticmethod
+    def _is_quota(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return getattr(exc, "code", None) == 429 or "resource_exhausted" in msg or "quota" in msg
+
     def _generate(self, *, model: str, contents, config, max_retries: int):
+        """Try `model`, then each fallback when one is out of quota."""
+        fallbacks = [m.strip() for m in os.getenv("GEMINI_FALLBACK_MODELS", "").split(",") if m.strip()]
+        chain = [model] + [m for m in fallbacks if m != model]
+        for candidate in chain[:-1]:
+            try:
+                return self._generate_one(
+                    model=candidate, contents=contents, config=config, max_retries=0,
+                )
+            except LLMRetriesExhaustedError as e:
+                if not self._is_quota(e):
+                    raise
+                logger.warning("Gemini model %s out of quota, trying the next one", candidate)
+        return self._generate_one(
+            model=chain[-1], contents=contents, config=config, max_retries=max_retries,
+        )
+
+    def _generate_one(self, *, model: str, contents, config, max_retries: int):
         """Single entry point for every Gemini API call, with retry policy."""
         client = self.lazy_client()
 
@@ -238,6 +289,10 @@ class GeminiProvider(LLMProvider):
         model = model or self.PRO
         max_tokens = self._clamp_max_tokens(max_tokens, model)
 
+        masker = getattr(parts, "masker", None) or self._masker()
+        if masker:
+            prompt, system = masker.mask(prompt), masker.mask(system)
+
         # `parts` (from build_pdf_parts) is already in Gemini's native shape.
         user_parts = parts if parts else [types.Part.from_text(text=prompt or "")]
 
@@ -246,6 +301,9 @@ class GeminiProvider(LLMProvider):
             "temperature": temperature,
             "max_output_tokens": max_tokens,
         }
+        thinking = self._thinking_config(model)
+        if thinking is not None:
+            config_kwargs["thinking_config"] = thinking
         if schema is not None:
             config_kwargs["response_schema"] = self._to_openapi_schema(schema)
         # Trusted instructions stay out of the untrusted user message. The
@@ -268,10 +326,13 @@ class GeminiProvider(LLMProvider):
         try:
             result = json.loads(raw)
         except json.JSONDecodeError as e:
-            logger.warning("Gemini JSON decode failed, attempting repair. Raw: %s", raw[:500])
+            logger.warning("Gemini JSON decode failed, attempting repair (%d chars)", len(raw))
             result = try_parse_json(raw)
             if result is None:
                 raise ValueError(f"AI returned invalid format: {e}")
+
+        if masker:
+            result = masker.unmask(result)
 
         # Python-side coercion fills defaults and fixes types — the same pass
         # Claude's path runs, so downstream code sees an identical shape.
@@ -310,6 +371,9 @@ class GeminiProvider(LLMProvider):
 
         model = model or self.FLASH
         max_tokens = self._clamp_max_tokens(max_tokens, model)
+        masker = self._masker()
+        if masker:
+            prompt, system = masker.mask(prompt), masker.mask(system)
 
         contents: List[Any] = []
         for turn in (history or []):
@@ -321,6 +385,8 @@ class GeminiProvider(LLMProvider):
             content = (turn.get("content") or "")[:8000]
             if not content:
                 continue
+            if masker:
+                content = masker.mask(content)
             contents.append(types.Content(role=role, parts=[types.Part.from_text(text=content)]))
 
         contents.append(types.Content(role="user", parts=[types.Part.from_text(text=prompt)]))
@@ -329,6 +395,9 @@ class GeminiProvider(LLMProvider):
             "temperature": temperature,
             "max_output_tokens": max_tokens,
         }
+        thinking = self._thinking_config(model)
+        if thinking is not None:
+            config_kwargs["thinking_config"] = thinking
         if system:
             config_kwargs["system_instruction"] = system
 
@@ -338,7 +407,8 @@ class GeminiProvider(LLMProvider):
             config=types.GenerateContentConfig(**config_kwargs),
             max_retries=max_retries,
         )
-        return (response.text or "").strip()
+        reply = (response.text or "").strip()
+        return masker.unmask(reply) if masker else reply
 
     # ------------------------------------------------------------------
     # Multimodal PDF
@@ -361,13 +431,44 @@ class GeminiProvider(LLMProvider):
         """
         from google.genai import types
 
-        # Text-only fallback: caller signals this with empty bytes / text/plain.
-        if not pdf_bytes or mime_type == "text/plain":
-            return [types.Part.from_text(text=prompt_text)]
-        return [
-            types.Part.from_bytes(data=pdf_bytes, mime_type=mime_type),
-            types.Part.from_text(text=prompt_text),
-        ]
+        masker = self._masker()
+        text_only = not pdf_bytes or mime_type == "text/plain"
+        document_text = ""
+        if masker and not text_only:
+            document_text = self._extract_text(pdf_bytes, mime_type)
+        # Masking needs text. A scan has none, so its bytes go as they are: the
+        # alternative is refusing to parse it.
+        if masker and document_text:
+            text_only = True
+            prompt_text = f"{prompt_text}\n\nDOCUMENT TEXT:\n{document_text}"
+
+        if masker:
+            prompt_text = masker.mask(prompt_text)
+        built = MaskedParts()
+        if masker:
+            built.masker = masker
+        if not text_only:
+            built.append(types.Part.from_bytes(data=pdf_bytes, mime_type=mime_type))
+        built.append(types.Part.from_text(text=prompt_text))
+        return built
+
+    @staticmethod
+    def _extract_text(data: bytes, mime_type: str) -> str:
+        """Best-effort text of a résumé file; "" when it has none (a scan)."""
+        import io
+
+        try:
+            if "pdf" in mime_type:
+                from pypdf import PdfReader
+                pages = PdfReader(io.BytesIO(data)).pages
+                text = "\n".join((p.extract_text() or "") for p in pages)
+            else:
+                import docx
+                text = "\n".join(p.text for p in docx.Document(io.BytesIO(data)).paragraphs)
+        except Exception as e:
+            logger.warning("Text extraction failed (%s)", type(e).__name__)
+            return ""
+        return text if len(text.strip()) >= 100 else ""
 
     # ------------------------------------------------------------------
     # Tool calling (ReAct loop)
@@ -394,6 +495,9 @@ class GeminiProvider(LLMProvider):
 
         pipeline_log: List[Dict[str, Any]] = []
         start_ts = time.time()
+        masker = self._masker() or PiiMasker()
+        user_message = masker.mask(user_message)
+        system_text = masker.mask(system_text)
 
         tool_config = types.Tool(function_declarations=tools)
         contents: List[Any] = [
@@ -454,7 +558,7 @@ class GeminiProvider(LLMProvider):
 
             if not function_call_parts:
                 return (
-                    "\n".join(text_parts) if text_parts else "I could not generate a response.",
+                    masker.unmask("\n".join(text_parts)) if text_parts else "I could not generate a response.",
                     pipeline_log,
                 )
 
@@ -471,7 +575,7 @@ class GeminiProvider(LLMProvider):
 
                 fc = part.function_call
                 tool_name = fc.name
-                tool_args = dict(fc.args) if fc.args else {}
+                tool_args = masker.unmask(dict(fc.args)) if fc.args else {}
 
                 logger.info(
                     "Orchestrator round %d: calling tool %s(%s)",
@@ -492,7 +596,7 @@ class GeminiProvider(LLMProvider):
                     "round": round_num,
                 })
 
-                result_str = json.dumps(result, default=str)[:8000]
+                result_str = masker.mask(json.dumps(result, default=str)[:8000])
                 function_response_parts.append(
                     types.Part.from_function_response(
                         name=tool_name,
@@ -503,6 +607,6 @@ class GeminiProvider(LLMProvider):
             contents.append(types.Content(role="user", parts=function_response_parts))
 
         return (
-            "\n".join(text_parts) if text_parts else "Reached maximum tool-calling rounds.",
+            masker.unmask("\n".join(text_parts)) if text_parts else "Reached maximum tool-calling rounds.",
             pipeline_log,
         )

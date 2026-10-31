@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 _IV_BYTES = 12
 _TAG_BYTES = 16
 _BLOB_VERSION = 1
+_LOCAL_BLOB_VERSION = 2
 
 # Reuse the KMS client across warm Lambda invocations (repo convention:
 # module-scope client caching, created lazily).
@@ -199,3 +200,76 @@ class KmsEnvelopeCipher:
             del dek
 
         return opened.decode("utf-8")
+
+
+class LocalEnvelopeCipher:
+    """The same envelope with the master key held by us instead of KMS.
+
+    For hosts with no KMS. ``CREDENTIALS_MASTER_KEY`` (base64 of 32 random
+    bytes, never logged, never in Mongo) wraps a per-encryption AES-256 data
+    key. The boundary is weaker than KMS: whoever reads the host's secrets file
+    can open the vault, and a reveal is not CloudTrail-visible. The context
+    binding is unchanged, so a blob still cannot move between users. Its blobs
+    are ``v: 2``; a ``v: 1`` blob needs ``scripts/rewrap_ats_credentials.py``.
+    """
+
+    @staticmethod
+    def _master_key() -> bytes:
+        raw = _get_config_value("CREDENTIALS_MASTER_KEY", "") or ""
+        try:
+            key = base64.b64decode(raw.encode("ascii"), validate=True)
+        except ValueError:
+            key = b""
+        if len(key) != 32:
+            raise KmsCipherError("Credential encryption is unavailable.")
+        return key
+
+    def encrypt(self, plaintext: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # lazy
+
+        ctx = KmsEnvelopeCipher._normalize_context(context)
+        aad = KmsEnvelopeCipher._aad(ctx)
+        dek = os.urandom(32)
+        wrap_iv = os.urandom(_IV_BYTES)
+        iv = os.urandom(_IV_BYTES)
+        try:
+            wrapped = AESGCM(self._master_key()).encrypt(wrap_iv, dek, aad)
+            sealed = AESGCM(dek).encrypt(iv, (plaintext or "").encode("utf-8"), aad)
+        finally:
+            del dek
+        return {
+            "v": _LOCAL_BLOB_VERSION,
+            "wrapped_dek": _b64e(wrapped),
+            "wrap_iv": _b64e(wrap_iv),
+            "iv": _b64e(iv),
+            "ciphertext": _b64e(sealed[:-_TAG_BYTES]),
+            "tag": _b64e(sealed[-_TAG_BYTES:]),
+        }
+
+    def decrypt(self, blob: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> str:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # lazy
+
+        if not isinstance(blob, dict) or blob.get("v") != _LOCAL_BLOB_VERSION:
+            raise KmsCipherError("Malformed credential blob.")
+        aad = KmsEnvelopeCipher._aad(KmsEnvelopeCipher._normalize_context(context))
+        try:
+            wrapped = _b64d(blob["wrapped_dek"])
+            wrap_iv = _b64d(blob["wrap_iv"])
+            iv = _b64d(blob["iv"])
+            sealed = _b64d(blob["ciphertext"]) + _b64d(blob["tag"])
+        except (KeyError, TypeError, ValueError):
+            raise KmsCipherError("Malformed credential blob.") from None
+        try:
+            dek = AESGCM(self._master_key()).decrypt(wrap_iv, wrapped, aad)
+            return AESGCM(dek).decrypt(iv, sealed, aad).decode("utf-8")
+        except KmsCipherError:
+            raise
+        except Exception:
+            raise KmsCipherError("Credential decryption failed.") from None
+
+
+def credential_cipher():
+    """The vault's cipher: our own key where one is configured, else KMS."""
+    if _get_config_value("CREDENTIALS_MASTER_KEY", ""):
+        return LocalEnvelopeCipher()
+    return KmsEnvelopeCipher()

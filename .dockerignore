@@ -1,0 +1,10 @@
+**
+!shared
+!services
+!config
+!infra/compose/requirements.txt
+!infra/compose/gunicorn.conf.py
+!infra/compose/aws-config
+**/__pycache__
+**/*.log
+**/.env*
