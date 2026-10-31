@@ -1,3 +1,5 @@
+> **Hosting changed 2026-10-31.** JobPilot now runs on one Oracle Cloud box in Docker Compose, not AWS. Lambda, API Gateway, CloudFront, SSM, SES, KMS and Bedrock details below are history. Current setup: `infra/compose/README.md` in `jobpilot-backend`.
+
 # JobPilot Backend — Agent Architecture
 
 Codebase-aware Claude Code subagents for `jobpilot-backend` (Flask · MongoDB/PyMongo · Claude-on-Bedrock · AWS Lambda). Each agent encodes this repo's real stack and **hard invariants**, operates at a senior bar, and knows when to hand off. Use this set when you're working **inside the backend repo**. (The platform-wide hub spanning both repos lives in `D:\Aithrex\.claude\agents\`.)

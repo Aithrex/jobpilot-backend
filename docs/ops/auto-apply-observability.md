@@ -1,5 +1,7 @@
 # Auto-Apply Observability (spec §11)
 
+> **Retired 2026-10-31.** This describes the AWS setup, which has been deleted. It is kept for history. Current hosting: [`infra/compose/README.md`](../../infra/compose/README.md).
+
 The metrics + alarms for the auto-apply execution plane (AWS orchestrator +
 private GCP Cloud Run worker). Every milestone is emitted as ONE structured,
 PII-FREE log line by `shared/python/services/apply_metrics.py` (and the worker's

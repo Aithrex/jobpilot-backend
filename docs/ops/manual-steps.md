@@ -174,9 +174,9 @@ do when the watchdog emails you, and the one open question about the EC2 box.
 | `resume_jobs` feed results | `career_pages` / `workday_jobs` / `mnc_jobs` results expire after `RESUME_JOBS_FEED_TTL_HOURS`=24 instead of a week (each is ~5 MiB). | Existing `resume_jobs` TTL. |
 | `jobpilot-retention-watchdog.timer` on the Oracle box | Daily 06:37 UTC. Repairs (index, pins, missing expiries, closed-and-due, feed rows) then **fails** if the TTL is not deleting or the DB is over 3.0 GiB. | GitHub Actions — independent of EC2 and Lambda on purpose. |
 
-Run it by hand any time on the box: `sudo systemctl start jobpilot-retention-watchdog`.
-locally `python scripts/retention_watchdog.py` (check only) /
-`--apply` (repair).
+Run it by hand any time on the box with
+`sudo systemctl start jobpilot-retention-watchdog`, or locally with
+`python scripts/retention_watchdog.py` (check only) or `--apply` (repair).
 
 ### Why it changed — twice
 

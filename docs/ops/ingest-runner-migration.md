@@ -1,5 +1,7 @@
 # Moving the 15-minute crawls off Lambda
 
+> **Retired 2026-10-31.** This describes the AWS setup, which has been deleted. It is kept for history. Current hosting: [`infra/compose/README.md`](../../infra/compose/README.md).
+
 **Status:** code landed, not yet cut over. Every EventBridge ingest rule is
 still `ENABLED` and the box is not yet running the unit.
 

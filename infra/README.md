@@ -1,5 +1,7 @@
 # JobPilot Backend — Deployment
 
+> **Retired 2026-10-31.** This describes the AWS setup, which has been deleted. It is kept for history. Current hosting: [`infra/compose/README.md`](compose/README.md).
+
 Four Lambda microservices (**auth · jobs · resume · billing**) behind one HTTP
 API, sharing one Lambda layer. Built from `services/<svc>/` + `shared/python/`.
 

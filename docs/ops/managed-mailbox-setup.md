@@ -1,5 +1,7 @@
 # Managed mailbox — external setup runbook (Cloudflare + S3)
 
+> **Retired 2026-10-31.** This describes the AWS setup, which has been deleted. It is kept for history. Current hosting: [`infra/compose/README.md`](../../infra/compose/README.md).
+
 The go-live steps that **cannot be done from this repo** for the managed
 application mailbox inbound path. Contract + rationale live in
 [`docs/specs/managed-mailbox-v1.md`](../specs/managed-mailbox-v1.md); this doc is

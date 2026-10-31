@@ -1,5 +1,7 @@
 # Auto-Apply Staged Rollout + Rollback (DoD item 12)
 
+> **Retired 2026-10-31.** This describes the AWS setup, which has been deleted. It is kept for history. Current hosting: [`infra/compose/README.md`](../../infra/compose/README.md).
+
 The exact feature-flag sequence to take auto-apply from internal fixtures to GA,
 and the rollback for each stage. Every flag is a config value (SSM in prod via
 `USE_SSM_SECRETS=true`, `.env` locally) read through `utils.config._get_config_value`

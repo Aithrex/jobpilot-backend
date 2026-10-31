@@ -1,5 +1,7 @@
 # Auto-Apply Incident Runbook (DoD item 12)
 
+> **Retired 2026-10-31.** This describes the AWS setup, which has been deleted. It is kept for history. Current hosting: [`infra/compose/README.md`](../../infra/compose/README.md).
+
 What to DO when auto-apply misbehaves: the kill switches, how to pause one user,
 how to drain/DLQ the queue, how to work a `submission_unknown` backlog, and the
 "stop everything" procedure. Every lever here is config-only (SSM in prod, `.env`
