@@ -37,7 +37,7 @@ def validate_layout(body: bytes) -> None:
 def main() -> int:
     for attempt in range(1, 4):
         try:
-            request = Request(URL, method="GET", headers={"Accept": "application/json", "Cache-Control": "no-cache"})
+            request = Request(URL, method="GET", headers={"User-Agent": "aspirely-deploy-check", "Accept": "application/json", "Cache-Control": "no-cache"})
             with urlopen(request, timeout=15) as response:
                 if response.status != 200:
                     raise ValueError(f"expected HTTP 200, received {response.status}")

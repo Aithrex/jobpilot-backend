@@ -26,8 +26,8 @@ def test_workflow_checks_resume_json_and_does_not_accept_failed_health():
     assert not step.get("continue-on-error", False)
     assert "exit 0" not in step["run"]
     assert "resume" in job["name"].lower()
-    assert "detect-changes" in job["needs"]
-    assert "contains(fromJSON(needs.detect-changes.outputs.services), 'resume')" in job["if"]
+    assert "deploy" in job["needs"]
+    assert "needs.deploy.result == 'success'" in job["if"]
     assert "python scripts/check_deployed_api.py" in step["run"]
     assert any(s.get("uses", "").startswith("actions/checkout@") for s in job["steps"])
 

@@ -17,6 +17,8 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Deploy must not race verification. A failed, cancelled, timed-out or missing
+  # suite refuses to deploy, and workflow_dispatch is not a bypass.
   await-tests:
     name: Wait for the offline suite
     runs-on: ubuntu-latest
@@ -78,3 +80,19 @@ jobs:
           done
           echo "::error::The site does not report $TAG after 15 minutes; the previous version is still serving. On the box: journalctl -u jobpilot-pull-deploy"
           exit 1
+
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Verify resume API via edge
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    needs: [deploy]
+    if: always() && needs.deploy.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Check public resume API JSON through the edge
+        # Public and read-only. /api/health proves the revision; this proves a
+        # real API answers rather than the SPA's HTML fallback.
+        run: python scripts/check_deployed_api.py
