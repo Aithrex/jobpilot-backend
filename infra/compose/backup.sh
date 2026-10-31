@@ -16,7 +16,9 @@ DATA=/mnt/jobpilot-data/s3
 RESUMES=jobpilot-resumes-prod-032398581420
 MAIL=jobpilot-mail-prod-032398581420
 RC=(rclone --config /etc/jobpilot/rclone.conf --stats 0)
-LIMIT_BYTES=$((17 * 1000 * 1000 * 1000))   # alert at 17 GB of the 20 GB
+# The nightly archive exists twice while it is replaced, so stay under half of
+# the 20 GB. Above this the owner gets mail while there is still room to act.
+LIMIT_BYTES=$((9 * 1000 * 1000 * 1000))
 DISK_LIMIT_PCT=85
 
 case "${1:-}" in
