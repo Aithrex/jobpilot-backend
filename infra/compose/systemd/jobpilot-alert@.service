@@ -3,4 +3,4 @@ Description=Mail the owner that %i failed
 
 [Service]
 Type=oneshot
-ExecStart=/opt/jobpilot/src/infra/compose/alert.sh %i
+ExecStart=/bin/bash /opt/jobpilot/src/infra/compose/alert.sh %i

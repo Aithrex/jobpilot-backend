@@ -7,4 +7,4 @@ Type=oneshot
 Nice=15
 IOSchedulingClass=idle
 CPUWeight=10
-ExecStart=/opt/jobpilot/src/infra/compose/backup.sh user
+ExecStart=/bin/bash /opt/jobpilot/src/infra/compose/backup.sh user

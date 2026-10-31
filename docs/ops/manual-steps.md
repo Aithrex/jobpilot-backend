@@ -172,9 +172,9 @@ do when the watchdog emails you, and the one open question about the EC2 box.
 | `job_postings.expire_at` + TTL index `ttl_expire_at` | Stamped ON INSERT from the posting's own date (`retention_expiry`: posted date, never later than first seen, + `JOB_INVENTORY_MAX_AGE_DAYS`=7; floored at 24h for a posting that arrives already old). MongoDB deletes the row when it passes. | **Inside MongoDB**, every 60s. Needs nothing of ours running. |
 | Pinning | `pin_posting` removes `expire_at` in the same write that sets `pinned`. A TTL index ignores a document without the field, so an applied/saved/tailored posting can never be deleted. | Apply / save paths (live) + the watchdog (daily). |
 | `resume_jobs` feed results | `career_pages` / `workday_jobs` / `mnc_jobs` results expire after `RESUME_JOBS_FEED_TTL_HOURS`=24 instead of a week (each is ~5 MiB). | Existing `resume_jobs` TTL. |
-| `.github/workflows/retention-watchdog.yml` | Daily 06:37 UTC. Repairs (index, pins, missing expiries, closed-and-due, feed rows) then **fails** if the TTL is not deleting or the DB is over 3.0 GiB. | GitHub Actions — independent of EC2 and Lambda on purpose. |
+| `jobpilot-retention-watchdog.timer` on the Oracle box | Daily 06:37 UTC. Repairs (index, pins, missing expiries, closed-and-due, feed rows) then **fails** if the TTL is not deleting or the DB is over 3.0 GiB. | GitHub Actions — independent of EC2 and Lambda on purpose. |
 
-Run it by hand any time: **Actions → retention-watchdog → Run workflow**, or
+Run it by hand any time on the box: `sudo systemctl start jobpilot-retention-watchdog`.
 locally `python scripts/retention_watchdog.py` (check only) /
 `--apply` (repair).
 

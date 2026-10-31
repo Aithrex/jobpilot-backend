@@ -1,0 +1,14 @@
+[Unit]
+Description=JobPilot retention watchdog (keeps Atlas inside its size limit)
+OnFailure=jobpilot-alert@%n.service
+
+[Service]
+Type=oneshot
+User=jobpilot
+WorkingDirectory=/opt/jobpilot/app
+EnvironmentFile=/etc/jobpilot/ingest-runner.env
+Environment=PYTHONPATH=/opt/jobpilot/app/shared/python:/opt/jobpilot/app
+Environment=ENVIRONMENT=prod
+Environment=DB_NAME=aspirely_db
+Nice=10
+ExecStart=/opt/jobpilot/venv/bin/python scripts/retention_watchdog.py --apply --max-gib 3.0
