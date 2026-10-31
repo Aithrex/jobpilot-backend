@@ -37,7 +37,7 @@ case "${1:-}" in
       | zstd -q -T2 -9 \
       | "${RC[@]}" rcat --s3-chunk-size 64M --s3-upload-concurrency 2 --s3-no-check-bucket backup:nightly/jobs.tar.zst.new
     "${RC[@]}" moveto --s3-no-check-bucket backup:nightly/jobs.tar.zst.new backup:nightly/jobs.tar.zst
-    "$0" check
+    bash "$0" check
     ;;
   check)
     USED=$("${RC[@]}" size --json --fast-list oci:jobpilot-backups | jq .bytes)

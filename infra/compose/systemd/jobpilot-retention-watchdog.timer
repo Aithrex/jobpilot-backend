@@ -1,0 +1,9 @@
+[Unit]
+Description=JobPilot retention watchdog schedule
+
+[Timer]
+OnCalendar=*-*-* 06:37:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

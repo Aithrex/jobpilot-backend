@@ -52,7 +52,11 @@ install -m 0644 "$SRC/infra/oracle/jobpilot-pull-deploy.service" \
 deploy_all() {
   APP_SRC="$SRC" REVISION="$NEW" bash "$SRC/infra/ec2/install-ingest-runner.sh" || return 1
   [ -f /etc/jobpilot/stack-enabled ] || return 0
-  SRC="$SRC" bash "$SRC/infra/compose/deploy.sh" "$NEW"
+  SRC="$SRC" bash "$SRC/infra/compose/deploy.sh" "$NEW" || return 1
+  install -m 0644 "$SRC"/infra/compose/systemd/* /etc/systemd/system/
+  systemctl daemon-reload
+  systemctl enable -q --now jobpilot-backup-user.timer jobpilot-backup-nightly.timer \
+    jobpilot-retention-watchdog.timer
 }
 
 if deploy_all; then
