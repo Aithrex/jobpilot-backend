@@ -65,6 +65,18 @@ PYTHONPATH=shared/python pytest tests evals -q
 
 ## Deployment
 
+Production runs in Docker Compose on one Oracle Cloud box. Merge to `main`: CI
+runs the tests, and the box pulls the commit and swaps it in with no downtime.
+Runbook: [`infra/compose/README.md`](infra/compose/README.md).
+
+The AWS setup was retired on 2026-10-31. Its runbook stays in
+[`infra/README.md`](infra/README.md) for history.
+
+**A new blueprint must be registered in `services/gateway/wsgi.py`,** or it 404s
+in production.
+
+### Retired: AWS Lambda
+
 Build → package → Terraform. Full runbook in [`infra/README.md`](infra/README.md).
 
 ```bash

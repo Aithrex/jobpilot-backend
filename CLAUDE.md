@@ -1,28 +1,30 @@
 # JobPilot Backend
 
-Flask API for the **Aspirely** AI career platform (`jobpilot` is the repo/internal name) — MongoDB + **Claude-on-Bedrock**, deployed to **AWS Lambda**. The frontend is a **separate repo** (`jobpilot-frontend`).
+Flask API for the **Aspirely** AI career platform (`jobpilot` is the repo/internal name) — MongoDB + an LLM behind `services/llm_providers`, running in **Docker Compose on one Oracle Cloud box**. The frontend is a **separate repo** (`jobpilot-frontend`).
 
-**5 deployed Lambdas** under `services/<svc>/`: four HTTP services (**auth · jobs · resume · billing**), each with its own `app.py` (Flask factory), `lambda_handler.py` and `blueprints/`; plus **`apply_executor`**, a headless container-image Lambda with **no HTTP routes** (invoked Lambda-to-Lambda). Shared business logic + framework live in the **`shared/python` Lambda layer** (mounted `/opt/python`). `from services.X` / `from blueprints.X` resolve across a service's local dir AND the shared layer via **PEP 420 namespace packages** (so NO `__init__.py` in any `services/`/`blueprints/` dir — adding one breaks the merge). `local.py` stitches the four HTTP services into one Flask app for local dev.
+> **Hosting moved on 2026-10-31.** AWS is deleted. All HTTP services run as one app, `services/gateway/wsgi.py`, and the scheduler is `services/scheduler/runner.py`. Runbook: [`infra/compose/README.md`](infra/compose/README.md). `services/<svc>/` still marks the code's boundaries, but "Lambda", "layer", "SSM", "KMS", "SES" and "EventBridge" below are history unless a section says otherwise. **AI is down until a Gemini key is set** (see the runbook).
 
-> **`services/learning/` is a NOT-YET-DEPLOYED skeleton.** It is absent from `var.service_config` in `infra/terraform/variables.tf`, and both `lambda.tf` and `apigateway.tf` `for_each` over that map — so no learning Lambda and no `/api/learning` edge route exist. `local.py` doesn't register it either. **Live traffic is served by `resume` at `/api/resume/learning/*`**; the skeleton exists to make the domain one-route extractable later (see its `app.py` docstring). Deploying it = add a `learning` entry to `service_config` + the deploy workflow's path filter.
+**5 Lambdas, now retired,** lived under `services/<svc>/`: four HTTP services (**auth · jobs · resume · billing**), each with its own `app.py` (Flask factory), `lambda_handler.py` and `blueprints/`; plus **`apply_executor`**, a headless container-image Lambda with **no HTTP routes** (invoked Lambda-to-Lambda). Shared business logic + framework live in the **`shared/python` Lambda layer** (mounted `/opt/python`). `from services.X` / `from blueprints.X` resolve across a service's local dir AND the shared layer via **PEP 420 namespace packages** (so NO `__init__.py` in any `services/`/`blueprints/` dir — adding one breaks the merge). `local.py` stitches the four HTTP services into one Flask app for local dev.
+
+> **`services/learning/` is now live** at `/api/learning`, because the gateway registers it. Older traffic still uses `resume` at `/api/resume/learning/*`.
 
 ## Commands (run from this directory)
-- `python local.py` — local gateway: runs the four HTTP services as ONE Flask app on port 5000. Health: `GET /api/health`. **Needs MongoDB + AWS creds / Bedrock access** (without AWS creds, DB/search/career-pages work but every AI action fails).
+- `python local.py` — local gateway: runs the four HTTP services as ONE Flask app on port 5000. Health: `GET /api/health`. It omits the prod-only blueprints; production is `services/gateway/wsgi.py`. Needs MongoDB, and `LLM_PROVIDER=gemini` with `GEMINI_API_KEY` for AI actions.
 - `python scripts/verify.py --fast` — change-focused offline checks (renderer/pagination/selection by default). Pass extra pytest selectors after `--`.
 - `python scripts/verify.py --full` — **the offline test + eval suite** (`PYTHONPATH=shared/python pytest tests evals -q`). Fully deterministic: **mongomock** for Mongo, a **FakeLLM** for Bedrock — no AWS creds, no secrets, no network. This is exactly what `.github/workflows/tests.yml` and the optional pre-push hook run. See [`docs/qa/verification.md`](docs/qa/verification.md).
 - `python scripts/install_pre_push_hook.py` — repository-local pre-push hook (does not change global Git config). CI remains authoritative.
 - `pip install -r requirements-dev.txt` — pytest + mongomock + openpyxl (dev/CI only; **not** installed by the runtime requirements, so a fresh venv has no pytest).
 - `pip install -r shared/python/requirements.txt` — layer deps (Flask/pymongo/boto3/google-genai/fpdf2/docx/pypdf/crypto/PyJWT/lxml/requests…). **All runtime deps live here** — there are no per-service requirements files.
-- `python scripts/check_bedrock.py` — verify Bedrock creds + Claude model access (run before first use).
+- `python scripts/check_bedrock.py` — retired with AWS Bedrock; kept for history.
 
 ## Hard invariants (breaking these breaks login, billing, AI integrity, or prod)
 1. **Auth error contract:** auth FAILURES return **400/409/403/429 — NEVER 401** (401 = `@jwt_required()` missing/bad token only; the FE force-logs-out on **any** 401). Auth success payloads are **flat**; reset uses **`new_password`**. JWT identity = email; **`JWT_SECRET_KEY` must match the legacy portfolio value** — don't rotate.
-2. **Long work = async job, never inline:** `get_resume_service().create_job(type,payload,user_email)` + `ResumeService.invoke_async(...)` → `{job_id}`; add an `elif job_type==…` branch in `shared/python/services/resume_service.py::_process_job`; client polls `GET /api/resume/job/<id>` (state in `resume_jobs`). Dispatch = Lambda self-invocation.
+2. **Long work = async job, never inline:** `get_resume_service().create_job(type,payload,user_email)` + `ResumeService.invoke_async(...)` → `{job_id}`; add an `elif job_type==…` branch in `shared/python/services/resume_service.py::_process_job`; client polls `GET /api/resume/job/<id>` (state in `resume_jobs`). Dispatch = a bounded in-process pool (`_async_pool`, `ASYNC_JOB_WORKERS`); a deploy waits for running jobs.
 3. **Gate before you spend:** `entitlements_service.require_feature(key)` (→403 `upgrade_required`) / `check_and_increment(email,feature)` **before** any LLM call. Tailor quota = `usage_service`/`tailor_usage` (don't double-count).
 4. **Sanitize all untrusted input** with `shared/python/utils/security.py::InputSanitizer` before **any** Mongo filter (NoSQL injection). Never place user input in an operator position. Use atomic `$inc` for counters (concurrent Lambdas).
 5. **AI only via the provider abstraction:** `services/claude_client.py` is the facade **all** services call (`claude_json`, `CLAUDE_FLASH/PRO/PREVIEW`) — never call boto3 Bedrock (or google-genai) directly from routes/services. Under it, `services/llm_providers/` selects at runtime on **`LLM_PROVIDER`** (SSM in prod, env locally): **`claude`** = Claude on AWS Bedrock via boto3 `invoke_model`, `anthropic_version: bedrock-2023-05-31`, **no Anthropic SDK** (default) · **`gemini`** = Google Gemini via `google-genai`. The public surface is provider-agnostic, so switching touches no call site. Tiers: **FLASH = Haiku 4.5** (`us.anthropic.claude-haiku-4-5-20251001-v1:0`, ~8k out) for extraction; **PRO = Sonnet 4.6** (`us.anthropic.claude-sonnet-4-6`, 16k+) for tailoring/JD/scoring. **Never fabricate résumé facts** — `integrity_guard.py` + `fabrication_filter.py` enforce this; never weaken them. LLM output is schema-validated (`schemas/resume_schemas.py`) + repaired (`llm_providers/_json_repair.py`, max 6 rounds/25s).
-6. **New `/api/<prefix>`** needs its prefix added to the owning service's `routes` list in **`var.service_config`** (`infra/terraform/variables.tf`) — `apigateway.tf` and `lambda.tf` both `for_each` over that map, registering `ANY <prefix>` + `ANY <prefix>/{proxy+}`. Not there ⇒ 404 in prod (this is exactly why `learning` is dark).
-7. **Only `apply_executor` runs a real browser.** Never add Playwright/Chromium to another service — the others are zip Lambdas without the runtime.
+6. **A new blueprint must be registered in `services/gateway/wsgi.py`,** or it 404s in prod while the per-service `app.py` looks fine. `/api/*` is proxied whole, so there is no edge route to add.
+7. **Only `apply_executor` runs a real browser.** Never add Playwright/Chromium to another service — the app image has no browser runtime. Auto-apply submission is off in prod.
 8. **Tests never touch a real database, and your local `.env` IS production.** The repo-local `.env` names the live Atlas cluster with write access, so any script that loads it — and any test that gets past the mongomock patch — acts on production. On **2026-10-06** a test run emptied `users`, `resume_assets`, `user_preferences`, `companies`, `company_ats_endpoints` and `job_postings` in prod (restored from an Atlas snapshot; one account was lost). Now: `utils/db_connect.DBConnect._connect` **raises `RealDatabaseInTestRun` whenever pytest is loaded** — there is no off switch, do not add one — and `tests/_vg_support.current_db()` refuses anything that is not mongomock. Therefore: **(a)** put tests only under `tests/` or `evals/`, never in a scratch directory (no `conftest.py` there = no patch; the connector will raise); **(b)** never copy a test's `delete_many({})` / seeding fixture into a standalone script — a "frozen seed" lives in mongomock, not in the live DB; **(c)** every script that writes to the database is **dry-run by default** with an explicit `--apply`, prints what it will touch, and is run against prod only by the owner; **(d)** a `tests/…` file that needs data seeds it through the fixtures and never through `load_dotenv`.
 
 ## Stack
@@ -526,23 +528,20 @@ later postings out of the `MAX_ORDERED` window into date order: JPMorgan holds
 839 core-tech postings and a cap of 3 per 25-row page admits only ~240 within
 2,000.
 
-## Where the code actually runs (it is not all Lambda)
+## Where the code actually runs
 
-**Five Lambdas and one Oracle Cloud box.** The four HTTP services and
-`apply_executor` deploy to Lambda; `services/ingest_runner` — THE CRAWL — is a
-systemd unit on an **Oracle Cloud Always Free** A1 VM (`jobpilot-ingest`,
-4 OCPU / 24 GB, us-ashburn-1), cut over from EC2 on 2026-10-02 to take ~$35/month
-to $0. It moved off Lambda on 2026-09-02 because of the 300s wall: a shard could
-not finish its members before being starved. **Stay at 4 OCPU / 24 GB** — only
-that much A1 is free, and the tenancy quota allows more, which would bill.
+**One Oracle Cloud box** (`jobpilot-ingest`, A1 VM, us-ashburn-1) runs everything:
+the gateway and worker in Docker Compose, and `services/ingest_runner` (THE CRAWL)
+as a systemd unit. Files are on its 150 GB disk, MongoDB is on Atlas, and traffic
+arrives through a Cloudflare Tunnel. Runbook: [`infra/compose/README.md`](infra/compose/README.md).
+**Always Free is 2 OCPU / 12 GB.** The box is 4/24 by the owner's choice, and
+Oracle's docs say that is disabled when the trial ends. Never terminate the box.
 
 > **Oracle deploys are PULLED** (`infra/oracle/`, runbook in its README). CI
 > moves `deploy/ingest-runner` to a SHA whose suite is green; a 2-minute timer
 > on the box installs it through the SAME `infra/ec2/install-ingest-runner.sh`
-> and unit file. The deploy job is green only when `ingest_runner_heartbeat`
-> shows that SHA from hostname `jobpilot-ingest` — the host filter exists
-> because the first version passed on the EC2 heartbeat while Oracle could
-> not fetch. The EC2 box (`i-06bf0e03e60d9d409`) was TERMINATED 2026-10-02 and
+> and unit file, then swaps the site with no downtime. The deploy job is green
+> only when `/api/health` reports that SHA. The EC2 box (`i-06bf0e03e60d9d409`) was TERMINATED 2026-10-02 and
 > its CI job deleted; the EC2 paragraphs below are history. `infra/ec2/` stays
 > because its installer and unit file are what the Oracle box runs.
 

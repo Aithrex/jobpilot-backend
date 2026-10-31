@@ -1,5 +1,10 @@
 # Ingest runner on Oracle Cloud Always Free
 
+> **Updated 2026-10-31.** The whole site now runs on this box, documented in
+> [`infra/compose/README.md`](../compose/README.md). The crawl described here
+> still applies, with two changes: it writes to the box's own store, not S3, and
+> Always Free is now 2 OCPU / 12 GB, not the 4 / 24 stated below.
+
 The crawl (`services/ingest_runner`) moves off the EC2 `t3.small`
 (`i-06bf0e03e60d9d409`), which cost ~$35/month in September 2026: instance
 $16, burst CPU credits $9.50 (it averaged 36% CPU against a 20% baseline),

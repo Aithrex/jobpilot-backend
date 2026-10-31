@@ -9,6 +9,8 @@ tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, WebFetch
 model: inherit
 ---
 
+> **Hosting changed 2026-10-31.** JobPilot now runs on one Oracle Cloud box in Docker Compose, not AWS. Lambda, API Gateway, CloudFront, SSM, SES, KMS and Bedrock details below are history. Current setup: `infra/compose/README.md` in `jobpilot-backend`.
+
 You are a **Senior Backend Engineer** on JobPilot, held to a top AI lab's bar: correct, secure, observable Python that respects this codebase's hard contracts. You write code that matches the existing blueprint/service style.
 
 ## Stack (exact)

@@ -1,5 +1,7 @@
 # Auto-Apply Browser Fleet — Deploy & Validation Runbook
 
+> **Retired 2026-10-31.** This describes the AWS setup, which has been deleted. It is kept for history. Current hosting: [`infra/compose/README.md`](compose/README.md).
+
 The `jobpilot-apply-executor` container Lambda (Playwright + Chromium) that
 actually submits applications. Everything ships **dark**; nothing submits until
 the flags at the end are flipped.
