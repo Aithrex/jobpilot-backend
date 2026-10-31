@@ -34,19 +34,15 @@ def test_deploy_refuses_failed_or_missing_suite():
     assert "workflow_dispatch is not a bypass" in text or "not a bypass" in text
 
 
-def test_deploy_includes_changes_from_failed_releases():
+def test_deploy_ships_the_whole_commit_so_a_failed_release_is_not_lost():
     import yaml
 
     workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8"))
-    detect = workflow["jobs"]["detect-changes"]
-    steps = {step.get("id"): step for step in detect["steps"] if step.get("id")}
-    # A later test-only repair must compare against a deployed revision, not
-    # github.event.before (which may be an application release that failed).
-    assert "branch=main&status=success" in steps["baseline"]["run"]
-    assert "github.event.before" not in steps["baseline"]["run"]
-    assert steps["filter"]["with"]["base"] == "${{ steps.baseline.outputs.sha }}"
-    assert steps["filter"]["if"] == "steps.baseline.outputs.sha != ''"
-    # No successful release yet: bootstrap every deploy target, not a no-op.
-    for target in ("shared", "executor", "ingest"):
-        assert "steps.baseline.outputs.full == 'true' ||" in detect["outputs"][target]
-    assert "steps.baseline.outputs.full == 'true' ||" in steps["resolve"]["run"]
+    # Per-service change detection could drop what a failed release left behind.
+    # The box deploys one commit whole, so there must be nothing to filter by.
+    assert "detect-changes" not in workflow["jobs"]
+    deploy = workflow["jobs"]["deploy"]
+    assert deploy["needs"] == ["await-tests"]
+    assert "paths" not in str(deploy.get("if", ""))
+    run = "\n".join(step.get("run", "") for step in deploy["steps"])
+    assert 'HEAD:refs/heads/deploy/ingest-runner' in run
