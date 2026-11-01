@@ -1942,6 +1942,7 @@ _CLEARANCE_JD = re.compile(
     # qualified forms of the Export Administration Regulations are read.
     # "Import/export control" is also a customs clerk's whole job, so an export
     # rule only counts next to who may do the work.
+    r"subject to[^.\n]{0,60}(?:export|\bitar\b)|"
     r"export[ -]control(?:led|s)?[^.\n]{0,120}(?:u\.?s\.? person|citizen|permanent resident)|"
     r"(?:u\.?s\.? person|citizen|permanent resident)[^.\n]{0,120}export[ -]control|"
     # ITAR likewise: running a company's ITAR compliance is not being restricted
@@ -2100,7 +2101,8 @@ _YEARS_NOT_EXPERIENCE = re.compile(
     r"of age|(?<![a-z])old(?![a-z])|in business(?! development)|business for|history|founded|"
     r"anniversary|warranty|tenure|lease|coursework|of (college|school|study)|"
     r"(?<![a-z])ago(?![a-z])|in a row|consecutive|top workplace|best place|"
-    r"or older|(?<![a-z])of age(?![a-z])|from (?:the )?date|of hire")
+    r"or older|(?<![a-z])of age(?![a-z])|from (?:the )?date|of hire|"
+    r"as an? (?:great|top|leading|best|trusted|proud)(?![a-z])|workplace")
 _YEARS_WINDOW_BEFORE = re.compile(
     r"(?:within|in|during|over|for) (?:the )?(?:past|last|previous|next|first)\s*$|"
     r"(?:at least|minimum|must be|over)\s*$(?=.*age)|(?<![a-z])age\s*$")
@@ -2153,7 +2155,8 @@ _FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from|with|at)
 _PARENTHETICAL = re.compile(r"\([^)]*\)")
 _CLOSING_PREFERENCE = re.compile(
     r"(?:preferred|desired|desirable|a plus|nice to have|advantageous)\W*$")
-_CLAUSE_BREAK = re.compile(r"[,;:]\s+|\s+and\s+|\s+but\s+")
+# Not a colon: "Preferred: 5+ years" is one clause, its label and its number.
+_CLAUSE_BREAK = re.compile(r"[,;]\s+|\s+and\s+|\s+but\s+")
 
 
 def _years_are_preferred(sentence: str, position: int) -> bool:
