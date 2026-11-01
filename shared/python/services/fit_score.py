@@ -2279,13 +2279,7 @@ def _resume_industries(resume: Dict[str, Any]) -> Set[str]:
 
 
 def _work_mode(blob: str) -> str:
-    if _HYBRID_RE.search(blob):
-        return "hybrid"
-    if _REMOTE_RE.search(blob):
-        return "remote"
-    if _ONSITE_RE.search(blob):
-        return "onsite"
-    return "unknown"
+    return jd_profile.read_work_mode(blob)
 
 
 @lru_cache(maxsize=512)

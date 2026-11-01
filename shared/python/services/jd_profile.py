@@ -462,27 +462,122 @@ def read_certifications(blob: str) -> List[str]:
     return [name for name, rx in _CERTIFICATIONS if rx.search(blob or "")][:10]
 
 
-_EMPLOYMENT_TYPES: Sequence[Tuple[str, re.Pattern]] = (
-    ("internship", re.compile(r"(?<![a-z])(?:internship|co-op)(?![a-z])")),
-    ("contract", re.compile(
-        r"contract[- ]to[- ]hire|(?:contract|c2c|1099)\s+(?:role|position|job|opportunity|assignment)|"
-        r"employment type:?\s*contract")),
-    ("temporary", re.compile(r"(?<![a-z])temporary\s+(?:role|position|job|assignment)|"
-                             r"(?<![a-z])seasonal\s+(?:role|position|job)")),
-    ("part_time", re.compile(r"(?<![a-z])part[- ]time(?![a-z])")),
-    ("full_time", re.compile(r"(?<![a-z])full[- ]time(?![a-z])")),
-)
+# Both readers below accept STATEMENTS about this role, never mentions. "Assist
+# customers in person and on the phone" is not an on-site role, "hybrid cloud" is
+# not a hybrid role, and "full-time employees are eligible for benefits" says
+# nothing about this job. An unclear posting is `not_stated`, which costs a
+# candidate nothing; a wrong reading filters them out.
+_POLICY_PARAGRAPH = re.compile(
+    r"if this (?:position|role|job) is|for (?:on-?site|hybrid|remote)(?: and \w+)? roles|"
+    r"employees who are working|listed as|depending on|may be|interview|onboarding|"
+    r"this notice|hired to work")
+
+_MODE_WORD = r"(remote|hybrid|on[- ]?site|in[- ]office|in[- ]person)"
+_MODE_LABEL = (r"(?:work(?:place|ing)?(?: type| model| environment| arrangement| style| location| flexibility)?|"
+               r"location(?: type)?|workplace|remote status|job type|position type)")
+_MODE_STATEMENTS: Sequence[re.Pattern] = tuple(re.compile(p) for p in (
+    rf"^\W*{_MODE_LABEL}\s*[:\-]\s*(?:[a-z]+,\s*)?{_MODE_WORD}(?![a-z])",
+    rf"^\W*{_MODE_WORD}\W*$",
+    # A line opened by the mode: "Remote (Continental US)", "On-site - New York".
+    rf"^\W*{_MODE_WORD}\s*[-–—(]",
+    # A LinkedIn tag is the recruiter choosing this field in a form.
+    r"#li-(remote|hybrid|on-?site)(?![a-z])",
+    rf"(?:this|the) (?:is an?|role is|position is|job is|opportunity is|role will be|"
+    rf"position will be)\s+(?:a\s+|an\s+)?(?:fully\s+|100%\s+)?{_MODE_WORD}(?![a-z])",
+    rf"(?:fully|100%|entirely|completely)\s+{_MODE_WORD}(?![a-z])",
+    rf"(?<![a-z-]){_MODE_WORD}\s+(?:work(?:ing)?\s+)?(?:role|position|opportunity|job|employee|"
+    r"presence|schedule|requirement|arrangement)(?![a-z])",
+    rf"(?:work|working|be|report|reporting|based)\s+(?:primarily\s+|fully\s+)?{_MODE_WORD}(?![a-z])",
+))
+# Fewer than five days a week somewhere is a hybrid schedule.
+_PART_WEEK = (r"(?<![\d-])(?:[1-4]|one|two|three|four)(?:\s*\(\d\))?(?:\s*(?:-|to)\s*[1-4])?"
+              r"(?:\s+or more)?\s*days? (?:a|per|each) week")
+_MODE_REMOTE_EXTRA = re.compile(
+    r"work(?:ing)? (?:from home|remotely)(?![a-z])|work[- ]from[- ]home (?:role|position|job)|"
+    r"remote[- ](?:first|based|eligible|friendly)(?![a-z])")
+_MODE_HYBRID_EXTRA = re.compile(
+    r"hybrid (?:schedule|work|working|model|arrangement|environment)(?![a-z])|"
+    rf"{_PART_WEEK}[^.\n]{{0,40}}(?:office|on-?site|in[- ]person|campus)|"
+    rf"(?:office|on-?site|in[- ]person|campus|location)[^.\n]{{0,40}}{_PART_WEEK}")
+_TITLE_MODE = re.compile(r"(?:^|[-–—,(|/:]\s*)(remote|hybrid)(?:\s*$|\s*[-–—)|/:])")
+
+
+def _mode_name(word: str) -> str:
+    if word.startswith("remote"):
+        return "remote"
+    return "hybrid" if word.startswith("hybrid") else "onsite"
+
+
+def read_work_mode(blob: str) -> str:
+    """`remote`, `hybrid`, `onsite` or `unknown`: the earliest statement wins, so a
+    posting's own header outranks the company policy printed under it."""
+    if not blob:
+        return "unknown"
+    first_line = blob.lstrip().split("\n", 1)[0]
+    if len(first_line) <= 120:
+        title = _TITLE_MODE.search(first_line)
+        if title:
+            return title.group(1)
+    for sentence in _sentences(blob):
+        if _POLICY_PARAGRAPH.search(sentence):
+            continue
+        if _MODE_HYBRID_EXTRA.search(sentence):
+            return "hybrid"
+        best: Optional[Tuple[int, str]] = None
+        for rx in _MODE_STATEMENTS:
+            m = rx.search(sentence)
+            if m and (best is None or m.start() < best[0]):
+                best = (m.start(), _mode_name(m.group(1)))
+        m = _MODE_REMOTE_EXTRA.search(sentence)
+        if m and (best is None or m.start() < best[0]):
+            best = (m.start(), "remote")
+        if best:
+            return best[1]
+    return "unknown"
+
+
+_EMPLOYMENT_NOISE = re.compile(
+    r"benefit|eligib|employees|colleagues|hires|students|basis|working model|"
+    r"(?:all|our|for) (?:full|part)[- ]time")
+_EMPLOYMENT_VALUE = (r"(full[- ]?time|part[- ]?time|contract(?:or)?|temporary|temp|seasonal|"
+                     r"intern(?:ship)?|co-op|per diem|prn|regular)")
+_EMPLOYMENT_NAMES = {"full": "full_time", "part": "part_time", "cont": "contract",
+                     "temp": "temporary", "seas": "temporary", "inte": "internship",
+                     "co-o": "internship", "per ": "part_time", "prn": "part_time",
+                     "regu": "full_time"}
+_EMPLOYMENT_STATEMENTS: Sequence[re.Pattern] = tuple(re.compile(p) for p in (
+    rf"(?:employment|job|position|work|worker|contract|role|schedule)(?: type| status)?\s*[:\-]\s*"
+    rf"(?:[a-z]+,\s*)?(?:regular\s+)?{_EMPLOYMENT_VALUE}(?![a-z])",
+    rf"^\W*{_EMPLOYMENT_VALUE}\W*$",
+    rf"(?:this is an?|this (?:role|position|job) is(?: an?)?|is an?)\s+"
+    rf"{_EMPLOYMENT_VALUE}(?![a-z])",
+    rf"(?<![a-z-]){_EMPLOYMENT_VALUE}[ ,]+(?:[a-z]+ )?(?:role|position|job|opportunity|"
+    rf"assignment|employment)(?![a-z])",
+    r"(contract)[- ]to[- ]hire|(temp)orary contract|\((contract)or\)|(seasonal) [a-z]+ associate",
+    r"(intern(?:ship)?)(?![a-z])\s*(?:program|position|opportunity|role)",
+))
+_EMPLOYMENT_HOURS = re.compile(r"(\d{2})\s*\+?\s*(?:hours?|hrs?)\s*(?:per|a|/)\s*(?:week|wk)")
 
 
 def read_employment_type(blob: str) -> str:
-    """The earliest statement wins: a body saying "full-time" up top and "all
-    part-time employees are eligible" under benefits is a full-time job."""
-    best: Tuple[int, str] = (len(blob or "") + 1, NOT_STATED)
-    for name, rx in _EMPLOYMENT_TYPES:
-        m = rx.search(blob or "")
-        if m and m.start() < best[0]:
-            best = (m.start(), name)
-    return best[1]
+    """The earliest statement wins. Benefits wording never counts: it describes
+    who gets a plan, not this job. Hours settle a posting that states only those."""
+    for sentence in _sentences(blob or ""):
+        if _EMPLOYMENT_NOISE.search(sentence):
+            continue
+        best: Optional[Tuple[int, str]] = None
+        for rx in _EMPLOYMENT_STATEMENTS:
+            m = rx.search(sentence)
+            if m and (best is None or m.start() < best[0]):
+                word = next(g for g in m.groups() if g)
+                key = "prn" if word.startswith("prn") else word[:4].replace("-", "-")
+                best = (m.start(), _EMPLOYMENT_NAMES.get(key, NOT_STATED))
+        if best and best[1] != NOT_STATED:
+            return best[1]
+    m = _EMPLOYMENT_HOURS.search(blob or "")
+    if m:
+        return "full_time" if int(m.group(1)) >= 35 else "part_time"
+    return NOT_STATED
 
 
 _ALTERNATIVE_JOIN = re.compile(r"\s+(?:and/)?or\s+")

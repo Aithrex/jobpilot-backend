@@ -201,6 +201,39 @@ def test_clearance_level_certifications_and_employment_type():
         _norm("Full-time role. Part-time employees get benefits.")) == "full_time"
 
 
+@pytest.mark.parametrize("text,mode", [
+    ("Work environment: On-site, Arlington, VA", "onsite"),
+    ("This role is remote, but distance is no barrier. Our hybrid teams collaborate.", "remote"),
+    ("Remote\nRemote: employees in remote roles work offsite.\nFor onsite and hybrid roles...", "remote"),
+    ("This role requires working in person in our Mexico City office 4 days per week.", "hybrid"),
+    ("Software Engineer - Remote\nBuild things.", "remote"),
+    ("Assist customers in person and over the phone.", "unknown"),
+    ("A one-of-a-kind shop/play hybrid experience.", "unknown"),
+    ("Deploy across on-premise, hybrid, or cloud environments.", "unknown"),
+    ("If this position is listed as hybrid, you work from a facility.", "unknown"),
+    ("Support remote monitoring of devices.", "unknown"),
+    ("Proficiency with Microsoft Office.", "unknown"),
+])
+def test_work_mode_needs_a_statement(text, mode):
+    assert jd_profile.read_work_mode(_norm(text)) == mode
+
+
+@pytest.mark.parametrize("text,kind", [
+    ("Employment type: Full-time", "full_time"),
+    ("This is a part-time position.", "part_time"),
+    ("Hours per week: 45+ hours per week", "full_time"),
+    ("Schedule: Sunday-Saturday, varied, PRN position", "part_time"),
+    ("Medical Information Specialist (Contractor)", "contract"),
+    ("Temporary contract through end of year.", "temporary"),
+    ("Full-time and part-time employees are eligible for our benefit programs.", "not_stated"),
+    ("Full-time hires are eligible to participate.", "not_stated"),
+    ("Must be authorized to work on a full-time basis.", "not_stated"),
+    ("API contract definition and versioning.", "not_stated"),
+])
+def test_employment_type_needs_a_statement(text, kind):
+    assert jd_profile.read_employment_type(_norm(text)) == kind
+
+
 def test_requirements_carry_the_block_and_the_flags_come_from_it():
     reqs = fit_score.extract_requirements(
         "Requirements: Python, AWS. Visa sponsorship is not available.", "Engineer")
