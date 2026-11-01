@@ -155,7 +155,11 @@ NORMALIZATION_VERSION = 4
 # v9: every profile gains the `jd` block (`services/jd_profile.py`), and
 # `required_degree_level` stops reading "ms" inside "systems". Pure regex over
 # stored bodies, so the re-parse costs no model calls.
-EXTRACTOR_VERSION = 9
+#
+# v10: `jd-1.1.0`. Work mode and employment type are read from statements, years
+# from spelled-out numbers, and the block gains `additional_skills` and
+# `preferred_years`. Regex again, so no model calls.
+EXTRACTOR_VERSION = 10
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1

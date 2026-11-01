@@ -30,7 +30,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from services.jd_skill_vocabulary import JD_SKILL_VOCABULARY
 
 # Bump when a reader changes what it returns. Stored blocks carry it as `v`.
-JD_PROFILE_VERSION = "jd-1.0.0"
+JD_PROFILE_VERSION = "jd-1.1.0"
 
 SPONSORSHIP_OFFERED = "offered"
 SPONSORSHIP_NOT_OFFERED = "not_offered"

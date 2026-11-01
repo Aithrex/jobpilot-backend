@@ -60,7 +60,7 @@ from services import jd_profile
 
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.5"
+FIT_SCORE_VERSION = "fit-v2.6"
 
 # The cliff described below is REAL, and this is how 2.1 crosses it.
 #
@@ -117,8 +117,13 @@ FIT_SCORE_VERSION = "fit-v2.5"
 # required, against 18% with a word boundary. `work_authorization_restricted`
 # also reads the sponsorship wording `jd_profile` knows. Stored 2.4 profiles are
 # valid input until `EXTRACTOR_VERSION` re-parses them.
+#
+# 2.6 keeps the contract. `work_mode` is read from statements, not mentions, so
+# most postings that used to read `onsite` from "in person" now read `unknown`,
+# which scores nothing. Spelled-out years are read, and a preference word only
+# moves the number it qualifies.
 _COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset(
-    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5"})
+    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5", "fit-v2.6"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
