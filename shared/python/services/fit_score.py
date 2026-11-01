@@ -60,7 +60,7 @@ from services import jd_profile
 
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.6"
+FIT_SCORE_VERSION = "fit-v2.7"
 
 # The cliff described below is REAL, and this is how 2.1 crosses it.
 #
@@ -123,7 +123,8 @@ FIT_SCORE_VERSION = "fit-v2.6"
 # which scores nothing. Spelled-out years are read, and a preference word only
 # moves the number it qualifies.
 _COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset(
-    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5", "fit-v2.6"})
+    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5", "fit-v2.6",
+     "fit-v2.7"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {

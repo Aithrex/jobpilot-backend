@@ -9,16 +9,16 @@ import pytest
 
 import eval_jd_answer_key as key_eval
 
-# Measured on all 750 rows, which include the tuning rows, so they read higher
+# Measured on all 1,050 rows, which include the tuning rows, so they read higher
 # than the held-out score in docs/specs/jd-profile.md.
 FLOORS = {
     "sponsorship": 0.98,
-    "authorization": 0.95,
-    "min_degree": 0.86,
+    "authorization": 0.96,
+    "min_degree": 0.88,
     "min_years": 0.84,
     "clearance_required": 0.97,
-    "work_mode": 0.87,
-    "employment_type": 0.83,
+    "work_mode": 0.90,
+    "employment_type": 0.88,
 }
 
 
@@ -42,5 +42,5 @@ def test_a_stated_refusal_is_almost_never_missed_or_invented(result):
 
 def test_the_key_keeps_its_held_out_half():
     rows = key_eval.load_key()
-    assert len(rows) == 750
+    assert len(rows) == 1050
     assert sum(r["split"] == "holdout" for r in rows) == 150

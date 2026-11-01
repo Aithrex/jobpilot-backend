@@ -1,4 +1,4 @@
-# The JD dictionary (`jd-1.1.0`)
+# The JD dictionary (`jd-1.2.0`)
 
 `shared/python/services/jd_profile.py` is the one place a job description is
 read. Filtering and tailoring both go through it, so a posting cannot read one
@@ -73,33 +73,37 @@ and "scrum master", which is why JDs use the stricter readers here.
 
 ## Accuracy
 
-`evals/data/jd_answer_key.jsonl` holds 750 real JDs labelled blind from the JD text.
-The `dev` splits were used to write rules. `holdout` is 150 random JDs that no rule
-was written from, and it was scored once. `evals/eval_jd_answer_key.py` refuses to
-print `holdout` errors, and `evals/test_jd_answer_key.py` is the CI gate.
+`evals/data/jd_answer_key.jsonl` holds 1,050 real JDs labelled blind from the JD
+text. The `dev` splits were used to write rules. `holdout` is the newest 150
+random JDs, and `evals/eval_jd_answer_key.py` refuses to print its errors.
+`evals/test_jd_answer_key.py` is the CI gate.
 
 **The labels are AI-drafted until a person reviews them** (`review` on each row).
 `evals/data/jd_answer_key_review.csv` lists the rows worth checking.
 
-| Field | Live before `jd-1.1.0` | `jd-1.1.0` on `holdout` | On tuning rows |
-|---|---|---|---|
-| Sponsorship status | 98.7% | 98.7% | 99.3% |
-| Stated refusals caught | 16 of 16 | 16 of 16 | 98.8% |
-| Work authorization | 96.7% | 97.3% | 97% |
-| Clearance required | 98.7% | 98.7% | 98.7% |
-| Work mode | 82.7% | 87.3% | 90.3% |
-| Minimum degree | 82.7% | 84% | 90.7% |
-| Minimum years | 84% | 84.7% | 87.5% |
-| Employment type | 87.3% | 82% | 86.5% |
-| Skills precision / recall | 51% / 25% | 56% / 31% | 60% / 35% |
-| Every field right on one JD | 44.7% | 45.3% | 52.7% |
+Scores on JDs no rule had seen when they were scored, 150 random JDs each round:
 
-Each `holdout` figure can move about six points by chance. The gap to the tuning
-column is the real limit of hand-written rules: more of them raises the tuning
-score and leaves unseen JDs where they are, which is why the loop stopped here.
-Part of what remains is not a bug either. Labellers split on preferred-only years
-and on degrees listed under "preferred experience" headings. Non-English JDs are
-not read. Skills are the weak field, and reading them well needs a model.
+| Field | `jd-1.1.0`, round 1 / 2 | `jd-1.2.0`, round 1 / 2 |
+|---|---|---|
+| Sponsorship status | 98.7% / 100% | 98.7% / 100% |
+| Work authorization | 99.3% / 96.7% | 99.3% / 96.7% |
+| Clearance required | 99.3% / 98% | 99.3% / 98% |
+| Minimum degree | 91.3% / 87.3% | 92% / 86.7% |
+| Minimum years | 79.3% / 89.3% | 79.3% / 90% |
+| Work mode | 87.3% / 88.7% | 86.7% / 90% |
+| Employment type | 86% / 84% | 90.7% / 88.7% |
+| Skills recall | 31.4% / 29.3% | 33.5% / 32% |
+| Every field right on one JD | 52% / 50.7% | 52.7% / 52.7% |
+
+Each round's score can move about six points by chance, which is why round 1's
+years and round 2's differ so much. The loop stopped when degree, years and work
+mode stayed flat for two rounds. Rules written after reading more JDs raise the
+tuning score and leave unseen JDs where they are.
+
+What remains is mostly not a bug. Labellers split 27 to 16 on whether a
+preferred-only figure is `min_years`, and `min_years` stays required-only because
+that agrees with more labels (85.9% to 84.4%) while `preferred_years` still
+carries the figure. Non-English JDs are not read. Skills need a model.
 
 ## Changing a reader
 
