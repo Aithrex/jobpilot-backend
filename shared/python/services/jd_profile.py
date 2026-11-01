@@ -323,7 +323,7 @@ _EDU_NOISE = re.compile(
     r"in lieu of|in place of|"
     r"we (?:also )?(?:offer|provide)")
 # "degree, preferably in biology" prefers the FIELD, not the degree.
-_FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from)(?![a-z])[^.;,\n]*")
+_FIELD_PREFERENCE = re.compile(r"prefer(?:ably|able|red)\s+(?:major\s+)?(?:in|within|from)(?![a-z])[^.;,\n]*")
 # Preference wording `fit_score._PREFERRED_CUE` does not carry.
 _PARENTHETICAL = re.compile(r"\([^)]*\)")
 _DEGREE_NOT_REQUIRED = re.compile(r"(?:the )?(?:stated|listed|above) degree is preferred")
