@@ -361,7 +361,8 @@ def read_education(blob: str) -> Dict[str, Any]:
             elif fit_score._REQUIRED_HEAD.search(stripped):
                 mode = "required"
         for sentence in _sentences(stripped):
-            if _EDU_EQUIVALENT.search(sentence) or "in lieu of" in sentence:
+            if (_EDU_EQUIVALENT.search(sentence) or "in lieu of" in sentence) \
+                    and (_degree_levels(sentence + ",") or "education" in sentence):
                 saw_equivalent = True
             if not _degree_levels(sentence) or _EDU_NOISE.search(sentence):
                 continue
@@ -534,24 +535,22 @@ def read_certifications(blob: str) -> List[str]:
 _POLICY_PARAGRAPH = re.compile(
     r"if this (?:position|role|job) is|for (?:on-?site|hybrid|remote)(?: and \w+)? roles|"
     r"employees who are working|listed as|depending on|may be|interview|onboarding|"
-    r"this notice|hired to work")
+    r"this notice|hired to work|transitioning|rollout|opportunity to come together")
 
 _MODE_WORD = r"(remote|hybrid|on[- ]?site|in[- ]office|in[- ]person)"
-_MODE_LABEL = (r"(?:work(?:place|ing)?(?: type| model| environment| arrangement| style| location| flexibility)?|"
+_MODE_LABEL = (r"(?:work(?:place|ing)?(?: type| model| environment| arrangement| style| location| flexibility| mode)?|"
                r"location(?: type)?|workplace|remote status|job type|position type)")
 _MODE_STATEMENTS: Sequence[re.Pattern] = tuple(re.compile(p) for p in (
-    rf"^\W*{_MODE_LABEL}\s*[:\-]\s*(?:[a-z]+,\s*)?{_MODE_WORD}(?![a-z])",
+    rf"^\W*{_MODE_LABEL}\s*[:\-]\s*(?:[a-z-]+,\s*){{0,3}}{_MODE_WORD}(?![a-z])",
     rf"^\W*{_MODE_WORD}\W*$",
     # A line opened by the mode: "Remote (Continental US)", "On-site - New York".
     rf"^\W*{_MODE_WORD}\s*[-–—(]",
-    # A LinkedIn tag is the recruiter choosing this field in a form.
-    r"#li-(remote|hybrid|on-?site)(?![a-z])",
     rf"(?:this|the) (?:is an?|role is|position is|job is|opportunity is|role will be|"
     rf"position will be)\s+(?:a\s+|an\s+)?(?:fully\s+|100%\s+)?{_MODE_WORD}(?![a-z])",
     rf"(?:fully|100%|entirely|completely)\s+{_MODE_WORD}(?![a-z])",
     rf"(?<![a-z-]){_MODE_WORD}\s+(?:work(?:ing)?\s+)?(?:role|position|opportunity|job|employee|"
     r"presence|schedule|requirement|arrangement)(?![a-z])",
-    rf"(?:work|working|be|report|reporting|based)\s+(?:primarily\s+|fully\s+)?{_MODE_WORD}(?![a-z])",
+    rf"(?:work|working|be|report|reporting|based|located)\s+(?:primarily\s+|fully\s+)?{_MODE_WORD}(?![a-z])",
 ))
 # Fewer than five days a week somewhere is a hybrid schedule.
 _PART_WEEK = (r"(?<![\d-])(?:[1-4]|one|two|three|four)(?:\s*\(\d\))?(?:\s*(?:-|to)\s*[1-4])?"
@@ -563,6 +562,9 @@ _MODE_HYBRID_EXTRA = re.compile(
     r"hybrid (?:schedule|work|working|model|arrangement|environment)(?![a-z])|"
     rf"{_PART_WEEK}[^.\n]{{0,40}}(?:office|on-?site|in[- ]person|campus)|"
     rf"(?:office|on-?site|in[- ]person|campus|location)[^.\n]{{0,40}}{_PART_WEEK}")
+# A LinkedIn tag is the recruiter picking this field in a form, so it outranks
+# whatever the company's workplace policy paragraph says.
+_MODE_TAG = re.compile(r"#li-(remote|hybrid|on-?site)(?![a-z])")
 _TITLE_MODE = re.compile(r"(?:^|[-–—,(|/:]\s*)(remote|hybrid)(?:\s*$|\s*[-–—)|/:])")
 
 
@@ -577,6 +579,9 @@ def read_work_mode(blob: str) -> str:
     posting's own header outranks the company policy printed under it."""
     if not blob:
         return "unknown"
+    tag = _MODE_TAG.search(blob)
+    if tag:
+        return _mode_name(tag.group(1))
     first_line = blob.lstrip().split("\n", 1)[0]
     if len(first_line) <= 120:
         title = _TITLE_MODE.search(first_line)
@@ -602,8 +607,13 @@ def read_work_mode(blob: str) -> str:
 
 _EMPLOYMENT_NOISE = re.compile(
     r"benefit|eligib|employees|colleagues|hires|students|basis|working model|"
-    r"(?:all|our|for) (?:full|part)[- ]time")
-_EMPLOYMENT_VALUE = (r"(full[- ]?time|part[- ]?time|contract(?:or)?|temporary|temp|seasonal|"
+    r"(?:all|our|for) (?:full|part)[- ]time|contract of employment|not a contract")
+# "This full-time position is eligible for benefits" still says what the job is.
+_EMPLOYMENT_THIS_ROLE = re.compile(r"this\s+(full|part)\s*-?\s*time\s+(?:position|role|job)")
+_SEASONAL_ROLE = re.compile(
+    r"(?<![a-z])(seasonal)\s+(?:[a-z]+\s+)?(?:associate|colleague|employee|worker|team member|"
+    r"position|role|job|help|hire)")
+_EMPLOYMENT_VALUE = (r"(full\s*-?\s*time|part\s*-?\s*time|contract(?:or)?|temporary|temp|seasonal|"
                      r"intern(?:ship)?|co-op|per diem|prn|regular)")
 _EMPLOYMENT_NAMES = {"full": "full_time", "part": "part_time", "cont": "contract",
                      "temp": "temporary", "seas": "temporary", "inte": "internship",
@@ -612,35 +622,48 @@ _EMPLOYMENT_NAMES = {"full": "full_time", "part": "part_time", "cont": "contract
 _EMPLOYMENT_STATEMENTS: Sequence[re.Pattern] = tuple(re.compile(p) for p in (
     rf"(?:employment|job|position|work|worker|contract|role|schedule)(?: type| status)?\s*[:\-]\s*"
     rf"(?:[a-z]+,\s*)?(?:regular\s+)?{_EMPLOYMENT_VALUE}(?![a-z])",
-    rf"^\W*{_EMPLOYMENT_VALUE}\W*$",
+    rf"^\W*{_EMPLOYMENT_VALUE}(?![a-z])",
     rf"(?:this is an?|this (?:role|position|job) is(?: an?)?|is an?)\s+"
     rf"{_EMPLOYMENT_VALUE}(?![a-z])",
     rf"(?<![a-z-]){_EMPLOYMENT_VALUE}[ ,]+(?:[a-z]+ )?(?:role|position|job|opportunity|"
-    rf"assignment|employment)(?![a-z])",
+    rf"assignment|employment|schedule)(?![a-z])",
+    r"1099|independent (contract)or",
     r"(contract)[- ]to[- ]hire|(temp)orary contract|\((contract)or\)|(seasonal) [a-z]+ associate",
     r"(intern(?:ship)?)(?![a-z])\s*(?:program|position|opportunity|role)",
 ))
 _EMPLOYMENT_HOURS = re.compile(r"(\d{2})\s*\+?\s*(?:hours?|hrs?)\s*(?:per|a|/)\s*(?:week|wk)")
 
 
+def _employment_name(word: str) -> str:
+    word = word.replace(" ", "")
+    return _EMPLOYMENT_NAMES.get("prn" if word.startswith("prn") else word[:4], NOT_STATED)
+
+
 def read_employment_type(blob: str) -> str:
     """The earliest statement wins. Benefits wording never counts: it describes
     who gets a plan, not this job. Hours settle a posting that states only those."""
-    for sentence in _sentences(blob or ""):
+    sentences = _sentences(blob or "")
+    for sentence in sentences:
+        this_role = _EMPLOYMENT_THIS_ROLE.search(sentence)
+        if this_role:
+            return _employment_name(this_role.group(1))
+        seasonal = _SEASONAL_ROLE.search(sentence)
+        if seasonal:
+            return "temporary"
         if _EMPLOYMENT_NOISE.search(sentence):
             continue
         best: Optional[Tuple[int, str]] = None
         for rx in _EMPLOYMENT_STATEMENTS:
             m = rx.search(sentence)
             if m and (best is None or m.start() < best[0]):
-                word = next(g for g in m.groups() if g)
-                key = "prn" if word.startswith("prn") else word[:4].replace("-", "-")
-                best = (m.start(), _EMPLOYMENT_NAMES.get(key, NOT_STATED))
+                word = next((g for g in m.groups() if g), "contract")
+                best = (m.start(), _employment_name(word))
         if best and best[1] != NOT_STATED:
             return best[1]
-    m = _EMPLOYMENT_HOURS.search(blob or "")
-    if m:
-        return "full_time" if int(m.group(1)) >= 35 else "part_time"
+    for sentence in sentences:
+        hours = _EMPLOYMENT_HOURS.search(sentence)
+        if hours and not _EMPLOYMENT_NOISE.search(sentence):
+            return "full_time" if int(hours.group(1)) >= 35 else "part_time"
     return NOT_STATED
 
 

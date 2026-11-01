@@ -270,6 +270,11 @@ def test_clearance_level_certifications_and_employment_type():
     ("Remote\nRemote: employees in remote roles work offsite.\nFor onsite and hybrid roles...", "remote"),
     ("This role requires working in person in our Mexico City office 4 days per week.", "hybrid"),
     ("Software Engineer - Remote\nBuild things.", "remote"),
+    ("We prioritize in-office presence.\n#LI-Hybrid", "hybrid"),
+    ("Job type: Permanent, Full-time, Hybrid", "hybrid"),
+    ("Work mode: Hybrid/Split", "hybrid"),
+    ("Please note: this position is located on-site in Albuquerque, NM.", "onsite"),
+    ("Fidelity is transitioning to a full-time onsite working model.", "unknown"),
     ("Assist customers in person and over the phone.", "unknown"),
     ("A one-of-a-kind shop/play hybrid experience.", "unknown"),
     ("Deploy across on-premise, hybrid, or cloud environments.", "unknown"),
@@ -292,6 +297,15 @@ def test_work_mode_needs_a_statement(text, mode):
     ("Full-time hires are eligible to participate.", "not_stated"),
     ("Must be authorized to work on a full-time basis.", "not_stated"),
     ("API contract definition and versioning.", "not_stated"),
+    ("This job description is not a contract of employment.", "not_stated"),
+    ("Employees working at least 20 hours a week are eligible.", "not_stated"),
+    ("Schedule: Full - Time", "full_time"),
+    ("This role is a 1099 independent contractor position.", "contract"),
+    ("The medical director will work a full-time schedule Monday to Friday.", "full_time"),
+    ("This full-time position is eligible for a benefits package.", "full_time"),
+    ("Seasonal colleagues work 10-20 hours per week.", "temporary"),
+    ("Keep the seasonal areas of the store tidy.", "not_stated"),
+    ("Intern (Fixed Term)", "internship"),
 ])
 def test_employment_type_needs_a_statement(text, kind):
     assert jd_profile.read_employment_type(_norm(text)) == kind
