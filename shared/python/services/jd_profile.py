@@ -618,7 +618,8 @@ _POLICY_PARAGRAPH = re.compile(
     r"if this (?:position|role|job) is|for (?:on-?site|hybrid|remote)(?: and \w+)? roles|"
     r"employees who are working|listed as|depending on|may be|interview|onboarding|"
     r"this notice|hired to work|transitioning|rollout|opportunity to come together|"
-    r"office-based|for some roles|highly values|you are interested in|remote enabled")
+    r"office-based|for some roles|highly values|you are interested in|remote enabled|"
+    r"hybrid workforce|hybrid/virtual")
 # "Working remote is not an option" says the opposite of the word it contains.
 _MODE_NEGATED = re.compile(
     r"(?:unable to accommodate|not eligible for|not available for|no|not|without)\s+[^.,;\n]{0,40}?"
@@ -638,6 +639,10 @@ _MODE_STATEMENTS: Sequence[re.Pattern] = tuple(re.compile(p) for p in (
     rf"(?:role|position|job|opportunity)\s+(?:is|will be)\s+(?:categorized as\s+|considered\s+)?"
     rf"(?:a\s+|an\s+|fully\s+|100%\s+)*{_MODE_WORD}(?![a-z])",
     rf"open to {_MODE_WORD}(?![a-z])",
+    rf"\(\s*{_MODE_WORD}\s*\)",
+    rf"(?:requires?|majority|primarily)\s+{_MODE_WORD}(?![a-z])",
+    rf"(?:roles?|positions?|internships?|jobs?)\s+(?:is|are)\s+{_MODE_WORD}(?![a-z])",
+    rf"this\s+{_MODE_WORD}[, ]",
     rf"(?:this|the) (?:is an?|role is|position is|job is|opportunity is|role will be|"
     rf"position will be)\s+(?:a\s+|an\s+)?(?:fully\s+|100%\s+)?{_MODE_WORD}(?![a-z])",
     rf"(?:fully|100%|entirely|completely)\s+{_MODE_WORD}(?![a-z])",
@@ -649,10 +654,11 @@ _MODE_STATEMENTS: Sequence[re.Pattern] = tuple(re.compile(p) for p in (
 _PART_WEEK = (r"(?<![\d-])(?:[1-4]|one|two|three|four)(?:\s*\(\d\))?(?:\s*(?:-|to)\s*[1-4])?"
               r"(?:\s+or more)?\s*days? (?:a|per|each) week")
 _MODE_REMOTE_EXTRA = re.compile(
-    r"work(?:ing)? (?:from home|remotely)(?![a-z])|work[- ]from[- ]home (?:role|position|job)|"
+    r"work(?:ing)? remotely(?![a-z])|work(?:ing)?[- ]from[- ]home(?![a-z])|"
+    r"home[- ]based(?![a-z])|remote states(?![a-z])|"
     r"remote[- ](?:first|based|eligible|friendly)(?![a-z])")
 _MODE_HYBRID_EXTRA = re.compile(
-    r"hybrid(?:/[a-z]+)? (?:schedule|work|working|model|mode|arrangement|environment)(?![a-z])|"
+    r"hybrid(?:/[a-z]+)? (?:schedule|work|working|model|mode|arrangement|environment|capacity)(?![a-z])|"
     r"at least (?:[1-4]|one|two|three|four) days? in (?:the )?office|"
     rf"{_PART_WEEK}[^.\n]{{0,40}}(?:office|on-?site|in[- ]person|campus)|"
     rf"(?:office|on-?site|in[- ]person|campus|location)[^.\n]{{0,40}}{_PART_WEEK}")
