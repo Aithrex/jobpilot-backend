@@ -163,7 +163,10 @@ NORMALIZATION_VERSION = 4
 # v11: `jd-1.2.0`. Employment type no longer reads ordinary lines ("regular
 # bending, lifting") as statements, negated work mode wording reads as negated,
 # and the skills vocabulary grew to 570 phrases.
-EXTRACTOR_VERSION = 11
+#
+# v12: `jd-1.3.0`. `additional_skills` comes from `jd_skill_model`, about 30 ms a
+# posting and no model calls. Match scores do not change: they read the lexicon.
+EXTRACTOR_VERSION = 12
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1

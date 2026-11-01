@@ -2400,7 +2400,7 @@ def _extract_requirements_cached(jd_text: str, title: str) -> Dict[str, Any]:
                                 preferred_years=None if strict_years is not None
                                 else required_years,
                                 clearance_required=clearance_required,
-                                find_skills=find_skills)
+                                find_skills=find_skills, raw_text=jd_text)
 
     return {
         "content_hash": content_hash(jd_text, title),
