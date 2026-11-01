@@ -143,6 +143,12 @@ _FORM_ASKS_CANDIDATE = re.compile(
     r"(?<![a-z])(?:do you|will you|are you|would you|have you)(?![a-z])")
 
 
+# Refusal phrased without the word "sponsor".
+_VISA_SUPPORT_REFUSED = re.compile(
+    r"(?:cannot|can't|unable to|not able to|will not|won't|do not|does not|not)(?![a-z])[^\n.;!?]{0,50}"
+    r"(?:work authori[sz]ation|visa|immigration)\s+(?:assistance|support)")
+
+
 def read_sponsorship(blob: str) -> Dict[str, str]:
     """`{"status", "evidence"}`. A negative statement outranks a positive one.
 
@@ -150,7 +156,12 @@ def read_sponsorship(blob: str) -> Dict[str, str]:
     `not_offered`: it is said by employers who do sponsor, so it is reported
     by `read_authorization` instead.
     """
-    if not blob or "sponsor" not in blob:
+    if not blob:
+        return {"status": NOT_STATED, "evidence": ""}
+    if "sponsor" not in blob:
+        for sentence in _sentences(blob):
+            if _VISA_SUPPORT_REFUSED.search(sentence):
+                return {"status": SPONSORSHIP_NOT_OFFERED, "evidence": _evidence(sentence)}
         return {"status": NOT_STATED, "evidence": ""}
     found: Dict[str, str] = {}
 
@@ -252,7 +263,9 @@ _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
         r"(?<![a-z.])m\.d\.|(?<![a-z.])j\.d\.(?!\s*(?:power|irving|edwards|vance|williams))|juris doctor|"
         r"(?<![a-z,] )(?<![a-z])(?:md|jd)\s+(?:degree|required)")),
     (3, re.compile(
-        r"(?<![a-z-])(?<!scrum )master'?s(?![a-z])|(?<![a-z-])masters?\s+degree(?![a-z])|"
+        r"(?<![a-z-])master's(?![a-z])|(?<![a-z-])masters?\s+degree(?![a-z])|"
+        r"(?<![a-z-])(?<!scrum )masters(?=\s+(?:in|of|or|level|program|preferred|required)(?![a-z])|"
+        r"\s*[,/.;)]|\s*$)|"
         r"(?<![a-z-])master of (?:science|arts|business|engineering|education|public|fine|"
         r"laws|computer|technology|health|social|information)(?![a-z])|"
         r"(?:advanced|graduate|post-?graduate) degree|(?<![a-z])m\.?b\.?a(?![a-z])|(?<![a-z])m\.eng(?![a-z])|(?<![a-z])msc(?![a-z])|"
@@ -261,6 +274,7 @@ _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
     (2, re.compile(
         r"(?<![a-z])bachelor'?s?(?![a-z])|(?<![a-z])b\.?tech(?![a-z])|(?<![a-z])bsc(?![a-z])|"
         r"(?<![a-z])bsn(?![a-z])|(?<![a-z])b\.e\.(?![a-z])|undergraduate degree|"
+        r"(?<![a-z])baccalaureate(?![a-z])|(?<![a-z])tertiary (?:qualification|degree|education)|"
         r"(?:four|4)[- ]year degree|(?:college|university) degree|"
         r"(?:a|relevant|related|technical|engineering)\s+degree(?![a-z])(?!\s+of(?![a-z]))|"
         r"(?<![a-z\d-])(?<!\d )degree (?:in|qualified)(?![a-z])|"
@@ -278,7 +292,8 @@ _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
 _EDU_NOISE = re.compile(
     r"tuition|reimburs|scholarship|alumni|student loan|high school students|"
     r"continuing education|education assistance|education history|"
-    r"(?:phd|doctoral|graduate) programs?|these include|"
+    r"(?:phd|doctoral|graduate) programs?|these include|working towards|"
+    r"(?:bachelor|master)'?s? students|without a (?:college )?degree|"
     r"less than (?:a )?high school|"
     # The path offered INSTEAD of the degree, not a lower minimum.
     r"in lieu of|in place of|"
@@ -286,6 +301,7 @@ _EDU_NOISE = re.compile(
 # "degree, preferably in biology" prefers the FIELD, not the degree.
 _FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from)(?![a-z])[^.;,\n]*")
 # Preference wording `fit_score._PREFERRED_CUE` does not carry.
+_PARENTHETICAL = re.compile(r"\([^)]*\)")
 _EDU_PREFERRED_EXTRA = re.compile(r"(?<![a-z])(?:an asset|beneficial|considered a)(?![a-z])")
 # "High school diploma or equivalent" is a GED, not experience for a degree.
 _EDU_EQUIVALENT = re.compile(
@@ -350,21 +366,30 @@ def read_education(blob: str) -> Dict[str, Any]:
             if not _degree_levels(sentence) or _EDU_NOISE.search(sentence):
                 continue
             sentence = _FIELD_PREFERENCE.sub("", sentence)
-            sentence_pref = bool(fit_score._PREFERRED_CUE.search(sentence))
+            sentence_pref = bool(fit_score._PREFERRED_CUE.search(_PARENTHETICAL.sub("", sentence)))
             sentence_req = bool(fit_score._REQUIRED_CUE.search(sentence))
             for name, rx in _EDU_FIELDS:
                 if rx.search(sentence) and name not in fields:
                     fields.append(name)
-            for clause in _EDU_CLAUSE.split(sentence):
+            clauses = _EDU_CLAUSE.split(sentence)
+            cued = [c for c in clauses if fit_score._PREFERRED_CUE.search(_PARENTHETICAL.sub("", c))]
+            for clause in clauses:
                 # The split ate the comma that makes "bs," a degree.
                 levels = _degree_levels(clause + ",")
                 if not levels:
                     continue
-                clause_pref = bool(fit_score._PREFERRED_CUE.search(clause)
-                                   or _EDU_PREFERRED_EXTRA.search(clause))
-                clause_req = bool(fit_score._REQUIRED_CUE.search(clause))
+                # A note in brackets qualifies the note: "degree (CPA highly
+                # preferred)" still requires the degree.
+                plain = _PARENTHETICAL.sub("", clause)
+                clause_pref = bool(fit_score._PREFERRED_CUE.search(plain)
+                                   or _EDU_PREFERRED_EXTRA.search(plain))
+                clause_req = bool(fit_score._REQUIRED_CUE.search(plain))
                 if clause_pref or clause_req:
                     is_pref = clause_pref and not clause_req
+                elif cued and len(clauses) > 1:
+                    # "Bachelor's, Master's preferred": the cue belongs to its
+                    # own clause, and this one stands on the section.
+                    is_pref = mode == "preferred"
                 else:
                     is_pref = sentence_pref and not sentence_req
                     if not sentence_pref and not sentence_req:
@@ -399,10 +424,34 @@ _YEARS_RANGE = re.compile(
     r"(?<![\d.$])(\d{1,2})\s*\+?\s*(?:-|to)\s*(\d{1,2})\s*\+?\s*(?:years?|yrs?)(?![a-z])")
 
 
-def read_experience(blob: str, min_years: Optional[int]) -> Dict[str, Any]:
-    """`min_years` is `fit_score._required_years`; this adds the top of a range."""
+_NUMBER_NAMES = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+                 "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+                 "eighteen": 18}
+_MONTHS_REQUIRED = re.compile(
+    r"(?<![\d.$])(\d{1,2}|" + "|".join(_NUMBER_NAMES) + r")(?:\s*\(\d{1,2}\))?\s*\+?\s*months?"
+    r"(?![a-z])[^.\n]{0,60}(?:experience|required)")
+
+
+def _months_required(blob: str) -> Optional[float]:
+    """A requirement stated in months, in years: "six (6) months prior experience"."""
+    from services import fit_score
+
+    for sentence in _sentences(blob or ""):
+        m = _MONTHS_REQUIRED.search(sentence)
+        if m and not fit_score._PREFERRED_CUE.search(sentence):
+            count = _NUMBER_NAMES.get(m.group(1)) or int(m.group(1))
+            return round(count / 12, 2)
+    return None
+
+
+def read_experience(blob: str, min_years: Optional[int],
+                    preferred_years: Optional[int] = None) -> Dict[str, Any]:
+    """`min_years` is what the posting REQUIRES; `preferred_years` is set only when
+    a preference is all it states. `fit_score` keeps scoring on either one."""
     if min_years is None:
-        return {"min_years": None, "max_years": None, "evidence": ""}
+        months = _months_required(blob)
+        return {"min_years": months, "max_years": None,
+                "preferred_years": preferred_years, "evidence": ""}
     max_years = None
     evidence = ""
     for sentence in _sentences(blob or ""):
@@ -416,7 +465,8 @@ def read_experience(blob: str, min_years: Optional[int]) -> Dict[str, Any]:
     if not evidence:
         needle = re.compile(rf"(?<![\d.$]){min_years}\s*(?:\+|plus)?\s*(?:or more\s+)?(?:years?|yrs?)")
         evidence = next((s for s in _sentences(blob or "") if needle.search(s)), "")
-    return {"min_years": min_years, "max_years": max_years, "evidence": _evidence(evidence)}
+    return {"min_years": min_years, "max_years": max_years, "preferred_years": None,
+            "evidence": _evidence(evidence)}
 
 
 _CLEARANCE_LEVELS: Sequence[Tuple[str, re.Pattern]] = (
@@ -648,14 +698,15 @@ _SOFT_SKILLS = frozenset({
 
 
 def read_fields(blob: str, *, min_years: Optional[int], clearance_required: bool,
-                find_skills: Callable[[str], List[str]]) -> Dict[str, Any]:
+                find_skills: Callable[[str], List[str]],
+                preferred_years: Optional[int] = None) -> Dict[str, Any]:
     """The block stored at `requirements["jd"]`. `blob` is `fit_score._norm`ed."""
     return {
         "v": JD_PROFILE_VERSION,
         "sponsorship": read_sponsorship(blob),
         "authorization": read_authorization(blob),
         "education": read_education(blob),
-        "experience": read_experience(blob, min_years),
+        "experience": read_experience(blob, min_years, preferred_years),
         "clearance_level": clearance_level(blob, clearance_required),
         "certifications": read_certifications(blob),
         "employment_type": read_employment_type(blob),

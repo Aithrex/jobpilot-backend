@@ -113,6 +113,9 @@ def test_authorization(sentence, requirement):
     "We offer tuition reimbursement toward a master's degree.",
     "Be a master of your craft.",
     "Connaissance du S.I.M.D.U.T;",
+    "Masters job-related, technical and professional knowledge.",
+    "Master's students: $28.00 CAD / hour.",
+    "Completed or working towards a high school diploma.",
     "Our team includes engineers from Google and leading PhD programs.",
 ])
 def test_no_degree_is_invented(text):
@@ -135,6 +138,8 @@ def test_no_degree_is_invented(text):
     ("Degree in life sciences, engineering, or a related discipline.", 2, 0),
     ("Bachelors degree + 7 years. In lieu of required degree, associates degree + 9 years.", 2, 0),
     ("Education required: less than high school education.", 0, 0),
+    ("Bachelor's/university degree, Master's degree preferred", 2, 3),
+    ("University degree in accounting (CPA or similar certification highly preferred).", 2, 0),
 ])
 def test_degree_reading(text, minimum, preferred):
     result = jd_profile.read_education(_norm(text))
@@ -200,6 +205,32 @@ def test_equivalent_experience_is_not_a_ged(text, expected):
 ])
 def test_years_read_spelled_numbers_and_the_bachelors_path(text, years):
     assert fit_score._required_years(_norm(text)) == years
+
+
+@pytest.mark.parametrize("text,minimum,preferred", [
+    ("3-6 years of experience, preferred", None, 3),
+    ("One year of general maintenance experience preferred.", None, 1),
+    ("A degree is a plus and a minimum of 5 years successful experience in sales.", 5, None),
+    ("Must be 18 years or older.", None, None),
+    ("1-3 years of inside sales experience, preferably in B2B distribution.", 1, None),
+    ("+3 years of experience in dealer administration (ideal), with strong results.", 3, None),
+    ("Typically 2-3 years of relevant experience and a degree in a related field desirable.", 2, None),
+    ("Current nursing experience within the past 5 years.", None, None),
+    ("Bachelor's degree, along with 5+ years as a clinical research associate.", 5, None),
+])
+def test_experience_keeps_required_and_preferred_apart(text, minimum, preferred):
+    block = fit_score.extract_requirements(text, "Analyst")["jd"]["experience"]
+    assert (block["min_years"], block["preferred_years"]) == (minimum, preferred)
+
+
+def test_months_read_as_years():
+    assert jd_profile.read_experience(
+        _norm("Six (6) months prior sales experience."), None)["min_years"] == 0.5
+
+
+def test_the_scorer_keeps_its_preferred_years_fallback():
+    assert fit_score.extract_requirements(
+        "3-6 years of experience, preferred", "Analyst")["required_years"] == 3
 
 
 def test_the_scorer_no_longer_taxes_a_bachelors_for_the_word_teams():

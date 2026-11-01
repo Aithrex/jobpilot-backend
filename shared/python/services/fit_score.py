@@ -2085,13 +2085,17 @@ _YEARS_CONTEXT = re.compile(
     r"position|building|leading|managing|designing|supporting|administering|"
     r"running|operating|deploying|developing|writing|delivering|owning|"
     r"implementing|architecting|maintaining|testing|analy[sz]ing|"
-    r"(?<![a-z])in (a|an)(?![a-z])")
+    r"(?<![a-z])in (a|an)(?![a-z])|(?<![a-z])as (a|an)(?![a-z])")
 # Award streaks too: "voted 13 years in a row a top workplace" filed a nursing
 # assistant and a maintenance assistant as `staff` in the 2026-10-02 spot check.
 _YEARS_NOT_EXPERIENCE = re.compile(
     r"of age|(?<![a-z])old(?![a-z])|in business|business for|history|founded|"
     r"anniversary|warranty|tenure|lease|coursework|of (college|school|study)|"
-    r"(?<![a-z])ago(?![a-z])|in a row|consecutive|top workplace|best place")
+    r"(?<![a-z])ago(?![a-z])|in a row|consecutive|top workplace|best place|"
+    r"or older|(?<![a-z])of age(?![a-z])|from (?:the )?date|of hire")
+_YEARS_WINDOW_BEFORE = re.compile(
+    r"(?:within|in|during|over|for) (?:the )?(?:past|last|previous|next|first)\s*$|"
+    r"(?:at least|minimum|must be|over)\s*$(?=.*age)|(?<![a-z])age\s*$")
 _PREFERRED_CUE = re.compile(
     r"prefer|nice to have|nice-to-have|(?<![a-z])bonus(?![a-z])|a plus(?![a-z])|"
     r"ideal(ly)?(?![a-z])|desired|desirable|advantageous")
@@ -2104,7 +2108,7 @@ def is_section_heading(line: str) -> bool:
     "- Prior closing experience strongly preferred" as one filed the rest of the
     posting, degree requirement included, as nice-to-have."""
     text = line.strip()
-    if not text or len(text) > 90 or text[0] in "-•*·–—":
+    if not text or len(text) > 90 or text[0] in "-•*·–—" or "," in text or text.endswith("."):
         return False
     return len(text.split()) <= 8 or text.endswith(":")
 
@@ -2129,6 +2133,33 @@ _BACHELOR_PATH_YEARS = re.compile(
     r"(?<![\d.$])(\d{1,2})\s*\+?\s*(?:years?|yrs?)(?![a-z])")
 
 
+# What a preference word qualifies decides whether the NUMBER is preferred.
+# "1-3 years of sales, preferably in B2B" prefers the field, and "+3 years
+# (ideal)" states a target. "3-6 years, preferred" closes on the cue, so it covers
+# the whole sentence.
+_FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from|with|at)(?![a-z])[^.;,\n]*")
+_PARENTHETICAL = re.compile(r"\([^)]*\)")
+_CLOSING_PREFERENCE = re.compile(
+    r"(?:preferred|desired|desirable|a plus|nice to have|advantageous)\W*$")
+_CLAUSE_BREAK = re.compile(r"[,;:]\s+|\s+and\s+|\s+but\s+")
+
+
+def _years_are_preferred(sentence: str, position: int) -> bool:
+    if _CLOSING_PREFERENCE.search(_CLAUSE_BREAK.split(sentence)[-1]) \
+            and len(_CLAUSE_BREAK.split(sentence)[-1].split()) <= 3:
+        return True
+    start = 0
+    end = len(sentence)
+    for brk in _CLAUSE_BREAK.finditer(sentence):
+        if brk.end() <= position:
+            start = brk.end()
+        elif brk.start() >= position:
+            end = brk.start()
+            break
+    clause = _FIELD_PREFERENCE.sub("", _PARENTHETICAL.sub("", sentence[start:end]))
+    return bool(_PREFERRED_CUE.search(clause))
+
+
 def _digits_for_number_words(blob: str) -> str:
     def word(match: "re.Match[str]") -> str:
         return str(_NUMBER_WORDS[match.group(1)])
@@ -2139,7 +2170,7 @@ def _digits_for_number_words(blob: str) -> str:
         lambda m: m.group(1) + str(_NUMBER_WORDS[m.group(2)]), blob)
 
 
-def _required_years(blob: str) -> Optional[int]:
+def _required_years(blob: str, *, preferred_fallback: bool = True) -> Optional[int]:
     """The posting's HEADLINE experience requirement, in years, or None.
 
     The headline, not the smallest number. "5+ years of software engineering,
@@ -2172,18 +2203,24 @@ def _required_years(blob: str) -> Optional[int]:
             elif _REQUIRED_HEAD.search(stripped):
                 mode = "required"
         for sentence in _SENTENCE_SPLIT.split(stripped):
-            is_pref = bool(_PREFERRED_CUE.search(sentence)) or (
-                mode == "preferred" and not _REQUIRED_CUE.search(sentence))
             for m in _HEADLINE_YEARS_RE.finditer(sentence):
+                is_pref = _years_are_preferred(sentence, m.start()) or (
+                    mode == "preferred" and not _REQUIRED_CUE.search(sentence))
                 n = int(m.group(1))
                 tail = m.group(2) or ""
                 head = sentence[max(0, m.start() - 40):m.start()]
                 if not 0 <= n <= 20 or _YEARS_NOT_EXPERIENCE.search(tail[:40]):
                     continue
+                # A window, not a requirement: "within the past 5 years".
+                if _YEARS_WINDOW_BEFORE.search(head):
+                    continue
                 if not (_YEARS_CONTEXT.search(tail[:60]) or "experience" in head):
                     continue
-                (preferred if is_pref else required).append(n)
-    pool = required or preferred
+                # "...a plus and a minimum of 5 years": the cue touching the
+                # number outranks one elsewhere in the sentence.
+                near_required = bool(_REQUIRED_CUE.search(head[-20:]))
+                (preferred if is_pref and not near_required else required).append(n)
+    pool = required or (preferred if preferred_fallback else [])
     if not pool:
         return None
     # Only when the bachelor's number is one the reader above accepted, so a
@@ -2323,7 +2360,10 @@ def _extract_requirements_cached(jd_text: str, title: str) -> Dict[str, Any]:
     clearance_required = bool(_CLEARANCE_JD.search(combined))
     # The ONE reading of this JD. The two flags below are derived from it so
     # that the scorer, the feed and tailoring cannot disagree about a posting.
-    jd = jd_profile.read_fields(combined, min_years=required_years,
+    strict_years = _required_years(combined, preferred_fallback=False)
+    jd = jd_profile.read_fields(combined, min_years=strict_years,
+                                preferred_years=None if strict_years is not None
+                                else required_years,
                                 clearance_required=clearance_required,
                                 find_skills=find_skills)
 
