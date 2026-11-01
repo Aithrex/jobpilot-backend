@@ -279,7 +279,7 @@ _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
         r"\s*[,/.;)]|\s*$)|"
         r"(?<![a-z-])master of (?:science|arts|business|engineering|education|public|fine|"
         r"laws|computer|technology|health|social|information)(?![a-z])|"
-        r"(?:advanced|graduate|post-?graduate) degree|(?<![a-z])m\.?b\.?a(?![a-z])|(?<![a-z])m\.eng(?![a-z])|(?<![a-z])msc(?![a-z])|"
+        r"(?:advanced|graduate|post-?graduate) degree|education:\s*post-?graduate|(?<![a-z])m\.?b\.?a(?![a-z])|(?<![a-z])m\.eng(?![a-z])|(?<![a-z])msc(?![a-z])|"
         r"(?<![a-z.])m\.s\.?(?![a-z])|(?<![a-z.])m\.a\.(?![a-z])(?!\s*certif)|"
         rf"(?<![a-z.])(?<!, )ms{_ABBR_NEXT}")),
     (2, re.compile(
@@ -288,7 +288,8 @@ _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
         r"(?<![a-z])baccalaureate(?![a-z])|(?<![a-z])tertiary (?:qualification|degree|education)|"
         r"(?:four|4)[- ]year degree|(?:college|university) degree|"
         r"(?:a|relevant|related|technical|engineering|architectural|science|business|"
-        r"accounting|nursing|finance|law)\s+degree(?![a-z])(?!\s+of(?![a-z]))|"
+        r"accounting|nursing|finance|law|it)\s+degree(?![a-z])(?!\s+of(?![a-z]))|"
+        r"(?:college|university) graduate(?![a-z])(?!\s+(?:student|program|recruit))|"
         # A bare "degree" only opening a line: anywhere else it may be the tail of
         # "master's degree in physics", which must not read as a bachelor's too.
         r"^\W*degree (?:in|qualified|or equivalent|required)(?![a-z])|"
@@ -298,7 +299,7 @@ _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
         r"(?<![a-z])associate'?s?\s+(?:degree|of (?:arts|science|applied))(?![a-z])|"
         r"(?<![a-z])a\.a\.s\.?(?![a-z])|"
         r"(?<![a-z])diploma(?![a-z])|(?<![a-z])high school(?![a-z])|"
-        r"(?<![a-z])ged(?![a-z])|"
+        r"(?<![a-z])ged(?![a-z])|graduate of an? (?:accredited )?[a-z ]{0,40}(?:nursing|school|program)(?![a-z])|"
         r"(?<![a-z])vocational (?:school|training|degree|diploma|certificate)(?![a-z])")),
 )
 
@@ -325,6 +326,9 @@ _EDU_NOISE = re.compile(
 _FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from)(?![a-z])[^.;,\n]*")
 # Preference wording `fit_score._PREFERRED_CUE` does not carry.
 _PARENTHETICAL = re.compile(r"\([^)]*\)")
+_DEGREE_NOT_REQUIRED = re.compile(r"(?:the )?(?:stated|listed|above) degree is preferred")
+_NOT_ESSENTIAL = re.compile(r"(?:preferred|desirable|desired)\s+(?:but|though|although)\s+not\s+"
+                            r"(?:essential|required|necessary|mandatory)")
 _CLOSING_NAMES_OTHER = re.compile(r"experience|skills?|knowledge|certif|licen[sc]")
 _EDU_PREFERRED_EXTRA = re.compile(r"(?<![a-z])(?:an asset|beneficial|considered a|valued)(?![a-z])")
 # "High school diploma or equivalent" is a GED, not experience for a degree.
@@ -392,6 +396,9 @@ def read_education(blob: str) -> Dict[str, Any]:
                 continue
             sentence = _FIELD_PREFERENCE.sub("", sentence)
             sentence_pref = bool(fit_score._PREFERRED_CUE.search(_PARENTHETICAL.sub("", sentence)))
+            if _NOT_ESSENTIAL.search(sentence):
+                preferred.extend((level, sentence) for level in _degree_levels(sentence + ","))
+                continue
             closing = _EDU_CLAUSE.split(sentence)[-1]
             if fit_score._PREFERRED_CUE.search(_PARENTHETICAL.sub("", closing)) \
                     and not _degree_levels(closing + ",") \
@@ -436,6 +443,10 @@ def read_education(blob: str) -> Dict[str, Any]:
                 bucket = preferred if is_pref else required
                 bucket.extend((level, sentence) for level in levels)
 
+    # Boilerplate that overturns a degree listed earlier in the posting.
+    if _DEGREE_NOT_REQUIRED.search(blob or ""):
+        preferred.extend(required)
+        required = []
     min_level, evidence = 0, ""
     if required:
         min_level, evidence = min(required, key=lambda item: item[0])
@@ -606,7 +617,13 @@ def read_certifications(blob: str) -> List[str]:
 _POLICY_PARAGRAPH = re.compile(
     r"if this (?:position|role|job) is|for (?:on-?site|hybrid|remote)(?: and \w+)? roles|"
     r"employees who are working|listed as|depending on|may be|interview|onboarding|"
-    r"this notice|hired to work|transitioning|rollout|opportunity to come together")
+    r"this notice|hired to work|transitioning|rollout|opportunity to come together|"
+    r"office-based|for some roles|highly values|you are interested in|remote enabled")
+# "Working remote is not an option" says the opposite of the word it contains.
+_MODE_NEGATED = re.compile(
+    r"(?:unable to accommodate|not eligible for|not available for|no|not|without)\s+[^.,;\n]{0,40}?"
+    r"(?:remote|hybrid|telecommut\w*)[^.,;\n]*|"
+    r"(?:remote|hybrid|telecommut\w*)[^.,;\n]{0,30}?(?:is not|isn't|not an option|not available)[^.,;\n]*")
 
 _MODE_WORD = r"(remote|hybrid|on[- ]?site|in[- ]office|in[- ]person)"
 _MODE_LABEL = (r"(?:work(?:place|ing)?(?: type| model| environment| arrangement| style| location| flexibility| mode)?|"
@@ -616,11 +633,16 @@ _MODE_STATEMENTS: Sequence[re.Pattern] = tuple(re.compile(p) for p in (
     rf"^\W*{_MODE_WORD}\W*$",
     # A line opened by the mode: "Remote (Continental US)", "On-site - New York".
     rf"^\W*{_MODE_WORD}\s*[-–—(]",
+    # A field in a header: "Mossville, IL | Onsite | Full-time", "Mumbai : Remote".
+    rf"[|>•:]\s*{_MODE_WORD}\s*(?:$|[|•])",
+    rf"(?:role|position|job|opportunity)\s+(?:is|will be)\s+(?:categorized as\s+|considered\s+)?"
+    rf"(?:a\s+|an\s+|fully\s+|100%\s+)*{_MODE_WORD}(?![a-z])",
+    rf"open to {_MODE_WORD}(?![a-z])",
     rf"(?:this|the) (?:is an?|role is|position is|job is|opportunity is|role will be|"
     rf"position will be)\s+(?:a\s+|an\s+)?(?:fully\s+|100%\s+)?{_MODE_WORD}(?![a-z])",
     rf"(?:fully|100%|entirely|completely)\s+{_MODE_WORD}(?![a-z])",
     rf"(?<![a-z-]){_MODE_WORD}\s+(?:work(?:ing)?\s+)?(?:role|position|opportunity|job|employee|"
-    r"presence|schedule|requirement|arrangement)(?![a-z])",
+    r"presence|schedule|requirement|arrangement|company|office environment|expectation)(?![a-z])",
     rf"(?:work|working|be|report|reporting|based|located)\s+(?:primarily\s+|fully\s+)?{_MODE_WORD}(?![a-z])",
 ))
 # Fewer than five days a week somewhere is a hybrid schedule.
@@ -630,7 +652,8 @@ _MODE_REMOTE_EXTRA = re.compile(
     r"work(?:ing)? (?:from home|remotely)(?![a-z])|work[- ]from[- ]home (?:role|position|job)|"
     r"remote[- ](?:first|based|eligible|friendly)(?![a-z])")
 _MODE_HYBRID_EXTRA = re.compile(
-    r"hybrid (?:schedule|work|working|model|arrangement|environment)(?![a-z])|"
+    r"hybrid(?:/[a-z]+)? (?:schedule|work|working|model|mode|arrangement|environment)(?![a-z])|"
+    r"at least (?:[1-4]|one|two|three|four) days? in (?:the )?office|"
     rf"{_PART_WEEK}[^.\n]{{0,40}}(?:office|on-?site|in[- ]person|campus)|"
     rf"(?:office|on-?site|in[- ]person|campus|location)[^.\n]{{0,40}}{_PART_WEEK}")
 # A LinkedIn tag is the recruiter picking this field in a form, so it outranks
@@ -658,11 +681,12 @@ def read_work_mode(blob: str) -> str:
         title = _TITLE_MODE.search(first_line)
         if title:
             return title.group(1)
-    for sentence in _sentences(blob):
-        if _POLICY_PARAGRAPH.search(sentence):
-            continue
-        if _MODE_HYBRID_EXTRA.search(sentence):
-            return "hybrid"
+    sentences = [_MODE_NEGATED.sub(" ", s) for s in _sentences(blob)
+                 if not _POLICY_PARAGRAPH.search(s)]
+    # Hybrid first: a hybrid job says "on-site" too, and nothing else says hybrid.
+    if any(_MODE_HYBRID_EXTRA.search(s) for s in sentences):
+        return "hybrid"
+    for sentence in sentences:
         best: Optional[Tuple[int, str]] = None
         for rx in _MODE_STATEMENTS:
             m = rx.search(sentence)
