@@ -117,6 +117,8 @@ def test_authorization(sentence, requirement):
     "Master's students: $28.00 CAD / hour.",
     "Completed or working towards a high school diploma.",
     "BSN or higher premium $1.00/hr.",
+    "Currently enrolled in a university program pursuing a degree in engineering.",
+    "No bachelor degree required.",
     "Must have completed at least two years toward a four-year undergraduate degree program.",
     "Our team includes engineers from Google and leading PhD programs.",
 ])
@@ -145,6 +147,8 @@ def test_no_degree_is_invented(text):
     ("High school diploma, GED or equivalent work experience, preferred", 0, 1),
     ("Degree or equivalent experience required.", 2, 0),
     ("Master's degree in physics required.", 3, 0),
+    ("Bachelor's degree in physics (or high school diploma / GED plus 6 additional years).", 2, 0),
+    ("A bachelor's degree or equivalent practical experience is valued for this role.", 0, 2),
     ("Degree in life sciences required.", 2, 0),
 ])
 def test_degree_reading(text, minimum, preferred):
@@ -175,6 +179,28 @@ def test_clearance_level_label_and_customs_work():
     reqs = fit_score.extract_requirements(
         "Ensure import/export control compliance with customs rules.", "Trade Analyst")
     assert reqs["clearance_required"] is False
+
+
+def test_citizenship_boilerplate_only_binds_a_cleared_role():
+    line = _norm("U.S. citizenship is required for all positions with a government clearance.")
+    assert jd_profile.read_authorization(line)["requirement"] == jd_profile.NOT_STATED
+    assert jd_profile.read_authorization(line, True)["requirement"] == jd_profile.AUTH_CITIZEN
+
+
+@pytest.mark.parametrize("text,level", [
+    ("Obtain and maintain a Secret U.S. security clearance.", "secret"),
+    ("Active Top Secret clearance with SCI eligibility.", "ts_sci"),
+])
+def test_clearance_levels(text, level):
+    assert jd_profile.clearance_level(_norm(text), True) == level
+
+
+def test_itar_compliance_work_is_not_a_clearance_rule():
+    reqs = fit_score.extract_requirements(
+        "Maintains records for exports of ITAR hardware and technical data.", "Trade Analyst")
+    assert reqs["clearance_required"] is False
+    assert fit_score.extract_requirements(
+        "Must be a U.S. person under ITAR.", "Engineer")["clearance_required"] is True
 
 
 def test_advanced_degree_reads_as_a_masters():
@@ -218,6 +244,10 @@ def test_years_read_spelled_numbers_and_the_bachelors_path(text, years):
     ("One year of general maintenance experience preferred.", None, 1),
     ("A degree is a plus and a minimum of 5 years successful experience in sales.", 5, None),
     ("Must be 18 years or older.", None, None),
+    ("Degree and typically requires 10+ years of relevant experience.\n12+ years of experience in architecture.", 10, None),
+    ("Minimum 2 years of controls experience.\nNo degree - must have 5+ years verifiable experience.", 2, None),
+    ("5 years of management experience.\nAssociate degree plus seven (7) years of experience will meet the requirement.", 5, None),
+    ("Bachelor's degree and four (4) years of progressively responsible work.", 4, None),
     ("1-3 years of inside sales experience, preferably in B2B distribution.", 1, None),
     ("+3 years of experience in dealer administration (ideal), with strong results.", 3, None),
     ("Typically 2-3 years of relevant experience and a degree in a related field desirable.", 2, None),

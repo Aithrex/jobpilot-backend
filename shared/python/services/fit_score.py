@@ -1939,7 +1939,10 @@ _CLEARANCE_JD = re.compile(
     # rule only counts next to who may do the work.
     r"export[ -]control(?:led|s)?[^.\n]{0,120}(?:u\.?s\.? person|citizen|permanent resident)|"
     r"(?:u\.?s\.? person|citizen|permanent resident)[^.\n]{0,120}export[ -]control|"
-    r"\bitar\b|itar\s*/\s*ear|ear\s*/\s*itar|"
+    # ITAR likewise: running a company's ITAR compliance is not being restricted
+    # by it, so the rule must say something about the applicant.
+    r"\bitar\b[^.\n]{0,160}(?:u\.?s\.? person|citizen|permanent resident|must|required|eligib)|"
+    r"(?:u\.?s\.? person|citizen|permanent resident|must|required|eligib)[^.\n]{0,160}\bitar\b|"
     r"\bear\b\s+(?:regulation|requirement|restriction)|"
     r"government contract requires|federal contract requires|"
     r"national agency check|suitability determination)")
@@ -2085,7 +2088,7 @@ _YEARS_CONTEXT = re.compile(
     r"position|building|leading|managing|designing|supporting|administering|"
     r"running|operating|deploying|developing|writing|delivering|owning|"
     r"implementing|architecting|maintaining|testing|analy[sz]ing|"
-    r"(?<![a-z])in (a|an)(?![a-z])|(?<![a-z])as (a|an)(?![a-z])")
+    r"(?<![a-z])in (a|an)(?![a-z])|(?<![a-z])as (a|an)(?![a-z])|progressive")
 # Award streaks too: "voted 13 years in a row a top workplace" filed a nursing
 # assistant and a maintenance assistant as `staff` in the 2026-10-02 spot check.
 _YEARS_NOT_EXPERIENCE = re.compile(
@@ -2137,6 +2140,10 @@ _BACHELOR_PATH_YEARS = re.compile(
 # "1-3 years of sales, preferably in B2B" prefers the field, and "+3 years
 # (ideal)" states a target. "3-6 years, preferred" closes on the cue, so it covers
 # the whole sentence.
+# A way around the requirement, whose number is the price of not meeting it.
+_YEARS_ALTERNATE_PATH = re.compile(
+    r"in lieu|substitut|will meet|(?<![a-z])no degree(?![a-z])|^or(?![a-z])")
+_YEARS_STATED_RULE = re.compile(r"(?<![a-z])(?:minimum|requires?|must have|at least)(?![a-z])")
 _FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from|with|at)(?![a-z])[^.;,\n]*")
 _PARENTHETICAL = re.compile(r"\([^)]*\)")
 _CLOSING_PREFERENCE = re.compile(
@@ -2158,6 +2165,10 @@ def _years_are_preferred(sentence: str, position: int) -> bool:
             break
     clause = _FIELD_PREFERENCE.sub("", _PARENTHETICAL.sub("", sentence[start:end]))
     return bool(_PREFERRED_CUE.search(clause))
+
+
+_YEARS_WITH_BACHELOR = re.compile(
+    r"(?<![\d.$])(\d{1,2})\s*\+?\s*(?:years?|yrs?) with (?:a )?(?:bachelor'?s?|b\.?s\.?)(?![a-z])")
 
 
 def _digits_for_number_words(blob: str) -> str:
@@ -2190,6 +2201,7 @@ def _required_years(blob: str, *, preferred_fallback: bool = True) -> Optional[i
     blob = _digits_for_number_words(_norm(blob))  # callers normally pass normalised text
     required: List[int] = []
     preferred: List[int] = []
+    stated: List[int] = []
     mode = "required"
     for line in blob.split("\n"):
         stripped = line.strip()
@@ -2203,6 +2215,8 @@ def _required_years(blob: str, *, preferred_fallback: bool = True) -> Optional[i
             elif _REQUIRED_HEAD.search(stripped):
                 mode = "required"
         for sentence in _SENTENCE_SPLIT.split(stripped):
+            if _YEARS_ALTERNATE_PATH.search(sentence):
+                continue
             for m in _HEADLINE_YEARS_RE.finditer(sentence):
                 is_pref = _years_are_preferred(sentence, m.start()) or (
                     mode == "preferred" and not _REQUIRED_CUE.search(sentence))
@@ -2220,12 +2234,19 @@ def _required_years(blob: str, *, preferred_fallback: bool = True) -> Optional[i
                 # number outranks one elsewhere in the sentence.
                 near_required = bool(_REQUIRED_CUE.search(head[-20:]))
                 (preferred if is_pref and not near_required else required).append(n)
+                if not is_pref and _YEARS_STATED_RULE.search(sentence):
+                    stated.append(n)
     pool = required or (preferred if preferred_fallback else [])
     if not pool:
         return None
+    # "Typically requires 10+ years" and "12+ years of architecture": the line
+    # that states the rule outranks a list of what the years were spent on.
+    if stated:
+        pool = stated
     # Only when the bachelor's number is one the reader above accepted, so a
     # degree's length ("bachelor's, 4 years") cannot become the requirement.
     paths = [int(m.group(1)) for m in _BACHELOR_PATH_YEARS.finditer(blob)]
+    paths += [int(m.group(1)) for m in _YEARS_WITH_BACHELOR.finditer(blob)]
     paths = [n for n in paths if n in pool]
     return min(paths) if paths else max(pool)
 

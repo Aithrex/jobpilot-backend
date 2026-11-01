@@ -211,7 +211,7 @@ _AUTH_CITIZEN_OR_PR = re.compile(
     r"(?:must be|requires?|be) an?\s+u\.?s\.? person(?![a-z])")
 _AUTH_CITIZEN = re.compile(
     r"must (?:be|hold) (?:a )?(?:u\.?s\.?|united states) citizen|"
-    r"(?:u\.?s\.?|united states) citizenship (?:is |are )?required|"
+    r"(?:u\.?s\.?|united states) citizenship(?: status)? (?:is |are )?required|"
     r"requires? (?:u\.?s\.?|united states) citizenship|"
     r"(?<![a-z])citizens? only(?![a-z])")
 _AUTH_ANY = re.compile(
@@ -219,6 +219,7 @@ _AUTH_ANY = re.compile(
     r"(?:legal |legally )?right to work|work authori[sz]ation|work authori[sz]ed|"
     r"work lawfully|lawfully (?:authori[sz]ed|work)|valid work (?:permit|visa)|"
     r"eligibility to work")
+_AUTH_WORK_REQUESTS = re.compile(r"authori[sz]ation requests?")
 # Compliance boilerplate that names work authorization without requiring it.
 _AUTH_BOILERPLATE = re.compile(
     r"e-?verify|i-9|employment eligibility verification|"
@@ -230,12 +231,19 @@ _AUTH_NOT_THIS_ROLE = re.compile(
     r"may be required|may require|(?<![a-z])if (?:required|applicable)(?![a-z])")
 
 
-def read_authorization(blob: str) -> Dict[str, str]:
+_AUTH_CLEARED_ROLES = re.compile(r"all positions with a (?:government |security )?clearance")
+
+
+def read_authorization(blob: str, clearance_required: bool = False) -> Dict[str, str]:
     """`{"requirement", "evidence"}`, strictest statement first."""
     if not blob:
         return {"requirement": NOT_STATED, "evidence": ""}
     fallback = ""
     for sentence in _sentences(blob):
+        # "Citizenship is required for all positions with a clearance" is boiler
+        # plate on most postings and a rule on the ones that carry a clearance.
+        if clearance_required and _AUTH_CLEARED_ROLES.search(sentence):
+            return {"requirement": AUTH_CITIZEN, "evidence": _evidence(sentence)}
         if _AUTH_NOT_THIS_ROLE.search(sentence):
             continue
         if _AUTH_CITIZEN_OR_PR.search(sentence):
@@ -243,7 +251,8 @@ def read_authorization(blob: str) -> Dict[str, str]:
         if _AUTH_CITIZEN.search(sentence):
             return {"requirement": AUTH_CITIZEN, "evidence": _evidence(sentence)}
         if not fallback and _AUTH_ANY.search(sentence) \
-                and not _AUTH_BOILERPLATE.search(sentence):
+                and not _AUTH_BOILERPLATE.search(sentence) \
+                and not _AUTH_WORK_REQUESTS.search(sentence):
             fallback = sentence
     if fallback:
         return {"requirement": AUTH_AUTHORIZED, "evidence": _evidence(fallback)}
@@ -298,6 +307,11 @@ _EDU_NOISE = re.compile(
     r"continuing education|education assistance|education history|"
     r"(?:phd|doctoral|graduate) programs?|these include|working towards|"
     r"(?<![a-z])premium(?![a-z])|differential|years toward|"
+    # Enrolment is not a held degree, and these lines waive one.
+    r"(?<![a-z])pursuing(?![a-z])|currently enrolled|actively enrolled|"
+    r"(?<![a-z])no (?:bachelor|college|university|degree)|"
+    # A substitute path, not a lower minimum.
+    r"will meet|substitut|"
     r"(?:bachelor|master)'?s? students|without a (?:college )?degree|"
     r"less than (?:a )?high school|"
     # The path offered INSTEAD of the degree, not a lower minimum.
@@ -307,7 +321,7 @@ _EDU_NOISE = re.compile(
 _FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from)(?![a-z])[^.;,\n]*")
 # Preference wording `fit_score._PREFERRED_CUE` does not carry.
 _PARENTHETICAL = re.compile(r"\([^)]*\)")
-_EDU_PREFERRED_EXTRA = re.compile(r"(?<![a-z])(?:an asset|beneficial|considered a)(?![a-z])")
+_EDU_PREFERRED_EXTRA = re.compile(r"(?<![a-z])(?:an asset|beneficial|considered a|valued)(?![a-z])")
 # "High school diploma or equivalent" is a GED, not experience for a degree.
 _EDU_EQUIVALENT = re.compile(
     r"equivalent[^.;\n]{0,30}(?:experience|combination)|"
@@ -387,13 +401,15 @@ def read_education(blob: str) -> Dict[str, Any]:
             clauses = _EDU_CLAUSE.split(sentence)
             cued = [c for c in clauses if fit_score._PREFERRED_CUE.search(_PARENTHETICAL.sub("", c))]
             for clause in clauses:
+                # A note in brackets qualifies the note: "degree (CPA highly
+                # preferred)" still requires the degree, and "(or high school
+                # diploma plus 6 years)" is a path around it.
+                plain = _PARENTHETICAL.sub("", clause)
                 # The split ate the comma that makes "bs," a degree.
-                levels = _degree_levels(clause + ",")
+                levels = _degree_levels(plain + ",") or (
+                    _degree_levels(clause + ",") if "(or" not in clause else [])
                 if not levels:
                     continue
-                # A note in brackets qualifies the note: "degree (CPA highly
-                # preferred)" still requires the degree.
-                plain = _PARENTHETICAL.sub("", clause)
                 clause_pref = bool(fit_score._PREFERRED_CUE.search(plain)
                                    or _EDU_PREFERRED_EXTRA.search(plain))
                 clause_req = bool(fit_score._REQUIRED_CUE.search(plain))
@@ -483,10 +499,11 @@ def read_experience(blob: str, min_years: Optional[int],
 
 
 _CLEARANCE_LEVELS: Sequence[Tuple[str, re.Pattern]] = (
-    ("ts_sci", re.compile(r"ts/sci|ts\s*/\s*sci|top secret\s*/\s*sci|clearance (?:type|level):\s*ts")),
+    ("ts_sci", re.compile(r"ts/sci|ts\s*/\s*sci|top secret\s*/\s*sci|clearance (?:type|level):\s*ts|"
+                          r"top[ -]secret[^.\n]{0,40}(?<![a-z])sci(?![a-z])")),
     ("top_secret", re.compile(r"top[ -]secret")),
     ("public_trust", re.compile(r"clearance (?:type|level):\s*public trust")),
-    ("secret", re.compile(r"(?<![a-z])secret (?:clearance|level|security|or higher)|"
+    ("secret", re.compile(r"(?<![a-z])secret (?:u\.?s\.? )?(?:clearance|level|security|or higher)|"
                           r"clearance (?:type|level):\s*secret|"
                           r"(?<![a-z])(?:active|interim|dod) secret(?![a-z])")),
     ("public_trust", re.compile(r"public trust")),
@@ -795,7 +812,7 @@ def read_fields(blob: str, *, min_years: Optional[int], clearance_required: bool
     return {
         "v": JD_PROFILE_VERSION,
         "sponsorship": read_sponsorship(blob),
-        "authorization": read_authorization(blob),
+        "authorization": read_authorization(blob, clearance_required),
         "education": read_education(blob),
         "experience": read_experience(blob, min_years, preferred_years),
         "clearance_level": clearance_level(blob, clearance_required),
