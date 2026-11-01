@@ -27,8 +27,10 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from services.jd_skill_vocabulary import JD_SKILL_VOCABULARY
+
 # Bump when a reader changes what it returns. Stored blocks carry it as `v`.
-JD_PROFILE_VERSION = "jd-1.0.0"
+JD_PROFILE_VERSION = "jd-1.1.0"
 
 SPONSORSHIP_OFFERED = "offered"
 SPONSORSHIP_NOT_OFFERED = "not_offered"
@@ -143,6 +145,12 @@ _FORM_ASKS_CANDIDATE = re.compile(
     r"(?<![a-z])(?:do you|will you|are you|would you|have you)(?![a-z])")
 
 
+# Refusal phrased without the word "sponsor".
+_VISA_SUPPORT_REFUSED = re.compile(
+    r"(?:cannot|can't|unable to|not able to|will not|won't|do not|does not|not)(?![a-z])[^\n.;!?]{0,50}"
+    r"(?:work authori[sz]ation|visa|immigration)\s+(?:assistance|support)")
+
+
 def read_sponsorship(blob: str) -> Dict[str, str]:
     """`{"status", "evidence"}`. A negative statement outranks a positive one.
 
@@ -150,7 +158,12 @@ def read_sponsorship(blob: str) -> Dict[str, str]:
     `not_offered`: it is said by employers who do sponsor, so it is reported
     by `read_authorization` instead.
     """
-    if not blob or "sponsor" not in blob:
+    if not blob:
+        return {"status": NOT_STATED, "evidence": ""}
+    if "sponsor" not in blob:
+        for sentence in _sentences(blob):
+            if _VISA_SUPPORT_REFUSED.search(sentence):
+                return {"status": SPONSORSHIP_NOT_OFFERED, "evidence": _evidence(sentence)}
         return {"status": NOT_STATED, "evidence": ""}
     found: Dict[str, str] = {}
 
@@ -194,34 +207,52 @@ _AUTH_CITIZEN_OR_PR = re.compile(
     r"(?:a\s+|an\s+)?(?:lawful\s+|legal\s+|u\.?s\.?\s+)?"
     r"(?:permanent resident|green[ -]card)|"
     r"green[ -]card holders?|permanent residents? only|"
-    r"must be a (?:lawful )?permanent resident")
+    r"must be a (?:lawful )?permanent resident|"
+    r"(?:must be|requires?|be) an?\s+u\.?s\.? person(?![a-z])")
 _AUTH_CITIZEN = re.compile(
     r"must (?:be|hold) (?:a )?(?:u\.?s\.?|united states) citizen|"
-    r"(?:u\.?s\.?|united states) citizenship (?:is |are )?required|"
+    r"(?:u\.?s\.?|united states) citizenship(?: status)? (?:is |are )?required|"
     r"requires? (?:u\.?s\.?|united states) citizenship|"
     r"(?<![a-z])citizens? only(?![a-z])")
 _AUTH_ANY = re.compile(
     r"(?:authori[sz]ed|eligible|entitled|legally able|permitted) to work|"
-    r"right to work|work authori[sz]ation|work authori[sz]ed|"
-    r"valid work (?:permit|visa)")
+    r"(?:legal |legally )?right to work|work authori[sz]ation|work authori[sz]ed|"
+    r"work lawfully|lawfully (?:authori[sz]ed|work)|valid work (?:permit|visa)|"
+    r"eligibility to work")
+_AUTH_WORK_REQUESTS = re.compile(r"authori[sz]ation requests?")
 # Compliance boilerplate that names work authorization without requiring it.
 _AUTH_BOILERPLATE = re.compile(
     r"e-?verify|i-9|employment eligibility verification|"
-    r"non-?discrimination|equal (?:employment )?opportunit")
+    r"non-?discrimination|equal (?:employment )?opportunit|poster|"
+    r":\s*$|^\W*(?:work authori[sz]ation|right to work)\W*$")
+# Citizenship named for OTHER roles, or as the group a rule does not apply to.
+_AUTH_NOT_THIS_ROLE = re.compile(
+    r"all positions with|certain (?:other )?(?:restricted )?positions|(?<![a-z])except(?![a-z])|"
+    r"may be required|may require|(?<![a-z])if (?:required|applicable)(?![a-z])")
 
 
-def read_authorization(blob: str) -> Dict[str, str]:
+_AUTH_CLEARED_ROLES = re.compile(r"all positions with a (?:government |security )?clearance")
+
+
+def read_authorization(blob: str, clearance_required: bool = False) -> Dict[str, str]:
     """`{"requirement", "evidence"}`, strictest statement first."""
     if not blob:
         return {"requirement": NOT_STATED, "evidence": ""}
     fallback = ""
     for sentence in _sentences(blob):
+        # "Citizenship is required for all positions with a clearance" is boiler
+        # plate on most postings and a rule on the ones that carry a clearance.
+        if clearance_required and _AUTH_CLEARED_ROLES.search(sentence):
+            return {"requirement": AUTH_CITIZEN, "evidence": _evidence(sentence)}
+        if _AUTH_NOT_THIS_ROLE.search(sentence):
+            continue
         if _AUTH_CITIZEN_OR_PR.search(sentence):
             return {"requirement": AUTH_CITIZEN_OR_PR, "evidence": _evidence(sentence)}
         if _AUTH_CITIZEN.search(sentence):
             return {"requirement": AUTH_CITIZEN, "evidence": _evidence(sentence)}
         if not fallback and _AUTH_ANY.search(sentence) \
-                and not _AUTH_BOILERPLATE.search(sentence):
+                and not _AUTH_BOILERPLATE.search(sentence) \
+                and not _AUTH_WORK_REQUESTS.search(sentence):
             fallback = sentence
     if fallback:
         return {"requirement": AUTH_AUTHORIZED, "evidence": _evidence(fallback)}
@@ -240,21 +271,27 @@ _ABBR_NEXT = (r"(?=\s*(?:/|,|\(|or(?![a-z])|and(?![a-z])|in(?![a-z])|with(?![a-z
 _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
     (4, re.compile(
         r"(?<![a-z])ph\.?\s?d(?![a-z])|doctorate|doctoral degree|doctor of|"
-        r"(?<![a-z])m\.d\.|(?<![a-z])j\.d\.(?!\s*(?:power|irving|edwards|vance|williams))|juris doctor|"
+        r"(?<![a-z.])m\.d\.|(?<![a-z.])j\.d\.(?!\s*(?:power|irving|edwards|vance|williams))|juris doctor|"
         r"(?<![a-z,] )(?<![a-z])(?:md|jd)\s+(?:degree|required)")),
     (3, re.compile(
-        r"(?<![a-z-])(?<!scrum )master'?s(?![a-z])|(?<![a-z-])masters?\s+degree(?![a-z])|"
+        r"(?<![a-z-])master's(?![a-z])|(?<![a-z-])masters?\s+degree(?![a-z])|"
+        r"(?<![a-z-])(?<!scrum )masters(?=\s+(?:in|of|or|level|program|preferred|required)(?![a-z])|"
+        r"\s*[,/.;)]|\s*$)|"
         r"(?<![a-z-])master of (?:science|arts|business|engineering|education|public|fine|"
         r"laws|computer|technology|health|social|information)(?![a-z])|"
-        r"(?<![a-z])m\.?b\.?a(?![a-z])|(?<![a-z])m\.eng(?![a-z])|(?<![a-z])msc(?![a-z])|"
+        r"(?:advanced|graduate|post-?graduate) degree|(?<![a-z])m\.?b\.?a(?![a-z])|(?<![a-z])m\.eng(?![a-z])|(?<![a-z])msc(?![a-z])|"
         r"(?<![a-z.])m\.s\.?(?![a-z])|(?<![a-z.])m\.a\.(?![a-z])(?!\s*certif)|"
         rf"(?<![a-z.])(?<!, )ms{_ABBR_NEXT}")),
     (2, re.compile(
         r"(?<![a-z])bachelor'?s?(?![a-z])|(?<![a-z])b\.?tech(?![a-z])|(?<![a-z])bsc(?![a-z])|"
         r"(?<![a-z])bsn(?![a-z])|(?<![a-z])b\.e\.(?![a-z])|undergraduate degree|"
+        r"(?<![a-z])baccalaureate(?![a-z])|(?<![a-z])tertiary (?:qualification|degree|education)|"
         r"(?:four|4)[- ]year degree|(?:college|university) degree|"
-        r"(?:a|relevant|related|technical|engineering)\s+degree(?![a-z])(?!\s+of(?![a-z]))|"
-        r"(?<![a-z\d-])(?<!\d )degree (?:in|qualified)(?![a-z])|"
+        r"(?:a|relevant|related|technical|engineering|architectural|science|business|"
+        r"accounting|nursing|finance|law)\s+degree(?![a-z])(?!\s+of(?![a-z]))|"
+        # A bare "degree" only opening a line: anywhere else it may be the tail of
+        # "master's degree in physics", which must not read as a bachelor's too.
+        r"^\W*degree (?:in|qualified|or equivalent|required)(?![a-z])|"
         r"(?<![a-z.])b\.s\.?(?![a-z])|(?<![a-z.])b\.a\.(?![a-z])|"
         rf"(?<![a-z.])(?<!, )(?:bs|ba){_ABBR_NEXT}")),
     (1, re.compile(
@@ -269,6 +306,17 @@ _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
 _EDU_NOISE = re.compile(
     r"tuition|reimburs|scholarship|alumni|student loan|high school students|"
     r"continuing education|education assistance|education history|"
+    r"(?:phd|doctoral|graduate) programs?|these include|working towards|"
+    r"(?<![a-z])premium(?![a-z])|differential|years toward|"
+    # Enrolment is not a held degree, and these lines waive one.
+    r"(?<![a-z])pursuing(?![a-z])|currently enrolled|actively enrolled|must be enrolled|"
+    # Required later or for someone else, not of this hire.
+    r"(?:at|within) (?:\d+|one|two|three|four|five) years? of (?:employment|hire)|"
+    r"(?<![a-z])if (?:in|candidate|you)(?![a-z])|"
+    r"(?<![a-z])no (?:bachelor|college|university|degree)|"
+    # A substitute path, not a lower minimum.
+    r"will meet|substitut|"
+    r"(?:bachelor|master)'?s? students|without a (?:college )?degree|"
     r"less than (?:a )?high school|"
     # The path offered INSTEAD of the degree, not a lower minimum.
     r"in lieu of|in place of|"
@@ -276,7 +324,9 @@ _EDU_NOISE = re.compile(
 # "degree, preferably in biology" prefers the FIELD, not the degree.
 _FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from)(?![a-z])[^.;,\n]*")
 # Preference wording `fit_score._PREFERRED_CUE` does not carry.
-_EDU_PREFERRED_EXTRA = re.compile(r"(?<![a-z])(?:an asset|beneficial|considered a)(?![a-z])")
+_PARENTHETICAL = re.compile(r"\([^)]*\)")
+_CLOSING_NAMES_OTHER = re.compile(r"experience|skills?|knowledge|certif|licen[sc]")
+_EDU_PREFERRED_EXTRA = re.compile(r"(?<![a-z])(?:an asset|beneficial|considered a|valued)(?![a-z])")
 # "High school diploma or equivalent" is a GED, not experience for a degree.
 _EDU_EQUIVALENT = re.compile(
     r"equivalent[^.;\n]{0,30}(?:experience|combination)|"
@@ -327,32 +377,58 @@ def read_education(blob: str) -> Dict[str, Any]:
         stripped = line.strip()
         if not stripped:
             continue
-        if len(stripped) <= 90:
-            if fit_score._PREFERRED_HEAD.search(stripped):
+        if fit_score.is_section_heading(stripped):
+            if "education" in stripped:
+                mode = "required"
+            elif fit_score._PREFERRED_HEAD.search(stripped):
                 mode = "preferred"
             elif fit_score._REQUIRED_HEAD.search(stripped):
                 mode = "required"
         for sentence in _sentences(stripped):
-            if _EDU_EQUIVALENT.search(sentence) or "in lieu of" in sentence:
+            if (_EDU_EQUIVALENT.search(sentence) or "in lieu of" in sentence) \
+                    and (_degree_levels(sentence + ",") or "education" in sentence):
                 saw_equivalent = True
             if not _degree_levels(sentence) or _EDU_NOISE.search(sentence):
                 continue
             sentence = _FIELD_PREFERENCE.sub("", sentence)
-            sentence_pref = bool(fit_score._PREFERRED_CUE.search(sentence))
+            sentence_pref = bool(fit_score._PREFERRED_CUE.search(_PARENTHETICAL.sub("", sentence)))
+            closing = _EDU_CLAUSE.split(sentence)[-1]
+            if fit_score._PREFERRED_CUE.search(_PARENTHETICAL.sub("", closing)) \
+                    and not _degree_levels(closing + ",") \
+                    and not _CLOSING_NAMES_OTHER.search(closing):
+                # "Bachelor's degree in accounting, business, or finance is
+                # preferred": the closing cue covers the list it ends.
+                preferred.extend((level, sentence) for level in _degree_levels(sentence + ","))
+                continue
             sentence_req = bool(fit_score._REQUIRED_CUE.search(sentence))
             for name, rx in _EDU_FIELDS:
                 if rx.search(sentence) and name not in fields:
                     fields.append(name)
-            for clause in _EDU_CLAUSE.split(sentence):
+            # Brackets hold their own commas: "(master's 6+, associate's 10+)".
+            outer = _PARENTHETICAL.sub(" ", sentence)
+            clauses = _EDU_CLAUSE.split(outer if _degree_levels(outer + ",") else sentence)
+            cued = [c for c in clauses if fit_score._PREFERRED_CUE.search(_PARENTHETICAL.sub("", c))]
+            cued_levels = {lvl for c in cued for lvl in _degree_levels(c + ",")}
+            for clause in clauses:
+                # A note in brackets qualifies the note: "degree (CPA highly
+                # preferred)" still requires the degree, and "(or high school
+                # diploma plus 6 years)" is a path around it.
+                plain = _PARENTHETICAL.sub("", clause)
                 # The split ate the comma that makes "bs," a degree.
-                levels = _degree_levels(clause + ",")
+                levels = _degree_levels(plain + ",") or (
+                    _degree_levels(clause + ",") if "(or" not in clause else [])
                 if not levels:
                     continue
-                clause_pref = bool(fit_score._PREFERRED_CUE.search(clause)
-                                   or _EDU_PREFERRED_EXTRA.search(clause))
-                clause_req = bool(fit_score._REQUIRED_CUE.search(clause))
+                clause_pref = bool(fit_score._PREFERRED_CUE.search(plain)
+                                   or _EDU_PREFERRED_EXTRA.search(plain))
+                clause_req = bool(fit_score._REQUIRED_CUE.search(plain))
                 if clause_pref or clause_req:
                     is_pref = clause_pref and not clause_req
+                elif cued and len(clauses) > 1:
+                    # "Bachelor's, Master's preferred": the cue belongs to its
+                    # own clause, and this one stands on the section. Items of
+                    # the same level are one list: "diploma, GED preferred".
+                    is_pref = mode == "preferred" or bool(cued_levels & set(levels))
                 else:
                     is_pref = sentence_pref and not sentence_req
                     if not sentence_pref and not sentence_req:
@@ -387,10 +463,34 @@ _YEARS_RANGE = re.compile(
     r"(?<![\d.$])(\d{1,2})\s*\+?\s*(?:-|to)\s*(\d{1,2})\s*\+?\s*(?:years?|yrs?)(?![a-z])")
 
 
-def read_experience(blob: str, min_years: Optional[int]) -> Dict[str, Any]:
-    """`min_years` is `fit_score._required_years`; this adds the top of a range."""
+_NUMBER_NAMES = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+                 "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+                 "eighteen": 18}
+_MONTHS_REQUIRED = re.compile(
+    r"(?<![\d.$])(\d{1,2}|" + "|".join(_NUMBER_NAMES) + r")(?:\s*\(\d{1,2}\))?\s*\+?\s*months?"
+    r"(?![a-z])[^.\n]{0,60}(?:experience|required)")
+
+
+def _months_required(blob: str) -> Optional[float]:
+    """A requirement stated in months, in years: "six (6) months prior experience"."""
+    from services import fit_score
+
+    for sentence in _sentences(blob or ""):
+        m = _MONTHS_REQUIRED.search(sentence)
+        if m and not fit_score._PREFERRED_CUE.search(sentence):
+            count = _NUMBER_NAMES.get(m.group(1)) or int(m.group(1))
+            return round(count / 12, 2)
+    return None
+
+
+def read_experience(blob: str, min_years: Optional[int],
+                    preferred_years: Optional[int] = None) -> Dict[str, Any]:
+    """`min_years` is what the posting REQUIRES; `preferred_years` is set only when
+    a preference is all it states. `fit_score` keeps scoring on either one."""
     if min_years is None:
-        return {"min_years": None, "max_years": None, "evidence": ""}
+        months = _months_required(blob)
+        return {"min_years": months, "max_years": None,
+                "preferred_years": preferred_years, "evidence": ""}
     max_years = None
     evidence = ""
     for sentence in _sentences(blob or ""):
@@ -404,13 +504,17 @@ def read_experience(blob: str, min_years: Optional[int]) -> Dict[str, Any]:
     if not evidence:
         needle = re.compile(rf"(?<![\d.$]){min_years}\s*(?:\+|plus)?\s*(?:or more\s+)?(?:years?|yrs?)")
         evidence = next((s for s in _sentences(blob or "") if needle.search(s)), "")
-    return {"min_years": min_years, "max_years": max_years, "evidence": _evidence(evidence)}
+    return {"min_years": min_years, "max_years": max_years, "preferred_years": None,
+            "evidence": _evidence(evidence)}
 
 
 _CLEARANCE_LEVELS: Sequence[Tuple[str, re.Pattern]] = (
-    ("ts_sci", re.compile(r"ts/sci|ts\s*/\s*sci|top secret\s*/\s*sci")),
+    ("ts_sci", re.compile(r"ts/sci|ts\s*/\s*sci|top secret\s*/\s*sci|clearance (?:type|level):\s*ts|"
+                          r"top[ -]secret[^.\n]{0,40}(?<![a-z])sci(?![a-z])")),
     ("top_secret", re.compile(r"top[ -]secret")),
-    ("secret", re.compile(r"(?<![a-z])secret (?:clearance|level|security|or higher)|"
+    ("public_trust", re.compile(r"clearance (?:type|level):\s*public trust")),
+    ("secret", re.compile(r"(?<![a-z])secret (?:u\.?s\.? )?(?:clearance|level|security|or higher)|"
+                          r"clearance (?:type|level):\s*secret|"
                           r"(?<![a-z])(?:active|interim|dod) secret(?![a-z])")),
     ("public_trust", re.compile(r"public trust")),
     ("export_controlled", re.compile(r"\bitar\b|export[ -]control|(?<![a-z])u\.?s\.? persons?(?![a-z])")),
@@ -451,6 +555,38 @@ _CERTIFICATIONS: Sequence[Tuple[str, re.Pattern]] = tuple(
         ("PALS", r"pals"),
         ("CPR", r"cpr"),
         ("PMP", r"pmp"),
+        ("CAPM", r"capm"),
+        ("PRINCE2", r"prince2"),
+        ("Certified ScrumMaster", r"certified scrum ?master|csm certification"),
+        ("TOGAF", r"togaf"),
+        ("CCSP", r"ccsp"),
+        ("CySA+", r"cysa\+?"),
+        ("GICSP", r"gicsp"),
+        ("CHFI", r"chfi"),
+        ("GCED", r"gced"),
+        ("CompTIA Project+", r"project\+"),
+        ("Databricks Certification", r"databricks certified|databricks certification"),
+        ("Salesforce Certification", r"salesforce certified|salesforce certification"),
+        ("Snowflake Certification", r"snowpro|snowflake certified|snowflake certification"),
+        ("CPA", r"cpa"),
+        ("CFP", r"cfp"),
+        ("CMA", r"cma"),
+        ("SPHR", r"sphr"),
+        ("PHR", r"phr"),
+        ("SHRM-CP", r"shrm-(?:cp|scp)"),
+        ("CPIM", r"cpim"),
+        ("CSCP", r"cscp"),
+        ("CPSM", r"cpsm"),
+        ("CQE", r"cqe"),
+        ("CQA", r"cqa"),
+        ("CCMA", r"ccma"),
+        ("RMA", r"rma certification|registered medical assistant"),
+        ("NRP", r"nrp"),
+        ("CCRN", r"ccrn"),
+        ("CNOR", r"cnor"),
+        ("PTCB", r"ptcb"),
+        ("CNA", r"certified nursing assistant|cna certification"),
+        ("EPA 608", r"epa 608|epa section 608"),
         ("Six Sigma", r"six sigma"),
         ("ITIL", r"itil"),
         ("CFA", r"cfa"),
@@ -459,30 +595,147 @@ _CERTIFICATIONS: Sequence[Tuple[str, re.Pattern]] = tuple(
 
 
 def read_certifications(blob: str) -> List[str]:
-    return [name for name, rx in _CERTIFICATIONS if rx.search(blob or "")][:10]
+    return [name for name, rx in _CERTIFICATIONS if rx.search(blob or "")][:12]
 
 
-_EMPLOYMENT_TYPES: Sequence[Tuple[str, re.Pattern]] = (
-    ("internship", re.compile(r"(?<![a-z])(?:internship|co-op)(?![a-z])")),
-    ("contract", re.compile(
-        r"contract[- ]to[- ]hire|(?:contract|c2c|1099)\s+(?:role|position|job|opportunity|assignment)|"
-        r"employment type:?\s*contract")),
-    ("temporary", re.compile(r"(?<![a-z])temporary\s+(?:role|position|job|assignment)|"
-                             r"(?<![a-z])seasonal\s+(?:role|position|job)")),
-    ("part_time", re.compile(r"(?<![a-z])part[- ]time(?![a-z])")),
-    ("full_time", re.compile(r"(?<![a-z])full[- ]time(?![a-z])")),
-)
+# Both readers below accept STATEMENTS about this role, never mentions. "Assist
+# customers in person and on the phone" is not an on-site role, "hybrid cloud" is
+# not a hybrid role, and "full-time employees are eligible for benefits" says
+# nothing about this job. An unclear posting is `not_stated`, which costs a
+# candidate nothing; a wrong reading filters them out.
+_POLICY_PARAGRAPH = re.compile(
+    r"if this (?:position|role|job) is|for (?:on-?site|hybrid|remote)(?: and \w+)? roles|"
+    r"employees who are working|listed as|depending on|may be|interview|onboarding|"
+    r"this notice|hired to work|transitioning|rollout|opportunity to come together")
+
+_MODE_WORD = r"(remote|hybrid|on[- ]?site|in[- ]office|in[- ]person)"
+_MODE_LABEL = (r"(?:work(?:place|ing)?(?: type| model| environment| arrangement| style| location| flexibility| mode)?|"
+               r"location(?: type)?|workplace|remote status|job type|position type)")
+_MODE_STATEMENTS: Sequence[re.Pattern] = tuple(re.compile(p) for p in (
+    rf"^\W*{_MODE_LABEL}\s*[:\-]\s*(?:[a-z-]+,\s*){{0,3}}{_MODE_WORD}(?![a-z])",
+    rf"^\W*{_MODE_WORD}\W*$",
+    # A line opened by the mode: "Remote (Continental US)", "On-site - New York".
+    rf"^\W*{_MODE_WORD}\s*[-–—(]",
+    rf"(?:this|the) (?:is an?|role is|position is|job is|opportunity is|role will be|"
+    rf"position will be)\s+(?:a\s+|an\s+)?(?:fully\s+|100%\s+)?{_MODE_WORD}(?![a-z])",
+    rf"(?:fully|100%|entirely|completely)\s+{_MODE_WORD}(?![a-z])",
+    rf"(?<![a-z-]){_MODE_WORD}\s+(?:work(?:ing)?\s+)?(?:role|position|opportunity|job|employee|"
+    r"presence|schedule|requirement|arrangement)(?![a-z])",
+    rf"(?:work|working|be|report|reporting|based|located)\s+(?:primarily\s+|fully\s+)?{_MODE_WORD}(?![a-z])",
+))
+# Fewer than five days a week somewhere is a hybrid schedule.
+_PART_WEEK = (r"(?<![\d-])(?:[1-4]|one|two|three|four)(?:\s*\(\d\))?(?:\s*(?:-|to)\s*[1-4])?"
+              r"(?:\s+or more)?\s*days? (?:a|per|each) week")
+_MODE_REMOTE_EXTRA = re.compile(
+    r"work(?:ing)? (?:from home|remotely)(?![a-z])|work[- ]from[- ]home (?:role|position|job)|"
+    r"remote[- ](?:first|based|eligible|friendly)(?![a-z])")
+_MODE_HYBRID_EXTRA = re.compile(
+    r"hybrid (?:schedule|work|working|model|arrangement|environment)(?![a-z])|"
+    rf"{_PART_WEEK}[^.\n]{{0,40}}(?:office|on-?site|in[- ]person|campus)|"
+    rf"(?:office|on-?site|in[- ]person|campus|location)[^.\n]{{0,40}}{_PART_WEEK}")
+# A LinkedIn tag is the recruiter picking this field in a form, so it outranks
+# whatever the company's workplace policy paragraph says.
+_MODE_TAG = re.compile(r"#li-(remote|hybrid|on-?site)(?![a-z])")
+_TITLE_MODE = re.compile(r"(?:^|[-–—,(|/:]\s*)(remote|hybrid)(?:\s*$|\s*[-–—)|/:])")
+
+
+def _mode_name(word: str) -> str:
+    if word.startswith("remote"):
+        return "remote"
+    return "hybrid" if word.startswith("hybrid") else "onsite"
+
+
+def read_work_mode(blob: str) -> str:
+    """`remote`, `hybrid`, `onsite` or `unknown`: the earliest statement wins, so a
+    posting's own header outranks the company policy printed under it."""
+    if not blob:
+        return "unknown"
+    tag = _MODE_TAG.search(blob)
+    if tag:
+        return _mode_name(tag.group(1))
+    first_line = blob.lstrip().split("\n", 1)[0]
+    if len(first_line) <= 120:
+        title = _TITLE_MODE.search(first_line)
+        if title:
+            return title.group(1)
+    for sentence in _sentences(blob):
+        if _POLICY_PARAGRAPH.search(sentence):
+            continue
+        if _MODE_HYBRID_EXTRA.search(sentence):
+            return "hybrid"
+        best: Optional[Tuple[int, str]] = None
+        for rx in _MODE_STATEMENTS:
+            m = rx.search(sentence)
+            if m and (best is None or m.start() < best[0]):
+                best = (m.start(), _mode_name(m.group(1)))
+        m = _MODE_REMOTE_EXTRA.search(sentence)
+        if m and (best is None or m.start() < best[0]):
+            best = (m.start(), "remote")
+        if best:
+            return best[1]
+    return "unknown"
+
+
+_EMPLOYMENT_NOISE = re.compile(
+    r"benefit|eligib|employees|colleagues|hires|students|basis|working model|"
+    r"(?:all|our|for) (?:full|part)[- ]time|contract of employment|not a contract")
+# "This full-time position is eligible for benefits" still says what the job is.
+_EMPLOYMENT_THIS_ROLE = re.compile(r"this\s+(full|part)\s*-?\s*time\s+(?:position|role|job)")
+_SEASONAL_ROLE = re.compile(
+    r"(?<![a-z])(seasonal)\s+(?:[a-z]+\s+)?(?:associate|colleague|employee|worker|team member|"
+    r"position|role|job|help|hire)")
+_EMPLOYMENT_VALUE = (r"(full\s*-?\s*time|part\s*-?\s*time|contract(?:or)?|temporary|temp|seasonal|"
+                     r"intern(?:ship)?|co-op|per diem|prn|regular)")
+_EMPLOYMENT_NAMES = {"full": "full_time", "part": "part_time", "cont": "contract",
+                     "temp": "temporary", "seas": "temporary", "inte": "internship",
+                     "co-o": "internship", "per ": "part_time", "prn": "part_time",
+                     "regu": "full_time"}
+_EMPLOYMENT_STATEMENTS: Sequence[re.Pattern] = tuple(re.compile(p) for p in (
+    rf"(?:employment|job|position|work|worker|contract|role|schedule)(?: type| status)?\s*[:\-]\s*"
+    rf"(?:[a-z]+,\s*)?(?:regular\s+)?{_EMPLOYMENT_VALUE}(?![a-z])",
+    rf"^\W*{_EMPLOYMENT_VALUE}(?![a-z])",
+    rf"(?:this is an?|this (?:role|position|job) is(?: an?)?|is an?)\s+"
+    rf"{_EMPLOYMENT_VALUE}(?![a-z])",
+    rf"(?<![a-z-]){_EMPLOYMENT_VALUE}[ ,]+(?:[a-z]+ )?(?:role|position|job|opportunity|"
+    rf"assignment|employment|schedule)(?![a-z])",
+    r"1099|independent (contract)or",
+    r"(contract)[- ]to[- ]hire|(temp)orary contract|\((contract)or\)|(seasonal) [a-z]+ associate",
+    r"(intern(?:ship)?)(?![a-z])\s*(?:program|position|opportunity|role)",
+))
+_EMPLOYMENT_HOURS = re.compile(r"(\d{2})\s*\+?\s*(?:hours?|hrs?)\s*(?:per|a|/)\s*(?:week|wk)")
+
+
+def _employment_name(word: str) -> str:
+    word = word.replace(" ", "")
+    return _EMPLOYMENT_NAMES.get("prn" if word.startswith("prn") else word[:4], NOT_STATED)
 
 
 def read_employment_type(blob: str) -> str:
-    """The earliest statement wins: a body saying "full-time" up top and "all
-    part-time employees are eligible" under benefits is a full-time job."""
-    best: Tuple[int, str] = (len(blob or "") + 1, NOT_STATED)
-    for name, rx in _EMPLOYMENT_TYPES:
-        m = rx.search(blob or "")
-        if m and m.start() < best[0]:
-            best = (m.start(), name)
-    return best[1]
+    """The earliest statement wins. Benefits wording never counts: it describes
+    who gets a plan, not this job. Hours settle a posting that states only those."""
+    sentences = _sentences(blob or "")
+    for sentence in sentences:
+        this_role = _EMPLOYMENT_THIS_ROLE.search(sentence)
+        if this_role:
+            return _employment_name(this_role.group(1))
+        seasonal = _SEASONAL_ROLE.search(sentence)
+        if seasonal:
+            return "temporary"
+        if _EMPLOYMENT_NOISE.search(sentence):
+            continue
+        best: Optional[Tuple[int, str]] = None
+        for rx in _EMPLOYMENT_STATEMENTS:
+            m = rx.search(sentence)
+            if m and (best is None or m.start() < best[0]):
+                word = next((g for g in m.groups() if g), "contract")
+                best = (m.start(), _employment_name(word))
+        if best and best[1] != NOT_STATED:
+            return best[1]
+    for sentence in sentences:
+        hours = _EMPLOYMENT_HOURS.search(sentence)
+        if hours and not _EMPLOYMENT_NOISE.search(sentence):
+            return "full_time" if int(hours.group(1)) >= 35 else "part_time"
+    return NOT_STATED
 
 
 _ALTERNATIVE_JOIN = re.compile(r"\s+(?:and/)?or\s+")
@@ -526,31 +779,57 @@ def read_skill_alternatives(blob: str, find_skills: Callable[[str], List[str]]) 
 # The dictionary
 # ---------------------------------------------------------------------------
 
-# People skills only. NOT `fit_score._GENERIC_SKILLS`, which means "does not
+# Not technical. NOT `fit_score._GENERIC_SKILLS`, which means "does not
 # discriminate between candidates" and so holds Excel, CRM and project
-# management: those are skills a job asks for, just common ones.
+# management: those are skills a job asks for, just common ones. The last group is
+# measured: lexicon terms the labellers agreed with under 30% of the time, usually
+# because the word describes the job ("recruiting" in an equal-opportunity notice,
+# "documentation" as a duty) rather than a skill it asks for.
 _SOFT_SKILLS = frozenset({
     "communication", "teamwork", "collaboration", "interpersonal", "leadership",
     "problem solving", "critical thinking", "time management", "organization",
     "attention to detail", "multitasking", "adaptability", "work ethic",
     "self motivated", "public speaking", "presentation", "mentoring", "negotiation",
-    "stakeholder management",
+    "stakeholder management", "bilingual",
+    "compliance", "recruiting", "documentation", "reporting", "monitoring", "onboarding",
+    "process improvement", "patient care", "quality control", "accessibility",
+    "safety compliance", "requirements gathering", "auditing", "roadmapping",
+    "hipaa compliance",
 })
+
+_VOCABULARY = re.compile(
+    r"(?<![a-z0-9])(?:" + "|".join(
+        re.escape(v) for v in sorted(JD_SKILL_VOCABULARY, key=len, reverse=True))
+    + r")(?![a-z0-9])")
+
+
+def read_additional_skills(blob: str, known: Sequence[str]) -> List[str]:
+    """Skills the JD names that the scoring lexicon cannot, in order of appearance."""
+    seen = set(known)
+    out: List[str] = []
+    for m in _VOCABULARY.finditer(blob or ""):
+        name = m.group(0)
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out[:20]
 
 
 def read_fields(blob: str, *, min_years: Optional[int], clearance_required: bool,
-                find_skills: Callable[[str], List[str]]) -> Dict[str, Any]:
+                find_skills: Callable[[str], List[str]],
+                preferred_years: Optional[int] = None) -> Dict[str, Any]:
     """The block stored at `requirements["jd"]`. `blob` is `fit_score._norm`ed."""
     return {
         "v": JD_PROFILE_VERSION,
         "sponsorship": read_sponsorship(blob),
-        "authorization": read_authorization(blob),
+        "authorization": read_authorization(blob, clearance_required),
         "education": read_education(blob),
-        "experience": read_experience(blob, min_years),
+        "experience": read_experience(blob, min_years, preferred_years),
         "clearance_level": clearance_level(blob, clearance_required),
         "certifications": read_certifications(blob),
         "employment_type": read_employment_type(blob),
         "skill_alternatives": read_skill_alternatives(blob, find_skills),
+        "additional_skills": read_additional_skills(blob, find_skills(blob)),
     }
 
 
@@ -602,7 +881,9 @@ def build(jd_text: Any, title: Any = "", *,
         "skills": {
             "required": required,
             "preferred": preferred,
-            "technical": [s for s in named if s not in _SOFT_SKILLS],
+            "technical": [s for s in named if s not in _SOFT_SKILLS]
+            + [s for s in jd["additional_skills"] if s not in named],
+            "additional": list(jd["additional_skills"]),
             "soft": [s for s in named if s in _SOFT_SKILLS],
             "alternatives": [list(g) for g in jd["skill_alternatives"]],
             "certifications": list(jd["certifications"]),
@@ -628,6 +909,33 @@ def build(jd_text: Any, title: Any = "", *,
             "text_length": reqs.get("text_length"),
         },
     }
+
+
+def prompt_view(analysis: Any) -> Any:
+    """`analysis` as a prompt may see it: `jd_profile` is replaced by `job_facts`.
+
+    Prompts dump the analysis whole, so without this they would carry raw JD
+    quotes and sponsorship wording, which are no use to a résumé writer and are
+    the one thing a résumé must never echo. Eligibility stays out on purpose.
+    """
+    if not isinstance(analysis, dict) or "jd_profile" not in analysis:
+        return analysis
+    view = {k: v for k, v in analysis.items() if k != "jd_profile"}
+    profile = analysis["jd_profile"]
+    if isinstance(profile, dict):
+        experience = profile.get("experience") or {}
+        education = profile.get("education") or {}
+        skills = profile.get("skills") or {}
+        view["job_facts"] = {
+            "min_years": experience.get("min_years"),
+            "max_years": experience.get("max_years"),
+            "min_degree": education.get("min_degree"),
+            "preferred_degree": education.get("preferred_degree"),
+            "degree_fields": education.get("fields") or [],
+            "skill_alternatives": skills.get("alternatives") or [],
+            "certifications": skills.get("certifications") or [],
+        }
+    return view
 
 
 def attach_to_analysis(analysis: Any, jd_text: Any) -> Any:

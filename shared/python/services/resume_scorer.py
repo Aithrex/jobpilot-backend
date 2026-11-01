@@ -16,6 +16,7 @@ from schemas.resume_schemas import (
     validate_and_coerce,
     build_resume_text,
 )
+from services.jd_profile import prompt_view
 from utils.keyword_normalizer import (
     normalize_single,
 )
@@ -484,7 +485,7 @@ class ResumeScorer:
         from services.claude_client import claude_json, CLAUDE_PRO
 
         tailored_json = json.dumps(tailored, indent=2)[:6000]
-        jd_json = json.dumps(jd_analysis, indent=2)[:3000]
+        jd_json = json.dumps(prompt_view(jd_analysis), indent=2)[:3000]
 
         # Build the deterministic-facts block. Scanner scores must be
         # CONSISTENT with these facts — Claude was guessing wildly before,

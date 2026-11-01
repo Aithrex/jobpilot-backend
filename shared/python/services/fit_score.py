@@ -60,7 +60,7 @@ from services import jd_profile
 
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.5"
+FIT_SCORE_VERSION = "fit-v2.6"
 
 # The cliff described below is REAL, and this is how 2.1 crosses it.
 #
@@ -117,8 +117,13 @@ FIT_SCORE_VERSION = "fit-v2.5"
 # required, against 18% with a word boundary. `work_authorization_restricted`
 # also reads the sponsorship wording `jd_profile` knows. Stored 2.4 profiles are
 # valid input until `EXTRACTOR_VERSION` re-parses them.
+#
+# 2.6 keeps the contract. `work_mode` is read from statements, not mentions, so
+# most postings that used to read `onsite` from "in person" now read `unknown`,
+# which scores nothing. Spelled-out years are read, and a preference word only
+# moves the number it qualifies.
 _COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset(
-    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5"})
+    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5", "fit-v2.6"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
@@ -1935,7 +1940,15 @@ _CLEARANCE_JD = re.compile(
     r"(?<![a-z])u\.?s\.? person(?:s)?(?: as defined)?|(?<![a-z])us person(?:s)?|"
     # `\bear\b` on its own would match the English word. Only the paired or
     # qualified forms of the Export Administration Regulations are read.
-    r"export[ -]control(?:led|s)?|\bitar\b|itar\s*/\s*ear|ear\s*/\s*itar|"
+    # "Import/export control" is also a customs clerk's whole job, so an export
+    # rule only counts next to who may do the work.
+    r"subject to[^.\n]{0,60}(?:export|\bitar\b)|"
+    r"export[ -]control(?:led|s)?[^.\n]{0,120}(?:u\.?s\.? person|citizen|permanent resident)|"
+    r"(?:u\.?s\.? person|citizen|permanent resident)[^.\n]{0,120}export[ -]control|"
+    # ITAR likewise: running a company's ITAR compliance is not being restricted
+    # by it, so the rule must say something about the applicant.
+    r"\bitar\b[^.\n]{0,160}(?:u\.?s\.? person|citizen|permanent resident|must|required|eligib)|"
+    r"(?:u\.?s\.? person|citizen|permanent resident|must|required|eligib)[^.\n]{0,160}\bitar\b|"
     r"\bear\b\s+(?:regulation|requirement|restriction)|"
     r"government contract requires|federal contract requires|"
     r"national agency check|suitability determination)")
@@ -2046,7 +2059,7 @@ def _split_sections(blob: str) -> Tuple[str, str]:
         head = stripped[:90]
         # A short line that names a preferred heading switches the mode; a
         # bullet that merely says "a plus" only reclassifies itself.
-        is_head = len(stripped) <= 90
+        is_head = is_section_heading(stripped)
         if _PREFERRED_HEAD.search(head):
             # Checked before the required heads on purpose: "preferred
             # qualifications" contains "qualifications", and reading it as a
@@ -2081,18 +2094,33 @@ _YEARS_CONTEXT = re.compile(
     r"position|building|leading|managing|designing|supporting|administering|"
     r"running|operating|deploying|developing|writing|delivering|owning|"
     r"implementing|architecting|maintaining|testing|analy[sz]ing|"
-    r"(?<![a-z])in (a|an)(?![a-z])")
+    r"(?<![a-z])in (a|an)(?![a-z])|(?<![a-z])as (a|an)(?![a-z])|progressive")
 # Award streaks too: "voted 13 years in a row a top workplace" filed a nursing
 # assistant and a maintenance assistant as `staff` in the 2026-10-02 spot check.
 _YEARS_NOT_EXPERIENCE = re.compile(
-    r"of age|(?<![a-z])old(?![a-z])|in business|business for|history|founded|"
+    r"of age|(?<![a-z])old(?![a-z])|in business(?! development)|business for|history|founded|"
     r"anniversary|warranty|tenure|lease|coursework|of (college|school|study)|"
-    r"(?<![a-z])ago(?![a-z])|in a row|consecutive|top workplace|best place")
+    r"(?<![a-z])ago(?![a-z])|in a row|consecutive|top workplace|best place|"
+    r"or older|(?<![a-z])of age(?![a-z])|from (?:the )?date|of hire|"
+    r"as an? (?:great|top|leading|best|trusted|proud)(?![a-z])|workplace")
+_YEARS_WINDOW_BEFORE = re.compile(
+    r"(?:within|in|during|over|for) (?:the )?(?:past|last|previous|next|first)\s*$|"
+    r"(?:at least|minimum|must be|over)\s*$(?=.*age)|(?<![a-z])age\s*$")
 _PREFERRED_CUE = re.compile(
     r"prefer|nice to have|nice-to-have|(?<![a-z])bonus(?![a-z])|a plus(?![a-z])|"
     r"ideal(ly)?(?![a-z])|desired|desirable|advantageous")
 _REQUIRED_CUE = re.compile(r"required|(?<![a-z])must(?![a-z])|minimum|at least")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.;])\s+|\s*•\s*")
+
+
+def is_section_heading(line: str) -> bool:
+    """A heading, not a bullet that happens to contain "preferred". Treating
+    "- Prior closing experience strongly preferred" as one filed the rest of the
+    posting, degree requirement included, as nice-to-have."""
+    text = line.strip()
+    if not text or len(text) > 90 or text[0] in "-•*·–—" or "," in text or text.endswith("."):
+        return False
+    return len(text.split()) <= 8 or text.endswith(":")
 
 
 _NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -2115,6 +2143,42 @@ _BACHELOR_PATH_YEARS = re.compile(
     r"(?<![\d.$])(\d{1,2})\s*\+?\s*(?:years?|yrs?)(?![a-z])")
 
 
+# What a preference word qualifies decides whether the NUMBER is preferred.
+# "1-3 years of sales, preferably in B2B" prefers the field, and "+3 years
+# (ideal)" states a target. "3-6 years, preferred" closes on the cue, so it covers
+# the whole sentence.
+# A way around the requirement, whose number is the price of not meeting it.
+_YEARS_ALTERNATE_PATH = re.compile(
+    r"in lieu|substitut|will meet|(?<![a-z])no degree(?![a-z])|^or(?![a-z])(?!.*bachelor)")
+_YEARS_STATED_RULE = re.compile(r"(?<![a-z])(?:minimum|requires?|must have|at least)(?![a-z])")
+_FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from|with|at)(?![a-z])[^.;,\n]*")
+_PARENTHETICAL = re.compile(r"\([^)]*\)")
+_CLOSING_PREFERENCE = re.compile(
+    r"(?:preferred|desired|desirable|a plus|nice to have|advantageous)\W*$")
+# Not a colon: "Preferred: 5+ years" is one clause, its label and its number.
+_CLAUSE_BREAK = re.compile(r"[,;]\s+|\s+and\s+|\s+but\s+")
+
+
+def _years_are_preferred(sentence: str, position: int) -> bool:
+    if _CLOSING_PREFERENCE.search(_CLAUSE_BREAK.split(sentence)[-1]) \
+            and len(_CLAUSE_BREAK.split(sentence)[-1].split()) <= 3:
+        return True
+    start = 0
+    end = len(sentence)
+    for brk in _CLAUSE_BREAK.finditer(sentence):
+        if brk.end() <= position:
+            start = brk.end()
+        elif brk.start() >= position:
+            end = brk.start()
+            break
+    clause = _FIELD_PREFERENCE.sub("", _PARENTHETICAL.sub("", sentence[start:end]))
+    return bool(_PREFERRED_CUE.search(clause))
+
+
+_YEARS_WITH_BACHELOR = re.compile(
+    r"(?<![\d.$])(\d{1,2})\s*\+?\s*(?:years?|yrs?) with (?:a )?(?:bachelor'?s?|b\.?s\.?)(?![a-z])")
+
+
 def _digits_for_number_words(blob: str) -> str:
     def word(match: "re.Match[str]") -> str:
         return str(_NUMBER_WORDS[match.group(1)])
@@ -2125,7 +2189,7 @@ def _digits_for_number_words(blob: str) -> str:
         lambda m: m.group(1) + str(_NUMBER_WORDS[m.group(2)]), blob)
 
 
-def _required_years(blob: str) -> Optional[int]:
+def _required_years(blob: str, *, preferred_fallback: bool = True) -> Optional[int]:
     """The posting's HEADLINE experience requirement, in years, or None.
 
     The headline, not the smallest number. "5+ years of software engineering,
@@ -2145,6 +2209,7 @@ def _required_years(blob: str) -> Optional[int]:
     blob = _digits_for_number_words(_norm(blob))  # callers normally pass normalised text
     required: List[int] = []
     preferred: List[int] = []
+    stated: List[int] = []
     mode = "required"
     for line in blob.split("\n"):
         stripped = line.strip()
@@ -2152,29 +2217,44 @@ def _required_years(blob: str) -> Optional[int]:
             continue
         # Same heading rules as `_split_sections`, but decided per SENTENCE:
         # a one-line "Required: 3+ years. Preferred: 5+ years." has to split.
-        if len(stripped) <= 90:
+        if is_section_heading(stripped):
             if _PREFERRED_HEAD.search(stripped):
                 mode = "preferred"
             elif _REQUIRED_HEAD.search(stripped):
                 mode = "required"
         for sentence in _SENTENCE_SPLIT.split(stripped):
-            is_pref = bool(_PREFERRED_CUE.search(sentence)) or (
-                mode == "preferred" and not _REQUIRED_CUE.search(sentence))
+            if _YEARS_ALTERNATE_PATH.search(sentence):
+                continue
             for m in _HEADLINE_YEARS_RE.finditer(sentence):
+                is_pref = _years_are_preferred(sentence, m.start()) or (
+                    mode == "preferred" and not _REQUIRED_CUE.search(sentence))
                 n = int(m.group(1))
                 tail = m.group(2) or ""
                 head = sentence[max(0, m.start() - 40):m.start()]
                 if not 0 <= n <= 20 or _YEARS_NOT_EXPERIENCE.search(tail[:40]):
                     continue
+                # A window, not a requirement: "within the past 5 years".
+                if _YEARS_WINDOW_BEFORE.search(head):
+                    continue
                 if not (_YEARS_CONTEXT.search(tail[:60]) or "experience" in head):
                     continue
-                (preferred if is_pref else required).append(n)
-    pool = required or preferred
+                # "...a plus and a minimum of 5 years": the cue touching the
+                # number outranks one elsewhere in the sentence.
+                near_required = bool(_REQUIRED_CUE.search(head[-20:]))
+                (preferred if is_pref and not near_required else required).append(n)
+                if not is_pref and _YEARS_STATED_RULE.search(sentence):
+                    stated.append(n)
+    pool = required or (preferred if preferred_fallback else [])
     if not pool:
         return None
+    # "Typically requires 10+ years" and "12+ years of architecture": the line
+    # that states the rule outranks a list of what the years were spent on.
+    if stated:
+        pool = stated
     # Only when the bachelor's number is one the reader above accepted, so a
     # degree's length ("bachelor's, 4 years") cannot become the requirement.
     paths = [int(m.group(1)) for m in _BACHELOR_PATH_YEARS.finditer(blob)]
+    paths += [int(m.group(1)) for m in _YEARS_WITH_BACHELOR.finditer(blob)]
     paths = [n for n in paths if n in pool]
     return min(paths) if paths else max(pool)
 
@@ -2279,13 +2359,7 @@ def _resume_industries(resume: Dict[str, Any]) -> Set[str]:
 
 
 def _work_mode(blob: str) -> str:
-    if _HYBRID_RE.search(blob):
-        return "hybrid"
-    if _REMOTE_RE.search(blob):
-        return "remote"
-    if _ONSITE_RE.search(blob):
-        return "onsite"
-    return "unknown"
+    return jd_profile.read_work_mode(blob)
 
 
 @lru_cache(maxsize=512)
@@ -2315,7 +2389,10 @@ def _extract_requirements_cached(jd_text: str, title: str) -> Dict[str, Any]:
     clearance_required = bool(_CLEARANCE_JD.search(combined))
     # The ONE reading of this JD. The two flags below are derived from it so
     # that the scorer, the feed and tailoring cannot disagree about a posting.
-    jd = jd_profile.read_fields(combined, min_years=required_years,
+    strict_years = _required_years(combined, preferred_fallback=False)
+    jd = jd_profile.read_fields(combined, min_years=strict_years,
+                                preferred_years=None if strict_years is not None
+                                else required_years,
                                 clearance_required=clearance_required,
                                 find_skills=find_skills)
 

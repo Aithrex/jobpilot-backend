@@ -17,6 +17,7 @@ from services.tailoring_policy import VERSION, WRITING_RULES, content, content_h
 from services.tailoring_planner import build_plan, questions
 from schemas.tailoring_contracts import CandidateFact
 from utils.llm_safety import guarded_system, wrap_untrusted, redact_pii_for_model
+from services.jd_profile import prompt_view
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +200,7 @@ def run(source: dict, jd: dict, *, current: dict | None = None,
         "omitted_ids may contain low-value bullets to omit, but preserve at least one bullet per existing role.",
         "Never omit an entire nonempty source section (projects, research, volunteer, credentials, custom) unless the user omitted it.",
         "For regeneration keep unrelated existing edits and exclusions. Return only requested changes.",
-        wrap_untrusted("job", redact_pii_for_model(json.dumps(jd))),
+        wrap_untrusted("job", redact_pii_for_model(json.dumps(prompt_view(jd)))),
         wrap_untrusted("plan", json.dumps([asdict(r) for r in plan.requirements])),
         wrap_untrusted("facts", redact_pii_for_model(json.dumps(packed))),
         wrap_untrusted("current_document", redact_pii_for_model(json.dumps(result))),

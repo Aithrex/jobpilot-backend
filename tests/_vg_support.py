@@ -144,6 +144,10 @@ def load_service_app(svc: str):
     spec.loader.exec_module(mod)
     flask_app = mod.create_app()
     flask_app.config["TESTING"] = True
+    # WSL steps its clock backwards ("Time jumped backwards" in dmesg). A token
+    # minted just before a step reads as "not yet valid", which flask-jwt-extended
+    # answers with 422, so an unrelated route test failed about once in four runs.
+    flask_app.config["JWT_DECODE_LEEWAY"] = 5
     return flask_app
 
 

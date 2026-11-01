@@ -155,7 +155,11 @@ NORMALIZATION_VERSION = 4
 # v9: every profile gains the `jd` block (`services/jd_profile.py`), and
 # `required_degree_level` stops reading "ms" inside "systems". Pure regex over
 # stored bodies, so the re-parse costs no model calls.
-EXTRACTOR_VERSION = 9
+#
+# v10: `jd-1.1.0`. Work mode and employment type are read from statements, years
+# from spelled-out numbers, and the block gains `additional_skills` and
+# `preferred_years`. Regex again, so no model calls.
+EXTRACTOR_VERSION = 10
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1
@@ -420,9 +424,11 @@ def _safe_jd_block(block: Any) -> Dict[str, Any]:
                 bool(education.get("equivalent_experience_accepted")),
         },
         "experience": {"min_years": experience.get("min_years"),
-                       "max_years": experience.get("max_years")},
+                       "max_years": experience.get("max_years"),
+                       "preferred_years": experience.get("preferred_years")},
         "clearance_level": _safe_family(jd.get("clearance_level"), 20),
         "certifications": _safe_skills(jd.get("certifications"), limit=10),
+        "additional_skills": _safe_skills(jd.get("additional_skills"), limit=20),
         "employment_type": _safe_family(jd.get("employment_type"), 20),
         "skill_alternatives": [_safe_skills(g, limit=5)
                                for g in (groups if isinstance(groups, list) else [])[:8]],

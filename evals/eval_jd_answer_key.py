@@ -4,9 +4,9 @@
     PYTHONPATH=shared/python python evals/eval_jd_answer_key.py --split dev --errors sponsorship
 
 The key is `evals/data/jd_answer_key.jsonl`: real JDs drawn from outside the set
-the readers were written against, labelled blind from the text alone. `dev` may
-be read while changing a reader. `test` is the score, and reading its errors to
-change a reader spends it. `review` on each row says whether a person has checked
+the readers were written against, labelled blind from the text alone. The `dev`
+splits may be read while changing a reader. `holdout` is the score, and reading
+its errors to change a reader spends it. `review` on each row says whether a person has checked
 that row's labels; a score over `draft` rows is a score against a careful reader,
 not yet against a reviewed key.
 
@@ -145,18 +145,21 @@ def score(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--split", choices=("dev", "test", "all"), default="all")
+    parser.add_argument("--split", choices=("dev", "dev2", "dev3", "dev4", "tune", "holdout", "all"),
+                        default="all")
     parser.add_argument("--stratum", choices=("random", "eligibility"))
     parser.add_argument("--errors", help="print the errors for this field")
     args = parser.parse_args()
 
     rows = load_key()
-    if args.split != "all":
+    if args.split == "tune":
+        rows = [r for r in rows if r["split"] != "holdout"]
+    elif args.split != "all":
         rows = [r for r in rows if r["split"] == args.split]
     if args.stratum:
         rows = [r for r in rows if r["stratum"] == args.stratum]
-    if args.errors and any(r["split"] == "test" for r in rows):
-        parser.error("--errors reads the test split; pass --split dev")
+    if args.errors and any(r["split"] == "holdout" for r in rows):
+        parser.error("--errors reads the held-out split; pass --split tune or a dev split")
 
     result = score(rows)
     errors = result.pop("errors")

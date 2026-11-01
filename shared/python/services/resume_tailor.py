@@ -31,6 +31,7 @@ from schemas.resume_schemas import (
     build_resume_text,
 )
 from services.integrity_guard import IntegrityGuard
+from services.jd_profile import prompt_view
 from utils.llm_safety import redact_pii_for_model, wrap_untrusted, guarded_system
 
 # Trusted instruction anchor. The résumé JSON, JD analysis, and free-text user
@@ -195,7 +196,7 @@ class ResumeTailor:
             dict(jd_analysis) if isinstance(jd_analysis, dict) else {}
         )
 
-        jd_json = json.dumps(jd_analysis, indent=2)
+        jd_json = json.dumps(prompt_view(jd_analysis), indent=2)
         resume_json = json.dumps(structured_resume, indent=2)
 
         # --- Keyword strategy (deterministic gap analysis, pre-AI) ---
@@ -500,7 +501,7 @@ class ResumeTailor:
         from services.claude_client import claude_json, CLAUDE_FLASH
 
         draft_json = json.dumps(strip_sidecar_keys(draft), indent=2)[:9000]
-        jd_json = json.dumps(jd_analysis, indent=2)[:2500]
+        jd_json = json.dumps(prompt_view(jd_analysis), indent=2)[:2500]
         system = guarded_system(
             "You are a rigorous resume-quality judge. Score the tailored resume "
             "on each dimension 0-100. The resume JSON and job analysis are "
@@ -546,7 +547,7 @@ class ResumeTailor:
 
         draft_json = json.dumps(strip_sidecar_keys(draft), indent=2)
         original_json = json.dumps(structured_resume, indent=2)
-        jd_json = json.dumps(jd_analysis, indent=2)
+        jd_json = json.dumps(prompt_view(jd_analysis), indent=2)
         weak = ", ".join(verdict.get("weakest_dimensions") or []) or "overall quality"
         critique = (verdict.get("critique") or "").strip()[:1200]
 
@@ -609,7 +610,7 @@ class ResumeTailor:
         # describe the resume, they aren't part of it.
         current_json = json.dumps(strip_sidecar_keys(current_tailored), indent=2)
         original_json = json.dumps(structured_resume, indent=2)
-        jd_json = json.dumps(jd_analysis, indent=2)
+        jd_json = json.dumps(prompt_view(jd_analysis), indent=2)
 
         # Smart truncation
         current_payload = self._smart_truncate(current_json)
@@ -2688,7 +2689,7 @@ class ResumeTailor:
         ]
 
         corrected_json = json.dumps(corrected, indent=2)[:6000]
-        jd_json = json.dumps(jd_analysis, indent=2)[:3000]
+        jd_json = json.dumps(prompt_view(jd_analysis), indent=2)[:3000]
 
         # Lazy import avoids a circular import (prompt_rules imports
         # BANNED_PHRASES from this module).

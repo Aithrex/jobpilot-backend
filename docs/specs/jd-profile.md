@@ -1,4 +1,4 @@
-# The JD dictionary (`jd-1.0.0`)
+# The JD dictionary (`jd-1.1.0`)
 
 `shared/python/services/jd_profile.py` is the one place a job description is
 read. Filtering and tailoring both go through it, so a posting cannot read one
@@ -21,7 +21,8 @@ a guess, and a model is never needed to produce the dictionary.
 | `role` | `title`, `company`, `location` | Text; company and location need the LLM analysis |
 | | `family`, `level`, `work_mode`, `industries` | From `fit_score` |
 | | `employment_type` | `full_time`, `part_time`, `contract`, `temporary`, `internship`, `not_stated` |
-| `experience` | `min_years`, `max_years` | Number or null |
+| `experience` | `min_years`, `max_years` | What the posting requires, or null; months read as fractions of a year |
+| | `preferred_years` | Set only when a preference is all it states |
 | | `evidence` | Source sentence |
 | `education` | `min_level`, `preferred_level` | 0 not stated, 1 high school or associate, 2 bachelor, 3 master, 4 doctorate |
 | | `min_degree`, `preferred_degree` | The same levels by name |
@@ -29,7 +30,8 @@ a guess, and a model is never needed to produce the dictionary.
 | | `equivalent_experience_accepted` | True or false |
 | | `evidence` | Source sentence |
 | `skills` | `required`, `preferred` | Canonical names; the LLM's are added when present |
-| | `technical`, `soft` | The same skills split by kind |
+| | `technical`, `soft` | The same skills split by kind; `soft` also holds terms measured as noise, such as "recruiting" |
+| | `additional` | Skills from `jd_skill_vocabulary.py`, which the match score does not read |
 | | `alternatives` | Groups the posting accepts instead of each other |
 | | `certifications` | For example `CISSP` |
 | `work_eligibility` | `sponsorship.status` | `offered`, `not_offered`, `conditional`, `not_stated` |
@@ -45,6 +47,11 @@ a guess, and a model is never needed to produce the dictionary.
 
 The stored block drops the evidence quotes except sponsorship, because it sits on
 every posting and the cluster is small. `build` re-reads them from the body.
+
+Prompts never see the dictionary directly. `jd_profile.prompt_view` replaces it
+with `job_facts` (years, degrees, fields, skill alternatives, certifications), so
+eligibility wording and raw JD quotes stay out of anything that writes a résumé.
+Every prompt that dumps a JD analysis must go through it.
 
 ## Rules that are easy to break
 
@@ -66,32 +73,33 @@ and "scrum master", which is why JDs use the stricter readers here.
 
 ## Accuracy
 
-`evals/data/jd_answer_key.jsonl` holds 300 real JDs, none from the set the readers
-were written against. They were labelled blind, from the JD text alone, and half
-are held out as `test`. Half of each split is random; the rest were picked for
-eligibility wording. `evals/eval_jd_answer_key.py` scores it and refuses to print
-`test` errors, and `evals/test_jd_answer_key.py` is the CI gate.
+`evals/data/jd_answer_key.jsonl` holds 750 real JDs labelled blind from the JD text.
+The `dev` splits were used to write rules. `holdout` is 150 random JDs that no rule
+was written from, and it was scored once. `evals/eval_jd_answer_key.py` refuses to
+print `holdout` errors, and `evals/test_jd_answer_key.py` is the CI gate.
 
 **The labels are AI-drafted until a person reviews them** (`review` on each row).
 `evals/data/jd_answer_key_review.csv` lists the rows worth checking.
 
-Held-out `test` split, 150 JDs, compared with the code before this module:
+| Field | Live before `jd-1.1.0` | `jd-1.1.0` on `holdout` | On tuning rows |
+|---|---|---|---|
+| Sponsorship status | 98.7% | 98.7% | 99.3% |
+| Stated refusals caught | 16 of 16 | 16 of 16 | 98.8% |
+| Work authorization | 96.7% | 97.3% | 97% |
+| Clearance required | 98.7% | 98.7% | 98.7% |
+| Work mode | 82.7% | 87.3% | 90.3% |
+| Minimum degree | 82.7% | 84% | 90.7% |
+| Minimum years | 84% | 84.7% | 87.5% |
+| Employment type | 87.3% | 82% | 86.5% |
+| Skills precision / recall | 51% / 25% | 56% / 31% | 60% / 35% |
+| Every field right on one JD | 44.7% | 45.3% | 52.7% |
 
-| Field | Before | Now |
-|---|---|---|
-| Stated sponsorship refusals caught | 18 of 28 | 28 of 28 |
-| `sponsorship` status | not measured | 98.7% |
-| `education.min_level` | 8% | 84% |
-| `experience.min_years` | 78% | 85% |
-| `authorization` | not measured | 93.3% |
-| `clearance_required` | not measured | 96.7% |
-| `work_mode` | not measured | 73% |
-| `employment_type` | not measured | 77% |
-| Skills | not measured | 48% precision, 20% recall |
-
-Skills are the weak field: the lexicon cannot name most of what a JD lists, and
-two labellers overlapped only 56% on skills, so the label is noisy too. Non-English
-JDs are not read.
+Each `holdout` figure can move about six points by chance. The gap to the tuning
+column is the real limit of hand-written rules: more of them raises the tuning
+score and leaves unseen JDs where they are, which is why the loop stopped here.
+Part of what remains is not a bug either. Labellers split on preferred-only years
+and on degrees listed under "preferred experience" headings. Non-English JDs are
+not read. Skills are the weak field, and reading them well needs a model.
 
 ## Changing a reader
 
