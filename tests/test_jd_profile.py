@@ -112,6 +112,8 @@ def test_authorization(sentence, requirement):
     "Please read the JD carefully. Work with a high degree of autonomy.",
     "We offer tuition reimbursement toward a master's degree.",
     "Be a master of your craft.",
+    "Connaissance du S.I.M.D.U.T;",
+    "Our team includes engineers from Google and leading PhD programs.",
 ])
 def test_no_degree_is_invented(text):
     assert jd_profile.read_education(_norm(text))["min_level"] == 0

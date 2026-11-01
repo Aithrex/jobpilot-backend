@@ -214,7 +214,7 @@ _AUTH_BOILERPLATE = re.compile(
 # Citizenship named for OTHER roles, or as the group a rule does not apply to.
 _AUTH_NOT_THIS_ROLE = re.compile(
     r"all positions with|certain (?:other )?(?:restricted )?positions|(?<![a-z])except(?![a-z])|"
-    r"may be required|(?<![a-z])if (?:required|applicable)(?![a-z])")
+    r"may be required|may require|(?<![a-z])if (?:required|applicable)(?![a-z])")
 
 
 def read_authorization(blob: str) -> Dict[str, str]:
@@ -249,7 +249,7 @@ _ABBR_NEXT = (r"(?=\s*(?:/|,|\(|or(?![a-z])|and(?![a-z])|in(?![a-z])|with(?![a-z
 _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
     (4, re.compile(
         r"(?<![a-z])ph\.?\s?d(?![a-z])|doctorate|doctoral degree|doctor of|"
-        r"(?<![a-z])m\.d\.|(?<![a-z])j\.d\.(?!\s*(?:power|irving|edwards|vance|williams))|juris doctor|"
+        r"(?<![a-z.])m\.d\.|(?<![a-z.])j\.d\.(?!\s*(?:power|irving|edwards|vance|williams))|juris doctor|"
         r"(?<![a-z,] )(?<![a-z])(?:md|jd)\s+(?:degree|required)")),
     (3, re.compile(
         r"(?<![a-z-])(?<!scrum )master'?s(?![a-z])|(?<![a-z-])masters?\s+degree(?![a-z])|"
@@ -278,6 +278,7 @@ _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
 _EDU_NOISE = re.compile(
     r"tuition|reimburs|scholarship|alumni|student loan|high school students|"
     r"continuing education|education assistance|education history|"
+    r"(?:phd|doctoral|graduate) programs?|these include|"
     r"less than (?:a )?high school|"
     # The path offered INSTEAD of the degree, not a lower minimum.
     r"in lieu of|in place of|"
