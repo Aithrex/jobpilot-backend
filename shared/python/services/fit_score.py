@@ -2092,7 +2092,7 @@ _YEARS_CONTEXT = re.compile(
 # Award streaks too: "voted 13 years in a row a top workplace" filed a nursing
 # assistant and a maintenance assistant as `staff` in the 2026-10-02 spot check.
 _YEARS_NOT_EXPERIENCE = re.compile(
-    r"of age|(?<![a-z])old(?![a-z])|in business|business for|history|founded|"
+    r"of age|(?<![a-z])old(?![a-z])|in business(?! development)|business for|history|founded|"
     r"anniversary|warranty|tenure|lease|coursework|of (college|school|study)|"
     r"(?<![a-z])ago(?![a-z])|in a row|consecutive|top workplace|best place|"
     r"or older|(?<![a-z])of age(?![a-z])|from (?:the )?date|of hire")
@@ -2142,7 +2142,7 @@ _BACHELOR_PATH_YEARS = re.compile(
 # the whole sentence.
 # A way around the requirement, whose number is the price of not meeting it.
 _YEARS_ALTERNATE_PATH = re.compile(
-    r"in lieu|substitut|will meet|(?<![a-z])no degree(?![a-z])|^or(?![a-z])")
+    r"in lieu|substitut|will meet|(?<![a-z])no degree(?![a-z])|^or(?![a-z])(?!.*bachelor)")
 _YEARS_STATED_RULE = re.compile(r"(?<![a-z])(?:minimum|requires?|must have|at least)(?![a-z])")
 _FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from|with|at)(?![a-z])[^.;,\n]*")
 _PARENTHETICAL = re.compile(r"\([^)]*\)")

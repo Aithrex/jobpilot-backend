@@ -287,7 +287,8 @@ _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
         r"(?<![a-z])bsn(?![a-z])|(?<![a-z])b\.e\.(?![a-z])|undergraduate degree|"
         r"(?<![a-z])baccalaureate(?![a-z])|(?<![a-z])tertiary (?:qualification|degree|education)|"
         r"(?:four|4)[- ]year degree|(?:college|university) degree|"
-        r"(?:a|relevant|related|technical|engineering)\s+degree(?![a-z])(?!\s+of(?![a-z]))|"
+        r"(?:a|relevant|related|technical|engineering|architectural|science|business|"
+        r"accounting|nursing|finance|law)\s+degree(?![a-z])(?!\s+of(?![a-z]))|"
         # A bare "degree" only opening a line: anywhere else it may be the tail of
         # "master's degree in physics", which must not read as a bachelor's too.
         r"^\W*degree (?:in|qualified|or equivalent|required)(?![a-z])|"
@@ -308,7 +309,10 @@ _EDU_NOISE = re.compile(
     r"(?:phd|doctoral|graduate) programs?|these include|working towards|"
     r"(?<![a-z])premium(?![a-z])|differential|years toward|"
     # Enrolment is not a held degree, and these lines waive one.
-    r"(?<![a-z])pursuing(?![a-z])|currently enrolled|actively enrolled|"
+    r"(?<![a-z])pursuing(?![a-z])|currently enrolled|actively enrolled|must be enrolled|"
+    # Required later or for someone else, not of this hire.
+    r"(?:at|within) (?:\d+|one|two|three|four|five) years? of (?:employment|hire)|"
+    r"(?<![a-z])if (?:in|candidate|you)(?![a-z])|"
     r"(?<![a-z])no (?:bachelor|college|university|degree)|"
     # A substitute path, not a lower minimum.
     r"will meet|substitut|"
@@ -321,6 +325,7 @@ _EDU_NOISE = re.compile(
 _FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from)(?![a-z])[^.;,\n]*")
 # Preference wording `fit_score._PREFERRED_CUE` does not carry.
 _PARENTHETICAL = re.compile(r"\([^)]*\)")
+_CLOSING_NAMES_OTHER = re.compile(r"experience|skills?|knowledge|certif|licen[sc]")
 _EDU_PREFERRED_EXTRA = re.compile(r"(?<![a-z])(?:an asset|beneficial|considered a|valued)(?![a-z])")
 # "High school diploma or equivalent" is a GED, not experience for a degree.
 _EDU_EQUIVALENT = re.compile(
@@ -388,18 +393,22 @@ def read_education(blob: str) -> Dict[str, Any]:
             sentence = _FIELD_PREFERENCE.sub("", sentence)
             sentence_pref = bool(fit_score._PREFERRED_CUE.search(_PARENTHETICAL.sub("", sentence)))
             closing = _EDU_CLAUSE.split(sentence)[-1]
-            if len(closing.split()) <= 2 and fit_score._PREFERRED_CUE.search(closing) \
-                    and not _degree_levels(closing + ","):
-                # "High school diploma, GED or equivalent, preferred": the
-                # closing word covers the whole list.
+            if fit_score._PREFERRED_CUE.search(_PARENTHETICAL.sub("", closing)) \
+                    and not _degree_levels(closing + ",") \
+                    and not _CLOSING_NAMES_OTHER.search(closing):
+                # "Bachelor's degree in accounting, business, or finance is
+                # preferred": the closing cue covers the list it ends.
                 preferred.extend((level, sentence) for level in _degree_levels(sentence + ","))
                 continue
             sentence_req = bool(fit_score._REQUIRED_CUE.search(sentence))
             for name, rx in _EDU_FIELDS:
                 if rx.search(sentence) and name not in fields:
                     fields.append(name)
-            clauses = _EDU_CLAUSE.split(sentence)
+            # Brackets hold their own commas: "(master's 6+, associate's 10+)".
+            outer = _PARENTHETICAL.sub(" ", sentence)
+            clauses = _EDU_CLAUSE.split(outer if _degree_levels(outer + ",") else sentence)
             cued = [c for c in clauses if fit_score._PREFERRED_CUE.search(_PARENTHETICAL.sub("", c))]
+            cued_levels = {lvl for c in cued for lvl in _degree_levels(c + ",")}
             for clause in clauses:
                 # A note in brackets qualifies the note: "degree (CPA highly
                 # preferred)" still requires the degree, and "(or high school
@@ -417,8 +426,9 @@ def read_education(blob: str) -> Dict[str, Any]:
                     is_pref = clause_pref and not clause_req
                 elif cued and len(clauses) > 1:
                     # "Bachelor's, Master's preferred": the cue belongs to its
-                    # own clause, and this one stands on the section.
-                    is_pref = mode == "preferred"
+                    # own clause, and this one stands on the section. Items of
+                    # the same level are one list: "diploma, GED preferred".
+                    is_pref = mode == "preferred" or bool(cued_levels & set(levels))
                 else:
                     is_pref = sentence_pref and not sentence_req
                     if not sentence_pref and not sentence_req:
