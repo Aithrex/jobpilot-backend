@@ -38,5 +38,5 @@ def test_a_stated_refusal_is_almost_never_missed_or_invented(result):
 
 def test_the_key_keeps_its_held_out_half():
     rows = key_eval.load_key()
-    assert len(rows) == 300
-    assert sum(r["split"] == "test" for r in rows) == 150
+    assert len(rows) == 600
+    assert sum(r["split"] in ("test", "final") for r in rows) == 300
