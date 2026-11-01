@@ -1,5 +1,6 @@
 """The shared JD dictionary. Sentences below are real wording from stored JDs,
 with employer names removed; every one was read wrongly before this module."""
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -244,6 +245,36 @@ def test_tailoring_and_filtering_read_the_same_facts():
     assert profile["content"]["responsibilities"] == ["Ship features"]
     assert profile["provenance"]["llm"] is True
     assert result["required_skills"] == ["LangGraph"]
+
+
+def test_prompts_get_job_facts_and_never_eligibility_or_quotes():
+    jd = "Requirements: 5+ years of experience in Python. Bachelor's degree required. Experience with AWS, " \
+         "GCP or Azure. Visa sponsorship is not available for this role."
+    analysis = jd_profile.attach_to_analysis({"job_title": "Engineer"}, jd)
+    view = jd_profile.prompt_view(analysis)
+    assert "jd_profile" not in view
+    assert view["job_facts"]["min_years"] == 5
+    assert view["job_facts"]["min_degree"] == "bachelor"
+    assert view["job_facts"]["skill_alternatives"] == [["aws", "gcp", "azure"]]
+    assert "sponsor" not in json.dumps(view).lower()
+    assert "jd_profile" in analysis
+    assert jd_profile.prompt_view({"job_title": "x"}) == {"job_title": "x"}
+    assert jd_profile.prompt_view(None) is None
+
+
+def test_the_analysis_prompt_reads_past_the_old_limit(monkeypatch):
+    from services import claude_client
+
+    seen = {}
+
+    def fake(prompt, **_):
+        seen["prompt"] = prompt
+        return {"job_title": "Engineer"}
+
+    monkeypatch.setattr(claude_client, "claude_json", fake)
+    monkeypatch.setattr("services.tailoring_policy.enabled", lambda: False)
+    ResumeService._analyze_jd(SimpleNamespace(), "x " * 4000 + "LATEREQUIREMENT")
+    assert "LATEREQUIREMENT" in seen["prompt"]
 
 
 def test_analysis_passes_through_when_it_is_not_a_dict():

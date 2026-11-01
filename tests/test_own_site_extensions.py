@@ -4,6 +4,7 @@ Real fixtures are trimmed from the employers' official pages captured on
 2026-10-22 (MATS Research, Rugged Science, Orange Logic, Nous Research,
 GMI Cloud, Attune, Longbridge). The few pages written by hand below are
 labelled SYNTHETIC and model one rule each."""
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,17 @@ from services.ats_providers.base import (DATE_EXACT, DATE_UNKNOWN, Endpoint,
                                          FetchContext, RawJob)
 
 FIX = Path(__file__).parent / "fixtures" / "ats_providers" / "own_site"
+
+
+@pytest.fixture(autouse=True)
+def _fixed_clock_for_minted_dates(monkeypatch):
+    """`looks_minted_now` compares a date's time of day with the CLOCK, and the
+    Longbridge fixture is stamped 04:28:07.797. Against the real clock this file
+    failed for ten minutes every day, and blocked a deploy on 2026-11-01."""
+    real = own_site.looks_minted_now
+    noon = datetime(2026, 10, 31, 16, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(own_site, "looks_minted_now",
+                        lambda value, **_: real(value, now=noon))
 
 
 def _read(name):

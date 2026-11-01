@@ -630,6 +630,33 @@ def build(jd_text: Any, title: Any = "", *,
     }
 
 
+def prompt_view(analysis: Any) -> Any:
+    """`analysis` as a prompt may see it: `jd_profile` is replaced by `job_facts`.
+
+    Prompts dump the analysis whole, so without this they would carry raw JD
+    quotes and sponsorship wording, which are no use to a résumé writer and are
+    the one thing a résumé must never echo. Eligibility stays out on purpose.
+    """
+    if not isinstance(analysis, dict) or "jd_profile" not in analysis:
+        return analysis
+    view = {k: v for k, v in analysis.items() if k != "jd_profile"}
+    profile = analysis["jd_profile"]
+    if isinstance(profile, dict):
+        experience = profile.get("experience") or {}
+        education = profile.get("education") or {}
+        skills = profile.get("skills") or {}
+        view["job_facts"] = {
+            "min_years": experience.get("min_years"),
+            "max_years": experience.get("max_years"),
+            "min_degree": education.get("min_degree"),
+            "preferred_degree": education.get("preferred_degree"),
+            "degree_fields": education.get("fields") or [],
+            "skill_alternatives": skills.get("alternatives") or [],
+            "certifications": skills.get("certifications") or [],
+        }
+    return view
+
+
 def attach_to_analysis(analysis: Any, jd_text: Any) -> Any:
     """Add `jd_profile` to an LLM analysis without touching what it returned.
 

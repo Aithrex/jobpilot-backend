@@ -46,6 +46,11 @@ a guess, and a model is never needed to produce the dictionary.
 The stored block drops the evidence quotes except sponsorship, because it sits on
 every posting and the cluster is small. `build` re-reads them from the body.
 
+Prompts never see the dictionary directly. `jd_profile.prompt_view` replaces it
+with `job_facts` (years, degrees, fields, skill alternatives, certifications), so
+eligibility wording and raw JD quotes stay out of anything that writes a résumé.
+Every prompt that dumps a JD analysis must go through it.
+
 ## Rules that are easy to break
 
 - **"Must be authorized to work in the US" is not `not_offered`.** Employers who

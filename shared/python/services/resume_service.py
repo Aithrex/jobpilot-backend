@@ -76,6 +76,11 @@ FEED_RESULT_TTL_HOURS = _env_int("RESUME_JOBS_FEED_TTL_HOURS", 24)
 #: Workday result from 5.66 MB to 6.63 MB: the poll failed, the client kept
 #: only the small MNC list, and every 80+ match in the inventory tabs vanished
 #: from the page with no error shown. 4.5 MB leaves room for that escaping.
+# How much of a JD the analysis prompt reads. It was 5,000 characters, which half
+# of sampled JDs exceed (median 5,015), so requirements sitting late in a long
+# posting never reached the model. The longest of 9,420 sampled bodies is
+# under 12,000.
+JD_PROMPT_CHARS = _env_int("JD_PROMPT_CHARS", 20_000)
 POLL_RESULT_MAX_BYTES = _env_int("POLL_RESULT_MAX_BYTES", 4_500_000)
 
 
@@ -480,7 +485,7 @@ class ResumeService:
         All skill and keyword lists are normalized to canonical forms.
 
         Args:
-            jd_text: Raw job description text (max 5000 chars sent to AI).
+            jd_text: Raw job description text (up to JD_PROMPT_CHARS sent to AI).
 
         Returns:
             Validated dict conforming to JD_ANALYSIS_SCHEMA.
@@ -510,7 +515,7 @@ class ResumeService:
             '- "keywords": list of strings (ATS-critical keywords from the JD)\n'
         )
         # JD text is fully attacker-influenced: tag as untrusted data + redact PII.
-        prompt = wrap_untrusted("job_description", redact_pii_for_model(jd_text[:5000]))
+        prompt = wrap_untrusted("job_description", redact_pii_for_model(jd_text[:JD_PROMPT_CHARS]))
 
         result = claude_json(
             prompt,
