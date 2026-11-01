@@ -140,6 +140,36 @@ def test_degree_reading(text, minimum, preferred):
     assert result["preferred_level"] == preferred
 
 
+def test_a_bullet_saying_preferred_is_not_a_heading():
+    text = "Qualifications\n- Prior closing experience strongly preferred\n- Bachelor's degree"
+    assert jd_profile.read_education(_norm(text))["min_level"] == 2
+
+
+@pytest.mark.parametrize("text,requirement", [
+    ("This job requires a U.S. person.", jd_profile.AUTH_CITIZEN_OR_PR),
+    ("Requires the ability to work lawfully in the U.S.", jd_profile.AUTH_AUTHORIZED),
+    ("Work authorization:", jd_profile.NOT_STATED),
+    ("Right to work poster (English/Spanish)", jd_profile.NOT_STATED),
+    ("U.S. citizenship is required for all positions with a government clearance.",
+     jd_profile.NOT_STATED),
+])
+def test_authorization_needs_a_statement_about_this_role(text, requirement):
+    assert jd_profile.read_authorization(_norm(text))["requirement"] == requirement
+
+
+def test_clearance_level_label_and_customs_work():
+    assert jd_profile.clearance_level(_norm("Clearance type: Secret"), True) == "secret"
+    reqs = fit_score.extract_requirements(
+        "Ensure import/export control compliance with customs rules.", "Trade Analyst")
+    assert reqs["clearance_required"] is False
+
+
+def test_advanced_degree_reads_as_a_masters():
+    result = jd_profile.read_education(
+        _norm("Bachelor's degree required. Advanced degree in business preferred."))
+    assert (result["min_level"], result["preferred_level"]) == (2, 3)
+
+
 def test_education_detail():
     result = jd_profile.read_education(
         _norm("Bachelor's degree in Computer Science or equivalent experience required."))

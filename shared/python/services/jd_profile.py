@@ -194,7 +194,8 @@ _AUTH_CITIZEN_OR_PR = re.compile(
     r"(?:a\s+|an\s+)?(?:lawful\s+|legal\s+|u\.?s\.?\s+)?"
     r"(?:permanent resident|green[ -]card)|"
     r"green[ -]card holders?|permanent residents? only|"
-    r"must be a (?:lawful )?permanent resident")
+    r"must be a (?:lawful )?permanent resident|"
+    r"(?:must be|requires?|be) an?\s+u\.?s\.? person(?![a-z])")
 _AUTH_CITIZEN = re.compile(
     r"must (?:be|hold) (?:a )?(?:u\.?s\.?|united states) citizen|"
     r"(?:u\.?s\.?|united states) citizenship (?:is |are )?required|"
@@ -202,12 +203,18 @@ _AUTH_CITIZEN = re.compile(
     r"(?<![a-z])citizens? only(?![a-z])")
 _AUTH_ANY = re.compile(
     r"(?:authori[sz]ed|eligible|entitled|legally able|permitted) to work|"
-    r"right to work|work authori[sz]ation|work authori[sz]ed|"
-    r"valid work (?:permit|visa)")
+    r"(?:legal |legally )?right to work|work authori[sz]ation|work authori[sz]ed|"
+    r"work lawfully|lawfully (?:authori[sz]ed|work)|valid work (?:permit|visa)|"
+    r"eligibility to work")
 # Compliance boilerplate that names work authorization without requiring it.
 _AUTH_BOILERPLATE = re.compile(
     r"e-?verify|i-9|employment eligibility verification|"
-    r"non-?discrimination|equal (?:employment )?opportunit")
+    r"non-?discrimination|equal (?:employment )?opportunit|poster|"
+    r":\s*$|^\W*(?:work authori[sz]ation|right to work)\W*$")
+# Citizenship named for OTHER roles, or as the group a rule does not apply to.
+_AUTH_NOT_THIS_ROLE = re.compile(
+    r"all positions with|certain (?:other )?(?:restricted )?positions|(?<![a-z])except(?![a-z])|"
+    r"may be required|(?<![a-z])if (?:required|applicable)(?![a-z])")
 
 
 def read_authorization(blob: str) -> Dict[str, str]:
@@ -216,6 +223,8 @@ def read_authorization(blob: str) -> Dict[str, str]:
         return {"requirement": NOT_STATED, "evidence": ""}
     fallback = ""
     for sentence in _sentences(blob):
+        if _AUTH_NOT_THIS_ROLE.search(sentence):
+            continue
         if _AUTH_CITIZEN_OR_PR.search(sentence):
             return {"requirement": AUTH_CITIZEN_OR_PR, "evidence": _evidence(sentence)}
         if _AUTH_CITIZEN.search(sentence):
@@ -246,7 +255,7 @@ _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
         r"(?<![a-z-])(?<!scrum )master'?s(?![a-z])|(?<![a-z-])masters?\s+degree(?![a-z])|"
         r"(?<![a-z-])master of (?:science|arts|business|engineering|education|public|fine|"
         r"laws|computer|technology|health|social|information)(?![a-z])|"
-        r"(?<![a-z])m\.?b\.?a(?![a-z])|(?<![a-z])m\.eng(?![a-z])|(?<![a-z])msc(?![a-z])|"
+        r"(?:advanced|graduate|post-?graduate) degree|(?<![a-z])m\.?b\.?a(?![a-z])|(?<![a-z])m\.eng(?![a-z])|(?<![a-z])msc(?![a-z])|"
         r"(?<![a-z.])m\.s\.?(?![a-z])|(?<![a-z.])m\.a\.(?![a-z])(?!\s*certif)|"
         rf"(?<![a-z.])(?<!, )ms{_ABBR_NEXT}")),
     (2, re.compile(
@@ -327,8 +336,10 @@ def read_education(blob: str) -> Dict[str, Any]:
         stripped = line.strip()
         if not stripped:
             continue
-        if len(stripped) <= 90:
-            if fit_score._PREFERRED_HEAD.search(stripped):
+        if fit_score.is_section_heading(stripped):
+            if "education" in stripped:
+                mode = "required"
+            elif fit_score._PREFERRED_HEAD.search(stripped):
                 mode = "preferred"
             elif fit_score._REQUIRED_HEAD.search(stripped):
                 mode = "required"
@@ -408,9 +419,11 @@ def read_experience(blob: str, min_years: Optional[int]) -> Dict[str, Any]:
 
 
 _CLEARANCE_LEVELS: Sequence[Tuple[str, re.Pattern]] = (
-    ("ts_sci", re.compile(r"ts/sci|ts\s*/\s*sci|top secret\s*/\s*sci")),
+    ("ts_sci", re.compile(r"ts/sci|ts\s*/\s*sci|top secret\s*/\s*sci|clearance (?:type|level):\s*ts")),
     ("top_secret", re.compile(r"top[ -]secret")),
+    ("public_trust", re.compile(r"clearance (?:type|level):\s*public trust")),
     ("secret", re.compile(r"(?<![a-z])secret (?:clearance|level|security|or higher)|"
+                          r"clearance (?:type|level):\s*secret|"
                           r"(?<![a-z])(?:active|interim|dod) secret(?![a-z])")),
     ("public_trust", re.compile(r"public trust")),
     ("export_controlled", re.compile(r"\bitar\b|export[ -]control|(?<![a-z])u\.?s\.? persons?(?![a-z])")),

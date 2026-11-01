@@ -1935,7 +1935,11 @@ _CLEARANCE_JD = re.compile(
     r"(?<![a-z])u\.?s\.? person(?:s)?(?: as defined)?|(?<![a-z])us person(?:s)?|"
     # `\bear\b` on its own would match the English word. Only the paired or
     # qualified forms of the Export Administration Regulations are read.
-    r"export[ -]control(?:led|s)?|\bitar\b|itar\s*/\s*ear|ear\s*/\s*itar|"
+    # "Import/export control" is also a customs clerk's whole job, so an export
+    # rule only counts next to who may do the work.
+    r"export[ -]control(?:led|s)?[^.\n]{0,120}(?:u\.?s\.? person|citizen|permanent resident)|"
+    r"(?:u\.?s\.? person|citizen|permanent resident)[^.\n]{0,120}export[ -]control|"
+    r"\bitar\b|itar\s*/\s*ear|ear\s*/\s*itar|"
     r"\bear\b\s+(?:regulation|requirement|restriction)|"
     r"government contract requires|federal contract requires|"
     r"national agency check|suitability determination)")
@@ -2046,7 +2050,7 @@ def _split_sections(blob: str) -> Tuple[str, str]:
         head = stripped[:90]
         # A short line that names a preferred heading switches the mode; a
         # bullet that merely says "a plus" only reclassifies itself.
-        is_head = len(stripped) <= 90
+        is_head = is_section_heading(stripped)
         if _PREFERRED_HEAD.search(head):
             # Checked before the required heads on purpose: "preferred
             # qualifications" contains "qualifications", and reading it as a
@@ -2093,6 +2097,16 @@ _PREFERRED_CUE = re.compile(
     r"ideal(ly)?(?![a-z])|desired|desirable|advantageous")
 _REQUIRED_CUE = re.compile(r"required|(?<![a-z])must(?![a-z])|minimum|at least")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.;])\s+|\s*•\s*")
+
+
+def is_section_heading(line: str) -> bool:
+    """A heading, not a bullet that happens to contain "preferred". Treating
+    "- Prior closing experience strongly preferred" as one filed the rest of the
+    posting, degree requirement included, as nice-to-have."""
+    text = line.strip()
+    if not text or len(text) > 90 or text[0] in "-•*·–—":
+        return False
+    return len(text.split()) <= 8 or text.endswith(":")
 
 
 _NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -2152,7 +2166,7 @@ def _required_years(blob: str) -> Optional[int]:
             continue
         # Same heading rules as `_split_sections`, but decided per SENTENCE:
         # a one-line "Required: 3+ years. Preferred: 5+ years." has to split.
-        if len(stripped) <= 90:
+        if is_section_heading(stripped):
             if _PREFERRED_HEAD.search(stripped):
                 mode = "preferred"
             elif _REQUIRED_HEAD.search(stripped):
