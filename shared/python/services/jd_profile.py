@@ -27,6 +27,8 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from services.jd_skill_vocabulary import JD_SKILL_VOCABULARY
+
 # Bump when a reader changes what it returns. Stored blocks carry it as `v`.
 JD_PROFILE_VERSION = "jd-1.0.0"
 
@@ -708,16 +710,40 @@ def read_skill_alternatives(blob: str, find_skills: Callable[[str], List[str]]) 
 # The dictionary
 # ---------------------------------------------------------------------------
 
-# People skills only. NOT `fit_score._GENERIC_SKILLS`, which means "does not
+# Not technical. NOT `fit_score._GENERIC_SKILLS`, which means "does not
 # discriminate between candidates" and so holds Excel, CRM and project
-# management: those are skills a job asks for, just common ones.
+# management: those are skills a job asks for, just common ones. The last group is
+# measured: lexicon terms the labellers agreed with under 30% of the time, usually
+# because the word describes the job ("recruiting" in an equal-opportunity notice,
+# "documentation" as a duty) rather than a skill it asks for.
 _SOFT_SKILLS = frozenset({
     "communication", "teamwork", "collaboration", "interpersonal", "leadership",
     "problem solving", "critical thinking", "time management", "organization",
     "attention to detail", "multitasking", "adaptability", "work ethic",
     "self motivated", "public speaking", "presentation", "mentoring", "negotiation",
-    "stakeholder management",
+    "stakeholder management", "bilingual",
+    "compliance", "recruiting", "documentation", "reporting", "monitoring", "onboarding",
+    "process improvement", "patient care", "quality control", "accessibility",
+    "safety compliance", "requirements gathering", "auditing", "roadmapping",
+    "hipaa compliance",
 })
+
+_VOCABULARY = re.compile(
+    r"(?<![a-z0-9])(?:" + "|".join(
+        re.escape(v) for v in sorted(JD_SKILL_VOCABULARY, key=len, reverse=True))
+    + r")(?![a-z0-9])")
+
+
+def read_additional_skills(blob: str, known: Sequence[str]) -> List[str]:
+    """Skills the JD names that the scoring lexicon cannot, in order of appearance."""
+    seen = set(known)
+    out: List[str] = []
+    for m in _VOCABULARY.finditer(blob or ""):
+        name = m.group(0)
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out[:20]
 
 
 def read_fields(blob: str, *, min_years: Optional[int], clearance_required: bool,
@@ -734,6 +760,7 @@ def read_fields(blob: str, *, min_years: Optional[int], clearance_required: bool
         "certifications": read_certifications(blob),
         "employment_type": read_employment_type(blob),
         "skill_alternatives": read_skill_alternatives(blob, find_skills),
+        "additional_skills": read_additional_skills(blob, find_skills(blob)),
     }
 
 
@@ -785,7 +812,9 @@ def build(jd_text: Any, title: Any = "", *,
         "skills": {
             "required": required,
             "preferred": preferred,
-            "technical": [s for s in named if s not in _SOFT_SKILLS],
+            "technical": [s for s in named if s not in _SOFT_SKILLS]
+            + [s for s in jd["additional_skills"] if s not in named],
+            "additional": list(jd["additional_skills"]),
             "soft": [s for s in named if s in _SOFT_SKILLS],
             "alternatives": [list(g) for g in jd["skill_alternatives"]],
             "certifications": list(jd["certifications"]),

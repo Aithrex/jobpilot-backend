@@ -326,6 +326,21 @@ def test_common_tools_are_technical_not_soft():
     assert "teamwork" in profile["skills"]["soft"]
 
 
+def test_additional_skills_enrich_the_dictionary_and_leave_the_score_alone():
+    reqs = fit_score.extract_requirements(
+        "Requirements: Databricks, ISO 13485 and change management.", "Engineer")
+    assert {"databricks", "iso 13485", "change management"} <= set(reqs["jd"]["additional_skills"])
+    assert "iso 13485" not in reqs["required_skills"]
+    profile = jd_profile.build("Requirements: Databricks and Python.", "Engineer")
+    assert "databricks" in profile["skills"]["technical"]
+
+
+def test_noise_terms_are_not_technical():
+    profile = jd_profile.build("Requirements: documentation, recruiting and Python.", "Engineer")
+    assert "python" in profile["skills"]["technical"]
+    assert "recruiting" not in profile["skills"]["technical"]
+
+
 def test_build_returns_the_whole_dictionary():
     profile = jd_profile.build(
         "Requirements: 5+ years of experience with Python and AWS. "

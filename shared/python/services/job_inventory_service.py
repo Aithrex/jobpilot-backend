@@ -424,6 +424,7 @@ def _safe_jd_block(block: Any) -> Dict[str, Any]:
                        "preferred_years": experience.get("preferred_years")},
         "clearance_level": _safe_family(jd.get("clearance_level"), 20),
         "certifications": _safe_skills(jd.get("certifications"), limit=10),
+        "additional_skills": _safe_skills(jd.get("additional_skills"), limit=20),
         "employment_type": _safe_family(jd.get("employment_type"), 20),
         "skill_alternatives": [_safe_skills(g, limit=5)
                                for g in (groups if isinstance(groups, list) else [])[:8]],
