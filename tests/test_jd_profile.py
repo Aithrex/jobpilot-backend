@@ -116,6 +116,8 @@ def test_authorization(sentence, requirement):
     "Masters job-related, technical and professional knowledge.",
     "Master's students: $28.00 CAD / hour.",
     "Completed or working towards a high school diploma.",
+    "BSN or higher premium $1.00/hr.",
+    "Must have completed at least two years toward a four-year undergraduate degree program.",
     "Our team includes engineers from Google and leading PhD programs.",
 ])
 def test_no_degree_is_invented(text):
@@ -140,6 +142,10 @@ def test_no_degree_is_invented(text):
     ("Education required: less than high school education.", 0, 0),
     ("Bachelor's/university degree, Master's degree preferred", 2, 3),
     ("University degree in accounting (CPA or similar certification highly preferred).", 2, 0),
+    ("High school diploma, GED or equivalent work experience, preferred", 0, 1),
+    ("Degree or equivalent experience required.", 2, 0),
+    ("Master's degree in physics required.", 3, 0),
+    ("Degree in life sciences required.", 2, 0),
 ])
 def test_degree_reading(text, minimum, preferred):
     result = jd_profile.read_education(_norm(text))

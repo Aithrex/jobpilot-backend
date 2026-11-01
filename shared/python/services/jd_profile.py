@@ -279,7 +279,9 @@ _DEGREE_READERS: Sequence[Tuple[int, re.Pattern]] = (
         r"(?<![a-z])baccalaureate(?![a-z])|(?<![a-z])tertiary (?:qualification|degree|education)|"
         r"(?:four|4)[- ]year degree|(?:college|university) degree|"
         r"(?:a|relevant|related|technical|engineering)\s+degree(?![a-z])(?!\s+of(?![a-z]))|"
-        r"(?<![a-z\d-])(?<!\d )degree (?:in|qualified)(?![a-z])|"
+        # A bare "degree" only opening a line: anywhere else it may be the tail of
+        # "master's degree in physics", which must not read as a bachelor's too.
+        r"^\W*degree (?:in|qualified|or equivalent|required)(?![a-z])|"
         r"(?<![a-z.])b\.s\.?(?![a-z])|(?<![a-z.])b\.a\.(?![a-z])|"
         rf"(?<![a-z.])(?<!, )(?:bs|ba){_ABBR_NEXT}")),
     (1, re.compile(
@@ -295,6 +297,7 @@ _EDU_NOISE = re.compile(
     r"tuition|reimburs|scholarship|alumni|student loan|high school students|"
     r"continuing education|education assistance|education history|"
     r"(?:phd|doctoral|graduate) programs?|these include|working towards|"
+    r"(?<![a-z])premium(?![a-z])|differential|years toward|"
     r"(?:bachelor|master)'?s? students|without a (?:college )?degree|"
     r"less than (?:a )?high school|"
     # The path offered INSTEAD of the degree, not a lower minimum.
@@ -370,6 +373,13 @@ def read_education(blob: str) -> Dict[str, Any]:
                 continue
             sentence = _FIELD_PREFERENCE.sub("", sentence)
             sentence_pref = bool(fit_score._PREFERRED_CUE.search(_PARENTHETICAL.sub("", sentence)))
+            closing = _EDU_CLAUSE.split(sentence)[-1]
+            if len(closing.split()) <= 2 and fit_score._PREFERRED_CUE.search(closing) \
+                    and not _degree_levels(closing + ","):
+                # "High school diploma, GED or equivalent, preferred": the
+                # closing word covers the whole list.
+                preferred.extend((level, sentence) for level in _degree_levels(sentence + ","))
+                continue
             sentence_req = bool(fit_score._REQUIRED_CUE.search(sentence))
             for name, rx in _EDU_FIELDS:
                 if rx.search(sentence) and name not in fields:
@@ -518,6 +528,38 @@ _CERTIFICATIONS: Sequence[Tuple[str, re.Pattern]] = tuple(
         ("PALS", r"pals"),
         ("CPR", r"cpr"),
         ("PMP", r"pmp"),
+        ("CAPM", r"capm"),
+        ("PRINCE2", r"prince2"),
+        ("Certified ScrumMaster", r"certified scrum ?master|csm certification"),
+        ("TOGAF", r"togaf"),
+        ("CCSP", r"ccsp"),
+        ("CySA+", r"cysa\+?"),
+        ("GICSP", r"gicsp"),
+        ("CHFI", r"chfi"),
+        ("GCED", r"gced"),
+        ("CompTIA Project+", r"project\+"),
+        ("Databricks Certification", r"databricks certified|databricks certification"),
+        ("Salesforce Certification", r"salesforce certified|salesforce certification"),
+        ("Snowflake Certification", r"snowpro|snowflake certified|snowflake certification"),
+        ("CPA", r"cpa"),
+        ("CFP", r"cfp"),
+        ("CMA", r"cma"),
+        ("SPHR", r"sphr"),
+        ("PHR", r"phr"),
+        ("SHRM-CP", r"shrm-(?:cp|scp)"),
+        ("CPIM", r"cpim"),
+        ("CSCP", r"cscp"),
+        ("CPSM", r"cpsm"),
+        ("CQE", r"cqe"),
+        ("CQA", r"cqa"),
+        ("CCMA", r"ccma"),
+        ("RMA", r"rma certification|registered medical assistant"),
+        ("NRP", r"nrp"),
+        ("CCRN", r"ccrn"),
+        ("CNOR", r"cnor"),
+        ("PTCB", r"ptcb"),
+        ("CNA", r"certified nursing assistant|cna certification"),
+        ("EPA 608", r"epa 608|epa section 608"),
         ("Six Sigma", r"six sigma"),
         ("ITIL", r"itil"),
         ("CFA", r"cfa"),
@@ -526,7 +568,7 @@ _CERTIFICATIONS: Sequence[Tuple[str, re.Pattern]] = tuple(
 
 
 def read_certifications(blob: str) -> List[str]:
-    return [name for name, rx in _CERTIFICATIONS if rx.search(blob or "")][:10]
+    return [name for name, rx in _CERTIFICATIONS if rx.search(blob or "")][:12]
 
 
 # Both readers below accept STATEMENTS about this role, never mentions. "Assist
