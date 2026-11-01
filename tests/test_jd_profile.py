@@ -256,6 +256,8 @@ def test_years_read_spelled_numbers_and_the_bachelors_path(text, years):
     ("One year of general maintenance experience preferred.", None, 1),
     ("A degree is a plus and a minimum of 5 years successful experience in sales.", 5, None),
     ("Must be 18 years or older.", None, None),
+    ("Bachelor's degree or four or more years of work experience.\nOne or more years of relevant experience required.", 1, None),
+    ("Associates' degree and a minimum of 2 years' work experience, or in lieu of a degree a combined minimum of 4 years.", 2, None),
     ("7+ years in business development, ideally in SaaS.", 7, None),
     ("HS diploma and 8 years of relevant experience;\nor a bachelor's degree with 4 years of relevant experience", 4, None),
     ("Degree and typically requires 10+ years of relevant experience.\n12+ years of experience in architecture.", 10, None),
