@@ -159,7 +159,11 @@ NORMALIZATION_VERSION = 4
 # v10: `jd-1.1.0`. Work mode and employment type are read from statements, years
 # from spelled-out numbers, and the block gains `additional_skills` and
 # `preferred_years`. Regex again, so no model calls.
-EXTRACTOR_VERSION = 10
+#
+# v11: `jd-1.2.0`. Employment type no longer reads ordinary lines ("regular
+# bending, lifting") as statements, negated work mode wording reads as negated,
+# and the skills vocabulary grew to 570 phrases.
+EXTRACTOR_VERSION = 11
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1

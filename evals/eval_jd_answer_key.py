@@ -145,7 +145,7 @@ def score(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--split", choices=("dev", "dev2", "dev3", "dev4", "tune", "holdout", "all"),
+    parser.add_argument("--split", choices=("dev", "dev2", "dev3", "dev4", "dev5", "dev6", "dev7", "tune", "holdout", "all"),
                         default="all")
     parser.add_argument("--stratum", choices=("random", "eligibility"))
     parser.add_argument("--errors", help="print the errors for this field")

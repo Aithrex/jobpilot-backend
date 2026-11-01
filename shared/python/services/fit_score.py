@@ -60,7 +60,7 @@ from services import jd_profile
 
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.6"
+FIT_SCORE_VERSION = "fit-v2.7"
 
 # The cliff described below is REAL, and this is how 2.1 crosses it.
 #
@@ -123,7 +123,8 @@ FIT_SCORE_VERSION = "fit-v2.6"
 # which scores nothing. Spelled-out years are read, and a preference word only
 # moves the number it qualifies.
 _COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset(
-    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5", "fit-v2.6"})
+    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5", "fit-v2.6",
+     "fit-v2.7"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
@@ -2149,7 +2150,11 @@ _BACHELOR_PATH_YEARS = re.compile(
 # the whole sentence.
 # A way around the requirement, whose number is the price of not meeting it.
 _YEARS_ALTERNATE_PATH = re.compile(
-    r"in lieu|substitut|will meet|(?<![a-z])no degree(?![a-z])|^or(?![a-z])(?!.*bachelor)")
+    r"^in lieu|substitut|will meet|(?<![a-z])no degree(?![a-z])|^or(?![a-z])(?!.*bachelor)|"
+    # "Bachelor's degree or 4+ years": the years stand in for the degree.
+    r"(?:degree|diploma|program[^.\n]{0,70}),?\s+or\s+\d{1,2}\s*\+?\s*(?:or more\s+)?(?:years?|yrs?)")
+# Everything after this is the way around the requirement stated before it.
+_YEARS_LIEU_TAIL = re.compile(r",?\s*(?:or\s+)?in lieu of.*$")
 _YEARS_STATED_RULE = re.compile(r"(?<![a-z])(?:minimum|requires?|must have|at least)(?![a-z])")
 _FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from|with|at)(?![a-z])[^.;,\n]*")
 _PARENTHETICAL = re.compile(r"\([^)]*\)")
@@ -2223,7 +2228,8 @@ def _required_years(blob: str, *, preferred_fallback: bool = True) -> Optional[i
             elif _REQUIRED_HEAD.search(stripped):
                 mode = "required"
         for sentence in _SENTENCE_SPLIT.split(stripped):
-            if _YEARS_ALTERNATE_PATH.search(sentence):
+            sentence = _YEARS_LIEU_TAIL.sub("", sentence)
+            if not sentence or _YEARS_ALTERNATE_PATH.search(sentence):
                 continue
             for m in _HEADLINE_YEARS_RE.finditer(sentence):
                 is_pref = _years_are_preferred(sentence, m.start()) or (

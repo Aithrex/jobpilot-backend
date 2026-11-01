@@ -334,7 +334,7 @@ search, guest cards and the digests. See
   `employers`/`career_sources`/`company_ats_endpoints`/`job_postings` →
   `docs/coverage/h1b-sponsor-gaps.{json,csv}`.
 
-## The JD dictionary (`jd-1.1.0`)
+## The JD dictionary (`jd-1.2.0`)
 
 `shared/python/services/jd_profile.py` is the ONE reader of a job description;
 filtering and tailoring both go through it. Never add a second JD reader, and
