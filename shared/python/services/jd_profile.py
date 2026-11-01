@@ -678,22 +678,30 @@ def read_work_mode(blob: str) -> str:
 
 _EMPLOYMENT_NOISE = re.compile(
     r"benefit|eligib|employees|colleagues|hires|students|basis|working model|"
-    r"(?:all|our|for) (?:full|part)[- ]time|contract of employment|not a contract")
+    r"(?:all|our|for) (?:full|part)[- ]time|contract of employment|not a contract|"
+    r"based on a full[- ]time|position until|overtime")
 # "This full-time position is eligible for benefits" still says what the job is.
 _EMPLOYMENT_THIS_ROLE = re.compile(r"this\s+(full|part)\s*-?\s*time\s+(?:position|role|job)")
 _SEASONAL_ROLE = re.compile(
     r"(?<![a-z])(seasonal)\s+(?:[a-z]+\s+)?(?:associate|colleague|employee|worker|team member|"
     r"position|role|job|help|hire)")
 _EMPLOYMENT_VALUE = (r"(full\s*-?\s*time|part\s*-?\s*time|contract(?:or)?|temporary|temp|seasonal|"
-                     r"intern(?:ship)?|co-op|per diem|prn|regular)")
+                     r"intern(?:ship)?|co-op|per diem|prn)")
 _EMPLOYMENT_NAMES = {"full": "full_time", "part": "part_time", "cont": "contract",
                      "temp": "temporary", "seas": "temporary", "inte": "internship",
                      "co-o": "internship", "per ": "part_time", "prn": "part_time",
                      "regu": "full_time"}
 _EMPLOYMENT_STATEMENTS: Sequence[re.Pattern] = tuple(re.compile(p) for p in (
-    rf"(?:employment|job|position|work|worker|contract|role|schedule)(?: type| status)?\s*[:\-]\s*"
+    rf"(?:employment|job|position|work|worker|contract|role|schedule|time)(?: type| status)?\s*[:\-]\s*"
     rf"(?:[a-z]+,\s*)?(?:regular\s+)?{_EMPLOYMENT_VALUE}(?![a-z])",
-    rf"^\W*{_EMPLOYMENT_VALUE}(?![a-z])",
+    # A whole line, or a line opened by hours wording. Nothing looser: "contract
+    # review" and "regular bending, lifting" also open lines.
+    rf"^\W*{_EMPLOYMENT_VALUE}\W*$",
+    r"^\W*(full\s*-?\s*time|part\s*-?\s*time)(?![a-z])(?!\s+and)(?!\s*:\s*\d)",
+    r"(temp)orary\s+(?:part|full)[- ]time",
+    r"(?<![a-z-])(part)[- ]time\s+(?:faculty|instructor|lecturer|adjunct|associate|staff)(?![a-z])",
+    r"as an?\s+[^.\n]{0,30}(intern)(?![a-z])",
+    r"^\W*(intern(?:ship)?)\s*\(",
     rf"(?:this is an?|this (?:role|position|job) is(?: an?)?|is an?)\s+"
     rf"{_EMPLOYMENT_VALUE}(?![a-z])",
     rf"(?<![a-z-]){_EMPLOYMENT_VALUE}[ ,]+(?:[a-z]+ )?(?:role|position|job|opportunity|"
@@ -702,6 +710,7 @@ _EMPLOYMENT_STATEMENTS: Sequence[re.Pattern] = tuple(re.compile(p) for p in (
     r"(contract)[- ]to[- ]hire|(temp)orary contract|\((contract)or\)|(seasonal) [a-z]+ associate",
     r"(intern(?:ship)?)(?![a-z])\s*(?:program|position|opportunity|role)",
 ))
+_EMPLOYMENT_FTE = re.compile(r"(?<![a-z])fte\s*:\s*(?:([01](?:\.\d+)?)(?![\d%])|<?\s*(\d{1,3})\s*%)")
 _EMPLOYMENT_HOURS = re.compile(r"(\d{2})\s*\+?\s*(?:hours?|hrs?)\s*(?:per|a|/)\s*(?:week|wk)")
 
 
@@ -731,6 +740,11 @@ def read_employment_type(blob: str) -> str:
                 best = (m.start(), _employment_name(word))
         if best and best[1] != NOT_STATED:
             return best[1]
+    for sentence in sentences:
+        fte = _EMPLOYMENT_FTE.search(sentence)
+        if fte:
+            value = float(fte.group(1) or 0) if not fte.group(2) else float(fte.group(2)) / 100
+            return "full_time" if value >= 0.9 else "part_time"
     for sentence in sentences:
         hours = _EMPLOYMENT_HOURS.search(sentence)
         if hours and not _EMPLOYMENT_NOISE.search(sentence):

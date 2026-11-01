@@ -351,6 +351,18 @@ def test_work_mode_needs_a_statement(text, mode):
     ("Seasonal colleagues work 10-20 hours per week.", "temporary"),
     ("Keep the seasonal areas of the store tidy.", "not_stated"),
     ("Intern (Fixed Term)", "internship"),
+    ("Regular bending, lifting, carrying and stretching.", "not_stated"),
+    ("Regular team meetups and social activities.", "not_stated"),
+    ("Contract review and negotiation workflows.", "not_stated"),
+    ("Contract type:", "not_stated"),
+    ("Regular", "not_stated"),
+    ("FTE: 1", "full_time"),
+    ("FTE: <67%", "part_time"),
+    ("Time type: Full time", "full_time"),
+    ("We are seeking a temporary part time campus safety officer.", "temporary"),
+    ("Under administrative leadership, part time faculty perform tasks.", "part_time"),
+    ("As a 3rd year pharmacy intern, you will apply your learning.", "internship"),
+    ("The salary is based on a full-time schedule at the time of posting.", "not_stated"),
 ])
 def test_employment_type_needs_a_statement(text, kind):
     assert jd_profile.read_employment_type(_norm(text)) == kind
