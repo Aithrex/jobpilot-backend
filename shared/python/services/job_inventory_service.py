@@ -151,7 +151,11 @@ NORMALIZATION_VERSION = 4
 # are re-levelled from the title by `relevel_from_title`; the v7 re-derive
 # skipped all 55,901 of them and left 247 whose own title says senior at
 # entry or mid.
-EXTRACTOR_VERSION = 8
+#
+# v9: every profile gains the `jd` block (`services/jd_profile.py`), and
+# `required_degree_level` stops reading "ms" inside "systems". Pure regex over
+# stored bodies, so the re-parse costs no model calls.
+EXTRACTOR_VERSION = 9
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1
@@ -385,6 +389,44 @@ def _safe_skills(values: Any, limit: int = 60) -> List[str]:
         if s and s not in out:
             out.append(s)
     return out
+
+
+def _safe_jd_block(block: Any) -> Dict[str, Any]:
+    """`jd_profile.read_fields` output, rebuilt key by key for storage.
+
+    Nothing here reaches a filter, so `evidence` keeps its punctuation (the
+    query sanitizer would strip the dots from "U.S."). Only the sponsorship
+    quote is stored: this runs on every posting and the cluster is small, and
+    the other quotes can be re-read from the body by `jd_profile.build`.
+    """
+    jd = block if isinstance(block, dict) else {}
+    if not jd:
+        return {}
+    sponsorship = jd.get("sponsorship") if isinstance(jd.get("sponsorship"), dict) else {}
+    authorization = jd.get("authorization") if isinstance(jd.get("authorization"), dict) else {}
+    education = jd.get("education") if isinstance(jd.get("education"), dict) else {}
+    experience = jd.get("experience") if isinstance(jd.get("experience"), dict) else {}
+    groups = jd.get("skill_alternatives")
+    return {
+        "v": _safe_version(jd.get("v")),
+        "sponsorship": {"status": _safe_family(sponsorship.get("status"), 20),
+                        "evidence": str(sponsorship.get("evidence") or "")[:200]},
+        "authorization": {"requirement": _safe_family(authorization.get("requirement"), 40)},
+        "education": {
+            "min_level": int(education.get("min_level") or 0),
+            "preferred_level": int(education.get("preferred_level") or 0),
+            "fields": _safe_skills(education.get("fields"), limit=6),
+            "equivalent_experience_accepted":
+                bool(education.get("equivalent_experience_accepted")),
+        },
+        "experience": {"min_years": experience.get("min_years"),
+                       "max_years": experience.get("max_years")},
+        "clearance_level": _safe_family(jd.get("clearance_level"), 20),
+        "certifications": _safe_skills(jd.get("certifications"), limit=10),
+        "employment_type": _safe_family(jd.get("employment_type"), 20),
+        "skill_alternatives": [_safe_skills(g, limit=5)
+                               for g in (groups if isinstance(groups, list) else [])[:8]],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1588,6 +1630,7 @@ def mark_requirements_parsed(
         "clearance_required": bool(payload.get("clearance_required")),
         "work_authorization_restricted": bool(payload.get("work_authorization_restricted")),
         "text_length": int(payload.get("text_length") or 0),
+        "jd": _safe_jd_block(payload.get("jd")),
         "content_hash": _safe_str(payload.get("content_hash"), 64),
         # --- guards (parse-once + never-regress) ---------------------------
         "source_content_hash": ch,

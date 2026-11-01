@@ -334,6 +334,13 @@ search, guest cards and the digests. See
   `employers`/`career_sources`/`company_ats_endpoints`/`job_postings` →
   `docs/coverage/h1b-sponsor-gaps.{json,csv}`.
 
+## The JD dictionary (`jd-1.0.0`)
+
+`shared/python/services/jd_profile.py` is the ONE reader of a job description;
+filtering and tailoring both go through it. Never add a second JD reader, and
+never read sponsorship, degree or experience from a JD anywhere else. It is pure
+regex and needs no model. See [`docs/specs/jd-profile.md`](docs/specs/jd-profile.md).
+
 ## Job sourcing
 Jobs come from JSearch **plus direct employer ATS portals** — the differentiator. Catalogs + engines live in the shared layer: `workday_tenant_catalog.py` / `workday_jobs_service.py` / `workday_cxs_fetcher.py` (Workday CXS) · `career_pages_catalog.py` / `career_pages_service.py` (**`FETCHERS`** greenhouse/lever/ashby/smartrecruiters/workable/recruitee; **`ENTERPRISE_FETCHERS`** amazon/eightfold/phenom/orc/uber) · `mnc_catalog.py` / `mnc_jobs_service.py`. Routes in `services/jobs/blueprints/jobs.py` (`/workday/*`, `/career-pages/*`, `/mnc/*`). Adding companies = catalog rows, validated live via `scripts/discover_workday_tenants.py` / `scripts/discover_career_pages.py`; a new ATS = a `_fetch_<ats>()` registered in `FETCHERS`. **Apify is disabled** (reversible — every edit tagged `APIFY DISABLED (temporary)`).
 

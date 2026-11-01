@@ -3738,6 +3738,14 @@ def _sponsorship_of(row: Dict[str, Any]) -> Optional[str]:
     reqs = row.get("requirements")
     if isinstance(reqs, dict) and reqs.get("work_authorization_restricted"):
         return "not_offered"
+    # The shared JD dictionary read the WHOLE body at ingest. `conditional`
+    # stays None: "only for principal-level roles" is not a promise to a reader.
+    if isinstance(reqs, dict) and isinstance(reqs.get("jd"), dict):
+        status = (reqs["jd"].get("sponsorship") or {}).get("status")
+        if status == "offered":
+            return "offered"
+        if status in ("not_stated", "conditional"):
+            return None
     blob = f"{row.get('title_raw') or ''} {row.get('description_text') or ''}"[:4000]
     if re.search(r"\b(visa sponsorship (?:is )?available|will sponsor|"
                  r"sponsorship (?:is )?provided|h-?1b sponsorship available)\b",
