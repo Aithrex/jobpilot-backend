@@ -1,4 +1,4 @@
-# The JD dictionary (`jd-1.2.0`)
+# The JD dictionary (`jd-1.3.0`)
 
 `shared/python/services/jd_profile.py` is the one place a job description is
 read. Filtering and tailoring both go through it, so a posting cannot read one
@@ -73,7 +73,7 @@ and "scrum master", which is why JDs use the stricter readers here.
 
 ## Accuracy
 
-`evals/data/jd_answer_key.jsonl` holds 1,050 real JDs labelled blind from the JD
+`evals/data/jd_answer_key.jsonl` holds 1,347 real JDs labelled blind from the JD
 text. The `dev` splits were used to write rules. `holdout` is the newest 150
 random JDs, and `evals/eval_jd_answer_key.py` refuses to print its errors.
 `evals/test_jd_answer_key.py` is the CI gate.
@@ -110,3 +110,37 @@ carries the figure. Non-English JDs are not read. Skills need a model.
 Bump `JD_PROFILE_VERSION`. Bump `job_inventory_service.EXTRACTOR_VERSION` too when
 stored postings should be re-read; the crawl then re-parses them with no model
 calls. Add the real sentence to `tests/test_jd_profile.py` first.
+
+## The skill model (`skills-1.0.0`)
+
+A word list cannot read skills. The misses are 3,803 different terms, 57% of them
+seen once, and adding every term labelled twice elsewhere cut precision from 61%
+to 31%. `jd_skill_model.py` reads every short phrase and judges how it is written
+and where it sits, so it can name a skill it has never seen.
+
+1. **Candidates:** phrases of up to four words. Filler is trimmed, so "strong
+   customer service skills" offers "customer service".
+2. **First stage:** a logistic regression keeps the likeliest 10%.
+3. **Second stage:** 250 decision trees judge those, using the phrase, its section,
+   its neighbours and how it behaves across 26,564 unlabelled postings.
+4. **Cutoff:** 0.35. A lower cutoff finds more and gets more wrong.
+
+The weights file is 1.4 MB and ships with the code. Reading a posting takes about
+30 ms and the loaded model about 30 MB. If the file is missing, the vocabulary
+answers instead. Match scores do not use this model.
+
+Measured on JDs left out of training. F1 balances precision and recall:
+
+| Set | `jd-1.2.0` precision / recall / F1 | Model precision / recall / F1 |
+|---|---|---|
+| Round 3, 150 JDs | 53.0 / 27.1 / 0.358 | 52.0 / 34.0 / 0.411 |
+| Round 4, 147 JDs | 57.4 / 30.5 / 0.398 | 56.1 / 36.2 / 0.440 |
+| Holdout, 150 JDs, final model | 58.8 / 32.0 / 0.414 | 57.0 / 39.2 / 0.464 |
+
+The final model trained on 1,197 JDs, rounds 3 and 4 included. Two blind labellers
+agree with each other about 80% of the time, so that is the realistic top.
+
+What was tried and measured: stats from 27,000 postings gave nothing over 15,000,
+so more unlabelled postings will not help. More labels will: F1 rose with each
+extra 150 JDs. Retrain with `scripts/train_jd_skill_model.py`, which needs
+scikit-learn; production does not. Keep `holdout` out of training.

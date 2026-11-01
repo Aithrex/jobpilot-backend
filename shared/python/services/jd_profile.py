@@ -16,7 +16,9 @@ Both now go through here:
   dictionary with the LLM's extras merged in.
 * `build` is the public entry when you hold a JD and want the dictionary.
 
-Everything here is pure: no network, no database, no LLM. An absent fact is
+Everything here is pure: no network, no database, no LLM. Skills beyond the
+lexicon come from `jd_skill_model`, a small trained model read from a file that
+ships with the code. An absent fact is
 `not_stated`, never a guess. Silence must not cost a candidate anything, and a
 wrong "no sponsorship" hides a real job from the people who most need it.
 
@@ -27,10 +29,11 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from services import jd_skill_model
 from services.jd_skill_vocabulary import JD_SKILL_VOCABULARY
 
 # Bump when a reader changes what it returns. Stored blocks carry it as `v`.
-JD_PROFILE_VERSION = "jd-1.2.0"
+JD_PROFILE_VERSION = "jd-1.3.0"
 
 SPONSORSHIP_OFFERED = "offered"
 SPONSORSHIP_NOT_OFFERED = "not_offered"
@@ -847,9 +850,16 @@ _VOCABULARY = re.compile(
     + r")(?![a-z0-9])")
 
 
-def read_additional_skills(blob: str, known: Sequence[str]) -> List[str]:
-    """Skills the JD names that the scoring lexicon cannot, in order of appearance."""
+def read_additional_skills(blob: str, known: Sequence[str], raw_text: Any = "") -> List[str]:
+    """Skills the JD names that the scoring lexicon cannot.
+
+    From `jd_skill_model`, best first. The vocabulary only answers when the model
+    has nothing to say, which means its weights file is missing.
+    """
     seen = set(known)
+    found = jd_skill_model.read_skills(raw_text, JD_SKILL_VOCABULARY) if raw_text else []
+    if found:
+        return [s for s in found if s not in seen][:20]
     out: List[str] = []
     for m in _VOCABULARY.finditer(blob or ""):
         name = m.group(0)
@@ -861,8 +871,10 @@ def read_additional_skills(blob: str, known: Sequence[str]) -> List[str]:
 
 def read_fields(blob: str, *, min_years: Optional[int], clearance_required: bool,
                 find_skills: Callable[[str], List[str]],
-                preferred_years: Optional[int] = None) -> Dict[str, Any]:
-    """The block stored at `requirements["jd"]`. `blob` is `fit_score._norm`ed."""
+                preferred_years: Optional[int] = None,
+                raw_text: Any = "") -> Dict[str, Any]:
+    """The block stored at `requirements["jd"]`. `blob` is `fit_score._norm`ed;
+    `raw_text` keeps its case, which the skill model reads."""
     return {
         "v": JD_PROFILE_VERSION,
         "sponsorship": read_sponsorship(blob),
@@ -873,7 +885,7 @@ def read_fields(blob: str, *, min_years: Optional[int], clearance_required: bool
         "certifications": read_certifications(blob),
         "employment_type": read_employment_type(blob),
         "skill_alternatives": read_skill_alternatives(blob, find_skills),
-        "additional_skills": read_additional_skills(blob, find_skills(blob)),
+        "additional_skills": read_additional_skills(blob, find_skills(blob), raw_text),
     }
 
 

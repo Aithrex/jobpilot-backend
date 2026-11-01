@@ -408,9 +408,13 @@ def test_common_tools_are_technical_not_soft():
     assert "teamwork" in profile["skills"]["soft"]
 
 
-def test_additional_skills_enrich_the_dictionary_and_leave_the_score_alone():
+def test_additional_skills_enrich_the_dictionary_and_leave_the_score_alone(monkeypatch):
+    fit_score._extract_requirements_cached.cache_clear()
+    monkeypatch.setattr(jd_profile.jd_skill_model, "read_skills",
+                        lambda *a, **k: ["databricks", "iso 13485", "change management"])
     reqs = fit_score.extract_requirements(
         "Requirements: Databricks, ISO 13485 and change management.", "Engineer")
+    fit_score._extract_requirements_cached.cache_clear()
     assert {"databricks", "iso 13485", "change management"} <= set(reqs["jd"]["additional_skills"])
     assert "iso 13485" not in reqs["required_skills"]
     profile = jd_profile.build("Requirements: Databricks and Python.", "Engineer")
