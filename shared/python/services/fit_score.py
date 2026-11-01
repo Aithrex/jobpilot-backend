@@ -56,9 +56,11 @@ from collections import OrderedDict
 from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+from services import jd_profile
+
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.4"
+FIT_SCORE_VERSION = "fit-v2.5"
 
 # The cliff described below is REAL, and this is how 2.1 crosses it.
 #
@@ -108,8 +110,15 @@ FIT_SCORE_VERSION = "fit-v2.4"
 # rung for an engineering-level résumé. Stored 2.3 profiles stay valid input;
 # they under-report the new skills until re-extracted, which
 # `scripts/reextract_requirements.py` does for the families that use them.
+#
+# 2.5 keeps the contract and adds the `jd` block (`services/jd_profile.py`). It
+# changes two VALUES. `required_degree_level` no longer reads "ms" inside
+# "systems" or "bs" inside "jobs": on 309 sampled JDs 83% read as Master's
+# required, against 18% with a word boundary. `work_authorization_restricted`
+# also reads the sponsorship wording `jd_profile` knows. Stored 2.4 profiles are
+# valid input until `EXTRACTOR_VERSION` re-parses them.
 _COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset(
-    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4"})
+    {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
@@ -1801,12 +1810,16 @@ _ONSITE_RE = re.compile(r"(on site|on-site|onsite|in office|in-office|"
                         r"in person|in-person|must relocate|relocation required)")
 _HYBRID_RE = re.compile(r"hybrid")
 
+# RESUME side only: an education line, where a bare "MS" really is a degree. A
+# JD is read by `jd_profile.read_education`, because a whole posting is full of
+# "MS Teams", "Bethesda, MD" and "scrum master". The left boundary is
+# load-bearing: without it "systems" reads master's and "jobs" bachelor's.
 _DEGREE_LEVELS: Sequence[Tuple[int, re.Pattern]] = (
-    (4, re.compile(r"(ph\.?d|doctorate|doctoral|m\.?d\.?(?![a-z])|j\.?d\.?(?![a-z]))")),
-    (3, re.compile(r"(master'?s?(?![a-z])|m\.?s\.?(?![a-z])|m\.?b\.?a|msn|m\.?eng)")),
-    (2, re.compile(r"(bachelor'?s?(?![a-z])|b\.?s\.?(?![a-z])|b\.?a\.?(?![a-z])|"
+    (4, re.compile(r"(?<![a-z])(ph\.?d|doctorate|doctoral|m\.?d\.?(?![a-z])|j\.?d\.?(?![a-z]))")),
+    (3, re.compile(r"(?<![a-z])(master'?s?(?![a-z])|m\.?s\.?(?![a-z])|m\.?b\.?a|msn|m\.?eng)")),
+    (2, re.compile(r"(?<![a-z])(bachelor'?s?(?![a-z])|b\.?s\.?(?![a-z])|b\.?a\.?(?![a-z])|"
                    r"undergraduate degree|bsn|b\.?tech|four year degree|4 year degree)")),
-    (1, re.compile(r"(associate'?s? degree|a\.?a\.?s\.?(?![a-z])|diploma|"
+    (1, re.compile(r"(?<![a-z])(associate'?s? degree|a\.?a\.?s\.?(?![a-z])|diploma|"
                    r"high school|ged(?![a-z])|vocational)")),
 )
 
@@ -2082,6 +2095,36 @@ _REQUIRED_CUE = re.compile(r"required|(?<![a-z])must(?![a-z])|minimum|at least")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.;])\s+|\s*•\s*")
 
 
+_NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+                 "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+                 "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15}
+_NUMBER_WORD = "|".join(_NUMBER_WORDS)
+# "two (2) years", "ten (10) years". The parenthetical is the same number twice.
+_NUMBER_IN_PARENS = re.compile(rf"(?<![a-z])({_NUMBER_WORD})\s*\(\d{{1,2}}\)")
+# "five years", "one to four years". Only ahead of "year", so "one of the top
+# ten teams" stays text.
+_NUMBER_BEFORE_YEARS = re.compile(
+    rf"(?<![a-z])({_NUMBER_WORD})(\s*(?:\+|or more\s+|plus\s+)?(?:(?:to|-)\s*"
+    rf"(?:{_NUMBER_WORD}|\d{{1,2}})\s*)?(?:years?|yrs?)(?![a-z]))")
+_NUMBER_AFTER_TO = re.compile(rf"(\d\s*(?:to|-)\s*)({_NUMBER_WORD})(?![a-z])")
+# A posting that prices each degree in years names its bachelor's path outright:
+# "Bachelor's + 7 years; associate's + 9" asks for seven, and the larger number
+# is the price of NOT having the degree.
+_BACHELOR_PATH_YEARS = re.compile(
+    r"(?<![a-z])(?:bachelor'?s?|b\.?s\.?|b\.?a\.?)(?![a-z])[^\n.;]{0,50}?"
+    r"(?<![\d.$])(\d{1,2})\s*\+?\s*(?:years?|yrs?)(?![a-z])")
+
+
+def _digits_for_number_words(blob: str) -> str:
+    def word(match: "re.Match[str]") -> str:
+        return str(_NUMBER_WORDS[match.group(1)])
+
+    blob = _NUMBER_IN_PARENS.sub(word, blob)
+    blob = _NUMBER_BEFORE_YEARS.sub(lambda m: word(m) + m.group(2), blob)
+    return _NUMBER_AFTER_TO.sub(
+        lambda m: m.group(1) + str(_NUMBER_WORDS[m.group(2)]), blob)
+
+
 def _required_years(blob: str) -> Optional[int]:
     """The posting's HEADLINE experience requirement, in years, or None.
 
@@ -2099,7 +2142,7 @@ def _required_years(blob: str) -> Optional[int]:
     """
     if not blob:
         return None
-    blob = _norm(blob)  # callers normally pass normalised text; cheap if so
+    blob = _digits_for_number_words(_norm(blob))  # callers normally pass normalised text
     required: List[int] = []
     preferred: List[int] = []
     mode = "required"
@@ -2127,7 +2170,13 @@ def _required_years(blob: str) -> Optional[int]:
                     continue
                 (preferred if is_pref else required).append(n)
     pool = required or preferred
-    return max(pool) if pool else None
+    if not pool:
+        return None
+    # Only when the bachelor's number is one the reader above accepted, so a
+    # degree's length ("bachelor's, 4 years") cannot become the requirement.
+    paths = [int(m.group(1)) for m in _BACHELOR_PATH_YEARS.finditer(blob)]
+    paths = [n for n in paths if n in pool]
+    return min(paths) if paths else max(pool)
 
 
 def _degree_level(blob: str) -> int:
@@ -2262,14 +2311,22 @@ def _extract_requirements_cached(jd_text: str, title: str) -> Dict[str, Any]:
         if rule["jd"].search(combined):
             licenses.append({"key": rule["key"], "label": rule["label"]})
 
+    required_years = _required_years(combined)
+    clearance_required = bool(_CLEARANCE_JD.search(combined))
+    # The ONE reading of this JD. The two flags below are derived from it so
+    # that the scorer, the feed and tailoring cannot disagree about a posting.
+    jd = jd_profile.read_fields(combined, min_years=required_years,
+                                clearance_required=clearance_required,
+                                find_skills=find_skills)
+
     return {
         "content_hash": content_hash(jd_text, title),
         "score_version": FIT_SCORE_VERSION,
         "requirements_source": source,
         "required_skills": req_skills[:30],
         "preferred_skills": pref_skills[:20],
-        "required_years": _required_years(combined),
-        "required_degree_level": _degree_level(combined),
+        "required_years": required_years,
+        "required_degree_level": jd["education"]["min_level"],
         # Title first, body as fallback. 3000 chars, not 800: the first 800 are
         # almost always company boilerplate ("About us..."), so the old window
         # recovered a family for only 9% of title-unclassifiable postings
@@ -2283,13 +2340,15 @@ def _extract_requirements_cached(jd_text: str, title: str) -> Dict[str, Any]:
         # vocabulary the feed filters on, and it is why `job_level` is now
         # answerable for postings whose title carries no marker (most of them).
         "job_level": level_from_signals(title_blob, description=blob,
-                                        required_years=_required_years(combined)),
+                                        required_years=required_years),
         "industries": sorted(_industries(combined)),
         "work_mode": _work_mode(combined),
         "licenses": licenses,
-        "clearance_required": bool(_CLEARANCE_JD.search(combined)),
-        "work_authorization_restricted": bool(_WORKAUTH_JD.search(combined)),
+        "clearance_required": clearance_required,
+        "work_authorization_restricted": bool(_WORKAUTH_JD.search(combined))
+        or jd["sponsorship"]["status"] == jd_profile.SPONSORSHIP_NOT_OFFERED,
         "text_length": len(blob),
+        "jd": jd,
     }
 
 

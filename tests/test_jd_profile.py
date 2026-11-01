@@ -1,0 +1,280 @@
+"""The shared JD dictionary. Sentences below are real wording from stored JDs,
+with employer names removed; every one was read wrongly before this module."""
+from types import SimpleNamespace
+
+import pytest
+
+from services import fit_score, jd_profile
+from services import job_inventory_service as inv
+from services import tech_feed_service
+from services.resume_service import ResumeService
+
+
+def _norm(text):
+    return fit_score._norm(text)
+
+
+@pytest.mark.parametrize("sentence", [
+    "Work visa sponsorship (such as TN, O-1, H-1B, etc.) is not available for this role now or in the future.",
+    "Applicants must be legally authorized to work and must not require employer sponsorship.",
+    "Work authorization that does not now or in the future require sponsorship of a visa.",
+    "This is not a visa sponsored position.",
+    "Authorized to work without employment-based immigration sponsorship, now or in the future.",
+    "This position is not eligible for employment-based sponsorship.",
+    "Do not apply for this role if you will need immigration sponsorship now or in the future.",
+    "Required and no current or future work authorization sponsorship available.",
+    "Must be authorized to work in the U.S. without needing sponsorship for a work visa.",
+    "Remote roles are not eligible for U.S. visa sponsorship.",
+    "Candidates must possess unrestricted work authorization and not require future sponsorship.",
+    "The company is prohibited from offering sponsorship for any immigrant visas.",
+    "We are not currently sponsoring employment-based visas (e.g., an H-1B).",
+    "Immigration sponsorship (H1-B, TN, etc.) is not currently available for this position.",
+])
+def test_stated_refusals_read_as_not_offered(sentence):
+    result = jd_profile.read_sponsorship(_norm(sentence))
+    assert result["status"] == jd_profile.SPONSORSHIP_NOT_OFFERED
+    assert result["evidence"]
+
+
+@pytest.mark.parametrize("sentence", [
+    "We sponsor visas to help exceptional talent join our team.",
+    "We're happy to sponsor international candidates (e.g., STEM OPT, H1B).",
+    "This position is eligible for employment visa sponsorship.",
+    "Visa sponsorship available",
+])
+def test_stated_offers_read_as_offered(sentence):
+    assert jd_profile.read_sponsorship(_norm(sentence))["status"] == jd_profile.SPONSORSHIP_OFFERED
+
+
+@pytest.mark.parametrize("sentence", [
+    "Work authorization sponsorship (H-1B, TN, J, etc.) is offered exclusively for principal-level roles.",
+    "This position may not be eligible for visa sponsorship now or in the future.",
+    "We will consider employment visa sponsorship on a case-by-case basis.",
+    "Based on immigration requirements, not all roles are suitable for sponsorship.",
+])
+def test_qualified_statements_are_conditional(sentence):
+    assert jd_profile.read_sponsorship(_norm(sentence))["status"] == jd_profile.SPONSORSHIP_CONDITIONAL
+
+
+@pytest.mark.parametrize("text,status", [
+    ("Visa Sponsorship?\nNo\nLocation: Austin", jd_profile.SPONSORSHIP_NOT_OFFERED),
+    ("Sponsorship available: No", jd_profile.SPONSORSHIP_NOT_OFFERED),
+    ("Is role eligible for immigration sponsorship?: Yes", jd_profile.SPONSORSHIP_OFFERED),
+    # An unanswered label says nothing.
+    ("Visa sponsorship:\nTravel requirements:\nNone", jd_profile.NOT_STATED),
+    ("Visa sponsorship?\nGovernment clearance required?", jd_profile.NOT_STATED),
+    # The form is asking the candidate, not stating a policy.
+    ("Do you require visa sponsorship? No", jd_profile.NOT_STATED),
+])
+def test_printed_forms(text, status):
+    assert jd_profile.read_sponsorship(_norm(text))["status"] == status
+
+
+@pytest.mark.parametrize("sentence", [
+    # Silence and a plain authorization line are not refusals: a wrong
+    # "no sponsorship" hides a reachable job from a visa-holding candidate.
+    "Must be authorized to work in the United States.",
+    "Partner with the executive sponsor on the project roadmap.",
+    "No project sponsorship is needed for this business sponsor.",
+    "Without executive sponsorship the program will stall.",
+    "Candidates must be prepared to indicate whether they require employment visa sponsorship.",
+    "Python and AWS required.",
+])
+def test_unrelated_or_silent_text_is_not_stated(sentence):
+    assert jd_profile.read_sponsorship(_norm(sentence))["status"] == jd_profile.NOT_STATED
+
+
+def test_a_negated_positive_is_never_offered():
+    assert jd_profile.read_sponsorship(
+        _norm("Please note this role cannot support future H-1B sponsorship."))["status"] \
+        == jd_profile.SPONSORSHIP_NOT_OFFERED
+
+
+@pytest.mark.parametrize("sentence,requirement", [
+    ("Must be a U.S. citizen.", jd_profile.AUTH_CITIZEN),
+    ("U.S. citizenship is required.", jd_profile.AUTH_CITIZEN),
+    ("Must be a U.S. citizen or permanent resident.", jd_profile.AUTH_CITIZEN_OR_PR),
+    ("Must be authorized to work in the United States.", jd_profile.AUTH_AUTHORIZED),
+    ("We participate in E-Verify to confirm work authorization.", jd_profile.NOT_STATED),
+])
+def test_authorization(sentence, requirement):
+    assert jd_profile.read_authorization(_norm(sentence))["requirement"] == requirement
+
+
+@pytest.mark.parametrize("text", [
+    "You will work with cross-functional teams to build distributed systems.",
+    "Run nightly batch jobs for our data platforms and programs.",
+    "Must know MS Office and MS Teams.",
+    "Office in Bethesda, MD and Jackson, MS.",
+    "Partner with the scrum master on master data management.",
+    "Our dedication has paid off: a six-time J.D. Power winner.",
+    "Please read the JD carefully. Work with a high degree of autonomy.",
+    "We offer tuition reimbursement toward a master's degree.",
+    "Be a master of your craft.",
+])
+def test_no_degree_is_invented(text):
+    assert jd_profile.read_education(_norm(text))["min_level"] == 0
+
+
+@pytest.mark.parametrize("text,minimum,preferred", [
+    ("Bachelor's degree in Computer Science required.", 2, 0),
+    ("Required: Bachelor's degree.\nPreferred: Master's degree.", 2, 3),
+    ("Bachelor's required, Master's preferred.", 2, 3),
+    ("BS with 5 years of experience or MS with 3 years of experience.", 2, 0),
+    ("BS, MS, or PhD in Computer Science.", 2, 0),
+    ("Master's degree preferred.", 0, 3),
+    ("MBA considered an asset.", 0, 3),
+    ("Master's degree required.", 3, 0),
+    ("High school diploma or GED required.", 1, 0),
+    ("PhD in Physics required.", 4, 0),
+    ("Juris Doctor (J.D.) degree required.", 4, 0),
+    ("University degree (or equivalent), preferably in biological sciences.", 2, 0),
+    ("Degree in life sciences, engineering, or a related discipline.", 2, 0),
+    ("Bachelors degree + 7 years. In lieu of required degree, associates degree + 9 years.", 2, 0),
+    ("Education required: less than high school education.", 0, 0),
+])
+def test_degree_reading(text, minimum, preferred):
+    result = jd_profile.read_education(_norm(text))
+    assert result["min_level"] == minimum
+    assert result["preferred_level"] == preferred
+
+
+def test_education_detail():
+    result = jd_profile.read_education(
+        _norm("Bachelor's degree in Computer Science or equivalent experience required."))
+    assert result["min_degree"] == "bachelor"
+    assert "computer science" in result["fields"]
+    assert result["equivalent_experience_accepted"] is True
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("High school diploma or equivalent required.", False),
+    ("Bachelor's degree or equivalent work experience.", True),
+    ("Equivalent combination of education and experience accepted with a bachelor's degree.", True),
+])
+def test_equivalent_experience_is_not_a_ged(text, expected):
+    assert jd_profile.read_education(_norm(text))["equivalent_experience_accepted"] is expected
+
+
+@pytest.mark.parametrize("text,years", [
+    ("Must have at least two (2) years of recent experience as a surveyor.", 2),
+    ("Minimum ten (10) years progressive experience in quality assurance.", 10),
+    ("Minimum of five years coaching experience.", 5),
+    ("One to four years of client management experience.", 1),
+    ("Bachelors degree + 7 years work experience; associates degree + 9 years work experience", 7),
+    ("Bachelor's degree and 5+ years of relevant experience (master's with 3 years).", 5),
+    ("We are one of the top ten teams. Python required.", None),
+])
+def test_years_read_spelled_numbers_and_the_bachelors_path(text, years):
+    assert fit_score._required_years(_norm(text)) == years
+
+
+def test_the_scorer_no_longer_taxes_a_bachelors_for_the_word_teams():
+    jd = "Work with teams on distributed systems. Requirements: 2+ years of Python, AWS, Docker."
+    assert fit_score.extract_requirements(jd, "Software Engineer")["required_degree_level"] == 0
+
+
+def test_resume_degree_reader_keeps_bare_abbreviations_and_gains_the_boundary():
+    assert fit_score._degree_level("ms computer science") == 3
+    assert fit_score._degree_level("bs computer science") == 2
+    assert fit_score._degree_level("distributed systems") == 0
+
+
+def test_alternatives_are_tight_lists_only():
+    read = lambda text: jd_profile.read_skill_alternatives(_norm(text), fit_score.find_skills)
+    assert read("Experience with AWS, GCP or Azure.") == [["aws", "gcp", "azure"]]
+    assert read("Excel or recruiting experience.") == []
+
+
+def test_experience_range():
+    block = jd_profile.read_experience(_norm("We ask for 6-8 years of experience."), 6)
+    assert (block["min_years"], block["max_years"]) == (6, 8)
+
+
+def test_clearance_level_certifications_and_employment_type():
+    assert jd_profile.clearance_level(_norm("Active TS/SCI required"), True) == "ts_sci"
+    assert jd_profile.clearance_level("", False) == jd_profile.NOT_STATED
+    assert jd_profile.read_certifications(_norm("CISSP or Security+ required")) \
+        == ["CISSP", "CompTIA Security+"]
+    assert jd_profile.read_employment_type(
+        _norm("Full-time role. Part-time employees get benefits.")) == "full_time"
+
+
+def test_requirements_carry_the_block_and_the_flags_come_from_it():
+    reqs = fit_score.extract_requirements(
+        "Requirements: Python, AWS. Visa sponsorship is not available.", "Engineer")
+    assert reqs["jd"]["v"] == jd_profile.JD_PROFILE_VERSION
+    assert reqs["jd"]["sponsorship"]["status"] == jd_profile.SPONSORSHIP_NOT_OFFERED
+    assert reqs["work_authorization_restricted"] is True
+    assert fit_score._precomputed_requirements(reqs) is not None
+
+
+def test_common_tools_are_technical_not_soft():
+    profile = jd_profile.build("Requirements: Excel, CRM, teamwork and communication.", "Analyst")
+    assert {"excel", "crm"} <= set(profile["skills"]["technical"])
+    assert "teamwork" in profile["skills"]["soft"]
+
+
+def test_build_returns_the_whole_dictionary():
+    profile = jd_profile.build(
+        "Requirements: 5+ years of experience with Python and AWS. "
+        "Bachelor's degree required. Visa sponsorship is not available.",
+        "Senior Software Engineer")
+    assert set(profile) == {"version", "content_hash", "role", "experience", "education",
+                            "skills", "work_eligibility", "compensation", "content",
+                            "provenance"}
+    assert profile["experience"]["min_years"] == 5
+    assert profile["education"]["min_degree"] == "bachelor"
+    assert {"python", "aws"} <= set(profile["skills"]["required"])
+    assert profile["work_eligibility"]["sponsorship"]["status"] == "not_offered"
+    assert profile["provenance"] == {**profile["provenance"], "deterministic": True, "llm": False}
+
+
+def test_tailoring_and_filtering_read_the_same_facts():
+    jd = "Requirements: Python. Master's degree required. Visa sponsorship is not available."
+    analysis = {"job_title": "Engineer", "required_skills": ["LangGraph"],
+                "responsibilities": ["Ship features"]}
+    stub = SimpleNamespace(_analyze_jd=lambda text: analysis)
+    result = ResumeService.extract_jd(stub, jd)
+    profile = result["jd_profile"]
+    reqs = fit_score.extract_requirements(jd, "Engineer")
+    assert profile["work_eligibility"]["sponsorship"] == reqs["jd"]["sponsorship"]
+    assert profile["education"]["min_level"] == reqs["required_degree_level"]
+    assert "langgraph" in profile["skills"]["required"]
+    assert profile["content"]["responsibilities"] == ["Ship features"]
+    assert profile["provenance"]["llm"] is True
+    assert result["required_skills"] == ["LangGraph"]
+
+
+def test_analysis_passes_through_when_it_is_not_a_dict():
+    assert jd_profile.attach_to_analysis(None, "text") is None
+
+
+def test_stored_block_is_bounded_and_keeps_evidence_punctuation():
+    reqs = fit_score.extract_requirements(
+        "U.S. work visa sponsorship is not available for this role.", "Engineer")
+    stored = inv._safe_jd_block(reqs["jd"])
+    assert stored["sponsorship"]["status"] == "not_offered"
+    assert "u.s." in stored["sponsorship"]["evidence"]
+    assert set(stored["education"]) == {"min_level", "preferred_level", "fields",
+                                        "equivalent_experience_accepted"}
+    assert "evidence" not in stored["experience"]
+    assert inv._safe_jd_block(None) == {}
+    assert inv._safe_jd_block({"$where": "x"})["sponsorship"]["status"] == ""
+
+
+@pytest.mark.parametrize("requirements,expected", [
+    ({"work_authorization_restricted": True,
+      "jd": {"sponsorship": {"status": "not_stated"}}}, "not_offered"),
+    ({"jd": {"sponsorship": {"status": "offered"}}}, "offered"),
+    ({"jd": {"sponsorship": {"status": "conditional"}}}, None),
+    ({"jd": {"sponsorship": {"status": "not_stated"}}}, None),
+])
+def test_feed_reads_the_stored_block(requirements, expected):
+    assert tech_feed_service._sponsorship_of({"requirements": requirements}) == expected
+
+
+def test_feed_still_reads_a_profile_stored_before_the_block():
+    row = {"requirements": {"required_skills": []},
+           "description_text": "Visa sponsorship is available for this role."}
+    assert tech_feed_service._sponsorship_of(row) == "offered"

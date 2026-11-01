@@ -462,6 +462,15 @@ class ResumeService:
     # ------------------------------------------------------------------
 
     def extract_jd(self, jd_text: str) -> Dict[str, Any]:
+        """The LLM analysis of a JD plus `jd_profile`, the shared JD dictionary.
+
+        Every tailoring flow enters here, so `jd_analysis["jd_profile"]` carries
+        the same sponsorship, education and experience the job feed reads.
+        """
+        from services.jd_profile import attach_to_analysis
+        return attach_to_analysis(self._analyze_jd(jd_text), jd_text)
+
+    def _analyze_jd(self, jd_text: str) -> Dict[str, Any]:
         """Parse a job description into structured fields using the LLM (PRO tier).
 
         Extracts: job title, company, location, required/preferred skills,
