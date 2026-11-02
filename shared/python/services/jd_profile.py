@@ -29,11 +29,11 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from services import jd_skill_model
+from services import jd_line_model, jd_skill_model
 from services.jd_skill_vocabulary import JD_SKILL_VOCABULARY
 
 # Bump when a reader changes what it returns. Stored blocks carry it as `v`.
-JD_PROFILE_VERSION = "jd-1.4.0"
+JD_PROFILE_VERSION = "jd-1.5.0"
 
 SPONSORSHIP_OFFERED = "offered"
 SPONSORSHIP_NOT_OFFERED = "not_offered"
@@ -919,6 +919,9 @@ def build(jd_text: Any, title: Any = "", *,
     except Exception:  # a salary we cannot read must not cost the dictionary
         compensation = None
 
+    # The LLM's lists win when it ran. Without it the posting's own lines answer.
+    lines = {} if llm.get("responsibilities") else read_content(jd_text)
+
     return {
         "version": JD_PROFILE_VERSION,
         "content_hash": reqs.get("content_hash"),
@@ -954,9 +957,9 @@ def build(jd_text: Any, title: Any = "", *,
         },
         "compensation": compensation,
         "content": {
-            "responsibilities": list(llm.get("responsibilities") or []),
-            "qualifications": list(llm.get("qualifications") or []),
-            "keywords": list(llm.get("keywords") or []),
+            "responsibilities": list(llm.get("responsibilities") or lines.get("responsibilities") or []),
+            "qualifications": list(llm.get("qualifications") or lines.get("qualifications") or []),
+            "keywords": list(llm.get("keywords") or lines.get("keywords") or []),
         },
         "provenance": {
             "deterministic": True,
@@ -965,6 +968,147 @@ def build(jd_text: Any, title: Any = "", *,
             "text_length": reqs.get("text_length"),
         },
     }
+
+
+# What a posting's own lines can supply to tailoring.
+MAX_RESPONSIBILITIES = 12
+MAX_QUALIFICATIONS = 20
+MAX_KEYWORDS = 30
+
+# Never hand these to anything that writes a résumé, whatever role a line was given.
+# `prompt_view` keeps eligibility out of the dictionary; this keeps it out of the
+# lines that sit beside the dictionary.
+_ELIGIBILITY_LINE = re.compile(
+    r"sponsor|\bvisas?\b|work authori[sz]ation|authori[sz]ed to work|eligible to work|"
+    r"right to work|citizen|permanent resident|green card|security clearance|"
+    r"e-verify|export control|\bitar\b|equal opportunity|\beeo\b", re.I)
+
+_CREDENTIAL_LINE = re.compile(
+    r"\b(?:degree|bachelor|master|mba|ph\.?d|diploma|ged|years?|yrs?|licen[sc]e|certifi)", re.I)
+
+
+def _own_words(line: str) -> str:
+    return jd_skill_model._BULLET.sub("", line).strip(" \t·•▪●-*")
+
+
+def _skills_on(line: str, names: Sequence[str]) -> List[str]:
+    low = " " + re.sub(r"\s+", " ", line.lower()) + " "
+    return [n for n in names if re.search(r"(?<![a-z0-9])" + re.escape(n) + r"(?![a-z0-9])", low)]
+
+
+def read_content(jd_text: Any) -> Dict[str, Any]:
+    """What a posting says the job does and asks for, in the posting's own words.
+
+    Lines are copied, never rewritten, so nothing here can be invented. The
+    `requirements` records have the shape `tailoring_jd.extract` produces, and each
+    `source_excerpt` is a line of `jd_skill_model.clean(jd_text)`.
+    """
+    from services import fit_score
+
+    duties: List[str] = []
+    required: List[str] = []
+    preferred: List[str] = []
+    seen = set()
+    for item in jd_line_model.read_lines(jd_text):
+        text = _own_words(item["text"])
+        key = text.lower()
+        if len(text) < 8 or key in seen or _ELIGIBILITY_LINE.search(text):
+            continue
+        target = {"duty": duties, "summary": duties, "required": required,
+                  "preferred": preferred}.get(item["role"])
+        if target is not None:
+            seen.add(key)
+            target.append(text)
+
+    model_skills = [s for s in jd_skill_model.read_skills(jd_text, JD_SKILL_VOCABULARY)
+                    if s not in _SOFT_SKILLS]
+
+    def skills_in(lines: Sequence[str]) -> List[str]:
+        found: List[str] = []
+        for line in lines:
+            for name in list(fit_score.find_skills(line)) + _skills_on(line, model_skills):
+                if name not in found and name not in _SOFT_SKILLS:
+                    found.append(name)
+        return found
+
+    asked = skills_in(required)
+    done = skills_in(duties)
+    wanted = skills_in(preferred)
+    required_skills = asked + [s for s in done if s not in asked and s not in wanted]
+    preferred_skills = [s for s in wanted if s not in required_skills]
+
+    records: List[Dict[str, Any]] = []
+    for lines, priority in ((required, "required"), (preferred, "preferred")):
+        for line in lines:
+            records.append({"text": line, "priority": priority,
+                            "kind": "qualification" if _CREDENTIAL_LINE.search(line) else "skill",
+                            "alternatives": [], "source_excerpt": line})
+    records.extend({"text": line, "priority": "unspecified", "kind": "responsibility",
+                    "alternatives": [], "source_excerpt": line}
+                   for line in duties)
+    return {
+        "responsibilities": duties[:MAX_RESPONSIBILITIES],
+        "qualifications": (required + preferred)[:MAX_QUALIFICATIONS],
+        "required_skills": required_skills,
+        "preferred_skills": preferred_skills,
+        "keywords": (required_skills + preferred_skills)[:MAX_KEYWORDS],
+        "requirements": records,
+    }
+
+
+def _years_wording(experience: Dict[str, Any]) -> str:
+    low, high = experience.get("min_years"), experience.get("max_years")
+    if low is not None and high is not None:
+        return f"{low:g}-{high:g} years"
+    if low is not None:
+        return f"{low:g}+ years"
+    return ""
+
+
+_EMPLOYMENT_WORDING = {"full_time": "Full-time", "part_time": "Part-time", "contract": "Contract",
+                       "temporary": "Temporary", "internship": "Intern"}
+
+
+def local_analysis(jd_text: Any, title: Any = "") -> Dict[str, Any]:
+    """A `JD_ANALYSIS` with no LLM, for when one is unavailable or not wanted.
+
+    Same keys and same clean-up as `tailoring_jd.extract`, so a caller cannot tell
+    which produced it except by `analysis_source`. Unknown facts stay empty: the
+    title and company usually live on the posting, not in its body.
+    """
+    from schemas.resume_schemas import JD_ANALYSIS_SCHEMA, validate_and_coerce
+    from services import fit_score
+    from services.requirement_assessment import attach_expressions
+    from services.term_registry import sanitize_jd_analysis
+    from utils.keyword_normalizer import normalize_keywords
+
+    text = str(jd_text or "")
+    content = read_content(text)
+    reqs = fit_score.extract_requirements(text, str(title or ""))
+    industries = list(reqs.get("industries") or [])
+    analysis = validate_and_coerce({
+        "job_title": str(title or ""),
+        "company": "Not specified",
+        "location": "Not specified",
+        "employment_type": _EMPLOYMENT_WORDING.get(reqs["jd"]["employment_type"], ""),
+        "required_skills": normalize_keywords(content["required_skills"]),
+        "preferred_skills": normalize_keywords(content["preferred_skills"]),
+        "responsibilities": content["responsibilities"],
+        "qualifications": content["qualifications"],
+        "experience_years": _years_wording(reqs["jd"]["experience"]),
+        "industry": industries[0] if industries else "",
+        "keywords": normalize_keywords(content["keywords"]),
+        "jd_context": {"domain": [], "logistics": [], "seniority": [], "title": []},
+    }, JD_ANALYSIS_SCHEMA)
+    analysis = sanitize_jd_analysis(analysis)
+    analysis["requirements"] = content["requirements"]
+    analysis["source_text"] = jd_skill_model.clean(text)[:56000]
+    analysis["analysis_completeness"] = "complete" if content["requirements"] else "partial"
+    analysis["analysis_source"] = "local"
+    try:
+        return attach_expressions(analysis)
+    except Exception:  # the same allowance `tailoring_jd.extract` makes
+        return analysis
 
 
 def prompt_view(analysis: Any) -> Any:

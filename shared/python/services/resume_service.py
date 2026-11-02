@@ -490,6 +490,18 @@ class ResumeService:
         Returns:
             Validated dict conforming to JD_ANALYSIS_SCHEMA.
         """
+        from services.jd_profile import local_analysis
+        if os.environ.get("JD_ANALYSIS_SOURCE", "").strip().lower() == "local":
+            return local_analysis(jd_text)
+        try:
+            return ResumeService._analyze_jd_with_llm(jd_text)
+        except Exception as exc:
+            # The posting's own lines still answer, so a JD can be read with no AI.
+            logger.warning("JD analysis fell back to the local reader: %r", exc)
+            return local_analysis(jd_text)
+
+    @staticmethod
+    def _analyze_jd_with_llm(jd_text: str) -> Dict[str, Any]:
         from services.tailoring_policy import enabled
         if enabled():
             from services.tailoring_jd import extract
