@@ -681,6 +681,73 @@ def daily_pipeline():
 
 
 # ------------------------------------------------------------------
+# For-you board snapshots (`services/board_snapshot.py`). The board's three
+# scans are rebuilt for every recently active user every 30 minutes on the
+# worker, so opening the board is a read, not three scans.
+# ------------------------------------------------------------------
+
+def _board_tag(data) -> dict:
+    """`{"board": "for_you"}` when the For-you board sent this scan, else {}.
+    Only that surface is precomputed; the per-catalog tabs keep scanning."""
+    from services import board_snapshot
+    return ({"board": board_snapshot.BOARD_FOR_YOU}
+            if str(data.get("board") or "") == board_snapshot.BOARD_FOR_YOU else {})
+
+
+def _record_board_request(payload: dict) -> None:
+    """Remember what this user's board asks for, so the refresh can rebuild
+    it. Never fails the scan it rides on."""
+    try:
+        from services import board_snapshot
+        if board_snapshot.is_board_request(payload):
+            board_snapshot.record_request(payload)
+    except Exception as e:  # pragma: no cover - bookkeeping only
+        logger.warning("board request not recorded: %s", type(e).__name__)
+
+
+@jobs_bp.route("/board/snapshot", methods=["POST"])
+@jwt_required()
+def board_snapshot_read():
+    """The user's stored For-you board for this exact request.
+
+    Body: the same fields the three scans send (titles, location, remote_only,
+    us_only, tz_offset_minutes, salary filters). Returns
+    `{available, fresh, built_at, age_seconds, refresh_minutes,
+      sources: {workday, careers, mncs}}` where each source is a scan result
+    or null. `fresh: true` means the board needs no scan; otherwise the client
+    shows what is here and scans. Reading also marks the user as active, which
+    is what keeps their board refreshed.
+    """
+    client_ip = get_client_ip(request)
+    if get_rate_limiter().is_rate_limited(f"jobs_board_snapshot:{client_ip}",
+                                          max_requests=60, window_seconds=300):
+        return jsonify({"error": "Rate limit exceeded"}), 429
+    data = request.get_json(silent=True) or {}
+    payload = {
+        "titles": _split_lines(data.get("titles"), max_items=40, max_len=120),
+        "industries": _split_lines(data.get("industries"), max_items=15, max_len=40),
+        "companies": _split_lines(data.get("companies"), max_items=100, max_len=60),
+        "location": InputSanitizer.sanitize_string(str(data.get("location") or ""), max_length=80),
+        "remote_only": bool(data.get("remote_only", False)),
+        "us_only": bool(data.get("us_only", True)),
+        **_salary_filter(data),
+        "user_email": get_jwt_identity(),
+        "tz_offset_minutes": data.get("tz_offset_minutes"),
+        "board": "for_you",
+    }
+    try:
+        from services import board_snapshot
+        if payload["titles"]:
+            board_snapshot.record_request(payload)
+        return jsonify(board_snapshot.load(payload)), 200
+    except Exception as e:
+        # A missing snapshot is a normal answer; so is a broken read. The
+        # client falls back to scanning either way.
+        logger.warning("board snapshot read failed: %s", type(e).__name__)
+        return jsonify({"available": False, "fresh": False, "sources": {}}), 200
+
+
+# ------------------------------------------------------------------
 # Workday Jobs tab — direct CXS fan-out across the validated tenant catalog.
 # Free (no Apify credits), async submit → poll /api/resume/job/<id>.
 # ------------------------------------------------------------------
@@ -743,7 +810,9 @@ def workday_search():
         # Viewer timezone: "posted today" is computed in the USER's calendar
         # day (service clamps to the real-world offset range).
         "tz_offset_minutes": data.get("tz_offset_minutes"),
+        **_board_tag(data),
     }
+    _record_board_request(payload)
     try:
         from services.resume_service import get_resume_service, ResumeService
         svc = get_resume_service()
@@ -799,7 +868,9 @@ def career_pages_search():
         **_salary_filter(data),
         "user_email": get_jwt_identity(),
         "tz_offset_minutes": data.get("tz_offset_minutes"),
+        **_board_tag(data),
     }
+    _record_board_request(payload)
     try:
         from services.resume_service import get_resume_service, ResumeService
         svc = get_resume_service()
@@ -856,7 +927,9 @@ def mnc_search():
         **_salary_filter(data),
         "user_email": get_jwt_identity(),
         "tz_offset_minutes": data.get("tz_offset_minutes"),
+        **_board_tag(data),
     }
+    _record_board_request(payload)
     try:
         from services.resume_service import get_resume_service, ResumeService
         svc = get_resume_service()

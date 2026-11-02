@@ -543,6 +543,28 @@ later postings out of the `MAX_ORDERED` window into date order: JPMorgan holds
 839 core-tech postings and a cap of 3 per 25-row page admits only ~240 within
 2,000.
 
+## The For-you board is precomputed (`board_snapshot.py`, 2026-11-02)
+
+Opening Jobs used to start three scans (two inventory builds of up to ~8,000
+postings each, plus a live MNC crawl) and wait for all of them. On Lambda each
+scan had its own function; on the Oracle box they share one API process, so
+the board got slow. Now:
+
+- The board's scans carry `board: "for_you"`. Each one records the request in
+  `board_requests` and saves its result in `board_snapshots` (one row per user
+  and tab, signed by the request, TTL 3 days).
+- The worker's `board_refresh` (every 10 minutes) rebuilds each user active in
+  the last 14 days once their board is 30 minutes old, one user at a time,
+  through `resume_service.run_board_source` - the SAME builder a live scan runs.
+- `POST /api/jobs/board/snapshot` serves it. `fresh` (all tabs, under 40
+  minutes, same viewer calendar day) means the client does not scan at all.
+- Fan-out bounds key on `workday_jobs_service._SERVER_BOUNDS` (Lambda OR
+  `ENVIRONMENT=prod`), not `_IN_LAMBDA`: without Lambda the box had silently
+  switched to the laptop envelope (MNC 420 s / 32 threads instead of 180 / 16).
+- `FEED_BUILD_SLOTS` (default 2) bounds concurrent inventory builds per process.
+
+Dropping both collections returns the board to scanning on every open.
+
 ## Where the code actually runs
 
 **One Oracle Cloud box** (`jobpilot-ingest`, A1 VM, us-ashburn-1) runs everything:

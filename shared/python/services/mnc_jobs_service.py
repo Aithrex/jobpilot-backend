@@ -52,6 +52,7 @@ from services.workday_jobs_service import (
     GLOBAL_KEEP,
     WINDOW_DAYS,
     _IN_LAMBDA,
+    _SERVER_BOUNDS,
     _attach_feasibility,
     _attach_sponsorship,
     _build_match_regex,
@@ -70,8 +71,8 @@ logger = logging.getLogger(__name__)
 # ~69 companies (vs career-pages' ~624) — a smaller pool finishes well inside
 # the resume Lambda's 300s budget even with the per-term enterprise/workday
 # fan-in. Env-overridable, optional (defaults always work).
-OVERALL_TIMEOUT = _env_int("MNC_OVERALL_TIMEOUT", 180 if _IN_LAMBDA else 420)
-MAX_WORKERS = _env_int("MNC_MAX_WORKERS", 16 if _IN_LAMBDA else 32)
+OVERALL_TIMEOUT = _env_int("MNC_OVERALL_TIMEOUT", 180 if _SERVER_BOUNDS else 420)
+MAX_WORKERS = _env_int("MNC_MAX_WORKERS", 16 if _SERVER_BOUNDS else 32)
 PER_COMPANY_KEEP = 30
 DETAIL_ENRICH_TOP = 150
 DETAIL_ENRICH_RECENT = 150

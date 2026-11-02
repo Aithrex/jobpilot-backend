@@ -1229,6 +1229,46 @@ def _feed_from_inventory(source: str, payload: Dict[str, Any]) -> Optional[Dict[
         return None
 
 
+#: The For-you board's three tabs, as `_process_job` job types.
+BOARD_JOB_TYPES = ("workday_jobs", "career_pages", "mnc_jobs")
+
+#: Inventory builds that may run at once in ONE process. Each build holds up to
+#: ~8,000 postings plus their scores in memory and is CPU-bound under the GIL.
+#: On Lambda every scan had its own 1.5 GB function; on the Oracle box all of
+#: them share one API process inside a 2 GB container, next to the requests it
+#: serves. A queued build waits a few seconds; an unbounded burst is what can
+#: take the whole process down and every scan in it.
+_FEED_BUILD_SLOTS = threading.BoundedSemaphore(
+    max(1, int(os.getenv("FEED_BUILD_SLOTS", "2") or 2)))
+
+
+def run_board_source(job_type: str, payload: Dict[str, Any],
+                     partial_cb=None) -> Dict[str, Any]:
+    """Build one board tab exactly as the user-facing scan does.
+
+    Inventory first (`_feed_from_inventory`), the legacy live crawl only when
+    the inventory cannot answer; the user's employer policy and logos applied
+    last. MNC has no inventory path yet. Raises what the engines raise.
+    """
+    email = str(payload.get("user_email") or "")
+    result = None
+    if job_type in ("workday_jobs", "career_pages"):
+        with _FEED_BUILD_SLOTS:
+            result = _feed_from_inventory(
+                "workday" if job_type == "workday_jobs" else "career-pages", payload)
+    if result is None:
+        if job_type == "workday_jobs":
+            from services.workday_jobs_service import run_workday_jobs_search as run
+        elif job_type == "career_pages":
+            from services.career_pages_service import run_career_pages_search as run
+        elif job_type == "mnc_jobs":
+            from services.mnc_jobs_service import run_mnc_search as run
+        else:
+            raise ValueError(f"not a board job type: {job_type}")
+        result = run(payload, partial_cb=partial_cb)
+    return _stamp_job_logos(_apply_employer_policy(result, email))
+
+
 def _apply_employer_policy(payload: Any, user_email: str,
                            list_keys: Tuple[str, ...] = ("jobs",)) -> Any:
     """The user's direct-employer policy on a legacy result / partial, in place.
@@ -2425,45 +2465,22 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             svc.complete_job(job_id, _stamp_job_logos(
                 tech_feed_service.search(payload)))
 
-        elif job_type == "workday_jobs":
-            # ADR-003 read cutover. `_feed_from_inventory` answers from
-            # `job_postings` in milliseconds and returns None when the slice is
-            # not warm yet, in which case the legacy live crawl runs unchanged.
-            result = _feed_from_inventory("workday", payload)
-            if result is None:
-                from services.workday_jobs_service import run_workday_jobs_search
-
-                def _stream_workday_partial(partial: dict) -> None:
-                    svc.update_job_partial(job_id, _stamp_job_logos(_apply_employer_policy(
-                        dict(partial), str(payload.get("user_email") or ""))))
-
-                result = run_workday_jobs_search(payload, partial_cb=_stream_workday_partial)
-            svc.complete_job(job_id, _stamp_job_logos(_apply_employer_policy(
-                result, str(payload.get("user_email") or ""))))
-
-        elif job_type == "career_pages":
-            result = _feed_from_inventory("career-pages", payload)
-            if result is None:
-                from services.career_pages_service import run_career_pages_search
-
-                def _stream_career_partial(partial: dict) -> None:
-                    svc.update_job_partial(job_id, _stamp_job_logos(_apply_employer_policy(
-                        dict(partial), str(payload.get("user_email") or ""))))
-
-                result = run_career_pages_search(payload, partial_cb=_stream_career_partial)
-            svc.complete_job(job_id, _stamp_job_logos(_apply_employer_policy(
-                result, str(payload.get("user_email") or ""))))
-
-        elif job_type == "mnc_jobs":
-            from services.mnc_jobs_service import run_mnc_search
-
-            def _stream_mnc_partial(partial: dict) -> None:
+        elif job_type in BOARD_JOB_TYPES:
+            # The three For-you board tabs. `run_board_source` is shared with
+            # the 30-minute board refresh (`board_snapshot`), so a precomputed
+            # board and a live one can never be built two different ways.
+            def _stream_partial(partial: dict) -> None:
                 svc.update_job_partial(job_id, _stamp_job_logos(_apply_employer_policy(
                     dict(partial), str(payload.get("user_email") or ""))))
 
-            result = run_mnc_search(payload, partial_cb=_stream_mnc_partial)
-            svc.complete_job(job_id, _stamp_job_logos(_apply_employer_policy(
-                result, str(payload.get("user_email") or ""))))
+            result = run_board_source(job_type, payload, partial_cb=_stream_partial)
+            svc.complete_job(job_id, result)
+            try:
+                from services import board_snapshot
+                board_snapshot.save_from_scan(payload, job_type, result)
+            except Exception as snap_err:  # never fail a scan over its cache
+                logger.warning("board snapshot not saved for %s: %s",
+                               job_id, type(snap_err).__name__)
 
         elif job_type == "daily_pipeline":
             # Idempotency guard — Lambda async invocations are at-least-once,
