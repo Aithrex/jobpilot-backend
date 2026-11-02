@@ -166,7 +166,10 @@ NORMALIZATION_VERSION = 4
 #
 # v12: `jd-1.3.0`. `additional_skills` comes from `jd_skill_model`, about 30 ms a
 # posting and no model calls. Match scores do not change: they read the lexicon.
-EXTRACTOR_VERSION = 12
+#
+# v13: `jd-1.4.0`. `required_years` and `work_mode` take a second opinion from
+# `jd_field_model`, so both can change on a stored posting and scores with them.
+EXTRACTOR_VERSION = 13
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1

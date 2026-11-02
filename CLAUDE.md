@@ -334,12 +334,13 @@ search, guest cards and the digests. See
   `employers`/`career_sources`/`company_ats_endpoints`/`job_postings` →
   `docs/coverage/h1b-sponsor-gaps.{json,csv}`.
 
-## The JD dictionary (`jd-1.3.0`)
+## The JD dictionary (`jd-1.4.0`)
 
 `shared/python/services/jd_profile.py` is the ONE reader of a job description;
 filtering and tailoring both go through it. Never add a second JD reader, and
 never read sponsorship, degree or experience from a JD anywhere else. Its facts are
-regex. Skills beyond the lexicon come from `jd_skill_model.py`, a small trained
+regex, with a second opinion on years and work mode from `jd_field_model.py`, which
+falls back to the rule. Retrain it with `scripts/train_jd_field_model.py`. Skills beyond the lexicon come from `jd_skill_model.py`, a small trained
 model shipped as a file and run in plain Python, so there is no model server and no
 LLM. It never feeds `fit_score`. Retrain with `scripts/train_jd_skill_model.py`.
 See [`docs/specs/jd-profile.md`](docs/specs/jd-profile.md).

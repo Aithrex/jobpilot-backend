@@ -56,11 +56,11 @@ from collections import OrderedDict
 from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from services import jd_profile
+from services import jd_field_model, jd_profile
 
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.7"
+FIT_SCORE_VERSION = "fit-v2.8"
 
 # The cliff described below is REAL, and this is how 2.1 crosses it.
 #
@@ -122,9 +122,13 @@ FIT_SCORE_VERSION = "fit-v2.7"
 # most postings that used to read `onsite` from "in person" now read `unknown`,
 # which scores nothing. Spelled-out years are read, and a preference word only
 # moves the number it qualifies.
+#
+# 2.8 keeps the contract. `required_years` and `work_mode` take a second opinion
+# from `jd_field_model`, which reads "Full-time onsite required" and "5+ Years of
+# Commercial Banking" where the rules read nothing.
 _COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset(
     {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5", "fit-v2.6",
-     "fit-v2.7"})
+     "fit-v2.7", "fit-v2.8"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
@@ -2368,6 +2372,25 @@ def _work_mode(blob: str) -> str:
     return jd_profile.read_work_mode(blob)
 
 
+def _checked_work_mode(jd_text: str, combined: str) -> str:
+    rule = _work_mode(combined)
+    return jd_field_model.check_work_mode(jd_text, rule) if jd_text else rule
+
+
+def _checked_years(jd_text: str, combined: str, required: Optional[int],
+                   strict: Optional[int]) -> Tuple[Optional[int], Optional[int]]:
+    """`(required_years, strict_years)` after the second opinion. Preferred-only
+    stays preferred: "2 years preferred" is not a minimum, whichever reader saw it."""
+    if not jd_text:
+        return required, strict
+    rule = jd_profile.read_experience(combined, strict, None)["min_years"]
+    value = jd_field_model.check_years(jd_text, rule)
+    if value == rule or value == required:
+        return required, strict
+    # Months are `read_experience`'s to report; `required_years` is whole years.
+    return (value, value) if isinstance(value, int) else (required, strict)
+
+
 @lru_cache(maxsize=512)
 def _extract_requirements_cached(jd_text: str, title: str) -> Dict[str, Any]:
     blob = _norm(jd_text)
@@ -2392,10 +2415,11 @@ def _extract_requirements_cached(jd_text: str, title: str) -> Dict[str, Any]:
             licenses.append({"key": rule["key"], "label": rule["label"]})
 
     required_years = _required_years(combined)
+    strict_years = _required_years(combined, preferred_fallback=False)
+    required_years, strict_years = _checked_years(jd_text, combined, required_years, strict_years)
     clearance_required = bool(_CLEARANCE_JD.search(combined))
     # The ONE reading of this JD. The two flags below are derived from it so
     # that the scorer, the feed and tailoring cannot disagree about a posting.
-    strict_years = _required_years(combined, preferred_fallback=False)
     jd = jd_profile.read_fields(combined, min_years=strict_years,
                                 preferred_years=None if strict_years is not None
                                 else required_years,
@@ -2425,7 +2449,7 @@ def _extract_requirements_cached(jd_text: str, title: str) -> Dict[str, Any]:
         "job_level": level_from_signals(title_blob, description=blob,
                                         required_years=required_years),
         "industries": sorted(_industries(combined)),
-        "work_mode": _work_mode(combined),
+        "work_mode": _checked_work_mode(jd_text, combined),
         "licenses": licenses,
         "clearance_required": clearance_required,
         "work_authorization_restricted": bool(_WORKAUTH_JD.search(combined))
