@@ -1189,11 +1189,16 @@ def run_discovery_worker(*, batch: Optional[int] = None,
     batches = 0
     drained = False
 
+    from services import ingest_shutdown
+
     while True:
         remaining = deadline - _time.monotonic()
         # No point claiming a batch we cannot finish: the lease would be held
         # while nothing happens to it.
         if remaining <= DISCOVERY_RESERVE_SECONDS:
+            break
+        # The runner is stopping (a deploy): claim nothing it would abandon.
+        if ingest_shutdown.requested():
             break
         try:
             claimed = reg.claim_discovery_batch(owner, size=size)

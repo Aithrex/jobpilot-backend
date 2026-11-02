@@ -1617,7 +1617,9 @@ class HostPolicy:
         while time.monotonic() < end:
             if (stop is not None and stop.is_set()) or time.monotonic() >= deadline:
                 return False
-            time.sleep(min(0.05, end - time.monotonic()))
+            # Clamped: `end` can pass between the check above and this read,
+            # and a negative sleep raises ValueError and fails the member.
+            time.sleep(min(0.05, max(0.0, end - time.monotonic())))
         return True
 
     def note_success(self, host: str) -> None:
@@ -2979,6 +2981,11 @@ def run_shard(
     # the lease expiry, the backoff window and the posting timestamps must all
     # come from ONE clock reading, not from three separate `datetime.now()`
     # calls taken minutes apart inside a slow run.
+    from services import ingest_shutdown
+    if ingest_shutdown.requested():
+        # The runner is stopping: do not take a lease it would only abandon.
+        result.update({"skipped": "shutting_down", "counts": {}})
+        return result
     state = inv.acquire_lease(src, shard_id, owner,
                               ttl_seconds=inv.LEASE_TTL_SECONDS, now=now)
     if state is None:
@@ -2997,6 +3004,9 @@ def run_shard(
     members = _rotate_members(shard_members(src, shard_id), now=now)
     policy = HostPolicy()
     stop = threading.Event()
+    # A deploy's SIGTERM sets this, so the shard winds down the way it would at
+    # its deadline instead of being killed mid-write (`ingest_shutdown`).
+    ingest_shutdown.register(stop)
     counts: Dict[str, int] = defaultdict(int)
     result.update({"run_id": run_id, "owner": owner, "members": len(members)})
 
@@ -3208,6 +3218,14 @@ def run_shard(
                                        now=now, early_cutoff=list_cutoff)
         counts["closed"] += closed
 
+        if members and not listed_keys and ingest_shutdown.requested():
+            # Stopped before any board answered. Not the shard's fault, so no
+            # failure and no backoff: it stays due and runs after the restart.
+            inv.bump_run_counts(run_id, **{k: int(v) for k, v in counts.items()})
+            inv.finish_run(run_id, status="interrupted", now=now)
+            result.update({"counts": dict(counts), "skipped": "shutting_down",
+                           "duration_ms": int((time.monotonic() - started) * 1000)})
+            return result
         if members and not listed_keys:
             # Every member failed: that is a shard failure, and it must back off
             # rather than hammer the same dead hosts every tick.
@@ -3248,6 +3266,7 @@ def run_shard(
 
     finally:
         stop.set()
+        ingest_shutdown.unregister(stop)
         inv.release_lease(src, shard_id, owner)
 
 

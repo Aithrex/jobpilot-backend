@@ -158,6 +158,9 @@ MAINTENANCE_UTC = (5, 20)  # cron(20 5 * * ? *) — daily retention purge
 # After maintenance, never overlapping with it. The report takes ~2 minutes and
 # is NEVER computed on an API request; this is the scheduled persist path.
 COVERAGE_SNAPSHOT_UTC = (5, 45)
+#: How late a daily job may still fire. The poll is one thread; when something
+#: holds it past the exact minute, the job runs late instead of not at all.
+DAILY_CATCH_UP_MINUTES = 10
 
 
 class Runner:
@@ -178,6 +181,7 @@ class Runner:
         self._inflight: Dict[Future, str] = {}
         self._lock = threading.Lock()
         self._fired: Dict[str, str] = {}   # job name -> slot already fired
+        self._discovery_thread: Optional[threading.Thread] = None
         self.counts: Dict[str, int] = {}
 
     # -- bookkeeping -------------------------------------------------------
@@ -418,27 +422,57 @@ class Runner:
         return True
 
     def poll(self, now: Optional[datetime] = None) -> None:
+        """Fire each job once per slot, LATE rather than never.
+
+        The quarter-hour jobs used to fire only when the poll landed on their
+        exact minute. The poll is a single thread, and the discovery dispatch
+        at :02/:17/:32/:47 began taking 2-3.5 minutes after the box went to 2
+        OCPU - so every time it ended after :04/:19/:34/:49, that quarter's
+        iCIMS tick was skipped outright. On 2026-11-02 iCIMS ran 21 of 72
+        ticks (every other source 71-72), and its shard runs fell from ~1,536 a
+        day to 341. Now a job is due from its minute to the end of its quarter.
+        """
         now = now or datetime.now(timezone.utc)
-        slot = now.strftime("%Y-%m-%dT%H:%M")
+        slot = now.strftime("%Y-%m-%d")
         quarter = now.strftime("%Y-%m-%dT%H:") + str(now.minute // 15)
+        into_quarter = now.minute % 15
 
         for source, minute in QUARTER_HOURLY.items():
             if source not in self.sources:
                 continue
-            if now.minute % 15 == minute and self._due(f"ingest:{source}", quarter):
+            if into_quarter >= minute and self._due(f"ingest:{source}", quarter):
                 self.dispatch_source(source)
 
-        if self.discovery and now.minute % 15 == DISCOVERY_MINUTE \
+        if self.discovery and into_quarter >= DISCOVERY_MINUTE \
                 and self._due("discovery", quarter):
-            self.dispatch_discovery()
+            self._dispatch_discovery_async()
 
-        if self.maintenance and (now.hour, now.minute) == MAINTENANCE_UTC \
+        if self.maintenance and self._daily_due(now, MAINTENANCE_UTC) \
                 and self._due("maintenance", slot):
             self.run_maintenance()
 
-        if (now.hour, now.minute) == COVERAGE_SNAPSHOT_UTC \
+        if self._daily_due(now, COVERAGE_SNAPSHOT_UTC) \
                 and self._due("coverage_snapshot", slot):
             self.run_coverage_snapshot()
+
+    @staticmethod
+    def _daily_due(now: datetime, at: tuple) -> bool:
+        """Inside the catch-up window after a daily job's UTC time. Bounded, so
+        a restart at noon does not re-run the 05:20 maintenance."""
+        minutes = (now.hour * 60 + now.minute) - (at[0] * 60 + at[1])
+        return 0 <= minutes < DAILY_CATCH_UP_MINUTES
+
+    def _dispatch_discovery_async(self) -> None:
+        """Discovery's dispatch (queue refill + claims) is slow and must not
+        hold the scheduler: it runs on its own thread, one at a time."""
+        prev = self._discovery_thread
+        if prev is not None and prev.is_alive():
+            logger.info("tick discovery: previous dispatch still running, skipped")
+            return
+        thread = threading.Thread(target=self.dispatch_discovery,
+                                  name="discovery-dispatch", daemon=True)
+        self._discovery_thread = thread
+        thread.start()
 
     def serve(self, once: bool = False) -> int:
         logger.info("ingest runner %s starting: sources=%s discovery=%s "
@@ -464,7 +498,10 @@ class Runner:
                 last_beat = time.monotonic()
             self.stop.wait(TICK_SECONDS)
 
-        logger.info("SIGTERM: draining %d in-flight", self.inflight())
+        from services import ingest_shutdown
+        told = ingest_shutdown.request()
+        logger.info("SIGTERM: draining %d in-flight (%d shard(s) told to wind down)",
+                    self.inflight(), told)
         self._drain()
         self.heartbeat()
         logger.info("ingest runner %s stopped", self.runner_id)
@@ -522,7 +559,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     signal.signal(signal.SIGTERM, _term)
     signal.signal(signal.SIGINT, _term)
-    return runner.serve(once=args.once)
+    code = runner.serve(once=args.once)
+    if runner.inflight():
+        # Whatever outlived the drain is abandoned on purpose (its lease
+        # expires and the next tick re-claims it). Leaving through normal
+        # interpreter exit would JOIN those threads, run past systemd's stop
+        # timeout and end in SIGKILL, which is what every deploy did.
+        logging.shutdown()
+        os._exit(code)
+    return code
 
 
 if __name__ == "__main__":
