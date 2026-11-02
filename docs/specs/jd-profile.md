@@ -1,4 +1,4 @@
-# The JD dictionary (`jd-1.4.0`)
+# The JD dictionary (`jd-1.5.0`)
 
 `shared/python/services/jd_profile.py` is the one place a job description is
 read. Filtering and tailoring both go through it, so a posting cannot read one
@@ -8,6 +8,7 @@ way in the feed and another way in tailoring.
 |---|---|---|
 | Ingest, feed, match score, apply sweep | `fit_score.extract_requirements` calls `jd_profile.read_fields` | `job_postings.requirements.jd` |
 | Every tailoring flow | `ResumeService.extract_jd` calls `jd_profile.attach_to_analysis` | `jd_analysis.jd_profile` |
+| Tailoring with no LLM | `ResumeService._analyze_jd` calls `jd_profile.local_analysis` | `jd_analysis`, with `analysis_source: local` |
 | Anything holding a JD | `jd_profile.build(jd_text, title, analysis=None)` | Return value |
 
 All readers are pure: no network, database or model. They cost about 19 ms per
@@ -42,7 +43,7 @@ a guess, and a model is never needed to produce the dictionary.
 | | `clearance_required`, `clearance_level` | `ts_sci`, `top_secret`, `secret`, `public_trust`, `export_controlled`, `unspecified`, `not_stated` |
 | | `licenses` | For example RN or CPA |
 | `compensation` | | `salary_normalizer` output or null |
-| `content` | `responsibilities`, `qualifications`, `keywords` | LLM only; empty without it |
+| `content` | `responsibilities`, `qualifications`, `keywords` | The LLM's when it ran, otherwise the posting's own lines from `read_content` |
 | `provenance` | `deterministic`, `llm`, `skills_source`, `text_length` | How this reading was made |
 
 The stored block drops the evidence quotes except sponsorship, because it sits on
@@ -190,3 +191,87 @@ What was tried and measured: stats from 27,000 postings gave nothing over 15,000
 so more unlabelled postings will not help. More labels will: F1 rose with each
 extra 150 JDs. Retrain with `scripts/train_jd_skill_model.py`, which needs
 scikit-learn; production does not. Keep `holdout` out of training.
+
+## The line reader (`lines-1.0.0`)
+
+`jd_line_model.py` gives every line of a posting one role: `company`, `summary`, `duty`,
+`required`, `preferred`, `benefit`, `legal`, `logistics`, `heading` or `other`.
+`jd_profile.read_content` turns those into `responsibilities`, `qualifications`,
+`required_skills`, `preferred_skills`, `keywords` and `requirements`, the fields that
+used to need an LLM. `jd_profile.local_analysis` wraps them in the `JD_ANALYSIS` shape.
+
+**It points and never writes.** Each value is a line of the posting or a skill found on
+one, so it cannot invent a requirement, and `source_excerpt` is always in `source_text`.
+
+**Eligibility wording cannot reach a résumé prompt.** `_ELIGIBILITY_LINE` drops visa,
+authorization, citizenship, clearance and equal-opportunity lines whatever role they got.
+
+The LLM still reads the JD first. `_analyze_jd` falls back to `local_analysis` when the
+LLM fails, and `JD_ANALYSIS_SOURCE=local` skips the LLM for this step altogether. Nothing
+here runs at crawl and nothing new is stored, so `EXTRACTOR_VERSION` did not change.
+
+### How it was trained
+
+- **First stage:** logistic regression over a line's words. Its labels came from 75,000
+  postings: a heading labels the lines under it, patterns correct trailing legal and
+  benefit text, and a line seen in many postings takes the role most of them gave it.
+  That gave 2.9M labelled lines, 1.1M distinct, at no AI cost. It never sees the key.
+- **Second stage:** small decision trees over that evidence in context: neighbouring
+  lines, the section, and position. They learned from the `dev` half of
+  `evals/data/jd_line_key.jsonl`.
+
+Retrain with `scripts/train_jd_line_model.py`, which needs scikit-learn; production does
+not. The file is 0.84 MB and costs about 21 MB of memory once loaded. `read_lines` takes
+about 24 ms per JD and `local_analysis` about 120 ms.
+
+### Accuracy
+
+`jd_line_key.jsonl` holds 100 random JDs labelled line by line from the JD alone, drawn
+from a chunk no model trained on. `dev` trains the second stage and `test` is the score.
+`evals/eval_jd_line_key.py` refuses to print the test split's errors, and
+`evals/test_jd_line_key.py` is the CI gate. The labels are AI-drafted until a person
+reviews them, and the ceiling is two copies of one AI, so it flatters.
+
+| Measure | `test`, 50 JDs seen once | `dev`, 5 folds | Two readers |
+|---|---|---|---|
+| Line role right | 80.8% | 82.0% | 97.4% |
+| Found what the job does (recall / precision) | 94.7% / 87.7% | 90.6% / 91.9% | 100% / 98.0% |
+| Found what the job asks for (recall / precision) | 86.5% / 90.5% | 92.0% / 92.5% | 99.5% / 100% |
+| Required v preferred right | 92.4% | 91.9% | 100% |
+| Handed to a prompt, must not be there | 2.1% | 1.4% | 0.2% |
+
+Headings alone scored 49.2% on `test`. After the eligibility filter, 23 of the 1,129 lines
+that would reach a prompt should not, and none of the 35 eligibility lines did.
+
+Skills barely move: on 150 fresh JDs `read_content` scores 49 / 34 against 45 / 35 for
+the live pipeline. It is weakest telling `logistics` and `summary` from their neighbours,
+which tailoring cares about least.
+
+Against Claude's own analyses of 739 JDs real users tailored for (85% tech, exported from
+`tailoring_records` after the model was frozen, kept out of the repo): 87.1% of Claude's
+responsibilities are covered by our `duty` and `summary` lines, of 96.4% that any line of
+the JD covers; 92.7% of its qualifications by `required` and `preferred` lines, of 96.9%;
+skills score F1 .57 exact and .65 with loose matching; required v preferred matches on
+84.9% of skills both found; years agree on 84.2%. These JDs score far better than the
+random sample because 93% of that sample is non-tech.
+
+Claude's answers are evidence, not truth. It wrote `Full-time` on 725 of the 739 JDs, and
+176 of the 242 we left blank have no such wording. Do not score `employment_type` on them.
+
+Training `jd_skill_model` on 525 of those JDs and testing on 150 held back moved F1 on real
+user JDs from .563 to .595 at threshold .25, precision and recall both up, with random JDs
+.392 to .384. It is not shipped: it changes stored `additional_skills`, so it needs an
+`EXTRACTOR_VERSION` bump and a re-read of every posting.
+
+Things tried and dropped, with the numbers, so nobody repeats them:
+
+- **`qwen2.5:3b` on 30 fresh JDs:** the rules beat it on sponsorship 96 to 79, years 89 to
+  71, skills .44 to .34, at 32 s per JD. It invented a sponsorship answer on 17% of JDs
+  that never mention it. Forcing a JSON schema made it answer the same thing every time;
+  free JSON, a quote before each answer, and worked examples are the fair test.
+- **Nearest-neighbour vectors:** plain vectors rate "5+ years" and "2+ years" .96 alike
+  and "will sponsor" and "will not sponsor" .86, so they cannot read facts. On line roles
+  51 neighbours voting scored 62.1% against 61.9% for words on the same labels, and need
+  a 90 MB model in production.
+- **Board fields such as "Remote type: Hybrid":** on 900 tuning rows they fixed 8 misses
+  and broke 23 right answers.
