@@ -75,6 +75,15 @@ def _env_int(name: str, default: int) -> int:
 
 
 _IN_LAMBDA = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+#: Whether the fan-out runs on a SERVER and must use the bounded envelope.
+#: The bounds used to key on `_IN_LAMBDA` alone, so the move to the Oracle box
+#: (2026-10-31, no Lambda) silently switched production to the laptop envelope:
+#: the MNC scan every board open runs went from 180 s / 16 threads to 420 s / 32,
+#: and the career-pages crawl from 210 s / 32 to 480 s / 64, inside the same API
+#: process every other request is served from. A laptop is the exception, so it
+#: is the case that has to be named.
+_SERVER_BOUNDS = _IN_LAMBDA or (os.environ.get("ENVIRONMENT") or "").strip().lower() in (
+    "prod", "production", "staging")
 
 # Bump when the record schema or fetch behavior changes so stale cached
 # results don't leak the old shape into the UI. v7: seniority + tailor
@@ -102,8 +111,8 @@ TOTAL_TERMS_CAP = 6       # title terms + resume-skill terms combined
 PER_TENANT_KEEP = 30
 GLOBAL_KEEP = 1500
 REQUEST_TIMEOUT = 6
-OVERALL_TIMEOUT = _env_int("WORKDAY_OVERALL_TIMEOUT", 210 if _IN_LAMBDA else 600)
-MAX_WORKERS = _env_int("WORKDAY_MAX_WORKERS", 32 if _IN_LAMBDA else 96)
+OVERALL_TIMEOUT = _env_int("WORKDAY_OVERALL_TIMEOUT", 210 if _SERVER_BOUNDS else 600)
+MAX_WORKERS = _env_int("WORKDAY_MAX_WORKERS", 32 if _SERVER_BOUNDS else 96)
 WINDOW_DAYS = 30
 # Top-ranked rows get their full JD fetched from the CXS detail endpoint so
 # skill matching + tailor-feasibility run against the real description.

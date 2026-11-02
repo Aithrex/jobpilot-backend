@@ -39,6 +39,7 @@ from services.workday_jobs_service import (
     GLOBAL_KEEP,
     WINDOW_DAYS,
     _IN_LAMBDA,
+    _SERVER_BOUNDS,
     _attach_feasibility,
     _attach_sponsorship,
     _build_match_regex,
@@ -68,8 +69,8 @@ DETAIL_TIMEOUT = 6
 # legacy 900s monolith) — cap the fan-out to leave room for detail enrichment
 # + scoring + cache writes. Env-overridable, optional (defaults always work).
 # One task per company (~624 tasks) so 32 workers finishes comfortably.
-OVERALL_TIMEOUT = _env_int("CAREER_PAGES_OVERALL_TIMEOUT", 210 if _IN_LAMBDA else 480)
-MAX_WORKERS = _env_int("CAREER_PAGES_MAX_WORKERS", 32 if _IN_LAMBDA else 64)
+OVERALL_TIMEOUT = _env_int("CAREER_PAGES_OVERALL_TIMEOUT", 210 if _SERVER_BOUNDS else 480)
+MAX_WORKERS = _env_int("CAREER_PAGES_MAX_WORKERS", 32 if _SERVER_BOUNDS else 64)
 PER_COMPANY_KEEP = 30
 DETAIL_ENRICH_TOP = 250      # rows still lacking a description after fetch
 DETAIL_ENRICH_RECENT = 300
