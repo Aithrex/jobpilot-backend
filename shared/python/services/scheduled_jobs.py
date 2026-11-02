@@ -328,6 +328,12 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             ResumeService.invoke_async(job_id, "saved_search_alerts", {})
             return {"job": name, "morning": morning, "evening": evening,
                     "saved_search_alerts": job_id}
+        if name == "board_refresh":
+            # Runs inline on the scheduler's own thread, NOT the async pool:
+            # one user at a time, inside a budget shorter than the 10-minute
+            # tick, and the runner's `busy` set stops two ticks overlapping.
+            from services import board_snapshot
+            return {"job": name, "result": board_snapshot.refresh_due(budget_seconds=540)}
         if name == "bandit_nightly":
             return {"job": name, "result": run_bandit_nightly()}
         if name == "learning_due":

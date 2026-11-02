@@ -76,6 +76,7 @@ picked up within 10 minutes. `ingest_maintenance` belongs to the crawler.
 | Job | When |
 |---|---|
 | `digest_hourly` | Hourly |
+| `board_refresh` | Every 10 minutes: rebuilds each active user's For-you board once it is 30 minutes old (`services/board_snapshot.py`) |
 | `learning_due` | Every 10 minutes |
 | `bandit_nightly`, `trend_aggregate`, `ats_signal_aggregate` | 03:00, 04:00, 04:30 UTC |
 | `guest_retention`, `events_refresh` | 05:45, 06:00 UTC |
