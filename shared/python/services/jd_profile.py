@@ -33,7 +33,7 @@ from services import jd_skill_model
 from services.jd_skill_vocabulary import JD_SKILL_VOCABULARY
 
 # Bump when a reader changes what it returns. Stored blocks carry it as `v`.
-JD_PROFILE_VERSION = "jd-1.3.0"
+JD_PROFILE_VERSION = "jd-1.4.0"
 
 SPONSORSHIP_OFFERED = "offered"
 SPONSORSHIP_NOT_OFFERED = "not_offered"

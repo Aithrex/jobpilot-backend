@@ -10,14 +10,15 @@ import pytest
 import eval_jd_answer_key as key_eval
 
 # Measured on all 1,347 rows, which include the tuning rows, so they read higher
-# than the held-out score in docs/specs/jd-profile.md.
+# than the held-out score in docs/specs/jd-profile.md. `jd_field_model` trained on
+# those rows too, so `work_mode` here reads far above its unseen score of about 90%.
 FLOORS = {
     "sponsorship": 0.98,
     "authorization": 0.96,
     "min_degree": 0.88,
-    "min_years": 0.84,
+    "min_years": 0.88,
     "clearance_required": 0.97,
-    "work_mode": 0.90,
+    "work_mode": 0.96,
     "employment_type": 0.88,
 }
 

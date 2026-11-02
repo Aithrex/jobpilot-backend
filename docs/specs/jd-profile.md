@@ -1,4 +1,4 @@
-# The JD dictionary (`jd-1.3.0`)
+# The JD dictionary (`jd-1.4.0`)
 
 `shared/python/services/jd_profile.py` is the one place a job description is
 read. Filtering and tailoring both go through it, so a posting cannot read one
@@ -110,6 +110,52 @@ carries the figure. Non-English JDs are not read. Skills need a model.
 Bump `JD_PROFILE_VERSION`. Bump `job_inventory_service.EXTRACTOR_VERSION` too when
 stored postings should be re-read; the crawl then re-parses them with no model
 calls. Add the real sentence to `tests/test_jd_profile.py` first.
+
+## The field checks (`fields-1.0.0`)
+
+`jd_field_model.py` gives a second opinion on `min_years` and `work_mode`, the two
+critical fields where unseen JDs score well under what two readers agree on (97%
+and 98%). The rules left "Full-time onsite required", "5 days in office" and
+"5+ Years of Commercial Banking" unread. Each model reads the sentences that could
+hold the answer and takes the rule's answer as one input. `fit_score` calls them,
+so the score, the feed and tailoring still see one reading.
+
+- **Years** scores every number of years or months in the posting. It may fill a
+  blank or change a number at 70% confidence or better. It never erases the rule's
+  answer: on the tuning rows, erasing broke more than it fixed.
+- **Preferred-only stays preferred.** A figure the rules read as preferred is not
+  promoted to `min_years`.
+- **Work mode** is a text classifier over the stretches that mention where work
+  happens.
+- **Sponsorship has no model.** On tuning rows the rules found 136 of 138 stated
+  refusals and a model changed nothing.
+
+Both return the rule's answer if the weights cannot be read.
+
+Training used the 1,197 tuning rows plus 500 postings in
+`evals/data/jd_field_hard_rows.jsonl`, picked from 100,000 unlabelled JDs because
+the rules and an earlier model disagreed on them, then labelled blind. These rows
+are a deliberately hard sample, so they only train and are never scored. That is
+the only use of the 1.5 million JD backup that moved a critical field. Retrain with
+`scripts/train_jd_field_model.py`, which needs scikit-learn; production does not.
+
+Rules alone against rules plus checks, on JDs the models never trained on:
+
+| Sample | Years | Work mode |
+|---|---|---|
+| Five-fold, 1,197 tuning rows (rules were tuned on these) | 86.1% to 88.1% | 92.1% to 94.8% |
+| `holdout`, 150 JDs | 90% to 90.7% | 90% to 93.3% |
+| Fresh 150 random JDs, drawn after every decision | 80.7% to 84.0% | 88.0% to 89.3% |
+
+The fresh row is the honest one: 5 years fixed and none broken, 3 work modes fixed
+and 1 broken. Sponsorship on it was 99.3%, with all 16 refusals found and no false
+alarm. Skills on it read 45% precision and 35% recall, under the holdout's 57 and
+39, so treat a single 150-JD sample as noisy. Those 150 labels are not in the
+answer key.
+
+The `holdout` score for years is the second look at that split: an earlier policy
+that could erase the rule's answer tied at 90%, fixing 3 and breaking 3, and that
+total is why the policy changed. The fresh sample was drawn to judge the change.
 
 ## The skill model (`skills-1.0.0`)
 
