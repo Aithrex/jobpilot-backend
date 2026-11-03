@@ -31,7 +31,7 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple  # noqa: F401
 
 from services.career_pages_service import (
     ENTERPRISE_FETCHERS,
@@ -244,6 +244,82 @@ def _normalize_employer(name: str) -> str:
     while toks and toks[-1] in _NAME_SUFFIXES:
         toks.pop()
     return " ".join(toks)
+
+
+# --------------------------------------------------------------------------
+# Which catalog employers the crawl inventory already carries.
+#
+# The For-you board is ONE list. Its two inventory tabs already hold every
+# employer the crawler reads - 60 of these 69 included (Amazon, Google, Apple,
+# NVIDIA, JPMorgan... measured 2026-11-02) - scored with the user's parsed
+# resumes and each posting's stored requirements. Live-crawling those
+# employers again added copies scored from a bare skill list and mostly no
+# description (median 40 against 52-62), and spent up to 180 s of the box's
+# CPU per board build. The board crawls live only what the inventory lacks.
+# --------------------------------------------------------------------------
+INVENTORY_HELD_MIN = _env_int("MNC_INVENTORY_HELD_MIN", 20)
+_HELD_TTL_SECONDS = 6 * 3600
+_held_cache: Dict[str, Any] = {"at": 0.0, "slugs": None}
+#: The inventory `source` an engine's postings land under; None = any source.
+_ENGINE_SOURCE = {"workday": "workday", "career_pages": "career-pages",
+                  "enterprise": "career-pages", "orc": "oracle", "uber": "career-pages"}
+
+
+def _inventory_keys(row: Dict[str, Any]) -> Tuple[Optional[str], set, set]:
+    """(source, tenants, normalized names) that identify one catalog employer."""
+    tenants = {str(row.get("slug") or "").lower(), str(row.get("tenant") or "").lower()}
+    if row.get("engine") == "orc" and row.get("host"):
+        tenants.add(str(row["host"]).split(".")[0].lower())   # jpmc.fa.oraclecloud.com
+    names = {_normalize_employer(row["display_name"])}
+    names.update(_normalize_employer(a) for a in row.get("aliases") or [])
+    tenants.discard("")
+    names.discard("")
+    return _ENGINE_SOURCE.get(str(row.get("engine") or "")), tenants, names
+
+
+def reset_inventory_held_cache() -> None:
+    _held_cache.update(at=0.0, slugs=None)
+
+
+def inventory_held_slugs(now: Optional[float] = None) -> Optional[set]:
+    """Catalog slugs with at least `INVENTORY_HELD_MIN` active postings in the
+    crawl inventory, or None when the inventory cannot be read (the caller then
+    crawls the whole catalog, exactly as before). One grouped read of active
+    postings, cached for six hours."""
+    import time as _time
+    now = _time.time() if now is None else now
+    if _held_cache["slugs"] is not None and now - _held_cache["at"] < _HELD_TTL_SECONDS:
+        return set(_held_cache["slugs"])
+    try:
+        from utils.db_connect import DBConnect
+        groups = list(DBConnect().get_db().job_postings.aggregate([
+            {"$match": {"status": "active"}},
+            {"$group": {"_id": {"s": "$source", "t": "$tenant", "n": "$employer_name"},
+                        "c": {"$sum": 1}}},
+        ], allowDiskUse=True))
+    except Exception as exc:
+        logger.warning("mnc: inventory coverage unreadable (%s); crawling the catalog",
+                       type(exc).__name__)
+        return None
+    by_tenant: Dict[Tuple[str, str], int] = {}
+    by_name: Dict[str, int] = {}
+    for g in groups:
+        key, c = g.get("_id") or {}, int(g.get("c") or 0)
+        src, ten = str(key.get("s") or ""), str(key.get("t") or "").lower()
+        by_tenant[(src, ten)] = by_tenant.get((src, ten), 0) + c
+        name = _normalize_employer(key.get("n") or "")
+        if name:
+            by_name[name] = by_name.get(name, 0) + c
+    held = set()
+    for row in MNC_CATALOG:
+        source, tenants, names = _inventory_keys(row)
+        n_tenant = sum(c for (s, t), c in by_tenant.items()
+                       if t in tenants and (source is None or s == source))
+        n_name = sum(by_name.get(n, 0) for n in names)
+        if max(n_tenant, n_name) >= INVENTORY_HELD_MIN:
+            held.add(row["slug"])
+    _held_cache.update(at=now, slugs=frozenset(held))
+    return held
 
 
 def _employer_allowed(row: Dict[str, Any], employer_name: str) -> bool:

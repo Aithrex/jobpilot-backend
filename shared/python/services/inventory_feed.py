@@ -228,6 +228,86 @@ def _family_slices(docs: List[Dict[str, Any]], families: List[str],
         return []
 
 
+#: Title-matched candidates fetched from beyond the candidate window.
+TITLE_SLICE = int(os.getenv("FEED_INVENTORY_TITLE_SLICE", "1500") or 1500)
+_SENIORITY_WORDS = re.compile(r"\b(sr|senior|jr|junior|lead|principal|staff|associate|entry|"
+                              r"level|i{1,3}|iv|[1-4])\b\.?", re.IGNORECASE)
+_GENERIC_TITLE_WORDS = frozenset({"engineer", "developer", "analyst", "manager", "scientist",
+                                  "specialist", "consultant", "architect", "administrator",
+                                  "intern", "associate", "lead"})
+
+
+def title_phrases(titles: Iterable[str], cap: int = 40) -> List[str]:
+    """The user's titles as phrases a posting title must contain, seniority
+    words aside: "Senior Data Engineer II" -> "data engineer". A lone generic
+    noun ("Engineer") is not a phrase - it would match the whole market."""
+    out: List[str] = []
+    for t in titles:
+        words = re.findall(r"[a-z0-9+#]+", _SENIORITY_WORDS.sub(" ", str(t or "").lower()))
+        phrase = " ".join(words)
+        if phrase and (len(words) > 1 or phrase not in _GENERIC_TITLE_WORDS) \
+                and phrase not in out:
+            out.append(phrase)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def title_pattern(titles: Iterable[str]) -> str:
+    """One case-insensitive regex matching any of `title_phrases`, words in
+    order with punctuation or a seniority word between them ("Data Engineer",
+    "Sr. Data Engineer II", "Data - Engineer"), never inside another word."""
+    phrases = title_phrases(titles)
+    if not phrases:
+        return ""
+    gap = (r"[^a-z0-9+#]+(?:(?:sr|senior|jr|junior|lead|principal|staff|[1-4]|i{1,3}|iv)"
+           r"\.?[^a-z0-9+#]+)?")
+    body = "|".join(gap.join(re.escape(w) for w in p.split()) for p in phrases)
+    return r"(?<![a-z0-9])(?:" + body + r")(?![a-z0-9])"
+
+
+def _title_slice(docs: List[Dict[str, Any]], titles: List[str], families: List[str],
+                 user_email: str, **retrieval: Any) -> List[Dict[str, Any]]:
+    """Postings TITLED like the user's own titles, older than the window.
+
+    The window is the newest `CANDIDATE_LIMIT` rows across the user's families,
+    which for a broad profile is two or three days of the market; the own-level
+    slice reads only exact bands (most postings state none) and the family
+    slices are a few hundred rows each. Replaying every real user's board
+    against everything crawled in the week (2026-11-03): today's title-matched
+    postings were 97-100% listed, the week's 76-89%, and every miss was never
+    RETRIEVED - "Software Engineer II - Slack", "AI/ML Software Engineer",
+    five to seven days old - while the board kept cards scoring 12.
+
+    Same remedy as the other slices: a guaranteed slice of its own. In the
+    user's families (the compound index bounds what Mongo examines: 13k rows
+    and 0.3 s per tab, measured live, against 173k and 3 s without it) and at
+    the user's levels or an unstated one.
+    """
+    if not titles or not families or len(docs) < CANDIDATE_LIMIT:
+        return []
+    try:
+        from services import experience_view
+        from services import job_inventory_service as inv
+        from services.experience_view import _VIEW_OF_BAND
+        pattern = title_pattern(titles)
+        dated = [d["posted_at"] for d in docs if isinstance(d.get("posted_at"), datetime)]
+        if not pattern or not dated:
+            return []
+        levels = (experience_view.for_user(user_email) or {}).get("levels") or [] \
+            if user_email else []
+        bands = sorted({b for b, v in _VIEW_OF_BAND.items() if v in levels})
+        have = {d.get("job_id") for d in docs}
+        older = inv.find_active_fresh(
+            role_families=families, posted_before=min(dated), max_age_days=WINDOW_DAYS,
+            seniorities=(bands + [inv.SENIORITY_UNKNOWN]) if bands else None,
+            title_pattern=pattern, limit=TITLE_SLICE, **retrieval)
+        return [d for d in older if d.get("job_id") not in have]
+    except Exception as exc:
+        logger.warning("inventory_feed: title slice failed (%s)", type(exc).__name__)
+        return []
+
+
 #: How many rows at the user's own level may take a place from rows at levels
 #: they have filtered away, when the cap would otherwise cut them.
 OWN_LEVEL_KEEP = int(os.getenv("FEED_INVENTORY_OWN_LEVEL_KEEP", "600") or 600)
@@ -612,6 +692,50 @@ def _score_rows(rows: List[Dict[str, Any]], user_email: str,
 
 # Parenthetical / trailing fragments that are POSTING NOISE rather than part of
 # the role. Only these are stripped for the dedupe key - see `_title_key`.
+def score_live_rows(rows: List[Dict[str, Any]], user_email: str) -> List[Dict[str, Any]]:
+    """Score live-crawled board rows EXACTLY as inventory rows are scored.
+
+    The For-you board is one list, so every card on it has to be scored with
+    the same engine AND the same inputs. The live crawls scored with a bare
+    skill list (`fit_score._profile_from_skills`) and no requirement profile,
+    while inventory rows get the user's parsed resumes and each posting's
+    stored requirements - so a Big Tech card read a median of 40 next to
+    inventory cards at 52-62 for the same person. Here a live row gets the
+    requirement profile its own description yields (the same deterministic
+    `extract_requirements` ingest stores) and goes through `_score_rows`.
+    Rows are re-ordered best match first; nothing is dropped.
+    """
+    if not rows:
+        return rows
+    from services import fit_score
+    from services.workday_jobs_service import _load_resume_profile
+
+    skills, years = _load_resume_profile(user_email)
+    profile = _build_profile(user_email, skills, years)
+    for row in rows:
+        desc = row.get("description")
+        if desc and not row.get("_requirements"):
+            try:
+                row["_requirements"] = fit_score.extract_requirements(desc, row.get("title") or "")
+            except Exception:  # pragma: no cover - a bad body scores from the title alone
+                pass
+    _score_rows(rows, user_email, skills, years, profile=profile)
+    for row in rows:
+        row.pop("_requirements", None)
+        fit = row.get("fit")
+        if isinstance(fit, dict):
+            # The legacy top-level copies must agree with the score they sit beside.
+            row["fit_band"] = fit.get("band")
+            row["fit_confidence"] = fit.get("confidence")
+            row["score_version"] = fit.get("score_version")
+        else:
+            for k in ("fit_band", "fit_confidence", "score_version"):
+                row.pop(k, None)
+    rows.sort(key=lambda j: (-(j.get("match_score") or 0),
+                             j.get("days_ago") if j.get("days_ago") is not None else 99))
+    return rows
+
+
 _TITLE_NOISE = re.compile(
     r"\b(remote|hybrid|on[- ]?site|onsite|work from home|wfh|full[- ]?time|part[- ]?time|"
     r"contract|temporary|temp|intern(ship)?|permanent|perm|"
@@ -963,6 +1087,14 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         sources=CAREER_FEED_SOURCES if source == SOURCE_CAREER else None,
         industries=industries or None, tenants=companies or None,
         work_mode="remote" if remote_only else None) if d.get("job_id") not in seen_ids]
+    seen_ids = {d.get("job_id") for d in docs}
+    title_extra = [d for d in _title_slice(
+        window, titles, list(families or []), user_email,
+        source=None if source == SOURCE_CAREER else source,
+        sources=CAREER_FEED_SOURCES if source == SOURCE_CAREER else None,
+        industries=industries or None, tenants=companies or None,
+        work_mode="remote" if remote_only else None) if d.get("job_id") not in seen_ids]
+    docs = docs + title_extra
 
     # Geo is decided by the ONE shared rule (`us_geo`), not a country-code
     # check: most inventory rows carry no parsed country (boards ship a
@@ -1128,7 +1260,7 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         "include_unknown_salary": include_unknown_salary,
         "resume_skill_count": len(skills),
         "diagnostics": {"task_errors": 0, "served_from": "inventory",
-                        "candidates": len(docs)},
+                        "candidates": len(docs), "title_slice": len(title_extra)},
         "errors": [],
         "served_from": "inventory",
         "policy": policy_block,

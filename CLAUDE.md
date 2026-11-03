@@ -565,6 +565,34 @@ the board got slow. Now:
 
 Dropping both collections returns the board to scanning on every open.
 
+**One list, one scorer (2026-11-03).** The individual catalog tabs are gone from
+the UI; the board is the union of every vendor the crawler reads (Workday,
+Oracle, iCIMS and the 30+ `career-pages` vendors). Two rules keep it one list:
+
+- **The Big Tech crawl fetches only what the inventory lacks.**
+  `mnc_jobs_service.inventory_held_slugs` (one grouped read, cached 6 h) finds
+  the catalog employers with >= `MNC_INVENTORY_HELD_MIN` active postings - 60
+  of 69 when measured - and `resume_service.run_board_source` live-crawls only
+  the rest. Unreadable inventory = the whole catalog, as before.
+- **Every live-crawled card is scored like an inventory card**
+  (`inventory_feed.score_live_rows`): parsed resumes plus the requirement
+  profile its own description yields, through `_score_rows`. The crawls had
+  scored from a bare skill list (Big Tech median 40 vs 52-62).
+
+**Titled postings are retrieved across the window** (`_title_slice`). The
+window is the newest `CANDIDATE_LIMIT` rows - two or three days for a broad
+profile - and replaying every user's board against the week's crawl showed
+today 97-100% listed but the week 76-89%, every miss never retrieved. The
+slice asks for postings whose title contains one of the user's title phrases
+(`title_phrases` / `title_pattern`), older than the window, in the user's
+families (the compound index bounds it: 13k rows / 0.3 s per tab, against 173k
+/ 3 s without the family) and at the user's levels or an unstated one.
+
+`scripts/board_fidelity_audit.py` is the per-user check (read-only): it
+replays each board and compares it with every posting crawled in the window,
+per vendor, with the reason for each miss. `AUDIT_PYPATH` replays a
+candidate build's code against live data before it ships.
+
 ## Where the code actually runs
 
 **One Oracle Cloud box** (`jobpilot-ingest`, A1 VM, us-ashburn-1) runs everything:

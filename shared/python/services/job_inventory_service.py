@@ -2441,9 +2441,15 @@ def find_active_fresh(
     projection: Optional[Dict[str, Any]] = None,
     limit: int = 60,
     include_undated: bool = False,
+    title_pattern: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> List[Dict[str, Any]]:
     """THE retrieval path: active + fresh, optionally by role family.
+
+    `title_pattern` is a case-insensitive regex on `title_raw`, applied as a
+    FILTER on top of the indexed shape below - pass it with `role_families`
+    so the index still bounds what is examined (`inventory_feed._title_slice`
+    builds it from re.escape()d phrases, so user text is never an operator).
 
     `seniorities` is an EXACT set of bands (no unknown ride-along) and
     `posted_before` an upper bound on `posted_at`. Together they are how a
@@ -2574,6 +2580,8 @@ def find_active_fresh(
     tens = [t for t in (_safe_key(t, 120) for t in (tenants or [])) if t]
     if tens:
         query["tenant"] = {"$in": tens} if len(tens) > 1 else tens[0]
+    if isinstance(title_pattern, str) and title_pattern:
+        query["title_raw"] = {"$regex": title_pattern[:8000], "$options": "i"}
 
     proj = projection or _CARD_PROJECTION
     lim = max(1, int(limit))
