@@ -60,7 +60,7 @@ from services import jd_field_model, jd_profile
 
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.8"
+FIT_SCORE_VERSION = "fit-v2.9"
 
 # The cliff described below is REAL, and this is how 2.1 crosses it.
 #
@@ -126,9 +126,14 @@ FIT_SCORE_VERSION = "fit-v2.8"
 # 2.8 keeps the contract. `required_years` and `work_mode` take a second opinion
 # from `jd_field_model`, which reads "Full-time onsite required" and "5+ Years of
 # Commercial Banking" where the rules read nothing.
+#
+# 2.9 keeps the contract. Power-engineering aliases for how resumes phrase the
+# studies and drawings ("single-line diagrams", "contingency analysis",
+# "transformer modeling"), all onto EXISTING canonical skills, so stored
+# requirement profiles already name what they now match.
 _COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset(
     {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5", "fit-v2.6",
-     "fit-v2.7", "fit-v2.8"})
+     "fit-v2.7", "fit-v2.8", "fit-v2.9"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
@@ -367,7 +372,14 @@ SKILL_LEXICON: Dict[str, List[str]] = {
     # anything else.
     "power systems analysis": ["power systems analysis", "power system analysis",
                                "power flow", "load flow", "power system studies",
-                               "power systems studies", "power system modeling"],
+                               "power systems studies", "power system modeling",
+                               # How resumes actually phrase the studies (2026-11-03:
+                               # 4 of 26 listed skills read on a live power résumé).
+                               "electrical load analysis", "electrical load calculation",
+                               "electrical load calculations", "contingency analysis",
+                               "transient stability", "stability studies",
+                               "transmission system modeling", "transmission planning",
+                               "reactive power compensation"],
     "short circuit analysis": ["short circuit analysis", "short-circuit analysis",
                                "short circuit studies", "fault analysis"],
     "arc flash": ["arc flash", "arc-flash", "incident energy analysis", "ieee 1584"],
@@ -401,10 +413,16 @@ SKILL_LEXICON: Dict[str, List[str]] = {
                              "generator interconnection", "der interconnection"],
     "electrical design": ["electrical design", "one-line diagram", "one line diagram",
                           "single line diagram", "single-line diagram",
+                          "one-line diagrams", "one line diagrams",
+                          "single line diagrams", "single-line diagrams",
+                          "panel schedules", "branch circuit", "branch circuits",
+                          "power distribution design", "power distribution systems",
+                          "feeder sizing", "conductor sizing", "voltage drop",
                           "electrical drawings", "wiring diagrams"],
     "electrical codes": ["national electrical code", "nfpa 70", "nfpa 70e", "nesc",
-                         "ieee standards"],
+                         "nfpa standards", "ieee standards"],
     "transformer design": ["transformer design", "power transformers",
+                           "transformer modeling", "transformer modelling",
                            "transformer sizing", "distribution transformers"],
     "switchgear": ["switchgear", "switchboards", "motor control centers",
                    "motor control center"],

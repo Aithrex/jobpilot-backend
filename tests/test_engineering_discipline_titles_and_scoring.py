@@ -301,8 +301,27 @@ class TestLexiconCollisions:
     def test_no_false_power_skill(self, text, absent):
         assert absent not in fit_score.find_skills(text)
 
+    @pytest.mark.parametrize("phrase,skill", [
+        ("single-line diagrams", "electrical design"),
+        ("panel schedules", "electrical design"),
+        ("voltage drop calculations", "electrical design"),
+        ("contingency analysis", "power systems analysis"),
+        ("transient stability studies", "power systems analysis"),
+        ("electrical load calculations", "power systems analysis"),
+        ("transformer modeling", "transformer design"),
+        ("nfpa standards", "electrical codes"),
+    ])
+    def test_resume_phrasings_of_power_work_are_read(self, phrase, skill):
+        """A live power resume read 4 of 26 listed skills (2026-11-03)."""
+        assert skill in fit_score.find_skills(phrase)
+
+    def test_voltage_regulation_alone_is_not_a_power_study(self):
+        # PMIC and power-electronics postings say it too.
+        assert "power systems analysis" not in fit_score.find_skills("LDO voltage regulation design")
+
     def test_version_bump_keeps_stored_profiles_valid(self):
-        assert fit_score.FIT_SCORE_VERSION == "fit-v2.8"
+        assert fit_score.FIT_SCORE_VERSION == "fit-v2.9"
+        assert "fit-v2.8" in fit_score._COMPATIBLE_REQUIREMENT_VERSIONS
         assert "fit-v2.3" in fit_score._COMPATIBLE_REQUIREMENT_VERSIONS
         assert "fit-v2.6" in fit_score._COMPATIBLE_REQUIREMENT_VERSIONS
         assert "fit-v2.7" in fit_score._COMPATIBLE_REQUIREMENT_VERSIONS
