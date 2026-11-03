@@ -973,6 +973,22 @@ def test_a_stored_teaser_is_fetched_on_a_later_tick(db, small_registry, monkeypa
     assert len(calls) == len(members)
 
 
+@pytest.mark.parametrize("place,country,code", [
+    ("Ehningen, DE", "Germany", "DE"),
+    ("Markham, CA", "Canada", "CA"),
+    ("Markham, CA", "CA", "CA"),
+    ("Tel Aviv, IL", "Israel", "IL"),
+    ("Bogota, CO", "Colombia", "CO"),
+    ("San Jose, CA", "United States", "US"),   # agrees: untouched
+    ("Austin, TX", "Canada", "US"),            # TX is not Canada's code: untouched
+])
+def test_a_country_code_that_collides_with_a_state_follows_the_board(place, country, code):
+    """IBM prints "Ehningen, DE" beside country Germany. Read alone DE is
+    Delaware, so German and Canadian requisitions filled US-only boards."""
+    got = w._location_with_stated_country(place, country)
+    assert inv.normalize_locations([got])[0]["country_code"] == code
+
+
 @pytest.mark.parametrize("place,country,expected,code", [
     ("San Jose", "United States of America", "San Jose, United States of America", "US"),
     ("Seattle", "US", "Seattle, US", "US"),

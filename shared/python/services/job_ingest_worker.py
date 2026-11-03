@@ -2407,7 +2407,18 @@ def _location_with_stated_country(location: Any, country: Any) -> Any:
     if not place or not stated or ";" in place:
         return location
     try:
-        if inv.normalize_location(place).get("country_code"):
+        parsed = inv.normalize_location(place).get("country_code")
+        stated_code = inv.normalize_country(stated)
+        tail = place.rsplit(",", 1)[-1].strip().upper() if "," in place else ""
+        if parsed and stated_code and parsed != stated_code and tail == stated_code:
+            # "City, XX" where XX IS the country the board states. IBM prints
+            # "Ehningen, DE" and "Markham, CA" beside country Germany / Canada;
+            # read alone, DE and CA are US state codes, so German and Canadian
+            # requisitions filed as Delaware and California and filled US-only
+            # boards (live, 2026-11-03). Only that exact collision is
+            # overridden: "Austin, TX" beside a stated Canada stays Texas.
+            return {"raw": place, "country": stated}
+        if parsed:
             return location
         joined = f"{place}, {stated}"
         if inv.normalize_location(joined).get("country_code"):
