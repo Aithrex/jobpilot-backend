@@ -177,6 +177,22 @@ class TestInternshipsKeepTheirFamily:
                       "Senior Hardware Reliability Engineer, Reliability Engineering"):
             assert fs.classify_role(title) == "hardware_engineering", title
 
+    def test_hyphenated_role_words_are_read(self):
+        """"Full-Stack Developer" and "Back-End Engineer" named no family, so
+        they were stored as `other` (or whatever the body suggested: teaching,
+        retail) and left every software board - ~200 live postings."""
+        for title in ("Full-Stack Developer", "Back-End Engineering Intern",
+                      "Front-End Developer, Dynamic Ad Creative", "Angular Front- End Developer",
+                      "Staff Back-end Engineer [L6-1] (GenAI Creative)"):
+            assert fs.classify_role(title) == "software_engineering", title
+            assert inv.role_family_of(title) == "software_engineering", title
+        assert fs.classify_role("Dev-Ops Engineer") == "devops"
+        # Phrases that are SPELLED with a hyphen keep their family, and a
+        # spaced dash still separates a role from its team.
+        assert fs.classify_role("Pre-Sales Executive") == "sales"
+        assert fs.classify_role("Electro-Mechanical Engineer") == "hardware_engineering"
+        assert fs.classify_role("Software Engineer - Test Frameworks & Tooling") == "software_engineering"
+
     def test_the_physical_veto_still_stands_where_it_should(self):
         for title in ("Staff Hardware Reliability Engineer", "Corrosion Reliability Engineer II",
                       "Senior Reliability Engineer - Power Electronics",
