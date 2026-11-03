@@ -415,7 +415,10 @@ def test_additional_skills_enrich_the_dictionary_and_leave_the_score_alone(monke
     reqs = fit_score.extract_requirements(
         "Requirements: Databricks, ISO 13485 and change management.", "Engineer")
     fit_score._extract_requirements_cached.cache_clear()
-    assert {"databricks", "iso 13485", "change management"} <= set(reqs["jd"]["additional_skills"])
+    # A model-read skill the shared dictionary KNOWS is a scored requirement
+    # (skill-dict-1.0 added Databricks); the rest enrich the dictionary only.
+    assert "databricks" in reqs["required_skills"]
+    assert {"iso 13485", "change management"} <= set(reqs["jd"]["additional_skills"])
     assert "iso 13485" not in reqs["required_skills"]
     profile = jd_profile.build("Requirements: Databricks and Python.", "Engineer")
     assert "databricks" in profile["skills"]["technical"]
