@@ -169,7 +169,13 @@ NORMALIZATION_VERSION = 4
 #
 # v13: `jd-1.4.0`. `required_years` and `work_mode` take a second opinion from
 # `jd_field_model`, so both can change on a stored posting and scores with them.
-EXTRACTOR_VERSION = 13
+#
+# v14: skill-dict-1.0 (`fit-v2.10`). The shared skill dictionary reads Spring
+# Boot, FastAPI, Django, LangChain, S3/EC2 ... in JD text, so `required_skills`
+# and `preferred_skills` change on stored postings. Ship ONLY with the stored-
+# body re-read (`job_ingest_worker._reread_stored`): without it a bump waits on
+# a detail fetch for every unchanged posting, which for Workday is never.
+EXTRACTOR_VERSION = 14
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1

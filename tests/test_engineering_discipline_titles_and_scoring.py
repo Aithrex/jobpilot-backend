@@ -320,7 +320,8 @@ class TestLexiconCollisions:
         assert "power systems analysis" not in fit_score.find_skills("LDO voltage regulation design")
 
     def test_version_bump_keeps_stored_profiles_valid(self):
-        assert fit_score.FIT_SCORE_VERSION == "fit-v2.9"
+        assert fit_score.FIT_SCORE_VERSION == "fit-v2.10"
+        assert "fit-v2.9" in fit_score._COMPATIBLE_REQUIREMENT_VERSIONS
         assert "fit-v2.8" in fit_score._COMPATIBLE_REQUIREMENT_VERSIONS
         assert "fit-v2.3" in fit_score._COMPATIBLE_REQUIREMENT_VERSIONS
         assert "fit-v2.6" in fit_score._COMPATIBLE_REQUIREMENT_VERSIONS

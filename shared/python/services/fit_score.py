@@ -60,7 +60,7 @@ from services import jd_field_model, jd_profile
 
 logger = logging.getLogger(__name__)
 
-FIT_SCORE_VERSION = "fit-v2.9"
+FIT_SCORE_VERSION = "fit-v2.10"
 
 # The cliff described below is REAL, and this is how 2.1 crosses it.
 #
@@ -131,9 +131,15 @@ FIT_SCORE_VERSION = "fit-v2.9"
 # studies and drawings ("single-line diagrams", "contingency analysis",
 # "transformer modeling"), all onto EXISTING canonical skills, so stored
 # requirement profiles already name what they now match.
+#
+# 2.10 keeps the contract and widens the shared skill dictionary
+# (skill-dict-1.0): frameworks, cloud services, AI tooling and practice
+# skills the resumes name (46% -> 71% of 1,343 live resume skills read), the
+# resume-only exact items (`_RESUME_ITEM_ALIASES`) and the IAM alias that had
+# been a backspace. Stored JD profiles are re-read by EXTRACTOR_VERSION 14.
 _COMPATIBLE_REQUIREMENT_VERSIONS: frozenset = frozenset(
     {"fit-v2.0", "fit-v2.1", "fit-v2.2", "fit-v2.3", "fit-v2.4", "fit-v2.5", "fit-v2.6",
-     "fit-v2.7", "fit-v2.8", "fit-v2.9"})
+     "fit-v2.7", "fit-v2.8", "fit-v2.9", "fit-v2.10"})
 
 # Component maxima. The sum is exactly 100; `test_fit_score_v2` asserts it.
 COMPONENT_MAX: Dict[str, int] = {
@@ -259,7 +265,8 @@ SKILL_LEXICON: Dict[str, List[str]] = {
     "scala": ["scala"],
     "perl": ["perl"],
     "matlab": ["matlab"],
-    "sql": ["sql", "t-sql", "pl/sql"],
+    "sql": ["sql", "t-sql", "pl/sql", "window functions", "common table expressions",
+            "query optimization", "query tuning", "stored procedures"],
     "bash": ["bash", "shell scripting", "shell script"],
     "vba": ["vba", "visual basic"],
     # --- web / frontend ---------------------------------------------------
@@ -288,28 +295,47 @@ SKILL_LEXICON: Dict[str, List[str]] = {
     "data modeling": ["data modeling", "data modelling", "dimensional modeling"],
     "data warehouse": ["data warehouse", "data warehousing", "redshift", "bigquery"],
     # --- cloud / infra ----------------------------------------------------
-    "aws": ["aws", "amazon web services"],
-    "azure": ["azure"],
-    "gcp": ["gcp", "google cloud"],
+    "aws": ["aws", "amazon web services",
+            # Services named without "AWS" in front: a resume that lists "S3,
+            # EC2, CloudFormation" and a JD asking for them both mean AWS.
+            "amazon s3", "aws s3", "ec2", "amazon ec2", "cloudformation", "cloudwatch",
+            "aws lambda", "amazon ecs", "aws ecs",
+            "amazon rds", "aws rds", "aws glue", "amazon kinesis", "aws kinesis",
+            "eventbridge", "step functions", "amazon sqs", "aws sqs", "amazon sns",
+            "route 53", "amazon bedrock", "aws bedrock", "aws cdk", "aws iam"],
+    "azure": ["azure", "azure data factory", "azure synapse", "azure devops",
+              "azure functions", "cosmos db", "cosmosdb", "event hubs"],
+    "gcp": ["gcp", "google cloud", "google cloud platform", "cloud pub/sub",
+            "google pub/sub", "vertex ai", "cloud run"],
     "docker": ["docker", "containerization", "containerisation"],
-    "kubernetes": ["kubernetes", "k8s"],
+    "kubernetes": ["kubernetes", "k8s", "helm chart", "helm charts", "openshift",
+                   "eks", "amazon eks", "aws eks", "aks", "azure kubernetes service", "gke"],
     "terraform": ["terraform"],
     "ci/cd": ["ci/cd", "cicd", "continuous integration", "continuous delivery",
               "jenkins", "github actions", "gitlab ci"],
     "linux": ["linux", "unix"],
     "git": ["git", "github", "gitlab", "version control"],
     "microservices": ["microservices", "microservice"],
-    "serverless": ["serverless", "lambda functions"],
-    "monitoring": ["monitoring", "observability", "datadog", "prometheus", "grafana"],
+    "serverless": ["serverless", "lambda functions", "azure functions", "cloud functions"],
+    "monitoring": ["monitoring", "observability", "datadog", "prometheus", "grafana",
+                   "opentelemetry", "distributed tracing", "elk stack", "kibana",
+                   "new relic", "dynatrace", "appdynamics"],
     # --- data science / ml ------------------------------------------------
-    "machine learning": ["machine learning", "ml models"],
-    "deep learning": ["deep learning", "neural networks"],
+    "machine learning": ["machine learning", "ml models", "feature engineering",
+                         "supervised learning", "unsupervised learning",
+                         "predictive modeling", "predictive modelling",
+                         "linear regression", "logistic regression", "k-means",
+                         "random forest", "random forests", "dbscan"],
+    "deep learning": ["deep learning", "neural networks", "neural network",
+                      "convolutional neural networks", "cnns", "rnns", "lstm", "lstms"],
     "nlp": ["nlp", "natural language processing"],
     "pytorch": ["pytorch"],
     "tensorflow": ["tensorflow", "keras"],
     "scikit-learn": ["scikit-learn", "sklearn"],
     "pandas": ["pandas", "numpy"],
-    "statistics": ["statistics", "statistical analysis", "statistical modeling"],
+    "statistics": ["statistics", "statistical analysis", "statistical modeling",
+                   "hypothesis testing", "regression analysis", "statsmodels",
+                   "exploratory data analysis"],
     "a/b testing": ["a/b testing", "ab testing", "experimentation"],
     "data visualization": ["data visualization", "data visualisation", "tableau",
                            "power bi", "powerbi", "looker"],
@@ -352,7 +378,7 @@ SKILL_LEXICON: Dict[str, List[str]] = {
     # --- embedded ---------------------------------------------------------
     "embedded c": ["embedded c", "bare metal", "baremetal"],
     "rtos": ["rtos", "freertos", "zephyr", "real time operating system"],
-    "firmware": ["firmware", "bootloader", "board bring-up", "board bringup"],
+    "firmware": ["firmware", "microcontroller", "microcontrollers", "bootloader", "board bring-up", "board bringup"],
     "device drivers": ["device driver", "device drivers", "kernel driver"],
     "embedded protocols": ["i2c", "spi", "uart", "can bus", "modbus", "mqtt"],
     "hardware debug": ["oscilloscope", "logic analyzer", "logic analyser",
@@ -438,7 +464,7 @@ SKILL_LEXICON: Dict[str, List[str]] = {
                         "trajectory planning"],
     "sensor fusion": ["sensor fusion", "kalman filter", "extended kalman",
                       "state estimation"],
-    "computer vision": ["computer vision", "opencv", "image processing",
+    "computer vision": ["computer vision", "opencv", "optical character recognition", "image processing",
                         "object detection", "point cloud"],
     "control systems": ["control systems", "pid control", "model predictive control",
                         "closed loop control"],
@@ -464,7 +490,7 @@ SKILL_LEXICON: Dict[str, List[str]] = {
                           "quantum algorithms", "qubit", "qubits"],
     "quantum sdk": ["qiskit", "cirq", "pennylane", "braket", "quantum sdk"],
     "quantum error correction": ["quantum error correction", "surface code",
-                                 "logical qubit", "\bqec\b"],
+                                 "logical qubit", "qec"],   # was "\\bqec\\b" in a plain string: a backspace
     "quantum control": ["pulse level", "pulse-level", "qubit control",
                         "quantum control", "cryo cmos"],
     "cryogenics": ["cryogenic", "cryogenics", "dilution refrigerator",
@@ -475,7 +501,7 @@ SKILL_LEXICON: Dict[str, List[str]] = {
     "distributed systems": ["distributed systems", "consensus", "raft protocol",
                             "sharding", "replication"],
     # --- ml platform ------------------------------------------------------
-    "mlops": ["mlops", "llmops", "model serving", "feature store",
+    "mlops": ["mlops", "mlflow", "kubeflow", "sagemaker pipelines", "tensorboard", "llmops", "model serving", "feature store",
               "model registry", "model monitoring"],
     "llm": ["llm", "large language model", "large language models",
             "transformers", "fine tuning", "fine-tuning", "rag",
@@ -487,7 +513,7 @@ SKILL_LEXICON: Dict[str, List[str]] = {
               "dependency scanning", "secure code review"],
     "cryptography": ["cryptography", "cryptographic", "key management",
                      "pki", "tls", "encryption at rest"],
-    "iam": ["identity and access management", "\biam\b", "oauth", "saml",
+    "iam": ["identity and access management", "iam", "oauth", "saml",
             "single sign on", "sso"],
     # --- mobile -----------------------------------------------------------
     "ios": ["ios development", "swiftui", "uikit", "xcode"],
@@ -553,7 +579,7 @@ SKILL_LEXICON: Dict[str, List[str]] = {
     "payroll": ["payroll", "payroll processing"],
     "quickbooks": ["quickbooks"],
     "sap": ["sap", "netsuite", "oracle financials", "erp system"],
-    "excel": ["excel", "microsoft excel", "spreadsheets", "pivot tables", "vlookup"],
+    "excel": ["excel", "microsoft excel", "power query", "spreadsheets", "pivot tables", "vlookup"],
     "accounts analysis": ["financial analysis", "cost analysis", "profitability analysis"],
     # --- education / teaching --------------------------------------------
     "lesson planning": ["lesson plan", "lesson planning", "instructional planning"],
@@ -612,6 +638,59 @@ SKILL_LEXICON: Dict[str, List[str]] = {
                               "troubleshooting equipment"],
     "forklift": ["forklift", "pallet jack"],
     "blueprint reading": ["blueprint reading", "read blueprints", "schematics"],
+    # --- frameworks, platforms and practice (skill-dict-1.0, 2026-11-03) --
+    # Read on all 28 live resumes, the scorer recognised 647 of 1,343 listed
+    # skills (48%): Spring Boot, FastAPI, Flask, Django, LangChain, Hugging
+    # Face, JWT, S3 ... none existed, so a JD asking for Spring Boot and a
+    # resume holding it matched on nothing. Every alias here is a form that
+    # cannot mean anything else in a JD: bare "spring" (Spring 2027), "express"
+    # (American Express), "lambda", "iam" stay out, and resume ITEMS that are
+    # exactly those words are read by `_RESUME_ITEM_ALIASES` instead.
+    "spring boot": ["spring boot", "springboot", "spring framework", "spring mvc",
+                    "spring cloud", "spring data", "spring data jpa", "spring security",
+                    "spring webflux", "reactive spring"],
+    "fastapi": ["fastapi"],
+    "flask": ["flask"],
+    "django": ["django", "django rest framework"],
+    "express.js": ["express.js", "expressjs", "express js"],
+    "redux": ["redux", "redux toolkit"],
+    "hibernate": ["hibernate", "jpa"],
+    "asp.net": ["asp.net", "asp.net core", "asp.net mvc", "asp.net web api",
+                "entity framework", "entity framework core", "ef core", "blazor"],
+    "langchain": ["langchain", "lang chain", "langgraph", "llamaindex", "llama index",
+                  "crewai", "autogen", "langflow", "semantic kernel"],
+    "hugging face": ["hugging face", "huggingface", "bert", "roberta"],
+    "vector databases": ["vector database", "vector databases", "vector search",
+                         "vector store", "pinecone", "faiss", "pgvector", "chromadb",
+                         "chroma db", "weaviate", "milvus", "vector embeddings"],
+    "xgboost": ["xgboost", "lightgbm", "catboost"],
+    "databricks": ["databricks", "delta lake", "medallion architecture"],
+    "firebase": ["firebase"],
+    "flutter": ["flutter"],
+    "message queues": ["rabbitmq", "activemq", "celery", "message queue", "message queues",
+                       "message broker", "event-driven architecture",
+                       "event driven architecture"],
+    "authentication": ["jwt", "json web token", "json web tokens", "oauth2", "oauth 2.0",
+                       "openid connect", "rbac", "role-based access control",
+                       "role based access control"],
+    "unit testing": ["junit", "jest", "mockito", "vitest", "mocha", "integration testing",
+                     "test-driven development", "test driven development", "unit tests"],
+    "api testing": ["postman", "api testing", "supertest", "rest-assured"],
+    "data structures & algorithms": ["data structures", "data structures and algorithms",
+                                     "data structures & algorithms", "algorithms and data structures"],
+    "object-oriented design": ["object-oriented design", "object oriented design",
+                               "object-oriented programming", "object oriented programming",
+                               "oop", "design patterns"],
+    # Bare "system design" is HVAC, controls and instructional design as often
+    # as software (206 non-tech JDs in 30k): only the software forms.
+    "system design": ["software system design", "distributed system design",
+                      "large-scale system design", "scalable systems",
+                      "high-level design", "low-level design"],
+    "sdlc": ["sdlc", "software development life cycle", "software development lifecycle"],
+    "code review": ["code review", "code reviews"],
+    "workday hcm": ["workday hcm", "core hcm", "workday studio", "workday integrations",
+                    "workday security", "workday reporting"],
+    "c": ["c programming", "c language", "ansi c"],   # bare "c": _SHORT_SKILLS
     # --- universal --------------------------------------------------------
     "communication": ["communication skills", "written communication",
                       "verbal communication", "strong communicator"],
@@ -636,12 +715,57 @@ _SHORT_SKILLS: Dict[str, Tuple[re.Pattern, re.Pattern]] = {
         re.compile(r"(program|language|develop|engineer|backend|back end|"
                    r"python|java|rust|scala|kotlin|c\+\+|microservice|/|,)"),
     ),
+    # "C" beside C++, firmware or embedded work is the language; "C-suite",
+    # "Grade C" and "Vitamin C" carry no such cue.
+    "c": (
+        # Not after "." or "/": "8 U.S.C. 1324b" and CNC "N/C programming".
+        re.compile(r"(?<![A-Za-z0-9_./])c(?![A-Za-z0-9_+#\-.])"),
+        re.compile(r"(c\+\+|embedded|firmware|microcontroller|rtos|assembly|"
+                   r"programming|python|java|rust|kernel|linux)"),
+    ),
     "r": (
         re.compile(r"(?<![A-Za-z0-9_])r(?![A-Za-z0-9_])"),
         re.compile(r"(python|sas|spss|stata|statistic|matlab|analytics|/|,)"),
     ),
 }
 _SHORT_WINDOW = 40
+
+
+#: A resume SKILL ITEM that is exactly one of these words names the skill:
+#: inside a skills list "C", "Go" and "Spring" can mean nothing else, while
+#: in a JD's running text they can ("Spring 2027 internship", "C-suite").
+#: Read only by `resume_item_skills`, never by `find_skills`.
+_RESUME_ITEM_ALIASES: Dict[str, str] = {
+    "c": "c", "go": "go", "r": "r", "spring": "spring boot", "express": "express.js",
+    "node": "node.js", "s3": "aws", "ec2": "aws", "lambda": "serverless", "glue": "aws",
+    "iam": "iam", "vpc": "aws", "rds": "aws", "sqs": "aws", "kinesis": "aws",
+    "word": "microsoft office", "powerpoint": "microsoft office", "rest": "rest api",
+    "llms": "llm", "gen ai": "llm", "genai": "llm", "generative ai": "llm",
+    "agentic ai": "llm", "prompt engineering": "llm", "openai": "llm", "claude": "llm",
+    "matplotlib": "data visualization", "seaborn": "data visualization",
+    "plotly": "data visualization", "d3.js": "data visualization",
+    "algorithms": "data structures & algorithms", "dsa": "data structures & algorithms",
+    "unit testing": "unit testing", "pytest": "unit testing",
+    "ctes": "sql", "embeddings": "llm", "claude code": "llm", "cursor": "llm",
+    "agentic workflows": "llm", "model context protocol (mcp)": "llm", "mcp": "llm",
+    "langsmith": "langchain",
+}
+
+
+def resume_item_skills(items) -> Set[str]:
+    """Canonical skills named by a resume's skill ITEMS: each item's exact
+    form first (`_RESUME_ITEM_ALIASES`, the bare canonical name), then
+    whatever the shared lexicon reads inside it."""
+    out: Set[str] = set()
+    for item in items or []:
+        raw = str(item or "")
+        key = " ".join(_norm(raw).split()).strip(" .;:")
+        if key in _RESUME_ITEM_ALIASES:
+            out.add(_RESUME_ITEM_ALIASES[key])
+        elif key in SKILL_LEXICON:
+            out.add(key)
+        out.update(find_skills(raw))
+    return out
 
 
 def _compile_lexicon() -> Tuple[re.Pattern, Dict[str, str]]:
@@ -2624,6 +2748,27 @@ def _precomputed_requirements(stored: Any) -> Optional[Dict[str, Any]]:
 # Resume profile
 # ---------------------------------------------------------------------------
 
+def _resume_skill_items(resume: Dict[str, Any]) -> List[str]:
+    """The resume's skill list as separate items (grouped or flat)."""
+    skills = (resume or {}).get("skills")
+    items: List[str] = []
+    if isinstance(skills, dict):
+        for group in skills.values():
+            if isinstance(group, (list, tuple)):
+                items.extend(str(x) for x in group)
+            elif group:
+                items.extend(p for p in re.split(r"[,;|]", str(group)) if p.strip())
+    elif isinstance(skills, (list, tuple)):
+        for x in skills:
+            if isinstance(x, dict):
+                items.append(str(x.get("name") or x.get("skill") or ""))
+            else:
+                items.append(str(x))
+    elif skills:
+        items.extend(p for p in re.split(r"[,;|]", str(skills)) if p.strip())
+    return [i for i in items if i.strip()]
+
+
 def _resume_text_parts(resume: Dict[str, Any]) -> Tuple[str, str]:
     """(experience_text, listed_skills_text).
 
@@ -2764,7 +2909,7 @@ def build_resume_profile(resume: Dict[str, Any],
         if families:
             break
         families = {f for f in (classify_role(t) for t in fallback) if f}
-    listed = set(find_skills(skills_text))
+    listed = set(find_skills(skills_text)) | resume_item_skills(_resume_skill_items(resume))
     applied = set(find_skills(exp_text))
     # Computed once: `level` reads it too, so a second `_resume_years` call
     # here could silently disagree with the `years` the profile reports.
@@ -2952,12 +3097,7 @@ def _profile_from_skills(resume_skills: Sequence[str],
     """Degraded profile for callers that only have a skill list (the feed
     pipelines). Every skill counts as a LISTED claim, never as applied
     experience, so a skills-only caller can never out-score a real resume."""
-    canon: Set[str] = set()
-    for s in resume_skills or []:
-        canon.update(find_skills(str(s)))
-        n = str(s or "").strip().lower()
-        if n in SKILL_LEXICON:
-            canon.add(n)
+    canon: Set[str] = resume_item_skills(resume_skills or [])
     title_list = [str(t) for t in (titles or []) if str(t or "").strip()]
     return {
         "experience_skills": set(),
