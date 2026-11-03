@@ -57,10 +57,11 @@ so, rather than masquerading as an employer with no openings.
 """
 from __future__ import annotations
 
+import html as _html
 import json
 import re
 from typing import Any, Dict, Iterator, List, Optional, Sequence
-from urllib.parse import urlparse
+from urllib.parse import unquote as _unquote, urlparse
 
 from services.ats_providers.base import (DATE_EXACT, DATE_UNKNOWN,
                                          STATUS_BLOCKED, STATUS_DEAD,
@@ -94,8 +95,38 @@ def _search_body(page: int, keyword: str = "") -> Dict[str, Any]:
     }
 
 
+_INITIAL_HISTORY_RE = re.compile(r'name="initialHistory"[^>]*value="([^"]*)"', re.IGNORECASE)
+_UNAVAILABLE_RE = re.compile(r'action="unavailablerequisition\.ftl"|Career Section Unavailable',
+                             re.IGNORECASE)
+
+
+def _description_from_detail_page(page: str) -> str:
+    """The description inside a Taleo `jobdetail.ftl` page, or "".
+
+    `initialHistory` is a `!|!`-separated list of URL-encoded fields. The
+    posting's rich-text sections are the long ones marked `!*!`: HDR keeps
+    description and qualifications apart, AAR and BAE print each section
+    twice, and location lists carry no marker. So: every marked section over
+    150 characters, in order, exact repeats dropped. A closed requisition or a
+    career section in maintenance prints none."""
+    if not page or _UNAVAILABLE_RE.search(page):
+        return ""
+    m = _INITIAL_HISTORY_RE.search(page)
+    if not m:
+        return ""
+    seen, sections = set(), []
+    for part in _html.unescape(m.group(1)).split("!|!"):
+        if not part.startswith("!*!") or len(part) <= 150 or part in seen:
+            continue
+        seen.add(part)
+        sections.append(html_to_text(_unquote(part[3:]).replace("\\:", ":")))
+    text = "\n\n".join(t for t in sections if t.strip())
+    return text if len(text) >= 200 else ""
+
+
 class TaleoProvider(AtsProvider):
     vendor = "taleo"
+    detail_revision = 2          # route fixed 2026-11-03
     label = "Taleo"
 
     termless = True
@@ -350,34 +381,34 @@ class TaleoProvider(AtsProvider):
 
     def fetch_detail(self, endpoint: Endpoint, job: RawJob,
                      ctx: FetchContext) -> Optional[RawJob]:
+        """The posting's own page, which carries the body in `initialHistory`.
+
+        This used to ask `rest/jobboard/jobDetail`, which does not exist: it is
+        a 404 on every zone, with or without the portal (re-probed 2026-11-03
+        on baesystems, hdr and aarcorp), so all 431 active Taleo postings were
+        title-only after 5-14 failed attempts each. The section-less
+        `jobdetail.ftl?job=` URL redirects to the zone's real career section
+        (`/2/` at BAE and AAR, `/ex/` at HDR) and that page prints the whole
+        description, URL-encoded, in its `initialHistory` hidden field.
+        """
         zone = self._zone(endpoint)
-        portal = self._portal(endpoint)
         if not zone or not job.source_job_id:
             return None
-        status, payload = ctx.get_json(
-            f"https://{zone}.taleo.net/careersection/rest/jobboard/jobDetail",
-            params={"lang": "en", "portal": portal, "jobId": job.source_job_id},
-            timeout=self.policy.detail_timeout, vendor=self.vendor,
-            extra_headers={"X-Requested-With": "XMLHttpRequest"})
-        if self.policy.is_challenge(status):
+        status, page = ctx.get_text(
+            f"https://{zone}.taleo.net/careersection/jobdetail.ftl",
+            params={"job": job.source_job_id, "lang": "en"},
+            timeout=self.policy.detail_timeout, vendor=self.vendor)
+        if self.policy.is_challenge(status, page or ""):
             raise ChallengeError(self.vendor, status)
-        if status != 200 or not isinstance(payload, dict):
+        if status != 200 or not page:
             return None
-
-        detail = payload.get("job") if isinstance(payload.get("job"), dict) \
-            else payload
-        description = html_to_text(" ".join(
-            str(detail.get(k) or "") for k in
-            ("description", "jobDescription", "briefDescription",
-             "qualification", "jobQualification")))
-        posted = to_iso(detail.get("postedDate") or detail.get("startDate") or "")
-        if not description and not posted:
+        description = _description_from_detail_page(page)
+        if not description:
             return None
         return RawJob(
             source_job_id=job.source_job_id, title=job.title,
             apply_url=job.apply_url, description=description[:40000],
-            posted_at=posted,
-            date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
+            date_confidence=DATE_UNKNOWN,
         )
 
     # -- validation ----------------------------------------------------------

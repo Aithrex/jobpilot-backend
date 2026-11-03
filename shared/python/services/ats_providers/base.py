@@ -471,6 +471,10 @@ class AtsProvider:
     termless: bool = True
     #: Does a second per-posting request add anything?
     has_detail: bool = False
+    #: Bumped when the detail route is FIXED. A posting's recorded detail
+    #: misses count only under the revision they happened in, so a fix
+    #: re-opens every posting the broken route had given up on.
+    detail_revision: int = 1
     #: ADR-001 confidence of `posted_at` produced by `list_jobs`.
     date_confidence: str = DATE_UNKNOWN
     #: Hosts the crawler may call for LIST/DETAIL data. "." prefix == suffix match.

@@ -2657,6 +2657,16 @@ def _listing_description_is_complete(row: Dict[str, Any], member: Dict[str, Any]
     return True
 
 
+def _detail_revision(member: Dict[str, Any]) -> int:
+    """The member's provider `detail_revision` (1 when it has none)."""
+    registry = _ats_registry()
+    provider = registry.get(_vendor_of(member)) if registry is not None else None
+    try:
+        return max(1, int(getattr(provider, "detail_revision", 1) or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _owes_a_detail_fetch(existing: Dict[str, Any], row: Dict[str, Any],
                          member: Dict[str, Any]) -> bool:
     """A stored posting whose body is only the listing teaser.
@@ -2671,7 +2681,11 @@ def _owes_a_detail_fetch(existing: Dict[str, Any], row: Dict[str, Any],
         return False
     try:
         attempts = int(existing.get("detail_misses") or 0)
+        recorded_under = int(existing.get("detail_revision") or 1)
     except (TypeError, ValueError):
+        attempts, recorded_under = 0, 1
+    if recorded_under < _detail_revision(member):
+        # Misses from a route since fixed say nothing about the fixed one.
         attempts = 0
     if attempts >= DETAIL_MAX_ATTEMPTS:
         return False
@@ -2686,7 +2700,8 @@ def _owes_a_detail_fetch(existing: Dict[str, Any], row: Dict[str, Any],
     return _needs_http_detail(row, member)
 
 
-def _listing_implies_same_content(existing: Dict[str, Any], row: Dict[str, Any]) -> bool:
+def _listing_implies_same_content(existing: Dict[str, Any], row: Dict[str, Any], *,
+                                  ignore_reader: bool = False) -> bool:
     """True when the LISTING fields prove `content_hash` cannot have moved.
 
     `inv.compute_content_hash` digests exactly: employer_id, normalized title,
@@ -2715,7 +2730,8 @@ def _listing_implies_same_content(existing: Dict[str, Any], row: Dict[str, Any])
     # inside `upsert_posting`, which an unchanged posting never reaches - so
     # without this line an EXTRACTOR_VERSION bump silently does nothing to the
     # existing inventory, which is the opposite of what that constant is for.
-    if (existing.get("requirements") or {}).get("extractor_version") != inv.EXTRACTOR_VERSION:
+    if not ignore_reader and \
+            (existing.get("requirements") or {}).get("extractor_version") != inv.EXTRACTOR_VERSION:
         return False
     if existing.get("title_normalized") != inv.normalize_title(row.get("title")):
         return False
@@ -2726,6 +2742,63 @@ def _listing_implies_same_content(existing: Dict[str, Any], row: Dict[str, Any])
     old_keys = sorted((l or {}).get("key", "") for l in (existing.get("locations") or []))
     new_keys = sorted(l["key"] for l in inv.normalize_locations(row.get("locations")))
     return old_keys == new_keys
+
+
+#: Stored postings one shard tick may re-read from the body we already hold,
+#: because only the READER changed. One local object-store read and one regex
+#: pass each (~20 ms); no request reaches the employer.
+REREAD_PER_SHARD = _env_int("JOB_INGEST_REREAD_PER_SHARD", 300)
+
+
+def _only_reader_is_stale(existing: Optional[Dict[str, Any]], row: Dict[str, Any]) -> bool:
+    """The listing proves the body has not moved; only the extractor has.
+
+    An EXTRACTOR_VERSION bump used to make every unchanged posting "need" a
+    detail fetch, so the upgrade reached the inventory at the speed of the
+    detail budget - which, for Workday, is never: measured 2026-11-03, 74,660
+    active Workday postings still carried a pre-`jd_profile` reading (v8) and
+    67,223 of them had the very body the reader needed sitting in our own
+    store. Such a posting is re-read from that body instead.
+    """
+    if not existing:
+        return False
+    if (existing.get("requirements") or {}).get("extractor_version") == inv.EXTRACTOR_VERSION:
+        return False
+    return _listing_implies_same_content(existing, row, ignore_reader=True)
+
+
+def _reread_stored(src: str, pending: List[Tuple[Dict[str, Any], str]], *,
+                   deadline: float, stop: Optional[threading.Event],
+                   counts: Dict[str, int], now: datetime) -> None:
+    """Re-read up to `REREAD_PER_SHARD` stored bodies with the current reader.
+
+    Runs AFTER the shard's writes, inside its deadline, so it can only use time
+    the shard did not need; what is left over is re-read on a later tick (the
+    posting is still stale, so it is still selected)."""
+    for existing, title in pending[:max(0, REREAD_PER_SHARD)]:
+        if time.monotonic() >= deadline or (stop is not None and stop.is_set()):
+            counts["reread_skipped_budget"] += 1
+            continue
+        sjid = existing.get("source_job_id") or ""
+        ch = existing.get("content_hash") or ""
+        try:
+            reusable = inv.find_parsed_requirements(ch)
+            if reusable and inv.mark_requirements_parsed(src, sjid, ch, reusable, now=now):
+                counts["reread_reused"] += 1
+                continue
+            body = inv.stored_description(src, existing)
+            if not body.strip():
+                counts["reread_no_body"] += 1
+                continue
+            if _persist_requirements(src, sjid, ch, body, title, now=now):
+                counts["reread_parsed"] += 1
+            else:
+                counts["reread_failed"] += 1
+        except Exception as exc:  # pragma: no cover - never break a crawl
+            counts["reread_failed"] += 1
+            logger.warning("ingest: stored re-read failed for %s: %s",
+                           str(sjid)[:40], type(exc).__name__)
+    counts["reread_deferred"] += max(0, len(pending) - max(0, REREAD_PER_SHARD))
 
 
 def _needs_http_detail(row: Dict[str, Any], member: Dict[str, Any]) -> bool:
@@ -3058,13 +3131,23 @@ def run_shard(
 
         touch_ids: List[str] = []
         needs_detail: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+        reread: List[Tuple[Dict[str, Any], str]] = []
         for member, row in rows:
             existing = existing_by_id.get(row["source_job_id"])
             if (_listing_implies_same_content(existing, row)
                     and not _owes_a_detail_fetch(existing, row, member)):
                 touch_ids.append(row["source_job_id"])
                 counts["unchanged"] += 1
+            elif (_only_reader_is_stale(existing, row)
+                    and not _owes_a_detail_fetch(existing, row, member)):
+                # Same body, older reader: re-read what we hold, fetch nothing.
+                touch_ids.append(row["source_job_id"])
+                counts["unchanged"] += 1
+                reread.append((existing, str(row.get("title") or "")))
             else:
+                if existing and int(existing.get("detail_revision") or 1) < _detail_revision(member) \
+                        and int(existing.get("detail_misses") or 0):
+                    row["_restart_misses"] = True
                 needs_detail.append((member, row))
         for start in range(0, len(touch_ids), 500):
             inv.touch_seen(src, touch_ids[start:start + 500], now=now)
@@ -3139,6 +3222,8 @@ def run_shard(
             payload = dict(row)
             payload.pop("_detail_ref", None)
             payload.pop("_member_key", None)
+            if payload.pop("_restart_misses", None):
+                payload["detail_misses_restart"] = True
             if description:
                 payload["description"] = description
             listing_desc = str(row.get("description") or "")
@@ -3148,6 +3233,7 @@ def run_shard(
                 got_detail = bool(description) and description != listing_desc
                 payload["body_state"] = BODY_FULL if got_detail else BODY_TEASER
                 payload["detail_attempted"] = not got_detail
+                payload["detail_revision"] = _detail_revision(member)
             elif id(row) in deferred_ids:
                 payload["body_state"] = BODY_TEASER
             else:
@@ -3172,7 +3258,12 @@ def run_shard(
             if outcome.get("kept_stored_body"):
                 # The stored body is the fetched one; this row only carried the
                 # teaser, and parsing THAT against the stored hash would
-                # replace real requirements with a blurb's.
+                # replace real requirements with a blurb's. The STORED body is
+                # still owed the current reader, so it joins the re-read set.
+                prior = existing_by_id.get(row["source_job_id"])
+                if outcome["needs_parse"] and prior:
+                    reread.append((dict(prior, content_hash=outcome["content_hash"]),
+                                   str(row.get("title") or "")))
                 continue
             if outcome["needs_parse"] and description:
                 # Parse-once across the whole inventory: if this exact body was
@@ -3207,6 +3298,8 @@ def run_shard(
         # picks them up; nothing is lost because the watermark only advances
         # over what we DID write.
         counts["parse_queued"] += len(parse_queue)
+        if reread:
+            _reread_stored(src, reread, deadline=deadline, stop=stop, counts=counts, now=now)
 
         # --- 7. progress -----------------------------------------------------
         if watermark is not None:

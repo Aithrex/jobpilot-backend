@@ -373,11 +373,53 @@ def test_cornerstone_discovers_the_site_id_when_it_is_unknown():
     assert endpoint.site == "3", "the working site id must be remembered"
 
 
-def test_cornerstone_publishes_no_description_and_does_not_invent_one():
-    """No public route returns a JD; an empty string is the honest answer."""
+def test_cornerstone_listing_carries_no_description():
+    """The search returns none; `fetch_detail` is where the body comes from."""
     rows = _csod_rows(Endpoint(vendor="cornerstone", tenant="arizona",
                                site="4"), _CsodCtx())
     assert rows[0].description == ""
+
+
+class _CsodDetailCtx(_CsodCtx):
+    """Adds the requisition-details route, which needs the shell's token."""
+
+    def __init__(self, statuses=(200,), **kw):
+        super().__init__(**kw)
+        self.statuses = list(statuses)
+        self.detail_calls = []
+
+    def get_json(self, url, params=None, timeout=None, vendor="", extra_headers=None):
+        self.detail_calls.append((url, params, extra_headers or {}))
+        status = self.statuses.pop(0) if self.statuses else 200
+        if status != 200:
+            return status, None
+        return 200, {"data": {"externalDescription":
+                              "<p><strong>Duties:</strong></p><ul><li>Run clinical trials.</li></ul>"}}
+
+
+def test_cornerstone_reads_the_description_with_the_shell_token():
+    """Re-probed live 2026-11-03: jobDetails returns `externalDescription`."""
+    from services.ats_providers.payroll import CornerstoneProvider
+    ep = Endpoint(vendor="cornerstone", tenant="arizona", site="4", host="arizona.csod.com")
+    ctx = _CsodDetailCtx()
+    job = _csod_rows(ep, ctx)[0]
+    detailed = CornerstoneProvider().fetch_detail(ep, job, ctx)
+    url, params, headers = ctx.detail_calls[-1]
+    assert url.endswith("/services/x/job-requisition/v2/requisitions/26826/jobDetails")
+    assert params == {"cultureId": 1}
+    assert headers["Authorization"] == "Bearer jwt-token-value"
+    assert "Run clinical trials." in detailed.description
+
+
+def test_cornerstone_detail_takes_the_site_from_the_posting_url_and_retries_a_401():
+    from services.ats_providers.base import RawJob
+    from services.ats_providers.payroll import CornerstoneProvider
+    ep = Endpoint(vendor="cornerstone", tenant="arizona", host="arizona.csod.com")
+    job = RawJob(source_job_id="26826", title="Coordinator",
+                 apply_url="https://arizona.csod.com/ux/ats/careersite/4/home/requisition/26826?c=arizona")
+    ctx = _CsodDetailCtx(statuses=(401, 200))
+    detailed = CornerstoneProvider().fetch_detail(ep, job, ctx)
+    assert detailed is not None and len(ctx.detail_calls) == 2
 
 
 # ---------------------------------------------------------------------------

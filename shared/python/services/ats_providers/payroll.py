@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import json
 import re
+import time as _time
 from typing import Any, Dict, Iterator, List, Optional
 
 from services.ats_providers.base import (DATE_EXACT, DATE_UNKNOWN, AtsProvider,
@@ -573,17 +574,21 @@ class CornerstoneProvider(AtsProvider):
     small range rather than assumed, and the discovered id is cached back onto
     the endpoint.
 
-    **No job description is available.** Every documented detail route 404s and
-    the posting page carries no JSON-LD, so rows are title/location/date only.
-    That is a real quality limit for resume matching and is recorded in
-    `docs/coverage/ats-vendor-coverage.md` rather than papered over.
+    **The description comes from the requisition API, with the same token.**
+    This said no description was available, so all 548 active Cornerstone
+    postings were title-only. Re-probed 2026-11-03 on arizona and
+    turnerconstruction: `GET /services/x/job-requisition/v2/requisitions/{id}
+    /jobDetails?cultureId=1`, sent with the anonymous bearer token the career
+    page publishes, returns the posting with its HTML body as
+    `data.externalDescription` (3,550 chars on one Arizona requisition).
     """
 
     vendor = "cornerstone"
+    detail_revision = 2          # route fixed 2026-11-03
     label = "Cornerstone"
 
     termless = True
-    has_detail = False
+    has_detail = True
     date_confidence = DATE_EXACT
     policy = _POLICY
 
@@ -651,6 +656,57 @@ class CornerstoneProvider(AtsProvider):
                     except ValueError:
                         return ""
         return ""
+
+    #: Anonymous tokens, per (host, site), reused across a run's detail fetches.
+    _TOKEN_TTL_SECONDS = 900
+    _SITE_IN_URL = re.compile(r"/careersite/(\d+)/", re.IGNORECASE)
+
+    def _cached_token(self, host: str, site: int, ctx: FetchContext,
+                      *, refresh: bool = False) -> str:
+        cache = self.__dict__.setdefault("_tokens", {})
+        key = (host, int(site))
+        hit = cache.get(key)
+        if hit and not refresh and _time.monotonic() - hit[1] < self._TOKEN_TTL_SECONDS:
+            return hit[0]
+        token = self._token(host, int(site), ctx)
+        if token:
+            cache[key] = (token, _time.monotonic())
+        return token
+
+    def fetch_detail(self, endpoint: Endpoint, job: RawJob,
+                     ctx: FetchContext) -> Optional[RawJob]:
+        host = self._host_of(endpoint)
+        rid = str(job.source_job_id or "").strip()
+        site = str(endpoint.site or "").strip()
+        if not site.isdigit():
+            m = self._SITE_IN_URL.search(job.apply_url or "")
+            site = m.group(1) if m else ""
+        if not host or not rid.isdigit() or not site.isdigit():
+            return None
+        url = (f"https://{host}/services/x/job-requisition/v2/requisitions"
+               f"/{rid}/jobDetails")
+        for attempt in range(2):
+            token = self._cached_token(host, int(site), ctx, refresh=attempt > 0)
+            if not token:
+                return None
+            status, payload = ctx.get_json(
+                url, params={"cultureId": 1},
+                timeout=self.policy.detail_timeout, vendor=self.vendor,
+                extra_headers={"Authorization": f"Bearer {token}",
+                               "Accept": "application/json"})
+            if self.policy.is_challenge(status):
+                raise ChallengeError(self.vendor, status)
+            if status == 401 and attempt == 0:
+                continue                       # token expired mid-run: mint one
+            if status != 200 or not isinstance(payload, dict):
+                return None
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            body = html_to_text(data.get("externalDescription") or "")
+            if not body:
+                return None
+            return RawJob(source_job_id=rid, title=job.title,
+                          apply_url=job.apply_url, description=body[:40000])
+        return None
 
     def _search(self, host: str, site: int, token: str, page: int,
                 ctx: FetchContext) -> Optional[Dict[str, Any]]:
@@ -742,7 +798,7 @@ class CornerstoneProvider(AtsProvider):
                 location=location,
                 posted_at=posted,
                 date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
-                # Cornerstone publishes no description on any public route.
+                # The listing has none; `fetch_detail` reads it.
                 description="",
                 remote=looks_remote(title, location),
             )
