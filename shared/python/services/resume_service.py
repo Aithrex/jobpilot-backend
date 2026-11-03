@@ -1248,7 +1248,14 @@ def run_board_source(job_type: str, payload: Dict[str, Any],
 
     Inventory first (`_feed_from_inventory`), the legacy live crawl only when
     the inventory cannot answer; the user's employer policy and logos applied
-    last. MNC has no inventory path yet. Raises what the engines raise.
+    last. Raises what the engines raise.
+
+    The board is ONE list over every employer we crawl, so:
+      * the Big Tech crawl fetches only the catalog employers the inventory
+        does not already carry (`_mnc_live_payload`) - the rest are on the
+        inventory tabs, and fetching them again only added weaker copies;
+      * every live-crawled card is scored by `inventory_feed.score_live_rows`,
+        the same engine and inputs as an inventory card.
     """
     email = str(payload.get("user_email") or "")
     result = None
@@ -1265,8 +1272,69 @@ def run_board_source(job_type: str, payload: Dict[str, Any],
             from services.mnc_jobs_service import run_mnc_search as run
         else:
             raise ValueError(f"not a board job type: {job_type}")
-        result = run(payload, partial_cb=partial_cb)
+        live_payload = _mnc_live_payload(payload) if job_type == "mnc_jobs" else payload
+        if live_payload is None:
+            result = _inventory_covers_catalog(payload)
+        else:
+            result = run(live_payload, partial_cb=partial_cb)
+            _score_live_result(result, email)
     return _stamp_job_logos(_apply_employer_policy(result, email))
+
+
+def _mnc_live_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The Big Tech crawl request, narrowed to employers the inventory lacks.
+
+    An explicit company filter is the caller's choice and is kept. When the
+    inventory cannot be read the whole catalog is crawled, as before. None
+    means the inventory already carries every catalog employer.
+    """
+    if payload.get("companies"):
+        return payload
+    try:
+        from services import mnc_jobs_service as mnc
+        held = mnc.inventory_held_slugs()
+    except Exception as exc:  # pragma: no cover - never let this blank the tab
+        logger.warning("mnc: coverage check failed (%s); crawling the catalog",
+                       type(exc).__name__)
+        return payload
+    if held is None:
+        return payload
+    residue = [r["slug"] for r in mnc.MNC_CATALOG if r["slug"] not in held]
+    if not residue:
+        return None
+    logger.info("mnc: %d catalog employers on the inventory tabs, crawling %d live",
+                len(held), len(residue))
+    return dict(payload, companies=residue)
+
+
+def _inventory_covers_catalog(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """A complete, empty Big Tech tab: every catalog employer is already on the
+    inventory tabs, so there is nothing left to crawl live."""
+    titles = [str(t) for t in (payload.get("titles") or []) if str(t or "").strip()]
+    return {
+        "ok": True, "generated_at": datetime.now(timezone.utc).isoformat(),
+        "jobs": [], "total": 0,
+        "window_counts": {"today": 0, "d1": 0, "d3": 0, "d7": 0, "d30": 0},
+        "query_terms": titles, "tenants_total": 0, "tenants_done": 0,
+        "tenants_with_results": 0, "cache_hit": True, "served_from": "inventory",
+        "diagnostics": {"served_from": "inventory",
+                        "note": "every catalog employer is on the inventory tabs"},
+        "errors": [],
+    }
+
+
+def _score_live_result(result: Any, email: str) -> None:
+    """One scorer for the whole board: rescore a live crawl's cards in place."""
+    if not isinstance(result, dict) or result.get("served_from") == "inventory":
+        return
+    jobs = result.get("jobs")
+    if not isinstance(jobs, list) or not jobs:
+        return
+    try:
+        from services import inventory_feed
+        inventory_feed.score_live_rows(jobs, email)
+    except Exception as exc:  # pragma: no cover - keep the crawl's own scores
+        logger.warning("board: live rows kept their crawl scores (%s)", type(exc).__name__)
 
 
 def _apply_employer_policy(payload: Any, user_email: str,

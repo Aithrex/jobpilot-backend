@@ -32,7 +32,8 @@ def _reset_process_caches():
     reason in production and exactly the wrong one here.
     """
     for module, fn in (("services.tech_feed_service", "reset_coverage_cache"),
-                       ("services.canonical_employer", "reset_cache")):
+                       ("services.canonical_employer", "reset_cache"),
+                       ("services.mnc_jobs_service", "reset_inventory_held_cache")):
         try:
             import importlib
             getattr(importlib.import_module(module), fn)()
