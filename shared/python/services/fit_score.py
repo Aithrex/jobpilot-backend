@@ -768,6 +768,15 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
         "systems engineer",
         "devsecops", "cloud architect", "infrastructure architect",
         "reliability engineer", "tech ops", "cloud operations",
+        # The DISCIPLINE form of SRE. Bare "reliability engineering" is a
+        # plant discipline and stays in hardware_engineering below, so Levi's
+        # "Engineer III, Systems Reliability Engineering" (their SRE team)
+        # was filed with the corrosion engineers and left every SRE's board.
+        # These start earlier in the title, so the leftmost match wins.
+        "site reliability engineering", "systems reliability engineering",
+        "software reliability engineering", "service reliability engineering",
+        "platform reliability engineering", "infrastructure reliability engineering",
+        "production reliability engineering",
     ],
     "security": [
         "security engineer", "security analyst", "information security", "infosec",
@@ -1130,6 +1139,13 @@ _SOFTWARE_MAINTENANCE = re.compile(
     r"(maintenance|support)(?![a-z])")
 
 
+#: Role phrases no plant uses, so a physical word beside them is the team
+#: ("Tooling & Automation Site Reliability Engineering (SRE)"), never the job.
+_NEVER_PHYSICAL_PHRASES = frozenset({
+    "site reliability", "site reliability engineering", "sre", "devops", "devsecops",
+})
+
+
 def _names_a_physical_domain(blob: str) -> bool:
     """`_PHYSICAL_QUALIFIER_RE`, except that "Application Development and
     Maintenance" is software being maintained, not a plant."""
@@ -1235,7 +1251,8 @@ def classify_role(text: Any) -> Optional[str]:
         # phrase "reliability engineer"; reading it as SRE puts a corrosion
         # engineer at the top of a cloud engineer's feed.
         if fam in _SOFTWARE_FAMILIES and _names_a_physical_domain(blob) \
-                and not _team_name_only_qualifier(blob):
+                and not _team_name_only_qualifier(blob) \
+                and m.group(0) not in _NEVER_PHYSICAL_PHRASES:
             return "hardware_engineering"
         return fam
     # The DISCIPLINE form: "Software Engineering Intern", "Data Science

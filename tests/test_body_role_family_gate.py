@@ -160,6 +160,23 @@ class TestInternshipsKeepTheirFamily:
         assert inv.role_family_of("Manufacturing Software Engineer") == "hardware_engineering"
         assert inv.role_family_of("Tooling Engineer") != "software_engineering"
 
+    def test_sre_named_as_a_discipline_is_devops(self):
+        """Levi's SRE team posts as "Engineer III, Systems Reliability
+        Engineering"; the bare discipline "reliability engineering" is a plant
+        role, so it read hardware and left every SRE's board (live, 2026-11-02)."""
+        for title in ("Engineer III, Systems Reliability Engineering",
+                      "Associate Engineer I,Systems Reliability Engineering",
+                      "Site Reliability Engineering Intern",
+                      "Software Reliability Engineering Lead",
+                      "Tooling & Automation Site Reliability Engineering (SRE), AVP",
+                      "Site Reliability Engineer (Manufacturing Infrastructure)"):
+            assert fs.classify_role(title) == "devops", title
+            assert inv.role_family_of(title) == "devops", title
+        for title in ("Reliability Engineering Intern", "Molding Reliability Engineering Intern",
+                      "Hardware Reliability Engineering Manager",
+                      "Senior Hardware Reliability Engineer, Reliability Engineering"):
+            assert fs.classify_role(title) == "hardware_engineering", title
+
     def test_the_physical_veto_still_stands_where_it_should(self):
         for title in ("Staff Hardware Reliability Engineer", "Corrosion Reliability Engineer II",
                       "Senior Reliability Engineer - Power Electronics",
