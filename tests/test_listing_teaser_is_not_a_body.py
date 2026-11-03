@@ -313,3 +313,30 @@ class TestIbmAndTikTokRows:
         assert job.apply_url == "https://lifeattiktok.com/search/769"
         assert job.location == "San Jose" and job.country == "United States of America"
         assert "Requirements\n3+ years of Go" in job.description
+
+
+class TestAFixedDetailRouteReopensWhatTheOldOneGaveUpOn:
+    """Taleo asked a URL that does not exist and gave up on all 431 postings
+    after 5-14 misses each; Eightfold skipped detail for PCSX tenants. A
+    provider whose route is fixed bumps `detail_revision`, and misses recorded
+    under the old revision stop counting (2026-11-03)."""
+
+    TALEO = {"source": "career", "vendor": "taleo", "tenant": "hdr"}
+
+    def test_old_misses_do_not_count_against_a_fixed_route(self):
+        stale = {"body_state": "teaser", "description_chars": 130, "detail_misses": 14}
+        assert w._owes_a_detail_fetch(stale, _row(), self.TALEO)
+        current = dict(stale, detail_revision=2, detail_misses=2)
+        assert not w._owes_a_detail_fetch(current, _row(), self.TALEO)
+
+    def test_the_first_miss_under_the_new_route_starts_a_new_count(self, db):
+        for _ in range(3):
+            inv.upsert_posting(_raw("T9", TEASER, body_state="teaser", detail_attempted=True), now=NOW)
+        assert db.job_postings.find_one({"source_job_id": "T9"})["detail_misses"] == 3
+        inv.upsert_posting(_raw("T9", TEASER, body_state="teaser", detail_attempted=True,
+                                detail_revision=2, detail_misses_restart=True), now=NOW)
+        doc = db.job_postings.find_one({"source_job_id": "T9"})
+        assert doc["detail_misses"] == 1 and doc["detail_revision"] == 2
+        inv.upsert_posting(_raw("T9", TEASER, body_state="teaser", detail_attempted=True,
+                                detail_revision=2), now=NOW)
+        assert db.job_postings.find_one({"source_job_id": "T9"})["detail_misses"] == 2

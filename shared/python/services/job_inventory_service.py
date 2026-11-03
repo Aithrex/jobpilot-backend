@@ -1400,8 +1400,18 @@ def upsert_posting(
         "$unset": unset,
     }
     if teaser and raw.get("detail_attempted"):
-        # Counted so a detail that never arrives stops being asked for.
-        update["$inc"] = {"detail_misses": 1}
+        # Counted so a detail that never arrives stops being asked for - under
+        # the route revision it was asked by (`AtsProvider.detail_revision`).
+        if raw.get("detail_misses_restart"):
+            # The first miss under a FIXED route: the old count was the old
+            # route's, so this one starts a new count rather than adding to it.
+            update["$set"]["detail_misses"] = 1
+        else:
+            update["$inc"] = {"detail_misses": 1}
+        try:
+            update["$set"]["detail_revision"] = max(1, int(raw.get("detail_revision") or 1))
+        except (TypeError, ValueError):
+            update["$set"]["detail_revision"] = 1
 
     try:
         before = _postings().find_one_and_update(
@@ -1566,6 +1576,29 @@ def _has_body(doc: Dict[str, Any]) -> bool:
     """A stored or offloaded description, inline or by reference."""
     return bool((doc or {}).get("description_ref")
                 or str((doc or {}).get("description_text") or "").strip())
+
+
+def stored_description(source: str, doc: Dict[str, Any]) -> str:
+    """The full stored JD body of a posting, or "".
+
+    The offloaded copy (`description_ref`, keyed by content hash) is the full
+    body; the inline `description_text` beside a ref is only a prefix, so it is
+    read only when nothing was offloaded."""
+    doc = doc or {}
+    ref = doc.get("description_ref")
+    if ref:
+        try:
+            from services import job_content_store
+            return job_content_store.get_jd(ref) or ""
+        except Exception:  # pragma: no cover - a storage miss is just "no body"
+            return ""
+    text = doc.get("description_text")
+    if text is None and doc.get("source_job_id"):
+        row = _postings().find_one(
+            {"source": _safe_key(source, 60), "source_job_id": _safe_str(doc["source_job_id"], 200)},
+            {"_id": 0, "description_text": 1})
+        text = (row or {}).get("description_text")
+    return str(text or "")
 
 
 def touch_seen(source: str, source_job_ids: Iterable[str],
@@ -2371,7 +2404,7 @@ def get_postings_map(source: str, source_job_ids: Iterable[str],
                   "normalization_version": 1,
                   # Whether the stored body is the fetched one or only the
                   # listing teaser (`job_ingest_worker._owes_a_detail_fetch`).
-                  "body_state": 1, "detail_misses": 1,
+                  "body_state": 1, "detail_misses": 1, "detail_revision": 1,
                   # `_admit_by_age` keeps an aged row the inventory already
                   # knows is early-career (see EARLY_CAREER_MAX_AGE_DAYS).
                   "seniority": 1,

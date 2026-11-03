@@ -68,7 +68,10 @@ def test_eightfold_classic_parses_positions():
     assert jobs[0].posted_at
 
 
-def test_eightfold_pcsx_uses_search_endpoint_and_skips_detail():
+def test_eightfold_pcsx_uses_search_endpoint_and_reads_detail():
+    """PCSX tenants serve the classic detail JSON too (re-probed live
+    2026-11-03 on Microsoft, Lockheed Martin and Qualcomm); skipping it left
+    539 active postings with only their listing teaser."""
     def get_json(url, params=None, timeout=None, vendor=""):
         assert "/api/pcsx/search" in url
         return 200, {"data": {"positions": [{
@@ -83,8 +86,21 @@ def test_eightfold_pcsx_uses_search_endpoint_and_skips_detail():
     jobs = list(EightfoldProvider().list_jobs(ep, _ctx(get_json=get_json)))
     assert jobs[0].title == "Cloud Engineer"
     detailed = EightfoldProvider().fetch_detail(
-        ep, jobs[0], _ctx(get_json=lambda *a, **k: (200, {"job_description": "nope"})))
-    assert detailed is None
+        ep, jobs[0], _ctx(get_json=lambda *a, **k: (200, {"job_description": "<p>Build Azure.</p>"})))
+    assert detailed.description == "Build Azure."
+
+    # Classic route empty -> the PCSX position-details body.
+    calls = []
+
+    def detail(url, params=None, timeout=None, vendor=""):
+        calls.append(url)
+        if "/position_details" in url:
+            assert params["position_id"] == "ms-1"
+            return 200, {"data": {"jobDescription": "<div>Own the control plane.</div>"}}
+        return 404, None
+    detailed = EightfoldProvider().fetch_detail(ep, jobs[0], _ctx(get_json=detail))
+    assert detailed.description == "Own the control plane."
+    assert any("/api/apply/v2/jobs/ms-1" in c for c in calls)
 
 
 def test_phenompeople_fingerprint_captures_tenant():

@@ -297,6 +297,7 @@ class EightfoldProvider(AtsProvider):
     """
 
     vendor = "eightfold"
+    detail_revision = 2          # route fixed 2026-11-03
     label = "Eightfold"
     termless = True
     has_detail = True
@@ -418,24 +419,38 @@ class EightfoldProvider(AtsProvider):
     def fetch_detail(self, endpoint: Endpoint, job: RawJob,
                      ctx: FetchContext) -> Optional[RawJob]:
         extra = endpoint.extra or {}
-        if str(extra.get("variant") or "") == "pcsx":
-            # PCSX tenants have no anonymous detail JSON (career_pages_service
-            # documents this). The listing teaser is all we get.
-            return None
+        # PCSX tenants (Microsoft, Lockheed Martin, Qualcomm) were skipped here
+        # as having "no anonymous detail JSON". Re-probed 2026-11-03: they serve
+        # the classic `/api/apply/v2/jobs/{id}` too (7,103 / 6,889 / 7,412
+        # chars on one live posting each), and `/api/pcsx/position_details`
+        # carries the same body as `jobDescription`. 539 active postings had
+        # only their listing teaser because of the skip.
+        pcsx = str(extra.get("variant") or "") == "pcsx"
         host = _host_of(endpoint)
         domain = str(extra.get("domain") or "")
         rid = job.source_job_id
         if not host or not rid:
             return None
+        params = {"domain": domain} if domain else {}
         url = job.detail_url or f"https://{host}/api/apply/v2/jobs/{rid}"
         status, payload = ctx.get_json(
-            url, params={"domain": domain} if domain else {},
-            timeout=self.policy.detail_timeout, vendor=self.vendor)
+            url, params=params, timeout=self.policy.detail_timeout, vendor=self.vendor)
         if self.policy.is_challenge(status):
             raise ChallengeError(self.vendor, status)
-        if status != 200 or not isinstance(payload, dict):
-            return None
-        body = html_to_text(payload.get("job_description") or "")[:5000]
+        body = ""
+        if status == 200 and isinstance(payload, dict):
+            body = html_to_text(payload.get("job_description") or "")
+        if not body and pcsx:
+            status, payload = ctx.get_json(
+                f"https://{host}/api/pcsx/position_details",
+                params=dict(params, position_id=rid, hl="en"),
+                timeout=self.policy.detail_timeout, vendor=self.vendor)
+            if self.policy.is_challenge(status):
+                raise ChallengeError(self.vendor, status)
+            data = (payload or {}).get("data") if isinstance(payload, dict) else None
+            if isinstance(data, dict):
+                body = html_to_text(data.get("jobDescription") or "")
+        body = body[:15000]
         if not body:
             return None
         return RawJob(source_job_id=rid, title=job.title,

@@ -60,15 +60,15 @@ returned during verification.
 | Workday | JSON | **relative** | detail | sometimes | `"Posted 2 Days Ago"`, so ADR-001 relative. Tenants shard `wd1`–`wd103`. |
 | Oracle ORC | JSON | exact | detail | sometimes | True pagination + `TotalJobsCount`; newest-first. |
 | iCIMS | **HTML** | detail-only | listing snippet | — | See §2.1. |
-| Taleo | JSON | exact | — | — | See §2.2. |
+| Taleo | JSON | exact | detail (page) | — | See §2.2; body from `jobdetail.ftl` `initialHistory` (2026-11-03). |
 | Jobvite | **HTML** | **none** | detail | — | See §2.3. |
 | BambooHR | JSON | detail-only | detail | **yes** | See §2.4. |
 | Phenom | JSON | exact | detail | sometimes | Per-employer host; not derivable. |
-| Eightfold | JSON | exact | detail | sometimes | Per-employer host; rate-limits aggressively. |
+| Eightfold | JSON | exact | detail | sometimes | Per-employer host; rate-limits aggressively. PCSX tenants read detail too (2026-11-03). |
 | **UKG / UltiPro** | JSON (POST) | exact | listing | — | **New.** See §3. |
 | **Paylocity** | HTML + embedded JSON | exact | detail | **yes** | **New.** See §3. |
 | **Rippling** | JSON | detail-only | detail | **yes** | **New.** See §3. |
-| **Cornerstone** | JSON (POST + JWT) | exact | **none** | — | **New.** See §3.1. |
+| **Cornerstone** | JSON (POST + JWT) | exact | detail (JWT) | — | **New.** See §3.1. |
 
 ### Why the last three matter disproportionately
 
@@ -224,11 +224,7 @@ Two further details, each of which independently returns zero:
   serves 212 on site 1. A provider assuming 1 reports Arizona as not hiring. The
   provider probes a small range and caches the id that answered.
 
-**Cornerstone publishes no job description on any public route.** Every
-documented detail path 404s and the posting page carries no JSON-LD, so rows are
-title/location/date only. That is a genuine match-quality limit — a resume can
-only be scored against a title and a location for these — and it is recorded
-here rather than hidden.
+**The description comes from the requisition API (2026-11-03).** This section used to say Cornerstone published none, and all 548 active postings were title-only. `GET /services/x/job-requisition/v2/requisitions/{id}/jobDetails?cultureId=1`, sent with the same anonymous token, returns the HTML body as `data.externalDescription` (verified live on arizona and turnerconstruction). The same day Taleo's detail moved off `rest/jobboard/jobDetail` (a 404 on every zone) to the posting's own `jobdetail.ftl`, and Eightfold PCSX tenants (Microsoft, Lockheed Martin, Qualcomm) stopped skipping a detail route they do serve. Each provider bumped `detail_revision`, so postings the broken routes had given up on are fetched again.
 
 Two field traps, both caught by the live check rather than by tests:
 

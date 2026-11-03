@@ -349,6 +349,8 @@ at text and never writes any, and eligibility wording never leaves it. Retrain w
 `scripts/train_jd_line_model.py`.
 See [`docs/specs/jd-profile.md`](docs/specs/jd-profile.md).
 
+> **A reader upgrade reaches the whole inventory (2026-11-03).** An unchanged posting was only re-read when its detail was re-fetched, so 96k of 282k active postings sat on old readers (74,660 Workday on v8, before `jd_profile`). The crawler now re-reads the body we already store when only `EXTRACTOR_VERSION` moved (`job_ingest_worker._reread_stored`, `JOB_INGEST_REREAD_PER_SHARD` per tick, no request to the employer); `scripts/reread_stale_requirements.py` clears a backlog through the same function. A provider whose detail route is FIXED bumps `detail_revision`, and misses recorded under the old revision stop counting.
+
 ## Job sourcing
 Jobs come from JSearch **plus direct employer ATS portals** — the differentiator. Catalogs + engines live in the shared layer: `workday_tenant_catalog.py` / `workday_jobs_service.py` / `workday_cxs_fetcher.py` (Workday CXS) · `career_pages_catalog.py` / `career_pages_service.py` (**`FETCHERS`** greenhouse/lever/ashby/smartrecruiters/workable/recruitee; **`ENTERPRISE_FETCHERS`** amazon/eightfold/phenom/orc/uber) · `mnc_catalog.py` / `mnc_jobs_service.py`. Routes in `services/jobs/blueprints/jobs.py` (`/workday/*`, `/career-pages/*`, `/mnc/*`). Adding companies = catalog rows, validated live via `scripts/discover_workday_tenants.py` / `scripts/discover_career_pages.py`; a new ATS = a `_fetch_<ats>()` registered in `FETCHERS`. **Apify is disabled** (reversible — every edit tagged `APIFY DISABLED (temporary)`).
 
