@@ -760,7 +760,7 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
         "analytics manager", "decision scientist",
     ],
     "devops": [
-        "devops", "site reliability", "sre", "platform engineer",
+        "devops", "dev ops", "site reliability", "sre", "platform engineer",
         "infrastructure engineer", "cloud engineer", "build engineer",
         "release engineer", "systems administrator", "sysadmin",
         # Bare "systems engineer" is infra/IT systems, not software product eng.
@@ -768,6 +768,15 @@ ROLE_FAMILIES: Dict[str, List[str]] = {
         "systems engineer",
         "devsecops", "cloud architect", "infrastructure architect",
         "reliability engineer", "tech ops", "cloud operations",
+        # The DISCIPLINE form of SRE. Bare "reliability engineering" is a
+        # plant discipline and stays in hardware_engineering below, so Levi's
+        # "Engineer III, Systems Reliability Engineering" (their SRE team)
+        # was filed with the corrosion engineers and left every SRE's board.
+        # These start earlier in the title, so the leftmost match wins.
+        "site reliability engineering", "systems reliability engineering",
+        "software reliability engineering", "service reliability engineering",
+        "platform reliability engineering", "infrastructure reliability engineering",
+        "production reliability engineering",
     ],
     "security": [
         "security engineer", "security analyst", "information security", "infosec",
@@ -1069,6 +1078,10 @@ def _compile_families() -> Tuple[re.Pattern, Dict[str, str]]:
     for fam, phrases in ROLE_FAMILIES.items():
         for p in phrases:
             phrase_to_family.setdefault(p.strip(), fam)
+            # `classify_role` folds in-word hyphens, so "pre-sales" must also
+            # be findable as "pre sales".
+            folded = re.sub(r"(?<=[a-z0-9])-\s?(?=[a-z])", " ", p.strip())
+            phrase_to_family.setdefault(folded, fam)
     ordered = sorted(phrase_to_family, key=len, reverse=True)
     body = "|".join(re.escape(p) for p in ordered)
     return re.compile(r"(?<![A-Za-z0-9_])(?:" + body + r")(?![A-Za-z0-9_])"), phrase_to_family
@@ -1128,6 +1141,13 @@ _TITLE_SEGMENT_SPLIT = re.compile(r"\s*(?:,|\s-\s|\s–\s|\s—\s|\(|\||/|:)\s*"
 _SOFTWARE_MAINTENANCE = re.compile(
     r"(?<![a-z])(application|software|systems?)\s+(development\s+and\s+)?"
     r"(maintenance|support)(?![a-z])")
+
+
+#: Role phrases no plant uses, so a physical word beside them is the team
+#: ("Tooling & Automation Site Reliability Engineering (SRE)"), never the job.
+_NEVER_PHYSICAL_PHRASES = frozenset({
+    "site reliability", "site reliability engineering", "sre", "devops", "devsecops",
+})
 
 
 def _names_a_physical_domain(blob: str) -> bool:
@@ -1209,12 +1229,22 @@ _DATABASE_ROLE = re.compile(
     r"engineer)|sql\s+developer)(?![a-z])")
 
 
+_INTRAWORD_HYPHEN = re.compile(r"(?<=[a-z0-9])-\s?(?=[a-z])")
+
+
 def classify_role(text: Any) -> Optional[str]:
     """Role family for a title (or a short blob). Returns None when nothing
     matches. It NEVER falls back to software_engineering: defaulting an
     unrecognised nontechnical title into an engineering family is exactly the
     failure this engine exists to prevent."""
-    blob = _norm(text)
+    # "Front-End", "Back-End", "Full-Stack": the phrase table spells these
+    # "front end" / "frontend", and a hyphen is neither, so "Full-Stack
+    # Developer" and "Back-End Engineer" classified as nothing and were stored
+    # under whatever the body suggested - `other`, `teaching`, `retail` (~80
+    # active postings, 2026-11-02), never reaching a software user's board.
+    # Only a hyphen INSIDE a word is folded; " - " still separates a role from
+    # its team (`_TITLE_SEGMENT_SPLIT`).
+    blob = _INTRAWORD_HYPHEN.sub(" ", _norm(text))
     if not blob.strip():
         return None
     # A machine, not a waiter. "server" is a hospitality title, and every
@@ -1235,7 +1265,8 @@ def classify_role(text: Any) -> Optional[str]:
         # phrase "reliability engineer"; reading it as SRE puts a corrosion
         # engineer at the top of a cloud engineer's feed.
         if fam in _SOFTWARE_FAMILIES and _names_a_physical_domain(blob) \
-                and not _team_name_only_qualifier(blob):
+                and not _team_name_only_qualifier(blob) \
+                and m.group(0) not in _NEVER_PHYSICAL_PHRASES:
             return "hardware_engineering"
         return fam
     # The DISCIPLINE form: "Software Engineering Intern", "Data Science
