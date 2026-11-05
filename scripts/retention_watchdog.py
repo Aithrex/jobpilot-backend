@@ -165,6 +165,41 @@ def crawler_checks(db, now: datetime):
     return lines, problems
 
 
+def description_checks(now: datetime):
+    """Every open posting should carry its job description (2026-11-05).
+
+    The crawler fetches bodies newest first under a per-run budget, keeps a
+    share of it for older postings still owed one, and retries a miss on a
+    schedule instead of abandoning it. This holds it to that: a breach means
+    the backlog is not draining or a board's detail route has broken."""
+    lines, problems = [], []
+    h = inv.description_health(now)
+    lines += [
+        f"- open postings with a description: **{h['with_body']:.1%}** "
+        f"({h['active'] - h['owed']:,} of {h['active']:,}; target "
+        f"{inv.DESCRIPTION_SLO_ACTIVE:.0%})",
+        f"- new postings (first seen 2-26 h ago) with one: **{h['new_with_body']:.1%}** "
+        f"({h['new_total'] - h['new_owed']:,} of {h['new_total']:,}; target "
+        f"{inv.DESCRIPTION_SLO_NEW:.0%})",
+        f"- oldest posting still owed one: {h['oldest_owed_hours']} h",
+        "- owed by source: " + ", ".join(
+            f"{k} {v['owed']:,}/{v['active']:,}" for k, v in sorted(h["by_source"].items())),
+    ]
+    for b in h["broken_boards"]:
+        lines.append(f"  - board `{b['ats']}:{b['tenant']}` ({b['employer']}): "
+                     f"{b['owed']:,} of {b['active']:,} open postings have no description")
+    if h["with_body"] < inv.DESCRIPTION_SLO_ACTIVE:
+        problems.append(f"only {h['with_body']:.1%} of open postings have a job description "
+                        f"(target {inv.DESCRIPTION_SLO_ACTIVE:.0%}); {h['owed']:,} are owed one")
+    if h["new_with_body"] < inv.DESCRIPTION_SLO_NEW:
+        problems.append(f"only {h['new_with_body']:.1%} of new postings got a description "
+                        f"(target {inv.DESCRIPTION_SLO_NEW:.0%}) - detail fetches are falling behind")
+    # Boards are REPORTED, not alerted on: a board can lack bodies for reasons
+    # that are not ours (a vendor that stopped publishing them), and the two
+    # targets above already turn red when the gap matters to users.
+    return lines, problems
+
+
 def _sizes(db):
     stats = db.command("dbstats")
     rows = []
@@ -240,6 +275,11 @@ def run(*, apply: bool, max_gib: float) -> int:
     c_lines, c_problems = crawler_checks(db, now)
     lines += c_lines
     problems += c_problems
+
+    lines.append("### Job descriptions")
+    d_lines, d_problems = description_checks(now)
+    lines += d_lines
+    problems += d_problems
 
     stats, rows = _sizes(db)
     total = stats.get("dataSize", 0) + stats.get("indexSize", 0)

@@ -694,6 +694,15 @@ INDEX_SPECS = [
     # handed to snapshots, tailoring and the FE. uuid4 hex, so unique is safe.
     ("job_postings", [("job_id", ASCENDING)],
      {"unique": True, "name": "job_id_unique"}),
+    # job_inventory_service.find_owed_details: open postings still owed a body,
+    #   {status:"active", body_state:"teaser", source:<eq>, tenant:{$in},
+    #    $or:[detail_next_at null | <= now]}  sort {first_seen_at: 1}
+    # Partial, so it holds the few thousand owed rows and not the inventory; the
+    # query names both filter fields by equality, which the planner can prove.
+    # Also ensured at runtime by `ensure_owed_detail_index`, with the same spec.
+    ("job_postings", [("source", ASCENDING), ("tenant", ASCENDING), ("first_seen_at", ASCENDING)],
+     {"name": "owed_detail_backlog",
+      "partialFilterExpression": {"status": "active", "body_state": "teaser"}}),
     # THE retrieval path. find_active_fresh(role_family=...) issues
     #   {status:"active", role_family:<eq>, cost_class:<eq|$in>,
     #    posted_at:{$gte:cutoff}}  sort {posted_at:-1}

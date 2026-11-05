@@ -996,15 +996,13 @@ class WorkableProvider(_BoardProvider):
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
-        # The v1 widget endpoint, exactly as `_fetch_workable` calls it. The
-        # crawler's `_list_career` appends `?details=true`, which inlines the
-        # body and would let this vendor skip `fetch_detail` — a real
-        # divergence between the two live paths, left as-is here because it is
-        # a behaviour change, not a port, and it belongs to whoever retires the
-        # old fetchers.
+        # `?details=true` inlines every posting's body in this ONE response.
+        # Without it each body cost its own detail request, and Workable meets
+        # a burst with 429 and a vendor-wide cooldown: on 2026-11-05 Toloka's
+        # 2,156-posting board had 346 open postings abandoned without a body.
         payload = self._get_json(
             ctx, f"https://apply.workable.com/api/v1/widget/accounts/"
-                 f"{endpoint.tenant}")
+                 f"{endpoint.tenant}?details=true")
         for job in self._rows(payload, "jobs"):
             if ctx.should_stop():
                 return
@@ -1035,6 +1033,10 @@ class WorkableProvider(_BoardProvider):
                     job.get("city"), job.get("state")),
                 detail_url=(f"https://apply.workable.com/api/v2/accounts/"
                             f"{endpoint.tenant}/jobs/{rid}"),
+                # The inlined body. A short one still gets its detail fetched
+                # (`has_detail`), which also carries `requirements`.
+                description=html_to_text(
+                    f"{job.get('description') or ''} {job.get('requirements') or ''}")[:40000],
                 extra={"experience_level": exp} if exp else {},
             )
 

@@ -5,7 +5,7 @@ engineering postings were "too thin to score" and capped at 40, because the
 130-530 character blurb their listings print was stored as the description and
 the real one was never fetched.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -74,9 +74,13 @@ class TestAStoredTeaserIsFetchedAgain:
         assert not w._owes_a_detail_fetch({"body_state": "full", "description_chars": 90},
                                           _row(), ORACLE)
 
-    def test_it_gives_up_after_the_attempt_limit(self):
-        stored = {"body_state": "teaser", "detail_misses": w.DETAIL_MAX_ATTEMPTS}
-        assert not w._owes_a_detail_fetch(stored, _row(), ORACLE)
+    def test_it_waits_out_a_miss_instead_of_giving_up(self):
+        """Two misses used to mean "never again" (2,251 postings abandoned by
+        2026-11-05). A miss now waits for `detail_next_at` and is then owed."""
+        stored = {"body_state": "teaser", "detail_misses": w.DETAIL_MAX_ATTEMPTS,
+                  "detail_next_at": NOW + timedelta(hours=1)}
+        assert not w._owes_a_detail_fetch(stored, _row(), ORACLE, now=NOW)
+        assert w._owes_a_detail_fetch(stored, _row(), ORACLE, now=NOW + timedelta(hours=2))
 
     def test_no_route_means_nothing_is_owed(self):
         assert not w._owes_a_detail_fetch({"body_state": "teaser"}, _row(), LEVER)
@@ -326,8 +330,14 @@ class TestAFixedDetailRouteReopensWhatTheOldOneGaveUpOn:
     def test_old_misses_do_not_count_against_a_fixed_route(self):
         stale = {"body_state": "teaser", "description_chars": 130, "detail_misses": 14}
         assert w._owes_a_detail_fetch(stale, _row(), self.TALEO)
-        current = dict(stale, detail_revision=2, detail_misses=2)
-        assert not w._owes_a_detail_fetch(current, _row(), self.TALEO)
+        # Under the CURRENT route a miss waits out its retry window (no longer
+        # "two misses and never again", 2026-11-05) ...
+        current = dict(stale, detail_revision=2, detail_misses=2,
+                       detail_next_at=NOW + timedelta(hours=6))
+        assert not w._owes_a_detail_fetch(current, _row(), self.TALEO, now=NOW)
+        # ... while a window recorded under the OLD route does not hold back the fixed one.
+        old_route = dict(stale, detail_revision=1, detail_next_at=NOW + timedelta(hours=6))
+        assert w._owes_a_detail_fetch(old_route, _row(), self.TALEO, now=NOW)
 
     def test_the_first_miss_under_the_new_route_starts_a_new_count(self, db):
         for _ in range(3):
