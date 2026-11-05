@@ -96,6 +96,32 @@ def _join(*parts: Any) -> str:
     return ", ".join(seen)
 
 
+_DIV_TAG_RE = re.compile(r"<(/?)div\b[^>]*>", re.IGNORECASE)
+
+
+def _div_inner_html(body: str, open_at: int) -> str:
+    """The inner HTML of the `<div ...>` whose tag starts at `open_at`,
+    balanced over nested divs. "" when the div never closes."""
+    first = _DIV_TAG_RE.match(body, open_at)
+    if not first or first.group(1):
+        return ""
+    depth, start = 1, first.end()
+    for tag in _DIV_TAG_RE.finditer(body, start):
+        depth += -1 if tag.group(1) else 1
+        if depth == 0:
+            return body[start:tag.start()]
+    return ""
+
+
+def _page_section(body: str, pattern: "re.Pattern[str]") -> str:
+    """Text of the div `pattern` locates (its match must END where that div's
+    opening tag starts), for posting pages that carry no `JobPosting` block."""
+    m = pattern.search(body)
+    if not m:
+        return ""
+    return html_to_text(_div_inner_html(body, m.end()))
+
+
 def _job_posting_ld(body: str) -> Optional[Dict[str, Any]]:
     """The `JobPosting` schema.org block on a posting page, if any."""
     for match in re.finditer(
@@ -293,6 +319,8 @@ class PaylocityProvider(AtsProvider):
     vendor = "paylocity"
     #: The posting page is the apply link (`detail_url == apply_url` at listing).
     detail_is_apply_url = True
+    #: Page fallback when the posting has no `JobPosting` block (2026-11-05).
+    detail_revision = 2
     label = "Paylocity"
 
     termless = True
@@ -393,12 +421,15 @@ class PaylocityProvider(AtsProvider):
             raise ChallengeError(self.vendor, status)
         if status != 200 or not body:
             return None
-        ld = _job_posting_ld(body)
-        if not ld:
-            return None
+        ld = _job_posting_ld(body) or {}
         posted_raw = ld.get("datePosted")
         posted = "" if looks_minted_now(posted_raw) else to_iso(posted_raw)
         description = html_to_text(ld.get("description") or "")
+        if not description:
+            # Many Paylocity boards publish no `JobPosting` block at all; the
+            # body is the div after the "Description" header (live,
+            # 2026-11-05: AME, Inc. - 49 of 68 open postings had no body).
+            description = _page_section(body, self._DESCRIPTION_RE)
         if not description and not posted:
             return None
         return RawJob(
@@ -410,6 +441,12 @@ class PaylocityProvider(AtsProvider):
             date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
             compensation=ld.get("baseSalary") or None,
         )
+
+    #: `<div class="job-listing-header">Description</div>` - the NEXT div is
+    #: the body ("Salary Description" is a separate, later header).
+    _DESCRIPTION_RE = re.compile(
+        r'<div[^>]*class=["\'][^"\']*job-listing-header[^"\']*["\'][^>]*>\s*Description\s*</div>\s*',
+        re.IGNORECASE)
 
     @staticmethod
     def _location_of(raw: Dict[str, Any]) -> str:
@@ -855,6 +892,8 @@ class JazzHrProvider(AtsProvider):
     vendor = "jazzhr"
     #: The posting page is the apply link (`detail_url == apply_url` at listing).
     detail_is_apply_url = True
+    #: Page fallback when the posting has no `JobPosting` block (2026-11-05).
+    detail_revision = 2
     label = "JazzHR"
 
     termless = True
@@ -952,12 +991,15 @@ class JazzHrProvider(AtsProvider):
             raise ChallengeError(self.vendor, status)
         if status != 200 or not body:
             return None
-        ld = _job_posting_ld(body)
-        if not ld:
-            return None
+        ld = _job_posting_ld(body) or {}
         posted_raw = ld.get("datePosted")
         posted = "" if looks_minted_now(posted_raw) else to_iso(posted_raw)
         description = html_to_text(ld.get("description") or "")
+        if not description:
+            # Some JazzHR accounts publish no `JobPosting` block; the body is
+            # still in `#job-description` (live, 2026-11-05: Noodles & Co,
+            # 38 of 53 open postings without a body after 638 attempts).
+            description = _page_section(body, self._DESCRIPTION_RE)
         if not description and not posted:
             return None
         return RawJob(
@@ -970,6 +1012,8 @@ class JazzHrProvider(AtsProvider):
             employment_type=str(ld.get("employmentType") or ""),
             compensation=ld.get("baseSalary") or None,
         )
+
+    _DESCRIPTION_RE = re.compile(r'(?=<div[^>]*\bid=["\']job-description["\'])', re.IGNORECASE)
 
 
 register(JazzHrProvider())
