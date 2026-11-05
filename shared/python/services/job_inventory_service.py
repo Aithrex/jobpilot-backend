@@ -2350,6 +2350,9 @@ _CARD_PROJECTION = {
     "cost_class": 1, "source_quality": 1, "content_hash": 1, "requirements": 1,
     "status": 1, "last_verified_at": 1, "description_ref": 1,
     "description_chars": 1, "industry": 1, "ats": 1, "tenant": 1,
+    # Whether the body is the full description or only a listing teaser, so a
+    # card can say its score is provisional (`inventory_feed._row`).
+    "body_state": 1,
     # A field stored but not projected is a field that does not exist as far as
     # every read path is concerned - the card renders from THIS shape, so an
     # omission here reads exactly like a normalizer that never captured it.

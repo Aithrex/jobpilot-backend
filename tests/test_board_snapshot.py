@@ -281,3 +281,37 @@ def test_production_uses_the_bounded_fan_out_without_lambda(environment, expecte
                          text=True, timeout=120, cwd=str(root))
     assert out.returncode == 0, out.stderr[-500:]
     assert out.stdout.strip().splitlines()[-1] == expected
+
+
+class TestNewSinceLastVisit:
+    """`seen_through` = the end of the user's PREVIOUS board visit, so the
+    client can mark what the crawler found since then as new (2026-11-05)."""
+
+    def _open(self, monkeypatch, at):
+        monkeypatch.setattr(bs, "_now", lambda: at)
+        bs.record_request(_payload())
+
+    def test_a_first_visit_has_nothing_to_compare_against(self, monkeypatch):
+        self._open(monkeypatch, NOW)
+        assert bs.load(_payload(), now=NOW)["seen_through"] is None
+
+    def test_activity_inside_one_visit_does_not_move_it(self, monkeypatch):
+        self._open(monkeypatch, NOW)
+        self._open(monkeypatch, NOW + timedelta(minutes=30))   # the page's auto-sync
+        self._open(monkeypatch, NOW + timedelta(minutes=60))
+        assert bs.seen_through(USER) is None
+
+    def test_a_return_after_the_gap_marks_the_previous_visit_seen(self, monkeypatch):
+        self._open(monkeypatch, NOW)
+        self._open(monkeypatch, NOW + timedelta(minutes=40))
+        back = NOW + timedelta(minutes=40 + bs.VISIT_GAP_MINUTES + 1)
+        self._open(monkeypatch, back)
+        seen = bs.load(_payload(), now=back)["seen_through"]
+        assert seen == (NOW + timedelta(minutes=40)).isoformat()
+        # ...and stays put for the rest of this visit.
+        self._open(monkeypatch, back + timedelta(minutes=30))
+        assert bs.seen_through(USER) == seen
+
+    def test_unknown_user_is_none(self):
+        assert bs.seen_through("") is None
+        assert bs.seen_through("nobody@example.com") is None

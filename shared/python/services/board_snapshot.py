@@ -72,6 +72,10 @@ MAX_SERVE_SECONDS = _env_int("BOARD_MAX_SERVE_HOURS", 24) * 3600
 ACTIVE_DAYS = _env_int("BOARD_ACTIVE_DAYS", 14)
 #: Rows expire on their own (a TTL index on `expire_at`).
 KEEP_DAYS = _env_int("BOARD_KEEP_DAYS", 3)
+#: Board activity closer together than this is ONE visit. The open page
+#: re-scans every 30 minutes, so a visit is "active" while that keeps going and
+#: ends when the board has been quiet this long.
+VISIT_GAP_MINUTES = _env_int("BOARD_VISIT_GAP_MINUTES", 120)
 
 #: The request fields that decide what a board contains. Everything else in a
 #: scan payload (force_refresh, the email) is not part of the answer.
@@ -183,13 +187,30 @@ def record_request(payload: Dict[str, Any]) -> Optional[str]:
     db = _db()
     _ensure_indexes(db)
     now = _now()
+    update: Dict[str, Any] = {"params": params, "sig": sig, "requested_at": now}
+    # "New since your last visit": a new visit starts when the board has been
+    # quiet for VISIT_GAP_MINUTES, and everything the crawler found after the
+    # PREVIOUS visit's last activity is new to this one. Kept per user on the
+    # server, so it agrees across devices.
+    prev = db[REQUESTS].find_one({"_id": email}, {"requested_at": 1})
+    last = _aware((prev or {}).get("requested_at"))
+    if last is not None and (now - last).total_seconds() >= VISIT_GAP_MINUTES * 60:
+        update["seen_through"] = last
     db[REQUESTS].update_one(
         {"_id": email},
-        {"$set": {"params": params, "sig": sig, "requested_at": now},
-         "$setOnInsert": {"created_at": now}},
+        {"$set": update, "$setOnInsert": {"created_at": now}},
         upsert=True,
     )
     return sig
+
+
+def seen_through(email: str) -> Optional[str]:
+    """End of the user's previous board visit (ISO), or None on a first visit."""
+    if not email:
+        return None
+    doc = _db()[REQUESTS].find_one({"_id": email}, {"seen_through": 1}) or {}
+    at = _aware(doc.get("seen_through"))
+    return at.isoformat() if at else None
 
 
 def save(email: str, key: str, sig: str, result: Dict[str, Any], *,
@@ -246,9 +267,11 @@ def load(payload: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str
     out: Dict[str, Any] = {
         "available": False, "fresh": False, "built_at": None, "age_seconds": None,
         "refresh_minutes": REFRESH_MINUTES, "sources": {k: None for k in SOURCES},
+        "seen_through": None,
     }
     if not email:
         return out
+    out["seen_through"] = seen_through(email)
     oldest: Optional[datetime] = None
     all_fresh = True
     for doc in _db()[SNAPSHOTS].find({"user_email": email, "sig": sig}):

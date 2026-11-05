@@ -509,9 +509,31 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
         "tech": doc.get("tech") or None,
         "_requirements": doc.get("requirements") or None,
     }
+    # When the crawler first saw it: what "New since your last visit" compares
+    # against `board_snapshot.load()["seen_through"]`.
+    first_seen = doc.get("first_seen_at")
+    if isinstance(first_seen, datetime):
+        row["first_seen_at"] = (first_seen if first_seen.tzinfo
+                                else first_seen.replace(tzinfo=timezone.utc)).isoformat()
+    if not has_read_description(doc):
+        # Scored from the title alone until the description is fetched; the
+        # card says so instead of presenting a provisional number as final.
+        row["score_basis"] = "title_only"
     if is_marketplace_board(row) or str(doc.get("board_kind") or "").lower() == "marketplace":
         row["board_kind"] = "marketplace"
     return row
+
+
+def has_read_description(doc: Dict[str, Any]) -> bool:
+    """Has this posting's real description been read into `requirements`?
+
+    No: a listing teaser (`body_state: teaser`), no stored body at all, or no
+    requirement profile yet. Each means the score leans on the title."""
+    if not doc.get("requirements"):
+        return False
+    if doc.get("body_state") == "teaser":
+        return False
+    return bool(doc.get("description_ref")) or int(doc.get("description_chars") or 0) > 200
 
 
 def _posted_text(days: Optional[int]) -> str:
