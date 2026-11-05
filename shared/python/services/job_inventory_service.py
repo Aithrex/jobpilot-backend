@@ -1167,7 +1167,12 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
     # Where the body is fetched from (a provider's detail URL, or an id). Kept
     # so a posting the listing no longer shows can still be fetched
     # (`job_ingest_worker._owed_backlog`). Absent = not told.
-    detail_ref = _safe_str(raw.get("detail_ref"), 600)
+    # NOT `_safe_str`: that is the FILTER guard and turns "." into "_", which
+    # stored "https://listings.jobs.gmu.edu/..." as "https://listings_jobs_gmu_edu/..."
+    # (live, 2026-11-05). This value is stored and never reaches a filter.
+    ref_raw = str(raw.get("detail_ref") or "")
+    detail_ref = (_safe_url(ref_raw, 600) if ref_raw.lower().startswith(("http://", "https://"))
+                  else _safe_display(ref_raw, 600))
     if detail_ref:
         doc["detail_ref"] = detail_ref
 

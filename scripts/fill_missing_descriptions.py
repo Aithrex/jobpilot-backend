@@ -62,6 +62,10 @@ def main(argv=None) -> int:
                     help="owed postings one shard run may fetch (default 150)")
     ap.add_argument("--budget", type=float, default=120.0,
                     help="seconds per shard run (default 120)")
+    ap.add_argument("--retry-now", action="store_true",
+                    help="with --apply: clear the retry wait on every owed posting first. "
+                         "For misses a since-fixed bug caused (2026-11-05: legacy Workday "
+                         "was handed a full URL where its fetch appends a path).")
     args = ap.parse_args(argv)
 
     from services import job_ingest_worker as w
@@ -75,6 +79,12 @@ def main(argv=None) -> int:
 
     sources = [w.normalize_source(args.source)] if args.source else [
         src for src, v in before["by_source"].items() if v["owed"]]
+    if args.retry_now:
+        res = inv._postings().update_many(
+            {"status": inv.STATUS_ACTIVE, "body_state": "teaser", "source": {"$in": sources},
+             "detail_next_at": {"$ne": None}},
+            {"$unset": {"detail_next_at": ""}})
+        print(f"retry wait cleared on {res.modified_count:,} owed postings")
     totals: Counter = Counter()
     started = time.monotonic()
     for src in sources:

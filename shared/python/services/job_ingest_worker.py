@@ -2843,27 +2843,59 @@ def _member_tenant(member: Dict[str, Any]) -> str:
     return str(member.get("slug") or member.get("tenant") or member["member_key"])
 
 
-def _stored_detail_ref(doc: Dict[str, Any], member: Dict[str, Any]) -> str:
-    """Where a STORED posting's body is fetched from, without its listing row.
+def _ref_is_mangled(ref: str) -> bool:
+    """A URL ref whose host lost its dots. Refs were stored through the filter
+    guard for a few hours on 2026-11-05, which writes "." as "_"
+    ("https://listings_jobs_gmu_edu/..."); such a ref can only ever miss."""
+    if not ref.lower().startswith(("http://", "https://")):
+        return False
+    host = ref.split("//", 1)[1].split("/", 1)[0]
+    return "." not in host
 
-    The ref the listing handed us is kept on the posting since 2026-11-05
-    (`detail_ref`). Older postings never kept it; for those the provider may
-    rebuild it from the apply link it minted (`detail_ref_from_apply_url` -
-    exact for Workday, which is 8,182 of the 10,794 open postings without a
-    body when this was written). "" means the provider addresses the detail by
-    the posting's own id, or cannot be rebuilt - and then a miss says so."""
+
+def _workday_path_from_apply_url(member: Dict[str, Any], url: str) -> str:
+    """The `externalPath` the LEGACY Workday detail fetch appends, rebuilt from
+    the apply link `_list_workday` minted as `{base}/{site}/{path}`."""
+    tenant, host, site = (str(member.get(k) or "") for k in ("tenant", "wd_host", "site"))
+    if not (tenant and host and site and url):
+        return ""
+    base = f"https://{tenant}.{host}.myworkdayjobs.com"
+    m = re.match(re.escape(base) + r"/(?:[a-z]{2}-[a-z]{2}/)?" + re.escape(site) + r"/(.+)$",
+                 url.split("#", 1)[0].split("?", 1)[0], re.IGNORECASE)
+    return (m.group(1) if m else "").strip("/")
+
+
+def _stored_detail_ref(doc: Dict[str, Any], member: Dict[str, Any]) -> str:
+    """Where a STORED posting's body is fetched from, without its listing row,
+    in the form THIS member's fetch path expects.
+
+    * Legacy Workday (`_uses_legacy_listing`) appends a PATH to its own CXS
+      base, so the path is rebuilt from the stored apply link - which is
+      stored with its dots intact - rather than trusted from `detail_ref`.
+    * Otherwise the kept `detail_ref`, unless it is a mangled URL.
+    * Otherwise the provider rebuilds it (`detail_ref_from_apply_url`, exact
+      for provider-path Workday), or - for a vendor whose posting page IS the
+      apply link (`detail_is_apply_url`) - the apply link itself.
+    * "" means the detail is addressed by the posting's own id, or cannot be
+      rebuilt; then a miss says so and is retried on its schedule."""
+    url = str(doc.get("canonical_url") or "")
+    if member.get("source") == SOURCE_WORKDAY and _uses_legacy_listing(member):
+        return _workday_path_from_apply_url(member, url)
     ref = str(doc.get("detail_ref") or "")
-    if ref:
+    if ref and not _ref_is_mangled(ref):
         return ref
     registry = _ats_registry()
     provider = registry.get(_vendor_of(member)) if registry is not None else None
     rebuild = getattr(provider, "detail_ref_from_apply_url", None)
     if callable(rebuild):
         try:
-            return str(rebuild(_endpoint_from_member(member),
-                               str(doc.get("canonical_url") or "")) or "")
+            rebuilt = str(rebuild(_endpoint_from_member(member), url) or "")
         except Exception:  # pragma: no cover - a bad URL is a miss, not a crash
-            return ""
+            rebuilt = ""
+        if rebuilt:
+            return rebuilt
+    if getattr(provider, "detail_is_apply_url", False) and url:
+        return url
     return ""
 
 

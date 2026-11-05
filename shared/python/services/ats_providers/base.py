@@ -525,6 +525,10 @@ class AtsProvider:
     #: reason fingerprinting is the primary strategy rather than this.
     slug_probe: bool = False
 
+    #: True when the listing's `detail_url` is the posting's own apply link, so a
+    #: posting stored without a detail ref can still be fetched from that link.
+    detail_is_apply_url: bool = False
+
     def detail_ref_from_apply_url(self, endpoint: "Endpoint", apply_url: str) -> str:
         """The `detail_url` this provider would have minted for a posting,
         rebuilt from the apply link it minted. "" when it cannot be rebuilt or

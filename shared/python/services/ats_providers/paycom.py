@@ -97,6 +97,8 @@ def _search_body(skip: int) -> Dict[str, Any]:
 
 class PaycomProvider(AtsProvider):
     vendor = VENDOR
+    #: The posting page is the apply link (`detail_url == apply_url` at listing).
+    detail_is_apply_url = True
     label = "Paycom"
 
     termless = True
