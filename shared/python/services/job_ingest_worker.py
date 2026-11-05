@@ -1679,6 +1679,7 @@ def http_get_json(source: str, url: str, policy: HostPolicy, *,
             logger.debug("ingest %s: network error on %s (%s)", source, host,
                          type(exc).__name__)
         else:
+            _note_http_status(resp.status_code)
             if resp.status_code == 200:
                 policy.note_success(host)
                 try:
@@ -1698,6 +1699,27 @@ def http_get_json(source: str, url: str, policy: HostPolicy, *,
                 return None
             time.sleep(backoff)
     return None
+
+
+#: HTTP statuses the CURRENT thread's requests got back, so a detail fetch can
+#: tell "the page is gone" (404/410) from every other way of finding nothing.
+#: `_fetch_timed` resets it before each fetch; nothing else reads it.
+_HTTP_STATUSES = threading.local()
+
+
+def _note_http_status(code: Any) -> None:
+    codes = getattr(_HTTP_STATUSES, "codes", None)
+    if codes is not None and isinstance(code, int):
+        codes.append(code)
+
+
+#: Only these say the posting itself is gone. 403/429/5xx, timeouts and bot
+#: challenges are the site refusing US, never evidence about the job.
+GONE_STATUSES = frozenset({404, 410})
+#: A job is closed on its page's word only after TWO "gone" answers this far
+#: apart, with no other answer between them: one 404 can be a deploy, a CDN
+#: hiccup or a renumbered URL.
+GONE_CONFIRM_HOURS = _env_float("JOB_INGEST_GONE_CONFIRM_HOURS", 20.0)
 
 
 _HTTP_HEADERS = {
@@ -2360,6 +2382,19 @@ def _endpoint_from_member(member: Dict[str, Any]):
     )
 
 
+def _recording(fetcher: Any) -> Any:
+    """A provider fetcher that also notes its HTTP status (`_note_http_status`)."""
+    if fetcher is None:
+        return None
+
+    def call(*args: Any, **kwargs: Any) -> Any:
+        out = fetcher(*args, **kwargs)
+        if isinstance(out, tuple) and out:
+            _note_http_status(out[0])
+        return out
+    return call
+
+
 def _provider_fetch_context(member: Dict[str, Any], *, cutoff: datetime,
                             deadline: float, stop: Optional[threading.Event]):
     """A FetchContext whose guard is THIS worker's SSRF allowlist.
@@ -2386,8 +2421,9 @@ def _provider_fetch_context(member: Dict[str, Any], *, cutoff: datetime,
             return assert_own_site_url(own_host, url)
         return assert_outbound_url(source, url)
 
-    get_json, get_text, post_json = make_fetchers(
-        PacedSession(), guard=guard, deadline=member_deadline, stop=stop)
+    get_json, get_text, post_json = (
+        _recording(fn) for fn in make_fetchers(
+            PacedSession(), guard=guard, deadline=member_deadline, stop=stop))
     cutoff_iso = cutoff.astimezone(timezone.utc).isoformat() if cutoff else None
     return FetchContext(
         get_json=get_json, get_text=get_text, post_json=post_json,
@@ -2939,6 +2975,7 @@ def _row_from_stored(doc: Dict[str, Any], member: Dict[str, Any]) -> Optional[Di
     row["_backlog"] = True
     row["_detail_misses"] = int(doc.get("detail_misses") or 0)
     row["_stored_revision"] = int(doc.get("detail_revision") or 1)
+    row["_gone_seen_at"] = doc.get("detail_gone_at")
     return row
 
 
@@ -2986,6 +3023,22 @@ def _owed_backlog(src: str, members: List[Dict[str, Any]], *, exclude: set,
             logger.warning("ingest: deferring %d owed postings failed: %s",
                            len(unworkable), type(exc).__name__)
     return out
+
+
+def _record_backlog_gone(src: str, row: Dict[str, Any], *, now: datetime) -> bool:
+    """The posting's own page answered 404/410. Closes it on the SECOND such
+    answer at least `GONE_CONFIRM_HOURS` after the first; otherwise records the
+    first and schedules the recheck. Returns True when it closed the posting."""
+    first = _aware(row.get("_gone_seen_at"))
+    try:
+        if first is not None and (now - first) >= timedelta(hours=GONE_CONFIRM_HOURS):
+            return inv.close_posting(src, row["source_job_id"], reason="detail_gone", now=now)
+        inv.record_detail_gone(src, row["source_job_id"], first_seen=first or now,
+                               recheck_at=now + timedelta(hours=max(GONE_CONFIRM_HOURS, 24.0)),
+                               now=now)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("ingest: recording a gone posting failed: %s", type(exc).__name__)
+    return False
 
 
 def _record_backlog_miss(src: str, row: Dict[str, Any], member: Dict[str, Any], *,
@@ -3409,12 +3462,23 @@ def run_shard(
         # postings were all scheduled out a day by misses in slow shards,
         # while the same fetch, run alone, read every one).
         cut_ids: set = set()
+        # Fetches whose EVERY HTTP answer was 404/410: the page says the job
+        # is gone. Acted on for backlog rows only, and only on a second such
+        # answer `GONE_CONFIRM_HOURS` later (`_record_backlog_gone`).
+        gone_ids: set = set()
 
         def _fetch_timed(pair):
-            body = fetch_detail(pair[1], pair[0], policy=policy, deadline=deadline, stop=stop)
+            _HTTP_STATUSES.codes = []
+            try:
+                body = fetch_detail(pair[1], pair[0], policy=policy, deadline=deadline, stop=stop)
+            finally:
+                codes = list(getattr(_HTTP_STATUSES, "codes", None) or [])
+                _HTTP_STATUSES.codes = None
             if time.monotonic() >= deadline - DEADLINE_CUT_SECONDS or (
                     stop is not None and stop.is_set()):
                 cut_ids.add(id(pair[1]))
+            if codes and all(c in GONE_STATUSES for c in codes):
+                gone_ids.add(id(pair[1]))
             return body
 
         details = run_bounded(
@@ -3455,6 +3519,12 @@ def run_shard(
                 # the next run asks again at once.
                 counts["backlog-cut"] += 1
                 continue
+            if id(row) in backlog_ids and not error and not fetched and id(row) in gone_ids:
+                if _record_backlog_gone(src, row, now=now):
+                    counts["backlog-closed-gone"] += 1
+                else:
+                    counts["backlog-gone-once"] += 1
+                continue
             if id(row) in backlog_ids and (error or not fetched):
                 # A backlog fetch that found nothing is a MISS and nothing
                 # more. It is not written through `upsert_posting`, which would
@@ -3476,7 +3546,7 @@ def run_shard(
             if detail_ref:
                 payload["detail_ref"] = detail_ref
             payload.pop("_member_key", None)
-            for internal in ("_backlog", "_detail_misses", "_stored_revision"):
+            for internal in ("_backlog", "_detail_misses", "_stored_revision", "_gone_seen_at"):
                 payload.pop(internal, None)
             if payload.pop("_restart_misses", None):
                 payload["detail_misses_restart"] = True
