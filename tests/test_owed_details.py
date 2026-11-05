@@ -427,3 +427,92 @@ class TestARunOutOfTimeIsNotAMiss:
         w.run_shard(w.SOURCE_WORKDAY, w.shard_of(w.SOURCE_WORKDAY, "co0"),
                     now=NOW, max_details=10, backlog_only=True)
         assert _doc(sjid)["detail_misses"] == 1
+
+
+class TestAJobWhosePageIsGoneIsClosed:
+    """2026-11-05: owed postings on The Citadel and Shoe Station answered 404 -
+    closed at the employer, still open on users' boards, because a posting
+    older than the listing window is never re-seen and so never closed."""
+
+    def _io(self, monkeypatch, statuses):
+        def fake_list(member, **kw):
+            member["_listing_truncated"] = True
+            return []
+
+        def fake_detail(row, member, **kw):
+            for code in statuses:
+                w._note_http_status(code)
+            return BODY if statuses == [200] else str(row.get("description") or "")
+
+        monkeypatch.setattr(w, "list_member", fake_list)
+        monkeypatch.setattr(w, "fetch_detail", fake_detail)
+
+    def _run(self, at):
+        return w.run_shard(w.SOURCE_WORKDAY, w.shard_of(w.SOURCE_WORKDAY, "co0"),
+                           now=at, max_details=10, backlog_only=True)
+
+    def test_one_404_is_a_strike_not_a_closure(self, db, board, monkeypatch):
+        sjid = _store_owed(board[0], "GONE", age_days=20)
+        self._io(monkeypatch, [404])
+        out = self._run(NOW)
+        doc = _doc(sjid)
+        assert out["counts"]["backlog-gone-once"] == 1
+        assert doc["status"] == "active" and inv._safe_dt(doc["detail_gone_at"]) == NOW
+        assert inv._safe_dt(doc["detail_next_at"]) == NOW + timedelta(hours=24)
+
+    def test_a_second_404_a_day_later_closes_it(self, db, board, monkeypatch):
+        sjid = _store_owed(board[0], "GONE", age_days=20)
+        self._io(monkeypatch, [404])
+        self._run(NOW)
+        out = self._run(NOW + timedelta(hours=25))
+        doc = _doc(sjid)
+        assert out["counts"]["backlog-closed-gone"] == 1
+        assert doc["status"] == "closed" and doc["closed_reason"] == "detail-gone"
+
+    def test_410_counts_like_404(self, db, board, monkeypatch):
+        sjid = _store_owed(board[0], "G410", age_days=20)
+        self._io(monkeypatch, [410])
+        self._run(NOW)
+        self._run(NOW + timedelta(hours=25))
+        assert _doc(sjid)["status"] == "closed"
+
+    def test_two_404s_too_close_together_do_not_close(self, db, board, monkeypatch):
+        sjid = _store_owed(board[0], "SOON", age_days=20)
+        self._io(monkeypatch, [404])
+        self._run(NOW)
+        inv._db().job_postings.update_one({"source_job_id": sjid},
+                                          {"$set": {"detail_next_at": NOW}})   # force an early recheck
+        self._run(NOW + timedelta(hours=3))
+        assert _doc(sjid)["status"] == "active"
+
+    def test_any_other_answer_breaks_the_streak(self, db, board, monkeypatch):
+        sjid = _store_owed(board[0], "FLAKY", age_days=20)
+        self._io(monkeypatch, [404])
+        self._run(NOW)
+        self._io(monkeypatch, [403])                       # the site refusing us is not "gone"
+        inv._db().job_postings.update_one({"source_job_id": sjid}, {"$set": {"detail_next_at": NOW}})
+        self._run(NOW + timedelta(hours=25))
+        assert "detail_gone_at" not in _doc(sjid)
+        self._io(monkeypatch, [404])
+        inv._db().job_postings.update_one({"source_job_id": sjid}, {"$set": {"detail_next_at": NOW}})
+        self._run(NOW + timedelta(hours=50))
+        doc = _doc(sjid)
+        assert doc["status"] == "active", "a new streak needs its own second strike"
+
+    def test_a_partly_successful_fetch_is_not_gone(self, db, board, monkeypatch):
+        sjid = _store_owed(board[0], "MIXED", age_days=20)
+        self._io(monkeypatch, [200, 404])                  # shell page fine, API call 404
+        self._run(NOW)
+        self._run(NOW + timedelta(hours=25))
+        assert _doc(sjid)["status"] == "active" and "detail_gone_at" not in _doc(sjid)
+
+    def test_a_body_clears_the_strike(self, db, board, monkeypatch):
+        sjid = _store_owed(board[0], "BACK", age_days=20)
+        self._io(monkeypatch, [404])
+        self._run(NOW)
+        self._io(monkeypatch, [200])
+        inv._db().job_postings.update_one({"source_job_id": sjid}, {"$set": {"detail_next_at": NOW}})
+        self._run(NOW + timedelta(hours=25))
+        doc = _doc(sjid)
+        assert doc["status"] == "active" and doc["body_state"] == "full"
+        assert "detail_gone_at" not in doc

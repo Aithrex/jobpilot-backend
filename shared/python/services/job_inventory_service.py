@@ -1433,8 +1433,10 @@ def upsert_posting(
         if retry_at is not None:
             update["$set"]["detail_next_at"] = retry_at
     elif body_state == "full":
-        # A body arrived: nothing is owed, so nothing is scheduled.
+        # A body arrived: nothing is owed, so nothing is scheduled - and the
+        # posting is plainly not gone.
         update["$unset"]["detail_next_at"] = ""
+        update["$unset"]["detail_gone_at"] = ""
 
     try:
         before = _postings().find_one_and_update(
@@ -1609,6 +1611,7 @@ _OWED_PROJECTION = {
     "locations": 1, "posted_at": 1, "posted_at_confidence": 1, "raw_posted_text": 1,
     "employment_type": 1, "seniority": 1, "description_text": 1, "detail_ref": 1,
     "detail_misses": 1, "detail_revision": 1, "tenant": 1, "first_seen_at": 1,
+    "detail_gone_at": 1,
 }
 
 
@@ -1676,6 +1679,19 @@ def defer_owed_details(source: str, source_job_ids: List[str], *, until: datetim
     return int(res.modified_count)
 
 
+def record_detail_gone(source: str, source_job_id: str, *, first_seen: datetime,
+                       recheck_at: datetime, now: Optional[datetime] = None) -> bool:
+    """The posting's own page answered 404/410 - the FIRST strike. Keeps when
+    the streak began (`detail_gone_at`) and asks again at `recheck_at`; the
+    second strike closes it (`job_ingest_worker._record_backlog_gone`)."""
+    res = _postings().update_one(
+        {"source": _safe_key(source, 60), "source_job_id": _safe_str(source_job_id, 200),
+         "body_state": "teaser", "status": STATUS_ACTIVE},
+        {"$set": {"detail_gone_at": first_seen, "detail_next_at": recheck_at,
+                  "detail_last_attempt_at": now or _now()}})
+    return bool(res.matched_count)
+
+
 def record_detail_miss(source: str, source_job_id: str, *, misses: int, revision: int,
                        next_at: datetime, now: Optional[datetime] = None) -> bool:
     """A detail fetch for a posting the listing did not show found nothing.
@@ -1687,7 +1703,9 @@ def record_detail_miss(source: str, source_job_id: str, *, misses: int, revision
         {"source": _safe_key(source, 60), "source_job_id": _safe_str(source_job_id, 200),
          "body_state": "teaser"},
         {"$set": {"detail_misses": max(1, int(misses)), "detail_revision": max(1, int(revision)),
-                  "detail_next_at": next_at, "detail_last_attempt_at": now}})
+                  "detail_next_at": next_at, "detail_last_attempt_at": now},
+         # Any answer but "gone" breaks a gone streak: closing needs two in a row.
+         "$unset": {"detail_gone_at": ""}})
     return bool(res.matched_count)
 
 
