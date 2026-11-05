@@ -49,7 +49,8 @@ def board(monkeypatch):
 def _listing(member, raw_id, *, days_ago=1, description=""):
     return w._listing_row(
         member, raw_id, title="Backend Engineer",
-        url=f"https://{member['tenant']}.wd1.myworkdayjobs.com/External/job/Austin/{raw_id}",
+        url=f"https://{member['tenant']}.wd1.myworkdayjobs.com/{member.get('site', 'External')}"
+            f"/job/Austin/{raw_id}",
         posted_at=NOW - timedelta(days=days_ago), location="Austin, TX, USA",
         description=description, employment_type="Full time",
         # What `_list_workday` really hands over: the externalPath, not a URL.
@@ -336,3 +337,43 @@ class TestTheNewPostingTargetReadsWorkingBoards:
         assert h["broken_boards"][0]["tenant"] == "co0"
         assert h["new_total"] == 10 and h["new_owed"] == 0 and h["new_with_body"] == 1.0
         assert h["new_total_all"] == 35 and h["new_owed_all"] == 25
+
+
+class TestTheBacklogCannotStarve:
+    """2026-11-05: The Children's Place and Sea Mar (270 owed postings) were
+    never once attempted. Oldest first, the queue's front held postings the
+    shard selected and then skipped - another shard's site of the same tenant,
+    or one with nothing to fetch - so every run selected them again."""
+
+    def test_a_shard_only_selects_its_own_members_postings(self, db, monkeypatch):
+        mine = {"member_key": "acme-a", "source": w.SOURCE_WORKDAY, "tenant": "acme",
+                "wd_host": "wd1", "site": "SiteA", "display_name": "Acme"}
+        theirs = {"member_key": "acme-b", "source": w.SOURCE_WORKDAY, "tenant": "acme",
+                  "wd_host": "wd1", "site": "SiteB", "display_name": "Acme"}
+        for i in range(5):        # the OTHER site's postings are older
+            _store_owed(theirs, f"OLD{i}", age_days=20 + i)
+        _store_owed(mine, "MINE1", age_days=3)
+        got = w._owed_backlog(w.SOURCE_WORKDAY, [mine], exclude=set(), now=NOW, limit=1)
+        assert [r["source_job_id"] for _m, r in got] == ["acme-a:MINE1"]
+        # ...and the other site's postings were not touched by this shard.
+        for i in range(5):
+            assert "detail_next_at" not in _doc(f"acme-b:OLD{i}")
+
+    def test_a_posting_it_cannot_fetch_is_moved_aside(self, db, board, monkeypatch):
+        stuck = _store_owed(board[0], "STUCK", age_days=30)
+        real = _store_owed(board[0], "REAL", age_days=2)
+        monkeypatch.setattr(w, "_row_from_stored",
+                            lambda doc, member: None if doc["source_job_id"] == stuck
+                            else _real_row_from_stored(doc, member))
+        got = w._owed_backlog(w.SOURCE_WORKDAY, board, exclude=set(), now=NOW, limit=1)
+        assert [r["source_job_id"] for _m, r in got] == [real]
+        doc = _doc(stuck)
+        assert inv._safe_dt(doc["detail_next_at"]) == NOW + timedelta(days=w.BACKLOG_DEFER_DAYS)
+        assert doc["detail_deferred_reason"] == "unworkable"
+        # Next run, the front of the queue is clear.
+        monkeypatch.setattr(w, "_row_from_stored", _real_row_from_stored)
+        again = w._owed_backlog(w.SOURCE_WORKDAY, board, exclude={real}, now=NOW, limit=5)
+        assert stuck not in [r["source_job_id"] for _m, r in again]
+
+
+_real_row_from_stored = w._row_from_stored
