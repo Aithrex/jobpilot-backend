@@ -60,13 +60,14 @@ def test_non_feed_shapes_pass_through():
 def test_the_poll_route_trims_feed_jobs_but_not_user_work(mock_db):
     from services.resume_service import get_resume_service
     svc = get_resume_service()
-    big = {"jobs": [_card(i, i % 100, pad=4000) for i in range(1600)]}
-    assert _size(big) > 6_000_000
+    from services.resume_service import POLL_RESULT_MAX_BYTES
+    big = {"jobs": [_card(i, i % 100, pad=9000) for i in range(1600)]}
+    assert _size(big) > POLL_RESULT_MAX_BYTES
 
     feed_id = svc.create_job("workday_jobs", {}, "a@b.com")
     svc.complete_job(feed_id, big)
     served = svc.get_job(feed_id, "a@b.com")
-    assert _size(served["result"]) <= 4_500_000
+    assert _size(served["result"]) <= POLL_RESULT_MAX_BYTES
     assert served["result"]["trimmed_for_size"]["dropped"] > 0
 
     own_id = svc.create_job("tailor", {}, "a@b.com")
@@ -81,3 +82,28 @@ def test_feed_cards_do_not_carry_the_taxonomy_verdict():
     from services import inventory_feed
     src = inspect.getsource(inventory_feed.build_feed)
     assert 'row.pop("tech", None)' in src
+
+
+def test_a_full_board_tab_is_not_trimmed():
+    """2026-11-04: the 4.5 MB Lambda-era cap stored a 1,500-card tab as 1,202
+    cards on the Oracle box, Today roles among them."""
+    from services.resume_service import POLL_RESULT_MAX_BYTES
+    tab = {"jobs": [_card(i, i % 100, pad=4000) for i in range(1500)]}
+    assert 4_500_000 < _size(tab) < POLL_RESULT_MAX_BYTES < 16_000_000
+    assert fit_feed_result(tab) is tab
+
+
+def test_recent_cards_are_dropped_last():
+    """A posting crawled minutes ago scores low until its body arrives; the
+    trim must not empty the Today window the board opens on."""
+    jobs = [_card(0, 20, days=0), _card(1, 90, days=9), _card(2, 25, days=1),
+            _card(3, 85, days=5)]
+    out = fit_feed_result({"jobs": jobs}, max_bytes=_size({"jobs": jobs[:2]}) + 5)
+    assert [j["job_id"] for j in out["jobs"]] == ["j0", "j2"]
+
+
+def test_an_undated_card_uses_when_it_was_first_seen():
+    jobs = [{**_card(0, 20), "days_ago": None, "first_seen_days_ago": 0},
+            _card(1, 90, days=9)]
+    out = fit_feed_result({"jobs": jobs}, max_bytes=_size({"jobs": jobs[:1]}) + 5)
+    assert [j["job_id"] for j in out["jobs"]] == ["j0"]
