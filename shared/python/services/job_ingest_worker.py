@@ -2396,7 +2396,8 @@ def _recording(fetcher: Any) -> Any:
 
 
 def _provider_fetch_context(member: Dict[str, Any], *, cutoff: datetime,
-                            deadline: float, stop: Optional[threading.Event]):
+                            deadline: float, stop: Optional[threading.Event],
+                            session: Any = None):
     """A FetchContext whose guard is THIS worker's SSRF allowlist.
 
     Providers must not grow a second outbound path. The crawler's host
@@ -2423,7 +2424,8 @@ def _provider_fetch_context(member: Dict[str, Any], *, cutoff: datetime,
 
     get_json, get_text, post_json = (
         _recording(fn) for fn in make_fetchers(
-            PacedSession(), guard=guard, deadline=member_deadline, stop=stop))
+            session if session is not None else PacedSession(),
+            guard=guard, deadline=member_deadline, stop=stop))
     cutoff_iso = cutoff.astimezone(timezone.utc).isoformat() if cutoff else None
     return FetchContext(
         get_json=get_json, get_text=get_text, post_json=post_json,
@@ -2549,7 +2551,8 @@ def _list_via_provider(member: Dict[str, Any], *, cutoff: datetime,
 
 def _detail_via_provider(row: Dict[str, Any], member: Dict[str, Any], *,
                          deadline: float,
-                         stop: Optional[threading.Event] = None) -> Optional[str]:
+                         stop: Optional[threading.Event] = None,
+                         session: Any = None) -> Optional[str]:
     registry = _ats_registry()
     if registry is None:
         return None
@@ -2562,7 +2565,7 @@ def _detail_via_provider(row: Dict[str, Any], member: Dict[str, Any], *,
     endpoint = _endpoint_from_member(member)
     ctx = _provider_fetch_context(
         member, cutoff=datetime(1970, 1, 1, tzinfo=timezone.utc),
-        deadline=deadline, stop=stop)
+        deadline=deadline, stop=stop, session=session)
     # The posting's own id. `_detail_ref` is the provider's `detail_url`, and a
     # URL is not an id: Oracle and Taleo address the detail BY id, so handing
     # them the URL asked for a requisition called "https://..." and every such
@@ -2689,6 +2692,10 @@ BACKLOG_DETAIL_SHARE = _env_float("JOB_INGEST_BACKLOG_SHARE", 0.2)
 #: row it cannot rebuild) is moved aside this long, so it never blocks the
 #: front of an oldest-first queue.
 BACKLOG_DEFER_DAYS = _env_int("JOB_INGEST_BACKLOG_DEFER_DAYS", 7)
+#: Owed postings one employer may have fetched in one run. A big backlog on one
+#: site (Procore: 86) otherwise fills a run, and at one paced request a second
+#: it cannot finish - or, unpaced, gets the box blocked by the site's CDN.
+BACKLOG_PER_MEMBER = _env_int("JOB_INGEST_BACKLOG_PER_MEMBER", 10)
 #: A fetch that comes back empty this close to the run's deadline was clamped
 #: by it (`fetch_detail` shortens its timeouts to the remaining budget), so
 #: its emptiness is the budget's, not the posting's.
@@ -2998,6 +3005,7 @@ def _owed_backlog(src: str, members: List[Dict[str, Any]], *, exclude: set,
         return []
     out: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
     unworkable: List[str] = []
+    per_member: Dict[str, int] = defaultdict(int)
     for doc in docs:
         sjid = str(doc.get("source_job_id") or "")
         if sjid in exclude:
@@ -3012,6 +3020,9 @@ def _owed_backlog(src: str, members: List[Dict[str, Any]], *, exclude: set,
             # selected first again next run, and the run after: move it aside.
             unworkable.append(sjid)
             continue
+        if per_member[member["member_key"]] >= BACKLOG_PER_MEMBER:
+            continue                  # this employer's share of the run is used
+        per_member[member["member_key"]] += 1
         out.append((member, row))
         if len(out) >= limit:
             break
@@ -3022,6 +3033,23 @@ def _owed_backlog(src: str, members: List[Dict[str, Any]], *, exclude: set,
         except Exception as exc:  # pragma: no cover
             logger.warning("ingest: deferring %d owed postings failed: %s",
                            len(unworkable), type(exc).__name__)
+    return _interleave_by_member(out)
+
+
+def _interleave_by_member(pairs: List[Tuple[Dict[str, Any], Dict[str, Any]]]
+                          ) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Round-robin across employers, each keeping its own oldest-first order,
+    so concurrent fetch workers spread over many sites instead of queueing on
+    one site's pacing."""
+    queues: Dict[str, List[Tuple[Dict[str, Any], Dict[str, Any]]]] = {}
+    for pair in pairs:
+        queues.setdefault(str(pair[0]["member_key"]), []).append(pair)
+    out: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    while queues:
+        for key in list(queues):
+            out.append(queues[key].pop(0))
+            if not queues[key]:
+                del queues[key]
     return out
 
 
@@ -3068,7 +3096,8 @@ def _needs_http_detail(row: Dict[str, Any], member: Dict[str, Any]) -> bool:
 
 
 def fetch_detail(row: Dict[str, Any], member: Dict[str, Any], *, policy: HostPolicy,
-                 deadline: float, stop: Optional[threading.Event] = None) -> str:
+                 deadline: float, stop: Optional[threading.Event] = None,
+                 session: Any = None) -> str:
     """Fetch one posting body. Returns "" when unavailable - a body-less row is
     still worth storing (title/employer/date are the freshness surface), it just
     cannot be requirement-parsed."""
@@ -3078,7 +3107,7 @@ def fetch_detail(row: Dict[str, Any], member: Dict[str, Any], *, policy: HostPol
     source = member["source"]
     regional = _is_regional_member(member)
     if (USE_PROVIDERS or regional) and not _uses_legacy_listing(member):
-        body = _detail_via_provider(row, member, deadline=deadline, stop=stop)
+        body = _detail_via_provider(row, member, deadline=deadline, stop=stop, session=session)
         if body is not None:
             fetched = str(body).strip()
             return fetched if len(fetched) >= len(listing_desc) else listing_desc
@@ -3466,11 +3495,24 @@ def run_shard(
         # is gone. Acted on for backlog rows only, and only on a second such
         # answer `GONE_CONFIRM_HOURS` later (`_record_backlog_gone`).
         gone_ids: set = set()
+        # Fetches that got NO HTTP answer: refused by pacing, connections
+        # dropped or reset. The site said nothing about the posting.
+        silent_ids: set = set()
+
+        # ONE pacing session for every detail fetch of this run. Each fetch
+        # used to build its own, so a provider's per-site spacing (own-site
+        # careers pages: one request at a time, a second apart) never applied
+        # ACROSS postings: one run sent 88 Procore detail requests six at a
+        # time, and Procore's CDN dropped every connection after the first
+        # few (2026-11-05). `HostPolicy` already paced the legacy path per run.
+        from services.ats_providers.http import PacedSession as _PacedSession
+        detail_session = _PacedSession()
 
         def _fetch_timed(pair):
             _HTTP_STATUSES.codes = []
             try:
-                body = fetch_detail(pair[1], pair[0], policy=policy, deadline=deadline, stop=stop)
+                body = fetch_detail(pair[1], pair[0], policy=policy, deadline=deadline,
+                                    stop=stop, session=detail_session)
             finally:
                 codes = list(getattr(_HTTP_STATUSES, "codes", None) or [])
                 _HTTP_STATUSES.codes = None
@@ -3479,6 +3521,8 @@ def run_shard(
                 cut_ids.add(id(pair[1]))
             if codes and all(c in GONE_STATUSES for c in codes):
                 gone_ids.add(id(pair[1]))
+            if not codes:
+                silent_ids.add(id(pair[1]))
             return body
 
         details = run_bounded(
@@ -3513,7 +3557,8 @@ def run_shard(
                 continue
             listing_desc = str(row.get("description") or "")
             fetched = bool(description) and description != listing_desc
-            cut = error == "deadline" or (id(row) in cut_ids and not fetched)
+            cut = error == "deadline" or (id(row) in cut_ids and not fetched) or (
+                id(row) in silent_ids and not fetched and id(row) in backlog_ids)
             if id(row) in backlog_ids and cut:
                 # Never asked, or asked as the budget ran out: untouched, so
                 # the next run asks again at once.

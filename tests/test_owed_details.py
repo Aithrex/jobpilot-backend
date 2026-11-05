@@ -81,6 +81,7 @@ def _patch_io(monkeypatch, listing_by_member, *, fetched=None, body=BODY, misses
 
     def fake_detail(row, member, **kw):
         fetched.append(row["source_job_id"])
+        w._note_http_status(200)          # the site answered, as a real fetch does
         if row["source_job_id"] in misses:
             return str(row.get("description") or "")   # what a failed fetch hands back
         return body
@@ -516,3 +517,70 @@ class TestAJobWhosePageIsGoneIsClosed:
         doc = _doc(sjid)
         assert doc["status"] == "active" and doc["body_state"] == "full"
         assert "detail_gone_at" not in doc
+
+
+class TestDetailFetchesArePacedPerRun:
+    """2026-11-05: one run sent 88 Procore detail requests six at a time - each
+    fetch built its own pacing session, so the own-site policy (one request at a
+    time, a second apart) never applied across postings - and Procore's CDN
+    dropped every connection after the first few. Every one was then recorded
+    as a miss and scheduled out a day."""
+
+    def test_every_detail_fetch_of_a_run_shares_one_pacing_session(self, db, board, monkeypatch):
+        for i in range(3):
+            _store_owed(board[0], f"P{i}", age_days=9 + i)
+        seen = []
+
+        def fake_detail(row, member, **kw):
+            seen.append(kw.get("session"))
+            return BODY
+
+        monkeypatch.setattr(w, "fetch_detail", fake_detail)
+        monkeypatch.setattr(w, "list_member", lambda member, **kw: [])
+        w.run_shard(w.SOURCE_WORKDAY, w.shard_of(w.SOURCE_WORKDAY, "co0"),
+                    now=NOW, max_details=10, backlog_only=True)
+        assert len(seen) == 3 and seen[0] is not None
+        assert all(s is seen[0] for s in seen)
+
+    def test_one_employer_gets_at_most_its_share_and_sites_interleave(self, db, board, monkeypatch):
+        for i in range(15):
+            _store_owed(board[0], f"BIG{i}", age_days=30 - i)
+        for i in range(3):
+            _store_owed(board[1], f"SMALL{i}", age_days=5 + i)
+        monkeypatch.setattr(w, "BACKLOG_PER_MEMBER", 10)
+        got = w._owed_backlog(w.SOURCE_WORKDAY, board, exclude=set(), now=NOW, limit=50)
+        keys = [m["member_key"] for m, _r in got]
+        assert keys.count("co0") == 10 and keys.count("co1") == 3
+        assert keys[:2] in (["co0", "co1"], ["co1", "co0"])          # interleaved
+        big = [r["source_job_id"] for m, r in got if m["member_key"] == "co0"]
+        assert big[0] == "co0:BIG0", "each employer keeps its own oldest-first order"
+
+    def test_a_fetch_with_no_http_answer_leaves_the_posting_untouched(self, db, board, monkeypatch):
+        sjid = _store_owed(board[0], "SILENT", age_days=9)
+        monkeypatch.setattr(w, "list_member", lambda member, **kw: [])
+        monkeypatch.setattr(w, "fetch_detail", lambda row, member, **kw: "")   # no status noted
+        out = w.run_shard(w.SOURCE_WORKDAY, w.shard_of(w.SOURCE_WORKDAY, "co0"),
+                          now=NOW, max_details=10, backlog_only=True)
+        doc = _doc(sjid)
+        assert out["counts"].get("backlog-cut") == 1 and not out["counts"].get("backlog-missed")
+        assert not doc.get("detail_misses") and doc.get("detail_next_at") is None
+
+    def test_the_provider_context_uses_the_session_it_is_given(self, board):
+        from services.ats_providers.http import PacedSession
+        session = PacedSession()
+        captured = {}
+        import services.ats_providers.http as http_mod
+        real = http_mod.make_fetchers
+
+        def spy(sess, **kw):
+            captured["session"] = sess
+            return real(sess, **kw)
+
+        import pytest as _pytest
+        mp = _pytest.MonkeyPatch()
+        try:
+            mp.setattr(http_mod, "make_fetchers", spy)
+            w._provider_fetch_context(board[0], cutoff=NOW, deadline=1e18, stop=None, session=session)
+        finally:
+            mp.undo()
+        assert captured["session"] is session
