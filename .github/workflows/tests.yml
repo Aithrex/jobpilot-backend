@@ -101,9 +101,10 @@ jobs:
 
       - name: Run test + eval suite
         if: steps.plan.outputs.skip == ''
-        # Same entry point as local / pre-push: scripts/verify.py --full,
-        # spread over the runner's cores (pytest-xdist).
-        run: python scripts/verify.py --full -- -n auto
+        # Same entry point as local / pre-push: scripts/verify.py --full.
+        # Not parallel: pytest-xdist -n auto measured SLOWER here (616 s vs
+        # 568 s serial, 2026-11-05) - a few long tests dominate the wall clock.
+        run: python scripts/verify.py --full
 
       - name: Record the tree this pull request passed on
         # Read by the plan step of the push to main that merges it. Best

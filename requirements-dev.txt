@@ -20,5 +20,3 @@ tzdata>=2024.1
 # Undefined-name gate (tests/test_no_undefined_names.py). pytest cannot see a
 # name that is only undefined on a branch no test runs.
 ruff>=0.5
-# Parallel CI run (-n auto): the suite has no order dependence (6,489 passed under -n 4, 2026-11-05).
-pytest-xdist>=3.5
