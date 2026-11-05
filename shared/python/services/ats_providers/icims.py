@@ -117,6 +117,8 @@ _RESULTS_OF_RE = re.compile(
 
 class IcimsProvider(AtsProvider):
     vendor = "icims"
+    #: The posting page is the apply link (`detail_url == apply_url` at listing).
+    detail_is_apply_url = True
     label = "iCIMS"
 
     termless = True

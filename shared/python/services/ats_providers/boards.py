@@ -1303,6 +1303,8 @@ class JobviteProvider(_BoardProvider):
     """
 
     vendor = "jobvite"
+    #: The posting page is the apply link (`detail_url == apply_url` at listing).
+    detail_is_apply_url = True
     label = "Jobvite"
     has_detail = True
     #: Jobvite's own asset path segment. It is not a company.

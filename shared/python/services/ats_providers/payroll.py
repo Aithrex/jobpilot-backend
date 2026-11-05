@@ -291,6 +291,8 @@ class PaylocityProvider(AtsProvider):
     """Paylocity Recruiting boards — HTML page, embedded job array."""
 
     vendor = "paylocity"
+    #: The posting page is the apply link (`detail_url == apply_url` at listing).
+    detail_is_apply_url = True
     label = "Paylocity"
 
     termless = True
@@ -851,6 +853,8 @@ class JazzHrProvider(AtsProvider):
     """
 
     vendor = "jazzhr"
+    #: The posting page is the apply link (`detail_url == apply_url` at listing).
+    detail_is_apply_url = True
     label = "JazzHR"
 
     termless = True

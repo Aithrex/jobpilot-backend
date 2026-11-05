@@ -222,6 +222,8 @@ def parse_detail(body: str) -> Dict[str, str]:
 
 class PaycorRecruitingProvider(AtsProvider):
     vendor = VENDOR
+    #: The posting page is the apply link (`detail_url == apply_url` at listing).
+    detail_is_apply_url = True
     label = "Paycor Recruiting"
 
     termless = True

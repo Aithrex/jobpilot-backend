@@ -140,6 +140,8 @@ def _ld_location(ld: Dict[str, Any]) -> str:
 
 class BreezyProvider(AtsProvider):
     vendor = VENDOR
+    #: The posting page is the apply link (`detail_url == apply_url` at listing).
+    detail_is_apply_url = True
     label = "Breezy HR"
 
     termless = True

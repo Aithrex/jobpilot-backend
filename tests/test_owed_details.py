@@ -52,8 +52,8 @@ def _listing(member, raw_id, *, days_ago=1, description=""):
         url=f"https://{member['tenant']}.wd1.myworkdayjobs.com/External/job/Austin/{raw_id}",
         posted_at=NOW - timedelta(days=days_ago), location="Austin, TX, USA",
         description=description, employment_type="Full time",
-        detail_ref=f"https://{member['tenant']}.wd1.myworkdayjobs.com/wday/cxs/"
-                   f"{member['tenant']}/External/job/Austin/{raw_id}")
+        # What `_list_workday` really hands over: the externalPath, not a URL.
+        detail_ref=f"job/Austin/{raw_id}")
 
 
 def _store_owed(member, raw_id, *, age_days=10, misses=0, next_at=None, **extra):
@@ -122,7 +122,7 @@ class TestRetrySchedule:
 class TestTheWritePathKeepsWhatABacklogNeeds:
     def test_the_detail_ref_is_kept_on_the_posting(self, db, board):
         sjid = _store_owed(board[0], "R1")
-        assert _doc(sjid)["detail_ref"].endswith("/wday/cxs/co0/External/job/Austin/R1")
+        assert _doc(sjid)["detail_ref"] == "job/Austin/R1"
 
     def test_a_miss_schedules_the_next_try_and_a_body_clears_it(self, db, board):
         row = _listing(board[0], "R2", description=TEASER)
@@ -241,7 +241,8 @@ class TestWorkdayRefRebuild:
         sjid = _store_owed(board[0], "R9")
         inv._db().job_postings.update_one({"source_job_id": sjid}, {"$unset": {"detail_ref": ""}})
         doc = _doc(sjid)
-        assert w._stored_detail_ref(doc, board[0]).endswith("/wday/cxs/co0/External/job/Austin/R9")
+        # Legacy Workday wants the PATH its own fetch appends to the CXS base.
+        assert w._stored_detail_ref(doc, board[0]) == "job/Austin/R9"
 
 
 class TestDescriptionHealth:
@@ -279,3 +280,39 @@ class TestWorkableShipsItsBodiesInTheListing:
         assert asked and asked[0].endswith("/widget/accounts/acme?details=true")
         assert len(jobs) == 1 and "Build APIs in Python." in jobs[0].description
         assert "<p>" not in jobs[0].description
+
+
+class TestRefsSurviveStorage:
+    """2026-11-05: the ref was stored through the FILTER guard, which writes
+    "." as "_" - "https://listings.jobs.gmu.edu/..." became
+    "https://listings_jobs_gmu_edu/...", and every fetch from it missed."""
+
+    def test_a_url_ref_keeps_its_dots(self):
+        doc = inv.normalize_posting({"source": "career", "source_job_id": "x:1", "title": "Engineer",
+                                     "employer_name": "GMU", "url": "https://listings.jobs.gmu.edu/jobs/1",
+                                     "detail_ref": "https://listings.jobs.gmu.edu/jobs/1"})
+        assert doc["detail_ref"] == "https://listings.jobs.gmu.edu/jobs/1"
+
+    def test_an_id_ref_is_kept_as_is(self):
+        doc = inv.normalize_posting({"source": "career", "source_job_id": "x:1", "title": "Engineer",
+                                     "employer_name": "Acme", "detail_ref": "Sr.-Engineer_R1"})
+        assert doc["detail_ref"] == "Sr.-Engineer_R1"
+
+    def test_a_mangled_ref_is_not_trusted(self):
+        assert w._ref_is_mangled("https://listings_jobs_gmu_edu/jobs/1")
+        assert not w._ref_is_mangled("https://listings.jobs.gmu.edu/jobs/1")
+        assert not w._ref_is_mangled("JR104445")
+
+    def test_legacy_workday_ignores_a_mangled_stored_path(self, board):
+        doc = {"canonical_url": "https://co0.wd1.myworkdayjobs.com/en-US/External/job/X/Sr.-Engineer_R1",
+               "detail_ref": "job/X/Sr_-Engineer_R1"}
+        assert w._stored_detail_ref(doc, board[0]) == "job/X/Sr.-Engineer_R1"
+
+    def test_a_vendor_whose_page_is_the_apply_link_falls_back_to_it(self):
+        url = "https://recruitingbypaycor.com/career/JobIntroduction.action?clientId=a&id=b"
+        paycor = {"source": w.SOURCE_CAREER, "vendor": "paycor", "tenant": "a", "member_key": "paycor-a"}
+        assert w._stored_detail_ref({"canonical_url": url}, paycor) == url
+
+    def test_a_vendor_addressed_by_id_does_not(self):
+        gh = {"source": w.SOURCE_CAREER, "ats": "greenhouse", "slug": "acme", "member_key": "gh-acme"}
+        assert w._stored_detail_ref({"canonical_url": "https://boards.greenhouse.io/acme/jobs/1"}, gh) == ""

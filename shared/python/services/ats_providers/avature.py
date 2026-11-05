@@ -125,6 +125,8 @@ def _job_posting(body: str) -> Dict[str, Any]:
 
 class AvatureProvider(AtsProvider):
     vendor = VENDOR
+    #: The posting page is the apply link (`detail_url == apply_url` at listing).
+    detail_is_apply_url = True
     label = "Avature"
 
     termless = True
