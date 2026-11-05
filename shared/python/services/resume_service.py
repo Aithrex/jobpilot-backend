@@ -81,15 +81,26 @@ FEED_RESULT_TTL_HOURS = _env_int("RESUME_JOBS_FEED_TTL_HOURS", 24)
 # posting never reached the model. The longest of 9,420 sampled bodies is
 # under 12,000.
 JD_PROMPT_CHARS = _env_int("JD_PROMPT_CHARS", 20_000)
-POLL_RESULT_MAX_BYTES = _env_int("POLL_RESULT_MAX_BYTES", 4_500_000)
+#:
+#: Lambda was retired with AWS on 2026-10-31 and the Oracle box has no 6 MB
+#: ceiling, so the 4.5 MB cap was only cutting the board: on 2026-11-04 a
+#: 1,500-card tab was stored as 1,202 cards, and 35 of one user's 150 Today
+#: roles were among the cards dropped, because a posting crawled minutes ago
+#: often has no body yet and scores low. 12 MB holds a full 1,500-card tab
+#: (~6.6 MB) with room to spare and keeps a stored board under MongoDB's 16 MB
+#: document limit (`board_snapshot.save`). nginx gzips the JSON on the way out.
+POLL_RESULT_MAX_BYTES = _env_int("POLL_RESULT_MAX_BYTES", 12_000_000)
 
 
 def fit_feed_result(result: Any, max_bytes: int = POLL_RESULT_MAX_BYTES) -> Any:
     """A feed result that fits the poll response, losing its WEAKEST cards.
 
-    Cards are dropped lowest `match_score` first (oldest first on a tie), the
-    survivors keep their order, and `trimmed_for_size` says how many went.
-    Anything that is not a dict with a `jobs` list is returned untouched.
+    Cards from the last two days go last: Today and Yesterday are the windows
+    the board opens on, and the newest postings score lowest until their body
+    is fetched. Otherwise cards are dropped lowest `match_score` first (oldest
+    first on a tie), the survivors keep their order, and `trimmed_for_size`
+    says how many went. Anything that is not a dict with a `jobs` list is
+    returned untouched.
     """
     if not isinstance(result, dict) or not isinstance(result.get("jobs"), list):
         return result
@@ -99,14 +110,17 @@ def fit_feed_result(result: Any, max_bytes: int = POLL_RESULT_MAX_BYTES) -> Any:
     jobs = result["jobs"]
     sizes = [len(json.dumps(j, default=str)) + 2 for j in jobs]
 
-    def _weakest(i: int) -> Tuple[float, float]:
+    def _weakest(i: int) -> Tuple[int, float, float]:
         row = jobs[i] if isinstance(jobs[i], dict) else {}
         try:
             score = float(row.get("match_score") or 0)
         except (TypeError, ValueError):
             score = 0.0
         days = row.get("days_ago")
-        return (score, -(days if isinstance(days, (int, float)) else 999))
+        if not isinstance(days, (int, float)):
+            days = row.get("first_seen_days_ago")
+        days = days if isinstance(days, (int, float)) else 999
+        return (1 if days <= 1 else 0, score, -days)
 
     drop: set = set()
     freed = 0
