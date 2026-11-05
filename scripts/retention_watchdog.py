@@ -175,12 +175,13 @@ def description_checks(now: datetime):
     lines, problems = [], []
     h = inv.description_health(now)
     lines += [
-        f"- open postings with a description: **{h['with_body']:.1%}** "
+        f"- open postings with a description: **{h['with_body']:.2%}** "
         f"({h['active'] - h['owed']:,} of {h['active']:,}; target "
         f"{inv.DESCRIPTION_SLO_ACTIVE:.0%})",
-        f"- new postings (first seen 2-26 h ago) with one: **{h['new_with_body']:.1%}** "
-        f"({h['new_total'] - h['new_owed']:,} of {h['new_total']:,}; target "
-        f"{inv.DESCRIPTION_SLO_NEW:.0%})",
+        f"- new postings (first seen 2-26 h ago) with one, on working boards: "
+        f"**{h['new_with_body']:.2%}** ({h['new_total'] - h['new_owed']:,} of "
+        f"{h['new_total']:,}; target {inv.DESCRIPTION_SLO_NEW:.0%}); on every board "
+        f"{h['new_with_body_all']:.2%}",
         f"- oldest posting still owed one: {h['oldest_owed_hours']} h",
         "- owed by source: " + ", ".join(
             f"{k} {v['owed']:,}/{v['active']:,}" for k, v in sorted(h["by_source"].items())),
@@ -189,11 +190,12 @@ def description_checks(now: datetime):
         lines.append(f"  - board `{b['ats']}:{b['tenant']}` ({b['employer']}): "
                      f"{b['owed']:,} of {b['active']:,} open postings have no description")
     if h["with_body"] < inv.DESCRIPTION_SLO_ACTIVE:
-        problems.append(f"only {h['with_body']:.1%} of open postings have a job description "
+        problems.append(f"only {h['with_body']:.2%} of open postings have a job description "
                         f"(target {inv.DESCRIPTION_SLO_ACTIVE:.0%}); {h['owed']:,} are owed one")
     if h["new_with_body"] < inv.DESCRIPTION_SLO_NEW:
-        problems.append(f"only {h['new_with_body']:.1%} of new postings got a description "
-                        f"(target {inv.DESCRIPTION_SLO_NEW:.0%}) - detail fetches are falling behind")
+        problems.append(f"only {h['new_with_body']:.2%} of new postings on working boards got "
+                        f"a description (target {inv.DESCRIPTION_SLO_NEW:.0%}) - detail fetches "
+                        "are falling behind")
     # Boards are REPORTED, not alerted on: a board can lack bodies for reasons
     # that are not ours (a vendor that stopped publishing them), and the two
     # targets above already turn red when the gap matters to users.
