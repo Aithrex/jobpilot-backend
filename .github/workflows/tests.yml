@@ -10,7 +10,11 @@
 name: tests
 
 on:
+  # main only: deploy.yml waits for THIS run on the merge commit. A pull
+  # request is covered by its own run below; running on every branch push
+  # as well tested each PR commit twice (2026-11-05).
   push:
+    branches: [main]
   pull_request:
 
 concurrency:
