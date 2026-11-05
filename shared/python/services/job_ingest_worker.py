@@ -2649,6 +2649,10 @@ DETAIL_RETRY_HOURS = (1, 6, 24)
 #: 6,401 open Workday postings had never had one attempt, 6,799 of them older
 #: than the 7 days the listing reads.
 BACKLOG_DETAIL_SHARE = _env_float("JOB_INGEST_BACKLOG_SHARE", 0.2)
+#: An owed posting the backlog selects but cannot fetch (no route left, or a
+#: row it cannot rebuild) is moved aside this long, so it never blocks the
+#: front of an oldest-first queue.
+BACKLOG_DEFER_DAYS = _env_int("JOB_INGEST_BACKLOG_DEFER_DAYS", 7)
 
 
 def detail_retry_at(misses: int, now: datetime) -> datetime:
@@ -2944,27 +2948,39 @@ def _owed_backlog(src: str, members: List[Dict[str, Any]], *, exclude: set,
     by_key = {str(m["member_key"]): m for m in members}
     tenants = sorted({_member_tenant(m) for m in members})
     try:
-        docs = inv.find_owed_details(src, tenants, now=now, limit=limit + len(exclude))
+        # Twice the limit: a run that meets unworkable rows at the front of
+        # the queue moves them aside AND still fetches its share.
+        docs = inv.find_owed_details(src, tenants, now=now, limit=2 * limit + len(exclude),
+                                     member_keys=sorted(by_key))
     except Exception as exc:  # pragma: no cover - the crawl must not fail on this
         logger.warning("ingest: owed-detail read failed for %s: %s", src, type(exc).__name__)
         return []
     out: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    unworkable: List[str] = []
     for doc in docs:
         sjid = str(doc.get("source_job_id") or "")
-        if sjid in exclude or ":" not in sjid:
-            continue
-        member = by_key.get(sjid.rsplit(":", 1)[0])
+        if sjid in exclude:
+            continue                   # the listing wrote it this run
+        member = by_key.get(sjid.rsplit(":", 1)[0]) if ":" in sjid else None
         if member is None:
             # Member keys may themselves hold a colon; fall back to a prefix scan.
             member = next((m for k, m in by_key.items() if sjid.startswith(k + ":")), None)
-        if member is None:
-            continue
-        row = _row_from_stored(doc, member)
+        row = _row_from_stored(doc, member) if member is not None else None
         if row is None or not _needs_http_detail(row, member):
+            # Nothing this shard can fetch for it. Left as is it would be
+            # selected first again next run, and the run after: move it aside.
+            unworkable.append(sjid)
             continue
         out.append((member, row))
         if len(out) >= limit:
             break
+    if unworkable:
+        try:
+            inv.defer_owed_details(src, unworkable, until=now + timedelta(days=BACKLOG_DEFER_DAYS),
+                                   reason="unworkable", now=now)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("ingest: deferring %d owed postings failed: %s",
+                           len(unworkable), type(exc).__name__)
     return out
 
 

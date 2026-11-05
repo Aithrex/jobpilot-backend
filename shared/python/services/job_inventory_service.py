@@ -1631,10 +1631,18 @@ def ensure_owed_detail_index() -> None:
 
 
 def find_owed_details(source: str, tenants: List[str], *, now: datetime,
-                      limit: int) -> List[Dict[str, Any]]:
+                      limit: int, member_keys: Optional[List[str]] = None
+                      ) -> List[Dict[str, Any]]:
     """Open postings of these boards whose body is still owed and whose retry
     window has passed, OLDEST first - the ones the newest-first listing budget
-    would otherwise never reach."""
+    would otherwise never reach.
+
+    `member_keys` narrows to postings whose id starts with one of them. A
+    tenant alone is not a board: two members can share one (a Workday tenant
+    with two sites, in two shards), and a shard that selects the other's
+    postings skips them - and, oldest first, keeps selecting them, so they
+    starved every newer posting behind them (2026-11-05: The Children's Place
+    and Sea Mar, 270 owed postings never once attempted)."""
     if limit <= 0 or not tenants:
         return []
     ensure_owed_detail_index()
@@ -1645,8 +1653,27 @@ def find_owed_details(source: str, tenants: List[str], *, now: datetime,
         "tenant": {"$in": [_safe_key(t, 120) for t in tenants[:2000] if t]},
         "$or": [{"detail_next_at": None}, {"detail_next_at": {"$lte": now}}],
     }
+    keys = [str(k) for k in (member_keys or []) if k]
+    if keys:
+        query["source_job_id"] = {
+            "$regex": "^(?:" + "|".join(re.escape(k) for k in keys[:500]) + "):"}
     return list(_postings().find(query, _OWED_PROJECTION)
                 .sort("first_seen_at", 1).limit(int(limit)))
+
+
+def defer_owed_details(source: str, source_job_ids: List[str], *, until: datetime,
+                       reason: str, now: Optional[datetime] = None) -> int:
+    """Move owed postings the backlog cannot work on out of its way until
+    `until`. Oldest first, a posting that is selected and then skipped is
+    selected again on every run and starves everything behind it."""
+    ids = [_safe_str(i, 200) for i in source_job_ids if i]
+    if not ids:
+        return 0
+    res = _postings().update_many(
+        {"source": _safe_key(source, 60), "source_job_id": {"$in": ids}, "body_state": "teaser"},
+        {"$set": {"detail_next_at": until, "detail_deferred_reason": _safe_key(reason, 40),
+                  "detail_last_attempt_at": now or _now()}})
+    return int(res.modified_count)
 
 
 def record_detail_miss(source: str, source_job_id: str, *, misses: int, revision: int,
