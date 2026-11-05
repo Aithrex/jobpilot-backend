@@ -2653,6 +2653,10 @@ BACKLOG_DETAIL_SHARE = _env_float("JOB_INGEST_BACKLOG_SHARE", 0.2)
 #: row it cannot rebuild) is moved aside this long, so it never blocks the
 #: front of an oldest-first queue.
 BACKLOG_DEFER_DAYS = _env_int("JOB_INGEST_BACKLOG_DEFER_DAYS", 7)
+#: A fetch that comes back empty this close to the run's deadline was clamped
+#: by it (`fetch_detail` shortens its timeouts to the remaining budget), so
+#: its emptiness is the budget's, not the posting's.
+DEADLINE_CUT_SECONDS = _env_float("JOB_INGEST_DEADLINE_CUT_SECONDS", 2.0)
 
 
 def detail_retry_at(misses: int, now: datetime) -> datetime:
@@ -3399,10 +3403,22 @@ def run_shard(
         # for — it was never meant to bound the inventory.
         deferred = fetch_rows[len(detail_targets):]
         counts["detail_deferred"] += len(deferred)
+        # A fetch the run's deadline cut short says nothing about the posting:
+        # it is NOT a miss. Recorded here because only the fetch itself knows
+        # whether it ended with time left (2026-11-05: Procore's 90 owed
+        # postings were all scheduled out a day by misses in slow shards,
+        # while the same fetch, run alone, read every one).
+        cut_ids: set = set()
+
+        def _fetch_timed(pair):
+            body = fetch_detail(pair[1], pair[0], policy=policy, deadline=deadline, stop=stop)
+            if time.monotonic() >= deadline - DEADLINE_CUT_SECONDS or (
+                    stop is not None and stop.is_set()):
+                cut_ids.add(id(pair[1]))
+            return body
+
         details = run_bounded(
-            lambda pair: fetch_detail(pair[1], pair[0], policy=policy,
-                                      deadline=deadline, stop=stop),
-            detail_targets + backlog_targets, max_workers=detail_workers,
+            _fetch_timed, detail_targets + backlog_targets, max_workers=detail_workers,
             deadline=deadline, stop=stop)
         # Body-in-listing rows join the write set without a request; so do the
         # deferred ones, with whatever the listing gave us.
@@ -3432,8 +3448,14 @@ def run_shard(
                 counts["write_skipped_budget"] += 1
                 continue
             listing_desc = str(row.get("description") or "")
-            if id(row) in backlog_ids and (error or not description
-                                           or description == listing_desc):
+            fetched = bool(description) and description != listing_desc
+            cut = error == "deadline" or (id(row) in cut_ids and not fetched)
+            if id(row) in backlog_ids and cut:
+                # Never asked, or asked as the budget ran out: untouched, so
+                # the next run asks again at once.
+                counts["backlog-cut"] += 1
+                continue
+            if id(row) in backlog_ids and (error or not fetched):
                 # A backlog fetch that found nothing is a MISS and nothing
                 # more. It is not written through `upsert_posting`, which would
                 # mark the posting live again on no evidence at all - a closed
@@ -3460,7 +3482,12 @@ def run_shard(
                 payload["detail_misses_restart"] = True
             if description:
                 payload["description"] = description
-            if id(row) in attempted_ids:
+            if id(row) in attempted_ids and cut:
+                # Written from the listing like a deferred row: a cut fetch is
+                # not an attempt, so no miss and no retry wait.
+                payload["body_state"] = BODY_TEASER
+                counts["detail-cut"] += 1
+            elif id(row) in attempted_ids:
                 # `fetch_detail` hands the listing text back when the fetch
                 # failed or found nothing longer.
                 got_detail = bool(description) and description != listing_desc
