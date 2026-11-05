@@ -110,6 +110,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import os
 import re
 import random
@@ -2207,10 +2208,14 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
             if posted_at is None or posted_at < cutoff:
                 continue
             shortcode = str(job.get("shortcode") or "")
+            from services.career_pages_service import _html_to_text
             rows.append(_listing_row(
                 member, shortcode or job.get("id"), title=job.get("title") or "",
                 url=job.get("url") or "", posted_at=posted_at,
                 location=", ".join(str(job.get(k) or "") for k in ("city", "state", "country")),
+                # `details=true` above inlines the body; it used to be dropped
+                # here and fetched again, one throttled request per posting.
+                description=_html_to_text(str(job.get("description") or ""))[:15000],
                 detail_ref=shortcode))
 
     elif ats == "recruitee":
@@ -2628,10 +2633,28 @@ FULL_LISTING_BODY_CHARS = 1200
 #: still owed (over budget, or it failed).
 BODY_FULL = "full"
 BODY_TEASER = "teaser"
-#: A detail that keeps failing, or keeps returning nothing longer than the
-#: listing, stops being retried. Without the bound those rows would take a slot
-#: of every tick's detail budget for as long as the posting stayed open.
+#: Kept for readers of the old rule. A detail that keeps failing is no longer
+#: abandoned after this many misses; it is asked again on `DETAIL_RETRY_HOURS`.
 DETAIL_MAX_ATTEMPTS = 2
+#: Hours until a missed detail is asked again: after the 1st miss, the 2nd, and
+#: every one after that, for as long as the posting stays open. Two misses used
+#: to mean "never again": on 2026-11-05 that had abandoned 2,251 open postings
+#: (1,348 career-pages, 773 Workday, 130 Oracle), most of them on two boards
+#: whose detail route had broken, so a fix there could never reach them.
+DETAIL_RETRY_HOURS = (1, 6, 24)
+#: Share of every run's detail budget kept for postings still owed a body that
+#: the LISTING no longer shows (`_owed_backlog`, oldest first). Without it the
+#: newest rows took the whole budget every tick (Workday deferred 90,037 fetches
+#: a day), and a posting that missed its first week was never fetched at all:
+#: 6,401 open Workday postings had never had one attempt, 6,799 of them older
+#: than the 7 days the listing reads.
+BACKLOG_DETAIL_SHARE = _env_float("JOB_INGEST_BACKLOG_SHARE", 0.2)
+
+
+def detail_retry_at(misses: int, now: datetime) -> datetime:
+    """When a posting whose detail has missed `misses` times is asked again."""
+    hours = DETAIL_RETRY_HOURS[min(max(1, int(misses)), len(DETAIL_RETRY_HOURS)) - 1]
+    return now + timedelta(hours=hours)
 
 
 def _has_detail_route(row: Dict[str, Any], member: Dict[str, Any]) -> bool:
@@ -2679,7 +2702,8 @@ def _detail_revision(member: Dict[str, Any]) -> int:
 
 
 def _owes_a_detail_fetch(existing: Dict[str, Any], row: Dict[str, Any],
-                         member: Dict[str, Any]) -> bool:
+                         member: Dict[str, Any], *,
+                         now: Optional[datetime] = None) -> bool:
     """A stored posting whose body is only the listing teaser.
 
     `_listing_implies_same_content` asks "does the stored doc have a body?" and
@@ -2691,14 +2715,16 @@ def _owes_a_detail_fetch(existing: Dict[str, Any], row: Dict[str, Any],
     if not existing or existing.get("body_state") == BODY_FULL:
         return False
     try:
-        attempts = int(existing.get("detail_misses") or 0)
         recorded_under = int(existing.get("detail_revision") or 1)
     except (TypeError, ValueError):
-        attempts, recorded_under = 0, 1
-    if recorded_under < _detail_revision(member):
-        # Misses from a route since fixed say nothing about the fixed one.
-        attempts = 0
-    if attempts >= DETAIL_MAX_ATTEMPTS:
+        recorded_under = 1
+    # A miss waits out its retry window (`DETAIL_RETRY_HOURS`) instead of
+    # taking a slot of every tick's budget - and is never abandoned. A route
+    # since fixed (`detail_revision`) is asked at once: misses recorded under
+    # the old route say nothing about the new one.
+    retry_at = _aware(existing.get("detail_next_at"))
+    if retry_at is not None and recorded_under >= _detail_revision(member) \
+            and retry_at > (now or _utcnow()):
         return False
     if existing.get("body_state") != BODY_TEASER:
         # Written before `body_state` existed: judge it by its size.
@@ -2810,6 +2836,117 @@ def _reread_stored(src: str, pending: List[Tuple[Dict[str, Any], str]], *,
             logger.warning("ingest: stored re-read failed for %s: %s",
                            str(sjid)[:40], type(exc).__name__)
     counts["reread_deferred"] += max(0, len(pending) - max(0, REREAD_PER_SHARD))
+
+
+def _member_tenant(member: Dict[str, Any]) -> str:
+    """The `tenant` a posting from this member is stored under (`_listing_row`)."""
+    return str(member.get("slug") or member.get("tenant") or member["member_key"])
+
+
+def _stored_detail_ref(doc: Dict[str, Any], member: Dict[str, Any]) -> str:
+    """Where a STORED posting's body is fetched from, without its listing row.
+
+    The ref the listing handed us is kept on the posting since 2026-11-05
+    (`detail_ref`). Older postings never kept it; for those the provider may
+    rebuild it from the apply link it minted (`detail_ref_from_apply_url` -
+    exact for Workday, which is 8,182 of the 10,794 open postings without a
+    body when this was written). "" means the provider addresses the detail by
+    the posting's own id, or cannot be rebuilt - and then a miss says so."""
+    ref = str(doc.get("detail_ref") or "")
+    if ref:
+        return ref
+    registry = _ats_registry()
+    provider = registry.get(_vendor_of(member)) if registry is not None else None
+    rebuild = getattr(provider, "detail_ref_from_apply_url", None)
+    if callable(rebuild):
+        try:
+            return str(rebuild(_endpoint_from_member(member),
+                               str(doc.get("canonical_url") or "")) or "")
+        except Exception:  # pragma: no cover - a bad URL is a miss, not a crash
+            return ""
+    return ""
+
+
+def _row_from_stored(doc: Dict[str, Any], member: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A stored posting as the listing row that wrote it, so the SAME detail
+    fetch and the SAME write path serve it. Built by `_listing_row` from the
+    stored fields; the date fields are restored as stored, because the listing
+    row would call a relative date exact."""
+    key = str(member["member_key"])
+    sjid = str(doc.get("source_job_id") or "")
+    if not sjid.startswith(key + ":"):
+        return None
+    raw_id = sjid[len(key) + 1:]
+    locations = [{"raw": l.get("raw") or "", "country": l.get("country") or ""}
+                 for l in (doc.get("locations") or []) if isinstance(l, dict) and l.get("raw")]
+    seniority = str(doc.get("seniority") or "")
+    row = _listing_row(
+        member, raw_id,
+        title=str(doc.get("title_raw") or ""),
+        url=str(doc.get("canonical_url") or ""),
+        posted_at=_aware(doc.get("posted_at")),
+        location=locations,
+        description=str(doc.get("description_text") or ""),
+        employment_type=str(doc.get("employment_type") or ""),
+        posted_text=str(doc.get("raw_posted_text") or ""),
+        detail_ref=_stored_detail_ref(doc, member),
+        seniority="" if seniority in ("", inv.SENIORITY_UNKNOWN) else seniority,
+    )
+    if row.get("source_job_id") != sjid:
+        return None
+    if doc.get("posted_at_confidence"):
+        row["posted_at_confidence"] = doc["posted_at_confidence"]
+    row["_backlog"] = True
+    row["_detail_misses"] = int(doc.get("detail_misses") or 0)
+    row["_stored_revision"] = int(doc.get("detail_revision") or 1)
+    return row
+
+
+def _owed_backlog(src: str, members: List[Dict[str, Any]], *, exclude: set,
+                  now: datetime, limit: int) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Open postings of this shard's boards still owed a body, oldest first,
+    whose retry window has passed - as `(member, row)` pairs ready for
+    `fetch_detail`. Never raises: a failed read is an empty backlog."""
+    if limit <= 0 or not members:
+        return []
+    by_key = {str(m["member_key"]): m for m in members}
+    tenants = sorted({_member_tenant(m) for m in members})
+    try:
+        docs = inv.find_owed_details(src, tenants, now=now, limit=limit + len(exclude))
+    except Exception as exc:  # pragma: no cover - the crawl must not fail on this
+        logger.warning("ingest: owed-detail read failed for %s: %s", src, type(exc).__name__)
+        return []
+    out: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+    for doc in docs:
+        sjid = str(doc.get("source_job_id") or "")
+        if sjid in exclude or ":" not in sjid:
+            continue
+        member = by_key.get(sjid.rsplit(":", 1)[0])
+        if member is None:
+            # Member keys may themselves hold a colon; fall back to a prefix scan.
+            member = next((m for k, m in by_key.items() if sjid.startswith(k + ":")), None)
+        if member is None:
+            continue
+        row = _row_from_stored(doc, member)
+        if row is None or not _needs_http_detail(row, member):
+            continue
+        out.append((member, row))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _record_backlog_miss(src: str, row: Dict[str, Any], member: Dict[str, Any], *,
+                         now: datetime) -> None:
+    """Count a backlog miss and schedule the next try; touches nothing else."""
+    revision = _detail_revision(member)
+    misses = 1 if int(row.get("_stored_revision") or 1) < revision \
+        else int(row.get("_detail_misses") or 0) + 1
+    try:
+        inv.record_detail_miss(src, row["source_job_id"], misses=misses, revision=revision,
+                               next_at=detail_retry_at(misses, now), now=now)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("ingest: recording a detail miss failed: %s", type(exc).__name__)
 
 
 def _needs_http_detail(row: Dict[str, Any], member: Dict[str, Any]) -> bool:
@@ -3017,8 +3154,14 @@ def run_shard(
     listing_workers: int = LISTING_WORKERS,
     detail_workers: int = DETAIL_WORKERS,
     max_details: int = MAX_DETAIL_FETCHES,
+    backlog_only: bool = False,
 ) -> Dict[str, Any]:
     """Ingest ONE shard. Never raises.
+
+    `backlog_only` skips the listing and spends the whole detail budget on
+    postings still owed a body (`_owed_backlog`), through the same fetch,
+    write and parse path - what `scripts/fill_missing_descriptions.py` runs to
+    clear a backlog faster than the crawl's reserved share does.
 
     Phases, in order:
       1. lease         - `acquire_lease`; a second delivery of the same shard
@@ -3079,7 +3222,7 @@ def run_shard(
         result.update({"skipped": "lease_unavailable", "counts": {}})
         return result
 
-    deep = inv.deep_listing_due(state, now, source=src, shard=shard_id)
+    deep = (not backlog_only) and inv.deep_listing_due(state, now, source=src, shard=shard_id)
     list_cutoff = early_cutoff if deep else fresh_cutoff
     if deep:
         # A deep run reads more pages; give it room so it still WRITES.
@@ -3098,7 +3241,7 @@ def run_shard(
         # --- 2. listing ------------------------------------------------------
         listed_keys: set = set()
         rows: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
-        listing = run_bounded(
+        listing = [] if backlog_only else run_bounded(
             lambda m: list_member(m, cutoff=list_cutoff, policy=policy,
                                   deadline=deadline, stop=stop, now=now),
             members, max_workers=listing_workers, deadline=deadline, stop=stop)
@@ -3146,11 +3289,11 @@ def run_shard(
         for member, row in rows:
             existing = existing_by_id.get(row["source_job_id"])
             if (_listing_implies_same_content(existing, row)
-                    and not _owes_a_detail_fetch(existing, row, member)):
+                    and not _owes_a_detail_fetch(existing, row, member, now=now)):
                 touch_ids.append(row["source_job_id"])
                 counts["unchanged"] += 1
             elif (_only_reader_is_stale(existing, row)
-                    and not _owes_a_detail_fetch(existing, row, member)):
+                    and not _owes_a_detail_fetch(existing, row, member, now=now)):
                 # Same body, older reader: re-read what we hold, fetch nothing.
                 touch_ids.append(row["source_job_id"])
                 counts["unchanged"] += 1
@@ -3175,7 +3318,19 @@ def run_shard(
                           reverse=True)
         free_rows = [p for p in needs_detail if not _needs_http_detail(p[1], p[0])]
         fetch_rows = [p for p in needs_detail if _needs_http_detail(p[1], p[0])]
-        detail_targets = fetch_rows[:max(0, int(max_details))]
+        # Postings still owed a body that this listing did not show (older than
+        # the window it reads, or on a board cut short). A share of the budget
+        # is theirs, oldest first, so the newest rows can never starve them.
+        backlog = _owed_backlog(
+            src, members, exclude={row["source_job_id"] for _m, row in rows},
+            now=now, limit=max(0, int(max_details)))
+        reserve = (min(len(backlog), max(1, math.ceil(max(0, int(max_details))
+                                                    * BACKLOG_DETAIL_SHARE)))
+                   if backlog else 0)
+        detail_targets = fetch_rows[:max(0, int(max_details) - reserve)]
+        backlog_targets = backlog[:max(0, int(max_details) - len(detail_targets))]
+        counts["backlog-owed"] += len(backlog)
+        counts["backlog-attempted"] += len(backlog_targets)
         # Rows past the budget are DEFERRED, not discarded.
         #
         # They used to be dropped outright, and for a vendor whose listing
@@ -3199,7 +3354,8 @@ def run_shard(
         details = run_bounded(
             lambda pair: fetch_detail(pair[1], pair[0], policy=policy,
                                       deadline=deadline, stop=stop),
-            detail_targets, max_workers=detail_workers, deadline=deadline, stop=stop)
+            detail_targets + backlog_targets, max_workers=detail_workers,
+            deadline=deadline, stop=stop)
         # Body-in-listing rows join the write set without a request; so do the
         # deferred ones, with whatever the listing gave us.
         details = list(details) + [
@@ -3207,7 +3363,8 @@ def run_shard(
             for pair in free_rows + deferred
         ]
         # What each row's body IS, so the next tick knows whether one is owed.
-        attempted_ids = {id(pair[1]) for pair in detail_targets}
+        attempted_ids = {id(pair[1]) for pair in detail_targets + backlog_targets}
+        backlog_ids = {id(pair[1]) for pair in backlog_targets}
         deferred_ids = {id(pair[1]) for pair in deferred}
         counts["detail_free"] += len(free_rows)
         inv.renew_lease(src, shard_id, owner, now=now)
@@ -3226,18 +3383,35 @@ def run_shard(
             if time.monotonic() >= deadline or (stop is not None and stop.is_set()):
                 counts["write_skipped_budget"] += 1
                 continue
+            listing_desc = str(row.get("description") or "")
+            if id(row) in backlog_ids and (error or not description
+                                           or description == listing_desc):
+                # A backlog fetch that found nothing is a MISS and nothing
+                # more. It is not written through `upsert_posting`, which would
+                # mark the posting live again on no evidence at all - a closed
+                # job must not be kept open by our asking about it.
+                counts["backlog-missed"] += 1
+                _record_backlog_miss(src, row, member, now=now)
+                continue
             if error:
                 counts["errors"] += 1
                 inv.record_run_failure(run_id, error, item=row["source_job_id"])
                 continue
+            if id(row) in backlog_ids:
+                counts["backlog-filled"] += 1
             payload = dict(row)
-            payload.pop("_detail_ref", None)
+            # Where this posting's body is fetched from, KEPT on the posting so
+            # a later pass can fetch it without the listing (`_owed_backlog`).
+            detail_ref = str(payload.pop("_detail_ref", None) or "")
+            if detail_ref:
+                payload["detail_ref"] = detail_ref
             payload.pop("_member_key", None)
+            for internal in ("_backlog", "_detail_misses", "_stored_revision"):
+                payload.pop(internal, None)
             if payload.pop("_restart_misses", None):
                 payload["detail_misses_restart"] = True
             if description:
                 payload["description"] = description
-            listing_desc = str(row.get("description") or "")
             if id(row) in attempted_ids:
                 # `fetch_detail` hands the listing text back when the fetch
                 # failed or found nothing longer.
@@ -3245,6 +3419,11 @@ def run_shard(
                 payload["body_state"] = BODY_FULL if got_detail else BODY_TEASER
                 payload["detail_attempted"] = not got_detail
                 payload["detail_revision"] = _detail_revision(member)
+                if not got_detail:
+                    prior = existing_by_id.get(row["source_job_id"]) or {}
+                    misses = (0 if row.get("_restart_misses")
+                              else int(prior.get("detail_misses") or 0)) + 1
+                    payload["detail_next_at"] = detail_retry_at(misses, now)
             elif id(row) in deferred_ids:
                 payload["body_state"] = BODY_TEASER
             else:
@@ -3322,7 +3501,7 @@ def run_shard(
                                        now=now, early_cutoff=list_cutoff)
         counts["closed"] += closed
 
-        if members and not listed_keys and ingest_shutdown.requested():
+        if members and not listed_keys and not backlog_only and ingest_shutdown.requested():
             # Stopped before any board answered. Not the shard's fault, so no
             # failure and no backoff: it stays due and runs after the restart.
             inv.bump_run_counts(run_id, **{k: int(v) for k, v in counts.items()})
@@ -3330,7 +3509,7 @@ def run_shard(
             result.update({"counts": dict(counts), "skipped": "shutting_down",
                            "duration_ms": int((time.monotonic() - started) * 1000)})
             return result
-        if members and not listed_keys:
+        if members and not listed_keys and not backlog_only:
             # Every member failed: that is a shard failure, and it must back off
             # rather than hammer the same dead hosts every tick.
             raise RuntimeError(

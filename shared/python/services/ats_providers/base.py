@@ -525,6 +525,13 @@ class AtsProvider:
     #: reason fingerprinting is the primary strategy rather than this.
     slug_probe: bool = False
 
+    def detail_ref_from_apply_url(self, endpoint: "Endpoint", apply_url: str) -> str:
+        """The `detail_url` this provider would have minted for a posting,
+        rebuilt from the apply link it minted. "" when it cannot be rebuilt or
+        the detail is addressed by the posting's id. Used only for postings
+        stored before `detail_ref` was kept (`job_ingest_worker._owed_backlog`)."""
+        return ""
+
     def board_url(self, endpoint: "Endpoint") -> str:
         """The PUBLIC board page for this endpoint, or "" when it is not
         derivable without a job.

@@ -1164,6 +1164,12 @@ def normalize_posting(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
     if doc["compensation"] is None:
         doc.pop("compensation")
+    # Where the body is fetched from (a provider's detail URL, or an id). Kept
+    # so a posting the listing no longer shows can still be fetched
+    # (`job_ingest_worker._owed_backlog`). Absent = not told.
+    detail_ref = _safe_str(raw.get("detail_ref"), 600)
+    if detail_ref:
+        doc["detail_ref"] = detail_ref
 
     # Provenance (CLAUDE-PROMPT D). Stored only when the provider SUPPLIED it -
     # absent means "not told", and an empty string on 400k rows would say
@@ -1418,6 +1424,12 @@ def upsert_posting(
             update["$set"]["detail_revision"] = max(1, int(raw.get("detail_revision") or 1))
         except (TypeError, ValueError):
             update["$set"]["detail_revision"] = 1
+        retry_at = _safe_dt(raw.get("detail_next_at"))
+        if retry_at is not None:
+            update["$set"]["detail_next_at"] = retry_at
+    elif body_state == "full":
+        # A body arrived: nothing is owed, so nothing is scheduled.
+        update["$unset"]["detail_next_at"] = ""
 
     try:
         before = _postings().find_one_and_update(
@@ -1582,6 +1594,125 @@ def _has_body(doc: Dict[str, Any]) -> bool:
     """A stored or offloaded description, inline or by reference."""
     return bool((doc or {}).get("description_ref")
                 or str((doc or {}).get("description_text") or "").strip())
+
+
+OWED_DETAIL_INDEX = "owed_detail_backlog"
+_OWED_INDEXED = False
+#: What `job_ingest_worker._row_from_stored` needs to rebuild a listing row.
+_OWED_PROJECTION = {
+    "_id": 0, "source": 1, "source_job_id": 1, "title_raw": 1, "canonical_url": 1,
+    "locations": 1, "posted_at": 1, "posted_at_confidence": 1, "raw_posted_text": 1,
+    "employment_type": 1, "seniority": 1, "description_text": 1, "detail_ref": 1,
+    "detail_misses": 1, "detail_revision": 1, "tenant": 1, "first_seen_at": 1,
+}
+
+
+def ensure_owed_detail_index() -> None:
+    """Partial index over open postings still owed a body - a few thousand
+    rows, not the inventory. Every query below names `status: active` and
+    `body_state: teaser` by equality, which is what lets the planner PROVE it
+    may use a partial index (see the note on partial filters in CLAUDE.md)."""
+    global _OWED_INDEXED
+    if _OWED_INDEXED:
+        return
+    try:
+        _postings().create_index(
+            [("source", 1), ("tenant", 1), ("first_seen_at", 1)],
+            name=OWED_DETAIL_INDEX,
+            partialFilterExpression={"status": STATUS_ACTIVE, "body_state": "teaser"})
+    except Exception as exc:  # pragma: no cover - an index is an optimisation
+        logger.warning("owed-detail index ensure failed: %s", type(exc).__name__)
+    _OWED_INDEXED = True
+
+
+def find_owed_details(source: str, tenants: List[str], *, now: datetime,
+                      limit: int) -> List[Dict[str, Any]]:
+    """Open postings of these boards whose body is still owed and whose retry
+    window has passed, OLDEST first - the ones the newest-first listing budget
+    would otherwise never reach."""
+    if limit <= 0 or not tenants:
+        return []
+    ensure_owed_detail_index()
+    query = {
+        "status": STATUS_ACTIVE,
+        "body_state": "teaser",
+        "source": _safe_key(source, 60),
+        "tenant": {"$in": [_safe_key(t, 120) for t in tenants[:2000] if t]},
+        "$or": [{"detail_next_at": None}, {"detail_next_at": {"$lte": now}}],
+    }
+    return list(_postings().find(query, _OWED_PROJECTION)
+                .sort("first_seen_at", 1).limit(int(limit)))
+
+
+def record_detail_miss(source: str, source_job_id: str, *, misses: int, revision: int,
+                       next_at: datetime, now: Optional[datetime] = None) -> bool:
+    """A detail fetch for a posting the listing did not show found nothing.
+
+    Records the miss and the next try and NOTHING else: no `last_seen_at`, no
+    status, because a failed fetch is not evidence the posting is live."""
+    now = now or _now()
+    res = _postings().update_one(
+        {"source": _safe_key(source, 60), "source_job_id": _safe_str(source_job_id, 200),
+         "body_state": "teaser"},
+        {"$set": {"detail_misses": max(1, int(misses)), "detail_revision": max(1, int(revision)),
+                  "detail_next_at": next_at, "detail_last_attempt_at": now}})
+    return bool(res.matched_count)
+
+
+#: Targets the watchdog holds the crawler to (`description_health`).
+DESCRIPTION_SLO_ACTIVE = 0.98      # open postings with a body
+DESCRIPTION_SLO_NEW = 0.99         # postings first seen 2-26 h ago with a body
+#: A board this size with this share of open postings owed a body is reported
+#: by name: at that rate it is our route that is broken, not their postings.
+BROKEN_BOARD_MIN_POSTINGS = 20
+BROKEN_BOARD_SHARE = 0.5
+
+
+def description_health(now: Optional[datetime] = None, *, boards: int = 12) -> Dict[str, Any]:
+    """How much of the open inventory still lacks its job description.
+
+    `owed` is what the crawler itself knows it lacks (`body_state: teaser`); a
+    posting whose vendor publishes no body at all is not owed one. Read-only."""
+    now = now or _now()
+    coll = _postings()
+    by_source: Dict[str, Dict[str, int]] = {}
+    for row in coll.aggregate([
+            {"$match": {"status": STATUS_ACTIVE}},
+            {"$group": {"_id": "$source", "active": {"$sum": 1},
+                        "owed": {"$sum": {"$cond": [{"$eq": ["$body_state", "teaser"]}, 1, 0]}}}}]):
+        by_source[str(row["_id"])] = {"active": int(row["active"]), "owed": int(row["owed"])}
+    active = sum(v["active"] for v in by_source.values())
+    owed = sum(v["owed"] for v in by_source.values())
+    window = {"status": STATUS_ACTIVE,
+              "first_seen_at": {"$gte": now - timedelta(hours=26), "$lt": now - timedelta(hours=2)}}
+    new_total = coll.count_documents(window)
+    new_owed = coll.count_documents(dict(window, body_state="teaser"))
+    oldest = coll.find_one({"status": STATUS_ACTIVE, "body_state": "teaser"},
+                           {"first_seen_at": 1}, sort=[("first_seen_at", 1)])
+    oldest_at = _safe_dt((oldest or {}).get("first_seen_at"))
+    broken = []
+    for row in coll.aggregate([
+            {"$match": {"status": STATUS_ACTIVE}},
+            {"$group": {"_id": {"ats": "$ats", "tenant": "$tenant"}, "active": {"$sum": 1},
+                        "owed": {"$sum": {"$cond": [{"$eq": ["$body_state", "teaser"]}, 1, 0]}},
+                        "name": {"$first": "$employer_name"}}},
+            {"$match": {"active": {"$gte": BROKEN_BOARD_MIN_POSTINGS}, "owed": {"$gte": 1}}}]):
+        if row["owed"] / max(1, row["active"]) >= BROKEN_BOARD_SHARE:
+            broken.append({"ats": row["_id"].get("ats"), "tenant": row["_id"].get("tenant"),
+                           "employer": row.get("name"), "active": row["active"],
+                           "owed": row["owed"]})
+    broken.sort(key=lambda b: -b["owed"])
+    with_body = 1 - owed / max(1, active)
+    new_with_body = 1 - new_owed / max(1, new_total)
+    return {
+        "measured_at": now, "active": active, "owed": owed,
+        "with_body": round(with_body, 4), "by_source": by_source,
+        "new_total": new_total, "new_owed": new_owed, "new_with_body": round(new_with_body, 4),
+        "oldest_owed_hours": (round((now - oldest_at).total_seconds() / 3600, 1)
+                              if oldest_at else None),
+        "broken_boards": broken[:boards],
+        "meets_slo": with_body >= DESCRIPTION_SLO_ACTIVE and new_with_body >= DESCRIPTION_SLO_NEW,
+    }
 
 
 def stored_description(source: str, doc: Dict[str, Any]) -> str:

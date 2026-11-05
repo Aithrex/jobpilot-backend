@@ -489,6 +489,23 @@ class WorkdayProvider(AtsProvider):
 
     # -- detail --------------------------------------------------------------
 
+    def detail_ref_from_apply_url(self, endpoint: Endpoint, apply_url: str) -> str:
+        """`{apply_base}/{site}/{path}` -> `{base}/wday/cxs/{tenant}/{site}/{path}`.
+
+        `_to_raw` mints both from the same `externalPath`, so the apply link a
+        posting stored is enough to fetch its body again. A locale segment
+        (`/en-US/`) is tolerated; a link to another site or host is refused."""
+        url = str(apply_url or "").split("#", 1)[0].split("?", 1)[0]
+        site = self._site_of(endpoint)
+        if not url or not site:
+            return ""
+        m = re.match(re.escape(self._apply_base(endpoint)) + r"/(?:[a-z]{2}-[a-z]{2}/)?"
+                     + re.escape(site) + r"/(.+)$", url, re.IGNORECASE)
+        path = (m.group(1) if m else "").strip("/")
+        if not path:
+            return ""
+        return f"{self._base(endpoint)}/wday/cxs/{endpoint.tenant}/{site}/{path}"
+
     def fetch_detail(self, endpoint: Endpoint, job: RawJob,
                      ctx: FetchContext) -> Optional[RawJob]:
         """The JD body. The list endpoint returns NO description at all, so
