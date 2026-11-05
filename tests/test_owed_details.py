@@ -377,3 +377,53 @@ class TestTheBacklogCannotStarve:
 
 
 _real_row_from_stored = w._row_from_stored
+
+
+class TestARunOutOfTimeIsNotAMiss:
+    """2026-11-05: Procore's 90 owed postings were all scheduled a day out by
+    "misses" in slow shards - the run's budget ran out - while the same fetch,
+    run alone from the same box, read every one."""
+
+    def test_a_backlog_fetch_cut_by_the_deadline_is_left_untouched(self, db, board, monkeypatch):
+        sjid = _store_owed(board[0], "CUT", age_days=9)
+        _patch_io(monkeypatch, {}, misses={sjid})                # comes back empty...
+        monkeypatch.setattr(w, "DEADLINE_CUT_SECONDS", 1e9)      # ...as the budget runs out
+        out = w.run_shard(w.SOURCE_WORKDAY, w.shard_of(w.SOURCE_WORKDAY, "co0"),
+                          now=NOW, max_details=10, backlog_only=True)
+        doc = _doc(sjid)
+        assert out["counts"].get("backlog-cut") == 1 and not out["counts"].get("backlog-missed")
+        assert not doc.get("detail_misses") and doc.get("detail_next_at") is None
+
+    def test_a_body_that_arrives_at_the_deadline_still_counts(self, db, board, monkeypatch):
+        sjid = _store_owed(board[0], "LATE", age_days=9)
+        _patch_io(monkeypatch, {})
+        monkeypatch.setattr(w, "DEADLINE_CUT_SECONDS", 1e9)
+        out = w.run_shard(w.SOURCE_WORKDAY, w.shard_of(w.SOURCE_WORKDAY, "co0"),
+                          now=NOW, max_details=10, backlog_only=True)
+        assert out["counts"]["backlog-filled"] == 1 and _doc(sjid)["body_state"] == "full"
+
+    def test_a_fetch_never_started_is_left_untouched(self, db, board, monkeypatch):
+        sjid = _store_owed(board[0], "NEVER", age_days=9)
+        _patch_io(monkeypatch, {})
+        monkeypatch.setattr(w, "run_bounded",
+                            lambda fn, items, **kw: [(item, None, "deadline") for item in items])
+        out = w.run_shard(w.SOURCE_WORKDAY, w.shard_of(w.SOURCE_WORKDAY, "co0"),
+                          now=NOW, max_details=10, backlog_only=True)
+        assert out["counts"].get("backlog-cut") == 1
+        assert _doc(sjid).get("detail_next_at") is None
+
+    def test_a_listing_fetch_cut_by_the_deadline_is_not_an_attempt(self, db, board, monkeypatch):
+        row = _listing(board[1], "FRESH")
+        fetched = _patch_io(monkeypatch, {board[1]["member_key"]: [row]}, misses={row["source_job_id"]})
+        monkeypatch.setattr(w, "DEADLINE_CUT_SECONDS", 1e9)
+        w.run_shard(w.SOURCE_WORKDAY, w.shard_of(w.SOURCE_WORKDAY, "co0"), now=NOW, max_details=10)
+        doc = _doc(row["source_job_id"])
+        assert fetched and doc["body_state"] == "teaser"
+        assert not doc.get("detail_misses") and doc.get("detail_next_at") is None
+
+    def test_a_real_miss_with_time_left_is_still_a_miss(self, db, board, monkeypatch):
+        sjid = _store_owed(board[0], "REALMISS", age_days=9)
+        _patch_io(monkeypatch, {}, misses={sjid})
+        w.run_shard(w.SOURCE_WORKDAY, w.shard_of(w.SOURCE_WORKDAY, "co0"),
+                    now=NOW, max_details=10, backlog_only=True)
+        assert _doc(sjid)["detail_misses"] == 1
