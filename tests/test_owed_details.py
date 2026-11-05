@@ -316,3 +316,23 @@ class TestRefsSurviveStorage:
     def test_a_vendor_addressed_by_id_does_not(self):
         gh = {"source": w.SOURCE_CAREER, "ats": "greenhouse", "slug": "acme", "member_key": "gh-acme"}
         assert w._stored_detail_ref({"canonical_url": "https://boards.greenhouse.io/acme/jobs/1"}, gh) == ""
+
+
+class TestTheNewPostingTargetReadsWorkingBoards:
+    """2026-11-05 the watchdog failed at 98.95% ("99.0%, target 99%") for new
+    postings on boards the report already named as broken."""
+
+    def test_a_broken_board_does_not_count_against_falling_behind(self, db, board):
+        for i in range(25):                       # co0: broken - all owed, all new
+            _store_owed(board[0], f"B{i}", age_days=0)
+            inv._db().job_postings.update_one(
+                {"source_job_id": f"co0:B{i}"},
+                {"$set": {"first_seen_at": NOW - timedelta(hours=5)}})
+        for i in range(10):                       # co1: works
+            row = _listing(board[1], f"G{i}")
+            inv.upsert_posting(dict(row, description=BODY, body_state="full"),
+                               now=NOW - timedelta(hours=5))
+        h = inv.description_health(NOW)
+        assert h["broken_boards"][0]["tenant"] == "co0"
+        assert h["new_total"] == 10 and h["new_owed"] == 0 and h["new_with_body"] == 1.0
+        assert h["new_total_all"] == 35 and h["new_owed_all"] == 25

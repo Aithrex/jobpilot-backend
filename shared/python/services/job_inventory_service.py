@@ -1688,10 +1688,6 @@ def description_health(now: Optional[datetime] = None, *, boards: int = 12) -> D
         by_source[str(row["_id"])] = {"active": int(row["active"]), "owed": int(row["owed"])}
     active = sum(v["active"] for v in by_source.values())
     owed = sum(v["owed"] for v in by_source.values())
-    window = {"status": STATUS_ACTIVE,
-              "first_seen_at": {"$gte": now - timedelta(hours=26), "$lt": now - timedelta(hours=2)}}
-    new_total = coll.count_documents(window)
-    new_owed = coll.count_documents(dict(window, body_state="teaser"))
     oldest = coll.find_one({"status": STATUS_ACTIVE, "body_state": "teaser"},
                            {"first_seen_at": 1}, sort=[("first_seen_at", 1)])
     oldest_at = _safe_dt((oldest or {}).get("first_seen_at"))
@@ -1707,12 +1703,31 @@ def description_health(now: Optional[datetime] = None, *, boards: int = 12) -> D
                            "employer": row.get("name"), "active": row["active"],
                            "owed": row["owed"]})
     broken.sort(key=lambda b: -b["owed"])
+    broken_keys = {(b["ats"], b["tenant"]) for b in broken}
+    # New postings, by board. The "falling behind" target reads only boards
+    # whose route WORKS: a board missing most of its bodies is a broken route
+    # (named in `broken_boards`), not a backlog, and counting it here turned
+    # the watchdog red on 2026-11-05 at 98.95% - printed as "99.0% (target
+    # 99%)" - for a handful of boards the report already listed by name.
+    new_total = new_owed = new_total_all = new_owed_all = 0
+    for row in coll.aggregate([
+            {"$match": {"status": STATUS_ACTIVE, "first_seen_at": {
+                "$gte": now - timedelta(hours=26), "$lt": now - timedelta(hours=2)}}},
+            {"$group": {"_id": {"ats": "$ats", "tenant": "$tenant"}, "n": {"$sum": 1},
+                        "owed": {"$sum": {"$cond": [{"$eq": ["$body_state", "teaser"]}, 1, 0]}}}}]):
+        new_total_all += row["n"]
+        new_owed_all += row["owed"]
+        if (row["_id"].get("ats"), row["_id"].get("tenant")) not in broken_keys:
+            new_total += row["n"]
+            new_owed += row["owed"]
     with_body = 1 - owed / max(1, active)
     new_with_body = 1 - new_owed / max(1, new_total)
     return {
         "measured_at": now, "active": active, "owed": owed,
         "with_body": round(with_body, 4), "by_source": by_source,
         "new_total": new_total, "new_owed": new_owed, "new_with_body": round(new_with_body, 4),
+        "new_total_all": new_total_all, "new_owed_all": new_owed_all,
+        "new_with_body_all": round(1 - new_owed_all / max(1, new_total_all), 4),
         "oldest_owed_hours": (round((now - oldest_at).total_seconds() / 3600, 1)
                               if oldest_at else None),
         "broken_boards": broken[:boards],
