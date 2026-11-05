@@ -753,6 +753,8 @@ def score_live_rows(rows: List[Dict[str, Any]], user_email: str) -> List[Dict[st
         else:
             for k in ("fit_band", "fit_confidence", "score_version"):
                 row.pop(k, None)
+    from services import company_type
+    company_type.annotate(rows)
     rows.sort(key=lambda j: (-(j.get("match_score") or 0),
                              j.get("days_ago") if j.get("days_ago") is not None else 99))
     return rows
@@ -1192,6 +1194,12 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         employer_display.apply_display_names(rows)
     except Exception as exc:  # pragma: no cover - display polish is best effort
         logger.warning("inventory_feed: display names skipped: %s", type(exc).__name__)
+    # The kind of employer each card is from (Big Tech & MNCs, enterprise,
+    # startup, staffing), with the evidence for it - what the board's grouped
+    # company filter reads. After display names, so the grouping sees the
+    # employer's name rather than the legal entity a board printed.
+    from services import company_type
+    company_type.annotate(rows)
 
     # "Too thin" is a statement about INVENTORY warmth, so it is judged before
     # the policy: a warm slice the user's policy narrows is served short and

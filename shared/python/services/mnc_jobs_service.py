@@ -260,6 +260,10 @@ def _normalize_employer(name: str) -> str:
 INVENTORY_HELD_MIN = _env_int("MNC_INVENTORY_HELD_MIN", 20)
 _HELD_TTL_SECONDS = 6 * 3600
 _held_cache: Dict[str, Any] = {"at": 0.0, "slugs": None}
+#: The grouped read both `inventory_held_slugs` and `company_type` use:
+#: active postings counted per (source, tenant, employer name). One read
+#: per process every six hours, shared, so a second consumer costs nothing.
+_groups_cache: Dict[str, Any] = {"at": 0.0, "groups": None}
 #: The inventory `source` an engine's postings land under; None = any source.
 _ENGINE_SOURCE = {"workday": "workday", "career_pages": "career-pages",
                   "enterprise": "career-pages", "orc": "oracle", "uber": "career-pages"}
@@ -279,6 +283,28 @@ def _inventory_keys(row: Dict[str, Any]) -> Tuple[Optional[str], set, set]:
 
 def reset_inventory_held_cache() -> None:
     _held_cache.update(at=0.0, slugs=None)
+    _groups_cache.update(at=0.0, groups=None)
+
+
+def inventory_groups(now: Optional[float] = None) -> Optional[List[Dict[str, Any]]]:
+    """Active postings counted per (source, tenant, employer name), or None
+    when the inventory cannot be read. Cached for six hours per process."""
+    import time as _time
+    now = _time.time() if now is None else now
+    if _groups_cache["groups"] is not None and now - _groups_cache["at"] < _HELD_TTL_SECONDS:
+        return _groups_cache["groups"]
+    try:
+        from utils.db_connect import DBConnect
+        groups = list(DBConnect().get_db().job_postings.aggregate([
+            {"$match": {"status": "active"}},
+            {"$group": {"_id": {"s": "$source", "t": "$tenant", "n": "$employer_name"},
+                        "c": {"$sum": 1}}},
+        ], allowDiskUse=True))
+    except Exception as exc:
+        logger.warning("mnc: inventory coverage unreadable (%s)", type(exc).__name__)
+        return None
+    _groups_cache.update(at=now, groups=groups)
+    return groups
 
 
 def inventory_held_slugs(now: Optional[float] = None) -> Optional[set]:
@@ -290,16 +316,9 @@ def inventory_held_slugs(now: Optional[float] = None) -> Optional[set]:
     now = _time.time() if now is None else now
     if _held_cache["slugs"] is not None and now - _held_cache["at"] < _HELD_TTL_SECONDS:
         return set(_held_cache["slugs"])
-    try:
-        from utils.db_connect import DBConnect
-        groups = list(DBConnect().get_db().job_postings.aggregate([
-            {"$match": {"status": "active"}},
-            {"$group": {"_id": {"s": "$source", "t": "$tenant", "n": "$employer_name"},
-                        "c": {"$sum": 1}}},
-        ], allowDiskUse=True))
-    except Exception as exc:
-        logger.warning("mnc: inventory coverage unreadable (%s); crawling the catalog",
-                       type(exc).__name__)
+    groups = inventory_groups(now)
+    if groups is None:
+        logger.warning("mnc: inventory coverage unreadable; crawling the catalog")
         return None
     by_tenant: Dict[Tuple[str, str], int] = {}
     by_name: Dict[str, int] = {}
