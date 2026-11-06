@@ -87,6 +87,23 @@ class TestBodyStatesTheLevel:
             "Junior Developer", description="We're looking for a senior developer.") == "entry"
 
 
+class TestTitleBandsInWords:
+    @pytest.mark.parametrize("title,level", [
+        ("Mid-Level Test & Evaluation Engineer", "mid"),
+        ("Intermediate Fullstack Engineer, Subscription Lifecycle", "mid"),
+        # Two bands at once: the stated years decide, so Entry filters keep it.
+        ("Software Engineer - Embedded (Early-Mid Level)", None),
+        ("Entry-Mid Level Analyst", None),
+    ])
+    def test_title(self, title, level):
+        assert fs.title_level(title) == level
+
+    def test_early_mid_with_two_years_stays_entry(self):
+        assert fs.level_from_signals(
+            "Software Engineer - Embedded (Early-Mid Level)",
+            description="You have a minimum of 2 years of experience designing embedded software.") == "entry"
+
+
 class TestLikelySeniorHint:
     @pytest.mark.parametrize("body", [
         "- Mentor engineers and produce exemplary artifacts.",

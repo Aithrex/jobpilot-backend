@@ -1615,7 +1615,9 @@ _LEVEL_PATTERNS: Sequence[Tuple[str, re.Pattern]] = (
         # 8. The band said in words: "Mid-Level Test & Evaluation Engineer"
         #    read no level at all (live, 2026-11-05), and "Intermediate
         #    Developer" is how Canadian boards title the same rung.
-        r"(?<![a-z])(mid[ -]?level|mid[ -]?career|intermediate(?!\s+care))(?![a-z])")),
+        #    "Early-Mid Level" / "Entry-Mid" span two bands: leave them to the
+        #    stated years, or an entry-level filter would lose them.
+        r"(?<![a-z])(?<!early[- ])(?<!entry[- ])(mid[ -]?level|mid[ -]?career|intermediate(?!\s+care))(?![a-z])")),
 )
 
 # Management titles, read by what they MANAGE rather than by the bare word.
