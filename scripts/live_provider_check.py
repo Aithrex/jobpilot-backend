@@ -84,6 +84,10 @@ PROBES: Dict[str, Dict[str, Any]] = {
     "neogov": {"tenant": "washington", "display_name": "State of Washington"},
     "taleo": {"tenant": "aarcorp", "host": "aarcorp.taleo.net",
               "display_name": "AAR Corp"},
+    # Official RMK board, revalidated 2026-11-05: 36 postings. Its listing
+    # omits locations, so the detail pass exercises location enrichment too.
+    "successfactors": {"tenant": "pseg", "host": "jobs.pseg.com",
+                       "display_name": "PSEG"},
     # Payroll-attached ATS (see `ats_providers/payroll.py`). UKG and Paylocity
     # boards are identified by opaque ids, so these were taken from real URLs
     # in the Common Crawl index rather than guessed.

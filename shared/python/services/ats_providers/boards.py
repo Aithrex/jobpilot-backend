@@ -819,9 +819,9 @@ class SmartRecruitersProvider(_BoardProvider):
     api_hosts = ("api.smartrecruiters.com",)
     portal_hosts = ("jobs.smartrecruiters.com", "careers.smartrecruiters.com")
 
-    # 100 per page, two pages. 200 newest is plenty for a 30-day window and
-    # bounds what a giant multinational costs us.
-    policy = _replace(_BOARD_POLICY, page_size=100, max_pages=2)
+    # No sort order is promised. Read the US board to its own total instead
+    # of assuming the first 200 contain every fresh opening.
+    policy = _replace(_BOARD_POLICY, page_size=100, max_pages=100)
 
     fingerprints = (
         fp(r"https?://api\.smartrecruiters\.com/v\d+/companies/"
@@ -875,7 +875,11 @@ class SmartRecruitersProvider(_BoardProvider):
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
         page_size = int(self.policy.page_size)
+        ctx.listing_truncated = True
         offset = 0
+        total: Optional[int] = None
+        seen: set = set()
+        overlap = False
         for _page in range(int(self.policy.max_pages)):
             if ctx.should_stop():
                 return
@@ -884,16 +888,32 @@ class SmartRecruitersProvider(_BoardProvider):
                      f"{endpoint.tenant}/postings",
                 # country=us is applied SERVER-side: giant multinationals
                 # (AccorHotels: 5,800+ postings) would otherwise bury their US
-                # slice beyond the two pages we are willing to read.
+                # slice beyond the bounded page budget.
                 {"limit": page_size, "offset": offset, "country": "us"})
+            if not isinstance(payload, dict) or not isinstance(payload.get("content"), list):
+                return
+            if any(not isinstance(row, dict) for row in payload["content"]):
+                return
+            try:
+                reported = int(payload["totalFound"])
+                if reported >= 0:
+                    total = max(total or 0, reported)
+            except (KeyError, TypeError, ValueError):
+                pass
             content = self._rows(payload, "content")
             if not content:
+                ctx.listing_truncated = len(seen) < total if total is not None else overlap or not seen
                 return
+            previous_count = len(seen)
             for job in content:
+                if ctx.should_stop():
+                    return
                 title = str(job.get("name") or "").strip()
                 rid = str(job.get("id") or "").strip()
-                if not rid or not title:
+                if not rid or not title or rid in seen:
+                    overlap = True
                     continue
+                seen.add(rid)
                 posted = to_iso(job.get("releasedDate"))
                 if self._too_old(ctx, posted):
                     continue
@@ -926,6 +946,12 @@ class SmartRecruitersProvider(_BoardProvider):
                 )
             offset += len(content)
             if len(content) < page_size:
+                ctx.listing_truncated = len(seen) < total if total is not None else overlap
+                return
+            if total is not None and offset >= total:
+                ctx.listing_truncated = len(seen) < total
+                return
+            if len(seen) == previous_count:
                 return
 
     def fetch_detail(self, endpoint: Endpoint, job: RawJob,
@@ -951,6 +977,41 @@ class SmartRecruitersProvider(_BoardProvider):
 # ---------------------------------------------------------------------------
 # Workable
 # ---------------------------------------------------------------------------
+
+def workable_widget_jobs(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One requisition per shortcode, retaining every widget location.
+
+    Workable repeats the same shortcode for each place a role can be based.
+    Keeping the last row silently loses the other locations. This pure helper
+    is also used by the legacy background listing path.
+    """
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        rid = str(raw.get("shortcode") or raw.get("code") or raw.get("id") or "").strip()
+        if not rid:
+            continue
+        if rid not in grouped:
+            grouped[rid] = dict(raw, _widget_locations=[], _widget_countries=[])
+        job = grouped[rid]
+        country = str(raw.get("country") or "").strip()
+        if country not in job["_widget_countries"]:
+            job["_widget_countries"].append(country)
+        place = _join(raw.get("city"), raw.get("state"), raw.get("country"))
+        if place and place not in job["_widget_locations"]:
+            job["_widget_locations"].append(place)
+        if raw.get("telecommuting"):
+            job["telecommuting"] = True
+        for field in ("description", "requirements"):
+            if len(str(raw.get(field) or "")) > len(str(job.get(field) or "")):
+                job[field] = raw[field]
+    for job in grouped.values():
+        # A multi-country requisition has no single country. Each place above
+        # keeps its own country instead of inheriting the first variant's.
+        job["country"] = job["_widget_countries"][0] if len(job["_widget_countries"]) == 1 else ""
+    return list(grouped.values())
+
 
 class WorkableProvider(_BoardProvider):
     vendor = "workable"
@@ -996,6 +1057,9 @@ class WorkableProvider(_BoardProvider):
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
+        ctx.listing_truncated = True
+        if ctx.should_stop():
+            return
         # `?details=true` inlines every posting's body in this ONE response.
         # Without it each body cost its own detail request, and Workable meets
         # a burst with 429 and a vendor-wide cooldown: on 2026-11-05 Toloka's
@@ -1003,11 +1067,18 @@ class WorkableProvider(_BoardProvider):
         payload = self._get_json(
             ctx, f"https://apply.workable.com/api/v1/widget/accounts/"
                  f"{endpoint.tenant}?details=true")
-        for job in self._rows(payload, "jobs"):
+        if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
+            return
+        complete = all(
+            isinstance(row, dict)
+            and str(row.get("shortcode") or row.get("code") or row.get("id") or "").strip()
+            and str(row.get("title") or "").strip()
+            for row in payload["jobs"])
+        for job in workable_widget_jobs(self._rows(payload, "jobs")):
             if ctx.should_stop():
                 return
             title = str(job.get("title") or "").strip()
-            rid = str(job.get("shortcode") or job.get("code") or "").strip()
+            rid = str(job.get("shortcode") or job.get("code") or job.get("id") or "").strip()
             if not rid or not title:
                 continue
             posted = to_iso(job.get("published_on"))
@@ -1020,7 +1091,7 @@ class WorkableProvider(_BoardProvider):
                 source_job_id=rid,
                 title=title,
                 apply_url=str(job.get("url") or ""),
-                location=_join(job.get("city"), job.get("state")),
+                location="; ".join(job["_widget_locations"]),
                 posted_at=posted,
                 date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
                 raw_posted_text=str(job.get("published_on") or ""),
@@ -1037,8 +1108,10 @@ class WorkableProvider(_BoardProvider):
                 # (`has_detail`), which also carries `requirements`.
                 description=html_to_text(
                     f"{job.get('description') or ''} {job.get('requirements') or ''}")[:40000],
-                extra={"experience_level": exp} if exp else {},
+                extra={"locations": list(job["_widget_locations"]),
+                       **({"experience_level": exp} if exp else {})},
             )
+        ctx.listing_truncated = not complete
 
     def fetch_detail(self, endpoint: Endpoint, job: RawJob,
                      ctx: FetchContext) -> Optional[RawJob]:

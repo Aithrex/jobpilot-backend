@@ -769,14 +769,42 @@ class SuccessFactorsProvider(AtsProvider):
             raise ChallengeError(self.vendor, status)
         if status != 200 or not body:
             return None
+        # Some RMK templates omit the listing's location column entirely.
+        # The public posting still states its places in JobPosting JSON-LD
+        # or the visible jobLocation microdata; neither requires another URL.
+        from services.ats_providers.own_site import ld_postings, _ld_location
+        postings = ld_postings(body)
+        ld = postings[0] if postings else {}
+        location, country = _ld_location(ld)
+        if not location:
+            from lxml import html as lxml_html
+            try:
+                doc = lxml_html.fromstring(body)
+                places = []
+                for node in doc.xpath('//*[@itemprop="jobLocation"]'):
+                    parts = [_first(node, f'.//*[@itemprop="{field}"]')
+                             for field in ("addressLocality", "addressRegion", "addressCountry")]
+                    place = ", ".join(part for part in parts if part)
+                    if place and place not in places:
+                        places.append(place)
+                location = "; ".join(places)
+                if not location:
+                    stated = _first(doc, '//*[contains(@class,"jobGeoLocation")]')
+                    location, country = _place(stated, self._host_of(endpoint))
+            except (ValueError, TypeError):
+                pass
         match = _JOB_DESCRIPTION_RE.search(body)
         text = html_to_text(match.group(1)).strip() if match else ""
         if not text:
             text = _itemprop_description(body)
         if not text:
+            text = html_to_text(ld.get("description") or "")
+        if not text and not location:
             return None
         return RawJob(source_job_id=job.source_job_id, title=job.title,
-                      apply_url=job.apply_url, description=text[:15000])
+                      apply_url=job.apply_url, description=text[:15000],
+                      location=location, country=country,
+                      extra={"locations": [part for part in location.split("; ") if part]})
 
     # -- identity ------------------------------------------------------------
 

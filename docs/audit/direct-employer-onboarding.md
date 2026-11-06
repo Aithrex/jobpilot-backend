@@ -1,6 +1,6 @@
 # Direct-employer onboarding — outcomes per company
 
-Generated 2026-10-22T07:49:58Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
+Generated 2026-11-05T23:32:44Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
 
 **Coverage basis:** in-repo catalogs and seed tables the crawler loads (no production inventory was read). `existing_covered` means the crawl tables already carry the exact endpoint; it is not a claim about live inventory counts.
 
@@ -189,7 +189,7 @@ Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, revi
 
 ## Owner priority: top employers per domain
 
-Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_validated: 38, blocked: 17, unsupported: 8, pending: 20
+Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 4, new_validated: 40, blocked: 18, unsupported: 8, pending: 20
 
 | company | domain | evidence | provider | endpoint | outcome | why | validated at | status | source | parsed | req | non-req |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -238,7 +238,7 @@ Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | Together AI | ai_ml | EXISTING | greenhouse | `greenhouse/togetherai` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:27Z | budget_limited | 79 | 30 | 30 | 0 |
 | Figure AI | ai_ml | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
 | Waymo | ai_ml | EXISTING | greenhouse | `greenhouse/waymo` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:28Z | budget_limited | 361 | 30 | 30 | 0 |
-| Aurora Innovation | ai_ml | EXISTING | greenhouse | `greenhouse/aurorainnovation` | existing_unhealthy_or_moved | validation failed - greenhouse/aurorainnovation answers 404; aurora.tech/careers serves no board link (JS) | 2026-10-22T02:18:28Z | failed |  | 0 | 0 | 0 |
+| Aurora Innovation | ai_ml | CHAIN | ashby | `ashby/aurora-operations-inc` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:25:39.293769Z | complete |  | 90 | 90 | 0 |
 | Physical Intelligence | ai_ml | EXISTING | ashby | `ashby/physicalintelligence` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:28Z | budget_limited |  | 30 | 30 | 0 |
 | Mistral AI | ai_ml | EXISTING | ashby | `ashby/mistral.ai` | existing_covered | row already in the crawl tables | 2026-10-22T05:09:40Z | complete |  | 222 | 222 | 0 |
 | ElevenLabs | ai_ml | EXISTING | ashby | `ashby/elevenlabs` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:29Z | budget_limited |  | 30 | 30 | 0 |
@@ -259,9 +259,9 @@ Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | Domo | data_science | BLOCKED |  |  | blocked | domo.com/company/careers answered 405 on 2026-10-21 |  | not_run |  |  |  |  |
 | ThoughtSpot | data_science | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
 | Sigma Computing | data_science | EXISTING | greenhouse | `greenhouse/sigmacomputing` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:35Z | budget_limited | 77 | 30 | 30 | 0 |
-| Hex | data_science | EXISTING | greenhouse | `greenhouse/hextechnologies` | existing_unhealthy_or_moved | validation failed - greenhouse/hextechnologies answers 404; hex.tech/careers serves no board link | 2026-10-22T02:18:35Z | failed |  | 0 | 0 | 0 |
+| Hex | data_science | CHAIN | ashby | `ashby/hex` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:25:40.344476Z | complete |  | 39 | 39 | 0 |
 | Starburst | data_science | EXISTING | greenhouse | `greenhouse/starburst` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:35Z | budget_limited | 33 | 30 | 30 | 0 |
-| ClickHouse | data_science | EXISTING | greenhouse | `greenhouse/clickhouse` | existing_unhealthy_or_moved | validation failed - greenhouse/clickhouse answers 404; clickhouse.com careers serves no board link | 2026-10-22T02:18:36Z | failed |  | 0 | 0 | 0 |
+| ClickHouse | data_science | CHAIN | ashby | `ashby/clickhouse` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:25:41.396673Z | complete |  | 202 | 202 | 0 |
 | Amplitude | data_science | CHAIN | ashby | `ashby/amplitude` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:09:44Z | complete |  | 41 | 41 | 0 |
 | Two Sigma | data_science | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
 | Capital One | data_science | EXISTING | workday | `workday/capitalone/Capital_One/wd12` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:36Z | budget_limited | 1998 | 30 | 30 | 0 |
@@ -277,7 +277,7 @@ Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | Broadcom | cloud | EXISTING | workday | `workday/broadcom/External_Career/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:39Z | budget_limited | 372 | 30 | 30 | 0 |
 | Red Hat | cloud | EXISTING | workday | `workday/redhat/jobs/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:41Z | budget_limited |  | 30 | 30 | 0 |
 | Nutanix | cloud | BLOCKED |  |  | blocked | careers.nutanix.com answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
-| NetApp | cloud | CHAIN | eightfold | `eightfold/netapp.eightfold.ai/netapp` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:14:45Z | complete |  | 136 | 136 | 0 |
+| NetApp | cloud | CHAIN | eightfold | `eightfold/netapp.eightfold.ai/netapp` | blocked | plan says added but no crawl member serves it - careers.netapp.com (TalentBrew front end) links netapp.eightfold.ai. | 2026-10-22T02:14:45Z | complete |  | 136 | 136 | 0 |
 | Equinix | cloud | EXISTING | workday | `workday/equinix/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:44Z | budget_limited |  | 30 | 30 | 0 |
 | Digital Realty | cloud | BLOCKED |  |  | blocked | TLS error fetching digitalrealty.com/about/careers on 2026-10-21 |  | not_run |  |  |  |  |
 | Rackspace | cloud | EXISTING | workday | `workday/rackspace/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:48Z | budget_limited | 35 | 30 | 30 | 0 |
@@ -382,19 +382,17 @@ Top-employer rows that are pending, blocked, or whose existing board no longer a
 - **Google DeepMind** (ai_ml, pending): official careers page is client-rendered; board link not in served HTML
 - **Groq** (ai_ml, pending): groq.com/careers redirects to the homepage; no board link served
 - **Figure AI** (ai_ml, pending): official careers page served no ATS link
-- **Aurora Innovation** (ai_ml, existing_unhealthy_or_moved): validation failed
 - **Confluent** (data_science, existing_unhealthy_or_moved): validation blocked
 - **dbt Labs** (data_science, existing_unhealthy_or_moved): validation failed
 - **Teradata** (data_science, pending): official careers page served no ATS link
 - **Domo** (data_science, blocked): domo.com/company/careers answered 405 on 2026-10-21
 - **ThoughtSpot** (data_science, pending): official careers page served no ATS link
-- **Hex** (data_science, existing_unhealthy_or_moved): validation failed
-- **ClickHouse** (data_science, existing_unhealthy_or_moved): validation failed
 - **Two Sigma** (data_science, pending): official careers page served no ATS link
 - **Nielsen** (data_science, pending): careers URL answered 404; NielsenIQ (crawled) is a different company
 - **DigitalOcean** (cloud, pending): open-roles page is a JS shell (XHRs Greenhouse per CLAUDE.md); token not observed in served HTML
 - **Akamai** (cloud, blocked): akamai.com/careers answered 403 on 2026-10-21
 - **Nutanix** (cloud, blocked): careers.nutanix.com answered 403 on 2026-10-21
+- **NetApp** (cloud, blocked): plan says added but no crawl member serves it
 - **Digital Realty** (cloud, blocked): TLS error fetching digitalrealty.com/about/careers on 2026-10-21
 - **Arista Networks** (cloud, blocked): arista.com/en/careers answered 406 on 2026-10-21
 - **Supermicro** (cloud, pending): official careers URL answered 404; current page unknown

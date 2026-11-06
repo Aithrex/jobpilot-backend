@@ -1,6 +1,6 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T07:49:58Z",
+ "generated_at": "2026-11-05T23:32:44Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
@@ -4440,11 +4440,11 @@
    "denominator": 166,
    "counts": {
     "existing_covered": 76,
-    "existing_unhealthy_or_moved": 7,
-    "new_validated": 38,
+    "existing_unhealthy_or_moved": 4,
+    "new_validated": 40,
     "excluded": 0,
     "review": 0,
-    "blocked": 17,
+    "blocked": 18,
     "unsupported": 8,
     "pending": 20
    },
@@ -6242,40 +6242,44 @@
     {
      "company": "Aurora Innovation",
      "disposition": "eligible_direct",
-     "evidence_state": "EXISTING",
-     "domain": "",
-     "provider": "greenhouse",
+     "evidence_state": "CHAIN",
+     "domain": "aurora.tech",
+     "provider": "ashby",
      "endpoint": {
-      "vendor": "greenhouse",
-      "tenant": "aurorainnovation",
+      "vendor": "ashby",
+      "tenant": "aurora-operations-inc",
       "site": "",
       "host": "",
       "extra": {}
      },
-     "where": "catalog_or_seed",
-     "plan": "existing",
-     "outcome": "existing_unhealthy_or_moved",
-     "why": "validation failed",
-     "member_key": "greenhouse-aurorainnovation",
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-aurora-operations-inc",
      "provider_needed": "",
-     "note": "greenhouse/aurorainnovation answers 404; aurora.tech/careers serves no board link (JS)",
+     "note": "2026-11-05: old Greenhouse token still answers 404. Official careers HTML publishes ashbyOrgSlug=aurora-operations-inc; its public posting API returned 90 distinct requisitions. Replaced the stale catalog endpoint.",
      "validation": {
-      "at": "2026-10-22T02:18:28Z",
-      "vendor": "greenhouse",
-      "status": "failed",
+      "at": "2026-11-05T23:25:39.293769Z",
+      "vendor": "ashby",
+      "status": "complete",
       "source_reported": null,
-      "parsed": 0,
-      "unique_ids": 0,
+      "parsed": 90,
+      "unique_ids": 90,
       "duplicate_rows": 0,
-      "requisitions": 0,
+      "requisitions": 90,
       "filtered_non_requisition": 0,
       "filtered_other_entity": 0,
       "http_statuses": [
-       "404"
+       "200"
       ],
-      "sample_titles": [],
-      "detail": "",
-      "member_key": "greenhouse-aurorainnovation"
+      "sample_titles": [
+       "Senior Staff TLM, Security Systems",
+       "Senior Program Manager, Test Execution (Weekends)",
+       "Senior Program Manager, Development Testing Operations (Release Testing)"
+      ],
+      "detail": "Guarded offline replay of the captured public posting API response; no network call.",
+      "member_key": "ashby-aurora-operations-inc"
      },
      "domain_group": "ai_ml"
     },
@@ -7066,40 +7070,44 @@
     {
      "company": "Hex",
      "disposition": "eligible_direct",
-     "evidence_state": "EXISTING",
-     "domain": "",
-     "provider": "greenhouse",
+     "evidence_state": "CHAIN",
+     "domain": "hex.tech",
+     "provider": "ashby",
      "endpoint": {
-      "vendor": "greenhouse",
-      "tenant": "hextechnologies",
+      "vendor": "ashby",
+      "tenant": "hex",
       "site": "",
       "host": "",
       "extra": {}
      },
-     "where": "catalog_or_seed",
-     "plan": "existing",
-     "outcome": "existing_unhealthy_or_moved",
-     "why": "validation failed",
-     "member_key": "greenhouse-hextechnologies",
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-hex",
      "provider_needed": "",
-     "note": "greenhouse/hextechnologies answers 404; hex.tech/careers serves no board link",
+     "note": "2026-11-05: old Greenhouse token still answers 404. Official job detail embeds jobs.ashbyhq.com/hex/embed?version=2; the public posting API returned 39 distinct requisitions. Replaced the stale catalog endpoint.",
      "validation": {
-      "at": "2026-10-22T02:18:35Z",
-      "vendor": "greenhouse",
-      "status": "failed",
+      "at": "2026-11-05T23:25:40.344476Z",
+      "vendor": "ashby",
+      "status": "complete",
       "source_reported": null,
-      "parsed": 0,
-      "unique_ids": 0,
+      "parsed": 39,
+      "unique_ids": 39,
       "duplicate_rows": 0,
-      "requisitions": 0,
+      "requisitions": 39,
       "filtered_non_requisition": 0,
       "filtered_other_entity": 0,
       "http_statuses": [
-       "404"
+       "200"
       ],
-      "sample_titles": [],
-      "detail": "",
-      "member_key": "greenhouse-hextechnologies"
+      "sample_titles": [
+       "Sales Engineer, Enterprise",
+       "AI Research Engineer",
+       "Technical Sourcer"
+      ],
+      "detail": "Guarded offline replay of the captured public posting API response; no network call.",
+      "member_key": "ashby-hex"
      },
      "domain_group": "data_science"
     },
@@ -7150,40 +7158,44 @@
     {
      "company": "ClickHouse",
      "disposition": "eligible_direct",
-     "evidence_state": "EXISTING",
-     "domain": "",
-     "provider": "greenhouse",
+     "evidence_state": "CHAIN",
+     "domain": "clickhouse.com",
+     "provider": "ashby",
      "endpoint": {
-      "vendor": "greenhouse",
+      "vendor": "ashby",
       "tenant": "clickhouse",
       "site": "",
       "host": "",
       "extra": {}
      },
-     "where": "catalog_or_seed",
-     "plan": "existing",
-     "outcome": "existing_unhealthy_or_moved",
-     "why": "validation failed",
-     "member_key": "greenhouse-clickhouse",
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-clickhouse",
      "provider_needed": "",
-     "note": "greenhouse/clickhouse answers 404; clickhouse.com careers serves no board link",
+     "note": "2026-11-05: old Greenhouse token still answers 404. Official careers bundle names the public Ashby posting API for clickhouse, which returned 202 distinct requisitions (80 explicitly US). Replaced the stale catalog endpoint.",
      "validation": {
-      "at": "2026-10-22T02:18:36Z",
-      "vendor": "greenhouse",
-      "status": "failed",
+      "at": "2026-11-05T23:25:41.396673Z",
+      "vendor": "ashby",
+      "status": "complete",
       "source_reported": null,
-      "parsed": 0,
-      "unique_ids": 0,
+      "parsed": 202,
+      "unique_ids": 202,
       "duplicate_rows": 0,
-      "requisitions": 0,
+      "requisitions": 202,
       "filtered_non_requisition": 0,
       "filtered_other_entity": 0,
       "http_statuses": [
-       "404"
+       "200"
       ],
-      "sample_titles": [],
-      "detail": "",
-      "member_key": "greenhouse-clickhouse"
+      "sample_titles": [
+       "Senior Cloud Software Engineer - Efficiency Engineering",
+       "Senior Cloud Software Engineer - Efficiency Engineering",
+       "Senior Software Engineer - Integrations - AI/ML"
+      ],
+      "detail": "Guarded offline replay of the captured public posting API response; no network call.",
+      "member_key": "ashby-clickhouse"
      },
      "domain_group": "data_science"
     },
@@ -7710,9 +7722,9 @@
      },
      "where": "seed",
      "plan": "added",
-     "outcome": "new_validated",
-     "why": "row added; live validation returned requisitions",
-     "member_key": "eightfold-netapp",
+     "outcome": "blocked",
+     "why": "plan says added but no crawl member serves it",
+     "member_key": "",
      "provider_needed": "",
      "note": "careers.netapp.com (TalentBrew front end) links netapp.eightfold.ai.",
      "validation": {
@@ -10863,12 +10875,6 @@
    "why": "official careers page served no ATS link"
   },
   {
-   "company": "Aurora Innovation",
-   "domain_group": "ai_ml",
-   "outcome": "existing_unhealthy_or_moved",
-   "why": "validation failed"
-  },
-  {
    "company": "Confluent",
    "domain_group": "data_science",
    "outcome": "existing_unhealthy_or_moved",
@@ -10899,18 +10905,6 @@
    "why": "official careers page served no ATS link"
   },
   {
-   "company": "Hex",
-   "domain_group": "data_science",
-   "outcome": "existing_unhealthy_or_moved",
-   "why": "validation failed"
-  },
-  {
-   "company": "ClickHouse",
-   "domain_group": "data_science",
-   "outcome": "existing_unhealthy_or_moved",
-   "why": "validation failed"
-  },
-  {
    "company": "Two Sigma",
    "domain_group": "data_science",
    "outcome": "pending",
@@ -10939,6 +10933,12 @@
    "domain_group": "cloud",
    "outcome": "blocked",
    "why": "careers.nutanix.com answered 403 on 2026-10-21"
+  },
+  {
+   "company": "NetApp",
+   "domain_group": "cloud",
+   "outcome": "blocked",
+   "why": "plan says added but no crawl member serves it"
   },
   {
    "company": "Digital Realty",

@@ -1,0 +1,51 @@
+{
+  "refineSearch": {
+    "totalHits": 2166,
+    "data": {
+      "jobs": [
+        {
+          "type": "Full-Time",
+          "state": "New Hampshire",
+          "reqId": "131500BR",
+          "city": "Manchester",
+          "applyUrl": "https://sjobs.brassring.com/TGnewUI/Search/home/HomeWithPreLoad?PageType=JobDetails&partnerid=25771&siteid=5403&jobid=305596",
+          "cityState": "Manchester, New Hampshire",
+          "country": "United States",
+          "jobId": "131500BR",
+          "title": "IT Systems Admin Sr",
+          "jobSeqNo": "BAE1US131500BREXTERNAL",
+          "postedDate": "2026-10-23T10:03:32.867+0000",
+          "dateCreated": "2026-10-20T15:02:29.776+0000"
+        },
+        {
+          "type": "Full-Time",
+          "state": "Colorado",
+          "reqId": "131232BR",
+          "city": "Broomfield",
+          "applyUrl": "https://sjobs.brassring.com/TGnewUI/Search/home/HomeWithPreLoad?PageType=JobDetails&partnerid=25771&siteid=5403&jobid=305326",
+          "cityState": "Broomfield, Colorado",
+          "country": "United States",
+          "jobId": "131232BR",
+          "title": "Field Service Tech III (Classified)",
+          "jobSeqNo": "BAE1US131232BREXTERNAL",
+          "postedDate": "2026-10-23T10:03:32.868+0000",
+          "dateCreated": "2026-10-14T16:04:16.063+0000"
+        },
+        {
+          "type": "Full-Time",
+          "state": "Colorado",
+          "reqId": "131084BR",
+          "city": "Broomfield",
+          "applyUrl": "https://sjobs.brassring.com/TGnewUI/Search/home/HomeWithPreLoad?PageType=JobDetails&partnerid=25771&siteid=5403&jobid=304741",
+          "cityState": "Broomfield, Colorado",
+          "country": "United States",
+          "jobId": "131084BR",
+          "title": "Engineer II - Software Quality Assurance",
+          "jobSeqNo": "BAE1US131084BREXTERNAL",
+          "postedDate": "2026-10-23T10:03:33.113+0000",
+          "dateCreated": "2026-10-08T15:02:20.585+0000"
+        }
+      ]
+    }
+  }
+}

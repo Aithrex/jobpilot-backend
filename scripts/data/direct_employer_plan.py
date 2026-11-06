@@ -552,7 +552,14 @@ TOP_EMPLOYER_PLAN: Dict[str, Dict[str, Any]] = {
     "SambaNova": _existing(_ep("greenhouse", "sambanovasystems")),
     "Together AI": _existing(_ep("greenhouse", "togetherai")),
     "Waymo": _existing(_ep("greenhouse", "waymo")),
-    "Aurora Innovation": _existing(_ep("greenhouse", "aurorainnovation"), note='greenhouse/aurorainnovation answers 404; aurora.tech/careers serves no board link (JS)'),
+    "Aurora Innovation": dict(
+        plan="added", state="CHAIN", domain="aurora.tech", where="career_pages_catalog",
+        endpoint=_ep("ashby", "aurora-operations-inc"), industry="manufacturing_automotive",
+        career_url="https://aurora.tech/careers", evidence_url="https://aurora.tech/careers",
+        checked_at="2026-11-05T23:25:39.293769Z",
+        note="2026-11-05: old Greenhouse token still answers 404. Official careers HTML "
+             "publishes ashbyOrgSlug=aurora-operations-inc; its public posting API returned "
+             "90 distinct requisitions. Replaced the stale catalog endpoint."),
     "Physical Intelligence": _existing(_ep("ashby", "physicalintelligence")),
     "Mistral AI": _existing(_ep("ashby", "mistral.ai"),
                             note="Catalog slug `mistral.ai` was crawled as `mistral-ai` "
@@ -570,9 +577,25 @@ TOP_EMPLOYER_PLAN: Dict[str, Dict[str, Any]] = {
     "dbt Labs": _existing(_ep("greenhouse", "dbtlabsinc"), note='greenhouse/dbtlabsinc answers 404; getdbt.com careers page shows Jibe/RMK hints, board not established'),
     "Cloudera": _existing(_ep("workday", "cloudera", site="External_Career", wd_host="wd5")),
     "Sigma Computing": _existing(_ep("greenhouse", "sigmacomputing")),
-    "Hex": _existing(_ep("greenhouse", "hextechnologies"), note='greenhouse/hextechnologies answers 404; hex.tech/careers serves no board link'),
+    "Hex": dict(
+        plan="added", state="CHAIN", domain="hex.tech", where="career_pages_catalog",
+        endpoint=_ep("ashby", "hex"), industry="tech",
+        career_url="https://hex.tech/careers/",
+        evidence_url="https://hex.tech/careers/ai-research-engineer/",
+        checked_at="2026-11-05T23:25:40.344476Z",
+        note="2026-11-05: old Greenhouse token still answers 404. Official job detail "
+             "embeds jobs.ashbyhq.com/hex/embed?version=2; the public posting API "
+             "returned 39 distinct requisitions. Replaced the stale catalog endpoint."),
     "Starburst": _existing(_ep("greenhouse", "starburst")),
-    "ClickHouse": _existing(_ep("greenhouse", "clickhouse"), note='greenhouse/clickhouse answers 404; clickhouse.com careers serves no board link'),
+    "ClickHouse": dict(
+        plan="added", state="CHAIN", domain="clickhouse.com", where="career_pages_catalog",
+        endpoint=_ep("ashby", "clickhouse"), industry="tech",
+        career_url="https://clickhouse.com/company/careers",
+        evidence_url="https://clickhouse.com/_next/static/immutable/chunks/2r_8--qdyl7-p.js",
+        checked_at="2026-11-05T23:25:41.396673Z",
+        note="2026-11-05: old Greenhouse token still answers 404. Official careers bundle "
+             "names the public Ashby posting API for clickhouse, which returned 202 distinct "
+             "requisitions (80 explicitly US). Replaced the stale catalog endpoint."),
     "Amplitude": dict(domain="amplitude.com", state="CHAIN", plan="added",
                       endpoint=_ep("ashby", "amplitude"), where="career_pages_catalog",
                       industry="tech", career_url="https://amplitude.com/careers",

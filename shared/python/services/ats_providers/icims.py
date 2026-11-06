@@ -286,12 +286,16 @@ class IcimsProvider(AtsProvider):
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
+        ctx.listing_truncated = True
+        if ctx.should_stop():
+            return
         host = self._host_of(endpoint)
         shell, hashed = self._bootstrap(endpoint, ctx)
         if not shell:
             return
 
         seen: set = set()
+        total: Optional[int] = None
         for page in range(int(self.policy.max_pages)):
             if ctx.should_stop():
                 return
@@ -307,14 +311,25 @@ class IcimsProvider(AtsProvider):
             if not body:
                 return
 
+            paging_text = " ".join(re.sub(r"<[^>]+>", " ", body).split())
+            match = _RESULTS_OF_RE.search(paging_text)
+            if match:
+                total = max(total or 0, int(match.group(1).replace(",", "")))
+            page_match = _PAGE_OF_RE.search(paging_text)
+            more_pages = (int(page_match.group(1)) < int(page_match.group(2))) if page_match else None
             rows = list(self._parse_rows(endpoint, host, body))
             if not rows:
-                # An explicit "no jobs" on page 0 is a real empty board; on a
-                # later page it is simply the end of pagination.
+                # A shell or changed template proves nothing. An explicit
+                # empty state is only complete if it does not contradict the
+                # board's own total from an earlier page.
+                if _EMPTY_MARKER in body.lower():
+                    ctx.listing_truncated = (total is not None and len(seen) < total) or more_pages is True
                 return
 
             new = 0
             for job in rows:
+                if ctx.should_stop():
+                    return
                 if job.source_job_id in seen:
                     continue
                 seen.add(job.source_job_id)
@@ -323,8 +338,16 @@ class IcimsProvider(AtsProvider):
             # iCIMS clamps `pr` past the last page and re-serves the final page,
             # so "every row was a duplicate" is the real end-of-list signal.
             if new == 0:
+                ctx.listing_truncated = (total is not None and len(seen) < total) or more_pages is True
+                return
+            if total is not None and len(seen) >= total:
+                ctx.listing_truncated = False
                 return
             if len(rows) < self.policy.page_size:
+                ctx.listing_truncated = (total is not None and len(seen) < total) or more_pages is True
+                return
+            if more_pages is False:
+                ctx.listing_truncated = total is not None and len(seen) < total
                 return
 
     # -- parsing -------------------------------------------------------------

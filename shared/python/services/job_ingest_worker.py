@@ -2223,9 +2223,11 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
                 compensation=job.get("SalaryInfo")))
 
     elif ats == "workable":
+        from services.ats_providers.boards import workable_widget_jobs
         url = f"https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true"
         data = http_get_json(SOURCE_CAREER, url, policy, deadline=deadline, stop=stop)
-        for job in ((data or {}).get("jobs") or []) if isinstance(data, dict) else []:
+        widget_rows = ((data or {}).get("jobs") or []) if isinstance(data, dict) else []
+        for job in workable_widget_jobs(widget_rows):
             posted_at = _parse_iso(job.get("published_on") or job.get("created_at"))
             if posted_at is None or posted_at < cutoff:
                 continue
@@ -2234,7 +2236,7 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
             rows.append(_listing_row(
                 member, shortcode or job.get("id"), title=job.get("title") or "",
                 url=job.get("url") or "", posted_at=posted_at,
-                location=", ".join(str(job.get(k) or "") for k in ("city", "state", "country")),
+                location=job["_widget_locations"],
                 # `details=true` above inlines the body; it used to be dropped
                 # here and fetched again, one throttled request per posting.
                 description=_html_to_text(str(job.get("description") or ""))[:15000],
@@ -2471,6 +2473,22 @@ def _location_with_stated_country(location: Any, country: Any) -> Any:
     return location
 
 
+def _provider_locations(job: Any) -> Any:
+    """Keep explicitly separated places separated through inventory parsing.
+
+    A display string containing three countries is still ONE location to
+    normalize_locations. Providers that merge per-location copies of a req
+    carry the original distinct places alongside the compatible display text.
+    """
+    stated = (getattr(job, "extra", None) or {}).get("locations")
+    if isinstance(stated, (list, tuple)):
+        places = [place.strip() for place in stated if isinstance(place, str) and place.strip()]
+        if places:
+            return places
+    return _location_with_stated_country(
+        getattr(job, "location", "") or "", getattr(job, "country", "") or "")
+
+
 def _raw_job_to_listing(member: Dict[str, Any], job: Any, *,
                         cutoff: datetime) -> Optional[Dict[str, Any]]:
     posted_at = _parse_iso(getattr(job, "posted_at", "") or "")
@@ -2489,8 +2507,7 @@ def _raw_job_to_listing(member: Dict[str, Any], job: Any, *,
         title=title,
         url=str(getattr(job, "apply_url", "") or ""),
         posted_at=posted_at,
-        location=_location_with_stated_country(
-            getattr(job, "location", "") or "", getattr(job, "country", "") or ""),
+        location=_provider_locations(job),
         description=str(getattr(job, "description", "") or ""),
         employment_type=str(getattr(job, "employment_type", "") or ""),
         posted_text=str(getattr(job, "raw_posted_text", "") or ""),
@@ -2590,6 +2607,12 @@ def _detail_via_provider(row: Dict[str, Any], member: Dict[str, Any], *,
     if detailed is None:
         return ""
     _adopt_detail_date(row, detailed)
+    # A location-free RMK listing can learn its place from the same detail
+    # response that supplies its body. Preserve every already-listed place.
+    if not any(row.get("locations") or []):
+        stated_location = _provider_locations(detailed)
+        if stated_location:
+            row["locations"] = stated_location if isinstance(stated_location, list) else [stated_location]
     return str(detailed.description or "")[:15000]
 
 

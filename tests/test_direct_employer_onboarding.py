@@ -93,6 +93,21 @@ def test_providers_another_agent_builds_are_named_not_rowed():
         assert res["why"] == f"unsupported_pending_provider:{need}"
 
 
+@pytest.mark.parametrize("name,tenant", [
+    ("Aurora Innovation", "aurora-operations-inc"), ("Hex", "hex"), ("ClickHouse", "clickhouse"),
+])
+def test_reprobed_migrations_use_the_proven_ashby_board(name, tenant):
+    entry = plan_mod.TOP_EMPLOYER_PLAN[name]
+    assert entry["plan"] == "added"
+    assert (entry["endpoint"]["vendor"], entry["endpoint"]["tenant"]) == ("ashby", tenant)
+    member = ob.member_for(entry["endpoint"], ob.crawl_members())
+    assert member is not None
+    endpoint = jw._endpoint_from_member(member)
+    assert registry.get("ashby").board_url(endpoint) == f"https://jobs.ashbyhq.com/{tenant}"
+    assert entry["checked_at"].startswith("2026-11-05T")
+    assert entry["evidence_url"].startswith("https://")
+
+
 def test_every_added_row_is_served_by_the_crawl_tables_with_its_exact_identity():
     """A5: an "added" row must be in the member tables the Oracle runner
     reads — the same tables, the same vendor/tenant/site/pod/host."""
@@ -216,6 +231,16 @@ def test_registration_records_carry_the_official_chain_as_ownership():
     assert src["canonical_endpoint"] == \
         "https://swift.wd3.myworkdayjobs.com/Join-Swift"
     assert recs["candidate"]["owner_domain"] == "swift.com"
+
+
+def test_registration_records_keep_the_new_observation_time():
+    entry = dict(plan_mod.LEAD_PLAN["Swift"], checked_at="2026-11-05T22:45:00Z")
+    report = ob.build_report(validations={"Swift": _ok_validation(47)}, cohorts=("leads",))
+    row = next(r for r in report["cohorts"]["leads"]["rows"] if r["company"] == "Swift")
+    recs = ob.registration_records(row, entry)
+    evidence = recs["career_source"]["ownership_evidence"][0]
+    assert evidence["at"].isoformat() == "2026-11-05T22:45:00+00:00"
+    assert "2026-11-05T22:45:00+00:00" in recs["candidate"]["verification_reason"]
 
 
 def test_apply_writes_ownership_through_existing_services(mock_db, monkeypatch):
@@ -430,7 +455,9 @@ def test_phenom_reads_to_the_reported_total_and_dedupes():
                                       host="careers.acrisure.com"), ctx))
     ids = [r.source_job_id for r in rows]
     assert len(ids) == len(set(ids)) == 2 * size - 1
-    assert ctx.listing_truncated is False and ctx.calls == 2
+    # A shifted result set repeated an id: 39 distinct rows do not prove a
+    # census of the declared 40. Preserve postings this partial read missed.
+    assert ctx.listing_truncated is True and ctx.calls == 2
 
 
 def test_phenom_schema_change_yields_fewer_rows_not_a_crash():

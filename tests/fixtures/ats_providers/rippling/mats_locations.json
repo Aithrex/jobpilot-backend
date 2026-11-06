@@ -1,0 +1,41 @@
+[
+  {
+    "uuid": "a66ae5be-95ab-4677-a4cf-96c19749f37a",
+    "name": "Cybersecurity Engineer (IT Security)",
+    "department": {
+      "id": "Operations",
+      "label": "Operations"
+    },
+    "url": "https://ats.rippling.com/mats-research/jobs/a66ae5be-95ab-4677-a4cf-96c19749f37a",
+    "workLocation": {
+      "label": "Remote (United States)",
+      "id": "Remote (United States)"
+    }
+  },
+  {
+    "uuid": "a66ae5be-95ab-4677-a4cf-96c19749f37a",
+    "name": "Cybersecurity Engineer (IT Security)",
+    "department": {
+      "id": "Operations",
+      "label": "Operations"
+    },
+    "url": "https://ats.rippling.com/mats-research/jobs/a66ae5be-95ab-4677-a4cf-96c19749f37a",
+    "workLocation": {
+      "label": "Remote (Canada)",
+      "id": "Remote (Canada)"
+    }
+  },
+  {
+    "uuid": "a66ae5be-95ab-4677-a4cf-96c19749f37a",
+    "name": "Cybersecurity Engineer (IT Security)",
+    "department": {
+      "id": "Operations",
+      "label": "Operations"
+    },
+    "url": "https://ats.rippling.com/mats-research/jobs/a66ae5be-95ab-4677-a4cf-96c19749f37a",
+    "workLocation": {
+      "label": "Remote (United Kingdom)",
+      "id": "Remote (United Kingdom)"
+    }
+  }
+]
