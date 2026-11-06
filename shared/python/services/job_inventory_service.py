@@ -175,7 +175,12 @@ NORMALIZATION_VERSION = 4
 # and `preferred_skills` change on stored postings. Ship ONLY with the stored-
 # body re-read (`job_ingest_worker._reread_stored`): without it a bump waits on
 # a detail fetch for every unchanged posting, which for Workday is never.
-EXTRACTOR_VERSION = 14
+#
+# v15: `jd.level_hint` - a LIKELY senior band read from duty wording ("you will
+# mentor junior engineers", "lead the design of") on postings that state no
+# years. Display only (`level_estimate` on the card); it never sets `seniority`
+# and never filters. Scores do not change.
+EXTRACTOR_VERSION = 15
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1

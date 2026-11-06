@@ -869,6 +869,56 @@ def read_additional_skills(blob: str, known: Sequence[str], raw_text: Any = "") 
     return out[:20]
 
 
+# A LIKELY band from how the posting describes the work, for the postings that
+# state no level and no years. Shown as "Likely Senior" with the sentence it
+# came from, and NEVER used to filter: the feed's level filter keeps treating
+# these as "no level stated", so a wrong estimate costs a label, not a job.
+# Each phrase is one an employer uses about the OWN role ("you will mentor"),
+# not about the team; measured on corpus JDs that DO state years, where the
+# stated years give the band the phrase must agree with
+# (`scripts/eval_level_hints.py`).
+_LEVEL_HINTS: Sequence[Tuple[str, re.Pattern]] = (
+    ("senior", re.compile(
+        r"(?<![a-z])(?:you will|you'll|will be expected to|responsible for)\s+(?:mentor|mentoring|coach|coaching)\s+"
+        r"(?:and\s+\w+\s+)?(?:junior|less experienced|newer)\s+"
+        r"(?:engineers|developers|analysts|team members|staff)"
+        r"|(?<![a-z])provide technical (?:leadership|direction) (?:to|for) (?:the|a|our)"
+        r"|(?<![a-z])(?:serve|act) as (?:a|the) (?:technical lead|tech lead)(?![a-z])"
+        r"|(?<![a-z])set (?:the )?technical direction"
+        r"|(?<![a-z])own (?:the )?(?:technical )?architecture (?:for|of)"
+        r"|(?<![a-z])lead (?:the )?(?:technical )?(?:design|architecture) (?:and (?:development|implementation) )?of")),
+)
+#: Measured 2026-11-05 on 20,000 corpus JDs and dropped: "work independently
+#: with minimal supervision" (mid) agreed with stated years 25% of the time -
+#: every band says it; "training will be provided" and "no experience
+#: required" (entry) sit in multi-role and senior postings; "serve as the
+#: subject matter expert" and "willingness to mentor" are not seniority.
+#: Entry ("under the guidance of senior engineers") reached 69% on unseen JDs
+#: (13 of them) and is left out: a wrong "Likely Entry" on a senior role
+#: misleads exactly the early-career users the board is built for. Senior on
+#: unseen JDs: 84% exact, 99% within one band (`scripts/eval_level_hints.py`).
+
+
+def read_level_hint(blob: str) -> Optional[Dict[str, str]]:
+    """{level, basis} read from how the work is described, or None.
+
+    Only for a posting whose level the stated signals left unknown - the
+    caller decides that. The first matching band wins in the order above
+    (senior duties outrank learning-from-seniors wording, which senior roles
+    sometimes carry for the team they join).
+    """
+    text = re.sub(r"<[^>]+>", "\n", str(blob or ""))
+    if not text.strip():
+        return None
+    low = text.lower()
+    for level, rx in _LEVEL_HINTS:
+        m = rx.search(low)
+        if m:
+            sentence = next((sn for sn in _sentences(text) if m.group(0) in sn.lower()), m.group(0))
+            return {"level": level, "basis": _evidence(sentence)}
+    return None
+
+
 def read_fields(blob: str, *, min_years: Optional[int], clearance_required: bool,
                 find_skills: Callable[[str], List[str]],
                 preferred_years: Optional[int] = None,
@@ -886,6 +936,9 @@ def read_fields(blob: str, *, min_years: Optional[int], clearance_required: bool
         "employment_type": read_employment_type(blob),
         "skill_alternatives": read_skill_alternatives(blob, find_skills),
         "additional_skills": read_additional_skills(blob, find_skills(blob), raw_text),
+        # Only where the posting states no years: a stated number is the answer.
+        "level_hint": (read_level_hint(str(raw_text or "") or blob)
+                       if min_years is None and preferred_years is None else None),
     }
 
 

@@ -114,3 +114,38 @@ class TestSavedNextStep:
         rows = [{"job_id": "j1"}]
         attach_next_step(rows, "me@x.com")
         assert rows[0]["next_step"]["tailored"] is False
+
+
+class TestLevelHint:
+    def test_duty_wording_reads_senior_with_its_sentence(self):
+        from services import jd_profile
+        hint = jd_profile.read_level_hint(
+            "About us. You will mentor junior engineers and review designs. Python, AWS.")
+        assert hint["level"] == "senior"
+        assert "mentor junior engineers" in hint["basis"]
+
+    def test_generic_wording_reads_nothing(self):
+        from services import jd_profile
+        for text in ("Work independently with minimal supervision.",
+                     "Willingness to mentor junior staff.",
+                     "Paid training will be provided. No experience required.",
+                     "Serve as the subject matter expert for the platform."):
+            assert jd_profile.read_level_hint(text) is None, text
+
+    def test_stated_years_suppress_the_hint(self):
+        from services import fit_score
+        r = fit_score.extract_requirements(
+            "Requirements: 2+ years of Python. You will mentor junior engineers.", "Software Engineer")
+        assert r["jd"]["level_hint"] is None
+        r = fit_score.extract_requirements(
+            "You will mentor junior engineers and lead the design of our APIs.", "Software Engineer")
+        assert r["jd"]["level_hint"]["level"] == "senior"
+
+    def test_card_estimate_only_when_no_level_is_stated(self):
+        from services.inventory_feed import level_estimate_of
+        req = {"jd": {"level_hint": {"level": "senior", "basis": "You will mentor junior engineers."}}}
+        assert level_estimate_of("unknown", req)["level"] == "senior"
+        assert level_estimate_of("", req)["level"] == "senior"
+        assert level_estimate_of("mid", req) is None
+        assert level_estimate_of("unknown", {"jd": {}}) is None
+        assert level_estimate_of("unknown", None) is None

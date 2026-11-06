@@ -502,6 +502,9 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
         "contract_friendly": False,
         "source": _ATS_LABEL.get(ats, "Workday" if doc.get("source") == SOURCE_WORKDAY else "Career Page"),
         "seniority": doc.get("seniority") or "",
+        # A likely band from duty wording, only where nothing stated a level
+        # (`jd_profile.read_level_hint`). Display only: filters read `seniority`.
+        "level_estimate": level_estimate_of(doc.get("seniority"), doc.get("requirements")),
         # Canonical identity, so the client never has to invent one from
         # display strings (which is what produced duplicate cards).
         "dedupe_group_id": doc.get("dedupe_group_id") or doc.get("job_id") or "",
@@ -522,6 +525,19 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
     if is_marketplace_board(row) or str(doc.get("board_kind") or "").lower() == "marketplace":
         row["board_kind"] = "marketplace"
     return row
+
+
+def level_estimate_of(seniority: Any, requirements: Any) -> Optional[Dict[str, str]]:
+    """The card's `level_estimate`, or None when a level is stated or no hint
+    was read. Shown as "Likely Senior" with the sentence it came from."""
+    if str(seniority or "").strip().lower() not in ("", "unknown"):
+        return None
+    jd = (requirements or {}).get("jd") if isinstance(requirements, dict) else None
+    hint = (jd or {}).get("level_hint") if isinstance(jd, dict) else None
+    if not isinstance(hint, dict) or hint.get("level") not in ("senior", "entry", "mid", "staff", "intern"):
+        return None
+    return {"level": str(hint["level"]), "basis": str(hint.get("basis") or "")[:200],
+            "version": "level-hint-1.0.0"}
 
 
 def has_read_description(doc: Dict[str, Any]) -> bool:
@@ -743,6 +759,10 @@ def score_live_rows(rows: List[Dict[str, Any]], user_email: str) -> List[Dict[st
                 pass
     _score_rows(rows, user_email, skills, years, profile=profile)
     for row in rows:
+        if not row.get("level_estimate"):
+            est = level_estimate_of(row.get("seniority"), row.get("_requirements"))
+            if est:
+                row["level_estimate"] = est
         row.pop("_requirements", None)
         fit = row.get("fit")
         if isinstance(fit, dict):
