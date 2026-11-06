@@ -1881,6 +1881,37 @@ _EARLY_CAREER_JD = re.compile(
     r"entry[ -]?level|no\s+prior\s+experience|no\s+experience\s+required|"
     r"0\s*[-to]{1,3}\s*2\s+years|1\s*[-to]{1,3}\s*2\s+years|"
     r"less\s+than\s+(one|two|1|2)\s+years?)")
+# The posting saying in words what level the ROLE is, read only when the title
+# states none and no years are stated (harshith's board and the all-users
+# audit, 2026-11-05). Each was measured against the band stated years give on
+# 30,000 corpus JDs (`scripts/eval_level_hints.py`): "looking for a senior
+# data engineer" / "as a senior full stack developer, you will" agree 74%,
+# one band off 21%, opposite end 5% - the same evidence a "Senior" title is,
+# so it is the stated level. "Early-career engineers" in general (63%, 26%
+# opposite: "train early-career engineers") was too loose; only the role
+# describing ITSELF is kept.
+_ROLE_NOUN = (r"(?:engineer|developer|scientist|analyst|architect|designer|consultant|"
+              r"contributor|sdet|administrator|specialist|programmer|technologist|researcher)s?(?![a-z])")
+_ROLE_ADJ = (r"(?:(?:highly|very|strong|talented|seasoned|motivated|skilled|driven|passionate|"
+             r"hands[- ]on|proven|exceptional)\s+)*")
+_NOT_A_ROLE = (r"(?!(?:leaders?|leadership|management|managers?|executives?|stakeholders?|vice|"
+               r"directors?|partners?|level|team|members?|staff|engineering|technical)(?![a-z]))")
+_SENIOR_ROLE_JD = re.compile(
+    r"(?:(?:looking for|seeking|hiring|searching for|in search of|recruiting|need) (?:a|an) |"
+    r"(?:(?<![a-z])as|you will be|you'll be|you are|role of|ideal candidate is|candidate will be) (?:a|an|our) )"
+    + _ROLE_ADJ + r"senior " + _NOT_A_ROLE + r"(?:[a-z+#./-]+ ){0,3}?" + _ROLE_NOUN)
+_EARLY_CAREER_ROLE_JD = re.compile(
+    r"(?:this|the) early[- ]career (?:role|position|opportunity|program)(?![a-z])|"
+    r"(?:role|position|opportunity) (?:is )?(?:ideal |designed |intended |perfect |great |well[- ]suited )?"
+    r"for (?:an? )?early[- ]career (?:candidates?|engineers?|professionals?|talent|applicants?)(?![a-z])|"
+    r"suits an? early[- ]career|"
+    r"(?:ideal|great|perfect|well[- ]suited|designed) for (?:an? )?(?:recent (?:college |university )?graduates?|"
+    r"new grad(?:uate)?s?|early[- ]career (?:candidates?|engineers?|professionals?))(?![a-z])")
+#: A level FIELD ("Job Level / Entry Level" in Workday metadata), anywhere in
+#: the body: those fields often sit past the first 4,000 characters (Airbus).
+_ENTRY_LEVEL_FIELD = re.compile(
+    r"(?:^|\n)\s*(?:[-*•·|]\s*)?(?:(?:job|career|experience|position) level\s*:?\s*)?"
+    r"entry[- ]level\s*(?:\n|$)")
 _INTERN_JD = re.compile(r"(internship|intern\s+program|co[ -]?op\s+(program|term)|"
                         r"summer\s+internship|currently\s+enrolled)")
 
@@ -1945,6 +1976,14 @@ def level_from_signals(title: Any, *, description: Any = "",
             return "intern"
         if _EARLY_CAREER_JD.search(hint_window) and (years is None or years <= 2):
             return "entry"
+    early = bool(_EARLY_CAREER_ROLE_JD.search(hint_window) or _ENTRY_LEVEL_FIELD.search(body)) \
+        if body else False
+    senior = bool(years is None and hint_window and _SENIOR_ROLE_JD.search(hint_window))
+    # Both said: the posting contradicts itself, and unknown is the honest answer.
+    if early and not senior and (years is None or years <= 2):
+        return "entry"
+    if senior and not early:
+        return "senior"
     # `_level_from_years` is the same ladder the RESUME side reads, so a
     # posting's "3+ years" and a candidate's three years resolve to the same
     # word. Years alone top out at `staff` there: "12+ years" is not evidence
@@ -2341,7 +2380,35 @@ _YEARS_LIEU_TAIL = re.compile(r",?\s*(?:or\s+)?in lieu of.*$")
 # may substitute for degree)" asks for two years. Only the aside is dropped; the
 # old rule skipped the whole sentence on the word "substitute" (Leidos, live
 # 2026-11-05). "(or 4 years in lieu of a degree)" goes with its number.
-_YEARS_ALTERNATE_ASIDE = re.compile(r"\([^)]*(?:in lieu|substitut|will meet|no degree)[^)]*\)")
+# "(u.s. or foreign equivalent)" is one word, not two sentence ends: split on
+# its dots, Red Hat's "...and two (2) years of experience" became a sentence
+# starting "or" and read as the degree's alternative (live, 2026-11-05).
+#: Only the "(u.s. or foreign equivalent)" form: protecting every "u.s." glued
+#: an OT posting's "...U.S. Public Health Service ... 1977 Have at least one
+#: year's experience" onto the alternative path before it and lost its 1 year.
+_US_ABBREV = re.compile(r"\(u\.s\.(?:a\.)?(?= or )")
+# Bullets glued without a newline: "...in lieu of a degree 1+ years of
+# experience in full stack". The lieu tail ate the real requirement after it
+# (SpaceX, five postings on one board). A number right after the phrase
+# starts a new requirement.
+_LIEU_GLUED = re.compile(
+    r"(?<=[a-z0-9)] )(in lieu of (?:a |an |the )?(?:[a-z'/-]+ ){0,3}?(?:degree|diploma|education))\s+(?=\d)")
+#: Only where the phrase CLOSES a clause ("...building software in lieu of a
+#: degree 1+ years"); one that OPENS a clause ("; in lieu of a degree 8 years")
+#: is followed by the price of not having the degree (Entergy), and the
+#: lookbehind - a word right before "in lieu" - keeps those whole.
+# "Qualifications: 2+ years in analytics, pricing...": no word "experience",
+# but the label right before the number says what it is. Only directly after
+# a requirement label, so "20+ years in business" stays company history.
+_YEARS_IN_FIELD_HEAD = re.compile(
+    r"(?:qualifications?|requirements?|requires?|must have|minimum(?: of)?)\s*:?\s*$")
+#: Only an aside where EXPERIENCE stands in for the DEGREE. The reverse -
+#: "12+ years (a Bachelor's may be substituted for 5 years)" - lowers the
+#: years for degree holders, so that sentence keeps being skipped (CACI).
+_YEARS_ALTERNATE_ASIDE = re.compile(
+    r"\((?=[^)]*(?:experience|training|certification))[^)]*"
+    r"(?:substitut\w*|considered|accepted) (?:for|in lieu of|in place of) (?:a |an |the )?(?:degree|bachelor|diploma|education)"
+    r"[^)]*\)|\([^)]*in lieu of (?:a |an |the )?(?:[a-z'/-]+ ){0,2}?(?:degree|diploma|education)[^)]*\)")
 _YEARS_STATED_RULE = re.compile(r"(?<![a-z])(?:minimum|requires?|must have|at least)(?![a-z])")
 _FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from|with|at)(?![a-z])[^.;,\n]*")
 _PARENTHETICAL = re.compile(r"\([^)]*\)")
@@ -2414,6 +2481,7 @@ def _required_years(blob: str, *, preferred_fallback: bool = True) -> Optional[i
                 mode = "preferred"
             elif _REQUIRED_HEAD.search(stripped):
                 mode = "required"
+        stripped = _LIEU_GLUED.sub(r"\1. ", _US_ABBREV.sub("(us", stripped))
         for sentence in _SENTENCE_SPLIT.split(stripped):
             sentence = _YEARS_LIEU_TAIL.sub("", _YEARS_ALTERNATE_ASIDE.sub("", sentence))
             if not sentence or _YEARS_ALTERNATE_PATH.search(sentence):
@@ -2429,13 +2497,16 @@ def _required_years(blob: str, *, preferred_fallback: bool = True) -> Optional[i
                 # A window, not a requirement: "within the past 5 years".
                 if _YEARS_WINDOW_BEFORE.search(head):
                     continue
-                if not (_YEARS_CONTEXT.search(tail[:60]) or "experience" in head):
+                in_field = not (_YEARS_CONTEXT.search(tail[:60]) or "experience" in head)
+                if in_field and not (tail.lstrip().startswith("in ") and _YEARS_IN_FIELD_HEAD.search(head)):
                     continue
                 # "...a plus and a minimum of 5 years": the cue touching the
                 # number outranks one elsewhere in the sentence.
                 near_required = bool(_REQUIRED_CUE.search(head[-20:]))
                 (preferred if is_pref and not near_required else required).append(n)
-                if not is_pref and _YEARS_STATED_RULE.search(sentence):
+                # "Minimum 1 year in IT" names a field, not the headline: it
+                # counts as required but never outranks "3 to 6 years" overall.
+                if not is_pref and not in_field and _YEARS_STATED_RULE.search(sentence):
                     stated.append(n)
     pool = required or (preferred if preferred_fallback else [])
     if not pool:

@@ -886,7 +886,18 @@ _LEVEL_HINTS: Sequence[Tuple[str, re.Pattern]] = (
         r"|(?<![a-z])(?:serve|act) as (?:a|the) (?:technical lead|tech lead)(?![a-z])"
         r"|(?<![a-z])set (?:the )?technical direction"
         r"|(?<![a-z])own (?:the )?(?:technical )?architecture (?:for|of)"
-        r"|(?<![a-z])lead (?:the )?(?:technical )?(?:design|architecture) (?:and (?:development|implementation) )?of")),
+        r"|(?<![a-z])lead (?:the )?(?:technical )?(?:design|architecture) (?:and (?:development|implementation) )?of"
+        # A duty bullet "Mentor engineers / teammates" (79% exact, 4% opposite
+        # end on 30k JDs) - "mentor others" is left out: electricians and
+        # retail leads say it.
+        r"|(?:^|\n)\s*(?:[-*\u2022\u00b7]\s*)?(?:you will |you'll |you )?mentor(?:ing|s)? (?:and \w+ )?"
+        r"(?:engineers|teammates|team members|other engineers|less experienced|junior|developers)(?![a-z])"
+        # "Looking for an experienced X": measured 81% senior or staff, 6%
+        # entry - "experienced" is how postings say senior, not mid.
+        r"|(?:looking for|seeking|hiring|searching for|need) (?:a|an) (?:(?:highly|very|strong|talented|seasoned|"
+        r"motivated|skilled)\s+)*experienced (?:[a-z+#./-]+ ){0,3}?"
+        r"(?:engineer|developer|scientist|analyst|architect|designer|consultant|administrator|specialist|"
+        r"programmer|technologist|researcher)s?(?![a-z])")),
 )
 #: Measured 2026-11-05 on 20,000 corpus JDs and dropped: "work independently
 #: with minimal supervision" (mid) agreed with stated years 25% of the time -

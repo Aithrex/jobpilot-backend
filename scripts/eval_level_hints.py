@@ -42,6 +42,12 @@ def main() -> None:
     ap.add_argument("--show", type=int, default=0, help="print N disagreeing sentences per band")
     a = ap.parse_args()
 
+    # The body STATEMENT rules `fit_score.level_from_signals` reads as the
+    # level (only where title and years are silent), scored the same way.
+    statements = [("senior statement", "senior", fit_score._SENIOR_ROLE_JD, True),
+                  ("early-career statement", "entry", fit_score._EARLY_CAREER_ROLE_JD, True),
+                  ("entry-level field", "entry", fit_score._ENTRY_LEVEL_FIELD, False)]
+    st_agree, st_near, st_wrong, st_silent = Counter(), Counter(), Counter(), Counter()
     agree, near, wrong = Counter(), Counter(), Counter()
     silent = silent_hit = 0
     silent_by = Counter()
@@ -61,6 +67,17 @@ def main() -> None:
                 by_years = fit_score._level_from_years(years)
                 early = bool(fit_score._EARLY_CAREER_JD.search(norm[:4000]))
                 hint = jd_profile.read_level_hint(body)
+                for name, lvl_s, rx, windowed in statements:
+                    if not rx.search(norm[:4000] if windowed else norm):
+                        continue
+                    if by_years is None:
+                        st_silent[name] += 1
+                    elif by_years in AGREE[lvl_s]:
+                        st_agree[name] += 1
+                    elif by_years in NEAR[lvl_s]:
+                        st_near[name] += 1
+                    else:
+                        st_wrong[name] += 1
                 if by_years is None and not early:
                     silent += 1
                     if hint:
@@ -84,6 +101,12 @@ def main() -> None:
         if tot:
             print(f"  {lvl:6s} hint on JDs stating years: {tot:5d}  exact {agree[lvl] / tot:6.1%}  "
                   f"one band off {near[lvl] / tot:6.1%}  wrong {wrong[lvl] / tot:6.1%}")
+    for name, _lvl, _rx, _w in statements:
+        tot = st_agree[name] + st_near[name] + st_wrong[name]
+        if tot or st_silent[name]:
+            print(f"  {name:22s} on JDs stating years: {tot:5d}  exact {st_agree[name] / max(1, tot):6.1%}  "
+                  f"one band off {st_near[name] / max(1, tot):6.1%}  wrong {st_wrong[name] / max(1, tot):6.1%}"
+                  f"  | fires on {st_silent[name]} JDs stating no years")
     print(f"silent JDs (no years, no early-career wording): {silent}; hint fires on {silent_hit} "
           f"({silent_hit / max(1, silent):.1%}) -> {dict(silent_by)}")
     for lvl, rows in misses.items():
