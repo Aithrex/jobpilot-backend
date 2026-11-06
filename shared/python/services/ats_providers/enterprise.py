@@ -116,6 +116,8 @@ class PhenomProvider(AtsProvider):
         "careers.snowflake.com",
         "careers.abb",
         "jobs.bechtel.com",
+        # Official BCG careers page and public /widgets, checked 2026-11-05.
+        "careers.bcg.com",
         ".phenompeople.com",
     )
     portal_hosts = api_hosts

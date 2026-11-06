@@ -1,0 +1,687 @@
+{
+  "schema_version": 1,
+  "assembled_at_utc": "2026-11-06T00:28:25.483253Z",
+  "production_access": false,
+  "scope": "One bounded retest of each of21 requested walls; no repeated blocked-host probing. Counts unknown unless a job listing was actually read.",
+  "items": [
+    {
+      "id": "wall_dayforce",
+      "name": "Dayforce",
+      "category": "wall",
+      "outcome": "reachable_page_board_not_validated",
+      "checked_at_utc": "2026-11-05T23:16:23.870788Z",
+      "evidence_url": "https://jobs.dayforcehcm.com/en-US/gmppu/CANDIDATEPORTAL",
+      "evidence_chain": [
+        "https://jobs.dayforcehcm.com/en-US/gmppu/CANDIDATEPORTAL",
+        "https://jobs.dayforcehcm.com/robots.txt"
+      ],
+      "http_status": 200,
+      "reason": "Public page returned200; no supported job listing was validated. Reachability alone does not prove crawl coverage.",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://jobs.dayforcehcm.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:23.870788Z",
+          "status": 200
+        },
+        {
+          "url": "https://jobs.dayforcehcm.com/en-US/gmppu/CANDIDATEPORTAL",
+          "checked_at_utc": "2026-11-05T23:16:24.921266Z",
+          "status": 200
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_adp_myjobs",
+      "name": "ADP MyJobs",
+      "category": "wall",
+      "outcome": "reachable_page_board_not_validated",
+      "checked_at_utc": "2026-11-05T23:16:25.193456Z",
+      "evidence_url": "https://myjobs.adp.com/inspiracareers",
+      "evidence_chain": [
+        "https://myjobs.adp.com/inspiracareers",
+        "https://myjobs.adp.com/robots.txt"
+      ],
+      "http_status": 200,
+      "reason": "Public page returned200; no supported job listing was validated. Reachability alone does not prove crawl coverage.",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://myjobs.adp.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:25.193456Z",
+          "status": 200
+        },
+        {
+          "url": "https://myjobs.adp.com/inspiracareers",
+          "checked_at_utc": "2026-11-05T23:16:26.248241Z",
+          "status": 200
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_bloomberg",
+      "name": "Bloomberg",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:26.633565Z",
+      "evidence_url": "https://careers.bloomberg.com/",
+      "evidence_chain": [
+        "https://careers.bloomberg.com/",
+        "https://careers.bloomberg.com/robots.txt",
+        "https://www.bloomberg.com/robots.txt",
+        "https://www.bloomberg.com/company/what-we-do/"
+      ],
+      "http_status": null,
+      "reason": "www.bloomberg.com: HTTP 403 / challenge at 2026-11-05T23:16:27.903441Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://careers.bloomberg.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:26.633565Z",
+          "status": 301
+        },
+        {
+          "url": "https://www.bloomberg.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:26.850169Z",
+          "status": 200
+        },
+        {
+          "url": "https://www.bloomberg.com/company/what-we-do/",
+          "checked_at_utc": "2026-11-05T23:16:27.903441Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_tesla",
+      "name": "Tesla",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:27.997937Z",
+      "evidence_url": "https://www.tesla.com/cua-api/apps/careers/state",
+      "evidence_chain": [
+        "https://www.tesla.com/cua-api/apps/careers/state",
+        "https://www.tesla.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "www.tesla.com: HTTP 403 / challenge at 2026-11-05T23:16:27.997937Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://www.tesla.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:27.997937Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_saic",
+      "name": "SAIC",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:28.150108Z",
+      "evidence_url": "https://www.saic.com/careers",
+      "evidence_chain": [
+        "https://www.saic.com/careers",
+        "https://www.saic.com/robots.txt",
+        "https://jobs.saic.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "jobs.saic.com: HTTP 403 / challenge at 2026-11-05T23:16:29.282389Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://www.saic.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:28.150108Z",
+          "status": 200
+        },
+        {
+          "url": "https://www.saic.com/careers",
+          "checked_at_utc": "2026-11-05T23:16:29.209450Z",
+          "status": 301
+        },
+        {
+          "url": "https://jobs.saic.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:29.282389Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_general_dynamics",
+      "name": "General Dynamics",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:29.414644Z",
+      "evidence_url": "https://www.gd.com/careers",
+      "evidence_chain": [
+        "https://www.gd.com/careers",
+        "https://www.gd.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "www.gd.com: HTTP 403 / challenge at 2026-11-05T23:16:29.414644Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://www.gd.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:29.414644Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_cognizant",
+      "name": "Cognizant",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:29.582341Z",
+      "evidence_url": "https://careers.cognizant.com/",
+      "evidence_chain": [
+        "https://careers.cognizant.com/",
+        "https://careers.cognizant.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "careers.cognizant.com: HTTP 403 / challenge at 2026-11-05T23:16:29.582341Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://careers.cognizant.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:29.582341Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_schneider_electric",
+      "name": "Schneider Electric",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:29.682414Z",
+      "evidence_url": "https://careers.se.com/",
+      "evidence_chain": [
+        "https://careers.se.com/",
+        "https://careers.se.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "careers.se.com: HTTP 403 / challenge at 2026-11-05T23:16:29.682414Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://careers.se.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:29.682414Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_national_grid",
+      "name": "National Grid",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:29.816683Z",
+      "evidence_url": "https://careers.nationalgrid.com/",
+      "evidence_chain": [
+        "https://careers.nationalgrid.com/",
+        "https://careers.nationalgrid.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "careers.nationalgrid.com: HTTP 403 / challenge at 2026-11-05T23:16:29.816683Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://careers.nationalgrid.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:29.816683Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_wsp",
+      "name": "WSP",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:30.019492Z",
+      "evidence_url": "https://powereng.com/careers",
+      "evidence_chain": [
+        "https://powereng.com/careers",
+        "https://powereng.com/robots.txt",
+        "https://www.wsp.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "www.wsp.com: HTTP 403 / challenge at 2026-11-05T23:16:30.298516Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://powereng.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:30.019492Z",
+          "status": 301
+        },
+        {
+          "url": "https://www.wsp.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:30.298516Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_nutanix",
+      "name": "Nutanix",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:30.425700Z",
+      "evidence_url": "https://careers.nutanix.com/",
+      "evidence_chain": [
+        "https://careers.nutanix.com/",
+        "https://careers.nutanix.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "careers.nutanix.com: HTTP 403 / challenge at 2026-11-05T23:16:30.425700Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://careers.nutanix.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:30.425700Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_akamai",
+      "name": "Akamai",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:30.532811Z",
+      "evidence_url": "https://www.akamai.com/careers",
+      "evidence_chain": [
+        "https://www.akamai.com/careers",
+        "https://www.akamai.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "www.akamai.com: HTTP 403 / challenge at 2026-11-05T23:16:30.532811Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://www.akamai.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:30.532811Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_arista_networks",
+      "name": "Arista Networks",
+      "category": "wall",
+      "outcome": "reachable_page_board_not_validated",
+      "checked_at_utc": "2026-11-05T23:16:30.669136Z",
+      "evidence_url": "https://www.arista.com/en/careers",
+      "evidence_chain": [
+        "https://www.arista.com/en/careers",
+        "https://www.arista.com/robots.txt"
+      ],
+      "http_status": 200,
+      "reason": "Public page returned200; no supported job listing was validated. Reachability alone does not prove crawl coverage.",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://www.arista.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:30.669136Z",
+          "status": 200
+        },
+        {
+          "url": "https://www.arista.com/en/careers",
+          "checked_at_utc": "2026-11-05T23:16:31.720688Z",
+          "status": 200
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_domo",
+      "name": "Domo",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:32.398007Z",
+      "evidence_url": "https://www.domo.com/company/careers",
+      "evidence_chain": [
+        "https://www.domo.com/company/careers",
+        "https://www.domo.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "www.domo.com: HTTP 405 / challenge at 2026-11-05T23:16:33.456474Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://www.domo.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:32.398007Z",
+          "status": 200
+        },
+        {
+          "url": "https://www.domo.com/company/careers",
+          "checked_at_utc": "2026-11-05T23:16:33.456474Z",
+          "status": 405
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_digital_realty",
+      "name": "Digital Realty",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:33.484808Z",
+      "evidence_url": "https://www.digitalrealty.com/about/careers",
+      "evidence_chain": [
+        "https://www.digitalrealty.com/about/careers",
+        "https://www.digitalrealty.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "SSLError: HTTPSConnectionPool(host='careers.digitalrealty.com', port=443): Max retries exceeded with url: /robots.txt (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1010)')))",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://www.digitalrealty.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:33.484808Z",
+          "status": 200
+        },
+        {
+          "url": "https://www.digitalrealty.com/about/careers",
+          "checked_at_utc": "2026-11-05T23:16:34.537977Z",
+          "status": 301
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_sempra",
+      "name": "Sempra",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:34.796701Z",
+      "evidence_url": "https://www.sempra.com/careers",
+      "evidence_chain": [
+        "https://www.sempra.com/careers",
+        "https://www.sempra.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "www.sempra.com: HTTP 403 / challenge at 2026-11-05T23:16:35.852597Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://www.sempra.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:34.798033Z",
+          "status": 200
+        },
+        {
+          "url": "https://www.sempra.com/careers",
+          "checked_at_utc": "2026-11-05T23:16:35.852597Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_tennessee_valley_authority",
+      "name": "Tennessee Valley Authority",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:35.946181Z",
+      "evidence_url": "https://www.tva.com/careers",
+      "evidence_chain": [
+        "https://www.tva.com/careers",
+        "https://www.tva.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "www.tva.com: HTTP 403 / challenge at 2026-11-05T23:16:35.946181Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://www.tva.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:35.946181Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_littelfuse",
+      "name": "Littelfuse",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:36.096049Z",
+      "evidence_url": "https://www.littelfuse.com/careers",
+      "evidence_chain": [
+        "https://www.littelfuse.com/careers",
+        "https://www.littelfuse.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "www.littelfuse.com: HTTP 403 / challenge at 2026-11-05T23:16:36.096049Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://www.littelfuse.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:16:36.096049Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_avangrid",
+      "name": "Avangrid",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:16:36.240803Z",
+      "evidence_url": "https://www.avangrid.com/careers",
+      "evidence_chain": [
+        "https://www.avangrid.com/careers"
+      ],
+      "http_status": null,
+      "reason": "ReadTimeout: HTTPSConnectionPool(host='www.avangrid.com', port=443): Read timed out. (read timeout=25)",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_oncor",
+      "name": "Oncor",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:17:01.406780Z",
+      "evidence_url": "https://www.oncor.com/",
+      "evidence_chain": [
+        "https://www.oncor.com/"
+      ],
+      "http_status": null,
+      "reason": "ReadTimeout: HTTPSConnectionPool(host='www.oncor.com', port=443): Read timed out. (read timeout=25)",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    },
+    {
+      "id": "wall_pharmacyclics",
+      "name": "Pharmacyclics",
+      "category": "wall",
+      "outcome": "blocked",
+      "checked_at_utc": "2026-11-05T23:17:26.743137Z",
+      "evidence_url": "https://www.pharmacyclics.com/",
+      "evidence_chain": [
+        "https://www.pharmacyclics.com/",
+        "https://www.pharmacyclics.com/robots.txt"
+      ],
+      "http_status": null,
+      "reason": "www.pharmacyclics.com: HTTP 403 / challenge at 2026-11-05T23:17:26.743137Z",
+      "rows_read": null,
+      "distinct_ids": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "requests": [
+        {
+          "url": "https://www.pharmacyclics.com/robots.txt",
+          "checked_at_utc": "2026-11-05T23:17:26.743137Z",
+          "status": 403
+        }
+      ],
+      "branch": "boards/employer-research",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43"
+    }
+  ],
+  "counts": {
+    "reachable_page_board_not_validated": 3,
+    "blocked": 18
+  }
+}

@@ -33,6 +33,11 @@ links `FolderDetail/<slug>/<id>` rather than `JobDetail/<id>`. Listing dates
 remain unknown. `extra.listing_route="Jobs"` describes that public template;
 the default remains `SearchJobs`. Paging is bounded at 250 pages and always
 marks a capped census truncated, including when no total is published.
+
+The same observation date's official careers pages link Two Sigma's `OpenRoles`
+route, EA's `SearchJobs`, and Deloitte's separate entry/experienced filtered
+`SearchJobs` URLs. The route is explicit endpoint data, and each exact filter
+remains in the endpoint's site identity.
 """
 from __future__ import annotations
 
@@ -51,7 +56,8 @@ from services.ats_providers.util import (html_to_text, looks_minted_now,
 
 VENDOR = "avature"
 #: Custom career hosts verified to be Avature, one by one.
-CUSTOM_HOSTS = ("jobs.frequentis.com", "jobs.siemens.com", "jobs.siemens-energy.com")
+CUSTOM_HOSTS = ("jobs.frequentis.com", "jobs.siemens.com", "jobs.siemens-energy.com",
+                "careers.twosigma.com", "jobs.ea.com", "apply.deloitte.com")
 _HOST_RE = re.compile(r"^(?:[a-z0-9-]+\.avature\.net|" +
                       "|".join(re.escape(h) for h in CUSTOM_HOSTS) + r")$")
 _PORTAL_RE = re.compile(r"^(?:[a-z]{2}_[A-Z]{2}/)?[A-Za-z0-9_-]{2,40}$")
@@ -188,7 +194,7 @@ class AvatureProvider(AtsProvider):
     fingerprints = (
         fp(r"https?://(?P<host>[a-z0-9-]+\.avature\.net|" +
            "|".join(re.escape(h) for h in CUSTOM_HOSTS) +
-           r")/(?P<site>(?:[a-z]{2}_[A-Z]{2}/)?[A-Za-z0-9_-]{2,40})/(?P<listing_route>SearchJobs|Jobs)/?"
+           r")/(?P<site>(?:[a-z]{2}_[A-Z]{2}/)?[A-Za-z0-9_-]{2,40})/(?P<listing_route>SearchJobs|Jobs|OpenRoles)/?"
            r"(?:\?(?P<query>[^\s\"'<>#]*))?", confidence=92),
     )
 
@@ -218,7 +224,7 @@ class AvatureProvider(AtsProvider):
     def board_url(self, endpoint: Endpoint) -> str:
         host, portal, query = self._parts(endpoint)
         route = (endpoint.extra or {}).get("listing_route", "SearchJobs")
-        if not host or route not in ("SearchJobs", "Jobs"):
+        if not host or route not in ("SearchJobs", "Jobs", "OpenRoles"):
             return ""
         return f"https://{host}/{portal}/{route}" + (f"?{query}" if query else "")
 

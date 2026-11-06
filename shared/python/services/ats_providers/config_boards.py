@@ -52,6 +52,9 @@ What a row may say
     records_path         dotted path to the list of records
     total_path           dotted path to the total count, when published
     fields               canonical RawJob attribute -> path or list of paths
+    fields.description_html_unescape  optional extra HTML entity decodes (0..2)
+    fields.source_job_id_regex  optional full-match pattern with ONE group,
+                          extracting a published requisition id from its URL
     fields.apply_url_template  formatted from the mapped values when the
                           record carries no absolute apply URL
 
@@ -74,8 +77,10 @@ ROW filter, never a paging stop — the same contract as Greenhouse and Phenom.
 from __future__ import annotations
 
 import copy
+import html
 import logging
 import re
+import uuid
 from dataclasses import replace as _dc_replace
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 from urllib.parse import quote, urlparse
@@ -100,6 +105,9 @@ _CONFIG_POLICY = CrawlPolicy(
     max_concurrency=4,
     timeout=10.0,
     detail_timeout=6.0,
+    challenge_statuses=frozenset({403, 405, 429, 503}),
+    challenge_markers=("verify you are human", "human verification", "cf-chl-",
+                       "px-captcha", "<title>access denied", "incapsula incident id"),
     page_size=100,
     max_pages=10,
     stale_page_tolerance=0,
@@ -219,6 +227,9 @@ class ConfigBoardProvider(AtsProvider):
             str(k): str(v) for k, v in dict(request.get("headers") or {}).items()}
         self.page_field = str(request.get("page_field") or "").strip()
         self.offset_field = str(request.get("offset_field") or "").strip()
+        self.nonce_param = str(request.get("nonce_param") or "").strip()
+        if self.nonce_param and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}", self.nonce_param):
+            raise ValueError("invalid published nonce parameter")
         preflight = dict(request.get("preflight") or {})
         self.preflight_url = str(preflight.get("url") or "").strip()
         self.preflight_method = str(preflight.get("method") or "GET").strip().upper()
@@ -235,6 +246,10 @@ class ConfigBoardProvider(AtsProvider):
         self.records_path = str(self.row.get("records_path") or "").strip()
         self.total_path = str(self.row.get("total_path") or "").strip()
         self.fields: Dict[str, Any] = dict(self.row.get("fields") or {})
+        pattern = str(self.fields.get("source_job_id_regex") or "")
+        self.id_pattern = re.compile(pattern) if pattern else None
+        if self.id_pattern is not None and self.id_pattern.groups != 1:
+            raise ValueError("source_job_id_regex must have exactly one group")
         self.apply_template = str(self.fields.get("apply_url_template") or "").strip()
 
         # An optional second request per posting, for a board whose search
@@ -242,11 +257,13 @@ class ConfigBoardProvider(AtsProvider):
         detail = dict(self.row.get("detail") or {})
         self.detail_template = str(detail.get("url_template") or "").strip()
         self.detail_record_path = str(detail.get("record_path") or "").strip()
+        # A data-selected region of the literal first-party posting page.
+        self.detail_html_xpath = str(detail.get("html_xpath") or "").strip()
         self.detail_sections: List[Tuple[str, str]] = [
             (str(label or "").strip(), str(path or "").strip())
             for label, path in (detail.get("sections") or ())
             if str(path or "").strip()]
-        self.has_detail = bool(self.detail_template and self.detail_sections)
+        self.has_detail = bool(self.detail_html_xpath or (self.detail_template and self.detail_sections))
         # A LISTING that already carries the body, split across fields
         # (Atlassian: overview / responsibilities / qualifications).
         self.description_sections: List[Tuple[str, str]] = [
@@ -298,53 +315,90 @@ class ConfigBoardProvider(AtsProvider):
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
         if not self.url or not self.records_path:
+            ctx.listing_truncated = True
             ctx.log("warning", "config_boards: %s row is incomplete", self.vendor)
             return
         if self.method == "POST" and ctx.post_json is None:
+            ctx.listing_truncated = True
             ctx.log("warning", "config_boards: %s needs post_json", self.vendor)
             return
 
-        self._preflight(ctx)
+        if ctx.should_stop():
+            ctx.listing_truncated = True
+            return
+        try:
+            self._preflight(ctx)
+        except Exception:
+            ctx.listing_truncated = True
+            raise
 
         size = self.page_size
+        seen = set()
+        reported = 0
+        overlap = False
         for index in range(int(self.policy.max_pages)):
             if ctx.should_stop():
                 ctx.listing_truncated = True
                 return
 
-            payload = self._fetch_page(ctx, index)
+            try:
+                payload = self._fetch_page(ctx, index)
+            except Exception:
+                ctx.listing_truncated = True
+                raise
             if payload is None:
-                if index:
-                    ctx.listing_truncated = True
+                ctx.listing_truncated = True
                 return
 
+            reported = max(reported, _int_or(dig(payload, self.total_path), 0)
+                           if self.total_path else 0)
+            raw_rows = payload if self.records_path == "$" else dig(payload, self.records_path)
+            if not isinstance(raw_rows, (list, tuple)):
+                ctx.listing_truncated = True
+                return
             rows = self._records(payload)
+            if len(rows) != len(raw_rows):
+                ctx.listing_truncated = True
             if not rows:
-                # Either the board is exhausted or the response reshaped. Both
-                # are "no more rows here", and neither is an exception.
+                # A correctly shaped empty page can prove exhaustion; a
+                # missing/reshaped records list above cannot.
                 if index == 0:
                     ctx.log("info", "config_boards: %s returned no records at %s",
                             self.vendor, self.records_path)
+                if reported > len(seen) or (overlap and not reported):
+                    ctx.listing_truncated = True
                 return
 
+            before = len(seen)
             for record in rows:
                 if ctx.should_stop():
                     ctx.listing_truncated = True
                     return
                 job = self._to_raw(record)
                 if job is None:
+                    ctx.listing_truncated = True
                     continue
+                if job.source_job_id in seen:
+                    overlap = True
+                    continue
+                seen.add(job.source_job_id)
                 # Row filter: none of these APIs promise an ordering.
                 if ctx.cutoff_iso and job.posted_at and job.posted_at < ctx.cutoff_iso:
                     continue
                 yield job
 
             if self.style == "none":
+                if reported > len(seen) or (overlap and not reported):
+                    ctx.listing_truncated = True
+                return
+            if len(seen) == before:
+                ctx.listing_truncated = True
                 return
             if size and len(rows) < size:
+                if reported > len(seen) or (overlap and not reported):
+                    ctx.listing_truncated = True
                 return
-            total = _int_or(dig(payload, self.total_path), 0) if self.total_path else 0
-            if total and size and (index + 1) * size >= total:
+            if reported and len(seen) >= reported:
                 return
 
         if self.style != "none":
@@ -379,6 +433,10 @@ class ConfigBoardProvider(AtsProvider):
 
     def _fetch_page(self, ctx: FetchContext, index: int) -> Optional[Any]:
         params = dict(self.base_params)
+        if self.nonce_param:
+            # Opt-in only when the served frontend publishes a UUID request
+            # parameter. This is a public request id, never a credential.
+            params[self.nonce_param] = str(uuid.uuid4())
         body = copy.deepcopy(self.base_body) if self.base_body is not None else None
 
         if self.style == "page":
@@ -442,6 +500,11 @@ class ConfigBoardProvider(AtsProvider):
             values[name] = _as_text(found)
         if not values["source_job_id"] or not values["title"]:
             return None
+        if self.id_pattern is not None:
+            match = self.id_pattern.fullmatch(values["source_job_id"])
+            if match is None or not match.group(1):
+                return None
+            values["source_job_id"] = match.group(1)
 
         raw_posted = first_present(record, _as_paths(self.fields.get("posted_at")))
         posted = to_iso(raw_posted) if raw_posted is not None else ""
@@ -455,6 +518,11 @@ class ConfigBoardProvider(AtsProvider):
 
         description = first_present(
             record, _as_paths(self.fields.get("description")))
+        # Some public JSON embeds entity-escaped HTML inside outer HTML.
+        # Opt in per data row; never reinterpret literal code in other boards.
+        for _ in range(min(2, max(0, _int_or(
+                self.fields.get("description_html_unescape"), 0)))):
+            description = html.unescape(str(description or ""))
         if self.description_sections:
             description = _join_sections(record, self.description_sections) \
                 or description
@@ -492,6 +560,26 @@ class ConfigBoardProvider(AtsProvider):
         """
         if not self.has_detail:
             return None
+        if self.detail_html_xpath:
+            # The URL comes from the job's public listing, never a generated
+            # endpoint. Pin it to the configured employer before transport.
+            if ctx.should_stop() or _host_of(job.apply_url) not in self.portal_hosts:
+                return None
+            status, body = ctx.get_text(job.apply_url, timeout=self.policy.detail_timeout,
+                                        vendor=self.vendor)
+            if self.policy.is_challenge(status, body or ""):
+                raise ChallengeError(self.vendor, status)
+            if status != 200 or not body:
+                return None
+            try:
+                from lxml import html as lhtml
+                doc = lhtml.fromstring(body)
+                nodes = doc.xpath(self.detail_html_xpath)
+                text = "\n\n".join(html_to_text(lhtml.tostring(node, encoding="unicode"))
+                                    for node in nodes if hasattr(node, "tag")).strip()
+            except (ValueError, TypeError):
+                return None
+            return _dc_replace(job, description=text[:15000]) if text else None
         url = _format_template(self.detail_template,
                                {"source_job_id": job.source_job_id})
         if not url:

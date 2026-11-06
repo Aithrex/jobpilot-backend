@@ -308,9 +308,13 @@ def validate_endpoint(endpoint: Dict[str, Any], *, cap: int = 400,
         from services import job_ingest_worker as jw
         from services.ats_providers.http import simple_context
         source = jw.source_of_vendor(vendor)
+        # Own-page members are pinned to the employer host in the crawler;
+        # they intentionally do not belong to a global vendor allowlist.
+        own_host = jw._own_site_host(dict(endpoint, vendor=vendor))
         ctx = simple_context(
             budget_seconds=budget, global_rate=1.0,
-            guard=lambda _v, url: jw.assert_outbound_url(source, url))
+            guard=lambda _v, url: (jw.assert_own_site_url(own_host, url)
+                                  if own_host else jw.assert_outbound_url(source, url)))
     statuses: List[Any] = []
     first_total: List[Optional[int]] = []
     kinds: List[str] = []

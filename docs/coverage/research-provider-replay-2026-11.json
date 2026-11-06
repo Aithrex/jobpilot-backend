@@ -1,0 +1,4705 @@
+{
+  "evidence_mode": "offline replay of dated live HTTP captures; no new network requests",
+  "command": ".venv-win/Scripts/python.exe .probe/replay-research.py",
+  "entry_points": [
+    "onboard_researched_companies.main --validate --only <each added name> --cap 10000 --write-docs",
+    "live_provider_check.check(vendor, limit=5) with proven endpoint override"
+  ],
+  "validations": [
+    {
+      "name": "DataVisor",
+      "endpoint": {
+        "vendor": "workable",
+        "tenant": "datavisor-jobs",
+        "host": ""
+      },
+      "validation": {
+        "at": "2026-11-05T23:50:54.934428Z",
+        "vendor": "workable",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 33,
+        "unique_ids": 27,
+        "duplicate_rows": 6,
+        "requisitions": 27,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Business Operations Analyst",
+          "Customer Success Manager - Fraud/AML Strategy",
+          "Customer Success Manager - Fraud/AML Strategy"
+        ],
+        "detail": "",
+        "member_key": "workable-datavisor-jobs",
+        "replayed_at_utc": "2026-11-06T00:19:24.130623+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:50:55.989196Z",
+          "method": "GET",
+          "url": "https://apply.workable.com/api/v1/widget/accounts/datavisor-jobs?details=true",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "LendingTree",
+      "endpoint": {
+        "vendor": "greenhouse",
+        "tenant": "lendingtree",
+        "site": "",
+        "host": "",
+        "extra": {}
+      },
+      "validation": {
+        "at": "2026-11-05T23:18:23.240473Z",
+        "vendor": "greenhouse",
+        "status": "complete",
+        "source_reported": 23,
+        "parsed": 23,
+        "unique_ids": 23,
+        "duplicate_rows": 0,
+        "requisitions": 23,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Account Executive",
+          "Account Executive",
+          "Account Executive"
+        ],
+        "detail": "",
+        "member_key": "greenhouse-lendingtree",
+        "replayed_at_utc": "2026-11-06T00:19:24.133221+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:18:24.295713Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/v1/boards/lendingtree/jobs?content=false",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Verisk",
+      "endpoint": {
+        "vendor": "oracle_orc",
+        "tenant": "fa-ewmy-saasfaprod1",
+        "site": "CX_1",
+        "host": "fa-ewmy-saasfaprod1.fa.ocs.oraclecloud.com",
+        "extra": {}
+      },
+      "validation": {
+        "at": "2026-11-05T23:18:24.370878Z",
+        "vendor": "oracle_orc",
+        "status": "complete",
+        "source_reported": 162,
+        "parsed": 162,
+        "unique_ids": 162,
+        "duplicate_rows": 0,
+        "requisitions": 162,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Sachbearbeiter f\u00fcr Medizinische Datenerfassung (m/w/d)",
+          "Senior Insurance Product Development Analyst",
+          "Senior Data Scientist"
+        ],
+        "detail": "",
+        "member_key": "oracle_orc-fa-ewmy-saasfaprod1-cx_1",
+        "replayed_at_utc": "2026-11-06T00:19:24.142973+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:18:25.428270Z",
+          "method": "GET",
+          "url": "https://fa-ewmy-saasfaprod1.fa.ocs.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitions?onlyData=true&expand=requisitionList.secondaryLocations&finder=findReqs%3BsiteNumber%3DCX_1%2Climit%3D200%2CsortBy%3DPOSTING_DATES_DESC%2Coffset%3D0",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "ThoughtSpot",
+      "endpoint": {
+        "vendor": "rippling",
+        "tenant": "thoughtspot"
+      },
+      "validation": {
+        "at": "2026-11-06T00:14:28.510501Z",
+        "vendor": "rippling",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 49,
+        "unique_ids": 48,
+        "duplicate_rows": 1,
+        "requisitions": 48,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Account Executive, AgentSpot",
+          "Account Executive, AgentSpot",
+          "Account Executive, AgentSpot"
+        ],
+        "detail": "",
+        "member_key": "rippling-thoughtspot",
+        "replayed_at_utc": "2026-11-06T00:19:24.142973+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-06T00:14:29.570127Z",
+          "method": "GET",
+          "url": "https://ats.rippling.com/api/v1/board/thoughtspot/jobs",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Two Sigma",
+      "endpoint": {
+        "vendor": "avature",
+        "tenant": "careers.twosigma.com",
+        "host": "careers.twosigma.com",
+        "site": "careers",
+        "extra": {
+          "listing_route": "OpenRoles"
+        }
+      },
+      "validation": {
+        "at": "2026-11-05T23:35:16.247200Z",
+        "vendor": "avature",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 66,
+        "unique_ids": 66,
+        "duplicate_rows": 0,
+        "requisitions": 66,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "AI Fluency: Program Manager",
+          "AI Research Scientist - Campus Full-Time",
+          "AI Research Scientist - Intern [2027 Summer]"
+        ],
+        "detail": "",
+        "member_key": "avature-careers-twosigma-com-careers",
+        "replayed_at_utc": "2026-11-06T00:19:24.255183+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:35:17.304821Z",
+          "method": "GET",
+          "url": "https://careers.twosigma.com/careers/OpenRoles",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:18.431499Z",
+          "method": "GET",
+          "url": "https://careers.twosigma.com/careers/OpenRoles/?jobRecordsPerPage=10&jobOffset=10",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:19.529150Z",
+          "method": "GET",
+          "url": "https://careers.twosigma.com/careers/OpenRoles/?jobRecordsPerPage=10&jobOffset=20",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:20.618750Z",
+          "method": "GET",
+          "url": "https://careers.twosigma.com/careers/OpenRoles/?jobRecordsPerPage=10&jobOffset=30",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:21.741376Z",
+          "method": "GET",
+          "url": "https://careers.twosigma.com/careers/OpenRoles/?jobRecordsPerPage=10&jobOffset=40",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:22.794592Z",
+          "method": "GET",
+          "url": "https://careers.twosigma.com/careers/OpenRoles/?jobRecordsPerPage=10&jobOffset=50",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:23.857842Z",
+          "method": "GET",
+          "url": "https://careers.twosigma.com/careers/OpenRoles/?jobRecordsPerPage=10&jobOffset=60",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "DigitalOcean",
+      "endpoint": {
+        "vendor": "greenhouse",
+        "tenant": "digitalocean98"
+      },
+      "validation": {
+        "at": "2026-11-05T23:41:50.775144Z",
+        "vendor": "greenhouse",
+        "status": "complete",
+        "source_reported": 152,
+        "parsed": 152,
+        "unique_ids": 152,
+        "duplicate_rows": 0,
+        "requisitions": 152,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Account Executive  - Commercial",
+          "Cloud Operations Administrator - II",
+          "Contracts Director - Go to Market"
+        ],
+        "detail": "",
+        "member_key": "greenhouse-digitalocean98",
+        "replayed_at_utc": "2026-11-06T00:19:24.256709+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:41:51.826151Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/v1/boards/digitalocean98/jobs?content=false",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Shopify",
+      "endpoint": {
+        "vendor": "careers_page",
+        "tenant": "shopify.com",
+        "host": "shopify.com",
+        "extra": {
+          "listing_url": "https://www.shopify.com/careers"
+        }
+      },
+      "validation": {
+        "at": "2026-11-06T00:01:45.240401Z",
+        "vendor": "careers_page",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 25,
+        "unique_ids": 25,
+        "duplicate_rows": 0,
+        "requisitions": 25,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Applied Machine Learning Engineering Managers",
+          "Applied Machine Learning Engineers",
+          "Applied ML Engineering - GenAI, AI Agent"
+        ],
+        "detail": "",
+        "member_key": "careers_page-shopify-com",
+        "replayed_at_utc": "2026-11-06T00:19:24.297336+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-06T00:01:46.291083Z",
+          "method": "GET",
+          "url": "https://www.shopify.com/careers",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Supermicro",
+      "endpoint": {
+        "vendor": "successfactors",
+        "tenant": "jobs.supermicro.com",
+        "host": "jobs.supermicro.com",
+        "extra": {}
+      },
+      "validation": {
+        "at": "2026-11-05T23:32:54.359419Z",
+        "vendor": "successfactors",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 1000,
+        "unique_ids": 1000,
+        "duplicate_rows": 0,
+        "requisitions": 1000,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Sr. Sales Manager",
+          "(Sr.) MB Testing Engineer",
+          "Product Engineer - Liquid Cooling Solutions"
+        ],
+        "detail": "",
+        "member_key": "successfactors-jobs-supermicro-com",
+        "replayed_at_utc": "2026-11-06T00:19:24.813513+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:32:55.419881Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:32:56.472110Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=25",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:32:57.525332Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=50",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:32:58.577979Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=75",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:32:59.628385Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=100",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:00.683779Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=125",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:01.734401Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=150",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:02.785348Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=175",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:03.836422Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=200",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:04.889051Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=225",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:05.941438Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=250",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:06.991771Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=275",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:08.050110Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=300",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:09.101284Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=325",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:10.151830Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=350",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:11.202837Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=375",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:12.262293Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=400",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:13.317098Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=425",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:14.369460Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=450",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:15.428652Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=475",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:16.480978Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=500",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:17.531837Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=525",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:18.582344Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=550",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:19.635904Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=575",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:20.687024Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=600",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:21.737390Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=625",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:22.788112Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=650",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:23.838557Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=675",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:24.892211Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=700",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:25.942424Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=725",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:26.993342Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=750",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:28.043651Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=775",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:29.094198Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=800",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:30.149063Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=825",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:31.199554Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=850",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:32.250549Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=875",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:33.301692Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=900",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:34.351877Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=925",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:35.407298Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=950",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:36.457618Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=975",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Kiewit",
+      "endpoint": {
+        "vendor": "successfactors",
+        "tenant": "kiewitcareers.kiewit.com",
+        "host": "kiewitcareers.kiewit.com",
+        "extra": {}
+      },
+      "validation": {
+        "at": "2026-11-05T23:33:36.779911Z",
+        "vendor": "successfactors",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 995,
+        "unique_ids": 995,
+        "duplicate_rows": 0,
+        "requisitions": 995,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Surveyor - Nuclear Construction",
+          "Batch Plant Superintendent - South Central District",
+          "Scheduler - Energy Construction"
+        ],
+        "detail": "",
+        "member_key": "successfactors-kiewitcareers-kiewit-com",
+        "replayed_at_utc": "2026-11-06T00:19:25.401996+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:33:37.836272Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:38.892030Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=25",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:39.943016Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=50",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:41.331980Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=75",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:42.423987Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=100",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:43.513932Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=125",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:44.740422Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=150",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:46.089693Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=175",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:47.233521Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=200",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:48.570493Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=225",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:49.919539Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=250",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:51.287023Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=275",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:52.443891Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=300",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:53.582097Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=325",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:54.947380Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=350",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:56.076204Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=375",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:57.427655Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=400",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:58.779813Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=425",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:33:59.876869Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=450",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:01.280739Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=475",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:02.615291Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=500",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:03.864342Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=525",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:04.997113Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=550",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:06.400567Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=575",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:07.757651Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=600",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:08.908562Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=625",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:10.284936Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=650",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:11.621951Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=675",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:12.737962Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=700",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:14.156080Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=725",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:15.517609Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=750",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:16.891118Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=775",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:18.280014Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=800",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:19.429530Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=825",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:20.569915Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=850",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:21.654160Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=875",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:23.083983Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=900",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:24.492620Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=925",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:25.823578Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=950",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:26.913929Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=975",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Mott MacDonald",
+      "endpoint": {
+        "vendor": "custom_mottmac",
+        "tenant": "mottmac",
+        "host": "www.mottmac.com"
+      },
+      "validation": {
+        "at": "2026-11-06T00:15:41.459006Z",
+        "vendor": "custom_mottmac",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 1070,
+        "unique_ids": 1070,
+        "duplicate_rows": 0,
+        "requisitions": 1063,
+        "filtered_non_requisition": 7,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Civil Engineer",
+          "2027 UK Degree Apprenticeship Programme: Project Management",
+          "Project Architect"
+        ],
+        "detail": "",
+        "member_key": "custom_mottmac-mottmac",
+        "replayed_at_utc": "2026-11-06T00:19:25.482461+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-06T00:15:42.510808Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=bcc4fe7e-6e77-4f27-b44d-8fe450b6610d&from=0",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:43.562681Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=abbc8dfa-f65c-489d-bbf8-8b67ae327b5d&from=12",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:44.615103Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=62955d8c-bc66-4026-b55d-3b36d59d3dc8&from=24",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:45.666199Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=112f04f8-56f6-41b3-b788-ee8c702eec0d&from=36",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:46.720165Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=aa4ce3b4-c80e-460e-a031-e9557e89bc1e&from=48",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:47.771235Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=24e85152-64e7-45cb-aded-45680448e5e0&from=60",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:48.823823Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=6b18168c-63a8-431d-8ada-7f197d57c74d&from=72",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:49.877570Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=15877170-737f-4d2a-b83c-49c54f1f48b1&from=84",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:50.927914Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=11b9898b-64d7-4d6f-8e9b-c03ebd2d4230&from=96",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:51.981623Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=3e07c4e4-a144-42e5-aa8b-215029f9ccd3&from=108",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:53.040161Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=07310cea-7beb-4c86-95b8-b758c84718dd&from=120",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:54.097884Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=361a2091-afc2-4ca2-a3ec-e346e1c1fbaa&from=132",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:55.151760Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=2efa367c-7bd4-4541-86b2-31b51ecc1e76&from=144",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:56.202848Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=c3b52e5a-c3a3-4a54-a2cf-cc138810fb16&from=156",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:57.255060Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=126d67aa-07d5-4c1e-86c0-31741fd5a52b&from=168",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:58.310664Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=4d615f30-68e3-407b-9f70-7ddaed464376&from=180",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:15:59.362135Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=23784183-9fc4-4683-9149-65c04a0222c8&from=192",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:00.413798Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=eb7b26c5-7c15-4e7e-a1c9-66de1218aef0&from=204",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:01.466687Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=fe26bb7d-940e-4bb0-a2ab-a194176ca7a5&from=216",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:02.521120Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=05136959-2f78-4c8f-8320-beaa5022216c&from=228",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:03.582405Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=3acdbe33-5788-4e82-824d-41998a7f6c45&from=240",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:04.634049Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=a3794816-54f7-45c1-9fdb-f6f5653df73f&from=252",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:05.686058Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=49a583fd-8ed3-48d8-99db-3b9424ce857f&from=264",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:06.743480Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=c65d5a84-a9a3-4c04-9a16-b3dd3014a058&from=276",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:07.807059Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=6b513ec9-e53a-43e8-a11a-590d5a5a1d37&from=288",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:08.864108Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=4fe2b74e-c200-401c-acf1-b15a54354678&from=300",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:09.919259Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=c347cbaf-0b70-4775-b39d-f4d56b245a31&from=312",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:10.975457Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=ce5ba7fb-3d74-4a46-b29c-9346da61b7c7&from=324",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:12.030644Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=8d8380bb-b0c0-471a-b7be-d63211ea4b70&from=336",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:13.087850Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=164a205c-3629-4d69-9138-4a6233589d71&from=348",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:14.141635Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=65b0aeb6-46ef-439d-b245-8190519721aa&from=360",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:15.192330Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=fed49450-7724-41d8-b3ae-1299837038ee&from=372",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:16.243228Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=6cb5b207-ee29-4b57-9ae3-0c67faf8a741&from=384",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:17.294944Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=24099ff3-d22d-4d46-a603-323dfa9a605e&from=396",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:18.345869Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=c69febfb-2d5e-4eaf-b962-ccff0ba950dc&from=408",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:19.396818Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=b8122ce8-ad01-437d-92d2-04ef4187f64f&from=420",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:20.447943Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=1797aebc-79c4-4406-8510-e8111bed46fe&from=432",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:21.501972Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=f6dc72bb-1dcd-4924-b4fc-9613395b286b&from=444",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:22.553846Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=22636bff-2f58-4a4c-9792-a5560ca35b38&from=456",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:23.604446Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=b51add52-dc7d-4085-b490-0e051dc3c320&from=468",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:24.661618Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=fba615a7-356c-4cba-aa95-aa61b6aceba9&from=480",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:25.720452Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=9a04cdfc-e69f-4173-8311-dba3a91a179d&from=492",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:26.774339Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=2f65919b-9536-4780-b022-8e2c0164b14e&from=504",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:27.825953Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=c389725d-c019-4e47-9eb0-2524c2cef222&from=516",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:28.876892Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=3ee80367-a3d8-4009-a1fc-e4d4f38d700b&from=528",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:29.933887Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=db3ddc86-025c-44f2-b677-08cf59df0fa9&from=540",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:30.984936Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=f1664685-f403-44ef-ad0f-8eaf786b4451&from=552",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:32.038910Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=0d71b589-3afb-4dc4-931a-f137d3d8550c&from=564",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:33.089587Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=74c27415-ba5a-4ba7-8be1-d2e9196f01a6&from=576",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:34.140748Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=f9af0651-3aa3-43fb-b124-7beccb7edd33&from=588",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:35.191576Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=000b430d-24ae-4044-a2a7-b09545b52a94&from=600",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:36.242855Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=fae3de28-177c-4103-881a-a3374bd85e36&from=612",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:37.293983Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=ef65e346-4480-4fc8-8ec7-8a99b8fb624b&from=624",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:38.345089Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=7ee693fe-5663-4a1e-9882-c1274fd135a7&from=636",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:39.396921Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=3146e2dd-3e43-470a-8868-406e52e8b56f&from=648",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:40.449986Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=ee7badc0-5732-4ef2-b8d9-e4c396e16c4f&from=660",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:41.500386Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=bf540a0f-4bff-4057-81e1-bd8aefd3bc3a&from=672",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:42.551179Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=7bfdcdc6-356a-4fa3-a1b9-4dc06c28bc09&from=684",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:43.601555Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=08ef3695-5e33-4fc8-a815-16801dfc3db8&from=696",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:44.653812Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=fb9f16b9-90c1-42c4-bf3e-5befc2da937c&from=708",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:45.704387Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=f4dd263c-0d72-440a-a3de-670d8fdad102&from=720",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:46.756066Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=8b79b48e-976c-4038-8e6d-9d1b56302c6e&from=732",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:47.808293Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=90b8017c-7b77-43e9-b760-8b9c6333efcd&from=744",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:48.858774Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=239c981a-7f8e-4b8a-88be-bfaa4ffc466f&from=756",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:49.909866Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=cb2de9d7-ffb5-4782-929f-f0b94e6cbc21&from=768",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:50.961000Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=dcbe5a6f-5644-4653-943a-2ae000f6d8d5&from=780",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:52.011364Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=8256cad0-a83a-4e52-b1c3-8070ab47d853&from=792",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:53.061950Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=9174fb98-9340-4340-8431-be3e40a89442&from=804",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:54.114166Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=29d6501b-b2a8-4768-880d-05cf6c13e30c&from=816",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:55.165135Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=c0d4dc94-4c32-447c-bf0b-6670a73b1f96&from=828",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:56.215226Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=93ffee29-d0a0-4438-891b-00346b5fd1dc&from=840",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:57.270473Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=eac360e9-30b4-47a4-a8c5-19696bf4fc92&from=852",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:58.321181Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=23a4cdd3-de24-48c6-8cc4-50c3460325cf&from=864",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:16:59.373390Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=5fabbf85-7240-4d74-9935-b61f27f07521&from=876",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:00.425396Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=d3c997fc-d186-41e1-a55c-320a929aa419&from=888",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:01.475970Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=ec42cb2b-6ccf-4c36-93ec-58f1f31b86d4&from=900",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:02.538317Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=991c8314-7a0a-4ee4-a750-1e9ab63a4855&from=912",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:03.588640Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=b7b54df3-88e3-423f-8ff2-37171207eccb&from=924",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:04.639069Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=f1a21039-a5c1-499f-aac4-25255f18f7e6&from=936",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:05.689988Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=bfc003a4-596f-43ce-b5c9-d600fca0782e&from=948",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:06.740200Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=f3d777fa-a594-455e-b728-557c95acc93a&from=960",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:07.791299Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=5833b9a6-a88d-4816-bc6c-82183a8971a1&from=972",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:08.843354Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=72c397c9-e73e-4171-b94d-1f094a88f78c&from=984",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:09.894034Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=cfc5e76f-3e30-4621-b6a7-732dc4db8910&from=996",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:10.945063Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=d20cc28d-91e5-4182-980a-ebf42f2e2ffe&from=1008",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:12.003093Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=0237c110-1fa2-4cef-a1f2-bbac4a67c5f8&from=1020",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:13.063299Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=0ca17a16-fd06-486d-9e26-2c99066e9530&from=1032",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:14.116129Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=3a50b2ba-2c59-42da-b891-c693b02cc0e8&from=1044",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:15.166877Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=a39dced1-1f37-4984-9aed-7c52eeb74943&from=1056",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:17:16.223429Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=d88d8e6b-2525-45dd-9996-e289adfa0ee1&from=1068",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "NRG Energy",
+      "endpoint": {
+        "vendor": "successfactors",
+        "tenant": "careers.nrgenergy.com",
+        "host": "careers.nrgenergy.com",
+        "extra": {
+          "search_path": "/nrg/search/"
+        }
+      },
+      "validation": {
+        "at": "2026-11-05T23:35:07.582871Z",
+        "vendor": "successfactors",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 75,
+        "unique_ids": 75,
+        "duplicate_rows": 0,
+        "requisitions": 75,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Environmental Health & Safety",
+          "Learning & Enablement Specialist",
+          "DOTP-Maintenance Mechanic"
+        ],
+        "detail": "",
+        "member_key": "successfactors-careers-nrgenergy-com",
+        "replayed_at_utc": "2026-11-06T00:19:25.540782+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:35:08.634716Z",
+          "method": "GET",
+          "url": "https://careers.nrgenergy.com/nrg/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:09.685143Z",
+          "method": "GET",
+          "url": "https://careers.nrgenergy.com/nrg/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=10",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:10.741018Z",
+          "method": "GET",
+          "url": "https://careers.nrgenergy.com/nrg/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=20",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:11.795073Z",
+          "method": "GET",
+          "url": "https://careers.nrgenergy.com/nrg/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=30",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:12.846319Z",
+          "method": "GET",
+          "url": "https://careers.nrgenergy.com/nrg/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=40",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:13.896864Z",
+          "method": "GET",
+          "url": "https://careers.nrgenergy.com/nrg/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=50",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:14.949029Z",
+          "method": "GET",
+          "url": "https://careers.nrgenergy.com/nrg/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=60",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:15.999768Z",
+          "method": "GET",
+          "url": "https://careers.nrgenergy.com/nrg/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=70",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Enphase Energy",
+      "endpoint": {
+        "vendor": "custom_enphase",
+        "tenant": "enphase"
+      },
+      "validation": {
+        "at": "2026-11-05T23:39:01.305764Z",
+        "vendor": "custom_enphase",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 33,
+        "unique_ids": 33,
+        "duplicate_rows": 0,
+        "requisitions": 33,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Senior Power Electronics Engineer",
+          "Senior Manager, Mechanical Engineering",
+          "Field Service Technician - Massachusetts (6 month Temporary Assignment)"
+        ],
+        "detail": "",
+        "member_key": "custom_enphase-enphase",
+        "replayed_at_utc": "2026-11-06T00:19:25.598877+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:39:02.358823Z",
+          "method": "GET",
+          "url": "https://enphase.com/api/v2/jobs?page=0",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:39:03.417245Z",
+          "method": "GET",
+          "url": "https://enphase.com/api/v2/jobs?page=1",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:39:04.478347Z",
+          "method": "GET",
+          "url": "https://enphase.com/api/v2/jobs?page=2",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:39:05.536577Z",
+          "method": "GET",
+          "url": "https://enphase.com/api/v2/jobs?page=3",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:39:06.590778Z",
+          "method": "GET",
+          "url": "https://enphase.com/api/v2/jobs?page=4",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "TSMC",
+      "endpoint": {
+        "vendor": "successfactors",
+        "tenant": "ro.careers.tsmc.com",
+        "host": "ro.careers.tsmc.com",
+        "extra": {}
+      },
+      "validation": {
+        "at": "2026-11-05T23:34:27.972547Z",
+        "vendor": "successfactors",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 339,
+        "unique_ids": 339,
+        "duplicate_rows": 0,
+        "requisitions": 339,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "JASM - MFG Intelligent manufacturing - AMHS Software Engineer (5382)",
+          "JASM - ACCT_FP&A Analyst (6713)",
+          "JASM - Engineer (AMHS Hardware, MFG)(6410)"
+        ],
+        "detail": "",
+        "member_key": "successfactors-ro-careers-tsmc-com",
+        "replayed_at_utc": "2026-11-06T00:19:25.783147+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:34:29.024349Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:30.079182Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=25",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:31.134602Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=50",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:32.185828Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=75",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:33.239019Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=100",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:34.295187Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=125",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:35.349001Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=150",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:36.402023Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=175",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:37.452882Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=200",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:38.504212Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=225",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:39.554874Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=250",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:40.605697Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=275",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:41.667704Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=300",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:42.722729Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=325",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Teradyne",
+      "endpoint": {
+        "vendor": "successfactors",
+        "tenant": "jobs.teradyne.com",
+        "host": "jobs.teradyne.com",
+        "extra": {}
+      },
+      "validation": {
+        "at": "2026-11-05T23:34:42.979461Z",
+        "vendor": "successfactors",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 570,
+        "unique_ids": 570,
+        "duplicate_rows": 0,
+        "requisitions": 570,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Sales Manager",
+          "Principal Systems Verification Architect (IST, North Reading, MA)",
+          "Automated Test Applications Engineer (SW Dev., System Design & Integration; Nort"
+        ],
+        "detail": "",
+        "member_key": "successfactors-jobs-teradyne-com",
+        "replayed_at_utc": "2026-11-06T00:19:26.111363+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:34:44.043779Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:45.098040Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=25",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:46.151149Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=50",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:47.204961Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=75",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:48.256577Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=100",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:49.308307Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=125",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:50.362481Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=150",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:51.414590Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=175",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:52.466790Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=200",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:53.519568Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=225",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:54.572928Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=250",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:55.624333Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=275",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:56.675405Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=300",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:57.728415Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=325",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:58.780049Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=350",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:34:59.831764Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=375",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:00.883515Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=400",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:01.939747Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=425",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:02.990429Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=450",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:04.042875Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=475",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:05.094914Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=500",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:06.149826Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=525",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:07.205670Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=550",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Boston Consulting Group",
+      "endpoint": {
+        "vendor": "phenom",
+        "tenant": "bcg",
+        "host": "careers.bcg.com"
+      },
+      "validation": {
+        "at": "2026-11-05T23:19:30.554525Z",
+        "vendor": "phenom",
+        "status": "budget_limited",
+        "source_reported": 939,
+        "parsed": 100,
+        "unique_ids": 100,
+        "duplicate_rows": 0,
+        "requisitions": 100,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Consultant, Internship MBA, United States",
+          "Expert Consultant /Project Leader, CFO Excellence",
+          "NAMR Commercial Excellence Director"
+        ],
+        "detail": "",
+        "member_key": "phenom-bcg",
+        "replayed_at_utc": "2026-11-06T00:19:26.126063+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:19:31.605164Z",
+          "method": "POST",
+          "url": "https://careers.bcg.com/widgets",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:19:32.667872Z",
+          "method": "POST",
+          "url": "https://careers.bcg.com/widgets",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:19:33.724237Z",
+          "method": "POST",
+          "url": "https://careers.bcg.com/widgets",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:19:34.776037Z",
+          "method": "POST",
+          "url": "https://careers.bcg.com/widgets",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:19:35.829838Z",
+          "method": "POST",
+          "url": "https://careers.bcg.com/widgets",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Riot Games",
+      "endpoint": {
+        "vendor": "greenhouse",
+        "tenant": "riotgames"
+      },
+      "validation": {
+        "at": "2026-11-05T23:19:36.160020Z",
+        "vendor": "greenhouse",
+        "status": "complete",
+        "source_reported": 187,
+        "parsed": 187,
+        "unique_ids": 187,
+        "duplicate_rows": 0,
+        "requisitions": 187,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "3D Character Artist (Contract)",
+          "3D Character Artist - Unpublished R&D Product",
+          "3D Environment Artist - Unpublished R&D Product (Contract)"
+        ],
+        "detail": "",
+        "member_key": "greenhouse-riotgames",
+        "replayed_at_utc": "2026-11-06T00:19:26.128081+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:19:36.163977Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/v1/boards/riotgames/jobs?content=false",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Pydantic",
+      "endpoint": {
+        "vendor": "careers_page",
+        "tenant": "pydantic.dev",
+        "host": "pydantic.dev",
+        "extra": {
+          "listing_url": "https://pydantic.dev/about#join-the-team"
+        }
+      },
+      "validation": {
+        "at": "2026-11-05T23:19:36.361280Z",
+        "vendor": "careers_page",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 12,
+        "unique_ids": 12,
+        "duplicate_rows": 0,
+        "requisitions": 12,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Security Operations Engineer",
+          "Staff Software Engineer, Agent Sandboxes",
+          "Senior Growth Marketer"
+        ],
+        "detail": "",
+        "member_key": "careers_page-pydantic-dev",
+        "replayed_at_utc": "2026-11-06T00:19:26.144148+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:19:38.464674Z",
+          "method": "GET",
+          "url": "https://pydantic.dev/about#join-the-team",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Procore",
+      "endpoint": {
+        "vendor": "careers_page",
+        "tenant": "careers.procore.com",
+        "host": "careers.procore.com",
+        "extra": {
+          "listing_url": "https://careers.procore.com/jobs/search"
+        }
+      },
+      "validation": {
+        "at": "2026-11-05T23:19:38.795445Z",
+        "vendor": "careers_page",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 110,
+        "unique_ids": 110,
+        "duplicate_rows": 0,
+        "requisitions": 110,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Senior Software Engineer - Procore AI Experience",
+          "Customer Success Engineer I, French Speaking (Remote)",
+          "Solution Engineer - French Market"
+        ],
+        "detail": "",
+        "member_key": "careers_page-careers-procore-com",
+        "replayed_at_utc": "2026-11-06T00:19:26.223131+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:19:39.848829Z",
+          "method": "GET",
+          "url": "https://careers.procore.com/jobs/search",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:19:40.899115Z",
+          "method": "GET",
+          "url": "https://careers.procore.com/jobs/search?page=2",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:19:41.950766Z",
+          "method": "GET",
+          "url": "https://careers.procore.com/jobs/search?page=3",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:19:43.007399Z",
+          "method": "GET",
+          "url": "https://careers.procore.com/jobs/search?page=4",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:19:44.058527Z",
+          "method": "GET",
+          "url": "https://careers.procore.com/jobs/search?page=5",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Etsy",
+      "endpoint": {
+        "vendor": "careers_page",
+        "tenant": "careers.etsy.com",
+        "host": "careers.etsy.com",
+        "extra": {
+          "listing_url": "https://careers.etsy.com/jobs/search"
+        }
+      },
+      "validation": {
+        "at": "2026-11-05T23:19:44.285393Z",
+        "vendor": "careers_page",
+        "status": "budget_limited",
+        "source_reported": null,
+        "parsed": 30,
+        "unique_ids": 30,
+        "duplicate_rows": 0,
+        "requisitions": 30,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Senior Business Operations & Program Manager (Customer Support)",
+          "Manager, Seller Retention & Engagement Marketing",
+          "Investigator, Operational Excellence"
+        ],
+        "detail": "",
+        "member_key": "careers_page-careers-etsy-com",
+        "replayed_at_utc": "2026-11-06T00:19:26.247168+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:19:45.346541Z",
+          "method": "GET",
+          "url": "https://careers.etsy.com/jobs/search",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Electronic Arts",
+      "endpoint": {
+        "vendor": "avature",
+        "tenant": "jobs.ea.com",
+        "host": "jobs.ea.com",
+        "site": "en_US/careers",
+        "extra": {}
+      },
+      "validation": {
+        "at": "2026-11-05T23:35:24.781862Z",
+        "vendor": "avature",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 342,
+        "unique_ids": 342,
+        "duplicate_rows": 0,
+        "requisitions": 342,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Associate Quality Designer - STAR WARS",
+          "Software Engineer III -Software Engineer III - Temporary Full Time",
+          "Senior Software Engineer"
+        ],
+        "detail": "",
+        "member_key": "avature-jobs-ea-com-en_us-careers",
+        "replayed_at_utc": "2026-11-06T00:19:26.715114+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:35:25.832857Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:27.287843Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=20",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:28.947475Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=40",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:30.751973Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=60",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:32.647910Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=80",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:34.359218Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=100",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:35.920733Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=120",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:37.695111Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=140",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:39.080877Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=160",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:40.565951Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=180",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:42.236711Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=200",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:43.755537Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=220",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:45.509564Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=240",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:46.950726Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=260",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:48.741736Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=280",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:50.444192Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=300",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:51.881449Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=320",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:53.660686Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs/?jobRecordsPerPage=20&jobOffset=340",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Deloitte",
+      "endpoint": {
+        "vendor": "avature",
+        "tenant": "apply.deloitte.com",
+        "host": "apply.deloitte.com",
+        "site": "en_US/careers?3_5_3=477%2C478%2C480&sort=relevancy",
+        "extra": {}
+      },
+      "validation": {
+        "at": "2026-11-05T23:35:54.890520Z",
+        "vendor": "avature",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 19,
+        "unique_ids": 19,
+        "duplicate_rows": 0,
+        "requisitions": 19,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Audit & Assurance \u2013 Analyst \u2013 Business Process Controls Advisory \u2013 Summer/Fall 2",
+          "Tax - Tax Technology Services Consultant - Summer 2027, Winter 2028",
+          "Tax - Tax Intern - Legal Business Services - Summer 2027"
+        ],
+        "detail": "",
+        "member_key": "avature-apply-deloitte-com-en_us-careers-3_5_3-477-2c478-2c480-sort-relevancy",
+        "replayed_at_utc": "2026-11-06T00:19:26.736456+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:35:55.942009Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs?3_5_3=477%2C478%2C480&sort=relevancy",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:35:57.453745Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=%5B%22477%22%2C%22478%22%2C%22480%22%5D&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=10",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Oxide Computer",
+      "endpoint": {
+        "vendor": "careers_page",
+        "tenant": "oxide.computer",
+        "host": "oxide.computer",
+        "extra": {
+          "listing_url": "https://oxide.computer/careers"
+        }
+      },
+      "validation": {
+        "at": "2026-11-05T23:39:06.722362Z",
+        "vendor": "careers_page",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 15,
+        "unique_ids": 15,
+        "duplicate_rows": 0,
+        "requisitions": 15,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Control Plane Engineer",
+          "Enterprise Security Engineer",
+          "Field Technical Delivery Engineer"
+        ],
+        "detail": "",
+        "member_key": "careers_page-oxide-computer",
+        "replayed_at_utc": "2026-11-06T00:19:26.752033+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:39:07.780267Z",
+          "method": "GET",
+          "url": "https://oxide.computer/careers",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "KPMG US",
+      "endpoint": {
+        "vendor": "careers_page",
+        "tenant": "kpmguscareers.com",
+        "host": "kpmguscareers.com",
+        "extra": {
+          "listing_url": "https://www.kpmguscareers.com/job-search/",
+          "pagination_param": "spage"
+        }
+      },
+      "validation": {
+        "at": "2026-11-06T00:00:06.338893Z",
+        "vendor": "careers_page",
+        "status": "budget_limited",
+        "source_reported": null,
+        "parsed": 692,
+        "unique_ids": 692,
+        "duplicate_rows": 0,
+        "requisitions": 692,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Databricks Sales Executive (Federal sector)",
+          "Director, Technical Lead Forward Deployed Engineer",
+          "Temporary System Administrator Shift Work (Disaster Recovery)"
+        ],
+        "detail": "",
+        "member_key": "careers_page-kpmguscareers-com",
+        "replayed_at_utc": "2026-11-06T00:19:28.823450+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-06T00:00:07.389882Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:09.126086Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=2",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:10.372219Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=3",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:11.729983Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=4",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:12.987158Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=5",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:14.316341Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=6",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:15.578790Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=7",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:17.114376Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=8",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:18.429465Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=9",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:19.645103Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=10",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:20.777100Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=11",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:21.927804Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=12",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:23.140857Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=13",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:24.326667Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=14",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:25.704088Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=15",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:26.925039Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=16",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:28.083032Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=17",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:29.313315Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=18",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:30.521424Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=19",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:31.834788Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=20",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:33.193521Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=21",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:34.562539Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=22",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:35.926297Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=23",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:37.264836Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=24",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:38.429075Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=25",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:39.572067Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=26",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:40.914930Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=27",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:42.119327Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=28",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:43.279722Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=29",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:44.652860Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=30",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:45.886934Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=31",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:47.102744Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=32",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:48.247434Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=33",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:49.536110Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=34",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:50.857343Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=35",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:52.026348Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=36",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:53.108636Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=37",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:54.296524Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=38",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:55.482981Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=39",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:56.679262Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=40",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:58.147823Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=41",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:00:59.349549Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=42",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:00.654500Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=43",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:02.032528Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=44",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:03.654170Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=45",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:04.974609Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=46",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:06.102036Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=47",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:07.404127Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=48",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:08.628546Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=49",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:09.869009Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=50",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:11.010473Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=51",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:12.168222Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=52",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:13.377237Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=53",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:14.485816Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=54",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:15.651463Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=55",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:16.786027Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=56",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:18.019055Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=57",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:19.436932Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=58",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:20.600226Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=59",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:21.833107Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=60",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:23.066360Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=61",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:24.378133Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=62",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:25.626569Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=63",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:26.760454Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=64",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:27.945341Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=65",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:30.174817Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=66",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:31.417651Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=67",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:32.621969Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=68",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:33.848309Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=69",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:34.907139Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=70",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:35.996613Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=71",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:37.062437Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=72",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:38.151497Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=73",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:39.250904Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=74",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:40.490995Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=75",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:41.623263Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=76",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:01:42.765572Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/?spage=77",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Deel",
+      "endpoint": {
+        "vendor": "careers_page",
+        "tenant": "deel.com",
+        "host": "deel.com",
+        "extra": {
+          "listing_url": "https://www.deel.com/careers/"
+        }
+      },
+      "validation": {
+        "at": "2026-11-06T00:01:43.932298Z",
+        "vendor": "careers_page",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 251,
+        "unique_ids": 251,
+        "duplicate_rows": 0,
+        "requisitions": 251,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Senior Staff Product Designer - AI",
+          "Enablement Manager, Support",
+          "Account Executive, SMB | Mexico"
+        ],
+        "detail": "",
+        "member_key": "careers_page-deel-com",
+        "replayed_at_utc": "2026-11-06T00:19:28.922372+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-06T00:01:44.986022Z",
+          "method": "GET",
+          "url": "https://www.deel.com/careers/",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "EY",
+      "endpoint": {
+        "vendor": "successfactors",
+        "tenant": "careers.ey.com",
+        "host": "careers.ey.com",
+        "extra": {
+          "search_path": "/ey/search/"
+        }
+      },
+      "validation": {
+        "at": "2026-11-06T00:06:33.887876Z",
+        "vendor": "successfactors",
+        "status": "budget_limited",
+        "source_reported": null,
+        "parsed": 1974,
+        "unique_ids": 1974,
+        "duplicate_rows": 0,
+        "requisitions": 1974,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Project Consultant - PAS WKFA - National - CNS - PC - WORKFORCE ADVISORY - Banga",
+          "Project Consultant - PAS WKFA - National - CNS - PC - WORKFORCE ADVISORY - Banga",
+          "Project Consultant - PAS WKFA - National - CNS - PC - WORKFORCE ADVISORY - Banga"
+        ],
+        "detail": "",
+        "member_key": "successfactors-careers-ey-com",
+        "replayed_at_utc": "2026-11-06T00:19:30.225620+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-06T00:06:34.947917Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:36.116053Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=25",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:37.167154Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=50",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:38.221868Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=75",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:39.275467Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=100",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:40.326078Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=125",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:41.383058Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=150",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:42.442329Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=175",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:43.493137Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=200",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:44.543995Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=225",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:45.596447Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=250",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:46.648057Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=275",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:47.707137Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=300",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:48.760178Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=325",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:49.811644Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=350",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:50.866909Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=375",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:51.922532Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=400",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:52.977822Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=425",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:54.028230Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=450",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:55.079415Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=475",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:56.134613Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=500",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:57.185969Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=525",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:58.240543Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=550",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:06:59.291513Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=575",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:00.344492Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=600",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:01.399258Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=625",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:02.449718Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=650",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:03.504249Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=675",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:04.555101Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=700",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:05.605915Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=725",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:06.656652Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=750",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:07.714151Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=775",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:08.771719Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=800",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:09.823705Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=825",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:10.877068Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=850",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:11.927788Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=875",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:12.978688Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=900",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:14.030413Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=925",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:15.082585Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=950",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:16.132990Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=975",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:17.183837Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1000",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:18.235057Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1025",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:19.289083Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1050",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:20.339418Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1075",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:21.390247Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1100",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:22.442061Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1125",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:23.496646Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1150",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:24.547587Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1175",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:25.598281Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1200",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:26.649547Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1225",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:27.706550Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1250",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:28.758789Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1275",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:29.818139Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1300",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:30.868572Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1325",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:31.922551Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1350",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:32.974958Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1375",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:34.025713Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1400",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:35.079068Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1425",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:36.129761Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1450",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:37.188547Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1475",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:38.239578Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1500",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:39.291086Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1525",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:40.343907Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1550",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:41.395110Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1575",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:42.447442Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1600",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:43.503832Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1625",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:44.558029Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1650",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:45.611985Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1675",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:46.662908Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1700",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:47.715546Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1725",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:48.766098Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1750",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:49.817516Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1775",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:50.872405Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1800",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:51.928449Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1825",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:52.979779Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1850",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:54.033692Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1875",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:55.085162Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1900",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:56.135972Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1925",
+          "status": 200
+        },
+        {
+          "at": "2026-11-06T00:07:57.191280Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=1950",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Deloitte (experienced)",
+      "endpoint": {
+        "vendor": "avature",
+        "tenant": "apply.deloitte.com",
+        "host": "apply.deloitte.com",
+        "site": "en_US/careers?3_5_3=479&sort=relevancy",
+        "extra": {},
+        "display_name": "Deloitte"
+      },
+      "validation": {
+        "at": "2026-11-05T23:35:59.423029Z",
+        "vendor": "avature",
+        "status": "budget_limited",
+        "source_reported": null,
+        "parsed": 1120,
+        "unique_ids": 1120,
+        "duplicate_rows": 0,
+        "requisitions": 1120,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Senior Consultant, Strategy, Growth, and Transformation",
+          "Cargo Strategy & Analytics Consultant",
+          "Project - Senior HR Generalist - Active TS/SCI w/ Polygraph Required- McLean, VA"
+        ],
+        "detail": "",
+        "member_key": "avature-apply-deloitte-com-en_us-careers-3_5_3-479-sort-relevancy",
+        "replayed_at_utc": "2026-11-06T00:19:31.725389+00:00",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T23:35:59.423029Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs?3_5_3=479&sort=relevancy",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:01.184658Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=10",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:02.763693Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=20",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:04.348252Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=30",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:05.904061Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=40",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:07.353113Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=50",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:08.904305Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=60",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:10.364046Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=70",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:11.850375Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=80",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:13.417176Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=90",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:14.877317Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=100",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:16.411441Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=110",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:17.976233Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=120",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:19.528037Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=130",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:21.014309Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=140",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:22.512110Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=150",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:23.957725Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=160",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:25.491622Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=170",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:27.013286Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=180",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:28.538156Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=190",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:29.997153Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=200",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:31.614290Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=210",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:33.233641Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=220",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:34.846588Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=230",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:36.449355Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=240",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:37.921233Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=250",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:39.389304Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=260",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:40.909603Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=270",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:42.480738Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=280",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:43.938839Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=290",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:45.434053Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=300",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:47.166664Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=310",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:48.643512Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=320",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:50.200529Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=330",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:51.799594Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=340",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:53.345581Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=350",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:54.933142Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=360",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:56.417011Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=370",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:57.992758Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=380",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:36:59.466004Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=390",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:01.006626Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=400",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:02.616674Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=410",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:04.174598Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=420",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:05.787396Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=430",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:07.313794Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=440",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:08.887691Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=450",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:10.390383Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=460",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:12.158609Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=470",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:13.797076Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=480",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:15.409825Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=490",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:17.016614Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=500",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:18.554647Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=510",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:20.243582Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=520",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:21.735000Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=530",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:23.360115Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=540",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:24.837785Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=550",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:26.557800Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=560",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:28.097575Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=570",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:29.579425Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=580",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:31.114252Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=590",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:32.682701Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=600",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:34.328603Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=610",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:35.885835Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=620",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:37.416354Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=630",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:38.964906Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=640",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:40.605385Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=650",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:42.312941Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=660",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:43.949019Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=670",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:45.502040Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=680",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:46.992151Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=690",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:48.635386Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=700",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:50.106433Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=710",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:51.675621Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=720",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:53.288820Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=730",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:54.979023Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=740",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:56.767837Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=750",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:37:58.340076Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=760",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:00.084831Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=770",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:02.315159Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=780",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:04.066347Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=790",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:05.498232Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=800",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:07.073712Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=810",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:08.789135Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=820",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:10.421460Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=830",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:12.137350Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=840",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:13.930321Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=850",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:15.562330Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=860",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:17.314611Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=870",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:18.939745Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=880",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:20.653169Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=890",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:22.505116Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=900",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:24.311514Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=910",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:25.861199Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=920",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:27.481007Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=930",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:29.147522Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=940",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:30.954900Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=950",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:32.714879Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=960",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:34.519245Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=970",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:36.179484Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=980",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:38.031257Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=990",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:39.912860Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=1000",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:41.841119Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=1010",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:43.609389Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=1020",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:45.237196Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=1030",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:46.946410Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=1040",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:48.595830Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=1050",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:50.336134Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=1060",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:52.280908Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=1070",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:54.078042Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=1080",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:55.950158Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=1090",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:57.638596Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=1100",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:38:59.354545Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs/?3_5_3=479&jobSort=relevancy&jobRecordsPerPage=10&jobOffset=1110",
+          "status": 200
+        }
+      ]
+    }
+  ],
+  "provider_checks": [
+    {
+      "vendor": "greenhouse",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "greenhouse-lendingtree",
+      "sample_title": "Account Executive",
+      "sample_url": "https://job-boards.greenhouse.io/lendingtree/jobs/7694977",
+      "sample_location": "Denver, Colorado, United States",
+      "sample_posted_at": "2026-03-09T14:58:15+00:00",
+      "name": "LendingTree",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:18:24.295713Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/v1/boards/lendingtree/jobs?content=false",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "oracle_orc",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "oracle_orc-fa-ewmy-saasfaprod1-cx_1",
+      "sample_title": "Sachbearbeiter f\u00fcr Medizinische Datenerfassung (m/w/d)",
+      "sample_url": "https://fa-ewmy-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/4482",
+      "sample_location": "Cologne, Nordrhein-Westfalen, Germany",
+      "sample_posted_at": "2026-11-05T00:00:00+00:00",
+      "name": "Verisk",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:18:25.428270Z",
+          "method": "GET",
+          "url": "https://fa-ewmy-saasfaprod1.fa.ocs.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitions?onlyData=true&expand=requisitionList.secondaryLocations&finder=findReqs%3BsiteNumber%3DCX_1%2Climit%3D200%2CsortBy%3DPOSTING_DATES_DESC%2Coffset%3D0",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "successfactors",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.01,
+      "detail": "",
+      "tenant": "successfactors-jobs-supermicro-com",
+      "sample_title": "Sr. Sales Manager",
+      "sample_url": "https://jobs.supermicro.com/job/Sweden-Stockholm-Sr_-Sales-Manager/1437825800/",
+      "sample_location": "Sweden - Stockholm",
+      "sample_posted_at": "",
+      "name": "Supermicro",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:32:55.419881Z",
+          "method": "GET",
+          "url": "https://jobs.supermicro.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "successfactors",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.02,
+      "detail": "",
+      "tenant": "successfactors-kiewitcareers-kiewit-com",
+      "sample_title": "Surveyor - Nuclear Construction",
+      "sample_url": "https://kiewitcareers.kiewit.com/job/Darlington-Surveyor-Nuclear-Construction-ON/1427583300/",
+      "sample_location": "Darlington, ON, Canada",
+      "sample_posted_at": "2026-11-05T00:00:00+00:00",
+      "name": "Kiewit",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:33:37.836272Z",
+          "method": "GET",
+          "url": "https://kiewitcareers.kiewit.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "successfactors",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.02,
+      "detail": "",
+      "tenant": "successfactors-ro-careers-tsmc-com",
+      "sample_title": "JASM - MFG Intelligent manufacturing - AMHS Software Engineer (5382)",
+      "sample_url": "https://ro.careers.tsmc.com/job/Kumamoto-JASM-MFG-Intelligent-manufacturing-AMHS-Software-Engineer-%285382%29-43/948644910/",
+      "sample_location": "Kumamoto, 43, Japan",
+      "sample_posted_at": "2026-11-05T00:00:00+00:00",
+      "name": "TSMC",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:34:29.024349Z",
+          "method": "GET",
+          "url": "https://ro.careers.tsmc.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "successfactors",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.01,
+      "detail": "",
+      "tenant": "successfactors-jobs-teradyne-com",
+      "sample_title": "Sales Manager",
+      "sample_url": "https://jobs.teradyne.com/Teradyne/job/Jubei-City-Sales-Manager/1437632000/",
+      "sample_location": "Jubei City, Taiwan",
+      "sample_posted_at": "",
+      "name": "Teradyne",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:34:44.043779Z",
+          "method": "GET",
+          "url": "https://jobs.teradyne.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "successfactors",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "successfactors-careers-nrgenergy-com",
+      "sample_title": "Environmental Health & Safety",
+      "sample_url": "https://careers.nrgenergy.com/nrg/job/Nipton-Environmental-Health-&-Safety-CA-92364/1437752700/",
+      "sample_location": "Nipton, CA, US, 92364",
+      "sample_posted_at": "2026-11-05T00:00:00+00:00",
+      "name": "NRG Energy",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:35:08.634716Z",
+          "method": "GET",
+          "url": "https://careers.nrgenergy.com/nrg/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "phenom",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "phenom-bcg",
+      "sample_title": "Consultant, Internship MBA, United States",
+      "sample_url": "https://studenttalent.bcg.com/careerhub/explore/jobs/790316560124?post_onboarding_pid=790316560124&amp;show_apply=1&amp;profile_type=candidate&amp;customredirec",
+      "sample_location": "Atlanta",
+      "sample_posted_at": "2026-09-29T00:00:00+00:00",
+      "name": "Boston Consulting Group",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:19:31.605164Z",
+          "method": "POST",
+          "url": "https://careers.bcg.com/widgets",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "greenhouse",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.02,
+      "detail": "",
+      "tenant": "greenhouse-riotgames",
+      "sample_title": "3D Character Artist (Contract)",
+      "sample_url": "https://www.riotgames.com/en/work-with-us/job/8282210?gh_jid=8282210",
+      "sample_location": "Guangzhou, China",
+      "sample_posted_at": "2026-10-15T09:28:20+00:00",
+      "name": "Riot Games",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:19:36.163977Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/v1/boards/riotgames/jobs?content=false",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "careers_page",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "careers_page-pydantic-dev",
+      "sample_title": "Security Operations Engineer",
+      "sample_url": "https://pydantic.dev/jobs/security-operations-engineer",
+      "sample_location": "Fully remote",
+      "sample_posted_at": "",
+      "name": "Pydantic",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:19:38.464674Z",
+          "method": "GET",
+          "url": "https://pydantic.dev/about#join-the-team",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "careers_page",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.03,
+      "detail": "",
+      "tenant": "careers_page-careers-procore-com",
+      "sample_title": "Senior Software Engineer - Procore AI Experience",
+      "sample_url": "https://careers.procore.com/jobs/senior-software-engineer-procore-ai-experience-austin-texas-united-states-226ce584-a6dd-478f-9ef3-b5795bf18911",
+      "sample_location": "Austin, Texas",
+      "sample_posted_at": "",
+      "name": "Procore",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:19:39.848829Z",
+          "method": "GET",
+          "url": "https://careers.procore.com/jobs/search",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "careers_page",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.03,
+      "detail": "",
+      "tenant": "careers_page-careers-etsy-com",
+      "sample_title": "Senior Business Operations & Program Manager (Customer Support)",
+      "sample_url": "https://careers.etsy.com/jobs/senior-business-operations-program-manager-customer-support-brooklyn-new-york-united-states",
+      "sample_location": "Hybrid",
+      "sample_posted_at": "",
+      "name": "Etsy",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:19:45.346541Z",
+          "method": "GET",
+          "url": "https://careers.etsy.com/jobs/search",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "greenhouse",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "greenhouse-digitalocean98",
+      "sample_title": "Account Executive  - Commercial",
+      "sample_url": "https://www.digitalocean.com/careers/position/apply/?gh_jid=8249366",
+      "sample_location": "San Francisco",
+      "sample_posted_at": "2026-10-06T13:04:39+00:00",
+      "name": "DigitalOcean",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:41:51.826151Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/v1/boards/digitalocean98/jobs?content=false",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "workable",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "workable-datavisor-jobs",
+      "sample_title": "Business Operations Analyst",
+      "sample_url": "https://apply.workable.com/j/CA0522510B",
+      "sample_location": "Mountain View, California",
+      "sample_posted_at": "2026-09-02T00:00:00+00:00",
+      "name": "DataVisor",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:50:55.989196Z",
+          "method": "GET",
+          "url": "https://apply.workable.com/api/v1/widget/accounts/datavisor-jobs?details=true",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "careers_page",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.05,
+      "detail": "",
+      "tenant": "careers_page-kpmguscareers-com",
+      "sample_title": "Databricks Sales Executive (Federal sector)",
+      "sample_url": "https://www.kpmguscareers.com/jobdetail/?jobId=139724",
+      "sample_location": "Advisory | McLean, VA; Washington, DC",
+      "sample_posted_at": "",
+      "name": "KPMG US",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-06T00:00:07.389882Z",
+          "method": "GET",
+          "url": "https://www.kpmguscareers.com/job-search/",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "careers_page",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.09,
+      "detail": "",
+      "tenant": "careers_page-deel-com",
+      "sample_title": "Senior Staff Product Designer - AI",
+      "sample_url": "https://jobs.deel.com/deel/job-details/f203cb23-b977-4178-a1d9-50a5184f2e9c/application",
+      "sample_location": "Israel; Denmark; Cyprus; Spain",
+      "sample_posted_at": "2026-11-04T13:23:59.101000+00:00",
+      "name": "Deel",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-06T00:01:44.986022Z",
+          "method": "GET",
+          "url": "https://www.deel.com/careers/",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "careers_page",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.03,
+      "detail": "",
+      "tenant": "careers_page-shopify-com",
+      "sample_title": "Applied Machine Learning Engineering Managers",
+      "sample_url": "https://www.shopify.com/careers/applied-machine-learning-engineering-managers_62d779d3-51c8-4b0a-ab2e-1a440276bb37",
+      "sample_location": "Remote - Americas",
+      "sample_posted_at": "",
+      "name": "Shopify",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-06T00:01:46.291083Z",
+          "method": "GET",
+          "url": "https://www.shopify.com/careers",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "successfactors",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.03,
+      "detail": "",
+      "tenant": "successfactors-careers-ey-com",
+      "sample_title": "Project Consultant - PAS WKFA - National - CNS - PC - WORKFORCE ADVISORY - Banga",
+      "sample_url": "https://careers.ey.com/ey/job/Bengaluru-Project-Consultant-PAS-WKFA-National-CNS-PC-WORKFORCE-ADVISORY-Bangalore-KA-560001/1445415333/",
+      "sample_location": "Bengaluru, KA, IN, 560001",
+      "sample_posted_at": "",
+      "name": "EY",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-06T00:06:34.947917Z",
+          "method": "GET",
+          "url": "https://careers.ey.com/ey/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "rippling",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "rippling-thoughtspot",
+      "sample_title": "Account Executive, AgentSpot",
+      "sample_url": "https://ats.rippling.com/thoughtspot/jobs/cd1a65db-a5f1-4ba8-b5be-186ca4fed96e",
+      "sample_location": "San Francisco, CA",
+      "sample_posted_at": "",
+      "name": "ThoughtSpot",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-06T00:14:29.570127Z",
+          "method": "GET",
+          "url": "https://ats.rippling.com/api/v1/board/thoughtspot/jobs",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "custom_mottmac",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "custom_mottmac-mottmac",
+      "sample_title": "Civil Engineer",
+      "sample_url": "https://www.mottmac.com/en-us/careers/explore-our-careers/civil-engineer-13569/",
+      "sample_location": "Exeter, United Kingdom",
+      "sample_posted_at": "",
+      "name": "Mott MacDonald",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-06T00:15:42.510808Z",
+          "method": "GET",
+          "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/?take=12&term=&country=&region=&discipline=&contractType=&workPattern=&reset=false&id=bcc4fe7e-6e77-4f27-b44d-8fe450b6610d&from=0",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "avature",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "avature-careers-twosigma-com-careers",
+      "sample_title": "AI Fluency: Program Manager",
+      "sample_url": "https://careers.twosigma.com/careers/JobDetail/New-York-United-States-AI-Fluency-Program-Manager/14291",
+      "sample_location": "",
+      "sample_posted_at": "",
+      "name": "Two Sigma",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:35:17.304821Z",
+          "method": "GET",
+          "url": "https://careers.twosigma.com/careers/OpenRoles",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "avature",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.03,
+      "detail": "",
+      "tenant": "avature-jobs-ea-com-en_us-careers",
+      "sample_title": "Associate Quality Designer - STAR WARS",
+      "sample_url": "https://jobs.ea.com/en_US/careers/JobDetail/Associate-Quality-Designer-STAR-WARS/216520",
+      "sample_location": "",
+      "sample_posted_at": "",
+      "name": "Electronic Arts",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:35:25.832857Z",
+          "method": "GET",
+          "url": "https://jobs.ea.com/en_US/careers/SearchJobs",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "avature",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.01,
+      "detail": "",
+      "tenant": "avature-apply-deloitte-com-en_us-careers-3_5_3-477-2c478-2c480-sort-relevancy",
+      "sample_title": "Audit & Assurance \u2013 Analyst \u2013 Business Process Controls Advisory \u2013 Summer/Fall 2",
+      "sample_url": "https://apply.deloitte.com/en_US/careers/JobDetail/Audit-Assurance-Analyst-Business-Process-Controls-Advisory-Summer-Fall-2027-Winter-2028/374253",
+      "sample_location": "",
+      "sample_posted_at": "",
+      "name": "Deloitte",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:35:55.942009Z",
+          "method": "GET",
+          "url": "https://apply.deloitte.com/en_US/careers/SearchJobs?3_5_3=477%2C478%2C480&sort=relevancy",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "custom_enphase",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "custom_enphase-enphase",
+      "sample_title": "Senior Power Electronics Engineer",
+      "sample_url": "https://enphase.com/job/o9WQAfwf",
+      "sample_location": "Petaluma, CA, United States",
+      "sample_posted_at": "",
+      "name": "Enphase Energy",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:39:02.358823Z",
+          "method": "GET",
+          "url": "https://enphase.com/api/v2/jobs?page=0",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "careers_page",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.02,
+      "detail": "",
+      "tenant": "careers_page-oxide-computer",
+      "sample_title": "Control Plane Engineer",
+      "sample_url": "https://oxide.computer/careers/sw-control-plane",
+      "sample_location": "",
+      "sample_posted_at": "",
+      "name": "Oxide Computer",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "requests": [
+        {
+          "at": "2026-11-05T23:39:07.780267Z",
+          "method": "GET",
+          "url": "https://oxide.computer/careers",
+          "status": 200
+        }
+      ]
+    }
+  ]
+}

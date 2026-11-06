@@ -1,0 +1,3489 @@
+{
+  "schema_version": 1,
+  "prepared_at_utc": "2026-11-05T22:47:39.562144Z",
+  "scope": "Phase4 bounded public value checks and offline implementation evidence; no database or dotenv access.",
+  "source_base": "57aab8c",
+  "measurement_status": "17 candidates have dated measured, blocked or inconclusive outcomes; two providers built after passing the specified gates.",
+  "count_semantics": "Historical counts are dated evidence. Current captured vendor observations prove only linked frontend use, not accessible full inventory. Null is unknown, never zero. Archive hostnames are candidates, not proven employers.",
+  "network_constraints": [
+    "One host at a time; >=1 second between same-host requests, >=2.5 seconds and one connection across icims.com.",
+    "First 403, 405, 429 or challenge stops that host. Honor robots and human-readable automated-collection prohibitions.",
+    "Use tenant_discovery with a no-retry paced transport wrapper; its default _get retries 429, which this task forbids.",
+    "Do not call probe_new_ats candidate-pattern sweeps: paths must come from the public page or documented API."
+  ],
+  "items": [
+    {
+      "id": "new_provider_radancy_talentbrew_search_jobs",
+      "name": "Radancy TalentBrew search-jobs",
+      "category": "new provider",
+      "provider_key": "radancy_talentbrew",
+      "status": "value_passed_public_ssr_access_limited",
+      "implementation": "implemented_radancy_talentbrew_in_separate_worktree",
+      "known_employers_in_audited_sources": [
+        {
+          "name": "PG&E",
+          "official_start_url": "https://jobs.pge.com/",
+          "historical_board_url": null,
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "scripts/data/direct_employer_plan.py",
+              "line": 709,
+              "note": "TalentBrew over SAP RCM C0000161245P; not yet readable",
+              "observed_on": "2026-10-21"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "SolutionHealth",
+          "official_start_url": "https://careers.solutionhealth.org/",
+          "historical_board_url": null,
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "scripts/data/direct_employer_leads.py",
+              "line": 153,
+              "note": "Official TalentBrew frontend observed",
+              "observed_on": "2026-10-21"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "Intuit",
+          "official_start_url": "https://jobs.intuit.com/",
+          "historical_board_url": null,
+          "disposition": "robots_refusal_excluded",
+          "evidence": [
+            {
+              "path": "docs/sourcing/h1b-sponsor-board-discovery.md",
+              "line": 163,
+              "note": "Known robots prohibition on /search-jobs; do not probe that path",
+              "observed_on": "2026-09-16"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "NetApp",
+          "official_start_url": "https://careers.netapp.com/",
+          "historical_board_url": "https://netapp.eightfold.ai/careers",
+          "disposition": "already_crawled_via_eightfold",
+          "evidence": [
+            {
+              "path": "scripts/data/direct_employer_plan.py",
+              "line": 630,
+              "note": "TalentBrew frontend links existing Eightfold source",
+              "observed_on": "2026-10-21"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "unconfirmed_leads": [
+        {
+          "name": "KPMG US",
+          "official_start_url": "https://www.kpmguscareers.com/",
+          "historical_board_url": null,
+          "disposition": "vendor_unconfirmed",
+          "evidence": [
+            {
+              "path": "docs/sourcing/h1b-sponsor-board-discovery.md",
+              "line": 216,
+              "note": "jobadx pixels only; three historical path guesses 404, do not repeat guesses",
+              "observed_on": "2026-09-16"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": null,
+      "sample_target": 3,
+      "sample_shortfall_reason": null,
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 5,
+        "current_reachable_us_postings": null,
+        "passed": true,
+        "passed_by": "known_employers"
+      },
+      "evidence": [
+        {
+          "path": "shared/python/services/ats_providers/radancy.py",
+          "line": 1,
+          "note": "Current reader consumes /api/jobs JSON; HTML /search-jobs is a distinct surface",
+          "observed_on": null
+        }
+      ],
+      "decision": "Build generic public SSR/detail reader for five proven employers with explicit truncation. Do not call /search-jobs/results or /resultspost: current robots prohibit /search-jobs/. Literal Spectrum Next link redirects to homepage. Keep Intuit excluded and Optum scoped to /optum-jobs.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/41",
+      "archive_shape": "Employer-owned custom domains; vendor-wide DNS suffix enumeration does not yield a meaningful customer count.",
+      "known_employer_count_recorded": 4,
+      "known_employer_count_revalidated": 5,
+      "current_captured_vendor_observations": [
+        {
+          "name": "Synopsys",
+          "official_start_url": "https://careers.synopsys.com/",
+          "captured_url": "https://careers.synopsys.com/",
+          "captured_at_utc": "2026-11-05T22:56:42.181401Z",
+          "body_file": ".probe/cc16cbdba30218c1100d.body",
+          "literal": "tbcdn.talentbrew.com",
+          "note": "Official Radancy frontend links Avature apply URLs; reuse Avature if listings are readable there.",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "Charter Communications",
+          "official_start_url": "https://jobs.spectrum.com/",
+          "captured_url": "https://jobs.spectrum.com/",
+          "captured_at_utc": "2026-11-05T22:59:52.563797Z",
+          "body_file": ".probe/647c9bcdba9eb60754d5.body",
+          "literal": "tbcdn.talentbrew.com/company/4673",
+          "note": "Official Spectrum frontend; unfiltered /search-jobs observed in its GET form.",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "Optum",
+          "official_start_url": "https://www.optum.com/",
+          "captured_url": "https://careers.unitedhealthgroup.com/search-jobs?acm=8738640,9255232,81400&alrpm=ALL&ascf=[%7B%22key%22:%22ALL%22,%22value%22:%22%22%7D]",
+          "captured_at_utc": "2026-11-05T23:00:00.117408Z",
+          "body_file": ".probe/c925226bfc69dd61c5f9.body",
+          "literal": "tbcdn.talentbrew.com",
+          "note": "Shared UnitedHealth Group frontend; employer-specific Optum entry is proven but broader UHG rows must not all be attributed to Optum.",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "archive_samples": [],
+      "sample_boards": [
+        {
+          "name": "Synopsys",
+          "board_url": "https://careers.synopsys.com/search-jobs",
+          "measured_at_utc": "2026-11-05T23:09:14.924257Z",
+          "board_total_advertised": 676,
+          "us_total_advertised": 175,
+          "us_share_advertised": 0.2588757396449704,
+          "rows_read": 15,
+          "description_samples_read": 1,
+          "listing_truncated": true,
+          "pagination_result": "robots_refusal: https://careers.synopsys.com/search-jobs/resultspost",
+          "evidence_file": ".probe/039d458b61891f5f2bd5.body",
+          "sample_detail_urls": [
+            "https://careers.synopsys.com/job/austin/lead-cybersecurity-automation-engineer/44408/92980004592"
+          ],
+          "note": "Advertised totals are not rows successfully crawled. Description samples contain JobPosting JSON-LD with actual dates."
+        },
+        {
+          "name": "Charter Communications",
+          "board_url": "https://jobs.spectrum.com/search-jobs",
+          "measured_at_utc": "2026-11-05T23:09:31.618388Z",
+          "board_total_advertised": 1458,
+          "us_total_advertised": 1458,
+          "us_share_advertised": 1.0,
+          "rows_read": 15,
+          "description_samples_read": 1,
+          "listing_truncated": true,
+          "pagination_result": "robots_refusal: https://jobs.spectrum.com/search-jobs/resultspost",
+          "evidence_file": ".probe/2a3419d0b65a6f152814.body",
+          "sample_detail_urls": [
+            "https://jobs.spectrum.com/job/st-louis/physical-security-officer-i/4673/97766408992"
+          ],
+          "note": "Advertised totals are not rows successfully crawled. Description samples contain JobPosting JSON-LD with actual dates."
+        },
+        {
+          "name": "Optum",
+          "board_url": "https://careers.unitedhealthgroup.com/search-jobs?acm=ALL&alrpm=ALL&ascf=[%7B%22key%22:%22custom_fields.UHGAJDType%22,%22value%22:%22Optum%22%7D]",
+          "measured_at_utc": "2026-11-05T23:09:35.587625Z",
+          "board_total_advertised": 5933,
+          "us_total_advertised": 5575,
+          "us_share_advertised": 0.9396595314343502,
+          "rows_read": 15,
+          "description_samples_read": 1,
+          "listing_truncated": true,
+          "pagination_result": "robots_refusal: https://careers.unitedhealthgroup.com/search-jobs/resultspost",
+          "evidence_file": ".probe/3fd1e1b406b3a036ef2a.body",
+          "sample_detail_urls": [
+            "https://careers.unitedhealthgroup.com/job/clinton/licensed-practical-nurse-lpn/34088/102914598400"
+          ],
+          "note": "Advertised totals are not rows successfully crawled. Description samples contain JobPosting JSON-LD with actual dates."
+        },
+        {
+          "name": "PG&E",
+          "board_url": "https://jobs.pge.com/search-jobs",
+          "measured_at_utc": "2026-11-05T23:12:45.611340Z",
+          "board_total_advertised": 149,
+          "us_total_advertised": 149,
+          "us_share_advertised": 1.0,
+          "rows_read": 15,
+          "description_samples_read": 0,
+          "listing_truncated": true,
+          "pagination_result": "not_attempted",
+          "evidence_file": ".probe/3eec6eb3ebc3ff47b34c.body",
+          "sample_detail_urls": [],
+          "note": "Advertised totals are not rows successfully crawled. Description samples contain JobPosting JSON-LD with actual dates."
+        },
+        {
+          "name": "SolutionHealth",
+          "board_url": "https://careers.solutionhealth.org/search-jobs",
+          "measured_at_utc": "2026-11-05T23:12:46.762825Z",
+          "board_total_advertised": 510,
+          "us_total_advertised": 510,
+          "us_share_advertised": 1.0,
+          "rows_read": 15,
+          "description_samples_read": 0,
+          "listing_truncated": true,
+          "pagination_result": "not_attempted",
+          "evidence_file": ".probe/ee9b55d9378404a9f630.body",
+          "sample_detail_urls": [],
+          "note": "Advertised totals are not rows successfully crawled. Description samples contain JobPosting JSON-LD with actual dates."
+        }
+      ],
+      "pagination_reference_script": "https://tbcdn.talentbrew.com/js/client/search.js",
+      "pagination_public_link_test": {
+        "literal_href": "/search-jobs&p=2",
+        "url": "https://jobs.spectrum.com/search-jobs&p=2",
+        "at_utc": "2026-11-05T23:14:59.217287Z",
+        "status": 200,
+        "final_url": "https://jobs.spectrum.com/",
+        "page": null,
+        "job_ids": [],
+        "events": [
+          {
+            "at": "2026-11-05T23:14:59.217461Z",
+            "method": "GET",
+            "url": "https://jobs.spectrum.com/robots.txt",
+            "status": 200,
+            "bytes": 39,
+            "body_file": ".probe/e4821fb6084b67da3120.body"
+          },
+          {
+            "at": "2026-11-05T23:15:00.267954Z",
+            "method": "GET",
+            "url": "https://jobs.spectrum.com/search-jobs&p=2",
+            "status": 302,
+            "bytes": 0,
+            "body_file": ".probe/ab85ff97b14b50478252.body"
+          },
+          {
+            "at": "2026-11-05T23:15:01.318286Z",
+            "method": "GET",
+            "url": "https://jobs.spectrum.com/",
+            "status": 200,
+            "bytes": 184652,
+            "body_file": ".probe/647c9bcdba9eb60754d5.body"
+          }
+        ]
+      },
+      "implementation_worktree": "D:/Aithrex/.worktrees-boards/provider-radancy-talentbrew",
+      "implementation_branch": "boards/provider-radancy-talentbrew",
+      "registered_validation_evidence": ".probe/value-registered-live.json",
+      "decision_at_utc": "2026-11-06T00:17:00Z",
+      "implementation_commit": "8e920bfa7dd4d0faf6663a9ef9252b2af051d763",
+      "verification": {
+        "focused_post_rebase_passed": 167,
+        "full": "Linux verify.py --full invoked; incomplete local result due unresponsive WSL, CI required"
+      }
+    },
+    {
+      "id": "new_provider_successfactors_career_site_builder",
+      "name": "SuccessFactors Career Site Builder",
+      "category": "new provider",
+      "provider_key": "successfactors",
+      "status": "existing_reader_robots_refusal",
+      "implementation": "already_implemented_successfactors_from_unified",
+      "known_employers_in_audited_sources": [
+        {
+          "name": "Wipro",
+          "official_start_url": "https://careers.wipro.com/",
+          "historical_board_url": null,
+          "disposition": "existing_crawl_seed",
+          "evidence": [
+            {
+              "path": "shared/python/services/job_ingest_worker.py",
+              "line": 708,
+              "note": "unified=True and location=United States",
+              "observed_on": "2026-10-07"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "HCLTech",
+          "official_start_url": "https://careers.hcltech.com/",
+          "historical_board_url": null,
+          "disposition": "existing_crawl_seed",
+          "evidence": [
+            {
+              "path": "shared/python/services/job_ingest_worker.py",
+              "line": 711,
+              "note": "unified=True and US custCountryRegion facet",
+              "observed_on": "2026-10-07"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "unconfirmed_leads": [
+        {
+          "name": "Tech Mahindra",
+          "official_start_url": "https://careers.techmahindra.com/",
+          "historical_board_url": null,
+          "disposition": "template_unconfirmed",
+          "evidence": [
+            {
+              "path": "docs/sourcing/h1b-sponsor-board-discovery.md",
+              "line": 188,
+              "note": "RMK-shaped shell, no rows; no observed listing API in this source",
+              "observed_on": "2026-09-16"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": null,
+      "sample_target": 3,
+      "sample_shortfall_reason": null,
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 3,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [
+        {
+          "path": "shared/python/services/ats_providers/successfactors.py",
+          "line": 602,
+          "note": "POST /services/recruiting/v1/jobs already implemented, ten rows/page, real dates, optional country filters",
+          "observed_on": "2026-10-07"
+        }
+      ],
+      "decision": "Career Site Builder unified JSON support already exists in successfactors._from_unified. All three current sample APIs are robots-prohibited; no new reader is justified and no API bypass was attempted.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "historical_board_measurements": [
+        {
+          "name": "Wipro",
+          "at": "2026-10-07",
+          "board_total": 6202,
+          "us_rows": 535
+        },
+        {
+          "name": "HCLTech",
+          "at": "2026-10-07",
+          "board_total": 14652,
+          "us_rows": 1075
+        }
+      ],
+      "archive_shape": "Employer-owned hosts; tenant enumeration does not map directly to a vendor DNS suffix.",
+      "known_employer_count_recorded": 2,
+      "known_employer_count_revalidated": 3,
+      "archive_samples": [],
+      "sample_boards": [
+        {
+          "name": "Wipro",
+          "endpoint": {
+            "vendor": "successfactors",
+            "tenant": "wipro",
+            "host": "careers.wipro.com",
+            "display_name": "Wipro",
+            "extra": {
+              "unified": true,
+              "location": "United States"
+            }
+          },
+          "measured_at_utc": "2026-11-05T23:29:26.354276Z",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null,
+          "us_count_semantics": "Explicit US labels only; lower bound, not full US inventory",
+          "listing_truncated": true,
+          "error": null,
+          "requests": [
+            {
+              "at": "2026-11-05T23:29:26.355211Z",
+              "method": "GET",
+              "url": "https://careers.wipro.com/robots.txt",
+              "status": 200,
+              "bytes": 252,
+              "body_file": ".probe/38f7526c18faeb5b0998.body"
+            }
+          ],
+          "outcome": "robots_refusal",
+          "note": "Existing unified reader attempted a prohibited /services/ path; helper refused before HTTP. Zero yielded rows is not an empty board.",
+          "diagnostic_parser_returned_counts": {
+            "rows_read": 0
+          }
+        },
+        {
+          "name": "HCLTech",
+          "endpoint": {
+            "vendor": "successfactors",
+            "tenant": "hcltech",
+            "host": "careers.hcltech.com",
+            "display_name": "HCLTech",
+            "extra": {
+              "unified": true,
+              "facet_filters": {
+                "custCountryRegion": [
+                  "United States"
+                ]
+              }
+            }
+          },
+          "measured_at_utc": "2026-11-05T23:29:27.757665Z",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null,
+          "us_count_semantics": "Explicit US labels only; lower bound, not full US inventory",
+          "listing_truncated": true,
+          "error": null,
+          "requests": [
+            {
+              "at": "2026-11-05T23:29:27.757833Z",
+              "method": "GET",
+              "url": "https://careers.hcltech.com/robots.txt",
+              "status": 200,
+              "bytes": 252,
+              "body_file": ".probe/471a39d078c372e23380.body"
+            }
+          ],
+          "outcome": "robots_refusal",
+          "note": "Existing unified reader attempted a prohibited /services/ path; helper refused before HTTP. Zero yielded rows is not an empty board.",
+          "diagnostic_parser_returned_counts": {
+            "rows_read": 0
+          }
+        },
+        {
+          "name": "Seagate",
+          "endpoint": {
+            "vendor": "successfactors",
+            "tenant": "seagatecareers.com",
+            "host": "seagatecareers.com",
+            "display_name": "Seagate",
+            "extra": {
+              "unified": true
+            }
+          },
+          "measured_at_utc": "2026-11-05T23:27:04.619656Z",
+          "board_url": "https://seagatecareers.com/search/",
+          "outcome": "robots_refusal",
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null,
+          "board_total": null,
+          "requests": [
+            {
+              "at": "2026-11-05T23:27:04.619656Z",
+              "method": "GET",
+              "url": "https://seagatecareers.com/robots.txt",
+              "status": 200,
+              "bytes": 252,
+              "body_file": ".probe\\d1b116133e6863b73157.body"
+            }
+          ],
+          "note": "Official careers link and served JavaScript prove /services/recruiting/v1/jobs; robots prohibits /services/. No API request sent.",
+          "diagnostic_parser_returned_counts": {
+            "rows_read": 0
+          }
+        }
+      ],
+      "decision_at_utc": "2026-11-05T23:35:17.436312Z"
+    },
+    {
+      "id": "new_provider_uber_termless_reader",
+      "name": "Uber termless reader",
+      "category": "new provider",
+      "provider_key": "uber",
+      "status": "blocked",
+      "implementation": "legacy_term_driven_engine_only",
+      "known_employers_in_audited_sources": [
+        {
+          "name": "Uber",
+          "official_start_url": "https://www.uber.com/us/en/careers/list/",
+          "historical_board_url": null,
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "shared/python/services/career_pages_service.py",
+              "line": 632,
+              "note": "POST loadSearchJobsResults known public request; termless validity unmeasured",
+              "observed_on": "2026-07-17"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": null,
+      "sample_target": 1,
+      "sample_shortfall_reason": "Only 1 current employer samples could be measured from the audited ownership chains. Archive candidates do not establish additional customers; remaining inventory is unknown.",
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 1,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [],
+      "decision": "Official careers redirect reaches jobs.uber.com, whose robots request returned HTTP403. Stop host; termless capability and inventory remain unknown.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "archive_shape": "Single-employer first-party API; three distinct tenant samples do not apply.",
+      "known_employer_count_recorded": 1,
+      "known_employer_count_revalidated": 1,
+      "archive_samples": [],
+      "sample_boards": [
+        {
+          "name": "Uber",
+          "board_url": "https://www.uber.com/us/en/careers/list/",
+          "measured_at_utc": "2026-11-05T23:16:10.887623Z",
+          "outcome": "blocked",
+          "error": "jobs.uber.com: HTTP 403 / challenge at 2026-11-05T23:16:12.116980Z",
+          "rows_read": null,
+          "us_rows": null,
+          "board_total": null,
+          "requests": [
+            {
+              "at": "2026-11-05T23:16:10.888622Z",
+              "method": "GET",
+              "url": "https://www.uber.com/robots.txt",
+              "status": 200,
+              "bytes": 904,
+              "body_file": ".probe\\25ef7e8e6eaad91fc418.body"
+            },
+            {
+              "at": "2026-11-05T23:16:11.940392Z",
+              "method": "GET",
+              "url": "https://www.uber.com/us/en/careers/list/",
+              "status": 301,
+              "bytes": 46,
+              "body_file": ".probe\\9defe25c9a93d39f7826.body"
+            },
+            {
+              "at": "2026-11-05T23:16:12.116980Z",
+              "method": "GET",
+              "url": "https://jobs.uber.com/robots.txt",
+              "status": 403,
+              "bytes": 5614,
+              "body_file": ".probe\\0a1d467e6a37c5944f5f.body"
+            }
+          ]
+        }
+      ],
+      "decision_at_utc": "2026-11-05T23:35:17.436312Z"
+    },
+    {
+      "id": "new_provider_ripplehire",
+      "name": "RippleHire",
+      "category": "new provider",
+      "provider_key": "ripplehire",
+      "status": "inconclusive_public_inventory_unavailable",
+      "implementation": "not_implemented",
+      "known_employers_in_audited_sources": [
+        {
+          "name": "Mphasis",
+          "official_start_url": null,
+          "historical_board_url": "https://mphasis.ripplehire.com/",
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "docs/sourcing/h1b-sponsor-board-discovery.md",
+              "line": 189,
+              "note": "RippleHire named from official-board research",
+              "observed_on": "2026-09-16"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "LTIMindtree",
+          "official_start_url": "https://www.ltimindtree.com/careers/",
+          "historical_board_url": null,
+          "disposition": "alternate_successfactors_board_known",
+          "evidence": [
+            {
+              "path": "docs/sourcing/h1b-sponsor-board-discovery.md",
+              "line": 218,
+              "note": "Recurring RippleHire vendor recorded; exact tenant not recorded",
+              "observed_on": "2026-09-16"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "unconfirmed_leads": [
+        {
+          "name": "UST",
+          "official_start_url": null,
+          "historical_board_url": "https://usource.ripplehire.com/",
+          "disposition": "capture_lead_not_official_ownership",
+          "evidence": [
+            {
+              "path": "docs/audit/jobright-capture-analysis.md",
+              "line": 55,
+              "note": "Jobright capture recorded UST job 61907; NOT sufficient ownership evidence",
+              "observed_on": null
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [
+        "ripplehire.com"
+      ],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": "2026-11-05T23:10:42.347962Z",
+      "sample_target": 3,
+      "sample_shortfall_reason": "Only 1 current employer samples could be measured from the audited ownership chains. Archive candidates do not establish additional customers; remaining inventory is unknown.",
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 1,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [],
+      "decision": "Current Mphasis URL redirects to SAML authentication. LTIMindtree evidence is historical (54 jobs on a different SuccessFactors board, almost none US); it is not a current RippleHire census. No third official sample is proven. Do not call this not_worth_it.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "historical_board_measurements": [
+        {
+          "name": "LTIMindtree",
+          "at": "2026-09-16",
+          "board_url": "https://careers.ltm.com/",
+          "provider": "successfactors",
+          "board_total": 54,
+          "us_rows": null,
+          "note": "Different board; mostly non-US. Not a RippleHire measurement."
+        }
+      ],
+      "known_employer_count_recorded": 2,
+      "known_employer_count_revalidated": 1,
+      "archive_samples": [
+        {
+          "domain": "ripplehire.com",
+          "at_utc": "2026-11-05T23:10:42.347962Z",
+          "candidate_hostname_count": 11,
+          "candidate_hosts": [
+            {
+              "vendor": "ripplehire",
+              "host": "autoconfig.ripplehire.com",
+              "tenant": "autoconfig",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "ripplehire",
+              "host": "autodiscover.ripplehire.com",
+              "tenant": "autodiscover",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "ripplehire",
+              "host": "codetest.ripplehire.com",
+              "tenant": "codetest",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "ripplehire",
+              "host": "codetestreport.ripplehire.com",
+              "tenant": "codetestreport",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "ripplehire",
+              "host": "ftp.ripplehire.com",
+              "tenant": "ftp",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "ripplehire",
+              "host": "interview.ripplehire.com",
+              "tenant": "interview",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "ripplehire",
+              "host": "sf.ripplehire.com",
+              "tenant": "sf",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "ripplehire",
+              "host": "shield.ripplehire.com",
+              "tenant": "shield",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "ripplehire",
+              "host": "staging-cp.ripplehire.com",
+              "tenant": "staging-cp",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "ripplehire",
+              "host": "staging-do.ripplehire.com",
+              "tenant": "staging-do",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "ripplehire",
+              "host": "uatreports.ripplehire.com",
+              "tenant": "uatreports",
+              "sources": [
+                "certspotter"
+              ]
+            }
+          ],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.ripplehire.com&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:10:43.516537Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.ripplehire.com&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.ripplehire.com&output=json&showNumPages=true",
+              "at": "2026-11-05T23:10:43.516631Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.ripplehire.com&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.ripplehire.com&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:10:45.517104Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.ripplehire.com&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": true
+          },
+          "requests": [
+            {
+              "url": "https://index.commoncrawl.org/robots.txt",
+              "at": "2026-11-05T23:10:42.348523Z",
+              "status": 200,
+              "error": null
+            },
+            {
+              "url": "https://index.commoncrawl.org/collinfo.json",
+              "at": "2026-11-05T23:10:43.399009Z",
+              "status": 200,
+              "error": null
+            },
+            {
+              "url": "https://api.certspotter.com/robots.txt",
+              "at": "2026-11-05T23:10:45.517363Z",
+              "status": 404,
+              "error": null
+            },
+            {
+              "url": "https://api.certspotter.com/v1/issuances?domain=ripplehire.com&include_subdomains=true&expand=dns_names",
+              "at": "2026-11-05T23:10:46.567508Z",
+              "status": 200,
+              "error": null
+            }
+          ],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        }
+      ],
+      "sample_boards": [
+        {
+          "name": "Mphasis",
+          "board_url": "https://mphasis.ripplehire.com/",
+          "measured_at_utc": "2026-11-05T23:28:49.534447Z",
+          "final_url": "https://mphasis.ripplehire.com/auth/saml2/authenticate/mph-ripplehire",
+          "http_status": 200,
+          "outcome": "login_required",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null,
+          "error": null,
+          "requests": [
+            {
+              "at": "2026-11-05T23:28:49.534736Z",
+              "method": "GET",
+              "url": "https://mphasis.ripplehire.com/robots.txt",
+              "status": 302,
+              "bytes": 0,
+              "body_file": ".probe/41c972918f86ceb7f131.body"
+            },
+            {
+              "at": "2026-11-05T23:28:50.585225Z",
+              "method": "GET",
+              "url": "https://mphasis.ripplehire.com/oauth2/authorization/mphasis",
+              "status": 302,
+              "bytes": 0,
+              "body_file": ".probe/0cc98d6af17feb586dec.body"
+            },
+            {
+              "at": "2026-11-05T23:28:51.635520Z",
+              "method": "GET",
+              "url": "https://mphasis.ripplehire.com/auth/oauth/authorize?response_type=code&client_id=ripplehire&scope=openid%20read%20write%20trust&state=HkQgZhHsPpfVNwM4RTTTjTCi97VIW2Iz44ktRhj-F7s%3D&redirect_uri=https://mphasis.ripplehire.com/login/oauth2/code/mphasis&nonce=vL1U58WoEcjgZZRIHrHP7VeZbtImbrDOnFVOlpLr4Pw",
+              "status": 302,
+              "bytes": 0,
+              "body_file": ".probe/17c7f1ba3805aff07677.body"
+            },
+            {
+              "at": "2026-11-05T23:28:52.685756Z",
+              "method": "GET",
+              "url": "https://mphasis.ripplehire.com/auth/login",
+              "status": 302,
+              "bytes": 0,
+              "body_file": ".probe/7a5cdc0edbdac9698cce.body"
+            },
+            {
+              "at": "2026-11-05T23:28:53.736114Z",
+              "method": "GET",
+              "url": "https://mphasis.ripplehire.com/auth/saml2/authenticate/mph-ripplehire",
+              "status": 200,
+              "bytes": 3328,
+              "body_file": ".probe/4b20fa38ed642e03ed89.body"
+            },
+            {
+              "at": "2026-11-05T23:28:54.786329Z",
+              "method": "GET",
+              "url": "https://mphasis.ripplehire.com/",
+              "status": 302,
+              "bytes": 0,
+              "body_file": ".probe/faba6a07128356e4040c.body"
+            },
+            {
+              "at": "2026-11-05T23:28:55.836642Z",
+              "method": "GET",
+              "url": "https://mphasis.ripplehire.com/oauth2/authorization/mphasis",
+              "status": 302,
+              "bytes": 0,
+              "body_file": ".probe/0cc98d6af17feb586dec.body"
+            },
+            {
+              "at": "2026-11-05T23:28:56.888923Z",
+              "method": "GET",
+              "url": "https://mphasis.ripplehire.com/auth/oauth/authorize?response_type=code&client_id=ripplehire&scope=openid%20read%20write%20trust&state=nm_01FILuLL9QHNkJfQqVLjagT6iPvZMfHPd8gPBCUs%3D&redirect_uri=https://mphasis.ripplehire.com/login/oauth2/code/mphasis&nonce=_snTAPQmZ57FgTSXV9txSvmc74l-dm4sK0_QBYz57k4",
+              "status": 302,
+              "bytes": 0,
+              "body_file": ".probe/0ad2c351f155bc2a3134.body"
+            },
+            {
+              "at": "2026-11-05T23:28:57.939196Z",
+              "method": "GET",
+              "url": "https://mphasis.ripplehire.com/auth/login",
+              "status": 302,
+              "bytes": 0,
+              "body_file": ".probe/7a5cdc0edbdac9698cce.body"
+            },
+            {
+              "at": "2026-11-05T23:28:58.989484Z",
+              "method": "GET",
+              "url": "https://mphasis.ripplehire.com/auth/saml2/authenticate/mph-ripplehire",
+              "status": 200,
+              "bytes": 3328,
+              "body_file": ".probe/4b20fa38ed642e03ed89.body"
+            }
+          ],
+          "note": "Redirect ended at /auth/saml2/authenticate/mph-ripplehire; no public requisition list was supplied. No login attempted."
+        }
+      ],
+      "decision_at_utc": "2026-11-05T23:35:17.436312Z"
+    },
+    {
+      "id": "new_provider_teamtailor",
+      "name": "Teamtailor",
+      "category": "new provider",
+      "provider_key": "teamtailor",
+      "status": "inconclusive_threshold_not_established",
+      "implementation": "not_implemented",
+      "known_employers_in_audited_sources": [],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [
+        {
+          "at": "2026-08-18",
+          "index_pages": 1,
+          "tenant_count": null,
+          "source": "docs/coverage/ats-vendor-coverage.md:346",
+          "note": "Index page count is not tenant count."
+        }
+      ],
+      "archive_domains_to_measure": [
+        "teamtailor.com"
+      ],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": "2026-11-05T23:10:47.140630Z",
+      "sample_target": 3,
+      "sample_shortfall_reason": null,
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 0,
+        "current_reachable_us_postings": 11,
+        "passed": null
+      },
+      "evidence": [
+        {
+          "path": "docs/coverage/ats-vendor-coverage.md",
+          "line": 310,
+          "note": "No verified tenants surfaced; mostly EU; jobs.json guesses were not evidence",
+          "observed_on": "2026-08-18"
+        }
+      ],
+      "decision": "Three branded public sample boards yielded 20 distinct job links and 11 US-located sample rows. This is below the 300-US gate; three board brands are below the five-employer gate and the forward ownership/eligibility review is incomplete. CloudMasonry is a consultancy candidate and is not automatically eligible. Whole-vendor US inventory and exhaustive tenant count remain unknown. Defer implementation; do not infer not_worth_it from these samples.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "known_employer_count_recorded": 0,
+      "known_employer_count_revalidated": 0,
+      "archive_samples": [
+        {
+          "domain": "teamtailor.com",
+          "at_utc": "2026-11-05T23:10:47.140630Z",
+          "candidate_hostname_count": 17,
+          "candidate_hosts": [
+            {
+              "vendor": "teamtailor",
+              "host": "au.teamtailor.com",
+              "tenant": "au",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "career.teamtailor.com",
+              "tenant": "career",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "dashboard.teamtailor.com",
+              "tenant": "dashboard",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "discover.teamtailor.com",
+              "tenant": "discover",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "errors.teamtailor.com",
+              "tenant": "errors",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "eu2.teamtailor.com",
+              "tenant": "eu2",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "finance-integrations.teamtailor.com",
+              "tenant": "finance-integrations",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "hello.teamtailor.com",
+              "tenant": "hello",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "highlights.teamtailor.com",
+              "tenant": "highlights",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "integrations.teamtailor.com",
+              "tenant": "integrations",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "na.teamtailor.com",
+              "tenant": "na",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "partner.teamtailor.com",
+              "tenant": "partner",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "staging-assets.teamtailor.com",
+              "tenant": "staging-assets",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "trust.teamtailor.com",
+              "tenant": "trust",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "tt-parser-ecs.teamtailor.com",
+              "tenant": "tt-parser-ecs",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "updates.teamtailor.com",
+              "tenant": "updates",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "teamtailor",
+              "host": "web.teamtailor.com",
+              "tenant": "web",
+              "sources": [
+                "certspotter"
+              ]
+            }
+          ],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.teamtailor.com&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:10:47.140855Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.teamtailor.com&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.teamtailor.com&output=json&showNumPages=true",
+              "at": "2026-11-05T23:10:47.140952Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.teamtailor.com&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.teamtailor.com&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:10:49.141541Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.teamtailor.com&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": true
+          },
+          "requests": [
+            {
+              "url": "https://api.certspotter.com/v1/issuances?domain=teamtailor.com&include_subdomains=true&expand=dns_names",
+              "at": "2026-11-05T23:10:49.141748Z",
+              "status": 200,
+              "error": null
+            }
+          ],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        }
+      ],
+      "sample_boards": [
+        {
+          "name": "Kepler Cheuvreux",
+          "board_url": "https://keplercheuvreux.teamtailor.com/jobs",
+          "official_company_url": "https://www.keplercheuvreux.com/fr/",
+          "measured_at_utc": "2026-11-05T23:56:37.825816Z",
+          "http_status": 200,
+          "outcome": "public_rows_measured_ownership_review_required",
+          "rows_read": 4,
+          "board_total": null,
+          "us_rows": 1,
+          "us_share_sample": 0.25,
+          "complete_census": false,
+          "evidence_file": ".probe/9691d72d4036788b3646.body",
+          "jobs": [
+            {
+              "id": "8658807",
+              "url": "https://keplercheuvreux.teamtailor.com/jobs/8658807-junior-accountant-permanent-contract-madrid",
+              "published_text": "JUNIOR ACCOUNTANT - PERMANENT CONTRACT - MADRID Support - Finance & Accounting · Spain - Madrid · Hybrid"
+            },
+            {
+              "id": "8623232",
+              "url": "https://keplercheuvreux.teamtailor.com/jobs/8623232-internship-credit-research-sell-side-paris",
+              "published_text": "INTERNSHIP - CREDIT RESEARCH SELL SIDE - PARIS Fixed income · France - Paris"
+            },
+            {
+              "id": "8541199",
+              "url": "https://keplercheuvreux.teamtailor.com/jobs/8541199-roadshow-coordinator-corporate-access-new-york",
+              "published_text": "ROADSHOW COORDINATOR - CORPORATE ACCESS - NEW YORK United States - New York · Hybrid"
+            },
+            {
+              "id": "8474780",
+              "url": "https://keplercheuvreux.teamtailor.com/jobs/8474780-internship-structuring-dynamic-strategies-nyon",
+              "published_text": "INTERNSHIP - STRUCTURING - DYNAMIC STRATEGIES - NYON Structured Solutions · Switzerland - Nyon"
+            }
+          ],
+          "ownership_note": "Branded public vendor board links the official company. CloudMasonry official careers page independently embeds the Teamtailor widget. No catalog row added; employer eligibility and exact forward link still require review."
+        },
+        {
+          "name": "CloudMasonry",
+          "board_url": "https://cloudmasonry.na.teamtailor.com/jobs",
+          "official_company_url": "https://cloudmasonry.com/join-our-team/",
+          "measured_at_utc": "2026-11-05T23:56:39.344363Z",
+          "http_status": 200,
+          "outcome": "public_rows_measured_ownership_review_required",
+          "rows_read": 10,
+          "board_total": null,
+          "us_rows": 6,
+          "us_share_sample": 0.6,
+          "complete_census": false,
+          "evidence_file": ".probe/8a084800dd284dea5cba.body",
+          "jobs": [
+            {
+              "id": "537014",
+              "url": "https://cloudmasonry.na.teamtailor.com/jobs/537014-salesforce-project-manager",
+              "published_text": "Salesforce Project Manager United Kingdom · London · Hybrid"
+            },
+            {
+              "id": "503234",
+              "url": "https://cloudmasonry.na.teamtailor.com/jobs/503234-salesforce-solution-architect",
+              "published_text": "Salesforce Solution Architect United Kingdom · London · Hybrid"
+            },
+            {
+              "id": "503226",
+              "url": "https://cloudmasonry.na.teamtailor.com/jobs/503226-salesforce-senior-consultant",
+              "published_text": "Salesforce Senior Consultant United Kingdom · London · Hybrid"
+            },
+            {
+              "id": "726732",
+              "url": "https://cloudmasonry.na.teamtailor.com/jobs/726732-director-of-sales",
+              "published_text": "Director of Sales Sales · United States · Fully Remote"
+            },
+            {
+              "id": "724830",
+              "url": "https://cloudmasonry.na.teamtailor.com/jobs/724830-salesforce-senior-developer",
+              "published_text": "Salesforce Senior Developer Technology · Multiple locations · Fully Remote"
+            },
+            {
+              "id": "713885",
+              "url": "https://cloudmasonry.na.teamtailor.com/jobs/713885-salesforce-technical-architect",
+              "published_text": "Salesforce Technical Architect United States · Fully Remote"
+            },
+            {
+              "id": "697696",
+              "url": "https://cloudmasonry.na.teamtailor.com/jobs/697696-principal-consultant-data-360-data-cloud",
+              "published_text": "Principal Consultant, Data 360 (Data Cloud) United States · Fully Remote"
+            },
+            {
+              "id": "619739",
+              "url": "https://cloudmasonry.na.teamtailor.com/jobs/619739-salesforce-technical-recruiter",
+              "published_text": "Salesforce Technical Recruiter Indianapolis · Hybrid"
+            },
+            {
+              "id": "600972",
+              "url": "https://cloudmasonry.na.teamtailor.com/jobs/600972-junior-accountant",
+              "published_text": "Junior Accountant Indianapolis · Hybrid"
+            },
+            {
+              "id": "588187",
+              "url": "https://cloudmasonry.na.teamtailor.com/jobs/588187-salesforce-senior-consultant",
+              "published_text": "Salesforce Senior Consultant Indianapolis · Hybrid"
+            }
+          ],
+          "ownership_note": "Branded public vendor board links the official company. CloudMasonry official careers page independently embeds the Teamtailor widget. No catalog row added; employer eligibility and exact forward link still require review."
+        },
+        {
+          "name": "CurifyLabs",
+          "board_url": "https://curifylabs.teamtailor.com/jobs",
+          "official_company_url": "https://curifylabs.com/",
+          "measured_at_utc": "2026-11-05T23:56:40.668531Z",
+          "http_status": 200,
+          "outcome": "public_rows_measured_ownership_review_required",
+          "rows_read": 6,
+          "board_total": null,
+          "us_rows": 4,
+          "us_share_sample": 0.6666666666666666,
+          "complete_census": false,
+          "evidence_file": ".probe/2d6d8a279427983c6ea9.body",
+          "jobs": [
+            {
+              "id": "8668365",
+              "url": "https://curifylabs.teamtailor.com/jobs/8668365-r-d-engineer-robotics-automation",
+              "published_text": "R&D Engineer (Robotics & Automation) Engineering · CurifyLabs HQ, Helsinki, Finland · Onsite"
+            },
+            {
+              "id": "8168069",
+              "url": "https://curifylabs.teamtailor.com/jobs/8168069-inside-sales-representative-u-s-nationwide",
+              "published_text": "Inside Sales Representative U.S Nationwide Sales · CurifyLabs United States · Fully Remote"
+            },
+            {
+              "id": "7874064",
+              "url": "https://curifylabs.teamtailor.com/jobs/7874064-production-engineer-technician-robotics-automation",
+              "published_text": "Production Engineer/Technician – Robotics & Automation Engineering · CurifyLabs HQ, Helsinki, Finland"
+            },
+            {
+              "id": "7849402",
+              "url": "https://curifylabs.teamtailor.com/jobs/7849402-central-u-s-sales-representative",
+              "published_text": "Central U.S. Sales Representative Sales · CurifyLabs United States · Fully Remote"
+            },
+            {
+              "id": "7841256",
+              "url": "https://curifylabs.teamtailor.com/jobs/7841256-senior-marketing-specialist",
+              "published_text": "Senior Marketing Specialist Marketing · CurifyLabs United States · Fully Remote"
+            },
+            {
+              "id": "7767745",
+              "url": "https://curifylabs.teamtailor.com/jobs/7767745-customer-success-compounding-pharmacist-pharmacy-technician",
+              "published_text": "Customer Success Compounding Pharmacist / Pharmacy Technician Customer Success · CurifyLabs United States · Fully Remote"
+            }
+          ],
+          "ownership_note": "Branded public vendor board links the official company. CloudMasonry official careers page independently embeds the Teamtailor widget. No catalog row added; employer eligibility and exact forward link still require review."
+        }
+      ],
+      "decision_at_utc": "2026-11-06T00:17:00Z",
+      "ownership_review_pending_brands": 3
+    },
+    {
+      "id": "new_provider_zoho_recruit",
+      "name": "Zoho Recruit",
+      "category": "new provider",
+      "provider_key": "zohorecruit",
+      "status": "inconclusive_js_shell_sample",
+      "implementation": "not_implemented",
+      "known_employers_in_audited_sources": [],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [
+        {
+          "at": "2026-08-18",
+          "tenant_count": 61,
+          "source": "docs/coverage/ats-vendor-coverage.md:311",
+          "note": "Historical count only; tenant identities not in audited sources."
+        }
+      ],
+      "archive_domains_to_measure": [
+        "zohorecruit.com"
+      ],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": "2026-11-05T23:10:47.233319Z",
+      "sample_target": 3,
+      "sample_shortfall_reason": "One branded JS-shell candidate, no proven forward ownership chain or current inventory, and two missing samples.",
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 0,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [
+        {
+          "path": "docs/coverage/ats-vendor-coverage.md",
+          "line": 311,
+          "note": "61 tenants found; no provider built",
+          "observed_on": "2026-08-18"
+        }
+      ],
+      "decision": "A public OXXO USA Zoho shell responded200 but did not expose a measured list in this bounded pass. Current accessibleUSinventory and ownership remain unknown. Do not build yet and do not label not_worth_it.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "known_employer_count_recorded": 0,
+      "known_employer_count_revalidated": 0,
+      "archive_samples": [
+        {
+          "domain": "zohorecruit.com",
+          "at_utc": "2026-11-05T23:10:47.233319Z",
+          "candidate_hostname_count": 4,
+          "candidate_hosts": [
+            {
+              "vendor": "zohorecruit",
+              "host": "insights.zohorecruit.com",
+              "tenant": "insights",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "zohorecruit",
+              "host": "notifications.zohorecruit.com",
+              "tenant": "notifications",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "zohorecruit",
+              "host": "recon.zohorecruit.com",
+              "tenant": "recon",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "zohorecruit",
+              "host": "sender.zohorecruit.com",
+              "tenant": "sender",
+              "sources": [
+                "certspotter"
+              ]
+            }
+          ],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.zohorecruit.com&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:10:47.233518Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.zohorecruit.com&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.zohorecruit.com&output=json&showNumPages=true",
+              "at": "2026-11-05T23:10:47.233602Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.zohorecruit.com&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.zohorecruit.com&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:10:49.234147Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.zohorecruit.com&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": true
+          },
+          "requests": [
+            {
+              "url": "https://api.certspotter.com/v1/issuances?domain=zohorecruit.com&include_subdomains=true&expand=dns_names",
+              "at": "2026-11-05T23:10:50.192012Z",
+              "status": 200,
+              "error": null
+            }
+          ],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        }
+      ],
+      "sample_boards": [
+        {
+          "name": "OXXO USA",
+          "board_url": "https://oxxousa.zohorecruit.com/jobs/Careers",
+          "measured_at_utc": "2026-11-05T23:56:42.448271Z",
+          "http_status": 200,
+          "outcome": "public_js_shell_no_measured_inventory",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "evidence_file": ".probe/fe697603276189e1d2f1.body",
+          "ownership_note": "Branded candidate found through a public indexed vendor board; official forward chain not established. Search-index snippets are not a current live job count."
+        }
+      ],
+      "decision_at_utc": "2026-11-06T00:17:00Z"
+    },
+    {
+      "id": "new_provider_personio",
+      "name": "Personio",
+      "category": "new provider",
+      "provider_key": "personio",
+      "status": "inconclusive_no_verified_employer_samples",
+      "implementation": "not_implemented",
+      "known_employers_in_audited_sources": [],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [
+        "jobs.personio.com",
+        "jobs.personio.de"
+      ],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": "2026-11-05T23:10:53.205226Z",
+      "sample_target": 3,
+      "sample_shortfall_reason": "Only 0 current employer samples could be measured from the audited ownership chains. Archive candidates do not establish additional customers; remaining inventory is unknown.",
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 0,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [
+        {
+          "path": "shared/python/services/ats_providers/own_site.py",
+          "line": 228,
+          "note": "Host recognition is not a registered Personio reader or an employer ownership chain",
+          "observed_on": null
+        }
+      ],
+      "decision": "No current employer-owned sample chain was found in the audited repository evidence or bounded archive results. Common Crawl query paths were robots-refused; CT infrastructure names are not proven employers. Certspotter stopped after HTTP429, so later domains remain unmeasured. Historical counts are retained separately. Do not build yet; do not label not_worth_it while the accessible US inventory remains unknown.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "known_employer_count_recorded": 0,
+      "known_employer_count_revalidated": 0,
+      "archive_samples": [
+        {
+          "domain": "jobs.personio.com",
+          "at_utc": "2026-11-05T23:10:50.693335Z",
+          "candidate_hostname_count": 0,
+          "candidate_hosts": [],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.jobs.personio.com&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:10:50.693647Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.jobs.personio.com&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.jobs.personio.com&output=json&showNumPages=true",
+              "at": "2026-11-05T23:10:50.693772Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.jobs.personio.com&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.jobs.personio.com&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:10:52.694347Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.jobs.personio.com&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": true
+          },
+          "requests": [
+            {
+              "url": "https://api.certspotter.com/v1/issuances?domain=jobs.personio.com&include_subdomains=true&expand=dns_names",
+              "at": "2026-11-05T23:10:52.694483Z",
+              "status": 200,
+              "error": null
+            }
+          ],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        },
+        {
+          "domain": "jobs.personio.de",
+          "at_utc": "2026-11-05T23:10:53.205226Z",
+          "candidate_hostname_count": 0,
+          "candidate_hosts": [],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.jobs.personio.de&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:10:53.205411Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.jobs.personio.de&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.jobs.personio.de&output=json&showNumPages=true",
+              "at": "2026-11-05T23:10:53.205465Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.jobs.personio.de&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.jobs.personio.de&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:10:55.206130Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.jobs.personio.de&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": true
+          },
+          "requests": [
+            {
+              "url": "https://api.certspotter.com/v1/issuances?domain=jobs.personio.de&include_subdomains=true&expand=dns_names",
+              "at": "2026-11-05T23:10:55.206449Z",
+              "status": 200,
+              "error": null
+            }
+          ],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        }
+      ],
+      "sample_boards": [],
+      "decision_at_utc": "2026-11-05T23:35:17.436312Z"
+    },
+    {
+      "id": "new_provider_pinpoint",
+      "name": "Pinpoint",
+      "category": "new provider",
+      "provider_key": "pinpoint",
+      "status": "inconclusive_sample_shortfall",
+      "implementation": "not_implemented",
+      "known_employers_in_audited_sources": [
+        {
+          "name": "Innovative Defense Technologies (IDT)",
+          "official_start_url": "https://idtus.com/",
+          "historical_board_url": "https://idtus.pinpointhq.com/",
+          "disposition": "mixed_business_review_not_eligible_yet",
+          "evidence": [
+            {
+              "path": "scripts/data/direct_employer_leads.py",
+              "line": 102,
+              "note": "Official ATS chain recorded; disposition mixed_review",
+              "observed_on": "2026-10-21"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [
+        "pinpointhq.com"
+      ],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": "2026-11-05T23:10:55.413445Z",
+      "sample_target": 3,
+      "sample_shortfall_reason": "Only 1 current employer samples could be measured from the audited ownership chains. Archive candidates do not establish additional customers; remaining inventory is unknown.",
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 1,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [],
+      "decision": "One reachable employer board contains 45 US postings, below the 300 threshold. One employer is proven, below five; two more samples and broader known-employer inventory remain unknown. Defer a generic reader without falsely claiming the vendor is not worthwhile.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "known_employer_count_recorded": 1,
+      "known_employer_count_revalidated": 1,
+      "archive_samples": [
+        {
+          "domain": "pinpointhq.com",
+          "at_utc": "2026-11-05T23:10:55.413445Z",
+          "candidate_hostname_count": 9,
+          "candidate_hosts": [
+            {
+              "vendor": "pinpoint",
+              "host": "billing.pinpointhq.com",
+              "tenant": "billing",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "pinpoint",
+              "host": "changelog.pinpointhq.com",
+              "tenant": "changelog",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "pinpoint",
+              "host": "content.pinpointhq.com",
+              "tenant": "content",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "pinpoint",
+              "host": "document-conversion-service.pinpointhq.com",
+              "tenant": "document-conversion-service",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "pinpoint",
+              "host": "fastly.pinpointhq.com",
+              "tenant": "fastly",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "pinpoint",
+              "host": "fra.pinpointhq.com",
+              "tenant": "fra",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "pinpoint",
+              "host": "sl.pinpointhq.com",
+              "tenant": "sl",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "pinpoint",
+              "host": "trends.pinpointhq.com",
+              "tenant": "trends",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "pinpoint",
+              "host": "trust.pinpointhq.com",
+              "tenant": "trust",
+              "sources": [
+                "certspotter"
+              ]
+            }
+          ],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.pinpointhq.com&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:10:55.413671Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.pinpointhq.com&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.pinpointhq.com&output=json&showNumPages=true",
+              "at": "2026-11-05T23:10:55.413779Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.pinpointhq.com&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.pinpointhq.com&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:10:57.414453Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.pinpointhq.com&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": true
+          },
+          "requests": [
+            {
+              "url": "https://api.certspotter.com/v1/issuances?domain=pinpointhq.com&include_subdomains=true&expand=dns_names",
+              "at": "2026-11-05T23:10:57.414602Z",
+              "status": 200,
+              "error": null
+            }
+          ],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        }
+      ],
+      "sample_boards": [
+        {
+          "name": "Innovative Defense Technologies (IDT)",
+          "board_url": "https://idtus.pinpointhq.com/postings.json",
+          "measured_at_utc": "2026-11-05T23:30:00.024638Z",
+          "final_url": "https://idtus.pinpointhq.com/postings.json",
+          "http_status": 200,
+          "outcome": "measured",
+          "board_total": 45,
+          "rows_read": 45,
+          "us_rows": 45,
+          "us_share": 1.0,
+          "error": null,
+          "requests": [
+            {
+              "at": "2026-11-05T23:30:00.024804Z",
+              "method": "GET",
+              "url": "https://idtus.pinpointhq.com/robots.txt",
+              "status": 200,
+              "bytes": 231,
+              "body_file": ".probe/da0d841cdfbdc643a520.body"
+            },
+            {
+              "at": "2026-11-05T23:29:58.344062Z",
+              "method": "GET",
+              "url": "https://idtus.pinpointhq.com/postings.json",
+              "status": 200,
+              "bytes": 537445,
+              "body_file": ".probe/4b6f1e5431d0e3177354.body"
+            }
+          ],
+          "distinct_ids": 45,
+          "count_semantics": "45 complete JSON rows. Every location is in Arlington VA, Fall River MA, Mount Laurel NJ or San Diego CA; US inferred from explicit city/state addresses.",
+          "official_evidence_url": "https://idtus.com/",
+          "endpoint_observed_in": "https://idtus.pinpointhq.com/",
+          "endpoint_literal": "\"url\":\"/postings.json\"",
+          "eligibility": "Existing official ATS chain; mixed business review remains required."
+        }
+      ],
+      "decision_at_utc": "2026-11-05T23:35:17.436312Z"
+    },
+    {
+      "id": "new_provider_comeet",
+      "name": "Comeet",
+      "category": "new provider",
+      "provider_key": "comeet",
+      "status": "existing_reader_covers_measured_employer",
+      "implementation": "no_generic_provider_but_own_site_reads_rendered_comeet_positions",
+      "known_employers_in_audited_sources": [
+        {
+          "name": "Upwind Security",
+          "official_start_url": "https://www.upwind.io/careers",
+          "historical_board_url": null,
+          "disposition": "existing_crawl_seed",
+          "evidence": [
+            {
+              "path": "shared/python/services/job_ingest_worker.py",
+              "line": 1083,
+              "note": "Own-site WordPress plugin positions; stable Comeet uid; no token",
+              "observed_on": "2026-10-22"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [
+        "comeet.com",
+        "comeet.co"
+      ],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": "2026-11-05T23:11:00.915478Z",
+      "sample_target": 3,
+      "sample_shortfall_reason": "Only 1 current employer samples could be measured from the audited ownership chains. Archive candidates do not establish additional customers; remaining inventory is unknown.",
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 1,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [],
+      "decision": "The existing own_site reader returns 98 real Upwind postings without truncation. Ten rows explicitly label US; this is a lower bound, not a full normalized US census. A generic Comeet reader has no measured incremental employer value yet; two additional samples remain unknown.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "historical_board_measurements": [
+        {
+          "name": "Upwind Security",
+          "at": "2026-10-22",
+          "rows_read": 94,
+          "board_total": 94,
+          "us_rows": null
+        }
+      ],
+      "archive_shape": "Known rendered tenant is first-party. Shared-host URL paths need URL-index enumeration, not subdomain counts.",
+      "known_employer_count_recorded": 1,
+      "known_employer_count_revalidated": 1,
+      "archive_samples": [
+        {
+          "domain": "comeet.com",
+          "at_utc": "2026-11-05T23:10:58.198740Z",
+          "candidate_hostname_count": 6,
+          "candidate_hosts": [
+            {
+              "vendor": "comeet",
+              "host": "gsnlink.comeet.com",
+              "tenant": "gsnlink",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "comeet",
+              "host": "hello.comeet.com",
+              "tenant": "hello",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "comeet",
+              "host": "insights.comeet.com",
+              "tenant": "insights",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "comeet",
+              "host": "local.comeet.com",
+              "tenant": "local",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "comeet",
+              "host": "meet.comeet.com",
+              "tenant": "meet",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "comeet",
+              "host": "mgemailevents.comeet.com",
+              "tenant": "mgemailevents",
+              "sources": [
+                "certspotter"
+              ]
+            }
+          ],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.comeet.com&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:10:58.198892Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.comeet.com&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.comeet.com&output=json&showNumPages=true",
+              "at": "2026-11-05T23:10:58.198948Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.comeet.com&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.comeet.com&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:11:00.199262Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.comeet.com&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": true
+          },
+          "requests": [
+            {
+              "url": "https://api.certspotter.com/v1/issuances?domain=comeet.com&include_subdomains=true&expand=dns_names",
+              "at": "2026-11-05T23:11:00.199418Z",
+              "status": 200,
+              "error": null
+            }
+          ],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        },
+        {
+          "domain": "comeet.co",
+          "at_utc": "2026-11-05T23:11:00.915478Z",
+          "candidate_hostname_count": 7,
+          "candidate_hosts": [
+            {
+              "vendor": "comeet",
+              "host": "gslink.comeet.co",
+              "tenant": "gslink",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "comeet",
+              "host": "insights.comeet.co",
+              "tenant": "insights",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "comeet",
+              "host": "insightsdev.comeet.co",
+              "tenant": "insightsdev",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "comeet",
+              "host": "local.comeet.co",
+              "tenant": "local",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "comeet",
+              "host": "qa01.comeet.co",
+              "tenant": "qa01",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "comeet",
+              "host": "salesloft-tracking.comeet.co",
+              "tenant": "salesloft-tracking",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "comeet",
+              "host": "welcome.comeet.co",
+              "tenant": "welcome",
+              "sources": [
+                "certspotter"
+              ]
+            }
+          ],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.comeet.co&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:11:00.915640Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.comeet.co&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.comeet.co&output=json&showNumPages=true",
+              "at": "2026-11-05T23:11:00.915699Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.comeet.co&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.comeet.co&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:11:02.916175Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.comeet.co&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": true
+          },
+          "requests": [
+            {
+              "url": "https://api.certspotter.com/v1/issuances?domain=comeet.co&include_subdomains=true&expand=dns_names",
+              "at": "2026-11-05T23:11:02.916327Z",
+              "status": 200,
+              "error": null
+            }
+          ],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        }
+      ],
+      "sample_boards": [
+        {
+          "name": "Upwind Security",
+          "endpoint": {
+            "vendor": "careers_page",
+            "tenant": "upwind.io",
+            "host": "upwind.io",
+            "display_name": "Upwind Security",
+            "extra": {
+              "listing_url": "https://www.upwind.io/careers"
+            }
+          },
+          "measured_at_utc": "2026-11-05T23:29:34.640411Z",
+          "board_total": null,
+          "rows_read": 98,
+          "us_rows": 10,
+          "us_share": 0.10204081632653061,
+          "us_count_semantics": "Explicit US labels only; lower bound, not full US inventory",
+          "listing_truncated": false,
+          "error": null,
+          "requests": [
+            {
+              "at": "2026-11-05T23:29:34.640775Z",
+              "method": "GET",
+              "url": "https://www.upwind.io/robots.txt",
+              "status": 200,
+              "bytes": 187,
+              "body_file": ".probe/4b6cd703b62d6c11b116.body"
+            },
+            {
+              "at": "2026-11-05T23:29:35.691120Z",
+              "method": "GET",
+              "url": "https://www.upwind.io/careers",
+              "status": 200,
+              "bytes": 418002,
+              "body_file": ".probe/4d2a1b093922b238fb95.body"
+            }
+          ]
+        }
+      ],
+      "decision_at_utc": "2026-11-05T23:35:17.436312Z"
+    },
+    {
+      "id": "new_provider_hibob",
+      "name": "HiBob",
+      "category": "new provider",
+      "provider_key": "hibob",
+      "status": "inconclusive_no_verified_employer_samples",
+      "implementation": "not_implemented",
+      "known_employers_in_audited_sources": [],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [
+        "hibob.com"
+      ],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": "2026-11-05T23:11:03.608783Z",
+      "sample_target": 3,
+      "sample_shortfall_reason": "Only 0 current employer samples could be measured from the audited ownership chains. Archive candidates do not establish additional customers; remaining inventory is unknown.",
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 0,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [
+        {
+          "path": "shared/python/services/ats_providers/own_site.py",
+          "line": 227,
+          "note": "Recognized as external ATS host; no named tenant found in audited evidence",
+          "observed_on": null
+        }
+      ],
+      "decision": "No current employer-owned sample chain was found in the audited repository evidence or bounded archive results. Common Crawl query paths were robots-refused; CT infrastructure names are not proven employers. Certspotter stopped after HTTP429, so later domains remain unmeasured. Historical counts are retained separately. Do not build yet; do not label not_worth_it while the accessible US inventory remains unknown.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "known_employer_count_recorded": 0,
+      "known_employer_count_revalidated": 0,
+      "archive_samples": [
+        {
+          "domain": "hibob.com",
+          "at_utc": "2026-11-05T23:11:03.608783Z",
+          "candidate_hostname_count": 10,
+          "candidate_hosts": [
+            {
+              "vendor": "hibob",
+              "host": "finance-maintenance.hibob.com",
+              "tenant": "finance-maintenance",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "hibob",
+              "host": "gitpod.hibob.com",
+              "tenant": "gitpod",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "hibob",
+              "host": "heartcorehr.hibob.com",
+              "tenant": "heartcorehr",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "hibob",
+              "host": "hr.hibob.com",
+              "tenant": "hr",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "hibob",
+              "host": "lab.hibob.com",
+              "tenant": "lab",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "hibob",
+              "host": "media-process.hibob.com",
+              "tenant": "media-process",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "hibob",
+              "host": "mgmt.hibob.com",
+              "tenant": "mgmt",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "hibob",
+              "host": "secure-mail.hibob.com",
+              "tenant": "secure-mail",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "hibob",
+              "host": "security.hibob.com",
+              "tenant": "security",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "hibob",
+              "host": "traceloop.hibob.com",
+              "tenant": "traceloop",
+              "sources": [
+                "certspotter"
+              ]
+            }
+          ],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.hibob.com&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:11:03.608966Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.hibob.com&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.hibob.com&output=json&showNumPages=true",
+              "at": "2026-11-05T23:11:03.609067Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.hibob.com&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.hibob.com&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:11:05.609782Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.hibob.com&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": true
+          },
+          "requests": [
+            {
+              "url": "https://api.certspotter.com/v1/issuances?domain=hibob.com&include_subdomains=true&expand=dns_names",
+              "at": "2026-11-05T23:11:05.610107Z",
+              "status": 200,
+              "error": null
+            }
+          ],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        }
+      ],
+      "sample_boards": [],
+      "decision_at_utc": "2026-11-05T23:35:17.436312Z"
+    },
+    {
+      "id": "new_provider_dover",
+      "name": "Dover",
+      "category": "new provider",
+      "provider_key": "dover",
+      "status": "inconclusive_no_verified_employer_samples",
+      "implementation": "not_implemented",
+      "known_employers_in_audited_sources": [],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [
+        "dover.com"
+      ],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": "2026-11-05T23:11:07.175714Z",
+      "sample_target": 3,
+      "sample_shortfall_reason": "Only 0 current employer samples could be measured from the audited ownership chains. Archive candidates do not establish additional customers; remaining inventory is unknown.",
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 0,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [
+        {
+          "path": "shared/python/services/ats_providers/own_site.py",
+          "line": 229,
+          "note": "Recognized as external ATS host; no named tenant found in audited evidence",
+          "observed_on": null
+        }
+      ],
+      "decision": "No current employer-owned sample chain was found in the audited repository evidence or bounded archive results. Common Crawl query paths were robots-refused; CT infrastructure names are not proven employers. Certspotter stopped after HTTP429, so later domains remain unmeasured. Historical counts are retained separately. Do not build yet; do not label not_worth_it while the accessible US inventory remains unknown.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "known_employer_count_recorded": 0,
+      "known_employer_count_revalidated": 0,
+      "archive_samples": [
+        {
+          "domain": "dover.com",
+          "at_utc": "2026-11-05T23:11:07.175714Z",
+          "candidate_hostname_count": 3,
+          "candidate_hosts": [
+            {
+              "vendor": "dover",
+              "host": "maintenance.dover.com",
+              "tenant": "maintenance",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "dover",
+              "host": "match.dover.com",
+              "tenant": "match",
+              "sources": [
+                "certspotter"
+              ]
+            },
+            {
+              "vendor": "dover",
+              "host": "r.dover.com",
+              "tenant": "r",
+              "sources": [
+                "certspotter"
+              ]
+            }
+          ],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.dover.com&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:11:07.175923Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.dover.com&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.dover.com&output=json&showNumPages=true",
+              "at": "2026-11-05T23:11:07.175986Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.dover.com&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.dover.com&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:11:09.176573Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.dover.com&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": true
+          },
+          "requests": [
+            {
+              "url": "https://api.certspotter.com/v1/issuances?domain=dover.com&include_subdomains=true&expand=dns_names",
+              "at": "2026-11-05T23:11:09.178413Z",
+              "status": 200,
+              "error": null
+            }
+          ],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        }
+      ],
+      "sample_boards": [],
+      "decision_at_utc": "2026-11-05T23:35:17.436312Z"
+    },
+    {
+      "id": "new_provider_symphony_talent_cws",
+      "name": "Symphony Talent CWS",
+      "category": "new provider",
+      "provider_key": "symphony_cws",
+      "status": "inconclusive_sample_shortfall",
+      "implementation": "not_implemented",
+      "known_employers_in_audited_sources": [
+        {
+          "name": "Southern California Edison",
+          "official_start_url": "https://www.edisoncareers.com/",
+          "historical_board_url": null,
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "scripts/data/direct_employer_plan.py",
+              "line": 715,
+              "note": "CWS frontend, jobsapi-google.m-cloud.io, SAP RCM C0003043182P",
+              "observed_on": "2026-10-21"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [
+        "m-cloud.io"
+      ],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": "2026-11-05T23:11:09.774643Z",
+      "sample_target": 3,
+      "sample_shortfall_reason": "Only 1 current employer samples could be measured from the audited ownership chains. Archive candidates do not establish additional customers; remaining inventory is unknown.",
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 1,
+        "current_reachable_us_postings": 10,
+        "passed": null
+      },
+      "evidence": [],
+      "decision": "One proven CWS employer advertises217 jobs and the permitted sample contains10 US jobs. The literal listing contract is resolved. One employer and10 accessible sampledUS jobs do not meet the gate; vendor-wide US inventory and two other employer samples remain unknown. Defer a generic reader until further ownership/value evidence.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "archive_shape": "Shared service hostname is not itself a count of customers.",
+      "known_employer_count_recorded": 1,
+      "known_employer_count_revalidated": 1,
+      "archive_samples": [
+        {
+          "domain": "m-cloud.io",
+          "at_utc": "2026-11-05T23:11:09.774643Z",
+          "candidate_hostname_count": null,
+          "candidate_hosts": [],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.m-cloud.io&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:11:09.774777Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.m-cloud.io&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.m-cloud.io&output=json&showNumPages=true",
+              "at": "2026-11-05T23:11:09.774835Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.m-cloud.io&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.m-cloud.io&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:11:11.775694Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.m-cloud.io&output=json&fl=url&limit=200&page=0"
+            },
+            {
+              "url": "https://api.certspotter.com/v1/issuances?domain=m-cloud.io&include_subdomains=true&expand=dns_names",
+              "at": "2026-11-05T23:11:11.878551Z",
+              "error": "api.certspotter.com: HTTP 429 / challenge at 2026-11-05T23:11:11.775996Z"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": true
+          },
+          "requests": [
+            {
+              "url": "https://api.certspotter.com/v1/issuances?domain=m-cloud.io&include_subdomains=true&expand=dns_names",
+              "at": "2026-11-05T23:11:11.775996Z",
+              "status": 429,
+              "error": null
+            }
+          ],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        }
+      ],
+      "sample_boards": [
+        {
+          "name": "Southern California Edison",
+          "board_url": "https://www.edisoncareers.com/job-search-results/",
+          "measured_at_utc": "2026-11-05T23:55:49.505967Z",
+          "final_url": "https://www.edisoncareers.com/job-search-results/",
+          "http_status": 200,
+          "outcome": "measured_partial",
+          "board_total": 217,
+          "rows_read": 10,
+          "us_rows": 10,
+          "us_share": 1.0,
+          "error": null,
+          "requests": [
+            {
+              "at": "2026-11-05T23:29:59.730461Z",
+              "method": "GET",
+              "url": "https://www.edisoncareers.com/robots.txt",
+              "status": 200,
+              "bytes": 170,
+              "body_file": ".probe/d70877f100807899b280.body"
+            },
+            {
+              "at": "2026-11-05T23:30:00.780882Z",
+              "method": "GET",
+              "url": "https://www.edisoncareers.com/job-search-results/",
+              "status": 200,
+              "bytes": 1502970,
+              "body_file": ".probe/8fd7b0ab2f6f55d972ce.body"
+            }
+          ],
+          "observed_api_base": "https://jobsapi-google.m-cloud.io/api/",
+          "observed_organization": "companies/3f187166-f813-42e8-b28c-afdaec98d345",
+          "next_observed_script": "https://www.edisoncareers.com/wp-content/plugins/cws/js/cws.jobs.js?ver=4.5.4-313",
+          "note": "Actual served Google-hook script maps the request to /api/job/search. All ten sampled records carry US and Southern California Edison brand, real open_date and descriptions. Earlier base /job404 did not measure this published contract. Total217 is advertised; no full census or second/third employer measured.",
+          "exact_api": "https://jobsapi-google.m-cloud.io/api/job/search",
+          "params": {
+            "pageSize": 10,
+            "offset": 0,
+            "companyName": "companies/3f187166-f813-42e8-b28c-afdaec98d345",
+            "orderBy": "posting_publish_time desc",
+            "callback": "CWS.jobs.jobCallback"
+          },
+          "contract_evidence": [
+            ".probe/984752019c19a3bc1249.body",
+            ".probe/3546b81a3535084c0637.body"
+          ],
+          "evidence_file": ".probe/value-cws-final.json"
+        }
+      ],
+      "decision_at_utc": "2026-11-06T00:17:00Z"
+    },
+    {
+      "id": "new_provider_pageup",
+      "name": "PageUp",
+      "category": "new provider",
+      "provider_key": "pageup",
+      "status": "inconclusive_sample_shortfall",
+      "implementation": "not_implemented",
+      "known_employers_in_audited_sources": [
+        {
+          "name": "George Mason University",
+          "official_start_url": null,
+          "historical_board_url": null,
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "user_brief",
+              "line": null,
+              "note": "Named PageUp tenant; description pages returned HTTP 202 empty challenge",
+              "observed_on": null
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "The Citadel",
+          "official_start_url": null,
+          "historical_board_url": null,
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "user_brief",
+              "line": null,
+              "note": "Named PageUp tenant; description pages returned HTTP 202 empty challenge",
+              "observed_on": null
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [
+        "pageuppeople.com"
+      ],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": "2026-11-05T23:11:11.890365Z",
+      "sample_target": 3,
+      "sample_shortfall_reason": "Only 1 current employer samples could be measured from the audited ownership chains. Archive candidates do not establish additional customers; remaining inventory is unknown.",
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 1,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [],
+      "decision": "George Mason is currently readable, contradicting the historical detail-page firewall claim. Its 147 advertised jobs are below300 and only30 were sampled. Citadel vendor evidence remains historical and the third sample is unknown; no build decision yet.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "known_employer_count_recorded": 2,
+      "known_employer_count_revalidated": 1,
+      "archive_samples": [
+        {
+          "domain": "pageuppeople.com",
+          "at_utc": "2026-11-05T23:11:11.890365Z",
+          "candidate_hostname_count": null,
+          "candidate_hosts": [],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.pageuppeople.com&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:11:11.891414Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.pageuppeople.com&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.pageuppeople.com&output=json&showNumPages=true",
+              "at": "2026-11-05T23:11:11.891532Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.pageuppeople.com&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.pageuppeople.com&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:11:13.891976Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.pageuppeople.com&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": false
+          },
+          "requests": [],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        }
+      ],
+      "sample_boards": [
+        {
+          "name": "George Mason University",
+          "board_url": "https://listings.jobs.gmu.edu/jobs/search",
+          "measured_at_utc": "2026-11-05T23:29:58.333751Z",
+          "final_url": "https://listings.jobs.gmu.edu/jobs/search",
+          "http_status": 200,
+          "outcome": "measured_partial",
+          "board_total": 147,
+          "rows_read": 30,
+          "us_rows": 30,
+          "us_share": 1.0,
+          "error": null,
+          "requests": [
+            {
+              "at": "2026-11-05T23:29:58.333906Z",
+              "method": "GET",
+              "url": "https://listings.jobs.gmu.edu/robots.txt",
+              "status": 200,
+              "bytes": 315,
+              "body_file": ".probe/8329a6981570e4295dc3.body"
+            },
+            {
+              "at": "2026-11-05T23:29:59.384254Z",
+              "method": "GET",
+              "url": "https://listings.jobs.gmu.edu/jobs/search",
+              "status": 200,
+              "bytes": 237712,
+              "body_file": ".probe/51c54ad00a07eb13180e.body"
+            }
+          ],
+          "listing_truncated": true,
+          "official_evidence_url": "https://jobs.gmu.edu/",
+          "detail_sample_url": "https://listings.jobs.gmu.edu/jobs/business-office-manager-fairfax-va-virginia-united-states-other",
+          "detail_status": 200,
+          "note": "Board advertises 147; first page exposes 30 distinct Virginia US jobs. First detail returned public JobPosting schema and PageUp apply tenant1128. Historical 202 firewall was not reproduced on this sample."
+        }
+      ],
+      "decision_at_utc": "2026-11-05T23:35:17.436312Z"
+    },
+    {
+      "id": "new_provider_peopleadmin",
+      "name": "PeopleAdmin",
+      "category": "new provider",
+      "provider_key": "peopleadmin",
+      "status": "robots_refusal",
+      "implementation": "not_implemented",
+      "known_employers_in_audited_sources": [
+        {
+          "name": "Indiana University",
+          "official_start_url": null,
+          "historical_board_url": null,
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "docs/sourcing/workday-tenant-expansion.md",
+              "line": 773,
+              "note": "Recorded as found on PeopleAdmin; historical, exact endpoint absent",
+              "observed_on": null
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "University of Georgia",
+          "official_start_url": null,
+          "historical_board_url": null,
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "docs/sourcing/workday-tenant-expansion.md",
+              "line": 773,
+              "note": "Recorded as found on PeopleAdmin; historical, exact endpoint absent",
+              "observed_on": null
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "George Washington University",
+          "official_start_url": null,
+          "historical_board_url": null,
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "docs/sourcing/workday-tenant-expansion.md",
+              "line": 773,
+              "note": "Recorded as found on PeopleAdmin; historical, exact endpoint absent",
+              "observed_on": null
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "Villanova University",
+          "official_start_url": null,
+          "historical_board_url": null,
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "docs/sourcing/workday-tenant-expansion.md",
+              "line": 773,
+              "note": "Recorded as found on PeopleAdmin; historical, exact endpoint absent",
+              "observed_on": null
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "unconfirmed_leads": [
+        {
+          "name": "Southern Methodist University",
+          "official_start_url": null,
+          "historical_board_url": null,
+          "disposition": "possibly_taleo",
+          "evidence": [
+            {
+              "path": "docs/sourcing/workday-tenant-expansion.md",
+              "line": 774,
+              "note": "Source explicitly says possibly Taleo; do not count as known",
+              "observed_on": null
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "Syracuse University",
+          "official_start_url": null,
+          "historical_board_url": null,
+          "disposition": "possibly_taleo",
+          "evidence": [
+            {
+              "path": "docs/sourcing/workday-tenant-expansion.md",
+              "line": 774,
+              "note": "Source explicitly says possibly Taleo; do not count as known",
+              "observed_on": null
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [
+        "peopleadmin.com"
+      ],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": "2026-11-05T23:11:13.918456Z",
+      "sample_target": 3,
+      "sample_shortfall_reason": null,
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 4,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [
+        {
+          "path": "docs/sourcing/workday-tenant-expansion.md",
+          "line": 769,
+          "note": "Public /postings/search HTML pattern documented; HTML-only does not imply unbuildable",
+          "observed_on": null
+        }
+      ],
+      "decision": "Four institution boards are known, below the five-employer gate. Four current robot checks prohibit collection. Search-index totals are not accessible posting counts and were not substituted; reachable US inventory remains unknown.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "known_employer_count_recorded": 4,
+      "known_employer_count_revalidated": 4,
+      "archive_samples": [
+        {
+          "domain": "peopleadmin.com",
+          "at_utc": "2026-11-05T23:11:13.918456Z",
+          "candidate_hostname_count": null,
+          "candidate_hosts": [],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.peopleadmin.com&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:11:13.918771Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.peopleadmin.com&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.peopleadmin.com&output=json&showNumPages=true",
+              "at": "2026-11-05T23:11:13.918912Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.peopleadmin.com&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.peopleadmin.com&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:11:15.919294Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.peopleadmin.com&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": false
+          },
+          "requests": [],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        }
+      ],
+      "sample_boards": [
+        {
+          "name": "Indiana University",
+          "board_url": "https://indiana.peopleadmin.com/",
+          "measured_at_utc": "2026-11-05T23:28:44.437209Z",
+          "final_url": null,
+          "http_status": null,
+          "outcome": "robots_refusal",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null,
+          "error": "robots_refusal: https://indiana.peopleadmin.com/",
+          "requests": [
+            {
+              "at": "2026-11-05T23:28:44.437365Z",
+              "method": "GET",
+              "url": "https://indiana.peopleadmin.com/robots.txt",
+              "status": 200,
+              "bytes": 171,
+              "body_file": ".probe/8b0ffb1c4f8319b2414a.body"
+            }
+          ],
+          "note": "Board path locally refused by current robots rules; no prohibited listing HTTP request was sent. Inventory remains unknown, not zero.",
+          "official_evidence_url": "https://kokomo.iu.edu/academic-affairs/academic-resources/faculty-search-screen.html",
+          "diagnostic_parser_returned_counts": {
+            "rows_read": 0
+          }
+        },
+        {
+          "name": "University of Georgia",
+          "board_url": "https://www.ugajobsearch.com/",
+          "measured_at_utc": "2026-11-05T23:29:56.937382Z",
+          "final_url": null,
+          "http_status": null,
+          "outcome": "robots_refusal",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null,
+          "error": "robots_refusal: https://www.ugajobsearch.com/",
+          "requests": [
+            {
+              "at": "2026-11-05T23:29:56.940185Z",
+              "method": "GET",
+              "url": "https://www.ugajobsearch.com/robots.txt",
+              "status": 200,
+              "bytes": 171,
+              "body_file": ".probe/f87c19ca4eb9ded44c19.body"
+            }
+          ],
+          "note": "Board path locally refused by current robots rules; no prohibited listing HTTP request was sent. Inventory remains unknown, not zero.",
+          "official_evidence_url": "https://www.uga.edu/faculty-and-staff",
+          "diagnostic_parser_returned_counts": {
+            "rows_read": 0
+          }
+        },
+        {
+          "name": "George Washington University",
+          "board_url": "https://www.gwu.jobs/",
+          "measured_at_utc": "2026-11-05T23:29:57.419586Z",
+          "final_url": null,
+          "http_status": null,
+          "outcome": "robots_refusal",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null,
+          "error": "robots_refusal: https://www.gwu.jobs/",
+          "requests": [
+            {
+              "at": "2026-11-05T23:29:57.419837Z",
+              "method": "GET",
+              "url": "https://www.gwu.jobs/robots.txt",
+              "status": 200,
+              "bytes": 171,
+              "body_file": ".probe/57086d2ae876f25cd05d.body"
+            }
+          ],
+          "note": "Board path locally refused by current robots rules; no prohibited listing HTTP request was sent. Inventory remains unknown, not zero.",
+          "official_evidence_url": "https://careers.gwu.edu/our-opportunities",
+          "diagnostic_parser_returned_counts": {
+            "rows_read": 0
+          }
+        },
+        {
+          "name": "Villanova University",
+          "board_url": "https://jobs.villanova.edu/postings/search",
+          "measured_at_utc": "2026-11-05T23:28:40.811457Z",
+          "final_url": null,
+          "http_status": null,
+          "outcome": "robots_refusal",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null,
+          "error": "robots_refusal: https://jobs.villanova.edu/postings/search",
+          "requests": [
+            {
+              "at": "2026-11-05T23:28:40.811695Z",
+              "method": "GET",
+              "url": "https://jobs.villanova.edu/robots.txt",
+              "status": 200,
+              "bytes": 171,
+              "body_file": ".probe/e7602c5cd32e3bdf7408.body"
+            }
+          ],
+          "note": "Board path locally refused by current robots rules; no prohibited listing HTTP request was sent. Inventory remains unknown, not zero.",
+          "official_evidence_url": "https://jobs.villanova.edu/postings/search",
+          "diagnostic_parser_returned_counts": {
+            "rows_read": 0
+          }
+        }
+      ],
+      "decision_at_utc": "2026-11-05T23:35:17.436312Z"
+    },
+    {
+      "id": "new_provider_interfolio",
+      "name": "Interfolio",
+      "category": "new provider",
+      "provider_key": "interfolio",
+      "status": "inconclusive_no_verified_employer_samples",
+      "implementation": "not_implemented",
+      "known_employers_in_audited_sources": [],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [
+        "interfolio.com"
+      ],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": "2026-11-05T23:11:15.927722Z",
+      "sample_target": 3,
+      "sample_shortfall_reason": "Only 0 current employer samples could be measured from the audited ownership chains. Archive candidates do not establish additional customers; remaining inventory is unknown.",
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 0,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [
+        {
+          "path": "docs/coverage/ats-vendor-coverage.md",
+          "line": 315,
+          "note": "Higher-education vendor grouping only; no named tenant in audited evidence",
+          "observed_on": "2026-08-18"
+        }
+      ],
+      "decision": "No current employer-owned sample chain was found in the audited repository evidence or bounded archive results. Common Crawl query paths were robots-refused; CT infrastructure names are not proven employers. Certspotter stopped after HTTP429, so later domains remain unmeasured. Historical counts are retained separately. Do not build yet; do not label not_worth_it while the accessible US inventory remains unknown.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "known_employer_count_recorded": 0,
+      "known_employer_count_revalidated": 0,
+      "archive_samples": [
+        {
+          "domain": "interfolio.com",
+          "at_utc": "2026-11-05T23:11:15.927722Z",
+          "candidate_hostname_count": null,
+          "candidate_hosts": [],
+          "bounded_commoncrawl_pages": 1,
+          "complete_census": false,
+          "failures": [
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.interfolio.com&output=json&fl=url&limit=200",
+              "at": "2026-11-05T23:11:15.927922Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.interfolio.com&output=json&fl=url&limit=200"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.interfolio.com&output=json&showNumPages=true",
+              "at": "2026-11-05T23:11:15.928013Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.interfolio.com&output=json&showNumPages=true"
+            },
+            {
+              "url": "https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.interfolio.com&output=json&fl=url&limit=200&page=0",
+              "at": "2026-11-05T23:11:17.928558Z",
+              "error": "robots_refusal: https://index.commoncrawl.org/CC-MAIN-2026-43-index?url=%2A.interfolio.com&output=json&fl=url&limit=200&page=0"
+            }
+          ],
+          "sources_attempted": {
+            "commoncrawl": true,
+            "certspotter": false
+          },
+          "requests": [],
+          "note": "Archive hostname candidates are neither current customers nor ownership proof; one bounded CC page is not an exhaustive vendor census."
+        }
+      ],
+      "sample_boards": [],
+      "decision_at_utc": "2026-11-05T23:35:17.436312Z"
+    },
+    {
+      "id": "new_provider_directemployers_jobs",
+      "name": "DirectEmployers jobs",
+      "category": "new provider",
+      "provider_key": "directemployers_nlx",
+      "status": "value_passed_reachable_us_requisitions",
+      "implementation": "implemented_directemployers_nlx_in_separate_worktree",
+      "known_employers_in_audited_sources": [
+        {
+          "name": "Southern Company",
+          "official_start_url": null,
+          "historical_board_url": "https://southerncompany.jobs/",
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "scripts/data/direct_employer_plan.py",
+              "line": 777,
+              "note": "DirectEmployers .jobs surface recorded; underlying ATS unresolved",
+              "observed_on": "2026-10-21"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "Burns & McDonnell",
+          "official_start_url": null,
+          "historical_board_url": "https://burnsmcd.jobs/",
+          "disposition": "unmeasured",
+          "evidence": [
+            {
+              "path": "scripts/data/direct_employer_plan.py",
+              "line": 780,
+              "note": "Official link recorded; underlying ATS unresolved",
+              "observed_on": "2026-10-21"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": null,
+      "sample_target": 3,
+      "sample_shortfall_reason": null,
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 3,
+        "current_reachable_us_postings": 995,
+        "passed": true,
+        "passed_by": "reachable_us_requisitions"
+      },
+      "evidence": [],
+      "decision": "Implemented a distinct generic public NLX provider after 650 US location rows proved 300 distinct requisitions. The final registered read completed 2,760 US location GUID rows and 995 distinct requisitions; every row prints Stantec and United States. Burns returned 504 and Southern Company returned a challenge; neither is seeded. Archive tenant counts remain unknown. The actual onboarding probe retains its 400-requisition budget limit.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/42",
+      "archive_shape": "Employer-owned .jobs sites share NLX API infrastructure; generic .jobs CT results would not establish customer identities. Current census remains unknown.",
+      "known_employer_count_recorded": 2,
+      "known_employer_count_revalidated": 3,
+      "current_captured_vendor_observations": [
+        {
+          "name": "Stantec",
+          "official_start_url": "https://stantec.com/",
+          "captured_url": "https://stantec.jobs/",
+          "captured_at_utc": "2026-11-05T22:56:04.103560Z",
+          "body_file": ".probe/eec957afcd96e6d5a63e.body",
+          "literal": "https://seo.nlx.org/stantec/sample_files/logo.svg",
+          "note": "Employer-linked stantec.jobs now serves a Nuxt shell; actual listing endpoint pending literal script inspection.",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        },
+        {
+          "name": "Burns & McDonnell",
+          "official_start_url": "https://burnsmcd.com/",
+          "captured_url": "https://www.burnsmcd.com/",
+          "captured_at_utc": "2026-11-05T22:55:49.231860Z",
+          "body_file": ".probe/ae655af97d1630048120.body",
+          "literal": "https://burnsmcd.jobs/",
+          "note": "Current official careers page confirms board destination; board response not captured in this child pass.",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "current_blocked_observations": [
+        {
+          "name": "Southern Company",
+          "official_start_url": "https://southerncompany.com/",
+          "captured_url": "https://southerncompany.jobs/?vs=2925&utm_source=southerncompany.com-DE&utm_medium=Other&utm_campaign=southerncompany.com&_ga=2.246996292.1393374614.1612792799-630953019.1598387569",
+          "captured_at_utc": "2026-11-05T22:55:45.203701Z",
+          "body_file": ".probe/c4e211116bc416a6591c.body",
+          "literal": "Request unsuccessful. Incapsula incident ID",
+          "note": "HTTP200 challenge. Stop this host; do not treat as empty board or sample again.",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "sample_boards": [
+        {
+          "name": "Stantec",
+          "official_start_url": "https://stantec.com/",
+          "captured_url": "https://stantec.jobs/",
+          "captured_at_utc": "2026-11-05T22:56:04.103560Z",
+          "body_file": ".probe/eec957afcd96e6d5a63e.body",
+          "literal": "https://seo.nlx.org/stantec/sample_files/logo.svg",
+          "note": "USshare1.0 describes the sampled US-filtered pages. Advertised global USshare2760/7077 is separate. The frontend filterFalsy drops offset0; including it in an earlier probe repeated page1. That earlier probe was stopped and does not contribute650/300 counts.",
+          "board_total": 7077,
+          "rows_read": 2760,
+          "us_rows": 2760,
+          "us_share": 1.0,
+          "outcome": "measured_complete_us_scope",
+          "measured_at_utc": "2026-11-06T00:17:57.988118Z",
+          "board_us_total_advertised": 2760,
+          "distinct_requisitions": 995,
+          "listing_truncated": false,
+          "public_country_filter": "https://stantec.jobs/locations/usa/jobs",
+          "exact_api": "https://prod-search-api.jobsyn.org/api/v1/solr/search",
+          "request_headers": {
+            "X-Origin": "stantec.jobs"
+          },
+          "query": {
+            "location": "usa",
+            "page": 1,
+            "num_items": 50
+          },
+          "evidence_file": ".probe/value-nlx-live.json",
+          "gate_measurement": {
+            "rows_read": 650,
+            "us_rows": 650,
+            "distinct_requisitions": 300,
+            "measured_at_utc": "2026-11-05T23:52:57.574242Z",
+            "evidence_file": ".probe/value-stantec-us-corrected.json"
+          }
+        },
+        {
+          "name": "Southern Company",
+          "official_start_url": "https://southerncompany.com/",
+          "captured_url": "https://southerncompany.jobs/?vs=2925&utm_source=southerncompany.com-DE&utm_medium=Other&utm_campaign=southerncompany.com&_ga=2.246996292.1393374614.1612792799-630953019.1598387569",
+          "captured_at_utc": "2026-11-05T22:55:45.203701Z",
+          "body_file": ".probe/c4e211116bc416a6591c.body",
+          "literal": "Request unsuccessful. Incapsula incident ID",
+          "note": "HTTP200 challenge. Stop this host; do not treat as empty board or sample again.",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null,
+          "outcome": "blocked_challenge"
+        },
+        {
+          "name": "Burns & McDonnell",
+          "board_url": "https://burnsmcd.jobs/jobs",
+          "measured_at_utc": "2026-11-05T23:50:18.939631Z",
+          "final_url": "https://burnsmcd.jobs/jobs/",
+          "http_status": 504,
+          "outcome": "api_unavailable",
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null,
+          "error": null,
+          "requests": [
+            {
+              "at": "2026-11-05T23:32:38.555198Z",
+              "method": "GET",
+              "url": "https://burnsmcd.jobs/robots.txt",
+              "status": 200,
+              "bytes": 109,
+              "body_file": ".probe/7f919cfcc12cb40adbf5.body"
+            },
+            {
+              "at": "2026-11-05T23:32:39.605472Z",
+              "method": "GET",
+              "url": "https://burnsmcd.jobs/jobs",
+              "status": 301,
+              "bytes": 166,
+              "body_file": ".probe/1d742ad42d6bbb9edd09.body"
+            },
+            {
+              "at": "2026-11-05T23:32:40.655860Z",
+              "method": "GET",
+              "url": "https://burnsmcd.jobs/jobs/",
+              "status": 200,
+              "bytes": 62625,
+              "body_file": ".probe/ef4ce28f60f36c02927d.body"
+            }
+          ],
+          "note": "Employer served literal Nuxt API contract; first listing request returned504. No zero inventory claim.",
+          "exact_api": "https://prod-search-api.jobsyn.org/api/v1/solr/search",
+          "evidence_file": ".probe/value-jobsyn.json"
+        }
+      ],
+      "decision_at_utc": "2026-11-06T00:17:57.988118Z",
+      "frontend_contract_evidence": [
+        {
+          "url": "https://stantec.jobs/_nuxt/CxHNmurD2.js",
+          "body_file": ".probe/f9081a925276923082a1.body",
+          "note": "Published pagination, filterFalsy and shouldForceSolrSearch logic"
+        },
+        {
+          "url": "https://stantec.jobs/_nuxt/DQqzE7jn.js",
+          "body_file": ".probe/4f00fd44960590cd06d8.body",
+          "note": "GET v1/{source}/search and URLSearchParams"
+        },
+        {
+          "url": "https://stantec.jobs/_nuxt/D3KNJQhc.js",
+          "body_file": ".probe/46194f8cedf7bbf65b58.body",
+          "note": "Public API base and X-Origin header"
+        },
+        {
+          "url": "https://stantec.jobs/_nuxt/BfULQbXb.js",
+          "body_file": ".probe/0f105aa99f99fb76f4ae.body",
+          "note": "Literal job URL construction from normalized location, title_slug, GUID"
+        }
+      ],
+      "implementation_branch": "boards/provider-directemployers-nlx",
+      "implementation_worktree": "D:/Aithrex/.worktrees-boards/provider-directemployers-nlx",
+      "latest_registered_validation": {
+        "at": "2026-11-06T00:17:57.988118Z",
+        "endpoint": {
+          "vendor": "directemployers_nlx",
+          "tenant": "stantec",
+          "host": "stantec.jobs",
+          "site": "usa"
+        },
+        "jobs": 995,
+        "truncated": false,
+        "options": {
+          "_directemployers_nlx_robots": {
+            "https://stantec.jobs": "User-agent: *\nDisallow: /*feed/\nDisallow: /*feeds/\nAllow: /\nSitemap: https://stantec.jobs/sitemaps/index.xml",
+            "https://prod-search-api.jobsyn.org": ""
+          },
+          "directemployers_nlx_total": 2760,
+          "directemployers_nlx_guid_count": 2760
+        },
+        "location_rows": 2760,
+        "us_jobs": 995,
+        "onboarding": {
+          "at": "2026-11-06T00:19:00Z",
+          "vendor": "directemployers_nlx",
+          "status": "budget_limited",
+          "source_reported": null,
+          "parsed": 400,
+          "unique_ids": 400,
+          "duplicate_rows": 0,
+          "requisitions": 400,
+          "filtered_non_requisition": 0,
+          "filtered_other_entity": 0,
+          "http_statuses": [
+            "200",
+            "404"
+          ],
+          "sample_titles": [
+            "Project Manager, PD&E",
+            "Commissioning Consultant",
+            "Hydrogeologist"
+          ],
+          "detail": "",
+          "member_key": "directemployers_nlx-stantec-usa"
+        },
+        "live_provider_check": {
+          "vendor": "directemployers_nlx",
+          "status": "OK",
+          "jobs": 5,
+          "elapsed": 1.34,
+          "detail": "",
+          "tenant": "directemployers_nlx-stantec-usa",
+          "sample_title": "Project Manager, PD&E",
+          "sample_url": "https://stantec.jobs/orlando-fl/project-manager-pde/3E2E7A1E031F4D3F8212CD9BAECBAD85/job/",
+          "sample_location": "Orlando, FL, United States; Coral Gables, FL, United States;",
+          "sample_posted_at": "2026-11-05T21:06:17.866000+00:00"
+        },
+        "replay_note": "Registered validation and live_provider_check reuse same-turn guarded HTTP responses; no MongoDB or dotenv."
+      },
+      "registered_validation_evidence": ".probe/value-nlx-live.json",
+      "registered_validation_history": [
+        {
+          "at": "2026-11-06T00:14:45.198489Z",
+          "endpoint": {
+            "vendor": "directemployers_nlx",
+            "tenant": "stantec",
+            "host": "stantec.jobs",
+            "site": "usa"
+          },
+          "error": "Refusal: robots_unverified HTTP 504: https://prod-search-api.jobsyn.org"
+        }
+      ],
+      "implementation_commit": "7bce0d9b3aa32cbff1fd52f9f3dbdca0da0cdc77"
+    },
+    {
+      "id": "new_provider_capgemini_own_api",
+      "name": "Capgemini own API",
+      "category": "new provider",
+      "provider_key": "custom_capgemini",
+      "status": "existing_reader_revalidated",
+      "implementation": "existing_successfactors_rmk_crawl_seed",
+      "known_employers_in_audited_sources": [
+        {
+          "name": "Capgemini",
+          "official_start_url": "https://careers.capgemini.com/",
+          "historical_board_url": null,
+          "disposition": "existing_crawl_seed",
+          "evidence": [
+            {
+              "path": "shared/python/services/job_ingest_worker.py",
+              "line": 702,
+              "note": "Existing Capgemini RMK seed",
+              "observed_on": null
+            },
+            {
+              "path": "shared/python/services/ats_providers/successfactors.py",
+              "line": 155,
+              "note": "Country mapping explicitly validated on this host",
+              "observed_on": "2026-10-07"
+            }
+          ],
+          "revalidated_at_utc": null,
+          "board_total": null,
+          "rows_read": null,
+          "us_rows": null,
+          "us_share": null
+        }
+      ],
+      "unconfirmed_leads": [],
+      "historical_archive_measurements": [],
+      "archive_domains_to_measure": [],
+      "archive_current_tenant_count": null,
+      "archive_current_at_utc": null,
+      "sample_target": 1,
+      "sample_shortfall_reason": "Only 1 current employer samples could be measured from the audited ownership chains. Archive candidates do not establish additional customers; remaining inventory is unknown.",
+      "threshold": {
+        "known_employers_min": 5,
+        "reachable_us_postings_min": 300,
+        "operator": "OR",
+        "current_known_employers": 1,
+        "current_reachable_us_postings": null,
+        "passed": null
+      },
+      "evidence": [
+        {
+          "path": "docs/sourcing/h1b-sponsor-board-discovery.md",
+          "line": 186,
+          "note": "Older custom API route unknown; later RMK implementation supersedes the missing-reader assumption",
+          "observed_on": "2026-09-16"
+        }
+      ],
+      "decision": "Existing SuccessFactors RMK seed returned75 jobs,19 explicitly US, within a seven-second guarded sample; truncated. Reuse the existing reader. No custom cg-jobstream API request or new provider is needed to establish reachable listings.",
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
+      "archive_shape": "Single-employer first-party API; three tenant samples do not apply.",
+      "known_employer_count_recorded": 1,
+      "known_employer_count_revalidated": 1,
+      "sample_boards": [
+        {
+          "name": "Capgemini",
+          "endpoint": {
+            "vendor": "successfactors",
+            "tenant": "capgemini",
+            "host": "careers.capgemini.com",
+            "display_name": "Capgemini"
+          },
+          "measured_at_utc": "2026-11-05T23:29:29.501364Z",
+          "board_total": null,
+          "rows_read": 75,
+          "us_rows": 19,
+          "us_share": 0.25333333333333335,
+          "us_count_semantics": "Explicit US labels only; lower bound, not full US inventory",
+          "listing_truncated": true,
+          "error": null,
+          "requests": [
+            {
+              "at": "2026-11-05T23:29:29.501941Z",
+              "method": "GET",
+              "url": "https://careers.capgemini.com/robots.txt",
+              "status": 200,
+              "bytes": 252,
+              "body_file": ".probe/db3528b706c3343d72cb.body"
+            },
+            {
+              "at": "2026-11-05T23:29:30.996625Z",
+              "method": "GET",
+              "url": "https://careers.capgemini.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+              "status": 200,
+              "bytes": 97043,
+              "body_file": ".probe/84f007eec102534a96e3.body"
+            },
+            {
+              "at": "2026-11-05T23:29:32.047065Z",
+              "method": "GET",
+              "url": "https://careers.capgemini.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=25",
+              "status": 200,
+              "bytes": 98346,
+              "body_file": ".probe/c5fced1b532f818916a4.body"
+            },
+            {
+              "at": "2026-11-05T23:29:33.097324Z",
+              "method": "GET",
+              "url": "https://careers.capgemini.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=50",
+              "status": 200,
+              "bytes": 97608,
+              "body_file": ".probe/feb904658be115a5e812.body"
+            },
+            {
+              "at": "2026-11-05T23:29:34.147708Z",
+              "method": "GET",
+              "url": "https://careers.capgemini.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=75",
+              "status": 200,
+              "bytes": 97488,
+              "body_file": ".probe/8478470fcd79e6975993.body"
+            }
+          ]
+        }
+      ],
+      "decision_at_utc": "2026-11-05T23:35:17.436312Z"
+    }
+  ],
+  "captured_evidence_updated_at_utc": "2026-11-05T23:08:26.302957Z",
+  "updated_at_utc": "2026-11-06T00:17:57.988118Z",
+  "counts": {
+    "candidates": 17,
+    "built": 2,
+    "not_worth_it": 0,
+    "value_gates_passed": 2
+  },
+  "unresolved_sample_policy": "A missing three-board sample set or blocked inventory is inconclusive, not evidence that a vendor has zero US value.",
+  "supplemental_candidates": [
+    {
+      "name": "ClearCompany",
+      "employer": "Mitsubishi Electric Power Products (MEPPI)",
+      "status": "needs_new_provider:clearcompany",
+      "known_employers": 1,
+      "measured_us_jobs": 81,
+      "advertised_jobs": 81,
+      "distinct_ids": 81,
+      "ownership_chain": [
+        "https://apply.clearcompany.com/meppi?noheader=False",
+        "https://careers-content.clearcompany.com/js/v1/career-site.js?hosted=true",
+        "https://careers-content.clearcompany.com/js/v1/career-site-no-polyfill.js?siteId=c441415b-fc94-1caf-d0db-a486f4316170&hosted=true&contentSelector=",
+        "https://careers-api.clearcompany.com/v1/c441415b-fc94-1caf-d0db-a486f4316170"
+      ],
+      "body_file": ".probe/d2d5a2be18de88367c42.body",
+      "decision": "One employer and81US jobs below new-provider gate; not a custom employer adapter. Other customers and archive census remain unknown."
+    }
+  ]
+}

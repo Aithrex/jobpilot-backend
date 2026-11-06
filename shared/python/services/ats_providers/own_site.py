@@ -93,7 +93,7 @@ import html as _html
 import json
 import re
 from typing import Any, Dict, Iterator, List, Optional, Tuple
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from services.ats_providers.base import (DATE_EXACT, DATE_UNKNOWN, AtsProvider,
                                          ChallengeError, CrawlPolicy, Endpoint,
@@ -106,8 +106,8 @@ VENDOR = "careers_page"
 MIN_LINKS = 2
 #: Explicit bounds, replacing the old 60-link cap and single page.
 MAX_LINKS_PER_PAGE = 200
-MAX_PAGES = 10
-MAX_POSTINGS = 500
+MAX_PAGES = 100
+MAX_POSTINGS = 2000
 #: Kept for callers that imported the old name.
 MAX_LINKS = MAX_LINKS_PER_PAGE
 
@@ -120,6 +120,7 @@ _JOB_PATH_RE = re.compile(
     r"/(jobs?|careers?|positions?|openings?|vacanc(?:y|ies)|opportunit(?:y|ies)|"
     r"job-openings|current-openings|open-positions|join-us|employment)"
     r"/(?P<slug>[^/?#]{6,120})/?$", re.IGNORECASE)
+_JOB_QUERY_PATH_RE = re.compile(r"/(?:job[-_]?details?|position[-_]?details?)/?$", re.IGNORECASE)
 #: The Comeet WordPress plugin renders positions on the employer's own site
 #: as `/careers/co/<location>/<position uid>/<slug>/all` (Upwind, observed
 #: 2026-10-22). The uid ("AE.E69") is Comeet's stable position id.
@@ -158,6 +159,9 @@ _RELAXED_SECTION_RE = re.compile(
     r"view all|see all|all jobs|open positions|open roles|search)\b"
     r"|@|^\W*$",
     re.IGNORECASE)
+_CALL_TO_ACTION_RE = re.compile(
+    r"^(?:take|choose)\b.*\b(?:path|route|journey)\b|"
+    r"^skip\s+(?:the|your)\s+(?:resume|cv|application)\b", re.IGNORECASE)
 
 #: A card's link often wraps its button too: "Software Engineer More Details".
 _BUTTON_TEXT_RE = re.compile(
@@ -234,14 +238,21 @@ _FORM_HOST_RE = re.compile(
     re.IGNORECASE)
 
 _TITLE_KEYS = ("title", "jobTitle", "positionTitle", "name")
-_ID_KEYS = ("id", "jobId", "uuid", "requisitionId", "reqId", "jobReqId", "slug")
+_ID_KEYS = ("ashby_id", "id", "jobId", "uuid", "requisitionId", "reqId", "jobReqId", "slug")
 _STRONG_KEYS = frozenset({"department", "departmentName", "employmentType", "jobType",
                           "applyUrl", "applicationUrl", "applyLink", "workplaceType",
-                          "workspaceType", "site", "requisitionId", "jobReqId"})
+                          "workspaceType", "site", "requisitionId", "jobReqId",
+                          "department_name", "employment_type", "external_link"})
 _EVIDENCE_KEYS = _STRONG_KEYS | frozenset({
     "location", "locations", "locationName", "city", "country", "countryCode",
     "descriptionHtml", "description", "jobDescription", "publishedAt", "postedAt",
-    "datePosted", "postedDate", "remote", "isRemote", "requirementsHtml"})
+    "datePosted", "postedDate", "remote", "isRemote", "requirementsHtml",
+    "location_name", "ashby_published_date", "full_job_description", "all_locations"})
+
+_FLIGHT_PUSH_RE = re.compile(r"self\.__next_f\.push\(")
+_FLIGHT_RECORD_RE = re.compile(r"(?:^|\n)[0-9a-f]+:(?=[\[{])")
+_HYDRATION_CHAR_CAP = 4_000_000
+_HYDRATION_NODE_CAP = 200_000
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +282,8 @@ def looks_like_a_job_title(text: str) -> bool:
 
 def _relaxed_title(text: str) -> bool:
     text = _ws(text)
+    if _CALL_TO_ACTION_RE.search(text):
+        return False
     if not (3 <= len(text) <= 90) or len(text.split()) > 12:
         return False
     if _BUTTON_ONLY_RE.match(text) or not re.search(r"[^\W\d_]{2}", text):
@@ -317,11 +330,25 @@ def _pattern_key(url: str, host: str) -> str:
         return "linkedin"
     if _COMEET_PATH_RE.search(urlparse(url).path):
         return "comeet"
+    if _query_job_id(url):
+        return urlparse(url).path.rstrip("/").lower() + "?jobId"
     jm = _JOB_PATH_RE.search(urlparse(url).path)
     if not jm:
         return ""
     path = urlparse(url).path
     return path[: jm.start("slug")].lower()
+
+
+def _query_job_id(url: str) -> str:
+    """An explicit job-detail path and one unambiguous published job ID."""
+    parsed = urlparse(url)
+    if not _JOB_QUERY_PATH_RE.search(parsed.path):
+        return ""
+    values = [value for key, items in parse_qs(parsed.query).items()
+              if key.lower() in ("jobid", "job_id", "requisitionid") for value in items]
+    if len(values) != 1 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", values[0]):
+        return ""
+    return values[0]
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +369,9 @@ def ld_postings(body: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for raw in _LD_RE.findall(body or ""):
         try:
-            data = json.loads(raw.strip())
+            # Some public JSON-LD embeds literal line breaks in descriptions.
+            # strict=False accepts those string characters; it executes no code.
+            data = json.loads(raw.strip(), strict=False)
         except (TypeError, ValueError):
             continue
         stack = list(data) if isinstance(data, list) else [data]
@@ -411,38 +440,84 @@ def _ld_date(ld: Dict[str, Any]) -> Tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 def _job_like(obj: Dict[str, Any]) -> bool:
+    if obj.get("is_listed") is False:
+        return False
     title = next((obj.get(k) for k in _TITLE_KEYS if isinstance(obj.get(k), str)), None)
     ident = next((obj.get(k) for k in _ID_KEYS
                   if isinstance(obj.get(k), (str, int)) and str(obj.get(k)).strip()), None)
-    if not title or ident is None or not _relaxed_title(title):
+    published_apply = any(isinstance(obj.get(k), str) and obj[k].startswith("https://")
+                          for k in ("applyUrl", "applicationUrl", "applyLink", "external_link"))
+    title_ok = _relaxed_title(title or "") or (
+        bool(title) and 6 <= len(title) <= 200 and bool(_ROLE_RE.search(title)) and published_apply)
+    if not title or ident is None or not title_ok:
         return False
     keys = set(obj)
     return len(keys & _EVIDENCE_KEYS) >= 3 and bool(keys & _STRONG_KEYS)
 
 
-def hydrated_jobs(body: str) -> List[Dict[str, Any]]:
+def _flight_payloads(body: str, info: Dict[str, Any]) -> Iterator[Any]:
+    """Decode public Next flight JSON strings; never execute JavaScript."""
+    decoder = json.JSONDecoder()
+    if not _FLIGHT_PUSH_RE.search(body):
+        return
+    if len(body) > _HYDRATION_CHAR_CAP:
+        info["hydration_truncated"] = True
+    text = body[:_HYDRATION_CHAR_CAP]
+    parts = []
+    for index, match in enumerate(_FLIGHT_PUSH_RE.finditer(text)):
+        if index >= 1000:
+            info["hydration_truncated"] = True
+            break
+        try:
+            value, _ = decoder.raw_decode(text, match.end())
+        except (TypeError, ValueError):
+            info["hydration_truncated"] = True
+            continue
+        if isinstance(value, list) and len(value) == 2 and value[0] == 1 and isinstance(value[1], str):
+            parts.append(value[1])
+    stream = "".join(parts)
+    for match in _FLIGHT_RECORD_RE.finditer(stream):
+        try:
+            value, _ = decoder.raw_decode(stream, match.end())
+        except (TypeError, ValueError):
+            info["hydration_truncated"] = True
+            continue
+        yield value
+
+
+def hydrated_jobs(body: str, info: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Job-shaped objects in the page's own hydration payloads, deduped."""
     found: Dict[str, Dict[str, Any]] = {}
+    info = info if info is not None else {}
+    payloads = []
     for pattern in _HYDRATION_RES:
         for raw in pattern.findall(body or ""):
             try:
                 data = json.loads(raw)
             except (TypeError, ValueError):
                 continue
-            stack: List[Any] = [data]
-            visited = 0
-            while stack and visited < 200000:
-                visited += 1
-                node = stack.pop()
-                if isinstance(node, dict):
-                    if _job_like(node):
-                        key = str(next(node.get(k) for k in _ID_KEYS
-                                       if node.get(k) not in (None, "")))
-                        found.setdefault(key, node)
-                        continue
-                    stack.extend(node.values())
-                elif isinstance(node, list):
-                    stack.extend(node)
+            payloads.append(data)
+    payloads.extend(_flight_payloads(body or "", info))
+    visited = 0
+    for data in payloads:
+        stack: List[Any] = [data]
+        while stack and visited < _HYDRATION_NODE_CAP:
+            visited += 1
+            node = stack.pop()
+            if isinstance(node, dict):
+                if isinstance(node.get("jobs"), list) and isinstance(node.get("jobsCount"), int):
+                    info["hydrated_total"] = max(info.get("hydrated_total", 0), node["jobsCount"])
+                if _job_like(node):
+                    key = str(next(node.get(k) for k in _ID_KEYS
+                                   if node.get(k) not in (None, "")))
+                    found.setdefault(key, node)
+                    continue
+                stack.extend(node.values())
+            elif isinstance(node, list):
+                stack.extend(node)
+        if stack:
+            info["hydration_truncated"] = True
+            break
     return list(found.values())
 
 
@@ -452,10 +527,11 @@ def _hydrated_row(obj: Dict[str, Any], page_url: str) -> Optional[Dict[str, Any]
     rid = slugify(ident, 80) if not re.match(r"^[A-Za-z0-9-]{1,80}$", ident) else ident
     if not title or not rid:
         return None
-    apply = next((str(obj.get(k)) for k in ("applyUrl", "applicationUrl", "applyLink")
+    apply = next((str(obj.get(k)) for k in ("applyUrl", "applicationUrl", "applyLink", "external_link")
                   if isinstance(obj.get(k), str) and obj.get(k).startswith(("https://", "mailto:"))),
                  "")
-    loc_val = obj.get("site") or obj.get("locationName") or obj.get("location") or obj.get("city")
+    loc_val = obj.get("all_locations") or obj.get("site") or obj.get("locationName") or obj.get("location_name") or obj.get("location") or obj.get("city")
+    locations = [str(x).strip() for x in obj.get("all_locations", []) if isinstance(x, str) and x.strip()] if isinstance(obj.get("all_locations"), list) else []
     if isinstance(loc_val, dict):
         loc_val = loc_val.get("name") or loc_val.get("city")
     if isinstance(loc_val, list):
@@ -464,17 +540,21 @@ def _hydrated_row(obj: Dict[str, Any], page_url: str) -> Optional[Dict[str, Any]
                   else obj["country"].get("name"))
     desc_parts = [html_to_text(obj.get(k) or "") for k in
                   ("descriptionHtml", "description", "jobDescription", "requirementsHtml",
-                   "responsibilitiesHtml") if isinstance(obj.get(k), str)]
+                   "responsibilitiesHtml", "full_job_description") if isinstance(obj.get(k), str)]
     raw_posted = next((obj.get(k) for k in ("publishedAt", "postedAt", "datePosted",
-                                            "postedDate") if obj.get(k)), None)
+                                            "postedDate", "ashby_published_date") if obj.get(k)), None)
     posted = "" if (not raw_posted or looks_minted_now(raw_posted)) else to_iso(raw_posted)
     work = _ws(obj.get("workspaceType") or obj.get("workplaceType") or "")
+    detail = str(obj.get("slug") or "")
+    detail = urljoin(page_url, detail) if detail.startswith(("/", "https://")) else ""
+    if detail and not _same_site(detail, urlparse(page_url).hostname or ""):
+        detail = ""
     return {
-        "id": rid, "title": title, "url": apply or page_url, "detail_url": "",
+        "id": rid, "title": title, "url": apply or detail or page_url, "detail_url": detail,
         "apply_url": apply or page_url,
-        "location": _ws(loc_val), "country": country,
-        "department": _ws(obj.get("department") or obj.get("departmentName") or ""),
-        "employment_type": _ws(obj.get("employmentType") or obj.get("jobType") or ""),
+        "location": _ws(loc_val), "country": country, "locations": locations,
+        "department": _ws(obj.get("department") or obj.get("departmentName") or obj.get("department_name") or ""),
+        "employment_type": _ws(obj.get("employmentType") or obj.get("jobType") or obj.get("employment_type") or ""),
         "description": "\n\n".join(p for p in desc_parts if p.strip()),
         "posted_at": posted, "raw_posted": _ws(raw_posted),
         "application_method": application_method_for(apply) if apply else "page",
@@ -564,7 +644,8 @@ def _card_fields(card: Any, title: str) -> Dict[str, str]:
     return out
 
 
-def _link_rows(doc: Any, page_url: str, host: str) -> List[Dict[str, Any]]:
+def _link_rows(doc: Any, page_url: str, host: str,
+               info: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     page = page_url.split("#")[0].rstrip("/")
     anchors = []
     for anchor in doc.xpath("//a[@href]"):
@@ -581,7 +662,7 @@ def _link_rows(doc: Any, page_url: str, host: str) -> List[Dict[str, Any]]:
         elif not url.startswith("https://") or not _same_site(url, host) or \
                 url.rstrip("/") == page or not (
                     _JOB_PATH_RE.search(urlparse(url).path)
-                    or _COMEET_PATH_RE.search(urlparse(url).path)):
+                    or _COMEET_PATH_RE.search(urlparse(url).path) or _query_job_id(url)):
             continue
         anchor.set("_resolved", url)
         anchors.append((anchor, url))
@@ -592,7 +673,9 @@ def _link_rows(doc: Any, page_url: str, host: str) -> List[Dict[str, Any]]:
     for anchor, url in anchors:
         # A link that wraps several blocks (name, location, type) names its
         # title block by class; prefer it to the joined text.
-        named = [el for el in anchor.iter() if el is not anchor and isinstance(el.tag, str)
+        labels = set(str(anchor.get("aria-labelledby") or "").split())
+        named = [el for el in anchor.iter() if el.get("id") in labels]
+        named = named or [el for el in anchor.iter() if el is not anchor and isinstance(el.tag, str)
                  and re.search(r"(position|job|role)[-_]?(name|title)|\btitle\b",
                                str(el.get("class") or ""), re.IGNORECASE)]
         raw_text = _ws(named[0].text_content()) if named else _ws(anchor.text_content())
@@ -621,6 +704,8 @@ def _link_rows(doc: Any, page_url: str, host: str) -> List[Dict[str, Any]]:
             entry.update(title=title, strict=strict, rank=rank,
                          fields=_card_fields(card, title))
         if len(order) >= MAX_LINKS_PER_PAGE:
+            if info is not None and candidate_urls - set(order):
+                info["links_truncated"] = True
             break
 
     entries = [per_url[u] for u in order]
@@ -648,7 +733,7 @@ def _link_rows(doc: Any, page_url: str, host: str) -> List[Dict[str, Any]]:
             if cm:
                 rid = f"comeet-{cm.group('uid').lower()}"
             else:
-                rid = slugify(match.group("slug") if match else url, 80)
+                rid = _query_job_id(url) or slugify(match.group("slug") if match else url, 80)
             method, detail = "page", url
         if not rid:
             continue
@@ -720,7 +805,7 @@ def _inline_rows(doc: Any, page_url: str) -> List[Dict[str, Any]]:
 # One listing page -> rows
 # ---------------------------------------------------------------------------
 
-def next_page_url(doc: Any, page_url: str, host: str) -> str:
+def next_page_url(doc: Any, page_url: str, host: str, pagination_param: str = "") -> str:
     """The page's OWN declared next page, same site and same listing path."""
     cands: List[str] = []
     for el in doc.xpath("//link[@rel='next'][@href] | //a[@rel='next'][@href]"):
@@ -732,6 +817,19 @@ def next_page_url(doc: Any, page_url: str, host: str) -> str:
                 or label in ("next", "next page"):
             cands.append(str(a.get("href")))
     base = urlparse(page_url)
+    # Opt-in only after the employer's public script proves this mapping.
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}", pagination_param):
+        for a in doc.xpath("//a[@data-href][not(@href)]"):
+            label = _ws(a.get("aria-label") or a.text_content()).lower()
+            value = str(a.get("data-href") or "")
+            if label not in ("next", "next page") or not re.fullmatch(r"[1-9]\d{0,6}", value):
+                continue
+            previous = (parse_qs(base.query).get(pagination_param) or ["1"])[0]
+            if not previous.isdigit() or int(value) <= int(previous):
+                continue
+            params = [(key, val) for key, val in parse_qsl(base.query, keep_blank_values=True)
+                      if key != pagination_param]
+            cands.append(urlunparse(base._replace(query=urlencode(params + [(pagination_param, value)]))))
     for href in cands:
         try:
             url = urljoin(page_url, href).split("#")[0]
@@ -748,7 +846,8 @@ def next_page_url(doc: Any, page_url: str, host: str) -> str:
     return ""
 
 
-def extract_postings(body: str, page_url: str, host: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+def extract_postings(body: str, page_url: str, host: str,
+                     pagination_param: str = "") -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Everything one careers page says about its openings. Never raises."""
     info: Dict[str, Any] = {"next_url": "", "empty_template": bool(
         _EMPTY_TEMPLATE_RE.search(html_to_text(_STRIP_RE.sub(" ", body or "")))),
@@ -796,7 +895,7 @@ def extract_postings(body: str, page_url: str, host: str) -> Tuple[List[Dict[str
              "application_method": "email" if (email and not url) else "page",
              "application_email": email, "source": "jsonld"}, "jsonld")
 
-    for obj in hydrated_jobs(body):
+    for obj in hydrated_jobs(body, info):
         add(_hydrated_row(obj, page_url), "hydrated")
 
     try:
@@ -805,12 +904,25 @@ def extract_postings(body: str, page_url: str, host: str) -> Tuple[List[Dict[str
     except Exception:
         doc = None
     if doc is not None:
-        for row in _link_rows(doc, page_url, host):
+        for row in _link_rows(doc, page_url, host, info):
             add(row, "link")
         if not rows:
             for row in _inline_rows(doc, page_url):
                 add(row, "inline")
-        info["next_url"] = next_page_url(doc, page_url, host)
+        # Only an explicitly labeled results counter, not unrelated numbers.
+        totals = []
+        for counter in doc.xpath('//*[@data-action="count"]'):
+            parent = counter.getparent()
+            raw = _ws(counter.text_content())
+            label = _ws(parent.text_content()) if parent is not None else ""
+            if re.fullmatch(r"[0-9][0-9,]{0,9}", raw) and re.search(r"\b(?:results|jobs|positions)\b", label, re.I):
+                totals.append(int(raw.replace(",", "")))
+        if totals:
+            info["reported_total"] = max(totals)
+        info["next_url"] = next_page_url(doc, page_url, host, pagination_param)
+        info["pagination_unresolved"] = not info["next_url"] and any(
+            _ws(a.get("aria-label") or a.text_content()).lower() in ("next", "next page")
+            for a in doc.xpath("//a[@data-href][not(@href)]"))
     return list(rows.values()), info
 
 
@@ -853,7 +965,8 @@ class OwnSiteCareersProvider(AtsProvider):
         max_concurrency=1,
         timeout=10.0,
         detail_timeout=10.0,
-        challenge_statuses=frozenset({429, 503}),
+        challenge_statuses=frozenset({403, 405, 429, 503}),
+        challenge_markers=("verify you are human", "human verification", "cf-chl-", "px-captcha"),
         page_size=MAX_LINKS_PER_PAGE,
         max_pages=MAX_PAGES,
         stale_page_tolerance=0,
@@ -866,6 +979,9 @@ class OwnSiteCareersProvider(AtsProvider):
         if not host or not url.startswith("https://") or not _same_site(url, host):
             return "", ""
         return host, url
+
+    def board_url(self, endpoint: Endpoint) -> str:
+        return self._listing(endpoint)[1]
 
     @staticmethod
     def _set_completeness(ctx: FetchContext, value: str) -> None:
@@ -880,9 +996,12 @@ class OwnSiteCareersProvider(AtsProvider):
                   ctx: FetchContext) -> Iterator[RawJob]:
         host, url = self._listing(endpoint)
         if not url:
+            self._set_completeness(ctx, UNVERIFIED)
             return
         seen_pages = set()
         seen_ids = set()
+        overlap = False
+        reported = 0
         emitted = 0
         state = COMPLETE
         page_url = url
@@ -891,22 +1010,34 @@ class OwnSiteCareersProvider(AtsProvider):
                 state = BUDGET_LIMITED
                 break
             seen_pages.add(page_url)
-            status, body = ctx.get_text(page_url, params={}, timeout=self.policy.timeout,
-                                        vendor=self.vendor)
-            if self.policy.is_challenge(status, ""):
-                raise ChallengeError(self.vendor, status)
+            try:
+                status, body = ctx.get_text(page_url, params={}, timeout=self.policy.timeout,
+                                            vendor=self.vendor)
+                if self.policy.is_challenge(status, body):
+                    raise ChallengeError(self.vendor, status)
+            except Exception:
+                self._set_completeness(ctx, UNVERIFIED if page_no == 0 else BUDGET_LIMITED)
+                raise
             if status != 200 or not body:
                 # Not "no jobs": we did not read the page.
                 state = UNVERIFIED if page_no == 0 else BUDGET_LIMITED
                 break
-            rows, info = extract_postings(body, page_url, host)
-            if not rows and page_no == 0:
+            rows, info = extract_postings(body, page_url, host,
+                                          str((endpoint.extra or {}).get("pagination_param") or ""))
+            if not rows:
                 # Nothing readable - an empty template, a JS shell, or a
                 # layout we do not understand. None of those is a zero.
-                state = UNVERIFIED
+                state = UNVERIFIED if page_no == 0 else BUDGET_LIMITED
                 break
+            previous_count = len(seen_ids)
+            reported = max(reported, info.get("hydrated_total") or 0, info.get("reported_total") or 0)
+            ctx.options["careers_page_counts"] = {"reported": reported or None}
             for row in rows:
+                if ctx.should_stop():
+                    state = BUDGET_LIMITED
+                    break
                 if row["id"] in seen_ids:
+                    overlap = True
                     continue
                 if emitted >= MAX_POSTINGS:
                     state = BUDGET_LIMITED
@@ -916,8 +1047,20 @@ class OwnSiteCareersProvider(AtsProvider):
                 yield self._to_raw(row)
             if state != COMPLETE:
                 break
+            if len(seen_ids) == previous_count:
+                state = BUDGET_LIMITED
+                break
+            if (info.get("hydration_truncated") or info.get("links_truncated")
+                    or info.get("pagination_unresolved")
+                    or (not info.get("next_url") and (reported > len(seen_ids)
+                        or (not reported and overlap)))):
+                state = BUDGET_LIMITED
+                break
             nxt = info.get("next_url") or ""
-            if not nxt or nxt in seen_pages:
+            if not nxt:
+                break
+            if nxt in seen_pages:
+                state = BUDGET_LIMITED
                 break
             if page_no + 1 >= MAX_PAGES:
                 state = BUDGET_LIMITED
@@ -939,6 +1082,8 @@ class OwnSiteCareersProvider(AtsProvider):
             extra["posting_purpose_hint"] = hint
         if row.get("workplace"):
             extra["workplace"] = row["workplace"]
+        if row.get("locations"):
+            extra["locations"] = list(row["locations"])
         posted = row.get("posted_at") or ""
         location = row.get("location") or ""
         return RawJob(
@@ -977,12 +1122,12 @@ class OwnSiteCareersProvider(AtsProvider):
             return None
         status, body = ctx.get_text(url, params={}, timeout=self.policy.detail_timeout,
                                     vendor=self.vendor)
-        if self.policy.is_challenge(status, ""):
+        if self.policy.is_challenge(status, body):
             raise ChallengeError(self.vendor, status)
         if status != 200 or not body:
             return None
         posting = _ld_posting(body)
-        text = html_to_text(posting.get("description") or "").strip()
+        text = html_to_text(_html.unescape(posting.get("description") or "")).strip()
         main = _STRIP_RE.sub(" ", body)
         page_text = html_to_text(main).strip()
         if len(text) < 300 and len(page_text) > len(text):
