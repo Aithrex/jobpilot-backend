@@ -1,6 +1,6 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T07:49:58Z",
+ "generated_at": "2026-11-05T23:40:24Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
@@ -9,11 +9,11 @@
    "counts": {
     "existing_covered": 5,
     "existing_unhealthy_or_moved": 0,
-    "new_validated": 47,
+    "new_validated": 48,
     "excluded": 61,
     "review": 31,
     "blocked": 0,
-    "unsupported": 22,
+    "unsupported": 21,
     "pending": 8
    },
    "rows": [
@@ -3300,16 +3300,41 @@
      "evidence_state": "FRONTEND",
      "domain": "solutionhealth.org",
      "provider": "radancy_talentbrew",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:radancy_talentbrew",
-     "member_key": "",
-     "provider_needed": "radancy_talentbrew",
-     "note": "",
+     "endpoint": {
+      "vendor": "radancy_talentbrew",
+      "tenant": "47438",
+      "site": "",
+      "host": "careers.solutionhealth.org",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy_talentbrew-47438",
+     "provider_needed": "",
+     "note": "2026-11-05: provider validated 15/510 advertised rows; public HTML only, explicitly truncated.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:24:09Z",
+      "vendor": "radancy_talentbrew",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 15,
+      "unique_ids": 15,
+      "duplicate_rows": 0,
+      "requisitions": 15,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Registered Nurse Ambulatory - Internal Med/Pediatrics Raymond - Part Time",
+       "Patient Service Representative- Elliot 1-Day Surgery Center- Per Diem (Friday av",
+       "Registered Nurse (OR)- Elliot 1-Day Surgery Center- Full Time (OR EXPERIENCE REQ"
+      ],
+      "detail": "",
+      "member_key": "radancy_talentbrew-47438"
      }
     },
     {
@@ -4437,18 +4462,150 @@
    ]
   },
   "top": {
-   "denominator": 166,
+   "denominator": 169,
    "counts": {
     "existing_covered": 76,
     "existing_unhealthy_or_moved": 7,
-    "new_validated": 38,
+    "new_validated": 41,
     "excluded": 0,
     "review": 0,
-    "blocked": 17,
-    "unsupported": 8,
+    "blocked": 18,
+    "unsupported": 7,
     "pending": 20
    },
    "rows": [
+    {
+     "company": "Synopsys",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "synopsys.com",
+     "provider": "radancy_talentbrew",
+     "endpoint": {
+      "vendor": "radancy_talentbrew",
+      "tenant": "44408",
+      "site": "",
+      "host": "careers.synopsys.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy_talentbrew-44408",
+     "provider_needed": "",
+     "note": "2026-11-05: 15/676 advertised rows validated; public HTML only, truncated.",
+     "validation": {
+      "at": "2026-11-05T23:23:56Z",
+      "vendor": "radancy_talentbrew",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 15,
+      "unique_ids": 15,
+      "duplicate_rows": 0,
+      "requisitions": 15,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Lead Cybersecurity Automation Engineer",
+       "Analog Design, Staff Engineer",
+       "Product Management, Principal"
+      ],
+      "detail": "",
+      "member_key": "radancy_talentbrew-44408"
+     },
+     "domain_group": "researched_boards"
+    },
+    {
+     "company": "Charter Communications",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "spectrum.com",
+     "provider": "radancy_talentbrew",
+     "endpoint": {
+      "vendor": "radancy_talentbrew",
+      "tenant": "4673",
+      "site": "",
+      "host": "jobs.spectrum.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy_talentbrew-4673",
+     "provider_needed": "",
+     "note": "2026-11-05: 15/1458 advertised rows validated; public HTML only, truncated.",
+     "validation": {
+      "at": "2026-11-05T23:23:59Z",
+      "vendor": "radancy_talentbrew",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 15,
+      "unique_ids": 15,
+      "duplicate_rows": 0,
+      "requisitions": 15,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Physical Security Officer I",
+       "Business Planning Specialist - Atlanta, GA",
+       "Business Planning Specialist - Atlanta, GA"
+      ],
+      "detail": "",
+      "member_key": "radancy_talentbrew-4673"
+     },
+     "domain_group": "researched_boards"
+    },
+    {
+     "company": "Optum",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "optum.com",
+     "provider": "radancy_talentbrew",
+     "endpoint": {
+      "vendor": "radancy_talentbrew",
+      "tenant": "34088",
+      "site": "optum",
+      "host": "careers.unitedhealthgroup.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy_talentbrew-34088-optum",
+     "provider_needed": "",
+     "note": "2026-11-05: official /optum-jobs entry and checked custom_fields.UHGAJDType=Optum required; 15/5933 advertised rows, truncated. Never the unfiltered UHG board.",
+     "validation": {
+      "at": "2026-11-05T23:24:05Z",
+      "vendor": "radancy_talentbrew",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 15,
+      "unique_ids": 15,
+      "duplicate_rows": 0,
+      "requisitions": 15,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Licensed Practical Nurse (LPN)",
+       "Ambulatory Service Representative III - Kelsey-Seybold Clinic: Upper Kirby",
+       "Per Diem Patient Registration Specialist"
+      ],
+      "detail": "",
+      "member_key": "radancy_talentbrew-34088-optum"
+     },
+     "domain_group": "researched_boards"
+    },
     {
      "company": "Microsoft",
      "disposition": "eligible_direct",
@@ -7710,9 +7867,9 @@
      },
      "where": "seed",
      "plan": "added",
-     "outcome": "new_validated",
-     "why": "row added; live validation returned requisitions",
-     "member_key": "eightfold-netapp",
+     "outcome": "blocked",
+     "why": "plan says added but no crawl member serves it",
+     "member_key": "",
      "provider_needed": "",
      "note": "careers.netapp.com (TalentBrew front end) links netapp.eightfold.ai.",
      "validation": {
@@ -8631,16 +8788,41 @@
      "evidence_state": "FRONTEND",
      "domain": "pge.com",
      "provider": "radancy_talentbrew",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:radancy_talentbrew",
-     "member_key": "",
-     "provider_needed": "radancy_talentbrew",
-     "note": "jobs.pge.com is TalentBrew over an SAP RCM tenant (C0000161245P); RCM is not anonymously listable.",
+     "endpoint": {
+      "vendor": "radancy_talentbrew",
+      "tenant": "29673",
+      "site": "",
+      "host": "jobs.pge.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy_talentbrew-29673",
+     "provider_needed": "",
+     "note": "2026-11-05: 15/149 advertised jobs validated through public HTML; explicitly truncated. SAP RCM is not requested.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:24:06Z",
+      "vendor": "radancy_talentbrew",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 15,
+      "unique_ids": 15,
+      "duplicate_rows": 0,
+      "requisitions": 15,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Cable Splicer",
+       "Program Manager, Expert",
+       "Senior Labor Relations Partner"
+      ],
+      "detail": "",
+      "member_key": "radancy_talentbrew-29673"
      },
      "domain_group": "electrical_power"
     },
@@ -10939,6 +11121,12 @@
    "domain_group": "cloud",
    "outcome": "blocked",
    "why": "careers.nutanix.com answered 403 on 2026-10-21"
+  },
+  {
+   "company": "NetApp",
+   "domain_group": "cloud",
+   "outcome": "blocked",
+   "why": "plan says added but no crawl member serves it"
   },
   {
    "company": "Digital Realty",

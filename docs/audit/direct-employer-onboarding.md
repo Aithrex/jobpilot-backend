@@ -1,6 +1,6 @@
 # Direct-employer onboarding — outcomes per company
 
-Generated 2026-10-22T07:49:58Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
+Generated 2026-11-05T23:40:24Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
 
 **Coverage basis:** in-repo catalogs and seed tables the crawler loads (no production inventory was read). `existing_covered` means the crawl tables already carry the exact endpoint; it is not a claim about live inventory counts.
 
@@ -8,7 +8,7 @@ Validation counts: `source` = total the vendor reported (blank when the API repo
 
 ## 174 researched LinkedIn leads
 
-Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, review: 31, unsupported: 22, pending: 8
+Denominator: **174**. existing_covered: 5, new_validated: 48, excluded: 61, review: 31, unsupported: 21, pending: 8
 
 | company | evidence | provider | endpoint | outcome | why | validated at | status | source | parsed | req | non-req |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -144,7 +144,7 @@ Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, revi
 | Sigma Defense Systems LLC | official_career_provider_unresolved |  |  | review | mixed_review |  | not_run |  |  |  |  |
 | SimVentions | official_ats_chain | iCIMS |  | review | mixed_review |  | not_run |  |  |  |  |
 | SoftWriters | CHAIN | ukg | `ukg/recruiting.ultipro.com/ROP1001ROPER/cf088029-453b-46f8-bcab-46ffb10fdf54` | unsupported | shared Roper UKG board; the UKG provider cannot filter to the hiring entity, and importing every Roper job as SoftWriters is wrong |  | not_run |  |  |  |  |
-| SolutionHealth | FRONTEND | radancy_talentbrew |  | unsupported | unsupported_pending_provider:radancy_talentbrew |  | not_run |  |  |  |  |
+| SolutionHealth | FRONTEND | radancy_talentbrew | `radancy_talentbrew/careers.solutionhealth.org/47438` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:24:09Z | budget_limited |  | 15 | 15 | 0 |
 | SoTalent | excluded_by_preference |  |  | excluded | intermediary |  | not_run |  |  |  |  |
 | Spring Arbor University | CHAIN | newton_paycor |  | unsupported | unsupported_pending_provider:newton_paycor |  | not_run |  |  |  |  |
 | Spring Venture Group | CHAIN | smartrecruiters | `smartrecruiters/SpringVentureGroup1` | new_validated | row added; live validation returned requisitions | 2026-10-22T01:59:32Z | complete | 6 | 6 | 6 | 0 |
@@ -189,10 +189,13 @@ Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, revi
 
 ## Owner priority: top employers per domain
 
-Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_validated: 38, blocked: 17, unsupported: 8, pending: 20
+Denominator: **169**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_validated: 41, blocked: 18, unsupported: 7, pending: 20
 
 | company | domain | evidence | provider | endpoint | outcome | why | validated at | status | source | parsed | req | non-req |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Synopsys | researched_boards | FRONTEND | radancy_talentbrew | `radancy_talentbrew/careers.synopsys.com/44408` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:23:56Z | budget_limited |  | 15 | 15 | 0 |
+| Charter Communications | researched_boards | FRONTEND | radancy_talentbrew | `radancy_talentbrew/jobs.spectrum.com/4673` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:23:59Z | budget_limited |  | 15 | 15 | 0 |
+| Optum | researched_boards | CHAIN | radancy_talentbrew | `radancy_talentbrew/careers.unitedhealthgroup.com/34088/optum` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:24:05Z | budget_limited |  | 15 | 15 | 0 |
 | Microsoft | software | EXISTING | eightfold | `eightfold/apply.careers.microsoft.com/microsoft` | existing_unhealthy_or_moved | validation blocked - Eightfold PCSX answered 403 to our validation (may be IP-specific; production inventory not visible here) | 2026-10-22T02:17:30Z | blocked |  | 0 | 0 | 0 |
 | Google | software | EXISTING | google_careers | `google_careers/www.google.com/google` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:32Z | budget_limited |  | 30 | 30 | 0 |
 | Apple | software | EXISTING | custom_apple | `custom_apple/jobs.apple.com/apple` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:34Z | budget_limited |  | 30 | 30 | 0 |
@@ -277,7 +280,7 @@ Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | Broadcom | cloud | EXISTING | workday | `workday/broadcom/External_Career/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:39Z | budget_limited | 372 | 30 | 30 | 0 |
 | Red Hat | cloud | EXISTING | workday | `workday/redhat/jobs/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:41Z | budget_limited |  | 30 | 30 | 0 |
 | Nutanix | cloud | BLOCKED |  |  | blocked | careers.nutanix.com answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
-| NetApp | cloud | CHAIN | eightfold | `eightfold/netapp.eightfold.ai/netapp` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:14:45Z | complete |  | 136 | 136 | 0 |
+| NetApp | cloud | CHAIN | eightfold | `eightfold/netapp.eightfold.ai/netapp` | blocked | plan says added but no crawl member serves it - careers.netapp.com (TalentBrew front end) links netapp.eightfold.ai. | 2026-10-22T02:14:45Z | complete |  | 136 | 136 | 0 |
 | Equinix | cloud | EXISTING | workday | `workday/equinix/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:44Z | budget_limited |  | 30 | 30 | 0 |
 | Digital Realty | cloud | BLOCKED |  |  | blocked | TLS error fetching digitalrealty.com/about/careers on 2026-10-21 |  | not_run |  |  |  |  |
 | Rackspace | cloud | EXISTING | workday | `workday/rackspace/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:48Z | budget_limited | 35 | 30 | 30 | 0 |
@@ -300,7 +303,7 @@ Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | American Electric Power | electrical_power | EXISTING | workday | `workday/aep/AEPCareerSite/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:14Z | budget_limited | 287 | 30 | 30 | 0 |
 | Xcel Energy | electrical_power | EXISTING | workday | `workday/xcelenergy/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:16Z | budget_limited |  | 30 | 30 | 0 |
 | Exelon | electrical_power | FRONTEND | radancy | `radancy/jobs.exeloncorp.com/exeloncorp` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:51Z | complete | 124 | 124 | 124 | 0 |
-| PG&E | electrical_power | FRONTEND | radancy_talentbrew |  | unsupported | unsupported_pending_provider:radancy_talentbrew - jobs.pge.com is TalentBrew over an SAP RCM tenant (C0000161245P); RCM is not anonymously listable. |  | not_run |  |  |  |  |
+| PG&E | electrical_power | FRONTEND | radancy_talentbrew | `radancy_talentbrew/jobs.pge.com/29673` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:24:06Z | budget_limited |  | 15 | 15 | 0 |
 | Southern California Edison | electrical_power | FRONTEND | symphony_cws |  | unsupported | unsupported_pending_provider:symphony_cws - edisoncareers.com is a Symphony/CWS front end (jobsapi-google.m-cloud.io) over SAP RCM C0003043182P. |  | not_run |  |  |  |  |
 | Entergy | electrical_power | CHAIN | successfactors | `successfactors/jobs.entergy.com/entergy` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:02Z | budget_limited |  | 200 | 200 | 0 |
 | Con Edison | electrical_power | CHAIN | oracle_orc | `oracle_orc/ejcu.fa.us6.oraclecloud.com/ejcu/CX_1033` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:49Z | complete | 49 | 49 | 49 | 0 |
@@ -395,6 +398,7 @@ Top-employer rows that are pending, blocked, or whose existing board no longer a
 - **DigitalOcean** (cloud, pending): open-roles page is a JS shell (XHRs Greenhouse per CLAUDE.md); token not observed in served HTML
 - **Akamai** (cloud, blocked): akamai.com/careers answered 403 on 2026-10-21
 - **Nutanix** (cloud, blocked): careers.nutanix.com answered 403 on 2026-10-21
+- **NetApp** (cloud, blocked): plan says added but no crawl member serves it
 - **Digital Realty** (cloud, blocked): TLS error fetching digitalrealty.com/about/careers on 2026-10-21
 - **Arista Networks** (cloud, blocked): arista.com/en/careers answered 406 on 2026-10-21
 - **Supermicro** (cloud, pending): official careers URL answered 404; current page unknown

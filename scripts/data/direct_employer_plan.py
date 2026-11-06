@@ -308,10 +308,11 @@ LEAD_PLAN: Dict[str, Dict[str, Any]] = {
         note="A Taleo seed `baesystems` already exists; health is checked "
              "separately and it is not this US Phenom front end."),
     "SolutionHealth": dict(
-        domain="solutionhealth.org", state="FRONTEND", plan="unsupported",
-        provider_needed="radancy_talentbrew",
-        reason="Radancy TalentBrew front end (/search-jobs); /api/jobs is not "
-               "served there and no TalentBrew provider exists"),
+        domain="solutionhealth.org", state="FRONTEND", plan="added",
+        endpoint=_ep("radancy_talentbrew", "47438", host="careers.solutionhealth.org"),
+        where="seed", industry="healthcare", career_url="https://careers.solutionhealth.org/",
+        checked_at="2026-11-05T23:24:09Z", evidence_url="https://careers.solutionhealth.org/",
+        note="2026-11-05: provider validated 15/510 advertised rows; public HTML only, explicitly truncated."),
     "Amazon Web Services (AWS)": dict(
         domain="amazon.com", state="FRONTEND", plan="existing",
         endpoint=_ep("amazon", "amazon", host="www.amazon.jobs"),
@@ -442,6 +443,9 @@ HEALTH_CHECKS: Dict[str, Dict[str, Any]] = {
 #: measured gap in docs/audit/feed-fidelity.md). A company may matter to two
 #: domains; it is listed once, under the domain it is best known for.
 TOP_EMPLOYERS: Dict[str, Any] = {
+    # November employer-board research: these names must participate in the
+    # owner onboarding report as well as carrying a plan and a crawl seed.
+    "researched_boards": ["Synopsys", "Charter Communications", "Optum"],
     "software": ["Microsoft", "Google", "Apple", "Amazon", "Meta", "Oracle",
                  "Salesforce", "Adobe", "IBM", "Intuit", "ServiceNow", "Workday",
                  "Atlassian", "Uber", "Airbnb", "Stripe", "Shopify", "Cisco",
@@ -515,6 +519,21 @@ def _added(*a: Any, **kw: Any) -> Dict[str, Any]:
 
 
 TOP_EMPLOYER_PLAN: Dict[str, Dict[str, Any]] = {
+    "Synopsys": dict(domain="synopsys.com", state="FRONTEND", plan="added",
+                     endpoint=_ep("radancy_talentbrew", "44408", host="careers.synopsys.com"),
+                     where="seed", industry="tech", career_url="https://careers.synopsys.com/",
+                     checked_at="2026-11-05T23:23:56Z", evidence_url="https://careers.synopsys.com/",
+                     note="2026-11-05: 15/676 advertised rows validated; public HTML only, truncated."),
+    "Charter Communications": dict(domain="spectrum.com", state="FRONTEND", plan="added",
+                     endpoint=_ep("radancy_talentbrew", "4673", host="jobs.spectrum.com"),
+                     where="seed", industry="telecom", career_url="https://jobs.spectrum.com/",
+                     checked_at="2026-11-05T23:23:59Z", evidence_url="https://jobs.spectrum.com/",
+                     note="2026-11-05: 15/1458 advertised rows validated; public HTML only, truncated."),
+    "Optum": dict(domain="optum.com", state="CHAIN", plan="added",
+                  endpoint=_ep("radancy_talentbrew", "34088", site="optum", host="careers.unitedhealthgroup.com"),
+                  where="seed", industry="healthcare", career_url="https://www.optum.com/en/careers.html",
+                  checked_at="2026-11-05T23:24:05Z", evidence_url="https://www.optum.com/en/careers.html",
+                  note="2026-11-05: official /optum-jobs entry and checked custom_fields.UHGAJDType=Optum required; 15/5933 advertised rows, truncated. Never the unfiltered UHG board."),
     # --- already crawled: the exact rows the crawl tables carry -------------
     "Microsoft": _existing(_ep("eightfold", "microsoft", host="apply.careers.microsoft.com"), note='Eightfold PCSX answered 403 to our validation (may be IP-specific; production inventory not visible here)'),
     "Google": _existing(_ep("google_careers", "google", host="www.google.com")),
@@ -706,10 +725,11 @@ TOP_EMPLOYER_PLAN: Dict[str, Dict[str, Any]] = {
                             note="US board; international-sargentlundy is separate."),
 
     # --- surfaces no existing provider reads ---------------------------------
-    "PG&E": dict(plan="unsupported", state="FRONTEND", provider_needed="radancy_talentbrew",
-                 domain="pge.com",
-                 note="jobs.pge.com is TalentBrew over an SAP RCM tenant (C0000161245P); "
-                      "RCM is not anonymously listable."),
+    "PG&E": dict(plan="added", state="FRONTEND", domain="pge.com", where="seed", industry="energy",
+                 endpoint=_ep("radancy_talentbrew", "29673", host="jobs.pge.com"),
+                 career_url="https://jobs.pge.com/",
+                 checked_at="2026-11-05T23:24:06Z", evidence_url="https://jobs.pge.com/",
+                 note="2026-11-05: 15/149 advertised jobs validated through public HTML; explicitly truncated. SAP RCM is not requested."),
     "Intuit": dict(plan="unsupported", state="FRONTEND", provider_needed="radancy_talentbrew",
                    domain="intuit.com", note="jobs.intuit.com is TalentBrew (/search-jobs)."),
     "Southern California Edison": dict(
