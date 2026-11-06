@@ -796,6 +796,18 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
      'display_name': 'Oxide Computer',
      'industry': 'tech'},
     # END board research 2026-11
+    # TalentBrew public HTML, employer-linked and provider-validated 2026-11-05.
+    # Each exposes 15 readable rows; forbidden Ajax pagination remains truncated.
+    {"vendor": "radancy_talentbrew", "tenant": "44408", "site": "",
+     "host": "careers.synopsys.com", "display_name": "Synopsys", "industry": "tech"},
+    {"vendor": "radancy_talentbrew", "tenant": "4673", "site": "",
+     "host": "jobs.spectrum.com", "display_name": "Charter Communications", "industry": "telecom"},
+    {"vendor": "radancy_talentbrew", "tenant": "34088", "site": "optum",
+     "host": "careers.unitedhealthgroup.com", "display_name": "Optum", "industry": "healthcare"},
+    {"vendor": "radancy_talentbrew", "tenant": "29673", "site": "",
+     "host": "jobs.pge.com", "display_name": "PG&E", "industry": "energy"},
+    {"vendor": "radancy_talentbrew", "tenant": "47438", "site": "",
+     "host": "careers.solutionhealth.org", "display_name": "SolutionHealth", "industry": "healthcare"},
     {"vendor": "oracle_orc", "tenant": "jpmc", "site": "CX_1",
      "host": "jpmc.fa.oraclecloud.com", "display_name": "JPMorgan Chase",
      "industry": "banking"},

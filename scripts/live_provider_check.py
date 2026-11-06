@@ -56,6 +56,9 @@ from services.ats_providers.http import simple_context  # noqa: E402
 PROBES: Dict[str, Dict[str, Any]] = {
     "custom_mottmac": {"tenant": "mottmac", "display_name": "Mott MacDonald"},
     "custom_enphase": {"tenant": "enphase", "display_name": "Enphase Energy"},
+    # Public TalentBrew HTML; first-page census is explicitly truncated.
+    "radancy_talentbrew": {"tenant": "44408", "host": "careers.synopsys.com",
+                           "display_name": "Synopsys"},
     # Every tenant below was confirmed to return >=1 posting on 2026-08-18.
     # A probe that yields nothing tells us nothing about the provider, which is
     # how the first run of this script mis-reported five working vendors as
