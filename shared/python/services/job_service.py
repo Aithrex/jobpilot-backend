@@ -2508,6 +2508,10 @@ class JobService:
         jobs = list(self.saved_jobs.find({"user_email": user_email}).sort("saved_at", -1))
         for j in jobs:
             j["_id"] = str(j["_id"])
+        try:
+            attach_next_step(jobs, user_email)
+        except Exception as e:  # pragma: no cover - the list must load without it
+            logger.warning("get_saved_jobs: next_step skipped: %s", type(e).__name__)
         return jobs
 
     def save_job(self, job: Dict[str, Any], user_email: str) -> Dict[str, Any]:
@@ -2738,3 +2742,60 @@ def get_job_service() -> JobService:
     if _job_service is None:
         _job_service = JobService()
     return _job_service
+
+
+def _iso(value: Any) -> Optional[str]:
+    if isinstance(value, datetime):
+        return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).isoformat()
+    return str(value) if value else None
+
+
+def attach_next_step(rows: List[Dict[str, Any]], user_email: str) -> None:
+    """Stamp `next_step` on each saved row: what the Saved and Applied pages
+    need to say what to do next, instead of a bare count.
+
+    * `posting_state` - `open`, `closed` (the employer took it down, or our
+      crawl closed it on a 404) or `unknown` (we hold no posting for it: a
+      search-API job, or one already purged). Unknown is never shown as closed.
+    * `posted_at` - when the employer posted it, if we know.
+    * `applied_at` / `tracker_status` - from the Tracker row for this job.
+    * `tailored` - a tailored resume exists for this job (a Tracker row with a
+      saved version; the Apply/Save stubs carry none).
+
+    Two indexed reads for the whole list, never one per row.
+    """
+    ids = [str(r.get("job_id") or "") for r in rows if r.get("job_id")]
+    if not ids:
+        return
+    db = DBConnect().get_db()
+    postings: Dict[str, Dict[str, Any]] = {}
+    for doc in db.job_postings.find(
+            {"job_id": {"$in": ids}},
+            {"_id": 0, "job_id": 1, "status": 1, "posted_at": 1, "closed_reason": 1}):
+        postings[str(doc.get("job_id"))] = doc
+    tracker: Dict[str, Dict[str, Any]] = {}
+    for rec in db.tailoring_records.find(
+            {"user_email": user_email, "source_job_id": {"$in": ids}},
+            {"_id": 0, "source_job_id": 1, "application": 1, "current_version_id": 1}):
+        key = str(rec.get("source_job_id") or "")
+        cur = tracker.setdefault(key, {"tailored": False, "applied_at": None, "status": None})
+        cur["tailored"] = cur["tailored"] or bool(rec.get("current_version_id"))
+        app = rec.get("application") or {}
+        if app.get("applied_at") and not cur["applied_at"]:
+            cur["applied_at"] = app.get("applied_at")
+        if app.get("status") and not cur["status"]:
+            cur["status"] = app.get("status")
+    for row in rows:
+        jid = str(row.get("job_id") or "")
+        doc = postings.get(jid)
+        status = str((doc or {}).get("status") or "").lower()
+        state = ("open" if status == "active" else
+                 "closed" if status in ("closed", "expired") else "unknown")
+        t = tracker.get(jid) or {}
+        row["next_step"] = {
+            "posting_state": state,
+            "posted_at": _iso((doc or {}).get("posted_at")),
+            "applied_at": _iso(t.get("applied_at")),
+            "tracker_status": t.get("status"),
+            "tailored": bool(t.get("tailored")),
+        }

@@ -502,6 +502,9 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
         "contract_friendly": False,
         "source": _ATS_LABEL.get(ats, "Workday" if doc.get("source") == SOURCE_WORKDAY else "Career Page"),
         "seniority": doc.get("seniority") or "",
+        # A likely band from duty wording, only where nothing stated a level
+        # (`jd_profile.read_level_hint`). Display only: filters read `seniority`.
+        "level_estimate": level_estimate_of(doc.get("seniority"), doc.get("requirements")),
         # Canonical identity, so the client never has to invent one from
         # display strings (which is what produced duplicate cards).
         "dedupe_group_id": doc.get("dedupe_group_id") or doc.get("job_id") or "",
@@ -522,6 +525,19 @@ def _row_from_posting(doc: Dict[str, Any], *, tz_offset: int) -> Optional[Dict[s
     if is_marketplace_board(row) or str(doc.get("board_kind") or "").lower() == "marketplace":
         row["board_kind"] = "marketplace"
     return row
+
+
+def level_estimate_of(seniority: Any, requirements: Any) -> Optional[Dict[str, str]]:
+    """The card's `level_estimate`, or None when a level is stated or no hint
+    was read. Shown as "Likely Senior" with the sentence it came from."""
+    if str(seniority or "").strip().lower() not in ("", "unknown"):
+        return None
+    jd = (requirements or {}).get("jd") if isinstance(requirements, dict) else None
+    hint = (jd or {}).get("level_hint") if isinstance(jd, dict) else None
+    if not isinstance(hint, dict) or hint.get("level") not in ("senior", "entry", "mid", "staff", "intern"):
+        return None
+    return {"level": str(hint["level"]), "basis": str(hint.get("basis") or "")[:200],
+            "version": "level-hint-1.0.0"}
 
 
 def has_read_description(doc: Dict[str, Any]) -> bool:
@@ -743,6 +759,10 @@ def score_live_rows(rows: List[Dict[str, Any]], user_email: str) -> List[Dict[st
                 pass
     _score_rows(rows, user_email, skills, years, profile=profile)
     for row in rows:
+        if not row.get("level_estimate"):
+            est = level_estimate_of(row.get("seniority"), row.get("_requirements"))
+            if est:
+                row["level_estimate"] = est
         row.pop("_requirements", None)
         fit = row.get("fit")
         if isinstance(fit, dict):
@@ -753,6 +773,8 @@ def score_live_rows(rows: List[Dict[str, Any]], user_email: str) -> List[Dict[st
         else:
             for k in ("fit_band", "fit_confidence", "score_version"):
                 row.pop(k, None)
+    from services import company_type
+    company_type.annotate(rows)
     rows.sort(key=lambda j: (-(j.get("match_score") or 0),
                              j.get("days_ago") if j.get("days_ago") is not None else 99))
     return rows
@@ -1192,6 +1214,12 @@ def build_feed(source: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
         employer_display.apply_display_names(rows)
     except Exception as exc:  # pragma: no cover - display polish is best effort
         logger.warning("inventory_feed: display names skipped: %s", type(exc).__name__)
+    # The kind of employer each card is from (Big Tech & MNCs, enterprise,
+    # startup, staffing), with the evidence for it - what the board's grouped
+    # company filter reads. After display names, so the grouping sees the
+    # employer's name rather than the legal entity a board printed.
+    from services import company_type
+    company_type.annotate(rows)
 
     # "Too thin" is a statement about INVENTORY warmth, so it is judged before
     # the policy: a warm slice the user's policy narrows is served short and
