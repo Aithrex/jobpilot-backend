@@ -1,6 +1,6 @@
 # Direct-employer onboarding — outcomes per company
 
-Generated 2026-10-22T07:49:58Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
+Generated 2026-11-06T00:20:19Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
 
 **Coverage basis:** in-repo catalogs and seed tables the crawler loads (no production inventory was read). `existing_covered` means the crawl tables already carry the exact endpoint; it is not a claim about live inventory counts.
 
@@ -189,7 +189,7 @@ Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, revi
 
 ## Owner priority: top employers per domain
 
-Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_validated: 38, blocked: 17, unsupported: 8, pending: 20
+Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_validated: 38, blocked: 18, unsupported: 8, pending: 19
 
 | company | domain | evidence | provider | endpoint | outcome | why | validated at | status | source | parsed | req | non-req |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -277,7 +277,7 @@ Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | Broadcom | cloud | EXISTING | workday | `workday/broadcom/External_Career/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:39Z | budget_limited | 372 | 30 | 30 | 0 |
 | Red Hat | cloud | EXISTING | workday | `workday/redhat/jobs/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:41Z | budget_limited |  | 30 | 30 | 0 |
 | Nutanix | cloud | BLOCKED |  |  | blocked | careers.nutanix.com answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
-| NetApp | cloud | CHAIN | eightfold | `eightfold/netapp.eightfold.ai/netapp` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:14:45Z | complete |  | 136 | 136 | 0 |
+| NetApp | cloud | CHAIN | eightfold | `eightfold/netapp.eightfold.ai/netapp` | blocked | plan says added but no crawl member serves it - careers.netapp.com (TalentBrew front end) links netapp.eightfold.ai. | 2026-10-22T02:14:45Z | complete |  | 136 | 136 | 0 |
 | Equinix | cloud | EXISTING | workday | `workday/equinix/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:44Z | budget_limited |  | 30 | 30 | 0 |
 | Digital Realty | cloud | BLOCKED |  |  | blocked | TLS error fetching digitalrealty.com/about/careers on 2026-10-21 |  | not_run |  |  |  |  |
 | Rackspace | cloud | EXISTING | workday | `workday/rackspace/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:48Z | budget_limited | 35 | 30 | 30 | 0 |
@@ -351,7 +351,7 @@ Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | Oncor | electrical_power | BLOCKED |  |  | blocked | oncor.com careers page timed out on 2026-10-21 |  | not_run |  |  |  |  |
 | Siemens | electrical_power | FRONTEND | avature |  | unsupported | unsupported_pending_provider:avature - jobs.siemens.com is Avature. |  | not_run |  |  |  |  |
 | Kiewit | electrical_power | PENDING |  |  | pending | official link goes to an AllCraftJobs craft board only; the professional board was not observed |  | not_run |  |  |  |  |
-| Stantec | electrical_power | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
+| Stantec | electrical_power | CHAIN | directemployers_nlx | `directemployers_nlx/stantec.jobs/stantec/usa` | new_validated | row added; live validation returned requisitions | 2026-11-06T00:19:00Z | budget_limited |  | 400 | 400 | 0 |
 | Mott MacDonald | electrical_power | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
 | Jacobs | electrical_power | PENDING |  |  | pending | jobs.jacobs.com does not resolve; current board not observed |  | not_run |  |  |  |  |
 | NRG Energy | electrical_power | PENDING |  |  | pending | nrg.com/careers.html answered 404 |  | not_run |  |  |  |  |
@@ -395,6 +395,7 @@ Top-employer rows that are pending, blocked, or whose existing board no longer a
 - **DigitalOcean** (cloud, pending): open-roles page is a JS shell (XHRs Greenhouse per CLAUDE.md); token not observed in served HTML
 - **Akamai** (cloud, blocked): akamai.com/careers answered 403 on 2026-10-21
 - **Nutanix** (cloud, blocked): careers.nutanix.com answered 403 on 2026-10-21
+- **NetApp** (cloud, blocked): plan says added but no crawl member serves it
 - **Digital Realty** (cloud, blocked): TLS error fetching digitalrealty.com/about/careers on 2026-10-21
 - **Arista Networks** (cloud, blocked): arista.com/en/careers answered 406 on 2026-10-21
 - **Supermicro** (cloud, pending): official careers URL answered 404; current page unknown
@@ -411,7 +412,6 @@ Top-employer rows that are pending, blocked, or whose existing board no longer a
 - **Avangrid** (electrical_power, blocked): avangrid.com/careers timed out on 2026-10-21
 - **Oncor** (electrical_power, blocked): oncor.com careers page timed out on 2026-10-21
 - **Kiewit** (electrical_power, pending): official link goes to an AllCraftJobs craft board only; the professional board was not observed
-- **Stantec** (electrical_power, pending): official careers page served no ATS link
 - **Mott MacDonald** (electrical_power, pending): official careers page served no ATS link
 - **Jacobs** (electrical_power, pending): jobs.jacobs.com does not resolve; current board not observed
 - **NRG Energy** (electrical_power, pending): nrg.com/careers.html answered 404

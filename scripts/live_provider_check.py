@@ -54,6 +54,9 @@ from services.ats_providers.http import simple_context  # noqa: E402
 # derivable from the tenant (Oracle pods, Phenom hosts), it is spelled out.
 
 PROBES: Dict[str, Dict[str, Any]] = {
+    # Official Stantec NLX board, verified 2026-11-06; exact US source scope.
+    "directemployers_nlx": {"tenant": "stantec", "host": "stantec.jobs",
+                            "site": "usa", "display_name": "Stantec"},
     # Every tenant below was confirmed to return >=1 posting on 2026-08-18.
     # A probe that yields nothing tells us nothing about the provider, which is
     # how the first run of this script mis-reported five working vendors as

@@ -1,6 +1,6 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T07:49:58Z",
+ "generated_at": "2026-11-06T00:20:19Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
@@ -4444,9 +4444,9 @@
     "new_validated": 38,
     "excluded": 0,
     "review": 0,
-    "blocked": 17,
+    "blocked": 18,
     "unsupported": 8,
-    "pending": 20
+    "pending": 19
    },
    "rows": [
     {
@@ -7710,9 +7710,9 @@
      },
      "where": "seed",
      "plan": "added",
-     "outcome": "new_validated",
-     "why": "row added; live validation returned requisitions",
-     "member_key": "eightfold-netapp",
+     "outcome": "blocked",
+     "why": "plan says added but no crawl member serves it",
+     "member_key": "",
      "provider_needed": "",
      "note": "careers.netapp.com (TalentBrew front end) links netapp.eightfold.ai.",
      "validation": {
@@ -10503,19 +10503,45 @@
     {
      "company": "Stantec",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "stantec.com",
-     "provider": "",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "official careers page served no ATS link",
-     "member_key": "",
+     "provider": "directemployers_nlx",
+     "endpoint": {
+      "vendor": "directemployers_nlx",
+      "tenant": "stantec",
+      "site": "usa",
+      "host": "stantec.jobs",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "directemployers_nlx-stantec-usa",
      "provider_needed": "",
-     "note": "",
+     "note": "Official career chain to stantec.jobs. Served NLX frontend publishes the shared public API, X-Origin owner scope and location=usa. 650 permitted location rows proved 300 distinct US requisitions. The final registered read on November 6 merged all 2,760 US location rows into 995 requisitions; onboarding's separate 400-requisition probe remains explicitly budget-limited.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-06T00:19:00Z",
+      "vendor": "directemployers_nlx",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 400,
+      "unique_ids": 400,
+      "duplicate_rows": 0,
+      "requisitions": 400,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "404"
+      ],
+      "sample_titles": [
+       "Project Manager, PD&E",
+       "Commissioning Consultant",
+       "Hydrogeologist"
+      ],
+      "detail": "",
+      "member_key": "directemployers_nlx-stantec-usa"
      },
      "domain_group": "electrical_power"
     },
@@ -10941,6 +10967,12 @@
    "why": "careers.nutanix.com answered 403 on 2026-10-21"
   },
   {
+   "company": "NetApp",
+   "domain_group": "cloud",
+   "outcome": "blocked",
+   "why": "plan says added but no crawl member serves it"
+  },
+  {
    "company": "Digital Realty",
    "domain_group": "cloud",
    "outcome": "blocked",
@@ -11035,12 +11067,6 @@
    "domain_group": "electrical_power",
    "outcome": "pending",
    "why": "official link goes to an AllCraftJobs craft board only; the professional board was not observed"
-  },
-  {
-   "company": "Stantec",
-   "domain_group": "electrical_power",
-   "outcome": "pending",
-   "why": "official careers page served no ATS link"
   },
   {
    "company": "Mott MacDonald",

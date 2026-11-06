@@ -45,6 +45,13 @@ a vendor agrees with us.
 
 ## 1. Vendors we crawl
 
+The separately registered `directemployers_nlx` reader was verified on
+2026-11-06 against Stantec's official US board: all 2,760 location GUID rows
+merged into 995 distinct requisitions. It enforces named employer/country
+scope, robots, serialized shared-API pacing and explicit partial-census flags.
+Burns & McDonnell and Southern Company remain unverified and are not seeded.
+See [the measured evidence](directemployers-nlx-2026-11.md).
+
 19 registered providers. "Rows/board" is what one representative live board
 returned during verification.
 

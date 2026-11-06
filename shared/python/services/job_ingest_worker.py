@@ -665,6 +665,11 @@ def _load_career_members() -> List[Dict[str, Any]]:
 # reports that as a configuration gap rather than pretending the employer has no
 # openings. A seed here would be a member that can only ever return zero.
 _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
+    # stantec.com/en/careers -> stantec.jobs; public NLX API, US scope.
+    # The API lists location variants; the reader merges each exact reqid.
+    {"vendor": "directemployers_nlx", "tenant": "stantec", "site": "usa",
+     "host": "stantec.jobs", "display_name": "Stantec",
+     "industry": "electrical_power"},
     {"vendor": "oracle_orc", "tenant": "jpmc", "site": "CX_1",
      "host": "jpmc.fa.oraclecloud.com", "display_name": "JPMorgan Chase",
      "industry": "banking"},
