@@ -33,6 +33,7 @@ from utils import db_connect
 
 LOGO_COLLECTIONS = (
     "company_logos",
+    "employers",
     "guest_sessions",
     "guest_quota_subjects",
     "guest_global_counters",
@@ -102,6 +103,17 @@ def logo_db():
     yield db
     pconfig.invalidate_cache()
     get_rate_limiter()._requests.clear()
+
+
+_REAL_GUESS_VERDICT = logo_svc._guess_verdict
+
+
+@pytest.fixture(autouse=True)
+def _guesses_belong(monkeypatch):
+    """A guessed domain's homepage check is a network request; every test
+    treats guesses as belonging unless it tests the check itself
+    (TestGuessVerdict calls the real function)."""
+    monkeypatch.setattr(logo_svc, "_guess_verdict", lambda domain, company, deadline: "yes")
 
 
 @pytest.fixture()
@@ -256,7 +268,7 @@ class TestGetOrFetch:
     def test_success_writes_ok_doc_and_s3(self, logo_db, fake_s3, monkeypatch):
         monkeypatch.setattr(
             logo_svc, "fetch_logo_for_domain",
-            lambda domain: {"data": _png(128), "content_type": "image/png",
+            lambda domain, deadline=None: {"data": _png(128), "content_type": "image/png",
                             "ext": "png", "source": "google"},
         )
         res = logo_svc.get_or_fetch("Acme Corp")
@@ -276,7 +288,7 @@ class TestGetOrFetch:
         not a content miss — it must not poison the 30-day negative cache."""
         monkeypatch.setattr(
             logo_svc, "fetch_logo_for_domain",
-            lambda domain: {"data": _png(128), "content_type": "image/png",
+            lambda domain, deadline=None: {"data": _png(128), "content_type": "image/png",
                             "ext": "png", "source": "google"},
         )
 
@@ -306,7 +318,7 @@ class TestGetOrFetch:
     def test_failure_writes_negative_cache_and_respects_it(self, logo_db, monkeypatch):
         calls = []
 
-        def fake_fetch(domain):
+        def fake_fetch(domain, deadline=None):
             calls.append(domain)
             return None
 
@@ -331,7 +343,7 @@ class TestGetOrFetch:
         })
         monkeypatch.setattr(
             logo_svc, "fetch_logo_for_domain",
-            lambda domain: {"data": _png(64), "content_type": "image/png",
+            lambda domain, deadline=None: {"data": _png(64), "content_type": "image/png",
                             "ext": "png", "source": "site"},
         )
         res = logo_svc.get_or_fetch("Ghost Startup")
@@ -368,7 +380,7 @@ class TestServingRoute:
         calls = []
         monkeypatch.setattr(
             logo_svc, "fetch_logo_for_domain",
-            lambda domain: calls.append(domain) or None,
+            lambda domain, deadline=None: calls.append(domain) or None,
         )
         resp = self._client().get(f"/api/jobs/logo/{'a' * 40}")
         assert resp.status_code == 404
@@ -399,7 +411,7 @@ class TestServingRoute:
         })
         monkeypatch.setattr(
             logo_svc, "fetch_logo_for_domain",
-            lambda domain: {"data": _png(64), "content_type": "image/png",
+            lambda domain, deadline=None: {"data": _png(64), "content_type": "image/png",
                             "ext": "png", "source": "site"},
         )
         resp = self._client().get(f"/api/jobs/logo/{key}")
@@ -418,7 +430,7 @@ class TestServingRoute:
         calls = []
         monkeypatch.setattr(
             logo_svc, "fetch_logo_for_domain",
-            lambda domain: calls.append(domain) or None,
+            lambda domain, deadline=None: calls.append(domain) or None,
         )
         resp = self._client().get(f"/api/jobs/logo/{key}")
         assert resp.status_code == 404
@@ -567,3 +579,423 @@ class TestStamping:
         assert guest_service._safe_logo_url(f"/api/other/{'a' * 40}") is None
         assert guest_service._safe_logo_url(f"/api/jobs/logo/{'A' * 40}") is None
         assert guest_service._safe_job_url("javascript:alert(1)") is None
+
+
+# ===========================================================================
+# Resolver v2 — candidate domains, ladder grading, refetching old misses
+# (2026-11-05: on 123 real employers the v1 resolver found 48 logos; the
+# registry's domains found 109, the suffix-stripped guess 94.)
+# ===========================================================================
+
+def _ico(*widths):
+    """ICO header + one 16-byte directory entry per width (0 byte = 256)."""
+    head = b"\x00\x00\x01\x00" + len(widths).to_bytes(2, "little")
+    entries = b"".join(bytes([w % 256, w % 256]) + b"\x00" * 14 for w in widths)
+    return head + entries + b"image-data"
+
+
+def _employer(db, employer_id, name, domain=None, verified=(), **extra):
+    from services.employer_registry import name_key
+    db.employers.insert_one({
+        "employer_id": employer_id, "display_name": name, "name_key": name_key(name),
+        "canonical_domain": domain, "verified_domains": list(verified or ([domain] if domain else [])),
+        "operating_status": "active", **extra,
+    })
+
+
+class TestCandidateDomains:
+    def test_legal_tail_stripped_before_guessing(self, logo_db):
+        assert logo_svc.resolve_domain("CROWDSTRIKE INC") == "crowdstrike.com"
+        assert logo_svc.resolve_domain("SHOPIFY USA INC.") == "shopify.com"
+        assert logo_svc.resolve_domain("Deel US LLC") == "deel.com"
+
+    def test_brand_words_are_kept(self, logo_db):
+        # "group" is part of the brand, and words inside the name stay.
+        assert logo_svc.resolve_domain("Zillow Group") == "zillowgroup.com"
+        assert logo_svc._core_name("bank of america") == "bank of america"
+        assert logo_svc._core_name("jpmorgan chase & co.") == "jpmorgan chase"
+
+    def test_leading_the_is_dropped_first(self, logo_db):
+        # thedowchemical.com is someone else's site (measured 2026-11-05).
+        got = [d for d, _ in logo_svc.candidate_domains("THE DOW CHEMICAL COMPANY", use_registry=False)]
+        assert got[:2] == ["dowchemical.com", "thedowchemical.com"]
+
+    def test_descriptor_dropped_as_a_later_guess(self, logo_db):
+        got = [d for d, _ in logo_svc.candidate_domains("ZENSAR TECHNOLOGIES INC", use_registry=False)]
+        assert got == ["zensartechnologies.com", "zensar.com"]
+        # Too short a remainder is someone else's domain: never guessed.
+        got = [d for d, _ in logo_svc.candidate_domains("NCC Group", use_registry=False)]
+        assert got == ["nccgroup.com"]
+
+    def test_domain_written_in_the_name(self, logo_db):
+        got = logo_svc.candidate_domains("Amazon.com Services LLC", use_registry=False)
+        assert got[0] == ("amazon.com", "name")
+
+    def test_ampersand_and_leading_the_get_alternatives(self, logo_db):
+        got = [d for d, _ in logo_svc.candidate_domains("The Home Depot", use_registry=False)]
+        assert "homedepot.com" in got
+        got = [d for d, _ in logo_svc.candidate_domains("Barnes & Noble, Inc.", use_registry=False)]
+        assert "barnesandnoble.com" in got
+
+    def test_vendor_careers_host_is_never_a_logo_domain(self, logo_db):
+        # JPMorgan's catalog careers host is jpmc.fa.oraclecloud.com, whose
+        # icon is ORACLE's.
+        got = logo_svc.candidate_domains("JPMorgan Chase", use_registry=False)
+        assert all("oraclecloud" not in d for d, _ in got)
+        assert got[0] == ("jpmorganchase.com", "override")
+        assert logo_svc._is_vendor_host("acme.wd5.myworkdayjobs.com")
+        assert not logo_svc._is_vendor_host("careers.acme.com")
+
+    def test_registry_domain_by_canonical_id_comes_first(self, logo_db):
+        _employer(logo_db, "emp_aaaaaaaaaaaa", "Texas Instruments", "ti.com")
+        got = logo_svc.candidate_domains("Texas Instruments", "emp_aaaaaaaaaaaa")
+        assert got[0] == ("ti.com", "registry")
+        assert ("texasinstruments.com", "guess") in got
+
+    def test_registry_domain_by_unique_name(self, logo_db):
+        _employer(logo_db, "emp_bbbbbbbbbbbb", "Amgen", "amgen.com")
+        assert logo_svc.candidate_domains("AMGEN INC")[0] == ("amgen.com", "registry")
+
+    def test_ambiguous_registry_name_answers_nothing(self, logo_db):
+        _employer(logo_db, "emp_cccccccccccc", "Forward", "forward.com")
+        _employer(logo_db, "emp_dddddddddddd", "Forward", "goforward.com")
+        got = logo_svc.candidate_domains("Forward")
+        assert all(b != "registry" for _, b in got)
+
+    def test_brand_without_domain_borrows_parent(self, logo_db):
+        _employer(logo_db, "emp_parent00000", "Salesforce", "salesforce.com")
+        _employer(logo_db, "emp_brand000000", "Tableau", None,
+                  operating_status="acquired", parent_employer_id="emp_parent00000")
+        got = logo_svc.candidate_domains("Tableau", "emp_brand000000")
+        assert got[0] == ("salesforce.com", "registry")
+
+
+class TestLadderGrading:
+    def test_ico_width_is_the_widest_entry(self):
+        assert logo_svc._image_width(_ico(16, 32, 48)) == 48
+        assert logo_svc._image_width(_ico(0)) == 256          # 0 byte means 256
+
+    def test_known_placeholder_is_never_a_logo(self, monkeypatch):
+        fake = _png(48)
+        monkeypatch.setattr(logo_svc, "PLACEHOLDER_SHA1",
+                            frozenset({hashlib.sha1(fake).hexdigest()}))
+        assert logo_svc._grade(fake) is None
+        assert logo_svc._grade(_png(48, tail=b"other")) == "good"
+
+    def test_real_placeholder_hashes_are_listed(self):
+        assert "2d7c9b60d1e2b4f4726141de2e4ab738110b9287" in logo_svc.PLACEHOLDER_SHA1
+        assert "980aa215c45dd3b92f40b272234a21f6d850b14a" in logo_svc.PLACEHOLDER_SHA1
+
+    def test_duckduckgo_answers_when_google_has_nothing(self, monkeypatch):
+        calls = []
+
+        def fake_get(url, deadline):
+            calls.append(url)
+            if url.startswith("https://icons.duckduckgo.com/ip3/rockwellautomation.com"):
+                return FakeResp(200, _png(64), "image/png")
+            return FakeResp(404, _png(16), "image/png")
+
+        monkeypatch.setattr(logo_svc, "_guarded_get", fake_get)
+        got = logo_svc.fetch_logo_for_domain("rockwellautomation.com")
+        assert got["source"] == "duckduckgo"
+        assert len(calls) == 2   # google, then duckduckgo; the site is never asked
+
+    def test_favicon_ico_is_asked_before_the_homepage(self, monkeypatch):
+        def fake_get(url, deadline):
+            if url == "https://zensar.com/favicon.ico":
+                return FakeResp(200, _ico(32), "image/x-icon")
+            if url == "https://zensar.com/":
+                return FakeResp(200, b"", "text/html", text="<html>no icon links</html>")
+            return FakeResp(404)
+
+        monkeypatch.setattr(logo_svc, "_guarded_get", fake_get)
+        got = logo_svc.fetch_logo_for_domain("zensar.com")
+        assert got["source"] == "site" and got["ext"] == "ico"
+
+    def test_small_real_icon_is_kept_when_nothing_larger_exists(self, monkeypatch):
+        # Google 200s a real 16px icon (tsmc.com, measured): v1 called that a
+        # miss because the "no icon" globe used to be a 16px 200.
+        def fake_get(url, deadline):
+            if url.startswith("https://www.google.com/s2/favicons"):
+                return FakeResp(200, _png(16), "image/png")
+            return FakeResp(404)
+
+        monkeypatch.setattr(logo_svc, "_guarded_get", fake_get)
+        got = logo_svc.fetch_logo_for_domain("tsmc.com")
+        assert got is not None and got["source"] == "google"
+        assert logo_svc._png_width(got["data"]) == 16
+
+    def test_tiny_pixel_is_not_a_logo(self, monkeypatch):
+        monkeypatch.setattr(logo_svc, "_guarded_get",
+                            lambda url, deadline: FakeResp(200, _png(1), "image/png"))
+        assert logo_svc.fetch_logo_for_domain("pixel.example") is None
+
+
+class TestResolverV2Fetching:
+    def _ok_fetch(self, good_domain, calls):
+        def fake(domain, deadline=None):
+            calls.append(domain)
+            if domain == good_domain:
+                return {"data": _png(64), "content_type": "image/png",
+                        "ext": "png", "source": "google"}
+            return None
+        return fake
+
+    def test_candidates_tried_in_order_and_basis_recorded(self, logo_db, fake_s3, monkeypatch):
+        _employer(logo_db, "emp_aaaaaaaaaaaa", "Texas Instruments", "ti.com")
+        calls = []
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain",
+                            self._ok_fetch("texasinstruments.com", calls))
+        res = logo_svc.get_or_fetch("Texas Instruments", canonical_employer_id="emp_aaaaaaaaaaaa")
+        assert res and res["status"] == "ok"
+        assert calls == ["ti.com", "texasinstruments.com"]
+        doc = logo_db.company_logos.find_one({"key": logo_svc.logo_key("Texas Instruments")})
+        assert doc["domain"] == "texasinstruments.com" and doc["domain_basis"] == "guess"
+        assert doc["resolver_version"] == logo_svc.RESOLVER_VERSION
+        assert doc["canonical_employer_id"] == "emp_aaaaaaaaaaaa"
+
+    def test_stored_wrong_domain_is_not_reused(self, logo_db, fake_s3, monkeypatch):
+        key = logo_svc.logo_key("CrowdStrike Inc")
+        logo_db.company_logos.insert_one({
+            "key": key, "company": "crowdstrike inc", "domain": "crowdstrikeinc.com",
+            "status": "missing", "s3_key": None,
+            "fetched_at": datetime.now(timezone.utc) - timedelta(days=31),
+        })
+        calls = []
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain",
+                            self._ok_fetch("crowdstrike.com", calls))
+        assert logo_svc.get_or_fetch("CrowdStrike Inc")["status"] == "ok"
+        assert "crowdstrikeinc.com" not in calls
+
+    def test_miss_records_every_domain_tried(self, logo_db, monkeypatch):
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain", lambda domain, deadline=None: None)
+        assert logo_svc.get_or_fetch("The Home Depot") is None
+        doc = logo_db.company_logos.find_one({"key": logo_svc.logo_key("The Home Depot")})
+        assert doc["status"] == "missing" and doc["resolver_version"] == logo_svc.RESOLVER_VERSION
+        assert "homedepot.com" in doc["domains_tried"]
+
+    def test_force_bypasses_negative_cache(self, logo_db, fake_s3, monkeypatch):
+        key = logo_svc.logo_key("Ghost Startup")
+        logo_db.company_logos.insert_one({
+            "key": key, "company": "ghost startup", "status": "missing",
+            "s3_key": None, "fetched_at": datetime.now(timezone.utc),
+        })
+        calls = []
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain",
+                            self._ok_fetch("ghoststartup.com", calls))
+        assert logo_svc.get_or_fetch("Ghost Startup") is None and calls == []
+        assert logo_svc.get_or_fetch("Ghost Startup", force=True)["status"] == "ok"
+
+    def test_serving_route_does_not_refetch_an_old_resolver_miss(self, logo_db, monkeypatch):
+        """Old misses are refetched by refresh_due in the background, never
+        inline on a page load (the gateway has 32 threads)."""
+        key = logo_svc.logo_key("Ghost Startup")
+        logo_db.company_logos.insert_one({
+            "key": key, "company": "ghost startup", "status": "missing",
+            "s3_key": None, "fetched_at": datetime.now(timezone.utc),
+        })
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain",
+                            lambda domain, deadline=None: (_ for _ in ()).throw(AssertionError("fetched")))
+        assert logo_svc.get_logo_bytes(key) is None
+
+
+class TestStampEmployerId:
+    def test_unanimous_canonical_id_is_remembered(self, logo_db, no_network):
+        logo_svc.stamp_logo_urls([
+            {"company": "Texas Instruments", "canonical_employer_id": "emp_aaaaaaaaaaaa"},
+            {"company": "texas instruments", "canonical_employer_id": "emp_aaaaaaaaaaaa"},
+            {"company": "Contested Co", "canonical_employer_id": "emp_111111111111"},
+            {"company": "Contested Co", "canonical_employer_id": "emp_222222222222"},
+        ])
+        ti = logo_db.company_logos.find_one({"key": logo_svc.logo_key("Texas Instruments")})
+        assert ti["canonical_employer_id"] == "emp_aaaaaaaaaaaa" and ti["status"] == "pending"
+        contested = logo_db.company_logos.find_one({"key": logo_svc.logo_key("Contested Co")})
+        assert "canonical_employer_id" not in contested
+
+
+class TestRefreshDue:
+    def _seed(self, db, name, status, **extra):
+        doc = {"key": logo_svc.logo_key(name), "company": logo_svc.normalize_company(name),
+               "status": status, "s3_key": None, "fetched_at": datetime.now(timezone.utc)}
+        doc.update(extra)
+        db.company_logos.insert_one(doc)
+
+    def test_picks_what_is_due_and_skips_what_is_current(self, logo_db, fake_s3, monkeypatch):
+        now = datetime.now(timezone.utc)
+        self._seed(logo_db, "Pending Co", "pending", fetched_at=None)
+        self._seed(logo_db, "CROWDSTRIKE INC", "missing")                       # v1 miss
+        self._seed(logo_db, "Fresh Miss", "missing", resolver_version=logo_svc.RESOLVER_VERSION)
+        self._seed(logo_db, "Old Miss", "missing", resolver_version=logo_svc.RESOLVER_VERSION,
+                   fetched_at=now - timedelta(days=31))
+        calls = []
+
+        def fake(domain, deadline=None):
+            calls.append(domain)
+            return {"data": _png(64), "content_type": "image/png", "ext": "png", "source": "google"}
+
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain", fake)
+        res = logo_svc.refresh_due(budget_seconds=60, workers=1)
+        assert res["picked"] == 3
+        assert res["outcomes"] == {"missing_expired:ok": 1, "missing_old_resolver:ok": 1,
+                                   "pending:ok": 1}
+        assert "crowdstrike.com" in calls and "freshmiss.com" not in calls
+        assert logo_db.company_logos.count_documents({"status": "ok"}) == 3
+        # Nothing is due any more except the fresh miss's 30-day wait.
+        assert logo_svc.refresh_due(budget_seconds=60)["picked"] == 0
+
+    def test_ok_logo_replaced_only_by_proven_domain(self, logo_db, fake_s3, monkeypatch):
+        _employer(logo_db, "emp_aaaaaaaaaaaa", "Texas Instruments", "ti.com")
+        self._seed(logo_db, "Texas Instruments", "ok", domain="texasinstruments.com",
+                   s3_key="company-logos/v1/old.png", content_type="image/png",
+                   canonical_employer_id="emp_aaaaaaaaaaaa")
+        self._seed(logo_db, "Guess Only Co", "ok", domain="guessonly.com",
+                   s3_key="company-logos/v1/g.png", content_type="image/png")
+        calls = []
+
+        def fake(domain, deadline=None):
+            calls.append(domain)
+            return {"data": _png(64), "content_type": "image/png", "ext": "png", "source": "google"}
+
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain", fake)
+        res = logo_svc.refresh_due(budget_seconds=60, workers=1)
+        assert res["outcomes"] == {"ok_recheck:kept": 1, "ok_recheck:replaced": 1}
+        assert calls == ["ti.com"]   # a guess-only company is never refetched
+        ti = logo_db.company_logos.find_one({"key": logo_svc.logo_key("Texas Instruments")})
+        assert ti["domain"] == "ti.com" and ti["domain_basis"] == "registry"
+        assert logo_db.company_logos.count_documents(
+            {"resolver_version": logo_svc.RESOLVER_VERSION}) == 2
+
+    def test_recheck_that_finds_nothing_keeps_the_working_logo(self, logo_db, fake_s3, monkeypatch):
+        _employer(logo_db, "emp_aaaaaaaaaaaa", "Texas Instruments", "ti.com")
+        self._seed(logo_db, "Texas Instruments", "ok", domain="texasinstruments.com",
+                   s3_key="company-logos/v1/old.png", content_type="image/png")
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain", lambda domain, deadline=None: None)
+        res = logo_svc.refresh_due(budget_seconds=60, workers=1)
+        assert res["outcomes"] == {"ok_recheck:kept": 1}
+        doc = logo_db.company_logos.find_one({"key": logo_svc.logo_key("Texas Instruments")})
+        assert doc["status"] == "ok" and doc["s3_key"] == "company-logos/v1/old.png"
+
+    def test_budget_spent_defers_the_rest(self, logo_db, monkeypatch):
+        self._seed(logo_db, "Pending Co", "pending", fetched_at=None)
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain",
+                            lambda domain, deadline=None: (_ for _ in ()).throw(AssertionError("fetched")))
+        res = logo_svc.refresh_due(budget_seconds=-1)
+        assert res["outcomes"] == {"pending:deferred": 1}
+        assert logo_db.company_logos.find_one({})["status"] == "pending"
+
+    def test_store_failure_is_reported_and_stays_pending(self, logo_db, monkeypatch):
+        self._seed(logo_db, "Pending Co", "pending", fetched_at=None)
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain",
+                            lambda domain, deadline=None: {"data": _png(64), "content_type": "image/png",
+                                                           "ext": "png", "source": "google"})
+        monkeypatch.setattr(logo_svc, "_store_s3",
+                            lambda *a: (_ for _ in ()).throw(ValueError("no bucket")))
+        res = logo_svc.refresh_due(budget_seconds=60)
+        assert res["outcomes"] == {"pending:store_failed": 1}
+
+
+class TestLogoRefreshSchedule:
+    def test_scheduler_runs_logo_refresh_every_15_minutes(self):
+        import importlib.util
+        from pathlib import Path
+        path = Path(__file__).resolve().parents[1] / "services" / "scheduler" / "runner.py"
+        spec = importlib.util.spec_from_file_location("sched_runner_logo", path)
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        assert runner.EVERY["logo_refresh"] == 15
+
+    def test_dispatch_routes_to_refresh_due(self, monkeypatch):
+        from services import scheduled_jobs
+        seen = {}
+        monkeypatch.setattr(logo_svc, "refresh_due",
+                            lambda **kw: seen.update(kw) or {"picked": 0})
+        out = scheduled_jobs.dispatch_scheduled("logo_refresh")
+        assert out == {"job": "logo_refresh", "result": {"picked": 0}}
+        assert seen["budget_seconds"] < 15 * 60
+
+
+class TestGuessVerdict:
+    """A guessed domain must answer, must not be a parking/sale page, and must
+    not redirect away from the brand (all measured 2026-11-05)."""
+
+    class Page:
+        def __init__(self, url, status=200, text="<html>ok</html>"):
+            self.url, self.status_code, self.text = url, status, text
+            self.headers = {"Content-Type": "text/html"}
+
+        @property
+        def ok(self):
+            return self.status_code < 400
+
+    def _check(self, monkeypatch, page, domain, company):
+        monkeypatch.setattr(logo_svc, "_guarded_get", lambda url, deadline: page)
+        return _REAL_GUESS_VERDICT(domain, company, deadline=10**12)
+
+    def test_nothing_answering_is_unknown(self, monkeypatch):
+        assert self._check(monkeypatch, None, "bestbuy.com", "best buy co inc") == "unknown"
+
+    def test_parking_hosts_are_not_theirs(self, monkeypatch):
+        for host in ("https://gcd.com/protected-domain-holder/", "https://www.hugedomains.com/x",
+                     "https://www.atom.com/name/c3ai"):
+            assert self._check(monkeypatch, self.Page(host), "x.com", "x inc") == "no"
+
+    def test_for_sale_text_is_not_theirs(self, monkeypatch):
+        page = self.Page("https://acme.com/", text="<h1>This domain is for sale!</h1>")
+        assert self._check(monkeypatch, page, "acme.com", "acme inc") == "no"
+
+    def test_redirect_away_from_the_brand_is_not_theirs(self, monkeypatch):
+        page = self.Page("https://atmos.earth/political-landscapes/meet-the-women/")
+        assert self._check(monkeypatch, page, "thedowchemical.com", "the dow chemical company") == "no"
+        page = self.Page("https://www.worldwidewebfx.com/")
+        assert self._check(monkeypatch, page, "zoomcommunications.com", "zoom communications inc") == "no"
+
+    @pytest.mark.parametrize("company,guess,final", [
+        ("the dow chemical company", "dowchemical.com", "www.dow.com"),
+        ("wsp usa inc", "wspusa.com", "www.wsp.com"),
+        ("electronic arts", "electronicarts.com", "www.ea.com"),
+        ("educational testing service", "educationaltestingservice.com", "www.ets.org"),
+        ("the bank of new york mellon", "bankofnewyorkmellon.com", "www.bny.com"),
+        ("genentech usa inc", "genentech.com", "www.gene.com"),
+        ("schneider electric usa inc", "schneiderelectric.com", "www.se.com"),
+        ("the sherwin-williams company", "sherwinwilliams.com", "www.sherwin-williams.com"),
+    ])
+    def test_redirect_to_the_brand_is_theirs(self, monkeypatch, company, guess, final):
+        assert self._check(monkeypatch, self.Page(f"https://{final}/"), guess, company) == "yes"
+
+    def test_bot_wall_is_an_answer(self, monkeypatch):
+        page = self.Page("https://www.crowdstrike.com/", status=403, text="Access denied")
+        assert self._check(monkeypatch, page, "crowdstrike.com", "crowdstrike inc") == "yes"
+        page = self.Page("https://validate.perfdrive.com/?ssa=1")
+        assert self._check(monkeypatch, page, "persistent.com", "persistent systems inc") == "yes"
+
+    def _fake_fetch(self, calls, png):
+        def fake(domain, deadline=None):
+            calls.append(domain)
+            return {"data": png, "content_type": "image/png", "ext": "png", "source": "google"}
+        return fake
+
+    def test_rejected_guess_is_skipped_for_the_next_candidate(self, logo_db, fake_s3, monkeypatch):
+        monkeypatch.setattr(logo_svc, "_guess_verdict", lambda domain, company, deadline:
+                            "no" if domain == "thedowchemical.com" else "yes")
+        calls = []
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain", self._fake_fetch(calls, _png(64)))
+        monkeypatch.setattr(logo_svc, "candidate_domains", lambda name, cid=None: [
+            ("thedowchemical.com", "guess"), ("dowchemical.com", "guess")])
+        assert logo_svc.get_or_fetch("The Dow Chemical Company")["status"] == "ok"
+        assert calls == ["dowchemical.com"]
+
+    def test_unknown_guess_needs_a_full_size_service_icon(self, logo_db, fake_s3, monkeypatch):
+        monkeypatch.setattr(logo_svc, "_guess_verdict", lambda domain, company, deadline: "unknown")
+        calls = []
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain", self._fake_fetch(calls, _png(16)))
+        assert logo_svc.get_or_fetch("Thermo Fisher Scientific Inc") is None   # stale 16px icon
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain", self._fake_fetch(calls, _png(48)))
+        assert logo_svc.get_or_fetch("Best Buy Co Inc", force=True)["status"] == "ok"
+
+    def test_proven_domains_skip_the_check(self, logo_db, fake_s3, monkeypatch):
+        monkeypatch.setattr(logo_svc, "_guess_verdict",
+                            lambda *a: (_ for _ in ()).throw(AssertionError("checked")))
+        calls = []
+        monkeypatch.setattr(logo_svc, "fetch_logo_for_domain", self._fake_fetch(calls, _png(16)))
+        assert logo_svc.get_or_fetch("General Motors")["status"] == "ok"   # gm.com, override
+        assert calls == ["gm.com"]

@@ -1,35 +1,40 @@
 #!/usr/bin/env python3
-"""Warm the company_logos cache across every company catalog.
+"""Find and fix missing company logos. DRY RUN unless --apply.
 
-Iterates the MNC, enterprise, career-pages (board ATS) and Workday tenant
-catalogs, deduplicates by normalized company name, and runs
-``company_logo_service.get_or_fetch`` for each with polite pacing (0.3s
-between companies). Fetches are Google-favicon-first, SSRF-guarded, capped
-at 512KB, and cached in S3 + the ``company_logos`` Mongo collection;
-failures are negative-cached as "missing" (refetch-eligible after 30 days).
+The scheduler's ``logo_refresh`` job (every 15 minutes, see
+``company_logo_service.refresh_due``) does this on its own; this script is
+for measuring it and for clearing a backlog in one go.
 
-Run from the repo root (needs MongoDB + AWS creds for S3):
+What counts as "due" (in this order): companies stamped on a board but never
+fetched, misses written by an older resolver (``RESOLVER_VERSION``), misses
+past the 30-day negative cache, and working logos an older resolver chose
+(rechecked against registry/catalog evidence only, never replaced by a guess).
 
-    python scripts/warm_company_logos.py                # warm everything
-    python scripts/warm_company_logos.py --limit 25     # first 25 companies
-    python scripts/warm_company_logos.py --dry-run      # print keys/domains only
+Run from the repo root:
 
-Prints ok/missing counts at the end. --dry-run touches neither the network
-nor the database.
+    python scripts/warm_company_logos.py                     # dry run: what is due, which domains each would try
+    python scripts/warm_company_logos.py --source catalogs   # dry run over the catalogs only: no DB, no network
+    python scripts/warm_company_logos.py --probe --limit 80  # dry run that ALSO asks the icon services; writes nothing
+    python scripts/warm_company_logos.py --apply             # fetch + store everything due
+
+The dry run READS the ``company_logos`` and ``employers`` collections (except
+with ``--source catalogs``). ``--probe`` adds outbound requests to Google's
+and DuckDuckGo's icon services and the companies' own sites. ``--apply``
+writes ``company_logos`` and the icon bytes to the app's S3 store, so it must
+run where that store is reachable (the Oracle box); anywhere else the fetch
+succeeds, the store fails, and the doc is left ``pending`` for the scheduler.
 """
 from __future__ import annotations
 
 import argparse
 import sys
-import time
+from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 for _p in (str(REPO_ROOT / "shared" / "python"), str(REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
-
-PACING_SECONDS = 0.3
 
 
 def iter_catalog_companies():
@@ -57,43 +62,115 @@ def iter_catalog_companies():
             yield name
 
 
+def _fmt_candidates(candidates):
+    return ", ".join(f"{d} [{b}]" for d, b in candidates) or "(none)"
+
+
+def dry_run_catalogs(limit: int) -> int:
+    from services import company_logo_service as svc
+    n = 0
+    for name in iter_catalog_companies():
+        if limit and n >= limit:
+            break
+        n += 1
+        cands = svc.candidate_domains(name, use_registry=False)
+        print(f"[dry-run] {name} -> key={svc.logo_key(name)} try: {_fmt_candidates(cands)}")
+    print(f"\ncatalog companies listed={n} (dry run - no database, no network)")
+    return 0
+
+
+def dry_run_cache(limit: int, probe: bool) -> int:
+    from services import company_logo_service as svc
+    svc._index_ensured = True   # a dry run issues no create_index either: reads only
+    coll = svc._coll()
+    print("company_logos by status:")
+    for row in coll.aggregate([{"$group": {"_id": {"status": "$status",
+                                                    "resolver": "$resolver_version"},
+                                           "n": {"$sum": 1}}},
+                               {"$sort": {"n": -1}}]):
+        print(f"  {row['_id']}: {row['n']}")
+
+    stuck = coll.count_documents({"status": "pending", "fetched_at": {"$ne": None}})
+    print(f"pending after a FAILED STORE (icon fetched, S3 write failed): {stuck}")
+
+    picked = svc.due_docs(limit or 1_000_000)
+    print(f"\ndue now: {len(picked)}  " + str(dict(Counter(label for label, _ in picked))))
+    outcome = Counter()
+    for label, doc in picked[: (limit or 60)]:
+        cands = svc.candidate_domains(doc["company"], doc.get("canonical_employer_id"))
+        line = (f"[{label}] {doc['company']!r} had={doc.get('domain') or '-'}"
+                f" -> try: {_fmt_candidates(cands)}")
+        if probe:
+            found = (svc.fetch_for_candidates(cands, svc.BACKGROUND_BUDGET_S, company=doc["company"])
+                     if cands else None)
+            if found:
+                domain, basis, got = found
+                width = svc._image_width(got["data"])
+                line += f"\n      FOUND {domain} [{basis}] via {got['source']} ({width or '?'}px)"
+                outcome[f"{label}:found:{basis}"] += 1
+            else:
+                line += "\n      none (stays a monogram)"
+                outcome[f"{label}:none"] += 1
+        print(line)
+    if probe:
+        print("\nprobe outcomes (nothing written):")
+        for k, v in sorted(outcome.items()):
+            print(f"  {k}: {v}")
+    print("\n(dry run - nothing written; pass --apply to fetch and store)")
+    return 0
+
+
+def apply(source: str, limit: int, batch: int) -> int:
+    from services import company_logo_service as svc
+    if source in ("catalogs", "all"):
+        names = {svc.normalize_company(n): svc.logo_key(n) for n in iter_catalog_companies()}
+        svc._ensure_docs(names)
+        print(f"catalog companies ensured: {len(names)}")
+
+    def report(label, doc, outcome):
+        print(f"[{outcome:>12}] ({label}) {doc['company']}")
+
+    totals = Counter()
+    done = 0
+    while not limit or done < limit:
+        size = min(batch, limit - done) if limit else batch
+        res = svc.refresh_due(budget_seconds=3600, limit=size, workers=4, on_result=report)
+        if not res["picked"]:
+            break
+        done += res["picked"]
+        for k, v in res["outcomes"].items():
+            totals[k] += v
+        progressed = sum(v for k, v in res["outcomes"].items()
+                         if k.rsplit(":", 1)[-1] in ("ok", "missing", "kept", "replaced"))
+        if not progressed:  # only store failures / errors left: stop, don't spin
+            print("no progress this round (store unreachable?) - stopping")
+            break
+    print("\ntotals:")
+    for k, v in sorted(totals.items()):
+        print(f"  {k}: {v}")
+    return 0
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Warm the company logo cache.")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="print key/domain per company; no network, no DB")
+    parser = argparse.ArgumentParser(description="Find and fix missing company logos.")
+    parser.add_argument("--apply", action="store_true",
+                        help="fetch and store (default: dry run, nothing written)")
+    parser.add_argument("--probe", action="store_true",
+                        help="dry run that also asks the icon services (no writes)")
+    parser.add_argument("--source", choices=("all", "cache", "catalogs"), default="all",
+                        help="catalogs = the shipped catalogs; cache = companies already "
+                             "stamped on boards (company_logos); all = both")
     parser.add_argument("--limit", type=int, default=0, metavar="N",
                         help="stop after N companies (0 = all)")
+    parser.add_argument("--batch", type=int, default=500, metavar="N",
+                        help="companies per refresh round with --apply")
     args = parser.parse_args()
 
-    from services.company_logo_service import get_or_fetch, logo_key, resolve_domain
-
-    ok = missing = 0
-    processed = 0
-    for name in iter_catalog_companies():
-        if args.limit and processed >= args.limit:
-            break
-        processed += 1
-        key = logo_key(name)
-        domain = resolve_domain(name)
-        if args.dry_run:
-            print(f"[dry-run] {name} -> key={key} domain={domain or '(none)'}")
-            continue
-        result = None
-        try:
-            result = get_or_fetch(name)
-        except Exception as e:  # keep warming; one company must not stop the run
-            print(f"[error] {name}: {type(e).__name__}")
-        if result and result.get("status") == "ok":
-            ok += 1
-            print(f"[ok]      {name} -> {result['s3_key']}")
-        else:
-            missing += 1
-            print(f"[missing] {name} (domain={domain or '(none)'})")
-        time.sleep(PACING_SECONDS)
-
-    print(f"\nprocessed={processed} ok={ok} missing={missing}"
-          + (" (dry run - nothing fetched)" if args.dry_run else ""))
-    return 0
+    if args.apply:
+        return apply(args.source, args.limit, args.batch)
+    if args.source == "catalogs":
+        return dry_run_catalogs(args.limit)
+    return dry_run_cache(args.limit, args.probe)
 
 
 if __name__ == "__main__":

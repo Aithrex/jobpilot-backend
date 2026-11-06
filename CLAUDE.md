@@ -599,6 +599,38 @@ replays each board and compares it with every posting crawled in the window,
 per vendor, with the reason for each miss. `AUDIT_PYPATH` replays a
 candidate build's code against live data before it ships.
 
+## Company logos (`company_logo_service.py`, resolver v2, 2026-11-05)
+
+Every board card carries `logo_url: /api/jobs/logo/<sha1(company)>`; the route
+serves a cached icon or 404s (the FE then draws a letter). v1 guessed
+`<whole name>.com`, so "CROWDSTRIKE INC" asked crowdstrikeinc.com, and it threw
+away every icon under 32px: on 123 real employers it found **48** logos. v2
+finds **106** from names alone and **119** with the registry's domains:
+
+- **Domains, strongest first** (`candidate_domains`): the `employers`
+  registry (by the posting's `canonical_employer_id`, else a unique
+  `name_key`), catalog domain/careers host, `DOMAIN_OVERRIDES`, a domain in the
+  name, then guesses with the legal/region tail stripped. A hiring-software
+  host (`*.oraclecloud.com`, `*.myworkdayjobs.com` ...) is never a logo
+  domain: JPMorgan's card showed Oracle's icon.
+- **A guess must prove itself** (`_guess_verdict`): parked/for-sale pages and
+  redirects to sites without the brand are refused (grubhubholdings.com is a
+  GoDaddy holder page, thedowchemical.com an activist article). Name
+  collisions (Cruise, Persistent Systems) are NOT catchable this way; the
+  registry's verified domains are the fix.
+- **Ladder per domain:** Google s2 -> DuckDuckGo -> `/favicon.ico` ->
+  apple-touch icons -> homepage `<link rel=icon>`. Both services answer "no
+  icon" with a 404 and a fixed placeholder (`PLACEHOLDER_SHA1`).
+- **`logo_refresh` (worker, every 15 min, 240 s)** fetches what is due:
+  never-fetched companies, misses an older `RESOLVER_VERSION` wrote, misses
+  past 30 days, and working logos to recheck against PROVEN domains only.
+  **Bump `RESOLVER_VERSION` whenever resolution changes**, or old misses wait
+  out their 30 days. The serving route never refetches an old miss inline.
+- `scripts/warm_company_logos.py` is dry-run by default (`--probe` asks the
+  icon services without writing). `scripts/` is not in the app image, so
+  `--apply` from a laptop cannot reach the S3 store; the worker job is the
+  real path.
+
 ## Where the code actually runs
 
 **One Oracle Cloud box** (`jobpilot-ingest`, A1 VM, us-ashburn-1) runs everything:

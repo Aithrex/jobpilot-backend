@@ -36,7 +36,10 @@ CATCH_UP_SECONDS = 600
 # board_refresh keeps every recently active user's For-you board built, so
 # opening it is a read (services/board_snapshot.py). Each board is rebuilt once
 # it is BOARD_REFRESH_MINUTES (30) old; the 10-minute tick only bounds how late.
-EVERY = {"digest_hourly": 60, "learning_due": 10, "board_refresh": 10}
+# logo_refresh fetches company icons that are due (never fetched, or missed
+# under an older resolver) inside a 4-minute budget (company_logo_service).
+EVERY = {"digest_hourly": 60, "learning_due": 10, "board_refresh": 10,
+         "logo_refresh": 15}
 DAILY = {
     "bandit_nightly": (3, 0),
     "trend_aggregate": (4, 0),

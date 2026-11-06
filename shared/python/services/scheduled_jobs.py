@@ -334,6 +334,13 @@ def dispatch_scheduled(name: str) -> Dict[str, Any]:
             # tick, and the runner's `busy` set stops two ticks overlapping.
             from services import board_snapshot
             return {"job": name, "result": board_snapshot.refresh_due(budget_seconds=540)}
+        if name == "logo_refresh":
+            # Inline on the scheduler thread like board_refresh: a few icon
+            # fetches at a time, inside a budget well under the 15-minute
+            # tick. It is what fetches logos for companies new to the boards
+            # and refetches the ones an older resolver could not find.
+            from services import company_logo_service
+            return {"job": name, "result": company_logo_service.refresh_due(budget_seconds=240)}
         if name == "bandit_nightly":
             return {"job": name, "result": run_bandit_nightly()}
         if name == "learning_due":
