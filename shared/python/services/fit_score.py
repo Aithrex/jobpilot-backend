@@ -2332,6 +2332,12 @@ _YEARS_ALTERNATE_PATH = re.compile(
     r"(?:degree|diploma|program[^.\n]{0,70}),?\s+or\s+\d{1,2}\s*\+?\s*(?:or more\s+)?(?:years?|yrs?)")
 # Everything after this is the way around the requirement stated before it.
 _YEARS_LIEU_TAIL = re.compile(r",?\s*(?:or\s+)?in lieu of.*$")
+# A parenthetical that names a way around the DEGREE is an aside, not the
+# requirement: "Bachelor's with 2-6 years of experience (additional experience
+# may substitute for degree)" asks for two years. Only the aside is dropped; the
+# old rule skipped the whole sentence on the word "substitute" (Leidos, live
+# 2026-11-05). "(or 4 years in lieu of a degree)" goes with its number.
+_YEARS_ALTERNATE_ASIDE = re.compile(r"\([^)]*(?:in lieu|substitut|will meet|no degree)[^)]*\)")
 _YEARS_STATED_RULE = re.compile(r"(?<![a-z])(?:minimum|requires?|must have|at least)(?![a-z])")
 _FIELD_PREFERENCE = re.compile(r"prefer(?:ably|red)\s+(?:in|within|from|with|at)(?![a-z])[^.;,\n]*")
 _PARENTHETICAL = re.compile(r"\([^)]*\)")
@@ -2405,7 +2411,7 @@ def _required_years(blob: str, *, preferred_fallback: bool = True) -> Optional[i
             elif _REQUIRED_HEAD.search(stripped):
                 mode = "required"
         for sentence in _SENTENCE_SPLIT.split(stripped):
-            sentence = _YEARS_LIEU_TAIL.sub("", sentence)
+            sentence = _YEARS_LIEU_TAIL.sub("", _YEARS_ALTERNATE_ASIDE.sub("", sentence))
             if not sentence or _YEARS_ALTERNATE_PATH.search(sentence):
                 continue
             for m in _HEADLINE_YEARS_RE.finditer(sentence):
