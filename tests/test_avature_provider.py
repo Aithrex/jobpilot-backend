@@ -93,15 +93,19 @@ def test_fhr_rows_carry_their_location():
     assert [(j.source_job_id, j.location) for j in jobs][0] == ("195994", "Corpus Christi, Texas")
 
 
-@pytest.mark.parametrize("response", [(403, None), (None, None), (200, "<html>No jobs found</html>")])
+@pytest.mark.parametrize("response", [(None, None), (200, "<html>No jobs found</html>")])
 def test_an_unread_board_is_unverified_never_empty(response):
     ctx = _ctx({FREQ: response}, [])
     assert list(AvatureProvider().list_jobs(_freq(), ctx)) == [] and ctx.listing_truncated
 
 
-def test_a_challenge_raises():
+@pytest.mark.parametrize("response", [(403, None), (405, None), (429, None), (503, None),
+                                     (200, "<title>Verify you are human</title>")])
+def test_a_challenge_raises(response):
     with pytest.raises(ChallengeError):
-        list(AvatureProvider().list_jobs(_freq(), _ctx({FREQ: (429, None)}, [])))
+        list(AvatureProvider().list_jobs(_freq(), _ctx({FREQ: response}, [])))
+    verdict = AvatureProvider().validate(_freq(), _ctx({FREQ: response}, []))
+    assert verdict.status == "blocked"
 
 
 def test_detail_reads_the_page_body_and_the_exact_date():

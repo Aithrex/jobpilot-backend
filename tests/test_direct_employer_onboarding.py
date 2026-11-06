@@ -76,13 +76,10 @@ def test_pending_companies_stay_pending_and_never_carry_an_endpoint():
         assert res["outcome"] == ob.PENDING
 
 
-def test_providers_another_agent_builds_are_named_not_rowed():
-    expected = {"Destro": "breezyhr", "GM Performance Power Units": "dayforce",
+def test_providers_still_missing_are_named_not_rowed():
+    expected = {"GM Performance Power Units": "dayforce",
                 "Inspira Financial": "adp_myjobs",
-                "Lincoln Institute of Land Policy": "paycom",
-                "Universal Background Screening": "appone",
-                "RevSpring": "newton_paycor", "Spring Arbor University": "newton_paycor",
-                "Epic": "avature", "Frequentis": "avature",
+                "Epic": "avature",
                 "TikTok USDS Joint Venture": "tiktok_usds"}
     for name, need in expected.items():
         entry = plan_mod.LEAD_PLAN[name]
@@ -91,6 +88,34 @@ def test_providers_another_agent_builds_are_named_not_rowed():
                              validation=None, members={})
         assert res["outcome"] == ob.UNSUPPORTED
         assert res["why"] == f"unsupported_pending_provider:{need}"
+
+
+def test_rechecked_quick_wins_name_the_actual_registered_provider_and_crawl_member():
+    members = ob.crawl_members()
+    for name, vendor in {
+        "Destro": "breezy", "Lincoln Institute of Land Policy": "paycom",
+        "Universal Background Screening": "appone", "RevSpring": "paycor",
+        "Spring Arbor University": "paycor", "Frequentis": "avature",
+        "Flint Hills Resources": "avature", "Fervo Energy": "greenhouse",
+        "MATS Research": "rippling", "Orange Logic": "careers_page",
+        "Rugged Science": "careers_page", "Nous Research": "careers_page",
+    }.items():
+        entry = plan_mod.LEAD_PLAN[name]
+        assert entry["endpoint"]["vendor"] == vendor, name
+        assert registry.readiness(vendor)["state"] == registry.READY
+        assert ob.member_for(entry["endpoint"], members) is not None, name
+        assert entry["checked_at"].startswith("2026-11-05T"), name
+        assert entry["evidence_url"].startswith("https://"), name
+
+
+@pytest.mark.parametrize("name,route", [("Siemens", "SearchJobs"), ("Siemens Energy", "Jobs")])
+def test_new_avature_boards_reach_the_crawler_with_the_proven_listing_template(name, route):
+    entry = plan_mod.TOP_EMPLOYER_PLAN[name]
+    assert entry["plan"] == "added"
+    member = ob.member_for(entry["endpoint"], ob.crawl_members())
+    assert member is not None
+    endpoint = jw._endpoint_from_member(member)
+    assert registry.get("avature").board_url(endpoint).endswith("/" + route)
 
 
 def test_every_added_row_is_served_by_the_crawl_tables_with_its_exact_identity():
@@ -218,6 +243,27 @@ def test_registration_records_carry_the_official_chain_as_ownership():
     assert recs["candidate"]["owner_domain"] == "swift.com"
 
 
+def test_registration_records_keep_the_new_observation_time():
+    entry = dict(plan_mod.LEAD_PLAN["Swift"], checked_at="2026-11-05T22:45:00Z")
+    report = ob.build_report(validations={"Swift": _ok_validation(47)}, cohorts=("leads",))
+    row = next(r for r in report["cohorts"]["leads"]["rows"] if r["company"] == "Swift")
+    recs = ob.registration_records(row, entry)
+    evidence = recs["career_source"]["ownership_evidence"][0]
+    assert evidence["at"].isoformat() == "2026-11-05T22:45:00+00:00"
+    assert "2026-11-05T22:45:00+00:00" in recs["candidate"]["verification_reason"]
+
+
+def test_mats_registration_names_the_employer_board_not_the_shared_vendor_host():
+    report = ob.build_report(validations={"MATS Research": _ok_validation(9)}, cohorts=("leads",))
+    row = next(r for r in report["cohorts"]["leads"]["rows"] if r["company"] == "MATS Research")
+    entry = plan_mod.LEAD_PLAN["MATS Research"]
+    recs = ob.registration_records(row, entry)
+    assert recs["career_source"]["canonical_endpoint"] == "https://ats.rippling.com/mats-research"
+    member = ob.member_for(entry["endpoint"], ob.crawl_members())
+    assert registry.get("rippling").board_url(jw._endpoint_from_member(member)) == \
+        "https://ats.rippling.com/mats-research"
+
+
 def test_apply_writes_ownership_through_existing_services(mock_db, monkeypatch):
     monkeypatch.setattr(ob, "_db", lambda: mock_db)
     report = ob.build_report(validations={"Swift": _ok_validation(47)},
@@ -327,6 +373,16 @@ def test_shared_board_with_entity_filter_counts_only_the_entity(monkeypatch):
             _raw("2", "Accountant", dept="Deltek")]
     v = _validate(monkeypatch, rows, _Ctx(payload={"total": 2}),
                   entity_filter="SoftWriters")
+    assert v["requisitions"] == 1 and v["filtered_other_entity"] == 1
+
+
+def test_shared_board_keeps_the_entity_proved_by_its_listing_subtitle(monkeypatch):
+    own = _raw("1", "Operations Engineer")
+    own.extra = {"listing_subtitle": "Flint Hills Resources, Corpus Christi, Texas"}
+    other = _raw("2", "Operations Engineer")
+    other.extra = {"listing_subtitle": "Georgia-Pacific, Atlanta, Georgia"}
+    v = _validate(monkeypatch, [own, other], _Ctx(payload={"total": 2}),
+                  entity_filter="Flint Hills Resources")
     assert v["requisitions"] == 1 and v["filtered_other_entity"] == 1
 
 

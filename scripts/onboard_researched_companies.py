@@ -373,6 +373,9 @@ def validate_endpoint(endpoint: Dict[str, Any], *, cap: int = 400,
         if entity_filter:
             blob = " ".join(str(getattr(job, k, "") or "") for k in
                             ("department", "description", "title"))
+            extra = getattr(job, "extra", {}) or {}
+            blob += " " + " ".join(str(extra.get(k) or "") for k in
+                                   ("listing_subtitle", "legal_entity", "hiring_organization"))
             if entity_filter.lower() not in blob.lower():
                 out["filtered_other_entity"] += 1
                 continue
@@ -751,8 +754,11 @@ def registration_records(row: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str
             board = prov.board_url(endpoint)
         except Exception:
             board = ""
-    research_at = datetime.strptime(plan_mod.RESEARCH_DATE, "%Y-%m-%d").replace(
-        tzinfo=timezone.utc)
+    checked_at = entry.get("checked_at")
+    research_at = (datetime.fromisoformat(str(checked_at).replace("Z", "+00:00"))
+                   if checked_at else
+                   datetime.strptime(plan_mod.RESEARCH_DATE, "%Y-%m-%d").replace(
+                       tzinfo=timezone.utc))
     lead = next((l for l in leads_mod.LEADS if l["company"] == row["company"]), {})
     career_url = entry.get("career_url") or lead.get("official_career_url") or ""
     evidence_url = entry.get("evidence_url") or lead.get("evidence_url") or career_url
@@ -785,7 +791,7 @@ def registration_records(row: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str
         "discovery_method": "operator_review", "evidence_url": evidence_url,
         "evidence_at": research_at, "verification_state": "verified",
         "verification_reason": (f"{entry.get('state', '')} chain on "
-                                f"{plan_mod.RESEARCH_DATE}; validated "
+                                f"{research_at.isoformat()}; validated "
                                 f"{v.get('at')}: {v.get('requisitions')} requisitions"),
         "canonical_employer_id": eid,
     }

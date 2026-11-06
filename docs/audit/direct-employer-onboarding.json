@@ -1,6 +1,6 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T07:49:58Z",
+ "generated_at": "2026-11-06T00:03:17Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
@@ -8,12 +8,12 @@
    "denominator": 174,
    "counts": {
     "existing_covered": 5,
-    "existing_unhealthy_or_moved": 0,
-    "new_validated": 47,
+    "existing_unhealthy_or_moved": 4,
+    "new_validated": 55,
     "excluded": 61,
     "review": 31,
     "blocked": 0,
-    "unsupported": 22,
+    "unsupported": 10,
     "pending": 8
    },
    "rows": [
@@ -502,7 +502,7 @@
      "why": "unsupported_pending_provider:own_site",
      "member_key": "",
      "provider_needed": "own_site",
-     "note": "Official roles apply via LinkedIn: manual handoff only.",
+     "note": "2026-11-05: official company page lists 3 LinkedIn apply links. Existing own-page discovery remains manual handoff; no LinkedIn fetching or application automation.",
      "validation": {
       "status": "not_run"
      }
@@ -1173,17 +1173,41 @@
      "disposition": "eligible_direct",
      "evidence_state": "CHAIN",
      "domain": "destroai.com",
-     "provider": "breezyhr",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:breezyhr",
-     "member_key": "",
-     "provider_needed": "breezyhr",
-     "note": "",
+     "provider": "breezy",
+     "endpoint": {
+      "vendor": "breezy",
+      "tenant": "destro-ai",
+      "site": "",
+      "host": "destro-ai.breezy.hr"
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "breezy-destro-ai",
+     "provider_needed": "",
+     "note": "2026-11-05: reconciled already-seeded source; live provider returned 13 rows.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:44:59.834641Z",
+      "vendor": "breezy",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 13,
+      "unique_ids": 13,
+      "duplicate_rows": 0,
+      "requisitions": 13,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Robotics Software Engineer - Field Deployment & Support",
+       "Robotics Software Engineer - Field Deployment & Support",
+       "Robotics Systems Engineer"
+      ],
+      "detail": "",
+      "member_key": "breezy-destro-ai"
      }
     },
     {
@@ -1332,7 +1356,7 @@
      "why": "unsupported_pending_provider:avature",
      "member_key": "",
      "provider_needed": "avature",
-     "note": "",
+     "note": "2026-11-05: official /jobs publishes a Next.js avaturePositions payload with open/published flags. Generic own-site parser returned 10 navigation/category links while the rendered board names 46 positions; those are not validated requisitions. Do not seed until a reader proves the published job/link mapping.",
      "validation": {
       "status": "not_run"
      }
@@ -1394,19 +1418,41 @@
     {
      "company": "Fervo Energy",
      "disposition": "eligible_direct",
-     "evidence_state": "OWN",
+     "evidence_state": "CHAIN",
      "domain": "fervoenergy.com",
-     "provider": "own_site",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:own_site",
-     "member_key": "",
-     "provider_needed": "own_site",
-     "note": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "fervoenergy"
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "greenhouse-fervoenergy",
+     "provider_needed": "",
+     "note": "2026-11-05: official job detail embeds boards.greenhouse.io/embed/job_board/js?for=fervoenergy; Greenhouse returned 68 requisitions. Added exact proven board.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:27.569747Z",
+      "vendor": "greenhouse",
+      "status": "complete",
+      "source_reported": 68,
+      "parsed": 68,
+      "unique_ids": 68,
+      "duplicate_rows": 0,
+      "requisitions": 68,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Asset Manager, Market Asset Operations",
+       "Associate Corporate Counsel",
+       "CAD Specialist"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-fervoenergy"
      }
     },
     {
@@ -1562,16 +1608,43 @@
      "evidence_state": "FRONTEND",
      "domain": "fhr.com",
      "provider": "avature",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:avature",
-     "member_key": "",
-     "provider_needed": "avature",
-     "note": "Shared Koch Avature front end; must filter to FHR when built.",
+     "endpoint": {
+      "vendor": "avature",
+      "tenant": "koch.avature.net",
+      "site": "en_US/careers?732=6297&tags=rm.kcm.web.kcm-004",
+      "host": "koch.avature.net",
+      "extra": {
+       "entity_name": "Flint Hills Resources"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "avature-koch-avature-net-en_us-careers-732-6297-tags-rm-kcm-web-kcm-004",
+     "provider_needed": "",
+     "note": "2026-11-05: official FHR -> Koch careers page still links exact FHR-filtered Avature URL. Existing provider reads 42/42 and enforces entity_name on every row.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:16.297954Z",
+      "vendor": "avature",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 42,
+      "unique_ids": 42,
+      "duplicate_rows": 0,
+      "requisitions": 42,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Data Analyst",
+       "Wireless System Administrator",
+       "Reliability Engineer"
+      ],
+      "detail": "",
+      "member_key": "avature-koch-avature-net-en_us-careers-732-6297-tags-rm-kcm-web-kcm-004"
      }
     },
     {
@@ -1641,16 +1714,40 @@
      "evidence_state": "FRONTEND",
      "domain": "frequentis.com",
      "provider": "avature",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:avature",
-     "member_key": "",
-     "provider_needed": "avature",
-     "note": "",
+     "endpoint": {
+      "vendor": "avature",
+      "tenant": "jobs.frequentis.com",
+      "site": "careers",
+      "host": "jobs.frequentis.com"
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "avature-jobs-frequentis-com-careers",
+     "provider_needed": "",
+     "note": "2026-11-05: reconciled already-seeded source; live provider returned 62 rows.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:10.369103Z",
+      "vendor": "avature",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 62,
+      "unique_ids": 62,
+      "duplicate_rows": 0,
+      "requisitions": 62,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "ATM Service Engineer - Voice Solutions (all genders)",
+       "Automation Test Engineer",
+       "Contracts Specialist"
+      ],
+      "detail": "",
+      "member_key": "avature-jobs-frequentis-com-careers"
      }
     },
     {
@@ -1720,7 +1817,7 @@
      "why": "unsupported_pending_provider:own_site",
      "member_key": "",
      "provider_needed": "own_site",
-     "note": "Official roles apply via LinkedIn: manual handoff only.",
+     "note": "2026-11-05: official careers page lists 10 LinkedIn apply links. Existing own-page discovery remains manual handoff; no LinkedIn fetching or application automation.",
      "validation": {
       "status": "not_run"
      }
@@ -2187,16 +2284,32 @@
      "evidence_state": "CHAIN",
      "domain": "lincolninst.edu",
      "provider": "paycom",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:paycom",
-     "member_key": "",
-     "provider_needed": "paycom",
-     "note": "",
+     "endpoint": {
+      "vendor": "paycom",
+      "tenant": "AC25DFC6E5002C200B92C92109B3F768",
+      "site": "",
+      "host": "www.paycomonline.net"
+     },
+     "where": "seed",
+     "plan": "existing",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation blocked",
+     "member_key": "paycom-ac25dfc6e5002c200b92c92109b3f768",
+     "provider_needed": "",
+     "note": "2026-11-05: existing seed, ownership chain reconfirmed; Refusal: robots_refusal: https://www.paycomonline.net/v4/ats/web.php/jobs?clientkey=AC25DFC6E5002C200B92C92109B3F768. No blocked request was sent or retried.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:02.171749Z",
+      "status": "blocked",
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "source_reported": null,
+      "detail": "Refusal: robots_refusal: https://www.paycomonline.net/v4/ats/web.php/jobs?clientkey=AC25DFC6E5002C200B92C92109B3F768",
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": []
      }
     },
     {
@@ -2212,7 +2325,7 @@
      "why": "unsupported_pending_provider:own_site",
      "member_key": "",
      "provider_needed": "own_site",
-     "note": "",
+     "note": "2026-11-05: longbridge.com/robots.txt answered 403; stopped host, no listing probe or new row.",
      "validation": {
       "status": "not_run"
      }
@@ -2292,19 +2405,42 @@
     {
      "company": "MATS Research",
      "disposition": "eligible_direct",
-     "evidence_state": "OWN",
+     "evidence_state": "CONFIG",
      "domain": "matsprogram.org",
-     "provider": "own_site",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:own_site",
-     "member_key": "",
-     "provider_needed": "own_site",
-     "note": "Staff roles only; fellowships are not jobs.",
+     "provider": "rippling",
+     "endpoint": {
+      "vendor": "rippling",
+      "tenant": "mats-research",
+      "host": ""
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "rippling-mats-research",
+     "provider_needed": "",
+     "note": "2026-11-05: official page now embeds Rippling data-job-board-id=mats-research; replace the retired own-site listing (0/unverified). 19 location rows, 10 IDs, 9 staff requisitions and 1 Expression of Interest; no fellowships. Location merging follows in under-reads.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:46:08.431257Z",
+      "vendor": "rippling",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 19,
+      "unique_ids": 10,
+      "duplicate_rows": 9,
+      "requisitions": 9,
+      "filtered_non_requisition": 1,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Community Manager",
+       "Compute Operations Specialist",
+       "Cybersecurity Engineer (IT Security)"
+      ],
+      "detail": "",
+      "member_key": "rippling-mats-research"
      }
     },
     {
@@ -2552,17 +2688,44 @@
      "disposition": "eligible_direct",
      "evidence_state": "MANUAL",
      "domain": "nousresearch.com",
-     "provider": "own_site",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:own_site",
-     "member_key": "",
-     "provider_needed": "own_site",
-     "note": "Inline roles with email apply: manual handoff; never email automatically.",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "nousresearch.com",
+      "site": "",
+      "host": "nousresearch.com",
+      "extra": {
+       "listing_url": "https://nousresearch.com/careers"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-nousresearch-com",
+     "provider_needed": "",
+     "note": "2026-11-05: reconciled already-seeded source; live provider returned 13 rows.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:08.982887Z",
+      "vendor": "careers_page",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 13,
+      "unique_ids": 13,
+      "duplicate_rows": 0,
+      "requisitions": 13,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Office Manager",
+       "Machine Learning Engineer, Evals",
+       "Software Engineer"
+      ],
+      "detail": "",
+      "member_key": "careers_page-nousresearch-com"
      }
     },
     {
@@ -2634,17 +2797,44 @@
      "disposition": "eligible_direct",
      "evidence_state": "OWN",
      "domain": "orangelogic.com",
-     "provider": "own_site",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:own_site",
-     "member_key": "",
-     "provider_needed": "own_site",
-     "note": "",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "orangelogic.com",
+      "site": "",
+      "host": "orangelogic.com",
+      "extra": {
+       "listing_url": "https://www.orangelogic.com/about/careers"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-orangelogic-com",
+     "provider_needed": "",
+     "note": "2026-11-05: reconciled already-seeded source; live provider returned 7 rows.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:06.415954Z",
+      "vendor": "careers_page",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 7,
+      "unique_ids": 7,
+      "duplicate_rows": 0,
+      "requisitions": 7,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Product Marketing Manager, US",
+       "Financial Analyst, US",
+       "Applied AI Product Engineer, US"
+      ],
+      "detail": "",
+      "member_key": "careers_page-orangelogic-com"
      }
     },
     {
@@ -2993,17 +3183,33 @@
      "disposition": "eligible_direct",
      "evidence_state": "CHAIN",
      "domain": "revspringinc.com",
-     "provider": "newton_paycor",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:newton_paycor",
-     "member_key": "",
-     "provider_needed": "newton_paycor",
-     "note": "",
+     "provider": "paycor",
+     "endpoint": {
+      "vendor": "paycor",
+      "tenant": "8a7883d0798f66af0179905b7890010b",
+      "site": "aggregate",
+      "host": "recruitingbypaycor.com"
+     },
+     "where": "seed",
+     "plan": "existing",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation blocked",
+     "member_key": "paycor-8a7883d0798f66af0179905b7890010b-aggregate",
+     "provider_needed": "",
+     "note": "2026-11-05: existing seed, ownership chain reconfirmed; Refusal: robots_refusal: https://recruitingbypaycor.com/career/AggregateCareerHome.action?clientId=8a7883d0798f66af0179905b7890010b. No blocked request was sent or retried.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:44:59.474378Z",
+      "status": "blocked",
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "source_reported": null,
+      "detail": "Refusal: robots_refusal: https://recruitingbypaycor.com/career/AggregateCareerHome.action?clientId=8a7883d0798f66af0179905b7890010b",
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": []
      }
     },
     {
@@ -3072,17 +3278,44 @@
      "disposition": "eligible_direct",
      "evidence_state": "OWN",
      "domain": "ruggedscience.com",
-     "provider": "own_site",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:own_site",
-     "member_key": "",
-     "provider_needed": "own_site",
-     "note": "",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "ruggedscience.com",
+      "site": "",
+      "host": "ruggedscience.com",
+      "extra": {
+       "listing_url": "https://ruggedscience.com/careers/"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-ruggedscience-com",
+     "provider_needed": "",
+     "note": "2026-11-05: reconciled already-seeded source; live provider returned 9 rows.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:07.600909Z",
+      "vendor": "careers_page",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 9,
+      "unique_ids": 9,
+      "duplicate_rows": 0,
+      "requisitions": 9,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Software Developer / IT Specialist",
+       "Quality Director",
+       "Mechanical Designer"
+      ],
+      "detail": "",
+      "member_key": "careers_page-ruggedscience-com"
      }
     },
     {
@@ -3289,7 +3522,7 @@
      "why": "shared Roper UKG board; the UKG provider cannot filter to the hiring entity, and importing every Roper job as SoftWriters is wrong",
      "member_key": "",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05: official page still links Roper shared UKG board. recruiting.ultipro.com robots disallows the linked OpportunityDetail; no probe beyond robots, no unfiltered source added.",
      "validation": {
       "status": "not_run"
      }
@@ -3335,17 +3568,31 @@
      "disposition": "eligible_direct",
      "evidence_state": "CHAIN",
      "domain": "springarbor.edu",
-     "provider": "newton_paycor",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:newton_paycor",
-     "member_key": "",
-     "provider_needed": "newton_paycor",
-     "note": "",
+     "provider": "paycor",
+     "endpoint": {
+      "vendor": "paycor",
+      "tenant": "8a7883c66ee9a5cc016ef0ea2d5b06cb",
+      "site": "",
+      "host": "recruitingbypaycor.com"
+     },
+     "where": "seed",
+     "plan": "existing",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation blocked",
+     "member_key": "paycor-8a7883c66ee9a5cc016ef0ea2d5b06cb",
+     "provider_needed": "",
+     "note": "2026-11-05: existing seed, ownership chain reconfirmed; Refusal: robots_refusal: https://recruitingbypaycor.com/career/CareerHome.action?clientId=8a7883c66ee9a5cc016ef0ea2d5b06cb. No blocked request was sent or retried.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:44:59.823428Z",
+      "status": "blocked",
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "source_reported": null,
+      "detail": "Refusal: robots_refusal: https://recruitingbypaycor.com/career/CareerHome.action?clientId=8a7883c66ee9a5cc016ef0ea2d5b06cb",
+      "http_statuses": [],
+      "sample_titles": []
      }
     },
     {
@@ -3586,15 +3833,15 @@
      "disposition": "eligible_direct",
      "evidence_state": "OWN",
      "domain": "templehealth.org",
-     "provider": "own_site",
+     "provider": "silkroad",
      "endpoint": null,
      "where": "",
      "plan": "unsupported",
      "outcome": "unsupported",
-     "why": "unsupported_pending_provider:own_site",
+     "why": "unsupported_pending_provider:silkroad",
      "member_key": "",
-     "provider_needed": "own_site",
-     "note": "",
+     "provider_needed": "silkroad",
+     "note": "2026-11-05: careers.templehealth.org redirects to templehealth.org/careers; official page links https://jobs.silkroad.com/templehealth/Careers. No SilkRoad provider; do not treat navigation as jobs.",
      "validation": {
       "status": "not_run"
      }
@@ -3962,16 +4209,34 @@
      "evidence_state": "CHAIN",
      "domain": "universalbackground.com",
      "provider": "appone",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:appone",
-     "member_key": "",
-     "provider_needed": "appone",
-     "note": "",
+     "endpoint": {
+      "vendor": "appone",
+      "tenant": "universalbackgroundscreening.appone.com",
+      "site": "",
+      "host": "www2.appone.com"
+     },
+     "where": "seed",
+     "plan": "existing",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation blocked",
+     "member_key": "appone-universalbackgroundscreening-appone-com",
+     "provider_needed": "",
+     "note": "2026-11-05: existing seed, ownership chain reconfirmed; Refusal: robots_refusal: https://recruiting.myapps.paychex.com/appone/Branding/ReqTemplate/BrowseAllJobsbyCategory.asp?Type=REQ&FromID=1&ClientID=18117&B_ID=91&JobCode=0&CountryID=3&LanguageID=2&servervar=universalbackgroundscreening.appone.com. No blocked request was sent or retried.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:02.706048Z",
+      "status": "blocked",
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "source_reported": null,
+      "detail": "Refusal: robots_refusal: https://recruiting.myapps.paychex.com/appone/Branding/ReqTemplate/BrowseAllJobsbyCategory.asp?Type=REQ&FromID=1&ClientID=18117&B_ID=91&JobCode=0&CountryID=3&LanguageID=2&servervar=universalbackgroundscreening.appone.com",
+      "http_statuses": [
+       "404",
+       "200",
+       "200"
+      ],
+      "sample_titles": []
      }
     },
     {
@@ -4441,11 +4706,11 @@
    "counts": {
     "existing_covered": 76,
     "existing_unhealthy_or_moved": 7,
-    "new_validated": 38,
+    "new_validated": 39,
     "excluded": 0,
     "review": 0,
-    "blocked": 17,
-    "unsupported": 8,
+    "blocked": 18,
+    "unsupported": 6,
     "pending": 20
    },
    "rows": [
@@ -7710,9 +7975,9 @@
      },
      "where": "seed",
      "plan": "added",
-     "outcome": "new_validated",
-     "why": "row added; live validation returned requisitions",
-     "member_key": "eightfold-netapp",
+     "outcome": "blocked",
+     "why": "plan says added but no crawl member serves it",
+     "member_key": "",
      "provider_needed": "",
      "note": "careers.netapp.com (TalentBrew front end) links netapp.eightfold.ai.",
      "validation": {
@@ -9001,16 +9266,45 @@
      "evidence_state": "FRONTEND",
      "domain": "siemens-energy.com",
      "provider": "avature",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:avature",
-     "member_key": "",
-     "provider_needed": "avature",
-     "note": "jobs.siemens-energy.com is Avature.",
+     "endpoint": {
+      "vendor": "avature",
+      "tenant": "jobs.siemens-energy.com",
+      "site": "en_US/jobs",
+      "host": "jobs.siemens-energy.com",
+      "extra": {
+       "listing_route": "Jobs"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "avature-jobs-siemens-energy-com-en_us-jobs",
+     "provider_needed": "",
+     "note": "2026-11-05: official careers redirect proves the exact Avature Jobs template. Live provider read all 1,905 distinct listings. Locations are detail-only; US share unknown. FolderDetail also read live.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:52:55.127411Z",
+      "vendor": "avature",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 1905,
+      "unique_ids": 1905,
+      "duplicate_rows": 0,
+      "requisitions": 1905,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Finance Head of Regional Service - Middle East",
+       "Customs Classification Specialist",
+       "Gas Turbine Lathe Operator (Mon-Thurs 3:45pm-2:15am)"
+      ],
+      "detail": "",
+      "member_key": "avature-jobs-siemens-energy-com-en_us-jobs",
+      "replayed_at_utc": "2026-11-06T00:03:03.929299Z",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "electrical_power"
     },
@@ -9024,10 +9318,10 @@
      "where": "",
      "plan": "unsupported",
      "outcome": "unsupported",
-     "why": "links Hitachi's shared Workday board (hitachi.wd1/hitachi); needs an entity filter",
+     "why": "2026-11-05: official careers/open-jobs is an XHR shell; shared Hitachi Workday link is published but no public entity-filter identity has been proven. No unfiltered shared board added.",
      "member_key": "",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05: official careers/open-jobs is an XHR shell; shared Hitachi Workday link is published but no public entity-filter identity has been proven. No unfiltered shared board added.",
      "validation": {
       "status": "not_run"
      },
@@ -9117,7 +9411,7 @@
      "why": "not added; validation blocked",
      "member_key": "",
      "provider_needed": "",
-     "note": "jobs.eaton.com redirects to eaton.eightfold.ai/careers. The Eightfold API answered 403 to our validation on 2026-10-21, so no row was added.",
+     "note": "2026-11-05: jobs.eaton.com redirects to eaton.eightfold.ai/careers; robots disallows /careers, so no listing API request sent. Earlier 403 is not reinterpreted as empty.",
      "validation": {
       "at": "2026-10-22T02:15:53Z",
       "vendor": "eightfold",
@@ -9505,24 +9799,23 @@
      "why": "not added; validation blocked",
      "member_key": "",
      "provider_needed": "",
-     "note": "Official page links evergy.taleo.net (evergy_external_career_section).",
+     "note": "2026-11-05: official careers page links /careersection/evergy_external_career_section/jobsearch.ftl?lang=en. Current Taleo reader returned 0 from an HTML shell with no resolved portal; zero is unverified, not empty. No seed added.",
      "validation": {
-      "at": "2026-10-22T05:19:42Z",
-      "vendor": "taleo",
+      "at": "2026-11-05T22:45:29.976010Z",
       "status": "blocked",
-      "source_reported": null,
       "parsed": 0,
       "unique_ids": 0,
       "duplicate_rows": 0,
       "requisitions": 0,
-      "filtered_non_requisition": 0,
-      "filtered_other_entity": 0,
+      "source_reported": null,
+      "detail": "Official link uses careersection/evergy_external_career_section. Reader returned 0, portal unresolved; not confirmed empty.",
       "http_statuses": [
+       "404",
+       "302",
+       "404",
        "200"
       ],
-      "sample_titles": [],
-      "detail": "",
-      "member_key": "taleo-evergy"
+      "sample_titles": []
      },
      "domain_group": "electrical_power"
     },
@@ -10468,16 +10761,43 @@
      "evidence_state": "FRONTEND",
      "domain": "siemens.com",
      "provider": "avature",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:avature",
-     "member_key": "",
-     "provider_needed": "avature",
-     "note": "jobs.siemens.com is Avature.",
+     "endpoint": {
+      "vendor": "avature",
+      "tenant": "jobs.siemens.com",
+      "site": "en_US/externaljobs",
+      "host": "jobs.siemens.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "avature-jobs-siemens-com-en_us-externaljobs",
+     "provider_needed": "",
+     "note": "2026-11-05: official careers page links exact Avature SearchJobs board. Live 150-second crawl read 516 distinct listings, 94 with US locations, and correctly flagged truncation. Board displays 999+; exact total unknown. Paging follows its own folderOffset links.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:50:21.493331Z",
+      "vendor": "avature",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 516,
+      "unique_ids": 516,
+      "duplicate_rows": 0,
+      "requisitions": 516,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Agentic Evaluation & Testing Specialist, Kitchener, ON",
+       "Senior Manager, Software Development",
+       "Quality Inspector (2nd Shift)"
+      ],
+      "detail": "",
+      "member_key": "avature-jobs-siemens-com-en_us-externaljobs",
+      "replayed_at_utc": "2026-11-06T00:03:03.929299Z",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "electrical_power"
     },
@@ -10939,6 +11259,12 @@
    "domain_group": "cloud",
    "outcome": "blocked",
    "why": "careers.nutanix.com answered 403 on 2026-10-21"
+  },
+  {
+   "company": "NetApp",
+   "domain_group": "cloud",
+   "outcome": "blocked",
+   "why": "plan says added but no crawl member serves it"
   },
   {
    "company": "Digital Realty",

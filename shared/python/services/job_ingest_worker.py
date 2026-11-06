@@ -1056,10 +1056,10 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
      "display_name": "Universal Background Screening", "industry": "other"},
     # Own careers pages (`careers_page`), read live through the extended
     # own-site reader on 2026-10-22. Counts are what that run returned.
-    # MATS Research: 8 staff vacancies (cards; fellowships live under /program, not here).
-    {"vendor": "careers_page", "tenant": "matsprogram.org", "site": "",
-     "host": "matsprogram.org", "display_name": "MATS Research", "industry": "other",
-     "extra": {"listing_url": "https://www.matsprogram.org/careers"}},
+    # MATS Research migrated to an official Rippling embed (data-job-board-id),
+    # observed 2026-11-05: 19 location rows, 10 IDs, 9 staff requisitions + 1 EOI.
+    {"vendor": "rippling", "tenant": "mats-research", "site": "",
+     "host": "", "display_name": "MATS Research", "industry": "other"},
     # Orange Logic: 8 (two invisible leftover links excluded; one of them 404s).
     {"vendor": "careers_page", "tenant": "orangelogic.com", "site": "",
      "host": "orangelogic.com", "display_name": "Orange Logic", "industry": "tech",
@@ -1098,6 +1098,15 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
      "site": "en_US/careers?732=6297&tags=rm.kcm.web.kcm-004",
      "host": "koch.avature.net", "display_name": "Flint Hills Resources",
      "industry": "other", "extra": {"entity_name": "Flint Hills Resources"}},
+    # Official careers links rechecked 2026-11-05; exact template route is data.
+    # Siemens: 516 in a 150s partial read (truncated); Energy: all 1,905.
+    {"vendor": "avature", "tenant": "jobs.siemens.com",
+     "site": "en_US/externaljobs", "host": "jobs.siemens.com",
+     "display_name": "Siemens", "industry": "manufacturing_automotive"},
+    {"vendor": "avature", "tenant": "jobs.siemens-energy.com",
+     "site": "en_US/jobs", "host": "jobs.siemens-energy.com",
+     "display_name": "Siemens Energy", "industry": "energy",
+     "extra": {"listing_route": "Jobs"}},
     # iCIMS Jibe: echostar.com/careers -> jobs.echostar.com/jobs, whose page
     # declares canonical dish.jibeapply.com. 656 of 656, all dated; apply
     # links go to the iCIMS tenant attract-careers1-echostar.

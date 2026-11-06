@@ -1,0 +1,118 @@
+{
+  "evidence_mode": "offline replay of dated live HTTP captures; no fresh network requests",
+  "command": ".venv-win/Scripts/python.exe .probe/replay-final-validation.py",
+  "replayed_at_utc": "2026-11-06T00:03:03.929299Z",
+  "results": [
+    {
+      "vendor": "avature",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.03,
+      "detail": "",
+      "tenant": "avature-jobs-frequentis-com-careers",
+      "sample_title": "ATM Service Engineer - Voice Solutions (all genders)",
+      "sample_url": "https://jobs.frequentis.com/careers/JobDetail/VIE-ATM-Service-Engineer-Voice-Solutions-all-genders/3588",
+      "sample_location": "",
+      "sample_posted_at": "",
+      "employer": "Frequentis",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "replayed_at_utc": "2026-11-06T00:03:03.929299Z",
+      "requests": [
+        {
+          "url": "https://jobs.frequentis.com/careers/SearchJobs",
+          "captured_at_utc": "2026-11-05T22:45:11.633349Z",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "breezy",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "breezy-destro-ai",
+      "sample_title": "Robotics Software Engineer - Field Deployment & Support",
+      "sample_url": "https://destro-ai.breezy.hr/p/d62989845487-robotics-software-engineer-field-deployment-support",
+      "sample_location": "Sumner, WA",
+      "sample_posted_at": "",
+      "employer": "Destro",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "replayed_at_utc": "2026-11-06T00:03:03.929299Z",
+      "requests": [
+        {
+          "url": "https://destro-ai.breezy.hr/",
+          "captured_at_utc": "2026-11-05T22:45:00.885425Z",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "careers_page",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "careers_page-orangelogic-com",
+      "sample_title": "Senior Product Marketing Manager, US",
+      "sample_url": "https://www.orangelogic.com/jobs/senior-product-marketing-manager-orange-logic",
+      "sample_location": "",
+      "sample_posted_at": "",
+      "employer": "Orange Logic",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "replayed_at_utc": "2026-11-06T00:03:03.929299Z",
+      "requests": [
+        {
+          "url": "https://www.orangelogic.com/about/careers",
+          "captured_at_utc": "2026-11-05T22:45:07.466499Z",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "greenhouse",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "greenhouse-fervoenergy",
+      "sample_title": "Asset Manager, Market Asset Operations",
+      "sample_url": "https://job-boards.greenhouse.io/fervoenergy/jobs/4474295009",
+      "sample_location": "Houston, TX",
+      "sample_posted_at": "2026-10-30T17:36:51+00:00",
+      "employer": "Fervo Energy",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "replayed_at_utc": "2026-11-06T00:03:03.929299Z",
+      "requests": [
+        {
+          "url": "https://boards-api.greenhouse.io/v1/boards/fervoenergy/jobs?content=false",
+          "captured_at_utc": "2026-11-05T22:45:28.620512Z",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "vendor": "rippling",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.02,
+      "detail": "",
+      "tenant": "rippling-mats-research",
+      "sample_title": "Community Manager",
+      "sample_url": "https://ats.rippling.com/mats-research/jobs/bd0c2859-11c0-4425-82f6-1e9558a6b425",
+      "sample_location": "BERKELEY, CA",
+      "sample_posted_at": "",
+      "employer": "MATS Research",
+      "evidence_mode": "offline replay of dated live HTTP captures",
+      "replayed_at_utc": "2026-11-06T00:03:03.929299Z",
+      "requests": [
+        {
+          "url": "https://ats.rippling.com/api/v1/board/mats-research/jobs",
+          "captured_at_utc": "2026-11-05T22:46:09.481605Z",
+          "status": 200
+        }
+      ]
+    }
+  ],
+  "note": "The script date-confidence quality gate is retained. DEGRADED results are not relabeled as passes."
+}
