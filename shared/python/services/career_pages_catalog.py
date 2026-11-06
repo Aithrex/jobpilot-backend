@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import Dict, List
 
 CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
+    # Official Fervo job-page embed -> Greenhouse fervoenergy; 68 roles, 2026-11-05.
+    {"display_name": "Fervo Energy", "ats": "greenhouse", "slug": "fervoenergy", "industry": "energy"},
     {"display_name": "Abridge", "ats": "ashby", "slug": "abridge", "industry": "healthtech"},
     {"display_name": "Alchemy", "ats": "ashby", "slug": "alchemy", "industry": "tech"},
     {"display_name": "Ambience Healthcare", "ats": "ashby", "slug": "ambiencehealthcare", "industry": "healthtech"},

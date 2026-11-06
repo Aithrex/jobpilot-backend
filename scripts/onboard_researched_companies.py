@@ -373,6 +373,9 @@ def validate_endpoint(endpoint: Dict[str, Any], *, cap: int = 400,
         if entity_filter:
             blob = " ".join(str(getattr(job, k, "") or "") for k in
                             ("department", "description", "title"))
+            extra = getattr(job, "extra", {}) or {}
+            blob += " " + " ".join(str(extra.get(k) or "") for k in
+                                   ("listing_subtitle", "legal_entity", "hiring_organization"))
             if entity_filter.lower() not in blob.lower():
                 out["filtered_other_entity"] += 1
                 continue

@@ -104,6 +104,15 @@ PROBES: Dict[str, Dict[str, Any]] = {
                     "display_name": "University of Arizona"},
     "jazzhr": {"tenant": "aamco", "host": "aamco.applytojob.com",
                "display_name": "AAMCO"},
+    # Official employer chains rechecked 2026-11-05; complete public reads
+    # returned Frequentis 62, Destro 13 and Orange Logic 7 requisitions.
+    "avature": {"tenant": "jobs.frequentis.com", "site": "careers",
+                 "host": "jobs.frequentis.com", "display_name": "Frequentis"},
+    "breezy": {"tenant": "destro-ai", "host": "destro-ai.breezy.hr",
+               "display_name": "Destro AI"},
+    "careers_page": {"tenant": "orangelogic.com", "host": "orangelogic.com",
+                     "display_name": "Orange Logic",
+                     "extra": {"listing_url": "https://www.orangelogic.com/about/careers"}},
 }
 
 
