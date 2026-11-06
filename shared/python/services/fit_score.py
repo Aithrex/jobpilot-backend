@@ -1611,7 +1611,11 @@ _LEVEL_PATTERNS: Sequence[Tuple[str, re.Pattern]] = (
     #    so "Junior Engineer II" still reads junior.
     ("mid", re.compile(
         r"(?<![a-z])(level\s*2|l2|tier\s*2|grade\s*2)(?![a-z0-9])|"
-        r"(?<![a-z0-9])(ii|2)(?![a-z0-9.])")),
+        r"(?<![a-z0-9])(ii|2)(?![a-z0-9.])|"
+        # 8. The band said in words: "Mid-Level Test & Evaluation Engineer"
+        #    read no level at all (live, 2026-11-05), and "Intermediate
+        #    Developer" is how Canadian boards title the same rung.
+        r"(?<![a-z])(mid[ -]?level|mid[ -]?career|intermediate(?!\s+care))(?![a-z])")),
 )
 
 # Management titles, read by what they MANAGE rather than by the bare word.

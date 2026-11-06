@@ -162,3 +162,17 @@ class TestYearsAside:
     def test_a_degree_aside_never_hides_or_sets_the_years(self, text, years):
         from services import fit_score
         assert fit_score._required_years(fit_score._norm(text)) == years
+
+
+class TestMidLevelTitles:
+    @pytest.mark.parametrize("title,level", [
+        ("Mid-Level Test & Evaluation Engineer", "mid"),
+        ("Mid Level Software Engineer", "mid"),
+        ("Intermediate Developer", "mid"),
+        ("Intermediate Care Nurse", None),
+        ("Junior Developer", "entry"),
+        ("Software Engineer", None),
+    ])
+    def test_the_band_said_in_words(self, title, level):
+        from services import fit_score
+        assert fit_score.title_level(title) == level
