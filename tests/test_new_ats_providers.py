@@ -491,7 +491,8 @@ def test_config_board_paginates_with_the_rows_own_style():
     assert [p.get("page") for p in ctx.params] == [1, 2]
     assert all(p.get("locale") == "en-us" for p in ctx.params)
     assert len(ctx.calls) == 2
-    assert ctx.listing_truncated is False
+    # The board still advertises four jobs but only three were read.
+    assert ctx.listing_truncated is True
 
 
 def test_config_board_stops_on_the_total_the_board_reports():
@@ -574,9 +575,9 @@ def test_config_board_without_a_date_field_claims_no_date():
     jobs = list(provider.list_jobs(provider.default_endpoint(), ctx))
     assert jobs[0].posted_at == ""
     assert jobs[0].date_confidence == DATE_UNKNOWN
-    # `style: none` is one request, and it is not a truncated listing.
+    # A single-response template cannot override an unreached advertised total.
     assert len(ctx.calls) == 1
-    assert ctx.listing_truncated is False
+    assert ctx.listing_truncated is True
 
 
 def test_config_board_applies_the_cutoff_as_a_row_filter():

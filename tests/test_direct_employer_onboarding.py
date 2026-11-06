@@ -67,8 +67,8 @@ def test_every_eligible_lead_has_a_plan():
 
 
 def test_pending_companies_stay_pending_and_never_carry_an_endpoint():
-    for name in ("American Airlines", "Atlys", "Carvana", "DataVisor",
-                 "LendingTree", "Reflex", "Verisk", "Upwind Security"):
+    for name in ("American Airlines", "Atlys", "Carvana",
+                 "Reflex", "Upwind Security"):
         entry = plan_mod.LEAD_PLAN[name]
         assert entry["plan"] == "pending" and not entry.get("endpoint"), name
         res = ob.outcome_for(entry, disposition="eligible_direct",
@@ -500,3 +500,12 @@ def test_dotted_catalog_slug_keeps_its_dot_in_the_url_but_not_the_key():
 def test_moved_board_repaired_in_place():
     members = {m["member_key"]: m for m in jw._load_career_members()}
     assert "ashby-amplitude" in members and "greenhouse-amplitude" not in members
+
+
+def test_registration_records_keep_the_new_observation_time():
+    entry = dict(plan_mod.LEAD_PLAN["Swift"], checked_at="2026-11-05T22:45:00Z")
+    report = ob.build_report(validations={"Swift": _ok_validation(47)}, cohorts=("leads",))
+    row = next(r for r in report["cohorts"]["leads"]["rows"] if r["company"] == "Swift")
+    recs = ob.registration_records(row, entry)
+    evidence = recs["career_source"]["ownership_evidence"][0]
+    assert evidence["at"].isoformat() == "2026-11-05T22:45:00+00:00"

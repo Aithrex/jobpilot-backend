@@ -9,6 +9,12 @@ from __future__ import annotations
 from typing import Dict, List
 
 CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
+    # BEGIN board research 2026-11
+    {'display_name': 'LendingTree', 'ats': 'greenhouse', 'slug': 'lendingtree', 'industry': 'tech'},
+    {'display_name': 'Riot Games', 'ats': 'greenhouse', 'slug': 'riotgames', 'industry': 'tech'},
+    {'display_name': 'DigitalOcean', 'ats': 'greenhouse', 'slug': 'digitalocean98', 'industry': 'tech'},
+    {'display_name': 'DataVisor', 'ats': 'workable', 'slug': 'datavisor-jobs', 'industry': 'tech'},
+    # END board research 2026-11
     {"display_name": "Abridge", "ats": "ashby", "slug": "abridge", "industry": "healthtech"},
     {"display_name": "Alchemy", "ats": "ashby", "slug": "alchemy", "industry": "tech"},
     {"display_name": "Ambience Healthcare", "ats": "ashby", "slug": "ambiencehealthcare", "industry": "healthtech"},

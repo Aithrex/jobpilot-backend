@@ -24,6 +24,11 @@ entities on one shared board are two members.
 
 Hosts: `.avature.net` plus the custom hosts verified above, named one by one
 - never an open-ended custom-host allowlist.
+
+Observed 2026-11-05: official careers pages link Two Sigma's `OpenRoles`
+route, EA's `SearchJobs`, and Deloitte's separate entry/experienced filtered
+`SearchJobs` URLs. The route is explicit endpoint data, and each exact filter
+remains in the endpoint's site identity.
 """
 from __future__ import annotations
 
@@ -42,13 +47,13 @@ from services.ats_providers.util import (html_to_text, looks_minted_now,
 
 VENDOR = "avature"
 #: Custom career hosts verified to be Avature, one by one.
-CUSTOM_HOSTS = ("jobs.frequentis.com",)
+CUSTOM_HOSTS = ("jobs.frequentis.com", "careers.twosigma.com", "jobs.ea.com", "apply.deloitte.com")
 _HOST_RE = re.compile(r"^(?:[a-z0-9-]+\.avature\.net|" +
                       "|".join(re.escape(h) for h in CUSTOM_HOSTS) + r")$")
 _PORTAL_RE = re.compile(r"^(?:[a-z]{2}_[A-Z]{2}/)?[A-Za-z0-9_-]{2,40}$")
 _DETAIL_RE = re.compile(r"/JobDetail/(?:[^/?#]+/)?(?P<id>\d{1,12})/?$")
-_RESULTS_RE = re.compile(r"(\d{1,6})\s+results?\b", re.IGNORECASE)
-_PAGE_CAP = 25
+_RESULTS_RE = re.compile(r"(\d[\d,]*)\s+results?\b", re.IGNORECASE)
+_PAGE_CAP = 250
 _LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
                     re.IGNORECASE | re.DOTALL)
 
@@ -95,7 +100,7 @@ def parse_listing(body: str, page_url: str, host: str) -> Tuple[List[Dict[str, s
     for a in doc.xpath("//a[contains(@href,'jobOffset=')]"):
         url = urljoin(page_url, _html.unescape(str(a.get("href"))))
         u = urlparse(url)
-        if (u.hostname or "").lower() != host or "/SearchJobs" not in u.path:
+        if (u.hostname or "").lower() != host or u.path.rstrip("/") != urlparse(page_url).path.rstrip("/"):
             continue
         try:
             off = int((parse_qs(u.query).get("jobOffset") or ["-1"])[0])
@@ -104,7 +109,7 @@ def parse_listing(body: str, page_url: str, host: str) -> Tuple[List[Dict[str, s
         if off >= 0:
             offsets.setdefault(off, url)
     rep = _RESULTS_RE.search(html_to_text(body or ""))
-    return list(rows.values()), {"reported": int(rep.group(1)) if rep else None,
+    return list(rows.values()), {"reported": int(rep.group(1).replace(",", "")) if rep else None,
                                  "offsets": offsets}
 
 
@@ -141,14 +146,15 @@ class AvatureProvider(AtsProvider):
     policy = CrawlPolicy(
         pacing_key=None, min_interval=1.0, jitter=0.25, max_concurrency=1,
         timeout=20.0, detail_timeout=15.0,
-        challenge_statuses=frozenset({429, 503}),
+        challenge_statuses=frozenset({403, 405, 429, 503}),
+        challenge_markers=("verify you are human", "human verification", "cf-chl-", "px-captcha"),
         page_size=20, max_pages=_PAGE_CAP,
     )
 
     fingerprints = (
         fp(r"https?://(?P<host>[a-z0-9-]+\.avature\.net|" +
            "|".join(re.escape(h) for h in CUSTOM_HOSTS) +
-           r")/(?P<site>(?:[a-z]{2}_[A-Z]{2}/)?[A-Za-z0-9_-]{2,40})/SearchJobs/?"
+           r")/(?P<site>(?:[a-z]{2}_[A-Z]{2}/)?[A-Za-z0-9_-]{2,40})/(?P<listing_route>SearchJobs|OpenRoles)/?"
            r"(?:\?(?P<query>[^\s\"'<>#]*))?", confidence=92),
     )
 
@@ -162,7 +168,9 @@ class AvatureProvider(AtsProvider):
         query = "&".join(p for p in query.split("&")
                          if p and not p.lower().startswith("joboffset="))
         site = f"{portal}?{query}" if query else portal
-        return Endpoint(vendor=self.vendor, tenant=host, site=site, host=host)
+        route = fields.get("listing_route") or "SearchJobs"
+        return Endpoint(vendor=self.vendor, tenant=host, site=site, host=host,
+                        extra={"listing_route": route} if route != "SearchJobs" else {})
 
     @staticmethod
     def _parts(endpoint: Endpoint) -> Tuple[str, str, str]:
@@ -174,9 +182,10 @@ class AvatureProvider(AtsProvider):
 
     def board_url(self, endpoint: Endpoint) -> str:
         host, portal, query = self._parts(endpoint)
-        if not host:
+        route = (endpoint.extra or {}).get("listing_route", "SearchJobs")
+        if not host or route not in ("SearchJobs", "OpenRoles"):
             return ""
-        return f"https://{host}/{portal}/SearchJobs" + (f"?{query}" if query else "")
+        return f"https://{host}/{portal}/{route}" + (f"?{query}" if query else "")
 
     def list_jobs(self, endpoint: Endpoint, ctx: FetchContext) -> Iterator[RawJob]:
         url = self.board_url(endpoint)
@@ -201,6 +210,7 @@ class AvatureProvider(AtsProvider):
     def _walk(self, url: str, host: str, entity: str, counts: Dict[str, Any],
               ctx: FetchContext) -> Iterator[RawJob]:
         seen: Dict[str, bool] = {}
+        overlap = False
         visited = set()
         offset = 0
         for _page in range(int(self.policy.max_pages)):
@@ -217,13 +227,15 @@ class AvatureProvider(AtsProvider):
                 return
             rows, info = parse_listing(body, url, host)
             if info["reported"] is not None:
-                counts["reported"] = info["reported"]
-            if not rows and not seen:
-                # A template with no rows proves nothing.
+                counts["reported"] = max(counts["reported"] or 0, info["reported"])
+            if not rows:
+                # A later empty shell also cannot prove the census complete.
                 ctx.listing_truncated = True
                 return
+            previous_count = len(seen)
             for row in rows:
                 if row["id"] in seen:
+                    overlap = True
                     continue
                 seen[row["id"]] = True
                 counts["parsed"] = len(seen)
@@ -240,10 +252,14 @@ class AvatureProvider(AtsProvider):
                     extra={"application_method": "ats_url",
                            **({"listing_subtitle": row["subtitle"]} if row["subtitle"] else {})},
                 )
+            if len(seen) == previous_count:
+                # A repeated page is not evidence that unseen jobs closed.
+                ctx.listing_truncated = True
+                return
             reported = counts["reported"]
             later = sorted(o for o in info["offsets"] if o > offset)
             if not later or (reported is not None and len(seen) >= reported):
-                if reported is not None and len(seen) < reported:
+                if (reported is not None and len(seen) < reported) or (reported is None and overlap):
                     ctx.listing_truncated = True
                 return
             offset = later[0]

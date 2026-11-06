@@ -308,9 +308,13 @@ def validate_endpoint(endpoint: Dict[str, Any], *, cap: int = 400,
         from services import job_ingest_worker as jw
         from services.ats_providers.http import simple_context
         source = jw.source_of_vendor(vendor)
+        # Own-page members are pinned to the employer host in the crawler;
+        # they intentionally do not belong to a global vendor allowlist.
+        own_host = jw._own_site_host(dict(endpoint, vendor=vendor))
         ctx = simple_context(
             budget_seconds=budget, global_rate=1.0,
-            guard=lambda _v, url: jw.assert_outbound_url(source, url))
+            guard=lambda _v, url: (jw.assert_own_site_url(own_host, url)
+                                  if own_host else jw.assert_outbound_url(source, url)))
     statuses: List[Any] = []
     first_total: List[Optional[int]] = []
     kinds: List[str] = []
@@ -751,8 +755,11 @@ def registration_records(row: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str
             board = prov.board_url(endpoint)
         except Exception:
             board = ""
-    research_at = datetime.strptime(plan_mod.RESEARCH_DATE, "%Y-%m-%d").replace(
-        tzinfo=timezone.utc)
+    checked_at = entry.get("checked_at")
+    research_at = (datetime.fromisoformat(str(checked_at).replace("Z", "+00:00"))
+                   if checked_at else
+                   datetime.strptime(plan_mod.RESEARCH_DATE, "%Y-%m-%d").replace(
+                       tzinfo=timezone.utc))
     lead = next((l for l in leads_mod.LEADS if l["company"] == row["company"]), {})
     career_url = entry.get("career_url") or lead.get("official_career_url") or ""
     evidence_url = entry.get("evidence_url") or lead.get("evidence_url") or career_url
@@ -785,7 +792,7 @@ def registration_records(row: Dict[str, Any], entry: Dict[str, Any]) -> Dict[str
         "discovery_method": "operator_review", "evidence_url": evidence_url,
         "evidence_at": research_at, "verification_state": "verified",
         "verification_reason": (f"{entry.get('state', '')} chain on "
-                                f"{plan_mod.RESEARCH_DATE}; validated "
+                                f"{research_at.isoformat()}; validated "
                                 f"{v.get('at')}: {v.get('requisitions')} requisitions"),
         "canonical_employer_id": eid,
     }

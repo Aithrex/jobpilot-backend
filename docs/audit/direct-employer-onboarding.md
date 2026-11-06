@@ -1,6 +1,6 @@
 # Direct-employer onboarding — outcomes per company
 
-Generated 2026-10-22T07:49:58Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
+Generated 2026-11-06T00:19:30Z by `scripts/onboard_researched_companies.py --write-docs` (direct-employer-onboarding-1.0.0). Research reviewed 2026-10-21.
 
 **Coverage basis:** in-repo catalogs and seed tables the crawler loads (no production inventory was read). `existing_covered` means the crawl tables already carry the exact endpoint; it is not a claim about live inventory counts.
 
@@ -8,7 +8,7 @@ Validation counts: `source` = total the vendor reported (blank when the API repo
 
 ## 174 researched LinkedIn leads
 
-Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, review: 31, unsupported: 22, pending: 8
+Denominator: **174**. existing_covered: 5, new_validated: 50, excluded: 61, review: 31, unsupported: 22, pending: 5
 
 | company | evidence | provider | endpoint | outcome | why | validated at | status | source | parsed | req | non-req |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -58,7 +58,7 @@ Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, revi
 | crewlia | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
 | CrossTalent | identity_or_business_model_review |  |  | review | mixed_review |  | not_run |  |  |  |  |
 | Dark Wolf | official_ats_chain | Greenhouse |  | review | mixed_review |  | not_run |  |  |  |  |
-| DataVisor | PENDING | Workable |  | pending | Workable whr_embed(56790); account-to-slug link for datavisor-jobs not observed |  | not_run |  |  |  |  |
+| DataVisor | CHAIN | workable | `workable/datavisor-jobs` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:50:54.934428Z | complete |  | 33 | 27 | 0 |
 | Delta Electronics Americas | CHAIN | icims | `icims/careers-delta-americas.icims.com/careers-delta-americas` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:02:26Z | complete |  | 187 | 187 | 0 |
 | Destro | CHAIN | breezyhr |  | unsupported | unsupported_pending_provider:breezyhr |  | not_run |  |  |  |  |
 | Digivance Solutions | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
@@ -100,7 +100,7 @@ Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, revi
 | Iperium | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
 | KTek Resourcing | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
 | Largeton Group | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
-| LendingTree | PENDING | Greenhouse integration suspected; tenant unresolved |  | pending | gh_jid hints only; no board token observed |  | not_run |  |  |  |  |
+| LendingTree | CHAIN | greenhouse | `greenhouse/lendingtree` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:18:23.240473Z | complete | 23 | 23 | 23 | 0 |
 | Lincoln Institute of Land Policy | CHAIN | paycom |  | unsupported | unsupported_pending_provider:paycom |  | not_run |  |  |  |  |
 | Longbridge | OWN | own_site |  | unsupported | unsupported_pending_provider:own_site |  | not_run |  |  |  |  |
 | MANTECH | official_career_provider_unresolved |  |  | review | mixed_review |  | not_run |  |  |  |  |
@@ -177,7 +177,7 @@ Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, revi
 | Ventura Foods | FRONTEND | successfactors | `successfactors/jobs.venturafoods.com/venturafoods` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:04:23Z | complete |  | 98 | 98 | 0 |
 | Ventures Unlimited Inc | excluded_by_preference |  |  | excluded | staffing |  | not_run |  |  |  |  |
 | Verint | CHAIN | oracle_orc | `oracle_orc/fa-epcb-saasfaprod1.fa.ocs.oraclecloud.com/fa-epcb-saasfaprod1/CX` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:02:21Z | complete | 33 | 33 | 33 | 0 |
-| Verisk | PENDING |  |  | pending | corporate page challenged; SmartRecruiters/Oracle candidates unproven |  | not_run |  |  |  |  |
+| Verisk | CHAIN | oracle_orc | `oracle_orc/fa-ewmy-saasfaprod1.fa.ocs.oraclecloud.com/fa-ewmy-saasfaprod1/CX_1` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:18:24.370878Z | complete | 162 | 162 | 162 | 0 |
 | Vertex Pharmaceuticals | CHAIN | workday | `workday/vrtx/vertex_careers/wd501` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:01:36Z | budget_limited | 281 | 200 | 199 | 1 |
 | Visionist, Inc. | official_ats_chain | Jobvite |  | review | mixed_review |  | not_run |  |  |  |  |
 | Vizient | excluded_by_preference |  |  | excluded | consultancy |  | not_run |  |  |  |  |
@@ -189,7 +189,7 @@ Denominator: **174**. existing_covered: 5, new_validated: 47, excluded: 61, revi
 
 ## Owner priority: top employers per domain
 
-Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_validated: 38, blocked: 17, unsupported: 8, pending: 20
+Denominator: **168**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_validated: 48, blocked: 18, unsupported: 8, pending: 11
 
 | company | domain | evidence | provider | endpoint | outcome | why | validated at | status | source | parsed | req | non-req |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -209,7 +209,7 @@ Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | Uber | software | OWN | uber_careers |  | unsupported | unsupported_pending_provider:uber_careers - MNC catalog engine `uber` has no termless provider (only Uber Freight, a separate company, is crawled). |  | not_run |  |  |  |  |
 | Airbnb | software | EXISTING | greenhouse | `greenhouse/airbnb` | existing_covered | row already in the crawl tables | 2026-10-22T02:17:59Z | budget_limited | 193 | 30 | 30 | 0 |
 | Stripe | software | EXISTING | greenhouse | `greenhouse/stripe` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:00Z | budget_limited | 726 | 30 | 30 | 0 |
-| Shopify | software | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
+| Shopify | software | CHAIN | careers_page | `careers_page/shopify.com/shopify.com` | new_validated | row added; live validation returned requisitions | 2026-11-06T00:01:45.240401Z | complete |  | 25 | 25 | 0 |
 | Cisco | software | EXISTING | workday | `workday/cisco/Cisco_Careers/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:00Z | budget_limited | 1479 | 30 | 30 | 0 |
 | Autodesk | software | EXISTING | workday | `workday/autodesk/Ext/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:02Z | budget_limited | 32 | 30 | 30 | 0 |
 | PayPal | software | EXISTING | workday | `workday/paypal/jobs/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:04Z | budget_limited |  | 30 | 30 | 0 |
@@ -257,19 +257,19 @@ Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | Informatica | data_science | EXISTING | workday | `workday/salesforce/External_Career_Site/wd12` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
 | Alteryx | data_science | CHAIN | workday | `workday/alteryx/AlteryxCareers/wd108` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:14:38Z | complete | 50 | 50 | 50 | 0 |
 | Domo | data_science | BLOCKED |  |  | blocked | domo.com/company/careers answered 405 on 2026-10-21 |  | not_run |  |  |  |  |
-| ThoughtSpot | data_science | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
+| ThoughtSpot | data_science | CHAIN | rippling | `rippling/thoughtspot` | new_validated | row added; live validation returned requisitions | 2026-11-06T00:14:28.510501Z | complete |  | 49 | 48 | 0 |
 | Sigma Computing | data_science | EXISTING | greenhouse | `greenhouse/sigmacomputing` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:35Z | budget_limited | 77 | 30 | 30 | 0 |
 | Hex | data_science | EXISTING | greenhouse | `greenhouse/hextechnologies` | existing_unhealthy_or_moved | validation failed - greenhouse/hextechnologies answers 404; hex.tech/careers serves no board link | 2026-10-22T02:18:35Z | failed |  | 0 | 0 | 0 |
 | Starburst | data_science | EXISTING | greenhouse | `greenhouse/starburst` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:35Z | budget_limited | 33 | 30 | 30 | 0 |
 | ClickHouse | data_science | EXISTING | greenhouse | `greenhouse/clickhouse` | existing_unhealthy_or_moved | validation failed - greenhouse/clickhouse answers 404; clickhouse.com careers serves no board link | 2026-10-22T02:18:36Z | failed |  | 0 | 0 | 0 |
 | Amplitude | data_science | CHAIN | ashby | `ashby/amplitude` | new_validated | row added; live validation returned requisitions | 2026-10-22T05:09:44Z | complete |  | 41 | 41 | 0 |
-| Two Sigma | data_science | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
+| Two Sigma | data_science | CHAIN | avature | `avature/careers.twosigma.com/careers.twosigma.com/careers` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:35:16.247200Z | complete |  | 66 | 66 | 0 |
 | Capital One | data_science | EXISTING | workday | `workday/capitalone/Capital_One/wd12` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:36Z | budget_limited | 1998 | 30 | 30 | 0 |
 | Nielsen | data_science | PENDING |  |  | pending | careers URL answered 404; NielsenIQ (crawled) is a different company |  | not_run |  |  |  |  |
 | Experian | data_science | EXISTING | smartrecruiters | `smartrecruiters/experian` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:38Z | complete | 26 | 26 | 26 | 0 |
 | Splunk | data_science | EXISTING | workday | `workday/cisco/Cisco_Careers/wd5` | existing_covered | row already in the crawl tables |  | not_run |  |  |  |  |
 | Cloudflare | cloud | EXISTING | greenhouse | `greenhouse/cloudflare` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:38Z | budget_limited | 443 | 30 | 30 | 0 |
-| DigitalOcean | cloud | PENDING |  |  | pending | open-roles page is a JS shell (XHRs Greenhouse per CLAUDE.md); token not observed in served HTML |  | not_run |  |  |  |  |
+| DigitalOcean | cloud | CHAIN | greenhouse | `greenhouse/digitalocean98` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:41:50.775144Z | complete | 152 | 152 | 152 | 0 |
 | CoreWeave | cloud | EXISTING | greenhouse | `greenhouse/coreweave` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:39Z | budget_limited | 321 | 30 | 30 | 0 |
 | Akamai | cloud | BLOCKED |  |  | blocked | akamai.com/careers answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
 | Fastly | cloud | EXISTING | greenhouse | `greenhouse/fastly` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:39Z | budget_limited | 53 | 30 | 30 | 0 |
@@ -277,7 +277,7 @@ Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | Broadcom | cloud | EXISTING | workday | `workday/broadcom/External_Career/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:39Z | budget_limited | 372 | 30 | 30 | 0 |
 | Red Hat | cloud | EXISTING | workday | `workday/redhat/jobs/wd5` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:41Z | budget_limited |  | 30 | 30 | 0 |
 | Nutanix | cloud | BLOCKED |  |  | blocked | careers.nutanix.com answered 403 on 2026-10-21 |  | not_run |  |  |  |  |
-| NetApp | cloud | CHAIN | eightfold | `eightfold/netapp.eightfold.ai/netapp` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:14:45Z | complete |  | 136 | 136 | 0 |
+| NetApp | cloud | CHAIN | eightfold | `eightfold/netapp.eightfold.ai/netapp` | blocked | plan says added but no crawl member serves it - careers.netapp.com (TalentBrew front end) links netapp.eightfold.ai. | 2026-10-22T02:14:45Z | complete |  | 136 | 136 | 0 |
 | Equinix | cloud | EXISTING | workday | `workday/equinix/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:44Z | budget_limited |  | 30 | 30 | 0 |
 | Digital Realty | cloud | BLOCKED |  |  | blocked | TLS error fetching digitalrealty.com/about/careers on 2026-10-21 |  | not_run |  |  |  |  |
 | Rackspace | cloud | EXISTING | workday | `workday/rackspace/External/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:18:48Z | budget_limited | 35 | 30 | 30 | 0 |
@@ -292,7 +292,7 @@ Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | Arista Networks | cloud | BLOCKED |  |  | blocked | arista.com/en/careers answered 406 on 2026-10-21 |  | not_run |  |  |  |  |
 | Pure Storage | cloud | EXISTING | greenhouse | `greenhouse/purestorage` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:09Z | budget_limited | 369 | 30 | 30 | 0 |
 | Twilio | cloud | EXISTING | greenhouse | `greenhouse/twilio` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:09Z | budget_limited | 131 | 30 | 30 | 0 |
-| Supermicro | cloud | PENDING |  |  | pending | official careers URL answered 404; current page unknown |  | not_run |  |  |  |  |
+| Supermicro | cloud | CHAIN | successfactors | `successfactors/jobs.supermicro.com/jobs.supermicro.com` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:32:54.359419Z | complete |  | 1000 | 1000 | 0 |
 | Duke Energy | electrical_power | EXISTING | workday | `workday/dukeenergy/Search/wd1` | existing_covered | row already in the crawl tables | 2026-10-22T02:19:10Z | budget_limited |  | 30 | 30 | 0 |
 | Southern Company | electrical_power | PENDING |  |  | pending | only a DirectEmployers .jobs site (southerncompany.jobs) observed; employer ATS not established |  | not_run |  |  |  |  |
 | NextEra Energy | electrical_power | CHAIN | successfactors | `successfactors/jobs.nexteraenergy.com/nexteraenergy` | new_validated | row added; live validation returned requisitions | 2026-10-22T02:15:20Z | budget_limited |  | 200 | 200 | 0 |
@@ -350,15 +350,17 @@ Denominator: **166**. existing_covered: 76, existing_unhealthy_or_moved: 7, new_
 | Avangrid | electrical_power | BLOCKED |  |  | blocked | avangrid.com/careers timed out on 2026-10-21 |  | not_run |  |  |  |  |
 | Oncor | electrical_power | BLOCKED |  |  | blocked | oncor.com careers page timed out on 2026-10-21 |  | not_run |  |  |  |  |
 | Siemens | electrical_power | FRONTEND | avature |  | unsupported | unsupported_pending_provider:avature - jobs.siemens.com is Avature. |  | not_run |  |  |  |  |
-| Kiewit | electrical_power | PENDING |  |  | pending | official link goes to an AllCraftJobs craft board only; the professional board was not observed |  | not_run |  |  |  |  |
+| Kiewit | electrical_power | CHAIN | successfactors | `successfactors/kiewitcareers.kiewit.com/kiewitcareers.kiewit.com` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:33:36.779911Z | complete |  | 995 | 995 | 0 |
 | Stantec | electrical_power | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
-| Mott MacDonald | electrical_power | PENDING |  |  | pending | official careers page served no ATS link |  | not_run |  |  |  |  |
+| Mott MacDonald | electrical_power | CHAIN | custom_mottmac | `custom_mottmac/www.mottmac.com/mottmac` | new_validated | row added; live validation returned requisitions | 2026-11-06T00:15:41.459006Z | complete |  | 1070 | 1063 | 7 |
 | Jacobs | electrical_power | PENDING |  |  | pending | jobs.jacobs.com does not resolve; current board not observed |  | not_run |  |  |  |  |
-| NRG Energy | electrical_power | PENDING |  |  | pending | nrg.com/careers.html answered 404 |  | not_run |  |  |  |  |
-| Enphase Energy | electrical_power | PENDING |  |  | pending | official page uses a Jobvite link builder; tenant not in served HTML |  | not_run |  |  |  |  |
+| NRG Energy | electrical_power | CHAIN | successfactors | `successfactors/careers.nrgenergy.com/careers.nrgenergy.com` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:35:07.582871Z | complete |  | 75 | 75 | 0 |
+| Enphase Energy | electrical_power | CHAIN | custom_enphase | `custom_enphase/enphase` | new_validated | row added; live validation returned requisitions | 2026-11-05T23:39:01.305764Z | complete |  | 33 | 33 | 0 |
 | Mitsubishi Electric Power Products | electrical_power | PENDING |  |  | pending | Greenhouse referenced but no board token in served HTML |  | not_run |  |  |  |  |
 | Wabtec | electrical_power | PENDING |  |  | pending | careers.wabtec.com is a custom front end over SmartRecruiters; company id not observed |  | not_run |  |  |  |  |
 | Fluor | electrical_power | BLOCKED |  |  | blocked | careers.fluor.com is disallowed to our agent by robots.txt |  | not_run |  |  |  |  |
+| KPMG US | november_2026_research | CHAIN | careers_page | `careers_page/kpmguscareers.com/kpmguscareers.com` | new_validated | row added; live validation returned requisitions | 2026-11-06T00:00:06.338893Z | budget_limited |  | 692 | 692 | 0 |
+| Deel | november_2026_research | CHAIN | careers_page | `careers_page/deel.com/deel.com` | new_validated | row added; live validation returned requisitions | 2026-11-06T00:01:43.932298Z | complete |  | 251 | 251 | 0 |
 
 ## Existing rows health-checked (no duplicates added)
 
@@ -376,7 +378,6 @@ Denominator: **4**. existing_covered: 3, existing_unhealthy_or_moved: 1
 Top-employer rows that are pending, blocked, or whose existing board no longer answers. For each: record the official career page and the exact ATS endpoint in `scripts/data/direct_employer_plan.py` (`plan="candidate"`), run `--validate --only <name>`, add the catalog/seed row only when the run returns requisitions, flip `plan` to "added", re-run `--write-docs`. Unsupported rows wait for the provider named.
 
 - **Microsoft** (software, existing_unhealthy_or_moved): validation blocked
-- **Shopify** (software, pending): official careers page served no ATS link
 - **Bloomberg** (software, blocked): PerimeterX captcha (mnc_catalog record); not bypassed
 - **Qualcomm** (software, existing_unhealthy_or_moved): validation blocked
 - **Google DeepMind** (ai_ml, pending): official careers page is client-rendered; board link not in served HTML
@@ -387,17 +388,14 @@ Top-employer rows that are pending, blocked, or whose existing board no longer a
 - **dbt Labs** (data_science, existing_unhealthy_or_moved): validation failed
 - **Teradata** (data_science, pending): official careers page served no ATS link
 - **Domo** (data_science, blocked): domo.com/company/careers answered 405 on 2026-10-21
-- **ThoughtSpot** (data_science, pending): official careers page served no ATS link
 - **Hex** (data_science, existing_unhealthy_or_moved): validation failed
 - **ClickHouse** (data_science, existing_unhealthy_or_moved): validation failed
-- **Two Sigma** (data_science, pending): official careers page served no ATS link
 - **Nielsen** (data_science, pending): careers URL answered 404; NielsenIQ (crawled) is a different company
-- **DigitalOcean** (cloud, pending): open-roles page is a JS shell (XHRs Greenhouse per CLAUDE.md); token not observed in served HTML
 - **Akamai** (cloud, blocked): akamai.com/careers answered 403 on 2026-10-21
 - **Nutanix** (cloud, blocked): careers.nutanix.com answered 403 on 2026-10-21
+- **NetApp** (cloud, blocked): plan says added but no crawl member serves it
 - **Digital Realty** (cloud, blocked): TLS error fetching digitalrealty.com/about/careers on 2026-10-21
 - **Arista Networks** (cloud, blocked): arista.com/en/careers answered 406 on 2026-10-21
-- **Supermicro** (cloud, pending): official careers URL answered 404; current page unknown
 - **Southern Company** (electrical_power, pending): only a DirectEmployers .jobs site (southerncompany.jobs) observed; employer ATS not established
 - **National Grid** (electrical_power, blocked): careers.nationalgrid.com answered 403 on 2026-10-21
 - **Schneider Electric** (electrical_power, blocked): careers.se.com answered 403 on 2026-10-21
@@ -410,12 +408,8 @@ Top-employer rows that are pending, blocked, or whose existing board no longer a
 - **Littelfuse** (electrical_power, blocked): littelfuse.com/careers answered 403 on 2026-10-21
 - **Avangrid** (electrical_power, blocked): avangrid.com/careers timed out on 2026-10-21
 - **Oncor** (electrical_power, blocked): oncor.com careers page timed out on 2026-10-21
-- **Kiewit** (electrical_power, pending): official link goes to an AllCraftJobs craft board only; the professional board was not observed
 - **Stantec** (electrical_power, pending): official careers page served no ATS link
-- **Mott MacDonald** (electrical_power, pending): official careers page served no ATS link
 - **Jacobs** (electrical_power, pending): jobs.jacobs.com does not resolve; current board not observed
-- **NRG Energy** (electrical_power, pending): nrg.com/careers.html answered 404
-- **Enphase Energy** (electrical_power, pending): official page uses a Jobvite link builder; tenant not in served HTML
 - **Mitsubishi Electric Power Products** (electrical_power, pending): Greenhouse referenced but no board token in served HTML
 - **Wabtec** (electrical_power, pending): careers.wabtec.com is a custom front end over SmartRecruiters; company id not observed
 - **Fluor** (electrical_power, blocked): careers.fluor.com is disallowed to our agent by robots.txt
