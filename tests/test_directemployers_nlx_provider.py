@@ -191,3 +191,69 @@ def test_proven_seed_has_reviewed_endpoint_and_current_ownership_date():
     at = records['candidate']['evidence_at']
     assert at.isoformat().startswith(('2026-11-05T', '2026-11-06T'))
     assert at.isoformat() in records['candidate']['verification_reason']
+
+
+@pytest.mark.parametrize('cancel_after_first_page', [False, True])
+def test_worker_keeps_buffered_partial_rows_within_its_thirty_second_budget(monkeypatch, cancel_after_first_page):
+    """Exercise real worker consumption and the shared transport's retries."""
+    from datetime import datetime, timezone
+    import threading
+    import time
+    from services import job_ingest_worker as worker
+    from services.ats_providers.http import PacedSession, make_fetchers
+
+    clock = [100.0]
+    stop = threading.Event()
+    monkeypatch.setattr(time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    api_calls = []
+
+    class Response:
+        status_code = 200
+        text = 'User-agent: *\nDisallow:\n'
+        def json(self): return fixture(1)
+
+    class Requests:
+        @staticmethod
+        def get(url, **kwargs):
+            if url.endswith('/robots.txt'):
+                clock[0] += 0.1
+                return Response()
+            assert url == API
+            page = kwargs['params']['page']
+            api_calls.append((page, kwargs['timeout']))
+            if page == 1:
+                clock[0] += 1.0
+                if cancel_after_first_page: stop.set()
+                return Response()
+            # The real transport retries this slow request. Its caller's
+            # timeout bounds each attempt; no wall-clock sleeping or HTTP.
+            clock[0] += kwargs['timeout']
+            raise TimeoutError('simulated slow second page')
+
+    get_json, get_text, post_json = make_fetchers(
+        PacedSession(), deadline=130.0, stop=stop, requests_module=Requests)
+    ctx = FetchContext(get_json=get_json, get_text=get_text, post_json=post_json,
+                       deadline=130.0, stop=stop)
+    monkeypatch.setattr(worker, '_provider_fetch_context', lambda *args, **kwargs: ctx)
+    member = {'source': worker.SOURCE_CAREER, 'ats': 'directemployers_nlx',
+              'tenant': 'stantec', 'host': 'stantec.jobs', 'site': 'usa',
+              'member_key': 'directemployers_nlx-stantec-usa', 'display_name': 'Stantec'}
+    rows = worker._list_via_provider(member, cutoff=datetime(2020, 1, 1, tzinfo=timezone.utc),
+                                     deadline=130.0, stop=stop)
+    assert member['_listing_truncated'] is True
+    if cancel_after_first_page:
+        assert rows == [] and len(api_calls) == 1
+    else:
+        assert len(rows) == len({row['reqid'] for row in fixture(1)['jobs']})
+        assert max(len(row['locations']) for row in rows) == 2
+        assert clock[0] < ctx.deadline
+        assert len(api_calls) == 3, 'The shared transport must retain its two-attempt policy'
+
+
+def test_insufficient_transport_and_emission_budget_sends_no_request():
+    import time
+    ctx, asked = context()
+    ctx.deadline = time.monotonic() + 1.0
+    assert list(provider().list_jobs(endpoint(), ctx)) == []
+    assert ctx.listing_truncated and asked == []

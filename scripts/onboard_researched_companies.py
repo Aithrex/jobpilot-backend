@@ -653,65 +653,100 @@ def render_markdown(report: Dict[str, Any]) -> str:
 _STATIC_SECTIONS: List[str] = """
 ## How an added row reaches the Oracle ingester
 
-`services/ingest_runner` (systemd on the Oracle A1 box) -> `job_ingest_worker.
-dispatch_due_shards` -> `run_shard(source, shard)` -> `shard_members` =
-`registry_members(source)`, the union of `WORKDAY_TENANT_CATALOG` (+MNC Workday
-rows), `CAREER_PAGES_CATALOG` / `ENTERPRISE_CATALOG` / MNC rows, the
-`_SEED_ENDPOINTS` table, and `company_ats_endpoints` (validated|empty). Each
-member hashes to a shard by `blake2b(member_key)`; `list_member` lists it via
-`ats_providers.registry.get(vendor).list_jobs` (or the legacy US board path), the
-outbound guard allows only the provider's declared hosts, and every row is
-written by `job_inventory_service.upsert_posting`, which stamps
-`canonical_employer_id` only when `career_sources` holds owner-verified evidence.
-Rows added here live in the catalogs/seeds (ship with the deploy); `--apply`
-writes the ownership half (`company_discovery_candidates`, `employers`,
-`career_sources`).
+The Oracle ingest runner reads the union of the in-repository catalogs, seed
+endpoints and owner-verified dynamic sources. A new catalog/seed member can be
+scheduled after deployment. Canonical employer attribution requires the separate
+ownership records in `career_sources`; adding a token alone does not prove that
+ownership. The owner's onboarding `--apply` writes that ownership half only for
+rows whose exact endpoint has recorded successful validation.
 
-## Owner steps (in order) and rollback
+Validation timestamps above are the original public observations. An offline
+replay or documentation regeneration does not make an older observation fresh.
+Counts describe public responses and are not production inventory measurements.
+The header research-reviewed date identifies the original lead-registry audit,
+not the date of later public observations.
+The combined report retains the newest recorded validation matching each current
+exact endpoint, including its filters, route and host.
 
-1. Merge `dej/onboard`; let CI deploy the ingest runner (`deploy/ingest-runner`).
-   The new rows are crawled from the next tick.
-2. Garmin first: `db.company_ats_endpoints.find({display_name: /garmin/i})` - if
-   no Garmin row exists, add a `radancy` seed for `careers.garmin.com`.
-3. `PYTHONPATH=shared/python python3 scripts/onboard_researched_companies.py`
-   (dry-run, prints what it would register), then `... --apply`.
-4. `python3 scripts/verify_career_sources.py --mode content --apply` (ONE network
-   pass at a time), then `--mode backlink --apply`.
-5. `python3 scripts/employer_coverage_report.py --markdown --persist`.
+## Owner steps (in order)
 
-Rollback: revert the commit (catalog/seed rows and provider host entries go with
-it; members drop out on the next registry refresh, and their postings expire by
-TTL). `--apply` writes are additive: delete `career_sources` rows whose
-`ownership_evidence.source` is an onboarding evidence URL and
-`company_discovery_candidates` rows with `discovery_method: operator_review`
-written on the apply date; `scripts/backfill_canonical_employer_id.py --apply
---unstamp` reverses attribution.
+1. Review the combined employer-coverage PR and require the existing Linux CI
+   checks before merge. Deployment ships the catalog/seed and provider changes;
+   this task did not apply ownership records or write production data.
+2. On the deployed backend, run onboarding without flags to review its dry-run.
+   After reviewing the proposed ownership records, the owner may run `--apply`.
+3. Run content and backlink verification one network pass at a time. Review each
+   dry-run before its paired write. Keep all recorded robots, terms and challenge
+   refusals; a reachable parent board is not proof of subsidiary ownership.
+4. Review the coverage report before persisting its snapshot. Production coverage
+   numbers come from that snapshot, not the public sample counts in this report.
 
-## Defects found while onboarding (fixed here)
+```bash
+PYTHONPATH=shared/python python3 scripts/onboard_researched_companies.py
+PYTHONPATH=shared/python python3 scripts/onboard_researched_companies.py --apply
 
-- `job_ingest_worker` slugged catalog board tokens for the URL: `mistral.ai`,
-  `fathom.video`, `kraken.com`, `rivianvw.tech`, `arch.co`, `magic.dev` were
-  requested as `mistral-ai` & co. and 404'd every crawl. Member keys unchanged.
-- Phenom read at most 100 rows and never reported truncation; UKG likewise at its
-  1,000-row cap. A capped read was treated as a full census by
-  `_close_stale_in_shard`. Both now set `listing_truncated`; Phenom dedupes ids
-  across pages and stops at `totalHits`.
-- Greenhouse had no EU region: `boards-api.eu.greenhouse.io` does not exist; EU
-  boards are read from `job-boards.eu.greenhouse.io` pages, and a regional
-  Greenhouse/Lever member can no longer fall back to the US legacy path.
+PYTHONPATH=shared/python python3 scripts/verify_career_sources.py --mode content --workers 1
+PYTHONPATH=shared/python python3 scripts/verify_career_sources.py --mode content --workers 1 --apply
 
-## Not fixed here (follow-ups)
+PYTHONPATH=shared/python python3 scripts/verify_career_sources.py --mode backlink --workers 1
+PYTHONPATH=shared/python python3 scripts/verify_career_sources.py --mode backlink --workers 1 --apply
 
-- Phenom's 5x20 page budget reads 100 of e.g. BAE's 2,042 / ABB's 2,067 /
-  Bechtel's 1,150 postings (performance-engineer: raise `max_pages` or sort).
-- SmartRecruiters stopped at 200 of Intuitive's 450 without flagging truncation.
-- Oracle ORC, iCIMS and Taleo providers never set `listing_truncated`.
-- Workable's widget repeats a shortcode per location (Trexquant 50 rows / 34 ids);
-  the last location wins at upsert.
-- Eightfold answered 403 to this run for Microsoft, Qualcomm and Eaton (may be
-  IP-specific; the Oracle box's own inventory is the authority).
-- SuccessFactors RMK rows carry no location from the listing on several hosts
-  (PSEG, PSEG LI).
+PYTHONPATH=shared/python python3 scripts/employer_coverage_report.py --markdown
+PYTHONPATH=shared/python python3 scripts/employer_coverage_report.py --markdown --persist
+```
+
+The existing USAJOBS provider needs owner-configured `USAJOBS_API_KEY` and
+`USAJOBS_USER_AGENT`; obtain the free key through the official USAJOBS developer
+site. This task did not request, read or configure those credentials.
+
+Rollback: revert the combined code/catalog change to restore its prior source
+configuration. Any ownership records subsequently applied by the owner are
+separate additive data; review their recorded evidence and operator date before
+planning a data rollback. Do not reset or reseed production collections.
+
+## Coverage and safety fixes included
+
+- Employer-linked endpoints and actual crawl membership are reconciled together;
+  moved boards retain verified replacement tokens and exact canonical URLs.
+- Oracle ORC, iCIMS, Taleo, Phenom, SmartRecruiters, Eightfold, Avature and
+  SuccessFactors preserve partial reads at deadlines, caps, malformed responses,
+  repeated pages and unreached totals. Higher observed totals are retained when
+  the board changes during paging. A partial read must not close unseen jobs.
+- Phenom and SmartRecruiters have larger bounded page budgets. Public before/after
+  measurements and remaining partial reads are recorded in the coverage ledger.
+- Workable and Rippling merge repeated requisitions while preserving separate
+  locations. SuccessFactors detail locations fill missing listing locations;
+  explicit multi-location detail fields remain available to normalization.
+- Eightfold classic keeps missing posting dates unknown. Other detail-only or
+  undated templates also retain unknown dates rather than inventing current ones.
+- Avature template variants, bounded own-site hydration/query-ID listings, and
+  the proven Mott MacDonald and Enphase contracts use published paths and fields.
+- TalentBrew and DirectEmployers/NLX readers use the validated public contracts;
+  access restrictions and bounded reads remain visible. Source location rows,
+  distinct requisitions and advertised totals are measured separately.
+
+## Remaining restrictions and owner verification
+
+Blocked, unsupported, manual and unverified rows remain separate from genuinely
+empty boards. Shared-parent hiring-entity boundaries remain unresolved where the
+public evidence does not identify the requested employer. No parser or ownership
+filter broadens a subsidiary into every job on its parent board.
+
+Meta terms, Google results-paging robots, Intuit search-jobs robots and Fluor
+robots exclusions remain in force. Other robots refusals and host challenges are
+listed in `docs/coverage/board-backlog-2026-11.md`; neither an HTTP200 shell nor a
+zero-row parser result proves an empty inventory.
+
+Nine research employers already had static crawl rows and still need the owner's
+content/backlink verification: Upwind Security, Figure AI, Zoom, Ubisoft, Axonius,
+Tines, Cato Networks, Comcast and Rocket. The owner must also establish ownership
+for each independently filtered additional member, including Deloitte's second
+member, before relying on canonical attribution.
+
+The exact requested denominator, all final outcomes, provider value decisions,
+dated request chains, sample limits and owner handoffs are in the coverage ledger
+and its linked evidence JSON files. No database-writing command above was applied
+by this task.
 """.strip("\n").split("\n")
 
 

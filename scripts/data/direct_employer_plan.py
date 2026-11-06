@@ -709,12 +709,11 @@ TOP_EMPLOYERS: Dict[str, Any] = {
                          "Avangrid", "Oncor", "Siemens", "Kiewit", "Stantec",
                          "Mott MacDonald", "Jacobs", "NRG Energy", "Enphase Energy",
                          "Mitsubishi Electric Power Products", "Wabtec", "Fluor"],
-    "november_2026_research": ['TSMC', 'Teradyne', 'Boston Consulting Group', 'Riot Games', 'Pydantic', 'Procore', 'Etsy', 'Electronic Arts', 'Deloitte', 'Oxide Computer'],
-    "november_2026_research": ['KPMG US', 'Deel'],
-    "november_2026_research": ['TSMC', 'Teradyne', 'Boston Consulting Group', 'Riot Games', 'Pydantic', 'Procore', 'Etsy', 'EY', 'Electronic Arts', 'Deloitte', 'Oxide Computer'],
-    "november_2026_research": ['KPMG US', 'Deel'],
-    "november_2026_research": ['TSMC', 'Teradyne', 'Boston Consulting Group', 'Riot Games', 'Pydantic', 'Procore', 'Etsy', 'EY', 'Electronic Arts', 'Deloitte', 'Oxide Computer'],
-    "november_2026_research": ['KPMG US', 'Deel'],
+    "november_2026_research": [
+        "TSMC", "Teradyne", "Boston Consulting Group", "Riot Games", "Pydantic",
+        "Procore", "Etsy", "EY", "Electronic Arts", "Deloitte", "Oxide Computer",
+        "KPMG US", "Deel",
+    ],
 }
 
 

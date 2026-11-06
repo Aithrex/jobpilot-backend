@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 import json
 import re
+import time
 import unicodedata
 from typing import Any, Dict, Iterator, Optional
 from urllib.parse import urlparse
@@ -111,14 +112,35 @@ class DirectEmployersNLXProvider(AtsProvider):
         config = self._config(endpoint)
         return 'https://' + endpoint.host + config['path'] if config else ''
 
+    def _request_timeout(self, ctx: FetchContext) -> Optional[float]:
+        """Leave time for the worker to consume our merged buffer.
+
+        make_fetchers currently permits two attempts, a five-second semaphore
+        wait per attempt and up to 0.8 seconds of retry backoff. Reserve both
+        pacing intervals too, then two seconds for emission. The worker owns
+        the hard deadline and cancellation; neither is extended here. A
+        transport that overruns its requested timeout can still lose buffered
+        rows, so interrupted reads always remain partial.
+        """
+        if ctx.should_stop():
+            return None
+        waits = 2 * (5.0 + self.policy.min_interval + self.policy.jitter) + 0.8
+        available = ctx.deadline - time.monotonic() - waits - 2.0
+        if available < 1.0:  # shared transport's minimum is 0.5s per attempt
+            return None
+        return min(self.policy.timeout, available / 2)
+
     def _robots_allowed(self, url: str, ctx: FetchContext) -> bool:
         if ctx.should_stop():
             return False
         origin = 'https://' + urlparse(url).netloc
         cache = ctx.options.setdefault('_directemployers_nlx_robots', {})
         if origin not in cache:
+            timeout = self._request_timeout(ctx)
+            if timeout is None:
+                return False
             status, body = ctx.get_text(origin + '/robots.txt',
-                                        timeout=self.policy.timeout, vendor=self.vendor)
+                                        timeout=timeout, vendor=self.vendor)
             if self.policy.is_challenge(status, body or ''):
                 raise ChallengeError(self.vendor, status, 'robots refusal')
             if status not in (200, 404, 410):
@@ -171,12 +193,13 @@ class DirectEmployersNLXProvider(AtsProvider):
         total = None
         damaged = False
         for page in range(1, self.policy.max_pages + 1):
-            if ctx.should_stop():
+            timeout = self._request_timeout(ctx)
+            if timeout is None:
                 break
             status, body = ctx.get_json(
                 API, params={'location': config['site'], 'page': page, 'num_items': 50},
                 extra_headers={'X-Origin': endpoint.host},
-                timeout=self.policy.timeout, vendor=self.vendor,
+                timeout=timeout, vendor=self.vendor,
             )
             # Normal job descriptions can mention challenge words. Inspect an
             # error/interstitial body, not legitimate job content, for markers.

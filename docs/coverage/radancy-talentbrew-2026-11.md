@@ -54,5 +54,5 @@ new detail-revisit tests from main.
 
 The Optum scope check requires exactly the Optum facet value and every card's
 published Optum brand marker. Details retain each complete location, including
-its country. Distinct inventory locations depend on the Phase 2 worker mapping
-change; coordinate merge order with that PR.
+its country. The combined PR includes the Phase 2 worker mapping that preserves distinct
+inventory locations. Review and verify the combined change in PR #40.

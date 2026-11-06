@@ -61,3 +61,12 @@ payload fixtures, and 162 focused tests across provider, registry, readiness,
 onboarding and owed-detail paths. The exact `scripts/verify.py --full` command
 was invoked with native Python 3.12; final results are recorded in the parent
 delivery report and Linux CI remains required before merge.
+
+Combined integration correction: the reader reserves time for the worker to
+consume its merged requisitions before the caller deadline. Request timeouts
+account for the shared transport retry, pacing and semaphore allowances. A
+normal 30-second member budget yields a partial census; the 995-requisition
+measurement above used the longer bounded validation window. A transport that
+overruns its timeout or a cancellation can still prevent buffered delivery.
+The real-worker regression verifies partial rows, merged locations and unchanged
+cancellation behavior without changing the worker or shared transport.

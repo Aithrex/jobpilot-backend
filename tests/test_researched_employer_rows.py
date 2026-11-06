@@ -72,3 +72,14 @@ def test_deloitte_career_paths_keep_distinct_member_keys():
         "en_US/careers?3_5_3=477%2C478%2C480&sort=relevancy",
         "en_US/careers?3_5_3=479&sort=relevancy",
     }
+
+
+def test_every_researched_employer_is_present_in_owner_onboarding_report():
+    import sys
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import onboard_researched_companies as ob
+
+    report = ob.build_report(validations={})
+    represented = {row["company"] for cohort in report["cohorts"].values()
+                   for row in cohort["rows"]}
+    assert set(NAMES) <= represented, sorted(set(NAMES) - represented)
