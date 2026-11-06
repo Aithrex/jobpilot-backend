@@ -808,6 +808,11 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
      "host": "jobs.pge.com", "display_name": "PG&E", "industry": "energy"},
     {"vendor": "radancy_talentbrew", "tenant": "47438", "site": "",
      "host": "careers.solutionhealth.org", "display_name": "SolutionHealth", "industry": "healthcare"},
+    # stantec.com/en/careers -> stantec.jobs; public NLX API, US scope.
+    # The API lists location variants; the reader merges each exact reqid.
+    {"vendor": "directemployers_nlx", "tenant": "stantec", "site": "usa",
+     "host": "stantec.jobs", "display_name": "Stantec",
+     "industry": "electrical_power"},
     {"vendor": "oracle_orc", "tenant": "jpmc", "site": "CX_1",
      "host": "jpmc.fa.oraclecloud.com", "display_name": "JPMorgan Chase",
      "industry": "banking"},

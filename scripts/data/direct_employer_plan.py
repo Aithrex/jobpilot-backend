@@ -1257,7 +1257,19 @@ TOP_EMPLOYER_PLAN: Dict[str, Dict[str, Any]] = {
      'note': '2026-11-05 public provider validation read 995 distinct requisitions; '
              'listing_truncated=False. Exact official link/config chain and bounds: '
              'docs/coverage/research-evidence-2026-11.json.'},
-    "Stantec": _pending("official careers page served no ATS link", domain="stantec.com"),
+    "Stantec": dict(
+        domain="stantec.com", state="CHAIN", plan="added", where="seed",
+        industry="electrical_power",
+        endpoint=_ep("directemployers_nlx", "stantec", site="usa", host="stantec.jobs"),
+        career_url="https://www.stantec.com/en/careers",
+        evidence_url="https://stantec.jobs/locations/usa/jobs/",
+        checked_at="2026-11-05T23:52:57.574242Z",
+        note="Official career chain to stantec.jobs. Served NLX frontend publishes "
+             "the shared public API, X-Origin owner scope and location=usa. "
+             "650 permitted location rows proved 300 distinct US requisitions. "
+             "The final registered read on November 6 merged all 2,760 US "
+             "location rows into 995 requisitions; onboarding's separate "
+             "400-requisition probe remains explicitly budget-limited."),
     "Mott MacDonald": {'endpoint': {'vendor': 'custom_mottmac', 'tenant': 'mottmac', 'host': 'www.mottmac.com'},
      'domain': 'mottmac.com',
      'industry': 'engineering',

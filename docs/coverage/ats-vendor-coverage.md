@@ -48,6 +48,7 @@ a vendor agrees with us.
 The table below is the historical vendor inventory, with dated additions.
 Use `registry.readiness_report()` for the current registered set.
 "Rows/board" is what one representative live board returned during verification.
+
 ### Radancy TalentBrew public HTML (2026-11-05)
 
 `radancy_talentbrew` is separate from the `/api/jobs` JSON reader. Five
@@ -65,6 +66,13 @@ to its homepage. Optum requires the checked `custom_fields.UHGAJDType=Optum`
 facet, with no unfiltered parent fallback. Intuit remains excluded.
 
 See [the measured provider evidence](radancy-talentbrew-2026-11.md).
+
+The separately registered `directemployers_nlx` reader was verified on
+2026-11-06 against Stantec's official US board: all 2,760 location GUID rows
+merged into 995 distinct requisitions. It enforces named employer/country
+scope, robots, serialized shared-API pacing and explicit partial-census flags.
+Burns & McDonnell and Southern Company remain unverified and are not seeded.
+See [the measured evidence](directemployers-nlx-2026-11.md).
 
 
 | Vendor | Transport | Date | Description | Salary | Notes |
