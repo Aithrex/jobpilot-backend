@@ -179,14 +179,20 @@ NORMALIZATION_VERSION = 4
 # v15: `jd.level_hint` - a LIKELY senior band read from duty wording ("you will
 # mentor junior engineers", "lead the design of") on postings that state no
 # years. Display only (`level_estimate` on the card); it never sets `seniority`
-# and never filters. Same version: the no-level audit's reader fixes - glued
+# and never filters.
+#
+# The no-level audit's reader fixes (v16, below) - glued
 # "in lieu of a degree 1+ years" bullets, "(u.s. or foreign equivalent)",
 # "Qualifications: N+ years in <field>", an experience-for-degree aside, the
 # body saying the level in words ("looking for a senior SDET", "this
 # early-career role", an "Entry Level" field) and "Mid-Level"/"Intermediate"
 # titles. `required_years` and `seniority` move on those postings only
 # (`tests/test_level_statements.py`, `scripts/eval_level_hints.py`).
-EXTRACTOR_VERSION = 15
+#
+# v16: the no-level audit's reader fixes above shipped AFTER v15 went live
+# (PR #44 merged with only the level hint), so postings already re-read under
+# v15 need one more pass to pick them up.
+EXTRACTOR_VERSION = 16
 # The fit-score engine version a stored score belongs to (ADR-002 makes this
 # mandatory on every stored and served score).
 SCORING_VERSION = 1
