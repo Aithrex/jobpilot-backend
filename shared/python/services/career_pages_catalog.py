@@ -9,6 +9,14 @@ from __future__ import annotations
 from typing import Dict, List
 
 CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
+    # Official Fervo job-page embed -> Greenhouse fervoenergy; 68 roles, 2026-11-05.
+    {"display_name": "Fervo Energy", "ats": "greenhouse", "slug": "fervoenergy", "industry": "energy"},
+    # BEGIN board research 2026-11
+    {'display_name': 'LendingTree', 'ats': 'greenhouse', 'slug': 'lendingtree', 'industry': 'tech'},
+    {'display_name': 'Riot Games', 'ats': 'greenhouse', 'slug': 'riotgames', 'industry': 'tech'},
+    {'display_name': 'DigitalOcean', 'ats': 'greenhouse', 'slug': 'digitalocean98', 'industry': 'tech'},
+    {'display_name': 'DataVisor', 'ats': 'workable', 'slug': 'datavisor-jobs', 'industry': 'tech'},
+    # END board research 2026-11
     {"display_name": "Abridge", "ats": "ashby", "slug": "abridge", "industry": "healthtech"},
     {"display_name": "Alchemy", "ats": "ashby", "slug": "alchemy", "industry": "tech"},
     {"display_name": "Ambience Healthcare", "ats": "ashby", "slug": "ambiencehealthcare", "industry": "healthtech"},
@@ -49,7 +57,7 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Graphite", "ats": "ashby", "slug": "graphite", "industry": "tech"},
     {"display_name": "Greptile", "ats": "ashby", "slug": "greptile", "industry": "tech"},
     {"display_name": "Harvey", "ats": "ashby", "slug": "harvey", "industry": "tech"},
-    {"display_name": "Hex", "ats": "greenhouse", "slug": "hextechnologies", "industry": "tech"},
+    {"display_name": "Hex", "ats": "ashby", "slug": "hex", "industry": "tech"},
     {"display_name": "Ideogram", "ats": "ashby", "slug": "ideogram", "industry": "tech"},
     {"display_name": "Infisical", "ats": "ashby", "slug": "infisical", "industry": "tech"},
     {"display_name": "Kalshi", "ats": "ashby", "slug": "kalshi", "industry": "fintech"},
@@ -138,7 +146,7 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
     {"display_name": "Astranis", "ats": "greenhouse", "slug": "astranis", "industry": "telecom"},
     {"display_name": "At-Bay", "ats": "greenhouse", "slug": "atbay", "industry": "insurance"},
     {"display_name": "Atari", "ats": "greenhouse", "slug": "atariinc", "industry": "gaming"},
-    {"display_name": "Aurora Innovation", "ats": "greenhouse", "slug": "aurorainnovation", "industry": "manufacturing_automotive"},
+    {"display_name": "Aurora Innovation", "ats": "ashby", "slug": "aurora-operations-inc", "industry": "manufacturing_automotive"},
     {"display_name": "Axios", "ats": "greenhouse", "slug": "axios", "industry": "media"},
     {"display_name": "Axonius", "ats": "greenhouse", "slug": "axonius", "industry": "tech"},
     {"display_name": "Betterment", "ats": "greenhouse", "slug": "betterment", "industry": "fintech"},
@@ -167,7 +175,7 @@ CAREER_PAGES_CATALOG: List[Dict[str, str]] = [
     {"display_name": "CircleCI", "ats": "greenhouse", "slug": "circleci", "industry": "tech"},
     {"display_name": "Clara", "ats": "greenhouse", "slug": "clara", "industry": "fintech"},
     {"display_name": "Clearway Energy", "ats": "greenhouse", "slug": "clearwayjobs", "industry": "energy"},
-    {"display_name": "ClickHouse", "ats": "greenhouse", "slug": "clickhouse", "industry": "tech"},
+    {"display_name": "ClickHouse", "ats": "ashby", "slug": "clickhouse", "industry": "tech"},
     {"display_name": "Cloudflare", "ats": "greenhouse", "slug": "cloudflare", "industry": "tech"},
     {"display_name": "Clover Health", "ats": "greenhouse", "slug": "cloverhealth", "industry": "healthtech"},
     {"display_name": "Coalition", "ats": "greenhouse", "slug": "coalition", "industry": "insurance"},

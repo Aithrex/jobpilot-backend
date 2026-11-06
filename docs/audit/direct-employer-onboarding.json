@@ -1,6 +1,6 @@
 {
  "version": "direct-employer-onboarding-1.0.0",
- "generated_at": "2026-10-22T07:49:58Z",
+ "generated_at": "2026-11-06T00:40:57Z",
  "research_reviewed_on": "2026-10-21",
  "coverage_basis": "in-repo catalogs and seed tables the crawler loads (no production inventory was read)",
  "cohorts": {
@@ -8,13 +8,13 @@
    "denominator": 174,
    "counts": {
     "existing_covered": 5,
-    "existing_unhealthy_or_moved": 0,
-    "new_validated": 47,
+    "existing_unhealthy_or_moved": 4,
+    "new_validated": 59,
     "excluded": 61,
     "review": 31,
     "blocked": 0,
-    "unsupported": 22,
-    "pending": 8
+    "unsupported": 9,
+    "pending": 5
    },
    "rows": [
     {
@@ -502,7 +502,7 @@
      "why": "unsupported_pending_provider:own_site",
      "member_key": "",
      "provider_needed": "own_site",
-     "note": "Official roles apply via LinkedIn: manual handoff only.",
+     "note": "2026-11-05: official company page lists 3 LinkedIn apply links. Existing own-page discovery remains manual handoff; no LinkedIn fetching or application automation.",
      "validation": {
       "status": "not_run"
      }
@@ -1110,19 +1110,44 @@
     {
      "company": "DataVisor",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "datavisor.com",
-     "provider": "Workable",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "Workable whr_embed(56790); account-to-slug link for datavisor-jobs not observed",
-     "member_key": "",
+     "provider": "workable",
+     "endpoint": {
+      "vendor": "workable",
+      "tenant": "datavisor-jobs",
+      "host": ""
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "workable-datavisor-jobs",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05 public provider validation read 27 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:50:54.934428Z",
+      "vendor": "workable",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 33,
+      "unique_ids": 27,
+      "duplicate_rows": 6,
+      "requisitions": 27,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Business Operations Analyst",
+       "Customer Success Manager - Fraud/AML Strategy",
+       "Customer Success Manager - Fraud/AML Strategy"
+      ],
+      "detail": "",
+      "member_key": "workable-datavisor-jobs",
+      "replayed_at_utc": "2026-11-06T00:19:24.130623+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      }
     },
     {
@@ -1173,17 +1198,41 @@
      "disposition": "eligible_direct",
      "evidence_state": "CHAIN",
      "domain": "destroai.com",
-     "provider": "breezyhr",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:breezyhr",
-     "member_key": "",
-     "provider_needed": "breezyhr",
-     "note": "",
+     "provider": "breezy",
+     "endpoint": {
+      "vendor": "breezy",
+      "tenant": "destro-ai",
+      "site": "",
+      "host": "destro-ai.breezy.hr"
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "breezy-destro-ai",
+     "provider_needed": "",
+     "note": "2026-11-05: reconciled already-seeded source; live provider returned 13 rows.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:44:59.834641Z",
+      "vendor": "breezy",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 13,
+      "unique_ids": 13,
+      "duplicate_rows": 0,
+      "requisitions": 13,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Robotics Software Engineer - Field Deployment & Support",
+       "Robotics Software Engineer - Field Deployment & Support",
+       "Robotics Systems Engineer"
+      ],
+      "detail": "",
+      "member_key": "breezy-destro-ai"
      }
     },
     {
@@ -1332,7 +1381,7 @@
      "why": "unsupported_pending_provider:avature",
      "member_key": "",
      "provider_needed": "avature",
-     "note": "",
+     "note": "2026-11-05: official /jobs publishes a Next.js avaturePositions payload with open/published flags. Generic own-site parser returned 10 navigation/category links while the rendered board names 46 positions; those are not validated requisitions. Do not seed until a reader proves the published job/link mapping.",
      "validation": {
       "status": "not_run"
      }
@@ -1394,19 +1443,41 @@
     {
      "company": "Fervo Energy",
      "disposition": "eligible_direct",
-     "evidence_state": "OWN",
+     "evidence_state": "CHAIN",
      "domain": "fervoenergy.com",
-     "provider": "own_site",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:own_site",
-     "member_key": "",
-     "provider_needed": "own_site",
-     "note": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "fervoenergy"
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "greenhouse-fervoenergy",
+     "provider_needed": "",
+     "note": "2026-11-05: official job detail embeds boards.greenhouse.io/embed/job_board/js?for=fervoenergy; Greenhouse returned 68 requisitions. Added exact proven board.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:27.569747Z",
+      "vendor": "greenhouse",
+      "status": "complete",
+      "source_reported": 68,
+      "parsed": 68,
+      "unique_ids": 68,
+      "duplicate_rows": 0,
+      "requisitions": 68,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Asset Manager, Market Asset Operations",
+       "Associate Corporate Counsel",
+       "CAD Specialist"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-fervoenergy"
      }
     },
     {
@@ -1562,16 +1633,43 @@
      "evidence_state": "FRONTEND",
      "domain": "fhr.com",
      "provider": "avature",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:avature",
-     "member_key": "",
-     "provider_needed": "avature",
-     "note": "Shared Koch Avature front end; must filter to FHR when built.",
+     "endpoint": {
+      "vendor": "avature",
+      "tenant": "koch.avature.net",
+      "site": "en_US/careers?732=6297&tags=rm.kcm.web.kcm-004",
+      "host": "koch.avature.net",
+      "extra": {
+       "entity_name": "Flint Hills Resources"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "avature-koch-avature-net-en_us-careers-732-6297-tags-rm-kcm-web-kcm-004",
+     "provider_needed": "",
+     "note": "2026-11-05: official FHR -> Koch careers page still links exact FHR-filtered Avature URL. Existing provider reads 42/42 and enforces entity_name on every row.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:16.297954Z",
+      "vendor": "avature",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 42,
+      "unique_ids": 42,
+      "duplicate_rows": 0,
+      "requisitions": 42,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Data Analyst",
+       "Wireless System Administrator",
+       "Reliability Engineer"
+      ],
+      "detail": "",
+      "member_key": "avature-koch-avature-net-en_us-careers-732-6297-tags-rm-kcm-web-kcm-004"
      }
     },
     {
@@ -1641,16 +1739,40 @@
      "evidence_state": "FRONTEND",
      "domain": "frequentis.com",
      "provider": "avature",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:avature",
-     "member_key": "",
-     "provider_needed": "avature",
-     "note": "",
+     "endpoint": {
+      "vendor": "avature",
+      "tenant": "jobs.frequentis.com",
+      "site": "careers",
+      "host": "jobs.frequentis.com"
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "avature-jobs-frequentis-com-careers",
+     "provider_needed": "",
+     "note": "2026-11-05: reconciled already-seeded source; live provider returned 62 rows.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:10.369103Z",
+      "vendor": "avature",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 62,
+      "unique_ids": 62,
+      "duplicate_rows": 0,
+      "requisitions": 62,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "ATM Service Engineer - Voice Solutions (all genders)",
+       "Automation Test Engineer",
+       "Contracts Specialist"
+      ],
+      "detail": "",
+      "member_key": "avature-jobs-frequentis-com-careers"
      }
     },
     {
@@ -1720,7 +1842,7 @@
      "why": "unsupported_pending_provider:own_site",
      "member_key": "",
      "provider_needed": "own_site",
-     "note": "Official roles apply via LinkedIn: manual handoff only.",
+     "note": "2026-11-05: official careers page lists 10 LinkedIn apply links. Existing own-page discovery remains manual handoff; no LinkedIn fetching or application automation.",
      "validation": {
       "status": "not_run"
      }
@@ -2166,19 +2288,46 @@
     {
      "company": "LendingTree",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "lendingtree.com",
-     "provider": "Greenhouse integration suspected; tenant unresolved",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "gh_jid hints only; no board token observed",
-     "member_key": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "lendingtree",
+      "site": "",
+      "host": "",
+      "extra": {}
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "greenhouse-lendingtree",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05 public provider validation read 23 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:18:23.240473Z",
+      "vendor": "greenhouse",
+      "status": "complete",
+      "source_reported": 23,
+      "parsed": 23,
+      "unique_ids": 23,
+      "duplicate_rows": 0,
+      "requisitions": 23,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Executive",
+       "Account Executive",
+       "Account Executive"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-lendingtree",
+      "replayed_at_utc": "2026-11-06T00:19:24.133221+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      }
     },
     {
@@ -2187,16 +2336,32 @@
      "evidence_state": "CHAIN",
      "domain": "lincolninst.edu",
      "provider": "paycom",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:paycom",
-     "member_key": "",
-     "provider_needed": "paycom",
-     "note": "",
+     "endpoint": {
+      "vendor": "paycom",
+      "tenant": "AC25DFC6E5002C200B92C92109B3F768",
+      "site": "",
+      "host": "www.paycomonline.net"
+     },
+     "where": "seed",
+     "plan": "existing",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation blocked",
+     "member_key": "paycom-ac25dfc6e5002c200b92c92109b3f768",
+     "provider_needed": "",
+     "note": "2026-11-05: existing seed, ownership chain reconfirmed; Refusal: robots_refusal: https://www.paycomonline.net/v4/ats/web.php/jobs?clientkey=AC25DFC6E5002C200B92C92109B3F768. No blocked request was sent or retried.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:02.171749Z",
+      "status": "blocked",
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "source_reported": null,
+      "detail": "Refusal: robots_refusal: https://www.paycomonline.net/v4/ats/web.php/jobs?clientkey=AC25DFC6E5002C200B92C92109B3F768",
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": []
      }
     },
     {
@@ -2212,7 +2377,7 @@
      "why": "unsupported_pending_provider:own_site",
      "member_key": "",
      "provider_needed": "own_site",
-     "note": "",
+     "note": "2026-11-05: longbridge.com/robots.txt answered 403; stopped host, no listing probe or new row.",
      "validation": {
       "status": "not_run"
      }
@@ -2292,19 +2457,42 @@
     {
      "company": "MATS Research",
      "disposition": "eligible_direct",
-     "evidence_state": "OWN",
+     "evidence_state": "CONFIG",
      "domain": "matsprogram.org",
-     "provider": "own_site",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:own_site",
-     "member_key": "",
-     "provider_needed": "own_site",
-     "note": "Staff roles only; fellowships are not jobs.",
+     "provider": "rippling",
+     "endpoint": {
+      "vendor": "rippling",
+      "tenant": "mats-research",
+      "host": ""
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "rippling-mats-research",
+     "provider_needed": "",
+     "note": "2026-11-05: official page now embeds Rippling data-job-board-id=mats-research; replace the retired own-site listing (0/unverified). 19 location rows, 10 IDs, 9 staff requisitions and 1 Expression of Interest; no fellowships. Location merging follows in under-reads.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:46:08.431257Z",
+      "vendor": "rippling",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 19,
+      "unique_ids": 10,
+      "duplicate_rows": 9,
+      "requisitions": 9,
+      "filtered_non_requisition": 1,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Community Manager",
+       "Compute Operations Specialist",
+       "Cybersecurity Engineer (IT Security)"
+      ],
+      "detail": "",
+      "member_key": "rippling-mats-research"
      }
     },
     {
@@ -2552,17 +2740,44 @@
      "disposition": "eligible_direct",
      "evidence_state": "MANUAL",
      "domain": "nousresearch.com",
-     "provider": "own_site",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:own_site",
-     "member_key": "",
-     "provider_needed": "own_site",
-     "note": "Inline roles with email apply: manual handoff; never email automatically.",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "nousresearch.com",
+      "site": "",
+      "host": "nousresearch.com",
+      "extra": {
+       "listing_url": "https://nousresearch.com/careers"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-nousresearch-com",
+     "provider_needed": "",
+     "note": "2026-11-05: reconciled already-seeded source; live provider returned 13 rows.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:08.982887Z",
+      "vendor": "careers_page",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 13,
+      "unique_ids": 13,
+      "duplicate_rows": 0,
+      "requisitions": 13,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Office Manager",
+       "Machine Learning Engineer, Evals",
+       "Software Engineer"
+      ],
+      "detail": "",
+      "member_key": "careers_page-nousresearch-com"
      }
     },
     {
@@ -2634,17 +2849,44 @@
      "disposition": "eligible_direct",
      "evidence_state": "OWN",
      "domain": "orangelogic.com",
-     "provider": "own_site",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:own_site",
-     "member_key": "",
-     "provider_needed": "own_site",
-     "note": "",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "orangelogic.com",
+      "site": "",
+      "host": "orangelogic.com",
+      "extra": {
+       "listing_url": "https://www.orangelogic.com/about/careers"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-orangelogic-com",
+     "provider_needed": "",
+     "note": "2026-11-05: reconciled already-seeded source; live provider returned 7 rows.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:06.415954Z",
+      "vendor": "careers_page",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 7,
+      "unique_ids": 7,
+      "duplicate_rows": 0,
+      "requisitions": 7,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Product Marketing Manager, US",
+       "Financial Analyst, US",
+       "Applied AI Product Engineer, US"
+      ],
+      "detail": "",
+      "member_key": "careers_page-orangelogic-com"
      }
     },
     {
@@ -2993,17 +3235,33 @@
      "disposition": "eligible_direct",
      "evidence_state": "CHAIN",
      "domain": "revspringinc.com",
-     "provider": "newton_paycor",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:newton_paycor",
-     "member_key": "",
-     "provider_needed": "newton_paycor",
-     "note": "",
+     "provider": "paycor",
+     "endpoint": {
+      "vendor": "paycor",
+      "tenant": "8a7883d0798f66af0179905b7890010b",
+      "site": "aggregate",
+      "host": "recruitingbypaycor.com"
+     },
+     "where": "seed",
+     "plan": "existing",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation blocked",
+     "member_key": "paycor-8a7883d0798f66af0179905b7890010b-aggregate",
+     "provider_needed": "",
+     "note": "2026-11-05: existing seed, ownership chain reconfirmed; Refusal: robots_refusal: https://recruitingbypaycor.com/career/AggregateCareerHome.action?clientId=8a7883d0798f66af0179905b7890010b. No blocked request was sent or retried.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:44:59.474378Z",
+      "status": "blocked",
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "source_reported": null,
+      "detail": "Refusal: robots_refusal: https://recruitingbypaycor.com/career/AggregateCareerHome.action?clientId=8a7883d0798f66af0179905b7890010b",
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": []
      }
     },
     {
@@ -3072,17 +3330,44 @@
      "disposition": "eligible_direct",
      "evidence_state": "OWN",
      "domain": "ruggedscience.com",
-     "provider": "own_site",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:own_site",
-     "member_key": "",
-     "provider_needed": "own_site",
-     "note": "",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "ruggedscience.com",
+      "site": "",
+      "host": "ruggedscience.com",
+      "extra": {
+       "listing_url": "https://ruggedscience.com/careers/"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-ruggedscience-com",
+     "provider_needed": "",
+     "note": "2026-11-05: reconciled already-seeded source; live provider returned 9 rows.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:07.600909Z",
+      "vendor": "careers_page",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 9,
+      "unique_ids": 9,
+      "duplicate_rows": 0,
+      "requisitions": 9,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Software Developer / IT Specialist",
+       "Quality Director",
+       "Mechanical Designer"
+      ],
+      "detail": "",
+      "member_key": "careers_page-ruggedscience-com"
      }
     },
     {
@@ -3289,7 +3574,7 @@
      "why": "shared Roper UKG board; the UKG provider cannot filter to the hiring entity, and importing every Roper job as SoftWriters is wrong",
      "member_key": "",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05: official page still links Roper shared UKG board. recruiting.ultipro.com robots disallows the linked OpportunityDetail; no probe beyond robots, no unfiltered source added.",
      "validation": {
       "status": "not_run"
      }
@@ -3300,16 +3585,41 @@
      "evidence_state": "FRONTEND",
      "domain": "solutionhealth.org",
      "provider": "radancy_talentbrew",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:radancy_talentbrew",
-     "member_key": "",
-     "provider_needed": "radancy_talentbrew",
-     "note": "",
+     "endpoint": {
+      "vendor": "radancy_talentbrew",
+      "tenant": "47438",
+      "site": "",
+      "host": "careers.solutionhealth.org",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy_talentbrew-47438",
+     "provider_needed": "",
+     "note": "2026-11-05: provider validated 15/510 advertised rows; public HTML only, explicitly truncated.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:24:09Z",
+      "vendor": "radancy_talentbrew",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 15,
+      "unique_ids": 15,
+      "duplicate_rows": 0,
+      "requisitions": 15,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Registered Nurse Ambulatory - Internal Med/Pediatrics Raymond - Part Time",
+       "Patient Service Representative- Elliot 1-Day Surgery Center- Per Diem (Friday av",
+       "Registered Nurse (OR)- Elliot 1-Day Surgery Center- Full Time (OR EXPERIENCE REQ"
+      ],
+      "detail": "",
+      "member_key": "radancy_talentbrew-47438"
      }
     },
     {
@@ -3335,17 +3645,31 @@
      "disposition": "eligible_direct",
      "evidence_state": "CHAIN",
      "domain": "springarbor.edu",
-     "provider": "newton_paycor",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:newton_paycor",
-     "member_key": "",
-     "provider_needed": "newton_paycor",
-     "note": "",
+     "provider": "paycor",
+     "endpoint": {
+      "vendor": "paycor",
+      "tenant": "8a7883c66ee9a5cc016ef0ea2d5b06cb",
+      "site": "",
+      "host": "recruitingbypaycor.com"
+     },
+     "where": "seed",
+     "plan": "existing",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation blocked",
+     "member_key": "paycor-8a7883c66ee9a5cc016ef0ea2d5b06cb",
+     "provider_needed": "",
+     "note": "2026-11-05: existing seed, ownership chain reconfirmed; Refusal: robots_refusal: https://recruitingbypaycor.com/career/CareerHome.action?clientId=8a7883c66ee9a5cc016ef0ea2d5b06cb. No blocked request was sent or retried.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:44:59.823428Z",
+      "status": "blocked",
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "source_reported": null,
+      "detail": "Refusal: robots_refusal: https://recruitingbypaycor.com/career/CareerHome.action?clientId=8a7883c66ee9a5cc016ef0ea2d5b06cb",
+      "http_statuses": [],
+      "sample_titles": []
      }
     },
     {
@@ -3586,15 +3910,15 @@
      "disposition": "eligible_direct",
      "evidence_state": "OWN",
      "domain": "templehealth.org",
-     "provider": "own_site",
+     "provider": "silkroad",
      "endpoint": null,
      "where": "",
      "plan": "unsupported",
      "outcome": "unsupported",
-     "why": "unsupported_pending_provider:own_site",
+     "why": "unsupported_pending_provider:silkroad",
      "member_key": "",
-     "provider_needed": "own_site",
-     "note": "",
+     "provider_needed": "silkroad",
+     "note": "2026-11-05: careers.templehealth.org redirects to templehealth.org/careers; official page links https://jobs.silkroad.com/templehealth/Careers. No SilkRoad provider; do not treat navigation as jobs.",
      "validation": {
       "status": "not_run"
      }
@@ -3962,16 +4286,34 @@
      "evidence_state": "CHAIN",
      "domain": "universalbackground.com",
      "provider": "appone",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:appone",
-     "member_key": "",
-     "provider_needed": "appone",
-     "note": "",
+     "endpoint": {
+      "vendor": "appone",
+      "tenant": "universalbackgroundscreening.appone.com",
+      "site": "",
+      "host": "www2.appone.com"
+     },
+     "where": "seed",
+     "plan": "existing",
+     "outcome": "existing_unhealthy_or_moved",
+     "why": "validation blocked",
+     "member_key": "appone-universalbackgroundscreening-appone-com",
+     "provider_needed": "",
+     "note": "2026-11-05: existing seed, ownership chain reconfirmed; Refusal: robots_refusal: https://recruiting.myapps.paychex.com/appone/Branding/ReqTemplate/BrowseAllJobsbyCategory.asp?Type=REQ&FromID=1&ClientID=18117&B_ID=91&JobCode=0&CountryID=3&LanguageID=2&servervar=universalbackgroundscreening.appone.com. No blocked request was sent or retried.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:45:02.706048Z",
+      "status": "blocked",
+      "parsed": 0,
+      "unique_ids": 0,
+      "duplicate_rows": 0,
+      "requisitions": 0,
+      "source_reported": null,
+      "detail": "Refusal: robots_refusal: https://recruiting.myapps.paychex.com/appone/Branding/ReqTemplate/BrowseAllJobsbyCategory.asp?Type=REQ&FromID=1&ClientID=18117&B_ID=91&JobCode=0&CountryID=3&LanguageID=2&servervar=universalbackgroundscreening.appone.com",
+      "http_statuses": [
+       "404",
+       "200",
+       "200"
+      ],
+      "sample_titles": []
      }
     },
     {
@@ -4223,19 +4565,46 @@
     {
      "company": "Verisk",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "verisk.com",
-     "provider": "",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "corporate page challenged; SmartRecruiters/Oracle candidates unproven",
-     "member_key": "",
+     "provider": "oracle_orc",
+     "endpoint": {
+      "vendor": "oracle_orc",
+      "tenant": "fa-ewmy-saasfaprod1",
+      "site": "CX_1",
+      "host": "fa-ewmy-saasfaprod1.fa.ocs.oraclecloud.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "oracle_orc-fa-ewmy-saasfaprod1-cx_1",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05 public provider validation read 162 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:18:24.370878Z",
+      "vendor": "oracle_orc",
+      "status": "complete",
+      "source_reported": 162,
+      "parsed": 162,
+      "unique_ids": 162,
+      "duplicate_rows": 0,
+      "requisitions": 162,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Sachbearbeiter f\u00fcr Medizinische Datenerfassung (m/w/d)",
+       "Senior Insurance Product Development Analyst",
+       "Senior Data Scientist"
+      ],
+      "detail": "",
+      "member_key": "oracle_orc-fa-ewmy-saasfaprod1-cx_1",
+      "replayed_at_utc": "2026-11-06T00:19:24.142973+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      }
     },
     {
@@ -4437,18 +4806,150 @@
    ]
   },
   "top": {
-   "denominator": 166,
+   "denominator": 182,
    "counts": {
     "existing_covered": 76,
-    "existing_unhealthy_or_moved": 7,
-    "new_validated": 38,
+    "existing_unhealthy_or_moved": 4,
+    "new_validated": 69,
     "excluded": 0,
     "review": 0,
-    "blocked": 17,
-    "unsupported": 8,
-    "pending": 20
+    "blocked": 18,
+    "unsupported": 5,
+    "pending": 10
    },
    "rows": [
+    {
+     "company": "Synopsys",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "synopsys.com",
+     "provider": "radancy_talentbrew",
+     "endpoint": {
+      "vendor": "radancy_talentbrew",
+      "tenant": "44408",
+      "site": "",
+      "host": "careers.synopsys.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy_talentbrew-44408",
+     "provider_needed": "",
+     "note": "2026-11-05: 15/676 advertised rows validated; public HTML only, truncated.",
+     "validation": {
+      "at": "2026-11-05T23:23:56Z",
+      "vendor": "radancy_talentbrew",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 15,
+      "unique_ids": 15,
+      "duplicate_rows": 0,
+      "requisitions": 15,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Lead Cybersecurity Automation Engineer",
+       "Analog Design, Staff Engineer",
+       "Product Management, Principal"
+      ],
+      "detail": "",
+      "member_key": "radancy_talentbrew-44408"
+     },
+     "domain_group": "researched_boards"
+    },
+    {
+     "company": "Charter Communications",
+     "disposition": "eligible_direct",
+     "evidence_state": "FRONTEND",
+     "domain": "spectrum.com",
+     "provider": "radancy_talentbrew",
+     "endpoint": {
+      "vendor": "radancy_talentbrew",
+      "tenant": "4673",
+      "site": "",
+      "host": "jobs.spectrum.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy_talentbrew-4673",
+     "provider_needed": "",
+     "note": "2026-11-05: 15/1458 advertised rows validated; public HTML only, truncated.",
+     "validation": {
+      "at": "2026-11-05T23:23:59Z",
+      "vendor": "radancy_talentbrew",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 15,
+      "unique_ids": 15,
+      "duplicate_rows": 0,
+      "requisitions": 15,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Physical Security Officer I",
+       "Business Planning Specialist - Atlanta, GA",
+       "Business Planning Specialist - Atlanta, GA"
+      ],
+      "detail": "",
+      "member_key": "radancy_talentbrew-4673"
+     },
+     "domain_group": "researched_boards"
+    },
+    {
+     "company": "Optum",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "optum.com",
+     "provider": "radancy_talentbrew",
+     "endpoint": {
+      "vendor": "radancy_talentbrew",
+      "tenant": "34088",
+      "site": "optum",
+      "host": "careers.unitedhealthgroup.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy_talentbrew-34088-optum",
+     "provider_needed": "",
+     "note": "2026-11-05: official /optum-jobs entry and checked custom_fields.UHGAJDType=Optum required; 15/5933 advertised rows, truncated. Never the unfiltered UHG board.",
+     "validation": {
+      "at": "2026-11-05T23:24:05Z",
+      "vendor": "radancy_talentbrew",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 15,
+      "unique_ids": 15,
+      "duplicate_rows": 0,
+      "requisitions": 15,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Licensed Practical Nurse (LPN)",
+       "Ambulatory Service Representative III - Kelsey-Seybold Clinic: Upper Kirby",
+       "Per Diem Patient Registration Specialist"
+      ],
+      "detail": "",
+      "member_key": "radancy_talentbrew-34088-optum"
+     },
+     "domain_group": "researched_boards"
+    },
     {
      "company": "Microsoft",
      "disposition": "eligible_direct",
@@ -5085,19 +5586,47 @@
     {
      "company": "Shopify",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "shopify.com",
-     "provider": "",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "official careers page served no ATS link",
-     "member_key": "",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "shopify.com",
+      "host": "shopify.com",
+      "extra": {
+       "listing_url": "https://www.shopify.com/careers"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-shopify-com",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05 public provider validation read 25 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-06T00:01:45.240401Z",
+      "vendor": "careers_page",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 25,
+      "unique_ids": 25,
+      "duplicate_rows": 0,
+      "requisitions": 25,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Applied Machine Learning Engineering Managers",
+       "Applied Machine Learning Engineers",
+       "Applied ML Engineering - GenAI, AI Agent"
+      ],
+      "detail": "",
+      "member_key": "careers_page-shopify-com",
+      "replayed_at_utc": "2026-11-06T00:19:24.297336+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "software"
     },
@@ -6242,40 +6771,44 @@
     {
      "company": "Aurora Innovation",
      "disposition": "eligible_direct",
-     "evidence_state": "EXISTING",
-     "domain": "",
-     "provider": "greenhouse",
+     "evidence_state": "CHAIN",
+     "domain": "aurora.tech",
+     "provider": "ashby",
      "endpoint": {
-      "vendor": "greenhouse",
-      "tenant": "aurorainnovation",
+      "vendor": "ashby",
+      "tenant": "aurora-operations-inc",
       "site": "",
       "host": "",
       "extra": {}
      },
-     "where": "catalog_or_seed",
-     "plan": "existing",
-     "outcome": "existing_unhealthy_or_moved",
-     "why": "validation failed",
-     "member_key": "greenhouse-aurorainnovation",
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-aurora-operations-inc",
      "provider_needed": "",
-     "note": "greenhouse/aurorainnovation answers 404; aurora.tech/careers serves no board link (JS)",
+     "note": "2026-11-05: old Greenhouse token still answers 404. Official careers HTML publishes ashbyOrgSlug=aurora-operations-inc; its public posting API returned 90 distinct requisitions. Replaced the stale catalog endpoint.",
      "validation": {
-      "at": "2026-10-22T02:18:28Z",
-      "vendor": "greenhouse",
-      "status": "failed",
+      "at": "2026-11-05T23:25:39.293769Z",
+      "vendor": "ashby",
+      "status": "complete",
       "source_reported": null,
-      "parsed": 0,
-      "unique_ids": 0,
+      "parsed": 90,
+      "unique_ids": 90,
       "duplicate_rows": 0,
-      "requisitions": 0,
+      "requisitions": 90,
       "filtered_non_requisition": 0,
       "filtered_other_entity": 0,
       "http_statuses": [
-       "404"
+       "200"
       ],
-      "sample_titles": [],
-      "detail": "",
-      "member_key": "greenhouse-aurorainnovation"
+      "sample_titles": [
+       "Senior Staff TLM, Security Systems",
+       "Senior Program Manager, Test Execution (Weekends)",
+       "Senior Program Manager, Development Testing Operations (Release Testing)"
+      ],
+      "detail": "Guarded offline replay of the captured public posting API response; no network call.",
+      "member_key": "ashby-aurora-operations-inc"
      },
      "domain_group": "ai_ml"
     },
@@ -7003,19 +7536,43 @@
     {
      "company": "ThoughtSpot",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "thoughtspot.com",
-     "provider": "",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "official careers page served no ATS link",
-     "member_key": "",
+     "provider": "rippling",
+     "endpoint": {
+      "vendor": "rippling",
+      "tenant": "thoughtspot"
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "rippling-thoughtspot",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05 public provider validation read 48 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-06T00:14:28.510501Z",
+      "vendor": "rippling",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 49,
+      "unique_ids": 48,
+      "duplicate_rows": 1,
+      "requisitions": 48,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Executive, AgentSpot",
+       "Account Executive, AgentSpot",
+       "Account Executive, AgentSpot"
+      ],
+      "detail": "",
+      "member_key": "rippling-thoughtspot",
+      "replayed_at_utc": "2026-11-06T00:19:24.142973+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "data_science"
     },
@@ -7066,40 +7623,44 @@
     {
      "company": "Hex",
      "disposition": "eligible_direct",
-     "evidence_state": "EXISTING",
-     "domain": "",
-     "provider": "greenhouse",
+     "evidence_state": "CHAIN",
+     "domain": "hex.tech",
+     "provider": "ashby",
      "endpoint": {
-      "vendor": "greenhouse",
-      "tenant": "hextechnologies",
+      "vendor": "ashby",
+      "tenant": "hex",
       "site": "",
       "host": "",
       "extra": {}
      },
-     "where": "catalog_or_seed",
-     "plan": "existing",
-     "outcome": "existing_unhealthy_or_moved",
-     "why": "validation failed",
-     "member_key": "greenhouse-hextechnologies",
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-hex",
      "provider_needed": "",
-     "note": "greenhouse/hextechnologies answers 404; hex.tech/careers serves no board link",
+     "note": "2026-11-05: old Greenhouse token still answers 404. Official job detail embeds jobs.ashbyhq.com/hex/embed?version=2; the public posting API returned 39 distinct requisitions. Replaced the stale catalog endpoint.",
      "validation": {
-      "at": "2026-10-22T02:18:35Z",
-      "vendor": "greenhouse",
-      "status": "failed",
+      "at": "2026-11-05T23:25:40.344476Z",
+      "vendor": "ashby",
+      "status": "complete",
       "source_reported": null,
-      "parsed": 0,
-      "unique_ids": 0,
+      "parsed": 39,
+      "unique_ids": 39,
       "duplicate_rows": 0,
-      "requisitions": 0,
+      "requisitions": 39,
       "filtered_non_requisition": 0,
       "filtered_other_entity": 0,
       "http_statuses": [
-       "404"
+       "200"
       ],
-      "sample_titles": [],
-      "detail": "",
-      "member_key": "greenhouse-hextechnologies"
+      "sample_titles": [
+       "Sales Engineer, Enterprise",
+       "AI Research Engineer",
+       "Technical Sourcer"
+      ],
+      "detail": "Guarded offline replay of the captured public posting API response; no network call.",
+      "member_key": "ashby-hex"
      },
      "domain_group": "data_science"
     },
@@ -7150,40 +7711,44 @@
     {
      "company": "ClickHouse",
      "disposition": "eligible_direct",
-     "evidence_state": "EXISTING",
-     "domain": "",
-     "provider": "greenhouse",
+     "evidence_state": "CHAIN",
+     "domain": "clickhouse.com",
+     "provider": "ashby",
      "endpoint": {
-      "vendor": "greenhouse",
+      "vendor": "ashby",
       "tenant": "clickhouse",
       "site": "",
       "host": "",
       "extra": {}
      },
-     "where": "catalog_or_seed",
-     "plan": "existing",
-     "outcome": "existing_unhealthy_or_moved",
-     "why": "validation failed",
-     "member_key": "greenhouse-clickhouse",
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "ashby-clickhouse",
      "provider_needed": "",
-     "note": "greenhouse/clickhouse answers 404; clickhouse.com careers serves no board link",
+     "note": "2026-11-05: old Greenhouse token still answers 404. Official careers bundle names the public Ashby posting API for clickhouse, which returned 202 distinct requisitions (80 explicitly US). Replaced the stale catalog endpoint.",
      "validation": {
-      "at": "2026-10-22T02:18:36Z",
-      "vendor": "greenhouse",
-      "status": "failed",
+      "at": "2026-11-05T23:25:41.396673Z",
+      "vendor": "ashby",
+      "status": "complete",
       "source_reported": null,
-      "parsed": 0,
-      "unique_ids": 0,
+      "parsed": 202,
+      "unique_ids": 202,
       "duplicate_rows": 0,
-      "requisitions": 0,
+      "requisitions": 202,
       "filtered_non_requisition": 0,
       "filtered_other_entity": 0,
       "http_statuses": [
-       "404"
+       "200"
       ],
-      "sample_titles": [],
-      "detail": "",
-      "member_key": "greenhouse-clickhouse"
+      "sample_titles": [
+       "Senior Cloud Software Engineer - Efficiency Engineering",
+       "Senior Cloud Software Engineer - Efficiency Engineering",
+       "Senior Software Engineer - Integrations - AI/ML"
+      ],
+      "detail": "Guarded offline replay of the captured public posting API response; no network call.",
+      "member_key": "ashby-clickhouse"
      },
      "domain_group": "data_science"
     },
@@ -7234,19 +7799,48 @@
     {
      "company": "Two Sigma",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "twosigma.com",
-     "provider": "",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "official careers page served no ATS link",
-     "member_key": "",
+     "provider": "avature",
+     "endpoint": {
+      "vendor": "avature",
+      "tenant": "careers.twosigma.com",
+      "host": "careers.twosigma.com",
+      "site": "careers",
+      "extra": {
+       "listing_route": "OpenRoles"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "avature-careers-twosigma-com-careers",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05 public provider validation read 66 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:35:16.247200Z",
+      "vendor": "avature",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 66,
+      "unique_ids": 66,
+      "duplicate_rows": 0,
+      "requisitions": 66,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "AI Fluency: Program Manager",
+       "AI Research Scientist - Campus Full-Time",
+       "AI Research Scientist - Intern [2027 Summer]"
+      ],
+      "detail": "",
+      "member_key": "avature-careers-twosigma-com-careers",
+      "replayed_at_utc": "2026-11-06T00:19:24.255183+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "data_science"
     },
@@ -7433,19 +8027,43 @@
     {
      "company": "DigitalOcean",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "digitalocean.com",
-     "provider": "",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "open-roles page is a JS shell (XHRs Greenhouse per CLAUDE.md); token not observed in served HTML",
-     "member_key": "",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "digitalocean98"
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "greenhouse-digitalocean98",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05 public provider validation read 152 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:41:50.775144Z",
+      "vendor": "greenhouse",
+      "status": "complete",
+      "source_reported": 152,
+      "parsed": 152,
+      "unique_ids": 152,
+      "duplicate_rows": 0,
+      "requisitions": 152,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Account Executive  - Commercial",
+       "Cloud Operations Administrator - II",
+       "Contracts Director - Go to Market"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-digitalocean98",
+      "replayed_at_utc": "2026-11-06T00:19:24.256709+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "cloud"
     },
@@ -7710,9 +8328,9 @@
      },
      "where": "seed",
      "plan": "added",
-     "outcome": "new_validated",
-     "why": "row added; live validation returned requisitions",
-     "member_key": "eightfold-netapp",
+     "outcome": "blocked",
+     "why": "plan says added but no crawl member serves it",
+     "member_key": "",
      "provider_needed": "",
      "note": "careers.netapp.com (TalentBrew front end) links netapp.eightfold.ai.",
      "validation": {
@@ -8318,19 +8936,45 @@
     {
      "company": "Supermicro",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "supermicro.com",
-     "provider": "",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "official careers URL answered 404; current page unknown",
-     "member_key": "",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "jobs.supermicro.com",
+      "host": "jobs.supermicro.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-jobs-supermicro-com",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05 public provider validation read 1000 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:32:54.359419Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 1000,
+      "unique_ids": 1000,
+      "duplicate_rows": 0,
+      "requisitions": 1000,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Sr. Sales Manager",
+       "(Sr.) MB Testing Engineer",
+       "Product Engineer - Liquid Cooling Solutions"
+      ],
+      "detail": "",
+      "member_key": "successfactors-jobs-supermicro-com",
+      "replayed_at_utc": "2026-11-06T00:19:24.813513+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "cloud"
     },
@@ -8631,16 +9275,41 @@
      "evidence_state": "FRONTEND",
      "domain": "pge.com",
      "provider": "radancy_talentbrew",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:radancy_talentbrew",
-     "member_key": "",
-     "provider_needed": "radancy_talentbrew",
-     "note": "jobs.pge.com is TalentBrew over an SAP RCM tenant (C0000161245P); RCM is not anonymously listable.",
+     "endpoint": {
+      "vendor": "radancy_talentbrew",
+      "tenant": "29673",
+      "site": "",
+      "host": "jobs.pge.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "radancy_talentbrew-29673",
+     "provider_needed": "",
+     "note": "2026-11-05: 15/149 advertised jobs validated through public HTML; explicitly truncated. SAP RCM is not requested.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:24:06Z",
+      "vendor": "radancy_talentbrew",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 15,
+      "unique_ids": 15,
+      "duplicate_rows": 0,
+      "requisitions": 15,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Cable Splicer",
+       "Program Manager, Expert",
+       "Senior Labor Relations Partner"
+      ],
+      "detail": "",
+      "member_key": "radancy_talentbrew-29673"
      },
      "domain_group": "electrical_power"
     },
@@ -9001,16 +9670,45 @@
      "evidence_state": "FRONTEND",
      "domain": "siemens-energy.com",
      "provider": "avature",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:avature",
-     "member_key": "",
-     "provider_needed": "avature",
-     "note": "jobs.siemens-energy.com is Avature.",
+     "endpoint": {
+      "vendor": "avature",
+      "tenant": "jobs.siemens-energy.com",
+      "site": "en_US/jobs",
+      "host": "jobs.siemens-energy.com",
+      "extra": {
+       "listing_route": "Jobs"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "avature-jobs-siemens-energy-com-en_us-jobs",
+     "provider_needed": "",
+     "note": "2026-11-05: official careers redirect proves the exact Avature Jobs template. Live provider read all 1,905 distinct listings. Locations are detail-only; US share unknown. FolderDetail also read live.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:52:55.127411Z",
+      "vendor": "avature",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 1905,
+      "unique_ids": 1905,
+      "duplicate_rows": 0,
+      "requisitions": 1905,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Finance Head of Regional Service - Middle East",
+       "Customs Classification Specialist",
+       "Gas Turbine Lathe Operator (Mon-Thurs 3:45pm-2:15am)"
+      ],
+      "detail": "",
+      "member_key": "avature-jobs-siemens-energy-com-en_us-jobs",
+      "replayed_at_utc": "2026-11-06T00:03:03.929299Z",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "electrical_power"
     },
@@ -9024,10 +9722,10 @@
      "where": "",
      "plan": "unsupported",
      "outcome": "unsupported",
-     "why": "links Hitachi's shared Workday board (hitachi.wd1/hitachi); needs an entity filter",
+     "why": "2026-11-05: official careers/open-jobs is an XHR shell; shared Hitachi Workday link is published but no public entity-filter identity has been proven. No unfiltered shared board added.",
      "member_key": "",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05: official careers/open-jobs is an XHR shell; shared Hitachi Workday link is published but no public entity-filter identity has been proven. No unfiltered shared board added.",
      "validation": {
       "status": "not_run"
      },
@@ -9117,7 +9815,7 @@
      "why": "not added; validation blocked",
      "member_key": "",
      "provider_needed": "",
-     "note": "jobs.eaton.com redirects to eaton.eightfold.ai/careers. The Eightfold API answered 403 to our validation on 2026-10-21, so no row was added.",
+     "note": "2026-11-05: jobs.eaton.com redirects to eaton.eightfold.ai/careers; robots disallows /careers, so no listing API request sent. Earlier 403 is not reinterpreted as empty.",
      "validation": {
       "at": "2026-10-22T02:15:53Z",
       "vendor": "eightfold",
@@ -9505,24 +10203,23 @@
      "why": "not added; validation blocked",
      "member_key": "",
      "provider_needed": "",
-     "note": "Official page links evergy.taleo.net (evergy_external_career_section).",
+     "note": "2026-11-05: official careers page links /careersection/evergy_external_career_section/jobsearch.ftl?lang=en. Current Taleo reader returned 0 from an HTML shell with no resolved portal; zero is unverified, not empty. No seed added.",
      "validation": {
-      "at": "2026-10-22T05:19:42Z",
-      "vendor": "taleo",
+      "at": "2026-11-05T22:45:29.976010Z",
       "status": "blocked",
-      "source_reported": null,
       "parsed": 0,
       "unique_ids": 0,
       "duplicate_rows": 0,
       "requisitions": 0,
-      "filtered_non_requisition": 0,
-      "filtered_other_entity": 0,
+      "source_reported": null,
+      "detail": "Official link uses careersection/evergy_external_career_section. Reader returned 0, portal unresolved; not confirmed empty.",
       "http_statuses": [
+       "404",
+       "302",
+       "404",
        "200"
       ],
-      "sample_titles": [],
-      "detail": "",
-      "member_key": "taleo-evergy"
+      "sample_titles": []
      },
      "domain_group": "electrical_power"
     },
@@ -10468,73 +11165,177 @@
      "evidence_state": "FRONTEND",
      "domain": "siemens.com",
      "provider": "avature",
-     "endpoint": null,
-     "where": "",
-     "plan": "unsupported",
-     "outcome": "unsupported",
-     "why": "unsupported_pending_provider:avature",
-     "member_key": "",
-     "provider_needed": "avature",
-     "note": "jobs.siemens.com is Avature.",
+     "endpoint": {
+      "vendor": "avature",
+      "tenant": "jobs.siemens.com",
+      "site": "en_US/externaljobs",
+      "host": "jobs.siemens.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "avature-jobs-siemens-com-en_us-externaljobs",
+     "provider_needed": "",
+     "note": "2026-11-05: official careers page links exact Avature SearchJobs board. Live 150-second crawl read 516 distinct listings, 94 with US locations, and correctly flagged truncation. Board displays 999+; exact total unknown. Paging follows its own folderOffset links.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T22:50:21.493331Z",
+      "vendor": "avature",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 516,
+      "unique_ids": 516,
+      "duplicate_rows": 0,
+      "requisitions": 516,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Agentic Evaluation & Testing Specialist, Kitchener, ON",
+       "Senior Manager, Software Development",
+       "Quality Inspector (2nd Shift)"
+      ],
+      "detail": "",
+      "member_key": "avature-jobs-siemens-com-en_us-externaljobs",
+      "replayed_at_utc": "2026-11-06T00:03:03.929299Z",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "electrical_power"
     },
     {
      "company": "Kiewit",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "kiewit.com",
-     "provider": "",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "official link goes to an AllCraftJobs craft board only; the professional board was not observed",
-     "member_key": "",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "kiewitcareers.kiewit.com",
+      "host": "kiewitcareers.kiewit.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-kiewitcareers-kiewit-com",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05 public provider validation read 995 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:33:36.779911Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 995,
+      "unique_ids": 995,
+      "duplicate_rows": 0,
+      "requisitions": 995,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Surveyor - Nuclear Construction",
+       "Batch Plant Superintendent - South Central District",
+       "Scheduler - Energy Construction"
+      ],
+      "detail": "",
+      "member_key": "successfactors-kiewitcareers-kiewit-com",
+      "replayed_at_utc": "2026-11-06T00:19:25.401996+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "electrical_power"
     },
     {
      "company": "Stantec",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "stantec.com",
-     "provider": "",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "official careers page served no ATS link",
-     "member_key": "",
+     "provider": "directemployers_nlx",
+     "endpoint": {
+      "vendor": "directemployers_nlx",
+      "tenant": "stantec",
+      "site": "usa",
+      "host": "stantec.jobs",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "directemployers_nlx-stantec-usa",
      "provider_needed": "",
-     "note": "",
+     "note": "Official career chain to stantec.jobs. Served NLX frontend publishes the shared public API, X-Origin owner scope and location=usa. 650 permitted location rows proved 300 distinct US requisitions. The final registered read on November 6 merged all 2,760 US location rows into 995 requisitions; onboarding's separate 400-requisition probe remains explicitly budget-limited.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-06T00:19:00Z",
+      "vendor": "directemployers_nlx",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 400,
+      "unique_ids": 400,
+      "duplicate_rows": 0,
+      "requisitions": 400,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200",
+       "404"
+      ],
+      "sample_titles": [
+       "Project Manager, PD&E",
+       "Commissioning Consultant",
+       "Hydrogeologist"
+      ],
+      "detail": "",
+      "member_key": "directemployers_nlx-stantec-usa"
      },
      "domain_group": "electrical_power"
     },
     {
      "company": "Mott MacDonald",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "mottmac.com",
-     "provider": "",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "official careers page served no ATS link",
-     "member_key": "",
+     "provider": "custom_mottmac",
+     "endpoint": {
+      "vendor": "custom_mottmac",
+      "tenant": "mottmac",
+      "host": "www.mottmac.com"
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "custom_mottmac-mottmac",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05 public provider validation read 1070 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-06T00:15:41.459006Z",
+      "vendor": "custom_mottmac",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 1070,
+      "unique_ids": 1070,
+      "duplicate_rows": 0,
+      "requisitions": 1063,
+      "filtered_non_requisition": 7,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Civil Engineer",
+       "2027 UK Degree Apprenticeship Programme: Project Management",
+       "Project Architect"
+      ],
+      "detail": "",
+      "member_key": "custom_mottmac-mottmac",
+      "replayed_at_utc": "2026-11-06T00:19:25.482461+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "electrical_power"
     },
@@ -10560,38 +11361,90 @@
     {
      "company": "NRG Energy",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "nrg.com",
-     "provider": "",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "nrg.com/careers.html answered 404",
-     "member_key": "",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "careers.nrgenergy.com",
+      "host": "careers.nrgenergy.com",
+      "extra": {
+       "search_path": "/nrg/search/"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-careers-nrgenergy-com",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05 public provider validation read 75 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:35:07.582871Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 75,
+      "unique_ids": 75,
+      "duplicate_rows": 0,
+      "requisitions": 75,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Environmental Health & Safety",
+       "Learning & Enablement Specialist",
+       "DOTP-Maintenance Mechanic"
+      ],
+      "detail": "",
+      "member_key": "successfactors-careers-nrgenergy-com",
+      "replayed_at_utc": "2026-11-06T00:19:25.540782+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "electrical_power"
     },
     {
      "company": "Enphase Energy",
      "disposition": "eligible_direct",
-     "evidence_state": "PENDING",
+     "evidence_state": "CHAIN",
      "domain": "enphase.com",
-     "provider": "",
-     "endpoint": null,
-     "where": "",
-     "plan": "pending",
-     "outcome": "pending",
-     "why": "official page uses a Jobvite link builder; tenant not in served HTML",
-     "member_key": "",
+     "provider": "custom_enphase",
+     "endpoint": {
+      "vendor": "custom_enphase",
+      "tenant": "enphase"
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "custom_enphase-enphase",
      "provider_needed": "",
-     "note": "",
+     "note": "2026-11-05 public provider validation read 33 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
      "validation": {
-      "status": "not_run"
+      "at": "2026-11-05T23:39:01.305764Z",
+      "vendor": "custom_enphase",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 33,
+      "unique_ids": 33,
+      "duplicate_rows": 0,
+      "requisitions": 33,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Power Electronics Engineer",
+       "Senior Manager, Mechanical Engineering",
+       "Field Service Technician - Massachusetts (6 month Temporary Assignment)"
+      ],
+      "detail": "",
+      "member_key": "custom_enphase-enphase",
+      "replayed_at_utc": "2026-11-06T00:19:25.598877+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
      },
      "domain_group": "electrical_power"
     },
@@ -10651,6 +11504,605 @@
       "status": "not_run"
      },
      "domain_group": "electrical_power"
+    },
+    {
+     "company": "TSMC",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "tsmc.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "ro.careers.tsmc.com",
+      "host": "ro.careers.tsmc.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-ro-careers-tsmc-com",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 339 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
+     "validation": {
+      "at": "2026-11-05T23:34:27.972547Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 339,
+      "unique_ids": 339,
+      "duplicate_rows": 0,
+      "requisitions": 339,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "JASM - MFG Intelligent manufacturing - AMHS Software Engineer (5382)",
+       "JASM - ACCT_FP&A Analyst (6713)",
+       "JASM - Engineer (AMHS Hardware, MFG)(6410)"
+      ],
+      "detail": "",
+      "member_key": "successfactors-ro-careers-tsmc-com",
+      "replayed_at_utc": "2026-11-06T00:19:25.783147+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
+    },
+    {
+     "company": "Teradyne",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "teradyne.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "jobs.teradyne.com",
+      "host": "jobs.teradyne.com",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-jobs-teradyne-com",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 570 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
+     "validation": {
+      "at": "2026-11-05T23:34:42.979461Z",
+      "vendor": "successfactors",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 570,
+      "unique_ids": 570,
+      "duplicate_rows": 0,
+      "requisitions": 570,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Sales Manager",
+       "Principal Systems Verification Architect (IST, North Reading, MA)",
+       "Automated Test Applications Engineer (SW Dev., System Design & Integration; Nort"
+      ],
+      "detail": "",
+      "member_key": "successfactors-jobs-teradyne-com",
+      "replayed_at_utc": "2026-11-06T00:19:26.111363+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
+    },
+    {
+     "company": "Boston Consulting Group",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "bcg.com",
+     "provider": "phenom",
+     "endpoint": {
+      "vendor": "phenom",
+      "tenant": "bcg",
+      "host": "careers.bcg.com"
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "phenom-bcg",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 100 distinct requisitions; listing_truncated=True. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
+     "validation": {
+      "at": "2026-11-05T23:19:30.554525Z",
+      "vendor": "phenom",
+      "status": "budget_limited",
+      "source_reported": 939,
+      "parsed": 100,
+      "unique_ids": 100,
+      "duplicate_rows": 0,
+      "requisitions": 100,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Consultant, Internship MBA, United States",
+       "Expert Consultant /Project Leader, CFO Excellence",
+       "NAMR Commercial Excellence Director"
+      ],
+      "detail": "",
+      "member_key": "phenom-bcg",
+      "replayed_at_utc": "2026-11-06T00:19:26.126063+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
+    },
+    {
+     "company": "Riot Games",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "riotgames.com",
+     "provider": "greenhouse",
+     "endpoint": {
+      "vendor": "greenhouse",
+      "tenant": "riotgames"
+     },
+     "where": "career_pages_catalog",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "greenhouse-riotgames",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 187 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
+     "validation": {
+      "at": "2026-11-05T23:19:36.160020Z",
+      "vendor": "greenhouse",
+      "status": "complete",
+      "source_reported": 187,
+      "parsed": 187,
+      "unique_ids": 187,
+      "duplicate_rows": 0,
+      "requisitions": 187,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "3D Character Artist (Contract)",
+       "3D Character Artist - Unpublished R&D Product",
+       "3D Environment Artist - Unpublished R&D Product (Contract)"
+      ],
+      "detail": "",
+      "member_key": "greenhouse-riotgames",
+      "replayed_at_utc": "2026-11-06T00:19:26.128081+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
+    },
+    {
+     "company": "Pydantic",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "pydantic.dev",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "pydantic.dev",
+      "host": "pydantic.dev",
+      "extra": {
+       "listing_url": "https://pydantic.dev/about#join-the-team"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-pydantic-dev",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 12 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
+     "validation": {
+      "at": "2026-11-05T23:19:36.361280Z",
+      "vendor": "careers_page",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 12,
+      "unique_ids": 12,
+      "duplicate_rows": 0,
+      "requisitions": 12,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Security Operations Engineer",
+       "Staff Software Engineer, Agent Sandboxes",
+       "Senior Growth Marketer"
+      ],
+      "detail": "",
+      "member_key": "careers_page-pydantic-dev",
+      "replayed_at_utc": "2026-11-06T00:19:26.144148+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
+    },
+    {
+     "company": "Procore",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "procore.com",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "careers.procore.com",
+      "host": "careers.procore.com",
+      "extra": {
+       "listing_url": "https://careers.procore.com/jobs/search"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-careers-procore-com",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 110 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
+     "validation": {
+      "at": "2026-11-05T23:19:38.795445Z",
+      "vendor": "careers_page",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 110,
+      "unique_ids": 110,
+      "duplicate_rows": 0,
+      "requisitions": 110,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Software Engineer - Procore AI Experience",
+       "Customer Success Engineer I, French Speaking (Remote)",
+       "Solution Engineer - French Market"
+      ],
+      "detail": "",
+      "member_key": "careers_page-careers-procore-com",
+      "replayed_at_utc": "2026-11-06T00:19:26.223131+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
+    },
+    {
+     "company": "Etsy",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "etsy.com",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "careers.etsy.com",
+      "host": "careers.etsy.com",
+      "extra": {
+       "listing_url": "https://careers.etsy.com/jobs/search"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-careers-etsy-com",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 30 distinct requisitions; listing_truncated=True. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
+     "validation": {
+      "at": "2026-11-05T23:19:44.285393Z",
+      "vendor": "careers_page",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 30,
+      "unique_ids": 30,
+      "duplicate_rows": 0,
+      "requisitions": 30,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Business Operations & Program Manager (Customer Support)",
+       "Manager, Seller Retention & Engagement Marketing",
+       "Investigator, Operational Excellence"
+      ],
+      "detail": "",
+      "member_key": "careers_page-careers-etsy-com",
+      "replayed_at_utc": "2026-11-06T00:19:26.247168+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
+    },
+    {
+     "company": "EY",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "ey.com",
+     "provider": "successfactors",
+     "endpoint": {
+      "vendor": "successfactors",
+      "tenant": "careers.ey.com",
+      "host": "careers.ey.com",
+      "extra": {
+       "search_path": "/ey/search/"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "successfactors-careers-ey-com",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 1974 distinct requisitions; listing_truncated=True. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
+     "validation": {
+      "at": "2026-11-06T00:06:33.887876Z",
+      "vendor": "successfactors",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 1974,
+      "unique_ids": 1974,
+      "duplicate_rows": 0,
+      "requisitions": 1974,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Project Consultant - PAS WKFA - National - CNS - PC - WORKFORCE ADVISORY - Banga",
+       "Project Consultant - PAS WKFA - National - CNS - PC - WORKFORCE ADVISORY - Banga",
+       "Project Consultant - PAS WKFA - National - CNS - PC - WORKFORCE ADVISORY - Banga"
+      ],
+      "detail": "",
+      "member_key": "successfactors-careers-ey-com",
+      "replayed_at_utc": "2026-11-06T00:19:30.225620+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
+    },
+    {
+     "company": "Electronic Arts",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "ea.com",
+     "provider": "avature",
+     "endpoint": {
+      "vendor": "avature",
+      "tenant": "jobs.ea.com",
+      "host": "jobs.ea.com",
+      "site": "en_US/careers",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "avature-jobs-ea-com-en_us-careers",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 342 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
+     "validation": {
+      "at": "2026-11-05T23:35:24.781862Z",
+      "vendor": "avature",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 342,
+      "unique_ids": 342,
+      "duplicate_rows": 0,
+      "requisitions": 342,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Associate Quality Designer - STAR WARS",
+       "Software Engineer III -Software Engineer III - Temporary Full Time",
+       "Senior Software Engineer"
+      ],
+      "detail": "",
+      "member_key": "avature-jobs-ea-com-en_us-careers",
+      "replayed_at_utc": "2026-11-06T00:19:26.715114+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
+    },
+    {
+     "company": "Deloitte",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "deloitte.com",
+     "provider": "avature",
+     "endpoint": {
+      "vendor": "avature",
+      "tenant": "apply.deloitte.com",
+      "host": "apply.deloitte.com",
+      "site": "en_US/careers?3_5_3=477%2C478%2C480&sort=relevancy",
+      "extra": {}
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "avature-apply-deloitte-com-en_us-careers-3_5_3-477-2c478-2c480-sort-relevancy",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 19 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json. Two published members: entry-level 19 complete plus experienced 1120 partial at 180 seconds; 1139 distinct IDs across their disjoint captures. Owner must verify both member backlinks; this plan entry registers the primary entry-level member.",
+     "validation": {
+      "at": "2026-11-05T23:35:54.890520Z",
+      "vendor": "avature",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 19,
+      "unique_ids": 19,
+      "duplicate_rows": 0,
+      "requisitions": 19,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Audit & Assurance \u2013 Analyst \u2013 Business Process Controls Advisory \u2013 Summer/Fall 2",
+       "Tax - Tax Technology Services Consultant - Summer 2027, Winter 2028",
+       "Tax - Tax Intern - Legal Business Services - Summer 2027"
+      ],
+      "detail": "",
+      "member_key": "avature-apply-deloitte-com-en_us-careers-3_5_3-477-2c478-2c480-sort-relevancy",
+      "replayed_at_utc": "2026-11-06T00:19:26.736456+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
+    },
+    {
+     "company": "Oxide Computer",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "oxide.computer",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "oxide.computer",
+      "host": "oxide.computer",
+      "extra": {
+       "listing_url": "https://oxide.computer/careers"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-oxide-computer",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 15 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
+     "validation": {
+      "at": "2026-11-05T23:39:06.722362Z",
+      "vendor": "careers_page",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 15,
+      "unique_ids": 15,
+      "duplicate_rows": 0,
+      "requisitions": 15,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Control Plane Engineer",
+       "Enterprise Security Engineer",
+       "Field Technical Delivery Engineer"
+      ],
+      "detail": "",
+      "member_key": "careers_page-oxide-computer",
+      "replayed_at_utc": "2026-11-06T00:19:26.752033+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
+    },
+    {
+     "company": "KPMG US",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "kpmg.com",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "kpmguscareers.com",
+      "host": "kpmguscareers.com",
+      "extra": {
+       "listing_url": "https://www.kpmguscareers.com/job-search/",
+       "pagination_param": "spage"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-kpmguscareers-com",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 692 distinct requisitions; listing_truncated=True. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
+     "validation": {
+      "at": "2026-11-06T00:00:06.338893Z",
+      "vendor": "careers_page",
+      "status": "budget_limited",
+      "source_reported": null,
+      "parsed": 692,
+      "unique_ids": 692,
+      "duplicate_rows": 0,
+      "requisitions": 692,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Databricks Sales Executive (Federal sector)",
+       "Director, Technical Lead Forward Deployed Engineer",
+       "Temporary System Administrator Shift Work (Disaster Recovery)"
+      ],
+      "detail": "",
+      "member_key": "careers_page-kpmguscareers-com",
+      "replayed_at_utc": "2026-11-06T00:19:28.823450+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
+    },
+    {
+     "company": "Deel",
+     "disposition": "eligible_direct",
+     "evidence_state": "CHAIN",
+     "domain": "deel.com",
+     "provider": "careers_page",
+     "endpoint": {
+      "vendor": "careers_page",
+      "tenant": "deel.com",
+      "host": "deel.com",
+      "extra": {
+       "listing_url": "https://www.deel.com/careers/"
+      }
+     },
+     "where": "seed",
+     "plan": "added",
+     "outcome": "new_validated",
+     "why": "row added; live validation returned requisitions",
+     "member_key": "careers_page-deel-com",
+     "provider_needed": "",
+     "note": "2026-11-05 public provider validation read 251 distinct requisitions; listing_truncated=False. Exact official link/config chain and bounds: docs/coverage/research-evidence-2026-11.json.",
+     "validation": {
+      "at": "2026-11-06T00:01:43.932298Z",
+      "vendor": "careers_page",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 251,
+      "unique_ids": 251,
+      "duplicate_rows": 0,
+      "requisitions": 251,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+       "200"
+      ],
+      "sample_titles": [
+       "Senior Staff Product Designer - AI",
+       "Enablement Manager, Support",
+       "Account Executive, SMB | Mexico"
+      ],
+      "detail": "",
+      "member_key": "careers_page-deel-com",
+      "replayed_at_utc": "2026-11-06T00:19:28.922372+00:00",
+      "evidence_mode": "offline replay of dated live HTTP captures"
+     },
+     "domain_group": "november_2026_research"
     }
    ]
   },
@@ -10827,12 +12279,6 @@
    "why": "validation blocked"
   },
   {
-   "company": "Shopify",
-   "domain_group": "software",
-   "outcome": "pending",
-   "why": "official careers page served no ATS link"
-  },
-  {
    "company": "Bloomberg",
    "domain_group": "software",
    "outcome": "blocked",
@@ -10863,12 +12309,6 @@
    "why": "official careers page served no ATS link"
   },
   {
-   "company": "Aurora Innovation",
-   "domain_group": "ai_ml",
-   "outcome": "existing_unhealthy_or_moved",
-   "why": "validation failed"
-  },
-  {
    "company": "Confluent",
    "domain_group": "data_science",
    "outcome": "existing_unhealthy_or_moved",
@@ -10893,40 +12333,10 @@
    "why": "domo.com/company/careers answered 405 on 2026-10-21"
   },
   {
-   "company": "ThoughtSpot",
-   "domain_group": "data_science",
-   "outcome": "pending",
-   "why": "official careers page served no ATS link"
-  },
-  {
-   "company": "Hex",
-   "domain_group": "data_science",
-   "outcome": "existing_unhealthy_or_moved",
-   "why": "validation failed"
-  },
-  {
-   "company": "ClickHouse",
-   "domain_group": "data_science",
-   "outcome": "existing_unhealthy_or_moved",
-   "why": "validation failed"
-  },
-  {
-   "company": "Two Sigma",
-   "domain_group": "data_science",
-   "outcome": "pending",
-   "why": "official careers page served no ATS link"
-  },
-  {
    "company": "Nielsen",
    "domain_group": "data_science",
    "outcome": "pending",
    "why": "careers URL answered 404; NielsenIQ (crawled) is a different company"
-  },
-  {
-   "company": "DigitalOcean",
-   "domain_group": "cloud",
-   "outcome": "pending",
-   "why": "open-roles page is a JS shell (XHRs Greenhouse per CLAUDE.md); token not observed in served HTML"
   },
   {
    "company": "Akamai",
@@ -10941,6 +12351,12 @@
    "why": "careers.nutanix.com answered 403 on 2026-10-21"
   },
   {
+   "company": "NetApp",
+   "domain_group": "cloud",
+   "outcome": "blocked",
+   "why": "plan says added but no crawl member serves it"
+  },
+  {
    "company": "Digital Realty",
    "domain_group": "cloud",
    "outcome": "blocked",
@@ -10951,12 +12367,6 @@
    "domain_group": "cloud",
    "outcome": "blocked",
    "why": "arista.com/en/careers answered 406 on 2026-10-21"
-  },
-  {
-   "company": "Supermicro",
-   "domain_group": "cloud",
-   "outcome": "pending",
-   "why": "official careers URL answered 404; current page unknown"
   },
   {
    "company": "Southern Company",
@@ -11031,40 +12441,10 @@
    "why": "oncor.com careers page timed out on 2026-10-21"
   },
   {
-   "company": "Kiewit",
-   "domain_group": "electrical_power",
-   "outcome": "pending",
-   "why": "official link goes to an AllCraftJobs craft board only; the professional board was not observed"
-  },
-  {
-   "company": "Stantec",
-   "domain_group": "electrical_power",
-   "outcome": "pending",
-   "why": "official careers page served no ATS link"
-  },
-  {
-   "company": "Mott MacDonald",
-   "domain_group": "electrical_power",
-   "outcome": "pending",
-   "why": "official careers page served no ATS link"
-  },
-  {
    "company": "Jacobs",
    "domain_group": "electrical_power",
    "outcome": "pending",
    "why": "jobs.jacobs.com does not resolve; current board not observed"
-  },
-  {
-   "company": "NRG Energy",
-   "domain_group": "electrical_power",
-   "outcome": "pending",
-   "why": "nrg.com/careers.html answered 404"
-  },
-  {
-   "company": "Enphase Energy",
-   "domain_group": "electrical_power",
-   "outcome": "pending",
-   "why": "official page uses a Jobvite link builder; tenant not in served HTML"
   },
   {
    "company": "Mitsubishi Electric Power Products",

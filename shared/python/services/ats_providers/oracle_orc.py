@@ -167,6 +167,9 @@ class OracleOrcProvider(AtsProvider):
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
+        # An early return is not a census unless a successful response proves
+        # exhaustion (or the requested newest-first freshness boundary).
+        ctx.listing_truncated = True
         host = self._host_of(endpoint)
         if not host:
             ctx.log("warning", "orc: endpoint %s has no host", endpoint.tenant)
@@ -183,6 +186,8 @@ class OracleOrcProvider(AtsProvider):
 
         offset = 0
         total: Optional[int] = None
+        seen: set = set()
+        overlap = False
         pages = 0
         while pages < int(self.policy.max_pages):
             if ctx.should_stop():
@@ -208,23 +213,35 @@ class OracleOrcProvider(AtsProvider):
             if not items or not isinstance(items[0], dict):
                 return
             block = items[0]
-            if total is None:
-                try:
-                    total = int(block.get("TotalJobsCount") or 0)
-                except (TypeError, ValueError):
-                    total = 0
+            try:
+                reported = int(block["TotalJobsCount"])
+                if reported >= 0:
+                    total = max(total or 0, reported)
+            except (KeyError, TypeError, ValueError):
+                pass
+            if pages == 0:
                 ctx.log("info", "orc: %s site=%s total=%s", host, site, total)
 
-            rows = [r for r in (block.get("requisitionList") or [])
+            if not isinstance(block.get("requisitionList"), list):
+                return
+            if any(not isinstance(row, dict) for row in block["requisitionList"]):
+                return
+            rows = [r for r in block["requisitionList"]
                     if isinstance(r, dict)]
             if not rows:
+                ctx.listing_truncated = (len(seen) < total if total is not None else overlap or not seen)
                 return
 
             crossed_cutoff = False
+            previous_count = len(seen)
             for raw in rows:
+                if ctx.should_stop():
+                    return
                 job = self._to_raw(endpoint, host, site, raw)
-                if job is None:
+                if job is None or job.source_job_id in seen:
+                    overlap = True
                     continue
+                seen.add(job.source_job_id)
                 # Newest-first: once we are past the freshness boundary every
                 # later row is older too, so stop rather than page the archive.
                 if (ctx.cutoff_iso and job.posted_at
@@ -233,13 +250,18 @@ class OracleOrcProvider(AtsProvider):
                     break
                 yield job
             if crossed_cutoff:
+                ctx.listing_truncated = overlap
                 return
 
             pages += 1
             offset += len(rows)
             if len(rows) < page_size:
+                ctx.listing_truncated = len(seen) < total if total is not None else overlap
                 return
             if total is not None and offset >= total:
+                ctx.listing_truncated = len(seen) < total
+                return
+            if len(seen) == previous_count:
                 return
 
     def _to_raw(self, endpoint: Endpoint, host: str, site: str,

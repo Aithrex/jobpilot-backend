@@ -220,6 +220,9 @@ class TaleoProvider(AtsProvider):
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
+        ctx.listing_truncated = True
+        if ctx.should_stop():
+            return
         zone = self._zone(endpoint)
         if not zone:
             ctx.log("info", "taleo: %s has no zone, skipping",
@@ -244,6 +247,7 @@ class TaleoProvider(AtsProvider):
         keyword = str((ctx.options or {}).get("keyword") or "").strip()
         total: Optional[int] = None
         seen: set = set()
+        overlap = False
 
         for page in range(1, int(self.policy.max_pages) + 1):
             if ctx.should_stop():
@@ -267,29 +271,44 @@ class TaleoProvider(AtsProvider):
                 ctx.log("info", "taleo: %s career section unavailable", zone)
                 return
 
-            rows = [r for r in (payload.get("requisitionList") or [])
-                    if isinstance(r, dict)]
-            if not rows:
-                return
-            if total is None:
-                paging = payload.get("pagingData") or {}
-                try:
-                    total = int(paging.get("totalCount") or 0)
-                except (TypeError, ValueError):
-                    total = 0
+            paging = payload.get("pagingData") or {}
+            try:
+                reported = int(paging["totalCount"])
+                if reported >= 0:
+                    total = max(total or 0, reported)
+            except (KeyError, TypeError, ValueError):
+                pass
+            if page == 1:
                 ctx.log("info", "taleo: %s portal=%s total=%s", zone, portal,
                         total)
+            if not isinstance(payload.get("requisitionList"), list):
+                return
+            if any(not isinstance(row, dict) for row in payload["requisitionList"]):
+                return
+            rows = [r for r in payload["requisitionList"] if isinstance(r, dict)]
+            if not rows:
+                ctx.listing_truncated = len(seen) < total if total is not None else overlap or not seen
+                return
 
+            previous_count = len(seen)
             for raw in rows:
+                if ctx.should_stop():
+                    return
                 job = self._to_raw(endpoint, zone, portal, raw)
                 if job is None or job.source_job_id in seen:
+                    overlap = True
                     continue
                 seen.add(job.source_job_id)
                 yield job
 
             if len(rows) < _PAGE_SIZE:
+                ctx.listing_truncated = len(seen) < total if total is not None else overlap
                 return
-            if total and page * _PAGE_SIZE >= total:
+            if total is not None and len(seen) >= total:
+                ctx.listing_truncated = False
+                return
+            if len(seen) == previous_count:
+                # A repeated page below the declared total is not exhaustion.
                 return
 
     def _to_raw(self, endpoint: Endpoint, zone: str, portal: str,

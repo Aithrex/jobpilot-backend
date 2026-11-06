@@ -1,0 +1,23 @@
+{
+  "totalItems": 1070,
+  "from": 0,
+  "take": 12,
+  "items": [
+    {
+      "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/civil-engineer-13569/",
+      "jobTitle": "Civil Engineer",
+      "location": "Exeter, United Kingdom",
+      "discipline": "Civil,Water",
+      "contractType": "Permanent",
+      "sector": "Water"
+    },
+    {
+      "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/2027-uk-degree-apprenticeship-programme-project-management-18088/",
+      "jobTitle": "2027 UK Degree Apprenticeship Programme: Project Management",
+      "location": "Birmingham, United Kingdom +5 more...",
+      "discipline": "Project programme and commercial management",
+      "contractType": "Contract",
+      "sector": "Various"
+    }
+  ]
+}

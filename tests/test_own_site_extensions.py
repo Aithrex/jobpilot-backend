@@ -251,8 +251,10 @@ def test_declared_pagination_is_followed_with_duplicates_dropped():
     jobs, ctx, asked = _list("paged.com", base, pages)
     assert asked == [base, f"{base}?page=2", f"{base}?page=3"]
     assert len(jobs) == 9 and len({j.source_job_id for j in jobs}) == 9
-    assert ctx.options[own_site.COMPLETENESS_KEY] == own_site.COMPLETE
-    assert not ctx.listing_truncated
+    # Without a published total, overlap can hide skipped rows as the board
+    # changes between pages. Keep the rows, but never authorize closure.
+    assert ctx.options[own_site.COMPLETENESS_KEY] == own_site.BUDGET_LIMITED
+    assert ctx.listing_truncated
 
 
 def test_pagination_past_the_budget_is_budget_limited(monkeypatch):

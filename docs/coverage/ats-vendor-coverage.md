@@ -45,8 +45,35 @@ a vendor agrees with us.
 
 ## 1. Vendors we crawl
 
-19 registered providers. "Rows/board" is what one representative live board
-returned during verification.
+The table below is the historical vendor inventory, with dated additions.
+Use `registry.readiness_report()` for the current registered set.
+"Rows/board" is what one representative live board returned during verification.
+
+### Radancy TalentBrew public HTML (2026-11-05)
+
+`radancy_talentbrew` is separate from the `/api/jobs` JSON reader. Five
+employer-linked boards passed the value gate and registered-provider validation:
+Synopsys, Charter/Spectrum, Optum (scoped), PG&E and SolutionHealth. Each returned
+15 distinct listings and one readable JobPosting detail. The public advertised
+totals are 676, 1,458, 5,933, 149 and 510 respectively; these are **not** complete
+crawl counts. All five reads set `listing_truncated=True`.
+
+The three sampled country facets report 175/676 US for Synopsys, 1,458/1,458
+for Spectrum and 5,575/5,933 for Optum. Robots prohibit `/search-jobs/` Ajax routes
+on these hosts; the reader checks robots, reads only permitted listing/detail
+HTML and never requests those routes. Spectrum's literal Next link redirects
+to its homepage. Optum requires the checked `custom_fields.UHGAJDType=Optum`
+facet, with no unfiltered parent fallback. Intuit remains excluded.
+
+See [the measured provider evidence](radancy-talentbrew-2026-11.md).
+
+The separately registered `directemployers_nlx` reader was verified on
+2026-11-06 against Stantec's official US board: all 2,760 location GUID rows
+merged into 995 distinct requisitions. It enforces named employer/country
+scope, robots, serialized shared-API pacing and explicit partial-census flags.
+Burns & McDonnell and Southern Company remain unverified and are not seeded.
+See [the measured evidence](directemployers-nlx-2026-11.md).
+
 
 | Vendor | Transport | Date | Description | Salary | Notes |
 |---|---|---|---|---|---|
@@ -69,6 +96,7 @@ returned during verification.
 | **Paylocity** | HTML + embedded JSON | exact | detail | **yes** | **New.** See §3. |
 | **Rippling** | JSON | detail-only | detail | **yes** | **New.** See §3. |
 | **Cornerstone** | JSON (POST + JWT) | exact | detail (JWT) | — | **New.** See §3.1. |
+| **Avature** | HTML | detail-only | detail | — | Frequentis and entity-filtered Koch; Siemens `SearchJobs` and Siemens Energy `Jobs` / `FolderDetail` templates added 2026-11-05. Page-owned `jobOffset` / `folderOffset` pagination; capped reads remain truncated. See [November evidence](quick-wins-evidence-2026-11.json). |
 
 ### Why the last three matter disproportionately
 

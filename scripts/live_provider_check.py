@@ -54,6 +54,14 @@ from services.ats_providers.http import simple_context  # noqa: E402
 # derivable from the tenant (Oracle pods, Phenom hosts), it is spelled out.
 
 PROBES: Dict[str, Dict[str, Any]] = {
+    "custom_mottmac": {"tenant": "mottmac", "display_name": "Mott MacDonald"},
+    "custom_enphase": {"tenant": "enphase", "display_name": "Enphase Energy"},
+    # Public TalentBrew HTML; first-page census is explicitly truncated.
+    "radancy_talentbrew": {"tenant": "44408", "host": "careers.synopsys.com",
+                           "display_name": "Synopsys"},
+    # Official Stantec NLX board, verified 2026-11-06; exact US source scope.
+    "directemployers_nlx": {"tenant": "stantec", "host": "stantec.jobs",
+                            "site": "usa", "display_name": "Stantec"},
     # Every tenant below was confirmed to return >=1 posting on 2026-08-18.
     # A probe that yields nothing tells us nothing about the provider, which is
     # how the first run of this script mis-reported five working vendors as
@@ -84,6 +92,10 @@ PROBES: Dict[str, Dict[str, Any]] = {
     "neogov": {"tenant": "washington", "display_name": "State of Washington"},
     "taleo": {"tenant": "aarcorp", "host": "aarcorp.taleo.net",
               "display_name": "AAR Corp"},
+    # Official RMK board, revalidated 2026-11-05: 36 postings. Its listing
+    # omits locations, so the detail pass exercises location enrichment too.
+    "successfactors": {"tenant": "pseg", "host": "jobs.pseg.com",
+                       "display_name": "PSEG"},
     # Payroll-attached ATS (see `ats_providers/payroll.py`). UKG and Paylocity
     # boards are identified by opaque ids, so these were taken from real URLs
     # in the Common Crawl index rather than guessed.
@@ -100,6 +112,15 @@ PROBES: Dict[str, Dict[str, Any]] = {
                     "display_name": "University of Arizona"},
     "jazzhr": {"tenant": "aamco", "host": "aamco.applytojob.com",
                "display_name": "AAMCO"},
+    # Official employer chains rechecked 2026-11-05; complete public reads
+    # returned Frequentis 62, Destro 13 and Orange Logic 7 requisitions.
+    "avature": {"tenant": "jobs.frequentis.com", "site": "careers",
+                 "host": "jobs.frequentis.com", "display_name": "Frequentis"},
+    "breezy": {"tenant": "destro-ai", "host": "destro-ai.breezy.hr",
+               "display_name": "Destro AI"},
+    "careers_page": {"tenant": "orangelogic.com", "host": "orangelogic.com",
+                     "display_name": "Orange Logic",
+                     "extra": {"listing_url": "https://www.orangelogic.com/about/careers"}},
 }
 
 

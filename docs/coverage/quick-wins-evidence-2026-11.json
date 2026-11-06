@@ -1,0 +1,2404 @@
+{
+  "observed_date": "2026-11-05",
+  "production_access": false,
+  "items": [
+    {
+      "name": "Lincoln Institute of Land Policy",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:45:02.171749Z",
+      "evidence_url": "https://www.lincolninst.edu/about-lincoln-institute/careers/",
+      "evidence_chain": [
+        "https://www.lincolninst.edu/about-lincoln-institute/careers/"
+      ],
+      "endpoint": {
+        "vendor": "paycom",
+        "tenant": "AC25DFC6E5002C200B92C92109B3F768",
+        "site": "",
+        "host": "www.paycomonline.net"
+      },
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "Refusal: robots_refusal: https://www.paycomonline.net/v4/ats/web.php/jobs?clientkey=AC25DFC6E5002C200B92C92109B3F768",
+      "outcome": "robots_refusal",
+      "requests": [
+        {
+          "at": "2026-11-05T22:45:02.172323Z",
+          "method": "GET",
+          "url": "https://www.paycomonline.net/robots.txt",
+          "status": 200,
+          "bytes": 444
+        }
+      ]
+    },
+    {
+      "name": "Universal Background Screening",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:45:02.706048Z",
+      "evidence_url": "https://universalbackground.com/career-opportunities-with-universal-background-screening/",
+      "evidence_chain": [
+        "https://universalbackground.com/career-opportunities-with-universal-background-screening/",
+        "https://www2.appone.com/Search/Search.aspx?ServerVar=universalbackgroundscreening.appone.com"
+      ],
+      "endpoint": {
+        "vendor": "appone",
+        "tenant": "universalbackgroundscreening.appone.com",
+        "site": "",
+        "host": "www2.appone.com"
+      },
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "Refusal: robots_refusal: https://recruiting.myapps.paychex.com/appone/Branding/ReqTemplate/BrowseAllJobsbyCategory.asp?Type=REQ&FromID=1&ClientID=18117&B_ID=91&JobCode=0&CountryID=3&LanguageID=2&servervar=universalbackgroundscreening.appone.com",
+      "outcome": "robots_refusal",
+      "requests": [
+        {
+          "at": "2026-11-05T22:45:02.706830Z",
+          "method": "GET",
+          "url": "https://www2.appone.com/robots.txt",
+          "status": 404,
+          "bytes": 103
+        },
+        {
+          "at": "2026-11-05T22:45:03.757352Z",
+          "method": "GET",
+          "url": "https://www2.appone.com/Search/Search.aspx?ServerVar=universalbackgroundscreening.appone.com",
+          "status": 200,
+          "bytes": 21907
+        },
+        {
+          "at": "2026-11-05T22:45:04.586385Z",
+          "method": "GET",
+          "url": "https://recruiting.myapps.paychex.com/robots.txt",
+          "status": 200,
+          "bytes": 30
+        }
+      ]
+    },
+    {
+      "name": "RevSpring",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:44:59.474378Z",
+      "evidence_url": "https://revspringinc.com/careers/",
+      "evidence_chain": [
+        "https://revspringinc.com/careers/"
+      ],
+      "endpoint": {
+        "vendor": "paycor",
+        "tenant": "8a7883d0798f66af0179905b7890010b",
+        "site": "aggregate",
+        "host": "recruitingbypaycor.com"
+      },
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "Refusal: robots_refusal: https://recruitingbypaycor.com/career/AggregateCareerHome.action?clientId=8a7883d0798f66af0179905b7890010b",
+      "outcome": "robots_refusal",
+      "requests": [
+        {
+          "at": "2026-11-05T22:44:59.474879Z",
+          "method": "GET",
+          "url": "https://recruitingbypaycor.com/robots.txt",
+          "status": 200,
+          "bytes": 26
+        }
+      ]
+    },
+    {
+      "name": "Spring Arbor University",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:44:59.823428Z",
+      "evidence_url": "https://springarbor.edu/about/offices-and-schools/human-resources/careers.php",
+      "evidence_chain": [
+        "https://springarbor.edu/about/offices-and-schools/human-resources/careers.php"
+      ],
+      "endpoint": {
+        "vendor": "paycor",
+        "tenant": "8a7883c66ee9a5cc016ef0ea2d5b06cb",
+        "site": "",
+        "host": "recruitingbypaycor.com"
+      },
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "Refusal: robots_refusal: https://recruitingbypaycor.com/career/CareerHome.action?clientId=8a7883c66ee9a5cc016ef0ea2d5b06cb",
+      "outcome": "robots_refusal",
+      "requests": []
+    },
+    {
+      "name": "Epic",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:45:28.793360Z",
+      "evidence_url": "https://careers.epic.com/",
+      "evidence_chain": [
+        "https://careers.epic.com/",
+        "https://careers.epic.com/jobs/"
+      ],
+      "endpoint": null,
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "The own-site parser yielded 10 navigation/category links, not the 46 published positions. No row added.",
+      "outcome": "needs_new_template:avature_nextjs",
+      "requests": [
+        {
+          "at": "2026-11-05T22:45:28.794007Z",
+          "method": "GET",
+          "url": "https://careers.epic.com/robots.txt",
+          "status": 200,
+          "bytes": 152
+        },
+        {
+          "at": "2026-11-05T22:45:29.844479Z",
+          "method": "GET",
+          "url": "https://careers.epic.com/jobs/",
+          "status": 200,
+          "bytes": 270856
+        }
+      ]
+    },
+    {
+      "name": "Frequentis",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:45:10.369103Z",
+      "evidence_url": "https://www.frequentis.com/en/careers",
+      "evidence_chain": [
+        "https://www.frequentis.com/en/careers",
+        "https://jobs.frequentis.com/careers/SearchJobs",
+        "https://jobs.frequentis.com/careers/SearchJobs/?jobOffset=20",
+        "https://jobs.frequentis.com/careers/SearchJobs/?jobOffset=40",
+        "https://jobs.frequentis.com/careers/SearchJobs/?jobOffset=60"
+      ],
+      "endpoint": {
+        "vendor": "avature",
+        "tenant": "jobs.frequentis.com",
+        "site": "careers",
+        "host": "jobs.frequentis.com"
+      },
+      "rows_read": 62,
+      "distinct_requisitions": 62,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": 62,
+      "truncated": false,
+      "reason": "Already seeded in origin/main; reconcile stale unsupported plan without adding duplicate crawl member.",
+      "outcome": "existing_revalidated",
+      "sample_titles": [
+        "ATM Service Engineer - Voice Solutions (all genders)",
+        "Automation Test Engineer",
+        "Contracts Specialist"
+      ],
+      "validation": {
+        "at": "2026-11-05T22:45:10.369103Z",
+        "vendor": "avature",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 62,
+        "unique_ids": 62,
+        "duplicate_rows": 0,
+        "requisitions": 62,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "ATM Service Engineer - Voice Solutions (all genders)",
+          "Automation Test Engineer",
+          "Contracts Specialist"
+        ],
+        "detail": "",
+        "member_key": "avature-jobs-frequentis-com-careers"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T22:45:10.369383Z",
+          "method": "GET",
+          "url": "https://jobs.frequentis.com/robots.txt",
+          "status": 200,
+          "bytes": 914
+        },
+        {
+          "at": "2026-11-05T22:45:11.633349Z",
+          "method": "GET",
+          "url": "https://jobs.frequentis.com/careers/SearchJobs",
+          "status": 200,
+          "bytes": 147260
+        },
+        {
+          "at": "2026-11-05T22:45:13.016794Z",
+          "method": "GET",
+          "url": "https://jobs.frequentis.com/careers/SearchJobs/?jobOffset=20",
+          "status": 200,
+          "bytes": 148134
+        },
+        {
+          "at": "2026-11-05T22:45:14.358713Z",
+          "method": "GET",
+          "url": "https://jobs.frequentis.com/careers/SearchJobs/?jobOffset=40",
+          "status": 200,
+          "bytes": 146807
+        },
+        {
+          "at": "2026-11-05T22:45:15.408938Z",
+          "method": "GET",
+          "url": "https://jobs.frequentis.com/careers/SearchJobs/?jobOffset=60",
+          "status": 200,
+          "bytes": 49066
+        }
+      ]
+    },
+    {
+      "name": "Flint Hills Resources",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:45:16.297954Z",
+      "evidence_url": "https://www.fhr.com/careers",
+      "evidence_chain": [
+        "https://www.fhr.com/careers",
+        "https://www.kochinc.com/career-opportunities/flint-hills-resources",
+        "https://koch.avature.net/en_US/careers/SearchJobs?732=6297&tags=rm.kcm.web.kcm-004",
+        "https://koch.avature.net/en_US/careers/SearchJobs/?3_85_3=6297&3_85_3_format=1077&jobRecordsPerPage=6&jobOffset=6",
+        "https://koch.avature.net/en_US/careers/SearchJobs/?3_85_3=6297&3_85_3_format=1077&jobRecordsPerPage=6&jobOffset=12",
+        "https://koch.avature.net/en_US/careers/SearchJobs/?3_85_3=6297&3_85_3_format=1077&jobRecordsPerPage=6&jobOffset=18",
+        "https://koch.avature.net/en_US/careers/SearchJobs/?3_85_3=6297&3_85_3_format=1077&jobRecordsPerPage=6&jobOffset=24",
+        "https://koch.avature.net/en_US/careers/SearchJobs/?3_85_3=6297&3_85_3_format=1077&jobRecordsPerPage=6&jobOffset=30",
+        "https://koch.avature.net/en_US/careers/SearchJobs/?3_85_3=6297&3_85_3_format=1077&jobRecordsPerPage=6&jobOffset=36"
+      ],
+      "endpoint": {
+        "vendor": "avature",
+        "tenant": "koch.avature.net",
+        "site": "en_US/careers?732=6297&tags=rm.kcm.web.kcm-004",
+        "host": "koch.avature.net",
+        "extra": {
+          "entity_name": "Flint Hills Resources"
+        }
+      },
+      "rows_read": 42,
+      "distinct_requisitions": 42,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": 42,
+      "truncated": false,
+      "reason": "Already seeded in origin/main; reconcile stale unsupported plan without adding duplicate crawl member.",
+      "outcome": "existing_revalidated",
+      "sample_titles": [
+        "Data Analyst",
+        "Wireless System Administrator",
+        "Reliability Engineer"
+      ],
+      "validation": {
+        "at": "2026-11-05T22:45:16.297954Z",
+        "vendor": "avature",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 42,
+        "unique_ids": 42,
+        "duplicate_rows": 0,
+        "requisitions": 42,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Data Analyst",
+          "Wireless System Administrator",
+          "Reliability Engineer"
+        ],
+        "detail": "",
+        "member_key": "avature-koch-avature-net-en_us-careers-732-6297-tags-rm-kcm-web-kcm-004"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T22:45:16.298298Z",
+          "method": "GET",
+          "url": "https://koch.avature.net/robots.txt",
+          "status": 200,
+          "bytes": 975
+        },
+        {
+          "at": "2026-11-05T22:45:17.348520Z",
+          "method": "GET",
+          "url": "https://koch.avature.net/en_US/careers/SearchJobs?732=6297&tags=rm.kcm.web.kcm-004",
+          "status": 200,
+          "bytes": 128146
+        },
+        {
+          "at": "2026-11-05T22:45:18.798933Z",
+          "method": "GET",
+          "url": "https://koch.avature.net/en_US/careers/SearchJobs/?3_85_3=6297&3_85_3_format=1077&jobRecordsPerPage=6&jobOffset=6",
+          "status": 200,
+          "bytes": 129157
+        },
+        {
+          "at": "2026-11-05T22:45:20.292711Z",
+          "method": "GET",
+          "url": "https://koch.avature.net/en_US/careers/SearchJobs/?3_85_3=6297&3_85_3_format=1077&jobRecordsPerPage=6&jobOffset=12",
+          "status": 200,
+          "bytes": 130526
+        },
+        {
+          "at": "2026-11-05T22:45:21.708010Z",
+          "method": "GET",
+          "url": "https://koch.avature.net/en_US/careers/SearchJobs/?3_85_3=6297&3_85_3_format=1077&jobRecordsPerPage=6&jobOffset=18",
+          "status": 200,
+          "bytes": 130442
+        },
+        {
+          "at": "2026-11-05T22:45:23.206787Z",
+          "method": "GET",
+          "url": "https://koch.avature.net/en_US/careers/SearchJobs/?3_85_3=6297&3_85_3_format=1077&jobRecordsPerPage=6&jobOffset=24",
+          "status": 200,
+          "bytes": 129980
+        },
+        {
+          "at": "2026-11-05T22:45:24.734690Z",
+          "method": "GET",
+          "url": "https://koch.avature.net/en_US/careers/SearchJobs/?3_85_3=6297&3_85_3_format=1077&jobRecordsPerPage=6&jobOffset=30",
+          "status": 200,
+          "bytes": 130419
+        },
+        {
+          "at": "2026-11-05T22:45:26.248917Z",
+          "method": "GET",
+          "url": "https://koch.avature.net/en_US/careers/SearchJobs/?3_85_3=6297&3_85_3_format=1077&jobRecordsPerPage=6&jobOffset=36",
+          "status": 200,
+          "bytes": 130505
+        }
+      ]
+    },
+    {
+      "name": "Fervo Energy",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:45:27.569747Z",
+      "evidence_url": "https://fervoenergy.com/jobs/fervoenergy/asset-manager-market-asset-operations/?gh_jid=4474295009",
+      "evidence_chain": [
+        "https://fervoenergy.com/careers/",
+        "https://fervoenergy.com/jobs/fervoenergy/asset-manager-market-asset-operations/?gh_jid=4474295009",
+        "https://boards-api.greenhouse.io/v1/boards/fervoenergy/jobs?content=false"
+      ],
+      "endpoint": {
+        "vendor": "greenhouse",
+        "tenant": "fervoenergy"
+      },
+      "rows_read": 68,
+      "distinct_requisitions": 68,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": false,
+      "reason": "Official job detail names exact Greenhouse board token; 68 real requisitions.",
+      "outcome": "new_validated",
+      "sample_titles": [
+        "Asset Manager, Market Asset Operations",
+        "Associate Corporate Counsel",
+        "CAD Specialist"
+      ],
+      "validation": {
+        "at": "2026-11-05T22:45:27.569747Z",
+        "vendor": "greenhouse",
+        "status": "complete",
+        "source_reported": 68,
+        "parsed": 68,
+        "unique_ids": 68,
+        "duplicate_rows": 0,
+        "requisitions": 68,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Asset Manager, Market Asset Operations",
+          "Associate Corporate Counsel",
+          "CAD Specialist"
+        ],
+        "detail": "",
+        "member_key": "greenhouse-fervoenergy"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T22:45:27.570340Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/robots.txt",
+          "status": 200,
+          "bytes": 131
+        },
+        {
+          "at": "2026-11-05T22:45:28.620512Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/v1/boards/fervoenergy/jobs?content=false",
+          "status": 200,
+          "bytes": 61313
+        }
+      ]
+    },
+    {
+      "name": "Longbridge",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:42:46.723027Z",
+      "evidence_url": "https://longbridge.com/hk/en/jobs/974e6b1b-0661-4d31-8c08-b28758e6d139",
+      "evidence_chain": [
+        "https://longbridge.com/hk/en/jobs/974e6b1b-0661-4d31-8c08-b28758e6d139"
+      ],
+      "endpoint": null,
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "403 on robots.txt; host stopped.",
+      "outcome": "blocked"
+    },
+    {
+      "name": "MATS Research",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:46:08.431257Z",
+      "evidence_url": "https://www.matsprogram.org/careers",
+      "evidence_chain": [
+        "https://www.matsprogram.org/careers",
+        "data-job-board-id=\"mats-research\" on official page",
+        "https://ats.rippling.com/api/v1/board/mats-research/jobs"
+      ],
+      "endpoint": {
+        "vendor": "rippling",
+        "tenant": "mats-research"
+      },
+      "rows_read": 19,
+      "distinct_requisitions": 9,
+      "us_rows": 8,
+      "us_share": 0.8888888888888888,
+      "board_total": 10,
+      "truncated": false,
+      "reason": "19 location rows, 10 IDs, 9 staff requisitions + 1 Expression of Interest. 8 requisitions have a US location; no fellowship rows. Old own-site listing yielded 0/unverified. Phase 2 fixes duplicate-location loss.",
+      "outcome": "migrated_validated",
+      "sample_titles": [
+        "Community Manager",
+        "Compute Operations Specialist",
+        "Cybersecurity Engineer (IT Security)"
+      ],
+      "validation": {
+        "at": "2026-11-05T22:46:08.431257Z",
+        "vendor": "rippling",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 19,
+        "unique_ids": 10,
+        "duplicate_rows": 9,
+        "requisitions": 9,
+        "filtered_non_requisition": 1,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Community Manager",
+          "Compute Operations Specialist",
+          "Cybersecurity Engineer (IT Security)"
+        ],
+        "detail": "",
+        "member_key": "rippling-mats-research"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T22:46:08.431432Z",
+          "method": "GET",
+          "url": "https://ats.rippling.com/robots.txt",
+          "status": 200,
+          "bytes": 35
+        },
+        {
+          "at": "2026-11-05T22:46:09.481605Z",
+          "method": "GET",
+          "url": "https://ats.rippling.com/api/v1/board/mats-research/jobs",
+          "status": 200,
+          "bytes": 5761
+        }
+      ]
+    },
+    {
+      "name": "Orange Logic",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:45:06.415954Z",
+      "evidence_url": "https://www.orangelogic.com/about/careers",
+      "evidence_chain": [
+        "https://www.orangelogic.com/about/careers",
+        "https://www.orangelogic.com/about/careers"
+      ],
+      "endpoint": {
+        "vendor": "careers_page",
+        "tenant": "orangelogic.com",
+        "site": "",
+        "host": "orangelogic.com",
+        "extra": {
+          "listing_url": "https://www.orangelogic.com/about/careers"
+        }
+      },
+      "rows_read": 7,
+      "distinct_requisitions": 7,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": false,
+      "reason": "Already seeded in origin/main; reconcile stale unsupported plan without adding duplicate crawl member.",
+      "outcome": "existing_revalidated",
+      "sample_titles": [
+        "Senior Product Marketing Manager, US",
+        "Financial Analyst, US",
+        "Applied AI Product Engineer, US"
+      ],
+      "validation": {
+        "at": "2026-11-05T22:45:06.415954Z",
+        "vendor": "careers_page",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 7,
+        "unique_ids": 7,
+        "duplicate_rows": 0,
+        "requisitions": 7,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Senior Product Marketing Manager, US",
+          "Financial Analyst, US",
+          "Applied AI Product Engineer, US"
+        ],
+        "detail": "",
+        "member_key": "careers_page-orangelogic-com"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T22:45:06.416293Z",
+          "method": "GET",
+          "url": "https://www.orangelogic.com/robots.txt",
+          "status": 200,
+          "bytes": 307
+        },
+        {
+          "at": "2026-11-05T22:45:07.466499Z",
+          "method": "GET",
+          "url": "https://www.orangelogic.com/about/careers",
+          "status": 200,
+          "bytes": 140168
+        }
+      ]
+    },
+    {
+      "name": "Rugged Science",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:45:07.600909Z",
+      "evidence_url": "https://ruggedscience.com/careers/",
+      "evidence_chain": [
+        "https://ruggedscience.com/careers/",
+        "https://ruggedscience.com/careers/"
+      ],
+      "endpoint": {
+        "vendor": "careers_page",
+        "tenant": "ruggedscience.com",
+        "site": "",
+        "host": "ruggedscience.com",
+        "extra": {
+          "listing_url": "https://ruggedscience.com/careers/"
+        }
+      },
+      "rows_read": 9,
+      "distinct_requisitions": 9,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": false,
+      "reason": "Already seeded in origin/main; reconcile stale unsupported plan without adding duplicate crawl member.",
+      "outcome": "existing_revalidated",
+      "sample_titles": [
+        "Software Developer / IT Specialist",
+        "Quality Director",
+        "Mechanical Designer"
+      ],
+      "validation": {
+        "at": "2026-11-05T22:45:07.600909Z",
+        "vendor": "careers_page",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 9,
+        "unique_ids": 9,
+        "duplicate_rows": 0,
+        "requisitions": 9,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Software Developer / IT Specialist",
+          "Quality Director",
+          "Mechanical Designer"
+        ],
+        "detail": "",
+        "member_key": "careers_page-ruggedscience-com"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T22:45:07.601450Z",
+          "method": "GET",
+          "url": "https://ruggedscience.com/robots.txt",
+          "status": 200,
+          "bytes": 3220
+        },
+        {
+          "at": "2026-11-05T22:45:08.651805Z",
+          "method": "GET",
+          "url": "https://ruggedscience.com/careers/",
+          "status": 200,
+          "bytes": 374007
+        }
+      ]
+    },
+    {
+      "name": "Temple Health – Temple University Health System",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:42:49.155202Z",
+      "evidence_url": "https://www.templehealth.com/careers",
+      "evidence_chain": [
+        "https://www.templehealth.com/careers"
+      ],
+      "endpoint": null,
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "Official page links SilkRoad, which has no registered provider.",
+      "outcome": "needs_new_provider:silkroad"
+    },
+    {
+      "name": "Nous Research",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:45:08.982887Z",
+      "evidence_url": "https://nousresearch.com/careers",
+      "evidence_chain": [
+        "https://nousresearch.com/careers",
+        "https://nousresearch.com/careers"
+      ],
+      "endpoint": {
+        "vendor": "careers_page",
+        "tenant": "nousresearch.com",
+        "site": "",
+        "host": "nousresearch.com",
+        "extra": {
+          "listing_url": "https://nousresearch.com/careers"
+        }
+      },
+      "rows_read": 13,
+      "distinct_requisitions": 13,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": false,
+      "reason": "Already seeded in origin/main; reconcile stale unsupported plan without adding duplicate crawl member.",
+      "outcome": "existing_revalidated",
+      "sample_titles": [
+        "Office Manager",
+        "Machine Learning Engineer, Evals",
+        "Software Engineer"
+      ],
+      "validation": {
+        "at": "2026-11-05T22:45:08.982887Z",
+        "vendor": "careers_page",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 13,
+        "unique_ids": 13,
+        "duplicate_rows": 0,
+        "requisitions": 13,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Office Manager",
+          "Machine Learning Engineer, Evals",
+          "Software Engineer"
+        ],
+        "detail": "",
+        "member_key": "careers_page-nousresearch-com"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T22:45:08.983128Z",
+          "method": "GET",
+          "url": "https://nousresearch.com/robots.txt",
+          "status": 200,
+          "bytes": 103
+        },
+        {
+          "at": "2026-11-05T22:45:10.033443Z",
+          "method": "GET",
+          "url": "https://nousresearch.com/careers",
+          "status": 200,
+          "bytes": 1069374
+        }
+      ]
+    },
+    {
+      "name": "SoftWriters",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:42:52.184011Z",
+      "evidence_url": "https://softwriters.com/career-opportunities",
+      "evidence_chain": [
+        "https://softwriters.com/career-opportunities"
+      ],
+      "endpoint": {
+        "vendor": "ukg",
+        "tenant": "ROP1001ROPER",
+        "site": "cf088029-453b-46f8-bcab-46ffb10fdf54",
+        "host": "recruiting.ultipro.com",
+        "extra": {}
+      },
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "UKG robots disallows the linked OpportunityDetail; shared Roper entity boundary remains unproven.",
+      "outcome": "robots_refusal"
+    },
+    {
+      "name": "Attune",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:42:53.361039Z",
+      "evidence_url": "https://www.attune.ai/company",
+      "evidence_chain": [
+        "https://www.attune.ai/company"
+      ],
+      "endpoint": null,
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "3 official LinkedIn application links; manual handoff only.",
+      "outcome": "manual"
+    },
+    {
+      "name": "GMI Cloud",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:42:54.498965Z",
+      "evidence_url": "https://www.gmicloud.ai/en/company/career",
+      "evidence_chain": [
+        "https://www.gmicloud.ai/en/company/career"
+      ],
+      "endpoint": null,
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "10 official LinkedIn application links; manual handoff only.",
+      "outcome": "manual"
+    },
+    {
+      "name": "Siemens",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:50:21.493331Z",
+      "evidence_url": "https://www.siemens.com/global/en/company/jobs.html",
+      "evidence_chain": [
+        "https://www.siemens.com/global/en/company/jobs.html",
+        "https://jobs.siemens.com/en_US/externaljobs/SearchJobs",
+        "https://jobs.siemens.com/en_US/externaljobs/JobDetail/528626"
+      ],
+      "endpoint": {
+        "vendor": "avature",
+        "tenant": "jobs.siemens.com",
+        "host": "jobs.siemens.com",
+        "site": "en_US/externaljobs"
+      },
+      "rows_read": 516,
+      "distinct_requisitions": 516,
+      "us_rows": 94,
+      "us_share": 0.1821705426356589,
+      "board_total": null,
+      "truncated": true,
+      "reason": "Bounded at 150 seconds; 999+ is not an exact total. Locations in Siemens Energy listing are unknown; detail pages publish them.",
+      "outcome": "new_validated",
+      "validation": {
+        "at": "2026-11-05T22:50:21.493331Z",
+        "vendor": "avature",
+        "status": "budget_limited",
+        "source_reported": null,
+        "parsed": 516,
+        "unique_ids": 516,
+        "duplicate_rows": 0,
+        "requisitions": 516,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Agentic Evaluation & Testing Specialist, Kitchener, ON",
+          "Senior Manager, Software Development",
+          "Quality Inspector (2nd Shift)"
+        ],
+        "detail": "",
+        "member_key": "avature-jobs-siemens-com-en_us-externaljobs",
+        "replayed_at_utc": "2026-11-06T00:03:03.929299Z",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "sample_titles": [
+        "Agentic Evaluation & Testing Specialist, Kitchener, ON",
+        "Senior Manager, Software Development",
+        "Quality Inspector (2nd Shift)"
+      ],
+      "detail_check": {
+        "url": "https://jobs.siemens.com/en_US/externaljobs/JobDetail/528626",
+        "status": 200,
+        "at": "2026-11-05T22:52:55.125332Z"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T22:50:21.493331Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/robots.txt",
+          "status": 200,
+          "bytes": 838
+        },
+        {
+          "at": "2026-11-05T22:50:22.552594Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs",
+          "status": 200,
+          "bytes": 161978
+        },
+        {
+          "at": "2026-11-05T22:50:24.291821Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=6",
+          "status": 200,
+          "bytes": 163101
+        },
+        {
+          "at": "2026-11-05T22:50:25.963373Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=12",
+          "status": 200,
+          "bytes": 164994
+        },
+        {
+          "at": "2026-11-05T22:50:27.652959Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=18",
+          "status": 200,
+          "bytes": 162744
+        },
+        {
+          "at": "2026-11-05T22:50:29.320449Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=24",
+          "status": 200,
+          "bytes": 162378
+        },
+        {
+          "at": "2026-11-05T22:50:31.043821Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=30",
+          "status": 200,
+          "bytes": 163273
+        },
+        {
+          "at": "2026-11-05T22:50:32.744152Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=36",
+          "status": 200,
+          "bytes": 163032
+        },
+        {
+          "at": "2026-11-05T22:50:34.483828Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=42",
+          "status": 200,
+          "bytes": 164026
+        },
+        {
+          "at": "2026-11-05T22:50:36.208261Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=48",
+          "status": 200,
+          "bytes": 163729
+        },
+        {
+          "at": "2026-11-05T22:50:37.902177Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=54",
+          "status": 200,
+          "bytes": 164921
+        },
+        {
+          "at": "2026-11-05T22:50:39.585584Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=60",
+          "status": 200,
+          "bytes": 163751
+        },
+        {
+          "at": "2026-11-05T22:50:41.206028Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=66",
+          "status": 200,
+          "bytes": 164161
+        },
+        {
+          "at": "2026-11-05T22:50:42.781319Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=72",
+          "status": 200,
+          "bytes": 163310
+        },
+        {
+          "at": "2026-11-05T22:50:44.441421Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=78",
+          "status": 200,
+          "bytes": 161070
+        },
+        {
+          "at": "2026-11-05T22:50:46.188255Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=84",
+          "status": 200,
+          "bytes": 162228
+        },
+        {
+          "at": "2026-11-05T22:50:47.850299Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=90",
+          "status": 200,
+          "bytes": 163982
+        },
+        {
+          "at": "2026-11-05T22:50:49.564552Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=96",
+          "status": 200,
+          "bytes": 165248
+        },
+        {
+          "at": "2026-11-05T22:50:51.118298Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=102",
+          "status": 200,
+          "bytes": 163310
+        },
+        {
+          "at": "2026-11-05T22:50:52.860074Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=108",
+          "status": 200,
+          "bytes": 164347
+        },
+        {
+          "at": "2026-11-05T22:50:54.595469Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=114",
+          "status": 200,
+          "bytes": 162895
+        },
+        {
+          "at": "2026-11-05T22:50:56.494814Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=120",
+          "status": 200,
+          "bytes": 162545
+        },
+        {
+          "at": "2026-11-05T22:50:58.077220Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=126",
+          "status": 200,
+          "bytes": 164803
+        },
+        {
+          "at": "2026-11-05T22:50:59.725921Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=132",
+          "status": 200,
+          "bytes": 167278
+        },
+        {
+          "at": "2026-11-05T22:51:01.447644Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=138",
+          "status": 200,
+          "bytes": 163747
+        },
+        {
+          "at": "2026-11-05T22:51:03.092119Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=144",
+          "status": 200,
+          "bytes": 165129
+        },
+        {
+          "at": "2026-11-05T22:51:04.751958Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=150",
+          "status": 200,
+          "bytes": 162889
+        },
+        {
+          "at": "2026-11-05T22:51:06.357414Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=156",
+          "status": 200,
+          "bytes": 165409
+        },
+        {
+          "at": "2026-11-05T22:51:07.964849Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=162",
+          "status": 200,
+          "bytes": 162954
+        },
+        {
+          "at": "2026-11-05T22:51:09.635573Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=168",
+          "status": 200,
+          "bytes": 164018
+        },
+        {
+          "at": "2026-11-05T22:51:11.355101Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=174",
+          "status": 200,
+          "bytes": 165374
+        },
+        {
+          "at": "2026-11-05T22:51:13.151742Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=180",
+          "status": 200,
+          "bytes": 163804
+        },
+        {
+          "at": "2026-11-05T22:51:14.815348Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=186",
+          "status": 200,
+          "bytes": 165709
+        },
+        {
+          "at": "2026-11-05T22:51:16.539957Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=192",
+          "status": 200,
+          "bytes": 165114
+        },
+        {
+          "at": "2026-11-05T22:51:18.176094Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=198",
+          "status": 200,
+          "bytes": 163590
+        },
+        {
+          "at": "2026-11-05T22:51:19.985871Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=204",
+          "status": 200,
+          "bytes": 165024
+        },
+        {
+          "at": "2026-11-05T22:51:21.626087Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=210",
+          "status": 200,
+          "bytes": 161711
+        },
+        {
+          "at": "2026-11-05T22:51:23.218602Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=216",
+          "status": 200,
+          "bytes": 163596
+        },
+        {
+          "at": "2026-11-05T22:51:24.899548Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=222",
+          "status": 200,
+          "bytes": 161976
+        },
+        {
+          "at": "2026-11-05T22:51:26.581919Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=228",
+          "status": 200,
+          "bytes": 164650
+        },
+        {
+          "at": "2026-11-05T22:51:28.255370Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=234",
+          "status": 200,
+          "bytes": 164809
+        },
+        {
+          "at": "2026-11-05T22:51:29.897378Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=240",
+          "status": 200,
+          "bytes": 165613
+        },
+        {
+          "at": "2026-11-05T22:51:31.661788Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=246",
+          "status": 200,
+          "bytes": 164665
+        },
+        {
+          "at": "2026-11-05T22:51:33.545807Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=252",
+          "status": 200,
+          "bytes": 163993
+        },
+        {
+          "at": "2026-11-05T22:51:35.394518Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=258",
+          "status": 200,
+          "bytes": 163746
+        },
+        {
+          "at": "2026-11-05T22:51:37.164285Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=264",
+          "status": 200,
+          "bytes": 164133
+        },
+        {
+          "at": "2026-11-05T22:51:39.103529Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=270",
+          "status": 200,
+          "bytes": 162320
+        },
+        {
+          "at": "2026-11-05T22:51:40.750283Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=276",
+          "status": 200,
+          "bytes": 166126
+        },
+        {
+          "at": "2026-11-05T22:51:42.692113Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=282",
+          "status": 200,
+          "bytes": 163133
+        },
+        {
+          "at": "2026-11-05T22:51:44.486728Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=288",
+          "status": 200,
+          "bytes": 164798
+        },
+        {
+          "at": "2026-11-05T22:51:46.361315Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=294",
+          "status": 200,
+          "bytes": 163812
+        },
+        {
+          "at": "2026-11-05T22:51:48.148837Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=300",
+          "status": 200,
+          "bytes": 165542
+        },
+        {
+          "at": "2026-11-05T22:51:50.021337Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=306",
+          "status": 200,
+          "bytes": 163012
+        },
+        {
+          "at": "2026-11-05T22:51:52.067853Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=312",
+          "status": 200,
+          "bytes": 165657
+        },
+        {
+          "at": "2026-11-05T22:51:53.892718Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=318",
+          "status": 200,
+          "bytes": 164097
+        },
+        {
+          "at": "2026-11-05T22:51:55.715450Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=324",
+          "status": 200,
+          "bytes": 161918
+        },
+        {
+          "at": "2026-11-05T22:51:57.371263Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=330",
+          "status": 200,
+          "bytes": 162276
+        },
+        {
+          "at": "2026-11-05T22:51:59.035458Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=336",
+          "status": 200,
+          "bytes": 164623
+        },
+        {
+          "at": "2026-11-05T22:52:00.673791Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=342",
+          "status": 200,
+          "bytes": 163947
+        },
+        {
+          "at": "2026-11-05T22:52:02.445522Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=348",
+          "status": 200,
+          "bytes": 163976
+        },
+        {
+          "at": "2026-11-05T22:52:04.219396Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=354",
+          "status": 200,
+          "bytes": 163093
+        },
+        {
+          "at": "2026-11-05T22:52:05.998100Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=360",
+          "status": 200,
+          "bytes": 165257
+        },
+        {
+          "at": "2026-11-05T22:52:07.850235Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=366",
+          "status": 200,
+          "bytes": 163569
+        },
+        {
+          "at": "2026-11-05T22:52:09.679823Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=372",
+          "status": 200,
+          "bytes": 163104
+        },
+        {
+          "at": "2026-11-05T22:52:11.569744Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=378",
+          "status": 200,
+          "bytes": 163973
+        },
+        {
+          "at": "2026-11-05T22:52:13.412388Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=384",
+          "status": 200,
+          "bytes": 163909
+        },
+        {
+          "at": "2026-11-05T22:52:15.218469Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=390",
+          "status": 200,
+          "bytes": 164184
+        },
+        {
+          "at": "2026-11-05T22:52:17.160301Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=396",
+          "status": 200,
+          "bytes": 164077
+        },
+        {
+          "at": "2026-11-05T22:52:18.909877Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=402",
+          "status": 200,
+          "bytes": 164343
+        },
+        {
+          "at": "2026-11-05T22:52:20.612355Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=408",
+          "status": 200,
+          "bytes": 166006
+        },
+        {
+          "at": "2026-11-05T22:52:22.514511Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=414",
+          "status": 200,
+          "bytes": 164738
+        },
+        {
+          "at": "2026-11-05T22:52:24.181013Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=420",
+          "status": 200,
+          "bytes": 163443
+        },
+        {
+          "at": "2026-11-05T22:52:25.889840Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=426",
+          "status": 200,
+          "bytes": 165364
+        },
+        {
+          "at": "2026-11-05T22:52:27.699639Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=432",
+          "status": 200,
+          "bytes": 166958
+        },
+        {
+          "at": "2026-11-05T22:52:29.521674Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=438",
+          "status": 200,
+          "bytes": 164994
+        },
+        {
+          "at": "2026-11-05T22:52:31.406684Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=444",
+          "status": 200,
+          "bytes": 163322
+        },
+        {
+          "at": "2026-11-05T22:52:33.092408Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=450",
+          "status": 200,
+          "bytes": 160600
+        },
+        {
+          "at": "2026-11-05T22:52:34.953069Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=456",
+          "status": 200,
+          "bytes": 164421
+        },
+        {
+          "at": "2026-11-05T22:52:37.140702Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=462",
+          "status": 200,
+          "bytes": 162579
+        },
+        {
+          "at": "2026-11-05T22:52:38.824772Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=468",
+          "status": 200,
+          "bytes": 165001
+        },
+        {
+          "at": "2026-11-05T22:52:40.530960Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=474",
+          "status": 200,
+          "bytes": 163224
+        },
+        {
+          "at": "2026-11-05T22:52:42.233200Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=480",
+          "status": 200,
+          "bytes": 162016
+        },
+        {
+          "at": "2026-11-05T22:52:43.910196Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=486",
+          "status": 200,
+          "bytes": 164293
+        },
+        {
+          "at": "2026-11-05T22:52:45.816942Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=492",
+          "status": 200,
+          "bytes": 162454
+        },
+        {
+          "at": "2026-11-05T22:52:47.484277Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=498",
+          "status": 200,
+          "bytes": 164633
+        },
+        {
+          "at": "2026-11-05T22:52:49.263144Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=504",
+          "status": 200,
+          "bytes": 164290
+        },
+        {
+          "at": "2026-11-05T22:52:50.989152Z",
+          "method": "GET",
+          "url": "https://jobs.siemens.com/en_US/externaljobs/SearchJobs/?folderRecordsPerPage=6&folderOffset=510",
+          "status": 200,
+          "bytes": 163865
+        }
+      ]
+    },
+    {
+      "name": "Siemens Energy",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:52:55.127411Z",
+      "evidence_url": "https://www.siemens-energy.com/global/en/home/careers.html",
+      "evidence_chain": [
+        "https://www.siemens-energy.com/global/en/home/careers.html",
+        "https://jobs.siemens-energy.com/en_US/jobs/Jobs",
+        "https://jobs.siemens-energy.com/en_US/jobs/FolderDetail/Finance-Head-of-Regional-Service-Middle-East/306123"
+      ],
+      "endpoint": {
+        "vendor": "avature",
+        "tenant": "jobs.siemens-energy.com",
+        "host": "jobs.siemens-energy.com",
+        "site": "en_US/jobs",
+        "extra": {
+          "listing_route": "Jobs"
+        }
+      },
+      "rows_read": 1905,
+      "distinct_requisitions": 1905,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": 1905,
+      "truncated": false,
+      "reason": "Followed every published next-page link to exhaustion. Locations in Siemens Energy listing are unknown; detail pages publish them.",
+      "outcome": "new_validated",
+      "validation": {
+        "at": "2026-11-05T22:52:55.127411Z",
+        "vendor": "avature",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 1905,
+        "unique_ids": 1905,
+        "duplicate_rows": 0,
+        "requisitions": 1905,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Finance Head of Regional Service - Middle East",
+          "Customs Classification Specialist",
+          "Gas Turbine Lathe Operator (Mon-Thurs 3:45pm-2:15am)"
+        ],
+        "detail": "",
+        "member_key": "avature-jobs-siemens-energy-com-en_us-jobs",
+        "replayed_at_utc": "2026-11-06T00:03:03.929299Z",
+        "evidence_mode": "offline replay of dated live HTTP captures"
+      },
+      "sample_titles": [
+        "Finance Head of Regional Service - Middle East",
+        "Customs Classification Specialist",
+        "Gas Turbine Lathe Operator (Mon-Thurs 3:45pm-2:15am)"
+      ],
+      "detail_check": {
+        "url": "https://jobs.siemens-energy.com/en_US/jobs/FolderDetail/Finance-Head-of-Regional-Service-Middle-East/306123",
+        "status": 200,
+        "at": "2026-11-05T22:54:45.968793Z"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T22:52:55.127411Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/robots.txt",
+          "status": 200,
+          "bytes": 883
+        },
+        {
+          "at": "2026-11-05T22:52:56.178309Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs",
+          "status": 200,
+          "bytes": 143613
+        },
+        {
+          "at": "2026-11-05T22:52:57.309223Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=20",
+          "status": 200,
+          "bytes": 144923
+        },
+        {
+          "at": "2026-11-05T22:52:58.419267Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=40",
+          "status": 200,
+          "bytes": 144618
+        },
+        {
+          "at": "2026-11-05T22:52:59.492091Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=60",
+          "status": 200,
+          "bytes": 144663
+        },
+        {
+          "at": "2026-11-05T22:53:00.599057Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=80",
+          "status": 200,
+          "bytes": 144687
+        },
+        {
+          "at": "2026-11-05T22:53:01.691017Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=100",
+          "status": 200,
+          "bytes": 144812
+        },
+        {
+          "at": "2026-11-05T22:53:02.756753Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=120",
+          "status": 200,
+          "bytes": 144590
+        },
+        {
+          "at": "2026-11-05T22:53:03.815023Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=140",
+          "status": 200,
+          "bytes": 144846
+        },
+        {
+          "at": "2026-11-05T22:53:04.909548Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=160",
+          "status": 200,
+          "bytes": 145620
+        },
+        {
+          "at": "2026-11-05T22:53:05.982287Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=180",
+          "status": 200,
+          "bytes": 144816
+        },
+        {
+          "at": "2026-11-05T22:53:07.038311Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=200",
+          "status": 200,
+          "bytes": 144660
+        },
+        {
+          "at": "2026-11-05T22:53:08.186642Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=220",
+          "status": 200,
+          "bytes": 144792
+        },
+        {
+          "at": "2026-11-05T22:53:09.318416Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=240",
+          "status": 200,
+          "bytes": 144992
+        },
+        {
+          "at": "2026-11-05T22:53:10.430628Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=260",
+          "status": 200,
+          "bytes": 145121
+        },
+        {
+          "at": "2026-11-05T22:53:11.486998Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=280",
+          "status": 200,
+          "bytes": 144569
+        },
+        {
+          "at": "2026-11-05T22:53:12.538444Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=300",
+          "status": 200,
+          "bytes": 145214
+        },
+        {
+          "at": "2026-11-05T22:53:13.635876Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=320",
+          "status": 200,
+          "bytes": 144882
+        },
+        {
+          "at": "2026-11-05T22:53:14.750023Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=340",
+          "status": 200,
+          "bytes": 144346
+        },
+        {
+          "at": "2026-11-05T22:53:16.197651Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=360",
+          "status": 200,
+          "bytes": 144060
+        },
+        {
+          "at": "2026-11-05T22:53:17.284134Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=380",
+          "status": 200,
+          "bytes": 145129
+        },
+        {
+          "at": "2026-11-05T22:53:18.377899Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=400",
+          "status": 200,
+          "bytes": 145334
+        },
+        {
+          "at": "2026-11-05T22:53:19.428547Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=420",
+          "status": 200,
+          "bytes": 144683
+        },
+        {
+          "at": "2026-11-05T22:53:20.479259Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=440",
+          "status": 200,
+          "bytes": 145026
+        },
+        {
+          "at": "2026-11-05T22:53:21.540111Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=460",
+          "status": 200,
+          "bytes": 144669
+        },
+        {
+          "at": "2026-11-05T22:53:22.611567Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=480",
+          "status": 200,
+          "bytes": 144901
+        },
+        {
+          "at": "2026-11-05T22:53:23.666762Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=500",
+          "status": 200,
+          "bytes": 144889
+        },
+        {
+          "at": "2026-11-05T22:53:24.764802Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=520",
+          "status": 200,
+          "bytes": 144407
+        },
+        {
+          "at": "2026-11-05T22:53:25.890595Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=540",
+          "status": 200,
+          "bytes": 144333
+        },
+        {
+          "at": "2026-11-05T22:53:26.998709Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=560",
+          "status": 200,
+          "bytes": 145451
+        },
+        {
+          "at": "2026-11-05T22:53:28.130145Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=580",
+          "status": 200,
+          "bytes": 145438
+        },
+        {
+          "at": "2026-11-05T22:53:29.229176Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=600",
+          "status": 200,
+          "bytes": 144936
+        },
+        {
+          "at": "2026-11-05T22:53:30.283206Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=620",
+          "status": 200,
+          "bytes": 144712
+        },
+        {
+          "at": "2026-11-05T22:53:31.334138Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=640",
+          "status": 200,
+          "bytes": 144516
+        },
+        {
+          "at": "2026-11-05T22:53:32.461592Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=660",
+          "status": 200,
+          "bytes": 145938
+        },
+        {
+          "at": "2026-11-05T22:53:33.518298Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=680",
+          "status": 200,
+          "bytes": 144215
+        },
+        {
+          "at": "2026-11-05T22:53:34.613024Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=700",
+          "status": 200,
+          "bytes": 145605
+        },
+        {
+          "at": "2026-11-05T22:53:35.665791Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=720",
+          "status": 200,
+          "bytes": 145414
+        },
+        {
+          "at": "2026-11-05T22:53:36.742519Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=740",
+          "status": 200,
+          "bytes": 144956
+        },
+        {
+          "at": "2026-11-05T22:53:37.825894Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=760",
+          "status": 200,
+          "bytes": 144422
+        },
+        {
+          "at": "2026-11-05T22:53:38.913689Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=780",
+          "status": 200,
+          "bytes": 144451
+        },
+        {
+          "at": "2026-11-05T22:53:39.978176Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=800",
+          "status": 200,
+          "bytes": 145531
+        },
+        {
+          "at": "2026-11-05T22:53:41.050079Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=820",
+          "status": 200,
+          "bytes": 144987
+        },
+        {
+          "at": "2026-11-05T22:53:42.206852Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=840",
+          "status": 200,
+          "bytes": 144673
+        },
+        {
+          "at": "2026-11-05T22:53:43.323322Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=860",
+          "status": 200,
+          "bytes": 145310
+        },
+        {
+          "at": "2026-11-05T22:53:44.438250Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=880",
+          "status": 200,
+          "bytes": 145604
+        },
+        {
+          "at": "2026-11-05T22:53:45.489034Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=900",
+          "status": 200,
+          "bytes": 144735
+        },
+        {
+          "at": "2026-11-05T22:53:46.542071Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=920",
+          "status": 200,
+          "bytes": 144318
+        },
+        {
+          "at": "2026-11-05T22:53:47.606391Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=940",
+          "status": 200,
+          "bytes": 145383
+        },
+        {
+          "at": "2026-11-05T22:53:48.986455Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=960",
+          "status": 200,
+          "bytes": 144804
+        },
+        {
+          "at": "2026-11-05T22:53:50.087439Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=980",
+          "status": 200,
+          "bytes": 145402
+        },
+        {
+          "at": "2026-11-05T22:53:51.153312Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1000",
+          "status": 200,
+          "bytes": 145374
+        },
+        {
+          "at": "2026-11-05T22:53:52.350601Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1020",
+          "status": 200,
+          "bytes": 145066
+        },
+        {
+          "at": "2026-11-05T22:53:53.472555Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1040",
+          "status": 200,
+          "bytes": 144340
+        },
+        {
+          "at": "2026-11-05T22:53:54.585455Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1060",
+          "status": 200,
+          "bytes": 145062
+        },
+        {
+          "at": "2026-11-05T22:53:55.684468Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1080",
+          "status": 200,
+          "bytes": 144990
+        },
+        {
+          "at": "2026-11-05T22:53:56.751219Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1100",
+          "status": 200,
+          "bytes": 144874
+        },
+        {
+          "at": "2026-11-05T22:53:57.845423Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1120",
+          "status": 200,
+          "bytes": 145107
+        },
+        {
+          "at": "2026-11-05T22:54:00.704684Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1140",
+          "status": 200,
+          "bytes": 145381
+        },
+        {
+          "at": "2026-11-05T22:54:03.665965Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1160",
+          "status": 200,
+          "bytes": 144329
+        },
+        {
+          "at": "2026-11-05T22:54:04.730976Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1180",
+          "status": 200,
+          "bytes": 144868
+        },
+        {
+          "at": "2026-11-05T22:54:05.782239Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1200",
+          "status": 200,
+          "bytes": 145744
+        },
+        {
+          "at": "2026-11-05T22:54:06.852958Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1220",
+          "status": 200,
+          "bytes": 145017
+        },
+        {
+          "at": "2026-11-05T22:54:07.934118Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1240",
+          "status": 200,
+          "bytes": 145378
+        },
+        {
+          "at": "2026-11-05T22:54:08.985317Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1260",
+          "status": 200,
+          "bytes": 145495
+        },
+        {
+          "at": "2026-11-05T22:54:10.123806Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1280",
+          "status": 200,
+          "bytes": 145417
+        },
+        {
+          "at": "2026-11-05T22:54:11.222948Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1300",
+          "status": 200,
+          "bytes": 145348
+        },
+        {
+          "at": "2026-11-05T22:54:12.389445Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1320",
+          "status": 200,
+          "bytes": 144408
+        },
+        {
+          "at": "2026-11-05T22:54:13.445238Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1340",
+          "status": 200,
+          "bytes": 144690
+        },
+        {
+          "at": "2026-11-05T22:54:14.503283Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1360",
+          "status": 200,
+          "bytes": 144580
+        },
+        {
+          "at": "2026-11-05T22:54:15.554489Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1380",
+          "status": 200,
+          "bytes": 145028
+        },
+        {
+          "at": "2026-11-05T22:54:16.678173Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1400",
+          "status": 200,
+          "bytes": 145393
+        },
+        {
+          "at": "2026-11-05T22:54:17.758853Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1420",
+          "status": 200,
+          "bytes": 145078
+        },
+        {
+          "at": "2026-11-05T22:54:18.910282Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1440",
+          "status": 200,
+          "bytes": 145144
+        },
+        {
+          "at": "2026-11-05T22:54:20.007360Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1460",
+          "status": 200,
+          "bytes": 145182
+        },
+        {
+          "at": "2026-11-05T22:54:21.067960Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1480",
+          "status": 200,
+          "bytes": 145529
+        },
+        {
+          "at": "2026-11-05T22:54:22.159122Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1500",
+          "status": 200,
+          "bytes": 145216
+        },
+        {
+          "at": "2026-11-05T22:54:23.273027Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1520",
+          "status": 200,
+          "bytes": 144967
+        },
+        {
+          "at": "2026-11-05T22:54:24.338226Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1540",
+          "status": 200,
+          "bytes": 144832
+        },
+        {
+          "at": "2026-11-05T22:54:25.393016Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1560",
+          "status": 200,
+          "bytes": 144644
+        },
+        {
+          "at": "2026-11-05T22:54:26.453108Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1580",
+          "status": 200,
+          "bytes": 145668
+        },
+        {
+          "at": "2026-11-05T22:54:27.549702Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1600",
+          "status": 200,
+          "bytes": 145149
+        },
+        {
+          "at": "2026-11-05T22:54:28.639743Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1620",
+          "status": 200,
+          "bytes": 145315
+        },
+        {
+          "at": "2026-11-05T22:54:29.795697Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1640",
+          "status": 200,
+          "bytes": 145991
+        },
+        {
+          "at": "2026-11-05T22:54:30.853141Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1660",
+          "status": 200,
+          "bytes": 144932
+        },
+        {
+          "at": "2026-11-05T22:54:31.929604Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1680",
+          "status": 200,
+          "bytes": 145475
+        },
+        {
+          "at": "2026-11-05T22:54:33.018961Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1700",
+          "status": 200,
+          "bytes": 146027
+        },
+        {
+          "at": "2026-11-05T22:54:34.078537Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1720",
+          "status": 200,
+          "bytes": 145462
+        },
+        {
+          "at": "2026-11-05T22:54:35.138269Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1740",
+          "status": 200,
+          "bytes": 144929
+        },
+        {
+          "at": "2026-11-05T22:54:36.201007Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1760",
+          "status": 200,
+          "bytes": 145105
+        },
+        {
+          "at": "2026-11-05T22:54:37.261841Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1780",
+          "status": 200,
+          "bytes": 145900
+        },
+        {
+          "at": "2026-11-05T22:54:38.313133Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1800",
+          "status": 200,
+          "bytes": 145033
+        },
+        {
+          "at": "2026-11-05T22:54:39.364417Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1820",
+          "status": 200,
+          "bytes": 145970
+        },
+        {
+          "at": "2026-11-05T22:54:40.464611Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1840",
+          "status": 200,
+          "bytes": 145258
+        },
+        {
+          "at": "2026-11-05T22:54:41.515376Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1860",
+          "status": 200,
+          "bytes": 146764
+        },
+        {
+          "at": "2026-11-05T22:54:42.627055Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1880",
+          "status": 200,
+          "bytes": 146048
+        },
+        {
+          "at": "2026-11-05T22:54:43.783165Z",
+          "method": "GET",
+          "url": "https://jobs.siemens-energy.com/en_US/jobs/Jobs/?folderRecordsPerPage=20&folderOffset=1900",
+          "status": 200,
+          "bytes": 105633
+        }
+      ]
+    },
+    {
+      "name": "Hitachi Energy",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:43:03.072192Z",
+      "evidence_url": "https://www.hitachienergy.com/careers",
+      "evidence_chain": [
+        "https://www.hitachienergy.com/careers"
+      ],
+      "endpoint": null,
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "Official jobs page is an XHR shell; no proven hiring-entity filter on shared Hitachi Workday.",
+      "outcome": "needs_entity_filter"
+    },
+    {
+      "name": "Eaton",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:43:04.283975Z",
+      "evidence_url": "https://jobs.eaton.com/",
+      "evidence_chain": [
+        "https://jobs.eaton.com/"
+      ],
+      "endpoint": {
+        "vendor": "eightfold",
+        "tenant": "eaton",
+        "site": "",
+        "host": "eaton.eightfold.ai",
+        "extra": {
+          "domain": "eaton.com"
+        }
+      },
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "Official redirect reaches Eightfold /careers, disallowed by robots; no API request sent.",
+      "outcome": "robots_refusal"
+    },
+    {
+      "name": "Evergy",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:45:29.976010Z",
+      "evidence_url": "https://www.evergy.com/careers",
+      "evidence_chain": [
+        "https://www.evergy.com/careers",
+        "https://evergy.taleo.net/careersection/jobsearch.ftl?lang=en",
+        "https://evergy.taleo.net:443/careersection/westar_mobile_career_section/jobsearch.ftl?lang=en"
+      ],
+      "endpoint": {
+        "vendor": "taleo",
+        "tenant": "evergy",
+        "site": "",
+        "host": "evergy.taleo.net",
+        "extra": {}
+      },
+      "rows_read": null,
+      "distinct_requisitions": null,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": null,
+      "reason": "Official link uses careersection/evergy_external_career_section. Reader returned 0, portal unresolved; not confirmed empty.",
+      "outcome": "unverified",
+      "requests": [
+        {
+          "at": "2026-11-05T22:45:29.976716Z",
+          "method": "GET",
+          "url": "https://evergy.taleo.net/robots.txt",
+          "status": 404,
+          "bytes": 27684
+        },
+        {
+          "at": "2026-11-05T22:45:31.027232Z",
+          "method": "GET",
+          "url": "https://evergy.taleo.net/careersection/jobsearch.ftl?lang=en",
+          "status": 302,
+          "bytes": 0
+        },
+        {
+          "at": "2026-11-05T22:45:32.077770Z",
+          "method": "GET",
+          "url": "https://evergy.taleo.net:443/robots.txt",
+          "status": 404,
+          "bytes": 27684
+        },
+        {
+          "at": "2026-11-05T22:45:33.128194Z",
+          "method": "GET",
+          "url": "https://evergy.taleo.net:443/careersection/westar_mobile_career_section/jobsearch.ftl?lang=en",
+          "status": 200,
+          "bytes": 122706
+        }
+      ]
+    },
+    {
+      "name": "Destro",
+      "category": "quick win",
+      "checked_at_utc": "2026-11-05T22:44:59.834641Z",
+      "evidence_url": "https://www.destroai.com/careers",
+      "evidence_chain": [
+        "https://www.destroai.com/careers",
+        "https://destro-ai.breezy.hr/"
+      ],
+      "endpoint": {
+        "vendor": "breezy",
+        "tenant": "destro-ai",
+        "site": "",
+        "host": "destro-ai.breezy.hr"
+      },
+      "rows_read": 13,
+      "distinct_requisitions": 13,
+      "us_rows": null,
+      "us_share": null,
+      "board_total": null,
+      "truncated": false,
+      "reason": "Already seeded in origin/main; reconcile stale unsupported plan without adding duplicate crawl member.",
+      "outcome": "existing_revalidated",
+      "sample_titles": [
+        "Robotics Software Engineer - Field Deployment & Support",
+        "Robotics Software Engineer - Field Deployment & Support",
+        "Robotics Systems Engineer"
+      ],
+      "validation": {
+        "at": "2026-11-05T22:44:59.834641Z",
+        "vendor": "breezy",
+        "status": "complete",
+        "source_reported": null,
+        "parsed": 13,
+        "unique_ids": 13,
+        "duplicate_rows": 0,
+        "requisitions": 13,
+        "filtered_non_requisition": 0,
+        "filtered_other_entity": 0,
+        "http_statuses": [
+          "200"
+        ],
+        "sample_titles": [
+          "Robotics Software Engineer - Field Deployment & Support",
+          "Robotics Software Engineer - Field Deployment & Support",
+          "Robotics Systems Engineer"
+        ],
+        "detail": "",
+        "member_key": "breezy-destro-ai"
+      },
+      "requests": [
+        {
+          "at": "2026-11-05T22:44:59.834981Z",
+          "method": "GET",
+          "url": "https://destro-ai.breezy.hr/robots.txt",
+          "status": 200,
+          "bytes": 135
+        },
+        {
+          "at": "2026-11-05T22:45:00.885425Z",
+          "method": "GET",
+          "url": "https://destro-ai.breezy.hr/",
+          "status": 200,
+          "bytes": 19792
+        }
+      ]
+    }
+  ]
+}

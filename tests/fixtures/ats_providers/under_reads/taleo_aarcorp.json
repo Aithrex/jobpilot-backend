@@ -1,0 +1,63 @@
+{
+  "requisitionList": [
+    {
+      "hotJob": false,
+      "addedToJobCart": false,
+      "draft": false,
+      "alreadyAppliedOn": false,
+      "toReApply": false,
+      "jobId": "327686",
+      "contestNo": "18996",
+      "column": [
+        "Welder",
+        "[\"United States-Michigan-Cadillac\"]",
+        "Nov 5, 2026"
+      ],
+      "linkedColumn": 0,
+      "locationsColumns": [
+        1
+      ]
+    },
+    {
+      "hotJob": false,
+      "addedToJobCart": false,
+      "draft": false,
+      "alreadyAppliedOn": false,
+      "toReApply": false,
+      "jobId": "327546",
+      "contestNo": "18981",
+      "column": [
+        "Assembler, Kitting",
+        "[\"United States-North Carolina-Greensboro\"]",
+        "Nov 5, 2026"
+      ],
+      "linkedColumn": 0,
+      "locationsColumns": [
+        1
+      ]
+    },
+    {
+      "hotJob": false,
+      "addedToJobCart": false,
+      "draft": false,
+      "alreadyAppliedOn": false,
+      "toReApply": false,
+      "jobId": "325028",
+      "contestNo": "18720",
+      "column": [
+        "Aircraft Mechanic 3 Lead",
+        "[\"Peru-Lima\"]",
+        "Nov 5, 2026"
+      ],
+      "linkedColumn": 0,
+      "locationsColumns": [
+        1
+      ]
+    }
+  ],
+  "pagingData": {
+    "currentPageNo": 1,
+    "pageSize": 25,
+    "totalCount": 197
+  }
+}

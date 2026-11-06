@@ -24,6 +24,20 @@ entities on one shared board are two members.
 
 Hosts: `.avature.net` plus the custom hosts verified above, named one by one
 - never an open-ended custom-host allowlist.
+
+Observed 2026-11-05: siemens.com's careers page links
+`jobs.siemens.com/en_US/externaljobs/SearchJobs`; Siemens Energy redirects
+its official careers page to `jobs.siemens-energy.com/en_US/jobs`, whose
+listing is `Jobs`. Both use the page's own `folderOffset` links. The latter
+links `FolderDetail/<slug>/<id>` rather than `JobDetail/<id>`. Listing dates
+remain unknown. `extra.listing_route="Jobs"` describes that public template;
+the default remains `SearchJobs`. Paging is bounded at 250 pages and always
+marks a capped census truncated, including when no total is published.
+
+The same observation date's official careers pages link Two Sigma's `OpenRoles`
+route, EA's `SearchJobs`, and Deloitte's separate entry/experienced filtered
+`SearchJobs` URLs. The route is explicit endpoint data, and each exact filter
+remains in the endpoint's site identity.
 """
 from __future__ import annotations
 
@@ -42,13 +56,14 @@ from services.ats_providers.util import (html_to_text, looks_minted_now,
 
 VENDOR = "avature"
 #: Custom career hosts verified to be Avature, one by one.
-CUSTOM_HOSTS = ("jobs.frequentis.com",)
+CUSTOM_HOSTS = ("jobs.frequentis.com", "jobs.siemens.com", "jobs.siemens-energy.com",
+                "careers.twosigma.com", "jobs.ea.com", "apply.deloitte.com")
 _HOST_RE = re.compile(r"^(?:[a-z0-9-]+\.avature\.net|" +
                       "|".join(re.escape(h) for h in CUSTOM_HOSTS) + r")$")
 _PORTAL_RE = re.compile(r"^(?:[a-z]{2}_[A-Z]{2}/)?[A-Za-z0-9_-]{2,40}$")
-_DETAIL_RE = re.compile(r"/JobDetail/(?:[^/?#]+/)?(?P<id>\d{1,12})/?$")
-_RESULTS_RE = re.compile(r"(\d{1,6})\s+results?\b", re.IGNORECASE)
-_PAGE_CAP = 25
+_DETAIL_RE = re.compile(r"/(?:JobDetail|FolderDetail)/(?:[^/?#]+/)?(?P<id>\d{1,12})/?$")
+_RESULTS_RE = re.compile(r"(\d[\d,]*)\s+results?\b", re.IGNORECASE)
+_PAGE_CAP = 250
 _LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
                     re.IGNORECASE | re.DOTALL)
 
@@ -82,29 +97,34 @@ def parse_listing(body: str, page_url: str, host: str) -> Tuple[List[Dict[str, s
         card = a
         for _ in range(6):
             parent = card.getparent()
-            if parent is None or len({x.get("href") for x in parent.xpath(".//a[contains(@href,'/JobDetail/')]")}) > 1:
+            if parent is None or len({x.get("href") for x in parent.xpath(
+                    ".//a[contains(@href,'/JobDetail/') or contains(@href,'/FolderDetail/')]")}) > 1:
                 break
             card = parent
         text = _ws(" ".join(card.itertext()))
         loc = re.search(r"Location\s*:\s*(.+?)(?=\s+(?:Job Number|Category|Posted|Date)\s*:|$)", text)
+        location_nodes = card.xpath(".//*[contains(concat(' ', normalize-space(@class), ' '), ' list-item-location ')]")
+        location = _ws(location_nodes[0].text_content()) if location_nodes else (loc.group(1).strip() if loc else "")
+        location = re.sub(r"\s+,", ",", location)
         rows.setdefault(m.group("id"), {
             "id": m.group("id"), "title": title, "url": url,
-            "location": loc.group(1).strip() if loc else "",
+            "location": location,
             "subtitle": text.replace(title, "", 1).strip()[:300]})
     offsets: Dict[int, str] = {}
-    for a in doc.xpath("//a[contains(@href,'jobOffset=')]"):
+    for a in doc.xpath("//a[contains(@href,'jobOffset=') or contains(@href,'folderOffset=')]"):
         url = urljoin(page_url, _html.unescape(str(a.get("href"))))
         u = urlparse(url)
-        if (u.hostname or "").lower() != host or "/SearchJobs" not in u.path:
+        if (u.hostname or "").lower() != host or u.path.rstrip("/") != urlparse(page_url).path.rstrip("/"):
             continue
         try:
-            off = int((parse_qs(u.query).get("jobOffset") or ["-1"])[0])
+            params = parse_qs(u.query)
+            off = int((params.get("jobOffset") or params.get("folderOffset") or ["-1"])[0])
         except ValueError:
             continue
         if off >= 0:
             offsets.setdefault(off, url)
     rep = _RESULTS_RE.search(html_to_text(body or ""))
-    return list(rows.values()), {"reported": int(rep.group(1)) if rep else None,
+    return list(rows.values()), {"reported": int(rep.group(1).replace(",", "")) if rep else None,
                                  "offsets": offsets}
 
 
@@ -121,6 +141,31 @@ def _job_posting(body: str) -> Dict[str, Any]:
                 if any(str(k).lower() == "jobposting" for k in kinds):
                     return item
     return {}
+
+
+def _detail_fields(doc: Any) -> Dict[str, Any]:
+    """Read labelled Avature fields, including every published job location."""
+    fields: Dict[str, Any] = {}
+    for label in doc.xpath("//*[contains(@class,'article__content__view__field__label')]"):
+        values = label.getparent().xpath("./*[contains(@class,'article__content__view__field__value')]")
+        if values:
+            fields[_ws(label.text_content()).lower().rstrip(":")] = _ws(values[0].text_content())
+    locations = []
+    direct = doc.xpath("//*[contains(concat(' ',normalize-space(@class),' '),' posting-location ')]")
+    if direct:
+        # The template publishes country, state, city as separate fields.
+        parts = [_ws(node.text_content()) for node in reversed(direct)]
+        locations.append(", ".join(dict.fromkeys(p for p in parts if p)))
+    elif fields.get("location(s)") or fields.get("location"):
+        locations.append(fields.get("location(s)") or fields["location"])
+    for group in doc.xpath("//*[contains(concat(' ',normalize-space(@class),' '),' additional-posting-locations ')]//ul"):
+        parts = [_ws(node.text_content()) for node in group.xpath(
+            ".//span[contains(concat(' ',normalize-space(@class),' '),' MultipleDataSetFieldValue ')]")]
+        if parts:
+            locations.append(", ".join(dict.fromkeys(p for p in reversed(parts) if p)))
+    fields["locations_list"] = list(dict.fromkeys(locations))
+    fields["locations"] = "; ".join(fields["locations_list"])
+    return fields
 
 
 class AvatureProvider(AtsProvider):
@@ -141,14 +186,15 @@ class AvatureProvider(AtsProvider):
     policy = CrawlPolicy(
         pacing_key=None, min_interval=1.0, jitter=0.25, max_concurrency=1,
         timeout=20.0, detail_timeout=15.0,
-        challenge_statuses=frozenset({429, 503}),
+        challenge_statuses=frozenset({403, 405, 429, 503}),
+        challenge_markers=("verify you are human", "human verification", "cf-chl-", "px-captcha"),
         page_size=20, max_pages=_PAGE_CAP,
     )
 
     fingerprints = (
         fp(r"https?://(?P<host>[a-z0-9-]+\.avature\.net|" +
            "|".join(re.escape(h) for h in CUSTOM_HOSTS) +
-           r")/(?P<site>(?:[a-z]{2}_[A-Z]{2}/)?[A-Za-z0-9_-]{2,40})/SearchJobs/?"
+           r")/(?P<site>(?:[a-z]{2}_[A-Z]{2}/)?[A-Za-z0-9_-]{2,40})/(?P<listing_route>SearchJobs|Jobs|OpenRoles)/?"
            r"(?:\?(?P<query>[^\s\"'<>#]*))?", confidence=92),
     )
 
@@ -160,9 +206,12 @@ class AvatureProvider(AtsProvider):
         query = _html.unescape(fields.get("query") or "")
         # Keep the employer's filter EXACTLY; drop only paging.
         query = "&".join(p for p in query.split("&")
-                         if p and not p.lower().startswith("joboffset="))
+                         if p and p.partition("=")[0].lower() not in
+                         ("joboffset", "folderoffset", "jobrecordsperpage", "folderrecordsperpage"))
         site = f"{portal}?{query}" if query else portal
-        return Endpoint(vendor=self.vendor, tenant=host, site=site, host=host)
+        route = fields.get("listing_route") or "SearchJobs"
+        return Endpoint(vendor=self.vendor, tenant=host, site=site, host=host,
+                        extra={"listing_route": route} if route != "SearchJobs" else {})
 
     @staticmethod
     def _parts(endpoint: Endpoint) -> Tuple[str, str, str]:
@@ -174,9 +223,10 @@ class AvatureProvider(AtsProvider):
 
     def board_url(self, endpoint: Endpoint) -> str:
         host, portal, query = self._parts(endpoint)
-        if not host:
+        route = (endpoint.extra or {}).get("listing_route", "SearchJobs")
+        if not host or route not in ("SearchJobs", "Jobs", "OpenRoles"):
             return ""
-        return f"https://{host}/{portal}/SearchJobs" + (f"?{query}" if query else "")
+        return f"https://{host}/{portal}/{route}" + (f"?{query}" if query else "")
 
     def list_jobs(self, endpoint: Endpoint, ctx: FetchContext) -> Iterator[RawJob]:
         url = self.board_url(endpoint)
@@ -201,6 +251,7 @@ class AvatureProvider(AtsProvider):
     def _walk(self, url: str, host: str, entity: str, counts: Dict[str, Any],
               ctx: FetchContext) -> Iterator[RawJob]:
         seen: Dict[str, bool] = {}
+        overlap = False
         visited = set()
         offset = 0
         for _page in range(int(self.policy.max_pages)):
@@ -217,13 +268,15 @@ class AvatureProvider(AtsProvider):
                 return
             rows, info = parse_listing(body, url, host)
             if info["reported"] is not None:
-                counts["reported"] = info["reported"]
-            if not rows and not seen:
-                # A template with no rows proves nothing.
+                counts["reported"] = max(counts["reported"] or 0, info["reported"])
+            if not rows:
+                # A later empty shell also cannot prove the census complete.
                 ctx.listing_truncated = True
                 return
+            previous_count = len(seen)
             for row in rows:
                 if row["id"] in seen:
+                    overlap = True
                     continue
                 seen[row["id"]] = True
                 counts["parsed"] = len(seen)
@@ -240,10 +293,14 @@ class AvatureProvider(AtsProvider):
                     extra={"application_method": "ats_url",
                            **({"listing_subtitle": row["subtitle"]} if row["subtitle"] else {})},
                 )
+            if len(seen) == previous_count:
+                # A repeated page is not evidence that unseen jobs closed.
+                ctx.listing_truncated = True
+                return
             reported = counts["reported"]
             later = sorted(o for o in info["offsets"] if o > offset)
             if not later or (reported is not None and len(seen) >= reported):
-                if reported is not None and len(seen) < reported:
+                if (reported is not None and len(seen) < reported) or (reported is None and overlap):
                     ctx.listing_truncated = True
                 return
             offset = later[0]
@@ -282,8 +339,10 @@ class AvatureProvider(AtsProvider):
             page_text = html_to_text(lxml_html.tostring(main, encoding="unicode")).strip()
             more = [_ws(s.text_content()) for s in doc.xpath(
                 "//*[contains(concat(' ',normalize-space(@class),' '),' moreDetail ')]/span")]
+            fields = _detail_fields(doc)
         except Exception:
             page_text, more = "", []
+            fields = {}
         if len(description) < 300 and len(page_text) > len(description):
             description = page_text
         if not description:
@@ -293,12 +352,18 @@ class AvatureProvider(AtsProvider):
         loc = ""
         if more:
             loc = more[0]
+        if not loc:
+            loc = fields.get("locations", "")
         out = RawJob(source_job_id=job.source_job_id, title=job.title, apply_url=job.apply_url,
                      description=description[:15000], location=loc,
                      posted_at=posted, date_confidence=DATE_EXACT if posted else DATE_UNKNOWN,
                      raw_posted_text=_ws(raw_posted), extra={})
+        if not more and fields.get("locations_list"):
+            out.extra["locations"] = fields["locations_list"]
         if len(more) > 1 and more[1]:
             out.extra["legal_entity"] = more[1]
+        elif fields.get("company"):
+            out.extra["legal_entity"] = fields["company"]
         org = ld.get("hiringOrganization") if ld else None
         if isinstance(org, dict) and org.get("name"):
             out.extra["hiring_organization"] = _ws(org["name"])

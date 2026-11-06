@@ -56,7 +56,9 @@ _ENTERPRISE_POLICY = CrawlPolicy(
     timeout=8.0,
     detail_timeout=6.0,
     page_size=20,
-    max_pages=5,
+    # 4,000 rows covers the measured 2,000+ Phenom boards. The caller's
+    # deadline still bounds work, and an unreached total is always truncated.
+    max_pages=200,
 )
 
 
@@ -114,6 +116,8 @@ class PhenomProvider(AtsProvider):
         "careers.snowflake.com",
         "careers.abb",
         "jobs.bechtel.com",
+        # Official BCG careers page and public /widgets, checked 2026-11-05.
+        "careers.bcg.com",
         ".phenompeople.com",
     )
     portal_hosts = api_hosts
@@ -161,6 +165,7 @@ class PhenomProvider(AtsProvider):
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
+        ctx.listing_truncated = True
         if ctx.post_json is None:
             ctx.log("warning", "phenom: context has no post_json; %s skipped",
                     endpoint.tenant)
@@ -171,6 +176,9 @@ class PhenomProvider(AtsProvider):
         size = int(self.policy.page_size)
         url = f"https://{host}/widgets"
         seen: set = set()
+        overlap = False
+        total: Optional[int] = None
+        read_count = 0
         for page in range(int(self.policy.max_pages)):
             if ctx.should_stop():
                 ctx.listing_truncated = True
@@ -194,21 +202,31 @@ class PhenomProvider(AtsProvider):
             if self.policy.is_challenge(status):
                 raise ChallengeError(self.vendor, status)
             if status != 200 or not isinstance(payload, dict):
-                if page > 0:
-                    # A later page failed: what we read is not the board.
-                    ctx.listing_truncated = True
                 return
             refine = payload.get("refineSearch") or {}
             data = (refine.get("data") or {}) if isinstance(refine, dict) else {}
-            jobs = [j for j in (data.get("jobs") or []) if isinstance(j, dict)]
-            if not jobs:
+            if not isinstance(data, dict) or not isinstance(data.get("jobs"), list):
                 return
+            if any(not isinstance(row, dict) for row in data["jobs"]):
+                return
+            try:
+                reported = int(refine["totalHits"])
+                if reported >= 0:
+                    total = max(total or 0, reported)
+            except (KeyError, TypeError, ValueError):
+                pass
+            jobs = [j for j in data["jobs"] if isinstance(j, dict)]
+            if not jobs:
+                ctx.listing_truncated = len(seen) < total if total is not None else overlap or not seen
+                return
+            previous_count = len(seen)
             for job in jobs:
                 if ctx.should_stop():
                     ctx.listing_truncated = True
                     return
                 raw = self._to_raw(host, job)
                 if raw is None or raw.source_job_id in seen:
+                    overlap = True
                     # A row repeated across pages (the result set shifted
                     # while we paged) is yielded once.
                     continue
@@ -216,13 +234,14 @@ class PhenomProvider(AtsProvider):
                 if _too_old(ctx, raw.posted_at):
                     continue
                 yield raw
+            read_count += len(jobs)
             if len(jobs) < size:
+                ctx.listing_truncated = len(seen) < total if total is not None else overlap
                 return
-            try:
-                total = int(refine.get("totalHits") or 0)
-            except (TypeError, ValueError, AttributeError):
-                total = 0
-            if total and (page + 1) * size >= total:
+            if total is not None and read_count >= total:
+                ctx.listing_truncated = len(seen) < total
+                return
+            if len(seen) == previous_count:
                 return
         # Fell out of the loop on the page cap with the board not exhausted.
         # Saying so matters: `_close_stale_in_shard` treats an untruncated
@@ -301,7 +320,9 @@ class EightfoldProvider(AtsProvider):
     label = "Eightfold"
     termless = True
     has_detail = True
-    date_confidence = DATE_EXACT
+    # Classic tenants can publish no posting timestamp. Individual rows with
+    # postedTs/creationTs still upgrade to exact in _to_raw.
+    date_confidence = DATE_UNKNOWN
     slug_probe = False
     policy = _EIGHTFOLD_POLICY
 
@@ -340,6 +361,7 @@ class EightfoldProvider(AtsProvider):
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
+        ctx.listing_truncated = True
         host = _host_of(endpoint)
         if not host:
             return
@@ -347,6 +369,9 @@ class EightfoldProvider(AtsProvider):
         domain = str(extra.get("domain") or "")
         variant = str(extra.get("variant") or "classic")
         size = int(self.policy.page_size)
+        total: Optional[int] = None
+        seen: set = set()
+        overlap = False
         for page in range(int(self.policy.max_pages)):
             if ctx.should_stop():
                 return
@@ -367,19 +392,40 @@ class EightfoldProvider(AtsProvider):
                 raise ChallengeError(self.vendor, status)
             if status != 200 or not isinstance(payload, dict):
                 return
+            block = payload.get("data") if variant == "pcsx" else payload
+            if not isinstance(block, dict) or not isinstance(block.get("positions"), list):
+                return
+            if any(not isinstance(row, dict) for row in block["positions"]):
+                return
+            try:
+                reported = int(block["count"])
+                if reported >= 0:
+                    total = max(total or 0, reported)
+            except (KeyError, TypeError, ValueError):
+                pass
             positions = self._positions(payload, variant)
             if not positions:
+                ctx.listing_truncated = len(seen) < total if total is not None else overlap or not seen
                 return
+            previous_count = len(seen)
             for job in positions:
                 if ctx.should_stop():
                     return
                 raw = self._to_raw(host, domain, job)
-                if raw is None:
+                if raw is None or raw.source_job_id in seen:
+                    overlap = True
                     continue
+                seen.add(raw.source_job_id)
                 if _too_old(ctx, raw.posted_at):
                     continue
                 yield raw
             if len(positions) < size:
+                ctx.listing_truncated = len(seen) < total if total is not None else overlap
+                return
+            if total is not None and len(seen) >= total:
+                ctx.listing_truncated = False
+                return
+            if len(seen) == previous_count:
                 return
 
     @staticmethod

@@ -1,0 +1,572 @@
+{
+  "evidence_mode": "offline replay of dated public HTTP captures; no fresh network or Mongo access",
+  "command": ".venv-win/Scripts/python.exe .probe/replay-final-validation.py",
+  "entry_point": "live_provider_check.check(vendor, limit=5, budget=90), measured endpoint overrides",
+  "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+  "results": [
+    {
+      "vendor": "successfactors",
+      "status": "DEGRADED",
+      "jobs": 5,
+      "elapsed": 0.05,
+      "detail": "declares date_confidence=exact but no row carried a posted_at",
+      "tenant": "successfactors-pseg",
+      "sample_title": "10078 IT Solution Architect Principal II",
+      "sample_url": "https://jobs.pseg.com/job/Newark-10078-IT-Solution-Architect-Principal-II-NJ-07101/1414110400/",
+      "sample_location": "",
+      "sample_posted_at": "",
+      "employer": "PSEG",
+      "endpoint": {
+        "vendor": "successfactors",
+        "tenant": "pseg",
+        "host": "jobs.pseg.com",
+        "display_name": "PSEG"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:01:05.754575Z",
+          "method": "GET",
+          "url": "https://jobs.pseg.com/robots.txt",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:01:06.805495Z",
+          "method": "GET",
+          "url": "https://jobs.pseg.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        }
+      ],
+      "listing_truncated": false
+    },
+    {
+      "vendor": "successfactors",
+      "status": "DEGRADED",
+      "jobs": 5,
+      "elapsed": 0.02,
+      "detail": "declares date_confidence=exact but no row carried a posted_at",
+      "tenant": "successfactors-psegliny",
+      "sample_title": "Sr Network Engineer",
+      "sample_url": "https://jobs.psegliny.com/LI/job/Bethpage-Sr-Network-Engineer-NY-11804/1437694800/",
+      "sample_location": "",
+      "sample_posted_at": "",
+      "employer": "PSEG Long Island",
+      "endpoint": {
+        "vendor": "successfactors",
+        "tenant": "psegliny",
+        "host": "jobs.psegliny.com",
+        "display_name": "PSEG Long Island"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:01:09.180062Z",
+          "method": "GET",
+          "url": "https://jobs.psegliny.com/robots.txt",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:01:10.230559Z",
+          "method": "GET",
+          "url": "https://jobs.psegliny.com/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow=0",
+          "status": 200
+        }
+      ],
+      "listing_truncated": false
+    },
+    {
+      "vendor": "oracle_orc",
+      "status": "BLOCKED",
+      "jobs": 0,
+      "elapsed": 0.0,
+      "detail": "replay challenge (status=403): captured refusal: https://jpmc.fa.oraclecloud.com/robots.txt",
+      "tenant": "oracle_orc-jpmc-cx_1",
+      "employer": "JPMorgan Chase",
+      "endpoint": {
+        "vendor": "oracle_orc",
+        "tenant": "jpmc",
+        "site": "CX_1",
+        "host": "jpmc.fa.oraclecloud.com",
+        "display_name": "JPMorgan Chase"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T22:47:49.099226Z",
+          "method": "GET",
+          "url": "https://jpmc.fa.oraclecloud.com/robots.txt",
+          "status": 403
+        }
+      ],
+      "listing_truncated": true
+    },
+    {
+      "vendor": "icims",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.01,
+      "detail": "",
+      "tenant": "icims-staff-emory",
+      "sample_title": "Recruiter II",
+      "sample_url": "https://staff-emory.icims.com/jobs/184807/recruiter-ii/job",
+      "sample_location": "Atlanta, GA, US",
+      "sample_posted_at": "",
+      "employer": "Emory University",
+      "endpoint": {
+        "vendor": "icims",
+        "tenant": "staff-emory",
+        "host": "staff-emory.icims.com",
+        "display_name": "Emory University"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:01:12.548623Z",
+          "method": "GET",
+          "url": "https://staff-emory.icims.com/robots.txt",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:01:15.049661Z",
+          "method": "GET",
+          "url": "https://staff-emory.icims.com/jobs/search?ss=1&in_iframe=1",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:01:17.550197Z",
+          "method": "GET",
+          "url": "https://staff-emory.icims.com/jobs/search?ss=1&in_iframe=1&searchRelation=keyword_all&pr=0&hashed=-435620505",
+          "status": 200
+        }
+      ],
+      "listing_truncated": true
+    },
+    {
+      "vendor": "taleo",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "taleo-aarcorp",
+      "sample_title": "Material Coordinator - 2nd Shift (SCA)",
+      "sample_url": "https://aarcorp.taleo.net/careersection/jobdetail.ftl?job=327486&lang=en",
+      "sample_location": "San Diego, California, United States",
+      "sample_posted_at": "2026-11-05T00:00:00+00:00",
+      "employer": "AAR Corp",
+      "endpoint": {
+        "vendor": "taleo",
+        "tenant": "aarcorp",
+        "host": "aarcorp.taleo.net",
+        "display_name": "AAR Corp"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:01:58.062594Z",
+          "method": "GET",
+          "url": "https://aarcorp.taleo.net/robots.txt",
+          "status": 404
+        },
+        {
+          "at": "2026-11-05T23:01:59.113315Z",
+          "method": "GET",
+          "url": "https://aarcorp.taleo.net/careersection/jobsearch.ftl?lang=en",
+          "status": 302
+        },
+        {
+          "at": "2026-11-05T23:02:00.163739Z",
+          "method": "GET",
+          "url": "https://aarcorp.taleo.net:443/robots.txt",
+          "status": 404
+        },
+        {
+          "at": "2026-11-05T23:02:01.214573Z",
+          "method": "GET",
+          "url": "https://aarcorp.taleo.net:443/careersection/2/jobsearch.ftl?lang=en",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:02:02.265511Z",
+          "method": "POST",
+          "url": "https://aarcorp.taleo.net/careersection/rest/jobboard/searchjobs?lang=en&portal=101430233",
+          "status": 200
+        }
+      ],
+      "listing_truncated": true
+    },
+    {
+      "vendor": "phenom",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "phenom-baesystems",
+      "sample_title": "Field Service Tech IV",
+      "sample_url": "https://sjobs.brassring.com/TGnewUI/Search/home/HomeWithPreLoad?PageType=JobDetails&partnerid=25771&siteid=5403&jobid=300806",
+      "sample_location": "Westminster, Colorado",
+      "sample_posted_at": "2026-09-17T08:04:26.352000+00:00",
+      "employer": "BAE Systems",
+      "endpoint": {
+        "vendor": "phenom",
+        "tenant": "baesystems",
+        "host": "jobs.baesystems.com",
+        "display_name": "BAE Systems"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:02:09.866942Z",
+          "method": "GET",
+          "url": "https://jobs.baesystems.com/robots.txt",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:02:10.919692Z",
+          "method": "POST",
+          "url": "https://jobs.baesystems.com/widgets",
+          "status": 200
+        }
+      ],
+      "listing_truncated": true
+    },
+    {
+      "vendor": "phenom",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.02,
+      "detail": "",
+      "tenant": "phenom-abb",
+      "sample_title": "Senior PLC Field Service Technician – Data Center Power Systems",
+      "sample_url": "https://abb.wd3.myworkdayjobs.com/External_Career_Page/job/Remote-North-Carolina-United-States-of-America/Data-Center-COE-Senior-PLC-Technician_JR00049351/apply",
+      "sample_location": "Remote, North Carolina",
+      "sample_posted_at": "2026-10-13T00:00:00+00:00",
+      "employer": "ABB",
+      "endpoint": {
+        "vendor": "phenom",
+        "tenant": "abb",
+        "host": "careers.abb",
+        "display_name": "ABB"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:04:04.734790Z",
+          "method": "GET",
+          "url": "https://careers.abb/robots.txt",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:04:05.785987Z",
+          "method": "POST",
+          "url": "https://careers.abb/widgets",
+          "status": 200
+        }
+      ],
+      "listing_truncated": true
+    },
+    {
+      "vendor": "phenom",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "phenom-bechtel",
+      "sample_title": "Change Control Manager",
+      "sample_url": "https://career4.successfactors.com/career?company=Bechtel&career_ns=job_application&career_job_req_id=300152&jobPipeline=PhenomCareerSite",
+      "sample_location": "Chandler, Arizona",
+      "sample_posted_at": "2026-10-26T19:11:15.961000+00:00",
+      "employer": "Bechtel",
+      "endpoint": {
+        "vendor": "phenom",
+        "tenant": "bechtel",
+        "host": "jobs.bechtel.com",
+        "display_name": "Bechtel"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:06:00.899410Z",
+          "method": "GET",
+          "url": "https://jobs.bechtel.com/robots.txt",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:06:01.950169Z",
+          "method": "POST",
+          "url": "https://jobs.bechtel.com/widgets",
+          "status": 200
+        }
+      ],
+      "listing_truncated": true
+    },
+    {
+      "vendor": "smartrecruiters",
+      "status": "BLOCKED",
+      "jobs": 0,
+      "elapsed": 0.0,
+      "detail": "replay challenge: captured robots prohibits https://api.smartrecruiters.com/v1/companies/Intuitive/postings?limit=100&offset=0&country=us",
+      "tenant": "smartrecruiters-intuitive",
+      "employer": "Intuitive",
+      "endpoint": {
+        "vendor": "smartrecruiters",
+        "tenant": "Intuitive",
+        "display_name": "Intuitive"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-06T00:07:59.227429Z",
+          "method": "GET",
+          "url": "https://api.smartrecruiters.com/robots.txt",
+          "status": 200
+        }
+      ],
+      "listing_truncated": true
+    },
+    {
+      "vendor": "workable",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "workable-trexquant",
+      "sample_title": "Associate General Counsel - Investment and Trading (USA)",
+      "sample_url": "https://apply.workable.com/j/7E000B1EF0",
+      "sample_location": "Stamford, Connecticut, United States",
+      "sample_posted_at": "2026-09-15T00:00:00+00:00",
+      "employer": "Trexquant",
+      "endpoint": {
+        "vendor": "workable",
+        "tenant": "trexquant",
+        "display_name": "Trexquant"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:50:54.934428Z",
+          "method": "GET",
+          "url": "https://apply.workable.com/robots.txt",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:07:02.437965Z",
+          "method": "GET",
+          "url": "https://apply.workable.com/api/v1/widget/accounts/trexquant?details=true",
+          "status": 200
+        }
+      ],
+      "listing_truncated": true
+    },
+    {
+      "vendor": "eightfold",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "eightfold-netflix",
+      "sample_title": "AI Engineer 6 - AI Foundation & Tooling, Ads Platform",
+      "sample_url": "https://explore.jobs.netflix.net/careers/job/790298014263",
+      "sample_location": "Los Gatos,California,United States of America",
+      "sample_posted_at": "",
+      "employer": "Netflix",
+      "endpoint": {
+        "vendor": "eightfold",
+        "tenant": "netflix",
+        "host": "explore.jobs.netflix.net",
+        "display_name": "Netflix",
+        "extra": {
+          "domain": "netflix.com"
+        }
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:07:02.638118Z",
+          "method": "GET",
+          "url": "https://explore.jobs.netflix.net/robots.txt",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:07:03.688915Z",
+          "method": "GET",
+          "url": "https://explore.jobs.netflix.net/api/apply/v2/jobs?domain=netflix.com&query=&location=United+States&start=0&num=10",
+          "status": 200
+        }
+      ],
+      "listing_truncated": true
+    },
+    {
+      "vendor": "oracle_orc",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.01,
+      "detail": "",
+      "tenant": "oracle_orc-verisk-cx_1",
+      "sample_title": "Sachbearbeiter für Medizinische Datenerfassung (m/w/d)",
+      "sample_url": "https://fa-ewmy-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/4482",
+      "sample_location": "Cologne, Nordrhein-Westfalen, Germany",
+      "sample_posted_at": "2026-11-05T00:00:00+00:00",
+      "employer": "Verisk",
+      "endpoint": {
+        "vendor": "oracle_orc",
+        "tenant": "verisk",
+        "site": "CX_1",
+        "host": "fa-ewmy-saasfaprod1.fa.ocs.oraclecloud.com",
+        "display_name": "Verisk"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:18:24.370878Z",
+          "method": "GET",
+          "url": "https://fa-ewmy-saasfaprod1.fa.ocs.oraclecloud.com/robots.txt",
+          "status": 404
+        },
+        {
+          "at": "2026-11-05T23:18:25.428270Z",
+          "method": "GET",
+          "url": "https://fa-ewmy-saasfaprod1.fa.ocs.oraclecloud.com/hcmRestApi/resources/latest/recruitingCEJobRequisitions?onlyData=true&expand=requisitionList.secondaryLocations&finder=findReqs%3BsiteNumber%3DCX_1%2Climit%3D200%2CsortBy%3DPOSTING_DATES_DESC%2Coffset%3D0",
+          "status": 200
+        }
+      ],
+      "listing_truncated": true
+    },
+    {
+      "vendor": "rippling",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "rippling-mats-research",
+      "sample_title": "Community Manager",
+      "sample_url": "https://ats.rippling.com/mats-research/jobs/bd0c2859-11c0-4425-82f6-1e9558a6b425",
+      "sample_location": "BERKELEY, CA",
+      "sample_posted_at": "",
+      "employer": "MATS Research",
+      "endpoint": {
+        "vendor": "rippling",
+        "tenant": "mats-research",
+        "display_name": "MATS Research"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T22:46:08.431432Z",
+          "method": "GET",
+          "url": "https://ats.rippling.com/robots.txt",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T22:46:09.481605Z",
+          "method": "GET",
+          "url": "https://ats.rippling.com/api/v1/board/mats-research/jobs",
+          "status": 200
+        }
+      ],
+      "listing_truncated": true
+    },
+    {
+      "vendor": "ashby",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "ashby-aurora-operations-inc",
+      "sample_title": "Senior Staff TLM, Security Systems",
+      "sample_url": "https://jobs.ashbyhq.com/aurora-operations-inc/281239f7-6a7f-4c6d-922c-d45f70aef5c2",
+      "sample_location": "Mountain View, CA · Bozeman, MT, San Francisco, CA, Pittsbur",
+      "sample_posted_at": "2026-11-02T16:56:15.869000+00:00",
+      "employer": "Aurora Innovation",
+      "endpoint": {
+        "vendor": "ashby",
+        "tenant": "aurora-operations-inc",
+        "display_name": "Aurora Innovation"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:25:38.241056Z",
+          "method": "GET",
+          "url": "https://api.ashbyhq.com/robots.txt",
+          "status": 401
+        },
+        {
+          "at": "2026-11-05T23:25:39.293769Z",
+          "method": "GET",
+          "url": "https://api.ashbyhq.com/posting-api/job-board/aurora-operations-inc",
+          "status": 200
+        }
+      ],
+      "listing_truncated": false
+    },
+    {
+      "vendor": "ashby",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.02,
+      "detail": "",
+      "tenant": "ashby-hex",
+      "sample_title": "Sales Engineer, Enterprise",
+      "sample_url": "https://jobs.ashbyhq.com/hex/0117460e-c11e-4435-889f-461714655db7",
+      "sample_location": "Remote - US · San Francisco, New York",
+      "sample_posted_at": "2026-07-21T16:02:35.246000+00:00",
+      "employer": "Hex",
+      "endpoint": {
+        "vendor": "ashby",
+        "tenant": "hex",
+        "display_name": "Hex"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:25:38.241056Z",
+          "method": "GET",
+          "url": "https://api.ashbyhq.com/robots.txt",
+          "status": 401
+        },
+        {
+          "at": "2026-11-05T23:25:40.344476Z",
+          "method": "GET",
+          "url": "https://api.ashbyhq.com/posting-api/job-board/hex",
+          "status": 200
+        }
+      ],
+      "listing_truncated": false
+    },
+    {
+      "vendor": "ashby",
+      "status": "OK",
+      "jobs": 5,
+      "elapsed": 0.0,
+      "detail": "",
+      "tenant": "ashby-clickhouse",
+      "sample_title": "Senior Cloud Software Engineer - Efficiency Engineering",
+      "sample_url": "https://jobs.ashbyhq.com/clickhouse/db498a8c-c8d8-405b-b86a-0943a5122e7d",
+      "sample_location": "NAMER and LatAm",
+      "sample_posted_at": "2026-08-13T06:40:24.278000+00:00",
+      "employer": "ClickHouse",
+      "endpoint": {
+        "vendor": "ashby",
+        "tenant": "clickhouse",
+        "display_name": "ClickHouse"
+      },
+      "replayed_at_utc": "2026-11-06T00:09:35.543041+00:00",
+      "requests": [
+        {
+          "at": "2026-11-05T23:25:38.241056Z",
+          "method": "GET",
+          "url": "https://api.ashbyhq.com/robots.txt",
+          "status": 401
+        },
+        {
+          "at": "2026-11-05T23:25:41.396673Z",
+          "method": "GET",
+          "url": "https://api.ashbyhq.com/posting-api/job-board/clickhouse",
+          "status": 200
+        }
+      ],
+      "listing_truncated": false
+    }
+  ],
+  "limitations": "Five-row quality samples are not complete censuses. Missing captures and robots refusals remain BLOCKED; DEGRADED is not relabeled OK."
+}

@@ -19,9 +19,9 @@ is the exact failure `job_ingest_worker` documents on `_TERMLESS_ATS`.
 
 Endpoint shapes, and how confident this module is in each
 --------------------------------------------------------
-**NOTHING here was verified against the live vendor from this environment —
-there is no outbound network in it.** Recording that plainly matters more than
-sounding certain: Jobvite shipped a provider that could only ever yield zero
+The original implementation transcribed the public RMK template before live
+verification was available. Later verified hosts are individually documented
+in `api_hosts` below. Recording that boundary matters: Jobvite shipped a provider that could only ever yield zero
 rows because a 200 was mistaken for a working endpoint, and the test that was
 supposed to catch it was written against an invented payload. So:
 
@@ -29,8 +29,9 @@ supposed to catch it was written against an invented payload. So:
      &startrow={n}` — **transcribed from the RMK template**, which renders the
      board as a table of `<tr class="data-row">` with `a.jobTitle-link`,
      `span.jobLocation`, `span.jobDepartment`, `span.jobDate`. This is the
-     primary path. `startrow` is a ROW offset stepping by the page size (25 in
-     the stock template), not a page number.
+    primary path. `startrow` is a ROW offset, not a page number. After the
+    first page, follow only its published same-host, same-path paging links;
+    NRG's observed template serves 10 rows rather than the stock 25.
   2. `GET https://{host}/services/xml/{feed}` — the RSS feed some RMK
      deployments expose. **Best-effort and OPT-IN**: it is requested only when
      an endpoint carries `extra["rss_path"]`, because firing a speculative
@@ -72,7 +73,7 @@ from __future__ import annotations
 import html as _html
 import re
 from typing import Any, Dict, Iterator, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from services.ats_providers.base import (DATE_EXACT, DATE_UNKNOWN, AtsProvider,
                                          ChallengeError, CrawlPolicy, Endpoint,
@@ -179,6 +180,39 @@ def _place(raw: Any, host: str = "") -> tuple:
 #: board measured, and a ceiling rather than a cost (see the early stop).
 _UNIFIED_MAX_PAGES = 150
 
+_SEARCH_PATH_RE = re.compile(r"^/(?:[A-Za-z0-9_-]+/)*search/?$")
+
+
+def _search_paging(body: str, page_url: str) -> tuple:
+    """The page's exact next links and total, never an inferred page size."""
+    try:
+        from lxml import html as lxml_html
+        doc = lxml_html.fromstring(body)
+    except Exception:
+        return None, {}
+    reported = None
+    for label in doc.xpath('//*[contains(concat(" ",normalize-space(@class)," ")," paginationLabel ")]'):
+        match = re.search(r"\bof\s+([\d,]+)\b", _text_of(label), re.IGNORECASE)
+        if match:
+            reported = int(match.group(1).replace(",", ""))
+            break
+    source = urlparse(page_url)
+    links = {}
+    for anchor in doc.xpath('//a[contains(@href,"startrow=")]'):
+        url = urljoin(page_url, str(anchor.get("href") or ""))
+        target = urlparse(url)
+        try:
+            if (target.scheme != "https" or target.hostname != source.hostname
+                    or target.port not in (None, 443) or target.username or target.password
+                    or target.path.rstrip("/") != source.path.rstrip("/")):
+                continue
+            offset = int((parse_qs(target.query).get("startrow") or ["-1"])[0])
+        except ValueError:
+            continue
+        if offset >= 0:
+            links.setdefault(offset, url)
+    return reported, links
+
 
 def _one(value: Any) -> str:
     """A unified-search field: sometimes a string, sometimes a one-item list."""
@@ -266,7 +300,9 @@ class SuccessFactorsProvider(AtsProvider):
     #: (`span.jobdescription`). Verified live on careers.capgemini.com
     #: 2026-10-07: 8,137 characters where the listing carries none.
     has_detail = True
-    date_confidence = DATE_EXACT
+    # Some RMK templates (Supermicro/Teradyne, checked 2026-11-05) omit
+    # dates entirely. Confidence is exact only on individual dated RawJobs.
+    date_confidence = DATE_UNKNOWN
     #: `career5.successfactors.eu` is a POD, not an employer, so a guessed
     #: tenant is unfalsifiable here — every wrong `?company=` value renders the
     #: same shell. Tenants come from fingerprinting the employer's own site.
@@ -277,6 +313,8 @@ class SuccessFactorsProvider(AtsProvider):
         ".successfactors.com",
         # First-party RMK host named by the official career registry.
         "jobs.sap.com",
+        # Official EY career page links /ey/search/; public rows checked 2026-11-06.
+        "careers.ey.com",
         # Verified live 2026-10-07: 1,867 postings, 659 in the United States,
         # dated and newest-first. (The RCM tenant `capgemitecP3` on file
         # returned nothing, which is what this module predicts for RCM.)
@@ -310,6 +348,12 @@ class SuccessFactorsProvider(AtsProvider):
         "careers.landisgyr.com",
         "careers.southwire.com",
         "careers.westinghousenuclear.com",
+        # Official employer chains and live public rows, 2026-11-05.
+        "jobs.supermicro.com",
+        "kiewitcareers.kiewit.com",
+        "ro.careers.tsmc.com",
+        "jobs.teradyne.com",
+        "careers.nrgenergy.com",
     )
     portal_hosts = api_hosts
 
@@ -332,9 +376,9 @@ class SuccessFactorsProvider(AtsProvider):
         # the protection and removes the false positive (ADR-004 §3.2).
         challenge_requires_marker=True,
         cooldown_seconds=900.0,
-        #: The stock RMK template paginates in 25s.
+        #: Stock page-size hint only; exact offsets come from published links.
         page_size=25,
-        max_pages=12,
+        max_pages=200,
         #: One conclusively-stale page may be a block boundary; two in a row is
         #: an answer. The sort is requested, not verified, so this is not 0.
         stale_page_tolerance=1,
@@ -396,6 +440,15 @@ class SuccessFactorsProvider(AtsProvider):
         tenant = str(endpoint.tenant or "").strip().lower()
         return tenant if "." in tenant else ""
 
+    def board_url(self, endpoint: Endpoint) -> str:
+        path = (endpoint.extra or {}).get("search_path")
+        if path is not None:
+            host = self._host_of(endpoint)
+            if not host or not _SEARCH_PATH_RE.fullmatch(str(path)):
+                return ""
+            return f"https://{host}{path}"
+        return super().board_url(endpoint)
+
     # -- listing -------------------------------------------------------------
 
     def list_jobs(self, endpoint: Endpoint,
@@ -405,6 +458,11 @@ class SuccessFactorsProvider(AtsProvider):
         if not host:
             ctx.log("info", "successfactors: %s has no host", endpoint.tenant)
             return
+        search_path = str((endpoint.extra or {}).get("search_path") or "/search/")
+        if not _SEARCH_PATH_RE.fullmatch(search_path):
+            ctx.log("warning", "successfactors: invalid search path for %s", host)
+            ctx.listing_truncated = True
+            return
         try:
             yield from self._list(endpoint, host, ctx)
         except ChallengeError:
@@ -412,6 +470,7 @@ class SuccessFactorsProvider(AtsProvider):
             # an empty board retires live employers.
             raise
         except Exception as exc:
+            ctx.listing_truncated = True
             ctx.log("warning", "successfactors: %s listing failed (%s: %s)",
                     host, type(exc).__name__, exc)
             return
@@ -440,7 +499,7 @@ class SuccessFactorsProvider(AtsProvider):
             return
 
         produced_html = False
-        for job in self._from_search(host, ctx):
+        for job in self._from_search(host, ctx, str((endpoint.extra or {}).get("search_path") or "/search/")):
             if job.source_job_id in emitted:
                 continue
             emitted.add(job.source_job_id)
@@ -450,7 +509,8 @@ class SuccessFactorsProvider(AtsProvider):
         # The RCM portal is only worth a request when the RMK search rendered
         # nothing at all — on a normal tenant it is a second fetch for rows we
         # already have.
-        if produced_html or emitted:
+        if (produced_html or emitted or ctx.should_stop()
+                or (ctx.options.get("successfactors_counts") or {}).get("parsed")):
             return
         for job in self._from_portal(endpoint, host, ctx):
             if job.source_job_id in emitted:
@@ -460,50 +520,74 @@ class SuccessFactorsProvider(AtsProvider):
 
     # -- shape 1: the RMK search page ----------------------------------------
 
-    def _from_search(self, host: str, ctx: FetchContext) -> Iterator[RawJob]:
+    def _from_search(self, host: str, ctx: FetchContext,
+                     search_path: str = "/search/") -> Iterator[RawJob]:
         size = int(self.policy.page_size)
         tolerance = max(0, int(getattr(self.policy, "stale_page_tolerance", 0)))
         keyword = str((ctx.options or {}).get("keyword") or "").strip()
-        url = f"https://{host}/search/"
+        url = f"https://{host}{search_path}"
         stale_streak = 0
+        params: Dict[str, Any] = {
+            "q": keyword, "sortColumn": "referencedate",
+            "sortDirection": "desc", "startrow": 0,
+        }
+        offset = 0
+        seen: set = set()
+        overlap = False
+        visited: set = set()
+        counts = {"reported": None, "parsed": 0}
+        ctx.options["successfactors_counts"] = counts
 
         for page in range(int(self.policy.max_pages)):
             if ctx.should_stop():
                 ctx.listing_truncated = True
                 return
-            params: Dict[str, Any] = {
-                "q": keyword,
-                "sortColumn": "referencedate",
-                "sortDirection": "desc",
-                # A ROW offset, not a page index.
-                "startrow": page * size,
-            }
+            page_url = url + ("?" + urlencode(params) if params else "")
+            if page_url in visited:
+                ctx.listing_truncated = True
+                return
+            visited.add(page_url)
             status, body = ctx.get_text(url, params=params,
                                         timeout=self.policy.timeout,
                                         vendor=self.vendor)
             if self.policy.is_challenge(status, body or ""):
                 raise ChallengeError(self.vendor, status)
             if status != 200 or not body:
-                if page:
-                    ctx.listing_truncated = True
+                ctx.listing_truncated = True
                 return
 
             rows = self._parse_rows(host, body)
+            reported, links = _search_paging(body, page_url)
+            if reported is not None:
+                counts["reported"] = max(counts["reported"] or 0, reported)
             if not rows:
+                # An empty shell, especially after a valid page, proves no end.
+                ctx.listing_truncated = True
                 return
 
             fresh = 0
             conclusively_stale = 0
+            previous_count = len(seen)
             for job in rows:
                 if ctx.should_stop():
                     ctx.listing_truncated = True
                     return
+                if job.source_job_id in seen:
+                    overlap = True
+                    continue
+                seen.add(job.source_job_id)
+                counts["parsed"] = len(seen)
                 if ctx.cutoff_iso and job.posted_at and job.posted_at < ctx.cutoff_iso:
                     conclusively_stale += 1
                     continue
                 fresh += 1
                 yield job
 
+            if len(seen) == previous_count:
+                ctx.listing_truncated = True
+                return
+            if counts["reported"] is not None and len(seen) >= counts["reported"]:
+                return
             if fresh:
                 stale_streak = 0
             elif conclusively_stale == len(rows):
@@ -512,9 +596,18 @@ class SuccessFactorsProvider(AtsProvider):
                 # deliberately not counted here.
                 stale_streak += 1
                 if stale_streak > tolerance:
+                    # Sorting is requested, not proven; this saves requests
+                    # without certifying unseen postings closed.
+                    ctx.listing_truncated = True
                     return
-            if len(rows) < size:
+            later = sorted(value for value in links if value > offset)
+            if not later:
+                if ((counts["reported"] is not None and len(seen) < counts["reported"])
+                        or (counts["reported"] is None and (overlap or len(rows) >= size))):
+                    ctx.listing_truncated = True
                 return
+            offset = later[0]
+            url, params = links[offset], {}
 
         ctx.listing_truncated = True
 
@@ -769,14 +862,42 @@ class SuccessFactorsProvider(AtsProvider):
             raise ChallengeError(self.vendor, status)
         if status != 200 or not body:
             return None
+        # Some RMK templates omit the listing's location column entirely.
+        # The public posting still states its places in JobPosting JSON-LD
+        # or the visible jobLocation microdata; neither requires another URL.
+        from services.ats_providers.own_site import ld_postings, _ld_location
+        postings = ld_postings(body)
+        ld = postings[0] if postings else {}
+        location, country = _ld_location(ld)
+        if not location:
+            from lxml import html as lxml_html
+            try:
+                doc = lxml_html.fromstring(body)
+                places = []
+                for node in doc.xpath('//*[@itemprop="jobLocation"]'):
+                    parts = [_first(node, f'.//*[@itemprop="{field}"]')
+                             for field in ("addressLocality", "addressRegion", "addressCountry")]
+                    place = ", ".join(part for part in parts if part)
+                    if place and place not in places:
+                        places.append(place)
+                location = "; ".join(places)
+                if not location:
+                    stated = _first(doc, '//*[contains(@class,"jobGeoLocation")]')
+                    location, country = _place(stated, self._host_of(endpoint))
+            except (ValueError, TypeError):
+                pass
         match = _JOB_DESCRIPTION_RE.search(body)
         text = html_to_text(match.group(1)).strip() if match else ""
         if not text:
             text = _itemprop_description(body)
         if not text:
+            text = html_to_text(ld.get("description") or "")
+        if not text and not location:
             return None
         return RawJob(source_job_id=job.source_job_id, title=job.title,
-                      apply_url=job.apply_url, description=text[:15000])
+                      apply_url=job.apply_url, description=text[:15000],
+                      location=location, country=country,
+                      extra={"locations": [part for part in location.split("; ") if part]})
 
     # -- identity ------------------------------------------------------------
 

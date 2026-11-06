@@ -665,6 +665,154 @@ def _load_career_members() -> List[Dict[str, Any]]:
 # reports that as a configuration gap rather than pretending the employer has no
 # openings. A seed here would be a member that can only ever return zero.
 _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
+    # BEGIN board research 2026-11
+    {'vendor': 'oracle_orc',
+     'tenant': 'fa-ewmy-saasfaprod1',
+     'site': 'CX_1',
+     'host': 'fa-ewmy-saasfaprod1.fa.ocs.oraclecloud.com',
+     'extra': {},
+     'display_name': 'Verisk',
+     'industry': 'tech'},
+    {'vendor': 'successfactors',
+     'tenant': 'jobs.supermicro.com',
+     'host': 'jobs.supermicro.com',
+     'extra': {},
+     'display_name': 'Supermicro',
+     'industry': 'tech'},
+    {'vendor': 'successfactors',
+     'tenant': 'kiewitcareers.kiewit.com',
+     'host': 'kiewitcareers.kiewit.com',
+     'extra': {},
+     'display_name': 'Kiewit',
+     'industry': 'engineering'},
+    {'vendor': 'successfactors',
+     'tenant': 'ro.careers.tsmc.com',
+     'host': 'ro.careers.tsmc.com',
+     'extra': {},
+     'display_name': 'TSMC',
+     'industry': 'tech'},
+    {'vendor': 'successfactors',
+     'tenant': 'jobs.teradyne.com',
+     'host': 'jobs.teradyne.com',
+     'extra': {},
+     'display_name': 'Teradyne',
+     'industry': 'tech'},
+    {'vendor': 'successfactors',
+     'tenant': 'careers.nrgenergy.com',
+     'host': 'careers.nrgenergy.com',
+     'extra': {'search_path': '/nrg/search/'},
+     'display_name': 'NRG Energy',
+     'industry': 'energy'},
+    {'vendor': 'phenom',
+     'tenant': 'bcg',
+     'host': 'careers.bcg.com',
+     'display_name': 'Boston Consulting Group',
+     'industry': 'consulting'},
+    {'vendor': 'careers_page',
+     'tenant': 'pydantic.dev',
+     'host': 'pydantic.dev',
+     'extra': {'listing_url': 'https://pydantic.dev/about#join-the-team'},
+     'display_name': 'Pydantic',
+     'industry': 'tech'},
+    {'vendor': 'careers_page',
+     'tenant': 'careers.procore.com',
+     'host': 'careers.procore.com',
+     'extra': {'listing_url': 'https://careers.procore.com/jobs/search'},
+     'display_name': 'Procore',
+     'industry': 'tech'},
+    {'vendor': 'careers_page',
+     'tenant': 'careers.etsy.com',
+     'host': 'careers.etsy.com',
+     'extra': {'listing_url': 'https://careers.etsy.com/jobs/search'},
+     'display_name': 'Etsy',
+     'industry': 'tech'},
+    {'vendor': 'careers_page',
+     'tenant': 'kpmguscareers.com',
+     'host': 'kpmguscareers.com',
+     'extra': {'listing_url': 'https://www.kpmguscareers.com/job-search/',
+               'pagination_param': 'spage'},
+     'display_name': 'KPMG US',
+     'industry': 'consulting'},
+    {'vendor': 'careers_page',
+     'tenant': 'deel.com',
+     'host': 'deel.com',
+     'extra': {'listing_url': 'https://www.deel.com/careers/'},
+     'display_name': 'Deel',
+     'industry': 'tech'},
+    {'vendor': 'careers_page',
+     'tenant': 'shopify.com',
+     'host': 'shopify.com',
+     'extra': {'listing_url': 'https://www.shopify.com/careers'},
+     'display_name': 'Shopify',
+     'industry': 'tech'},
+    {'vendor': 'successfactors',
+     'tenant': 'careers.ey.com',
+     'host': 'careers.ey.com',
+     'extra': {'search_path': '/ey/search/'},
+     'display_name': 'EY',
+     'industry': 'consulting'},
+    {'vendor': 'rippling', 'tenant': 'thoughtspot', 'display_name': 'ThoughtSpot', 'industry': 'tech'},
+    {'vendor': 'custom_mottmac',
+     'tenant': 'mottmac',
+     'host': 'www.mottmac.com',
+     'display_name': 'Mott MacDonald',
+     'industry': 'engineering'},
+    {'vendor': 'avature',
+     'tenant': 'careers.twosigma.com',
+     'host': 'careers.twosigma.com',
+     'site': 'careers',
+     'extra': {'listing_route': 'OpenRoles'},
+     'display_name': 'Two Sigma',
+     'industry': 'fintech'},
+    {'vendor': 'avature',
+     'tenant': 'jobs.ea.com',
+     'host': 'jobs.ea.com',
+     'site': 'en_US/careers',
+     'extra': {},
+     'display_name': 'Electronic Arts',
+     'industry': 'tech'},
+    {'vendor': 'avature',
+     'tenant': 'apply.deloitte.com',
+     'host': 'apply.deloitte.com',
+     'site': 'en_US/careers?3_5_3=477%2C478%2C480&sort=relevancy',
+     'extra': {},
+     'display_name': 'Deloitte',
+     'industry': 'consulting'},
+    {'vendor': 'avature',
+     'tenant': 'apply.deloitte.com',
+     'host': 'apply.deloitte.com',
+     'site': 'en_US/careers?3_5_3=479&sort=relevancy',
+     'extra': {},
+     'display_name': 'Deloitte',
+     'industry': 'consulting'},
+    {'vendor': 'custom_enphase',
+     'tenant': 'enphase',
+     'display_name': 'Enphase Energy',
+     'industry': 'energy'},
+    {'vendor': 'careers_page',
+     'tenant': 'oxide.computer',
+     'host': 'oxide.computer',
+     'extra': {'listing_url': 'https://oxide.computer/careers'},
+     'display_name': 'Oxide Computer',
+     'industry': 'tech'},
+    # END board research 2026-11
+    # TalentBrew public HTML, employer-linked and provider-validated 2026-11-05.
+    # Each exposes 15 readable rows; forbidden Ajax pagination remains truncated.
+    {"vendor": "radancy_talentbrew", "tenant": "44408", "site": "",
+     "host": "careers.synopsys.com", "display_name": "Synopsys", "industry": "tech"},
+    {"vendor": "radancy_talentbrew", "tenant": "4673", "site": "",
+     "host": "jobs.spectrum.com", "display_name": "Charter Communications", "industry": "telecom"},
+    {"vendor": "radancy_talentbrew", "tenant": "34088", "site": "optum",
+     "host": "careers.unitedhealthgroup.com", "display_name": "Optum", "industry": "healthcare"},
+    {"vendor": "radancy_talentbrew", "tenant": "29673", "site": "",
+     "host": "jobs.pge.com", "display_name": "PG&E", "industry": "energy"},
+    {"vendor": "radancy_talentbrew", "tenant": "47438", "site": "",
+     "host": "careers.solutionhealth.org", "display_name": "SolutionHealth", "industry": "healthcare"},
+    # stantec.com/en/careers -> stantec.jobs; public NLX API, US scope.
+    # The API lists location variants; the reader merges each exact reqid.
+    {"vendor": "directemployers_nlx", "tenant": "stantec", "site": "usa",
+     "host": "stantec.jobs", "display_name": "Stantec",
+     "industry": "electrical_power"},
     {"vendor": "oracle_orc", "tenant": "jpmc", "site": "CX_1",
      "host": "jpmc.fa.oraclecloud.com", "display_name": "JPMorgan Chase",
      "industry": "banking"},
@@ -1056,10 +1204,10 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
      "display_name": "Universal Background Screening", "industry": "other"},
     # Own careers pages (`careers_page`), read live through the extended
     # own-site reader on 2026-10-22. Counts are what that run returned.
-    # MATS Research: 8 staff vacancies (cards; fellowships live under /program, not here).
-    {"vendor": "careers_page", "tenant": "matsprogram.org", "site": "",
-     "host": "matsprogram.org", "display_name": "MATS Research", "industry": "other",
-     "extra": {"listing_url": "https://www.matsprogram.org/careers"}},
+    # MATS Research migrated to an official Rippling embed (data-job-board-id),
+    # observed 2026-11-05: 19 location rows, 10 IDs, 9 staff requisitions + 1 EOI.
+    {"vendor": "rippling", "tenant": "mats-research", "site": "",
+     "host": "", "display_name": "MATS Research", "industry": "other"},
     # Orange Logic: 8 (two invisible leftover links excluded; one of them 404s).
     {"vendor": "careers_page", "tenant": "orangelogic.com", "site": "",
      "host": "orangelogic.com", "display_name": "Orange Logic", "industry": "tech",
@@ -1098,6 +1246,15 @@ _SEED_ENDPOINTS: Tuple[Dict[str, Any], ...] = (
      "site": "en_US/careers?732=6297&tags=rm.kcm.web.kcm-004",
      "host": "koch.avature.net", "display_name": "Flint Hills Resources",
      "industry": "other", "extra": {"entity_name": "Flint Hills Resources"}},
+    # Official careers links rechecked 2026-11-05; exact template route is data.
+    # Siemens: 516 in a 150s partial read (truncated); Energy: all 1,905.
+    {"vendor": "avature", "tenant": "jobs.siemens.com",
+     "site": "en_US/externaljobs", "host": "jobs.siemens.com",
+     "display_name": "Siemens", "industry": "manufacturing_automotive"},
+    {"vendor": "avature", "tenant": "jobs.siemens-energy.com",
+     "site": "en_US/jobs", "host": "jobs.siemens-energy.com",
+     "display_name": "Siemens Energy", "industry": "energy",
+     "extra": {"listing_route": "Jobs"}},
     # iCIMS Jibe: echostar.com/careers -> jobs.echostar.com/jobs, whose page
     # declares canonical dish.jibeapply.com. 656 of 656, all dated; apply
     # links go to the iCIMS tenant attract-careers1-echostar.
@@ -2223,9 +2380,11 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
                 compensation=job.get("SalaryInfo")))
 
     elif ats == "workable":
+        from services.ats_providers.boards import workable_widget_jobs
         url = f"https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true"
         data = http_get_json(SOURCE_CAREER, url, policy, deadline=deadline, stop=stop)
-        for job in ((data or {}).get("jobs") or []) if isinstance(data, dict) else []:
+        widget_rows = ((data or {}).get("jobs") or []) if isinstance(data, dict) else []
+        for job in workable_widget_jobs(widget_rows):
             posted_at = _parse_iso(job.get("published_on") or job.get("created_at"))
             if posted_at is None or posted_at < cutoff:
                 continue
@@ -2234,7 +2393,7 @@ def _list_career(member: Dict[str, Any], *, cutoff: datetime, policy: HostPolicy
             rows.append(_listing_row(
                 member, shortcode or job.get("id"), title=job.get("title") or "",
                 url=job.get("url") or "", posted_at=posted_at,
-                location=", ".join(str(job.get(k) or "") for k in ("city", "state", "country")),
+                location=job["_widget_locations"],
                 # `details=true` above inlines the body; it used to be dropped
                 # here and fetched again, one throttled request per posting.
                 description=_html_to_text(str(job.get("description") or ""))[:15000],
@@ -2471,6 +2630,22 @@ def _location_with_stated_country(location: Any, country: Any) -> Any:
     return location
 
 
+def _provider_locations(job: Any) -> Any:
+    """Keep explicitly separated places separated through inventory parsing.
+
+    A display string containing three countries is still ONE location to
+    normalize_locations. Providers that merge per-location copies of a req
+    carry the original distinct places alongside the compatible display text.
+    """
+    stated = (getattr(job, "extra", None) or {}).get("locations")
+    if isinstance(stated, (list, tuple)):
+        places = [place.strip() for place in stated if isinstance(place, str) and place.strip()]
+        if places:
+            return places
+    return _location_with_stated_country(
+        getattr(job, "location", "") or "", getattr(job, "country", "") or "")
+
+
 def _raw_job_to_listing(member: Dict[str, Any], job: Any, *,
                         cutoff: datetime) -> Optional[Dict[str, Any]]:
     posted_at = _parse_iso(getattr(job, "posted_at", "") or "")
@@ -2489,8 +2664,7 @@ def _raw_job_to_listing(member: Dict[str, Any], job: Any, *,
         title=title,
         url=str(getattr(job, "apply_url", "") or ""),
         posted_at=posted_at,
-        location=_location_with_stated_country(
-            getattr(job, "location", "") or "", getattr(job, "country", "") or ""),
+        location=_provider_locations(job),
         description=str(getattr(job, "description", "") or ""),
         employment_type=str(getattr(job, "employment_type", "") or ""),
         posted_text=str(getattr(job, "raw_posted_text", "") or ""),
@@ -2590,6 +2764,12 @@ def _detail_via_provider(row: Dict[str, Any], member: Dict[str, Any], *,
     if detailed is None:
         return ""
     _adopt_detail_date(row, detailed)
+    # A location-free RMK listing can learn its place from the same detail
+    # response that supplies its body. Preserve every already-listed place.
+    if not any(row.get("locations") or []):
+        stated_location = _provider_locations(detailed)
+        if stated_location:
+            row["locations"] = stated_location if isinstance(stated_location, list) else [stated_location]
     return str(detailed.description or "")[:15000]
 
 

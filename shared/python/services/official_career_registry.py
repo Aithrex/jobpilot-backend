@@ -583,6 +583,54 @@ def lookup(*, domain: Any = None, name: Any = None) -> Optional[Dict[str, Any]]:
 #:   `none`   - a single request returns everything
 CUSTOM_BOARD_ADAPTERS: Tuple[Dict[str, Any], ...] = (
     {
+        "key": "mottmac",
+        "display_name": "Mott MacDonald",
+        "domain": "mottmac.com",
+        "vendor": "custom_mottmac",
+        "career_landing_url": "https://www.mottmac.com/en-us/careers/explore-our-careers/",
+        # 2026-11-06: official data-module=Jobs -> Jobs-MKG43EDE.js publishes
+        # this GET contract (from=current result count, take=12). Listing
+        # totalItems=1070. IDs are the same suffix printed as Job ref on the
+        # first-party detail. No posting date is published by these pages.
+        "request": {"method": "GET", "url": "https://www.mottmac.com/en-us/careers/explore-our-careers/listing/",
+                    "params": {"take": 12, "term": "", "country": "", "region": "", "discipline": "",
+                               "contractType": "", "workPattern": "", "reset": "false"},
+                    "nonce_param": "id"},
+        "pagination": {"style": "offset", "offset_param": "from", "page_size": 12, "max_pages": 200},
+        "records_path": "items", "total_path": "totalItems",
+        "fields": {"source_job_id": ["url"], "source_job_id_regex": r"https://www\.mottmac\.com/en-us/careers/explore-our-careers/[^/?#]+-(\d+)/?",
+                   "title": ["jobTitle"], "location": ["location"],
+                   "department": ["discipline"], "employment_type": ["contractType"],
+                   "apply_url": ["url"]},
+        "detail": {"html_xpath": "//section[contains(concat(' ', normalize-space(@class), ' '), ' rich-text__section ')]"},
+        "status": "verified",
+        "status_detail": "Public employer listing and description returned real requisitions, 2026-11-06",
+    },
+    {
+        "key": "enphase",
+        "display_name": "Enphase Energy",
+        "domain": "enphase.com",
+        "vendor": "custom_enphase",
+        "career_landing_url": "https://enphase.com/careers",
+        # 2026-11-05: the linked career-search-form.js fetches this exact
+        # public endpoint. Seven rows/page, pager.total_items=33; jid is the
+        # stable Jobvite id. The page renders /job/{jid}; no date is supplied.
+        "request": {"method": "GET", "url": "https://enphase.com/api/v2/jobs"},
+        "pagination": {"style": "page", "page_param": "page", "page_start": 0,
+                       "page_size": 7, "max_pages": 50},
+        "records_path": "rows",
+        "total_path": "pager.total_items",
+        "fields": {
+            "source_job_id": ["jid"], "title": ["name"],
+            "location": ["location"], "department": ["category"],
+            "description": ["description__value"],
+            "description_html_unescape": 1,
+            "apply_url_template": "https://enphase.com/job/{source_job_id}",
+        },
+        "status": "verified",
+        "status_detail": "Public employer JSON returned real requisitions, 2026-11-05",
+    },
+    {
         "key": "apple",
         "display_name": "Apple",
         "domain": "apple.com",

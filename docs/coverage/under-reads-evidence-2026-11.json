@@ -1,0 +1,1043 @@
+{
+  "phase": 2,
+  "checked_at": "2026-11-05T23:45:25.534659Z",
+  "production_access": "none; tests use existing mongomock fixtures; no .env present in worktree or parents",
+  "branch": "boards/under-reads",
+  "changes": [
+    {
+      "name": "Oracle ORC",
+      "outcome": "fixed",
+      "detail": "Listing defaults truncated; deadline, cap, malformed/failed response, unreached distinct total cannot become census. Sorted cutoff remains complete.",
+      "tests": "tests/test_board_under_reads.py",
+      "live_status": "blocked: parent robot probe HTTP403 at jpmc.fa.oraclecloud.com"
+    },
+    {
+      "name": "iCIMS",
+      "outcome": "fixed",
+      "detail": "Deadline checked before bootstrap; numeric totals and Page N of M both honored; cap/short-read/repeated-page incompleteness preserved.",
+      "tests": "tests/test_board_under_reads.py",
+      "fixture": "tests/fixtures/ats_providers/under_reads/icims_emory.html"
+    },
+    {
+      "name": "Taleo",
+      "outcome": "fixed",
+      "detail": "Deadline checked before portal discovery; distinct IDs counted against totalCount; cap, transport failure and short read remain truncated.",
+      "tests": "tests/test_board_under_reads.py",
+      "fixture": "tests/fixtures/ats_providers/under_reads/taleo_aarcorp.json"
+    },
+    {
+      "name": "Phenom",
+      "outcome": "fixed",
+      "detail": "Budget raised from 5 to 200 pages (100 to 4000 rows). Keeps totalHits termination, unsorted per-row cutoff and duplicate-aware truncation; sortBy remains documented empty value.",
+      "tests": "tests/test_board_under_reads.py",
+      "fixture": "tests/fixtures/ats_providers/under_reads/phenom_baesystems.json"
+    },
+    {
+      "name": "SmartRecruiters",
+      "outcome": "fixed",
+      "detail": "Budget raised from 2 to 100 pages (200 to 10000 US rows); totalFound stops reads; distinct-total checks, failed pages and deadlines keep truncation. Existing production dispatch already uses provider.",
+      "tests": "tests/test_board_under_reads.py",
+      "live_status": "robots_refusal: api.smartrecruiters.com disallows /v1/companies; parent stopped"
+    },
+    {
+      "name": "Workable",
+      "outcome": "fixed",
+      "detail": "Widget shortcode copies merge distinct places; provider and legacy background paths share grouping; mixed-country roles do not inherit first country.",
+      "tests": "tests/test_board_under_reads.py",
+      "fixture": "tests/fixtures/ats_providers/under_reads/workable_trexquant.json"
+    },
+    {
+      "name": "SuccessFactors RMK",
+      "outcome": "fixed",
+      "detail": "Posting JSON-LD, location microdata or visible jobGeoLocation supplies missing listing locations. Worker adopts only when location absent; explicit places remain separate through normalization.",
+      "tests": "tests/test_board_under_reads.py",
+      "fixtures": [
+        "tests/fixtures/ats_providers/under_reads/successfactors_pseg_detail.html",
+        "tests/fixtures/ats_providers/under_reads/successfactors_psegliny_detail.html"
+      ]
+    },
+    {
+      "name": "Eightfold classic",
+      "outcome": "fixed",
+      "detail": "Provider capability unknown; published postedTs/creationTs remain exact per row. Honors real count total, deduplicates IDs, retains truncation for cap/deadline/short or failed reads; highest observed total protects changing boards.",
+      "tests": "tests/test_board_under_reads.py",
+      "live_status": "parent Netflix probe: 231 US rows, no posting dates published",
+      "fixture": "tests/fixtures/ats_providers/under_reads/eightfold_netflix.json"
+    },
+    {
+      "name": "Rippling MATS Research",
+      "outcome": "fixed",
+      "detail": "Newly observed 19 location rows/10 IDs merged by UUID, retaining US/Canada/UK in actual worker inventory normalization; no identity or date invention.",
+      "evidence_url": "https://ats.rippling.com/api/v1/board/mats-research/jobs",
+      "evidence_at": "2026-11-05T22:46:09.481605Z",
+      "tests": "tests/test_board_under_reads.py",
+      "fixture": "tests/fixtures/ats_providers/rippling/mats_locations.json"
+    }
+  ],
+  "verification": [
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/test_board_under_reads.py",
+      "stage": "initial red",
+      "failed": 27,
+      "passed": 10
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/test_board_under_reads.py -k \"overlapping or discover_a_portal\"",
+      "stage": "additional red",
+      "failed": 7,
+      "passed": 4
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/test_board_under_reads.py tests/test_payroll_providers.py tests/test_new_ats_providers.py tests/test_direct_employer_onboarding.py tests/test_job_ingest_worker.py tests/test_owed_details.py tests/test_icims_parsing.py tests/test_taleo_detail.py",
+      "stage": "focused green before final fixture additions",
+      "passed": 285,
+      "failed": 0
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --full",
+      "stage": "native Windows full before two additional SuccessFactors fixture cases",
+      "platform": "Windows CPython 3.12.12",
+      "passed": 6600,
+      "failed": 1,
+      "skipped": 12,
+      "warnings": 4460,
+      "seconds": 1047.99,
+      "exit_code": 1,
+      "failure": "tests/test_board_snapshot.py::TestRefresh::test_the_budget_reports_what_it_did_not_reach",
+      "baseline": "Unchanged source/test; parent independently reproduced on origin/main research worktree (6544 passed,12 skipped,1 failed). Exact unchanged test passes under Linux. Windows monotonic tick can have zero elapsed time in the mocked budget=0 path; no out-of-scope source/test change."
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/test_board_under_reads.py -k successfactors",
+      "stage": "real detail fixture integration",
+      "passed": 5,
+      "failed": 0,
+      "deselected": 53
+    },
+    {
+      "command": "GIT_DIR=/mnt/d/Aithrex/jobpilot-backend/.git/worktrees/under-reads GIT_WORK_TREE=/mnt/d/Aithrex/.worktrees-boards/under-reads .venv/bin/python scripts/verify.py --full",
+      "stage": "superseded Linux full interrupted after material review findings",
+      "detail": "Passed prior Windows-failing section; stopped only verified under-reads process pair before additional completeness fixes and migrations. Not completion evidence."
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/test_board_under_reads.py",
+      "stage": "final completeness review red",
+      "failed": 14,
+      "passed": 72
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/test_board_under_reads.py tests/test_new_ats_providers.py tests/test_payroll_providers.py tests/test_direct_employer_onboarding.py tests/test_job_ingest_worker.py tests/test_owed_details.py tests/test_icims_parsing.py tests/test_taleo_detail.py",
+      "stage": "final focused after completeness review and migrations",
+      "passed": 336,
+      "failed": 0
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/_phase2_replay_validation.py",
+      "stage": "one-time guarded captured-response replay under pytest; temporary harness removed afterward",
+      "passed": 1,
+      "failed": 0,
+      "network_calls": 0
+    },
+    {
+      "command": "PYTHONPATH=shared/python .venv/bin/python scripts/onboard_researched_companies.py --results .probe/migration-replay.json --write-docs",
+      "stage": "offline docs regeneration",
+      "exit_code": 0,
+      "database_access": false,
+      "network_calls": 0
+    },
+    {
+      "command": "GIT_DIR=/mnt/d/Aithrex/jobpilot-backend/.git/worktrees/under-reads GIT_WORK_TREE=/mnt/d/Aithrex/.worktrees-boards/under-reads .venv/bin/python scripts/verify.py --full",
+      "stage": "superseded Linux full interrupted for cross-review correctness fixes",
+      "log": "under-reads-linux-final.log",
+      "detail": "Stopped verified under-reads processes only; Oracle cutoff parse-loss and malformed Workable/Rippling whole-widget completeness needed fixes. Not completion evidence."
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/test_board_under_reads.py -k \"malformed_rows or oracle_cutoff\"",
+      "stage": "cross-review red",
+      "failed": 7,
+      "passed": 0,
+      "deselected": 98
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/test_board_under_reads.py tests/test_new_ats_providers.py tests/test_payroll_providers.py tests/test_direct_employer_onboarding.py tests/test_job_ingest_worker.py tests/test_owed_details.py tests/test_icims_parsing.py tests/test_taleo_detail.py",
+      "stage": "cross-review focused green",
+      "passed": 343,
+      "failed": 0,
+      "seconds": 7.02
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/test_direct_employer_onboarding.py -k keep_the_new_observation_time",
+      "stage": "ownership timestamp red",
+      "failed": 1
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/test_board_under_reads.py -k id_fallback_accepted",
+      "stage": "Workable id fallback red",
+      "failed": 1
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/test_board_under_reads.py tests/test_new_ats_providers.py tests/test_payroll_providers.py tests/test_direct_employer_onboarding.py tests/test_job_ingest_worker.py tests/test_owed_details.py tests/test_icims_parsing.py tests/test_taleo_detail.py",
+      "stage": "final cross-reviewed focused green",
+      "passed": 345,
+      "failed": 0,
+      "seconds": 7.35
+    },
+    {
+      "command": "GIT_DIR=/mnt/d/Aithrex/jobpilot-backend/.git/worktrees/under-reads GIT_WORK_TREE=/mnt/d/Aithrex/.worktrees-boards/under-reads .venv/bin/python scripts/verify.py --full",
+      "stage": "final reviewed Linux full incomplete due shared WSL environment stall; PR Linux CI required",
+      "log": "under-reads-linux-reviewed-full.log",
+      "detail": "Invoked before draft PR; stopped making progress at unrelated tests/test_resume_layout.py::test_round_trip_completeness[eight_by_six], 5021/6665 progress markers. No final pytest count or exit code. No renderer/test change or WSL restart."
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe .probe/replay-final-validation.py",
+      "stage": "actual live_provider_check.check over dated captured public responses",
+      "ok": 12,
+      "degraded": 2,
+      "blocked": 2,
+      "network_calls": 0,
+      "database_access": false,
+      "artifact": "docs/coverage/under-reads-provider-replay-2026-11.json",
+      "limitations": "PSEG/PSEG LI remain DEGRADED for existing exact-date declaration with no listing dates; JPMC HTTP403 and Intuitive robots remain BLOCKED. Each check samples five rows, not a full census."
+    },
+    {
+      "command": ".venv-win/Scripts/python.exe scripts/verify.py --fast -- tests/test_board_under_reads.py tests/test_new_ats_providers.py tests/test_payroll_providers.py tests/test_direct_employer_onboarding.py tests/test_job_ingest_worker.py tests/test_owed_details.py tests/test_icims_parsing.py tests/test_taleo_detail.py",
+      "stage": "post-rebase on origin/main 9f6137c focused green",
+      "passed": 349,
+      "failed": 0,
+      "seconds": 7.08,
+      "protected_worker_functions": "All five ASTs equal origin/main; upstream detail session pacing retained."
+    }
+  ],
+  "protected_functions_changed": [],
+  "notes": [
+    "The existing Phenom overlapping-pages test was strengthened: 39 distinct IDs do not complete a total of 40.",
+    "Initial full suite ran while final additions were made; final full suite result must be recorded separately.",
+    "Live before/after probes and seven employer re-probes are coordinated by root to preserve host pacing.",
+    "Live reads are independent point-in-time public observations, not persisted production coverage figures; changing boards can change counts between reads.",
+    "Final paging review adds conservative completeness for growing/shrinking reported totals, no-total short overlaps, and malformed row arrays across six pagers. Truncation favors preserving live jobs when the listing cannot prove a census.",
+    "Cross-review additionally preserves truncation when ORC crosses the date cutoff after dropping a malformed fresh row, or Workable/Rippling widgets contain malformed rows. Valid rows still flow through."
+  ],
+  "live_successfactors_details": [
+    {
+      "endpoint": {
+        "vendor": "successfactors",
+        "tenant": "pseg",
+        "host": "jobs.pseg.com",
+        "display_name": "PSEG"
+      },
+      "detail": {
+        "location": "Newark, NJ, US, 07101",
+        "country": "",
+        "description_chars": 9898,
+        "extra": {
+          "locations": [
+            "Newark, NJ, US, 07101"
+          ]
+        },
+        "requests": [
+          {
+            "at": "2026-11-05T23:01:08.908778Z",
+            "method": "GET",
+            "url": "https://jobs.pseg.com/job/Newark-10078-IT-Solution-Architect-Principal-II-NJ-07101/1414110400/",
+            "status": 200,
+            "bytes": 53854,
+            "body_file": ".probe\\676d44bd35570e0c85ff.body"
+          }
+        ]
+      }
+    },
+    {
+      "endpoint": {
+        "vendor": "successfactors",
+        "tenant": "psegliny",
+        "host": "jobs.psegliny.com",
+        "display_name": "PSEG Long Island"
+      },
+      "detail": {
+        "location": "Bethpage, NY, United States",
+        "country": "United States",
+        "description_chars": 9353,
+        "extra": {
+          "locations": [
+            "Bethpage, NY, United States"
+          ]
+        },
+        "requests": [
+          {
+            "at": "2026-11-05T23:01:12.331158Z",
+            "method": "GET",
+            "url": "https://jobs.psegliny.com/LI/job/Bethpage-Sr-Network-Engineer-NY-11804/1437694800/",
+            "status": 200,
+            "bytes": 52952,
+            "body_file": ".probe\\48ddda15edde0354452c.body"
+          }
+        ]
+      }
+    }
+  ],
+  "live_before_after": [
+    {
+      "endpoint": {
+        "vendor": "successfactors",
+        "tenant": "pseg",
+        "host": "jobs.pseg.com",
+        "display_name": "PSEG"
+      },
+      "before": {
+        "at": "2026-11-05T22:49:04.394215Z",
+        "rows": 36,
+        "distinct_ids": 36,
+        "truncated": false
+      },
+      "after": {
+        "at": "2026-11-05T23:01:05.752838Z",
+        "rows": 36,
+        "distinct_ids": 36,
+        "truncated": false
+      },
+      "note": "Listing probe country-only US counter is unknown for this source, not zero. SuccessFactors sampled details separately prove their own US locations."
+    },
+    {
+      "endpoint": {
+        "vendor": "successfactors",
+        "tenant": "psegliny",
+        "host": "jobs.psegliny.com",
+        "display_name": "PSEG Long Island"
+      },
+      "before": {
+        "at": "2026-11-05T22:49:06.784566Z",
+        "rows": 34,
+        "distinct_ids": 34,
+        "truncated": false
+      },
+      "after": {
+        "at": "2026-11-05T23:01:09.180062Z",
+        "rows": 34,
+        "distinct_ids": 34,
+        "truncated": false
+      },
+      "note": "Listing probe country-only US counter is unknown for this source, not zero. SuccessFactors sampled details separately prove their own US locations."
+    },
+    {
+      "endpoint": {
+        "vendor": "oracle_orc",
+        "tenant": "jpmc",
+        "site": "CX_1",
+        "host": "jpmc.fa.oraclecloud.com",
+        "display_name": "JPMorgan Chase"
+      },
+      "before": {
+        "at": "2026-11-05T22:47:49.099226Z",
+        "outcome": "blocked",
+        "reason": "Refusal: jpmc.fa.oraclecloud.com: HTTP 403 / challenge at 2026-11-05T22:47:49.099226Z",
+        "rows": null,
+        "distinct_ids": null
+      },
+      "after": {
+        "at": "2026-11-05T22:47:49.099226Z",
+        "outcome": "blocked",
+        "reason": "Refusal: jpmc.fa.oraclecloud.com: HTTP 403 / challenge at 2026-11-05T22:47:49.099226Z",
+        "rows": null,
+        "distinct_ids": null
+      }
+    },
+    {
+      "endpoint": {
+        "vendor": "icims",
+        "tenant": "staff-emory",
+        "host": "staff-emory.icims.com",
+        "display_name": "Emory University"
+      },
+      "before": {
+        "at": "2026-11-05T22:47:49.258470Z",
+        "rows": 325,
+        "distinct_ids": 325,
+        "truncated": false
+      },
+      "after": {
+        "at": "2026-11-05T23:01:12.547625Z",
+        "rows": 325,
+        "distinct_ids": 325,
+        "truncated": false
+      },
+      "note": "Listing probe country-only US counter is unknown for this source, not zero. SuccessFactors sampled details separately prove their own US locations."
+    },
+    {
+      "endpoint": {
+        "vendor": "taleo",
+        "tenant": "aarcorp",
+        "host": "aarcorp.taleo.net",
+        "display_name": "AAR Corp"
+      },
+      "before": {
+        "at": "2026-11-05T22:48:34.745502Z",
+        "rows": 191,
+        "distinct_ids": 191,
+        "truncated": false
+      },
+      "after": {
+        "at": "2026-11-05T23:01:58.062594Z",
+        "rows": 192,
+        "distinct_ids": 192,
+        "truncated": true,
+        "reported_total": 198
+      },
+      "note": "After: 192 distinct IDs below reported pagingData.totalCount 198 across 8 pages; conservative truncation protects unseen rows. Before had 191 distinct IDs without truncation."
+    },
+    {
+      "endpoint": {
+        "vendor": "phenom",
+        "tenant": "baesystems",
+        "host": "jobs.baesystems.com",
+        "display_name": "BAE Systems"
+      },
+      "before": {
+        "at": "2026-11-05T22:48:46.546289Z",
+        "rows": 100,
+        "distinct_ids": 100,
+        "truncated": true
+      },
+      "after": {
+        "at": "2026-11-05T23:02:09.866942Z",
+        "rows": 2170,
+        "distinct_ids": 2170,
+        "truncated": false
+      }
+    },
+    {
+      "endpoint": {
+        "vendor": "phenom",
+        "tenant": "abb",
+        "host": "careers.abb",
+        "display_name": "ABB"
+      },
+      "before": {
+        "at": "2026-11-05T22:48:51.985117Z",
+        "rows": 100,
+        "distinct_ids": 100,
+        "truncated": true
+      },
+      "after": {
+        "at": "2026-11-05T23:04:04.734790Z",
+        "rows": 2195,
+        "distinct_ids": 2195,
+        "truncated": false
+      }
+    },
+    {
+      "endpoint": {
+        "vendor": "phenom",
+        "tenant": "bechtel",
+        "host": "jobs.bechtel.com",
+        "display_name": "Bechtel"
+      },
+      "before": {
+        "at": "2026-11-05T22:48:57.495911Z",
+        "rows": 100,
+        "distinct_ids": 100,
+        "truncated": true
+      },
+      "after": {
+        "at": "2026-11-05T23:06:00.899410Z",
+        "rows": 1133,
+        "distinct_ids": 1133,
+        "truncated": true,
+        "reported_totals": [
+          1128,
+          1135
+        ]
+      },
+      "note": "Board total changed from 1128 to 1135 during the after crawl; 1133 distinct IDs is below final total. Truncation is correct despite reaching the last 15-row page."
+    },
+    {
+      "endpoint": {
+        "vendor": "smartrecruiters",
+        "tenant": "Intuitive",
+        "display_name": "Intuitive"
+      },
+      "before": {
+        "at": "2026-11-05T22:49:02.987507Z",
+        "outcome": "blocked",
+        "reason": "Refusal: robots_refusal: https://api.smartrecruiters.com/v1/companies/Intuitive/postings?limit=100&offset=0&country=us",
+        "rows": null,
+        "distinct_ids": null
+      },
+      "after": {
+        "at": "2026-11-05T22:49:02.987507Z",
+        "outcome": "blocked",
+        "reason": "Refusal: robots_refusal: https://api.smartrecruiters.com/v1/companies/Intuitive/postings?limit=100&offset=0&country=us",
+        "rows": null,
+        "distinct_ids": null
+      }
+    },
+    {
+      "endpoint": {
+        "vendor": "workable",
+        "tenant": "trexquant",
+        "display_name": "Trexquant"
+      },
+      "before": {
+        "at": "2026-11-05T22:49:03.137827Z",
+        "rows": 54,
+        "distinct_ids": 36,
+        "truncated": false
+      },
+      "after": {
+        "at": "2026-11-05T23:07:01.374889Z",
+        "rows": 36,
+        "distinct_ids": 36,
+        "truncated": false
+      },
+      "note": "54 location variants become 36 requisitions with distinct places preserved. Country-only probe counts are not distinct US requisition counts."
+    },
+    {
+      "endpoint": {
+        "vendor": "eightfold",
+        "tenant": "netflix",
+        "host": "explore.jobs.netflix.net",
+        "display_name": "Netflix",
+        "extra": {
+          "domain": "netflix.com"
+        }
+      },
+      "before": {
+        "at": "2026-11-05T22:49:09.519253Z",
+        "rows": 231,
+        "distinct_ids": 231,
+        "truncated": false
+      },
+      "after": {
+        "at": "2026-11-05T23:07:02.638118Z",
+        "rows": 231,
+        "distinct_ids": 231,
+        "truncated": false
+      },
+      "note": "231 US-filtered classic Netflix positions; no posting dates supplied. Row dates remain unknown."
+    }
+  ],
+  "existing_board_reprobes": [
+    {
+      "name": "Microsoft",
+      "at": "2026-11-05T23:15:56.565423Z",
+      "endpoint": {
+        "vendor": "eightfold",
+        "tenant": "microsoft",
+        "site": "",
+        "host": "apply.careers.microsoft.com",
+        "extra": {},
+        "display_name": "Microsoft"
+      },
+      "outcome": "blocked",
+      "reason": "apply.careers.microsoft.com: HTTP 403 / challenge at 2026-11-05T23:15:57.615969Z",
+      "requests": [
+        {
+          "at": "2026-11-05T23:15:56.565423Z",
+          "method": "GET",
+          "url": "https://apply.careers.microsoft.com/robots.txt",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:15:57.615969Z",
+          "method": "GET",
+          "url": "https://apply.careers.microsoft.com/api/apply/v2/jobs?domain=&query=&location=United+States&start=0&num=10",
+          "status": 403
+        }
+      ],
+      "career_page": {
+        "url": "https://apply.careers.microsoft.com/careers",
+        "error": "apply.careers.microsoft.com: HTTP 403 / challenge at 2026-11-05T23:15:57.615969Z",
+        "requests": []
+      },
+      "rows": null
+    },
+    {
+      "name": "Qualcomm",
+      "at": "2026-11-05T23:15:57.714623Z",
+      "endpoint": {
+        "vendor": "eightfold",
+        "tenant": "qualcomm",
+        "site": "",
+        "host": "careers.qualcomm.com",
+        "extra": {},
+        "display_name": "Qualcomm"
+      },
+      "outcome": "blocked",
+      "reason": "careers.qualcomm.com: HTTP 403 / challenge at 2026-11-05T23:15:58.767808Z",
+      "requests": [
+        {
+          "at": "2026-11-05T23:15:57.714623Z",
+          "method": "GET",
+          "url": "https://careers.qualcomm.com/robots.txt",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:15:58.767808Z",
+          "method": "GET",
+          "url": "https://careers.qualcomm.com/api/apply/v2/jobs?domain=&query=&location=United+States&start=0&num=10",
+          "status": 403
+        }
+      ],
+      "career_page": {
+        "url": "https://careers.qualcomm.com/",
+        "error": "careers.qualcomm.com: HTTP 403 / challenge at 2026-11-05T23:15:58.767808Z",
+        "requests": []
+      },
+      "rows": null
+    },
+    {
+      "name": "Confluent",
+      "at": "2026-11-05T23:15:58.862367Z",
+      "endpoint": {
+        "vendor": "ashby",
+        "tenant": "confluent",
+        "site": "",
+        "host": "",
+        "extra": {},
+        "display_name": "Confluent"
+      },
+      "outcome": "blocked",
+      "reason": "robots_unverified HTTP 401: https://api.ashbyhq.com",
+      "requests": [
+        {
+          "at": "2026-11-05T23:15:58.862367Z",
+          "method": "GET",
+          "url": "https://api.ashbyhq.com/robots.txt",
+          "status": 401
+        }
+      ],
+      "career_page": {
+        "url": "https://www.ibm.com/careers/search?q=confluent",
+        "status": 200,
+        "at": "2026-11-05T23:16:01.612902Z",
+        "requests": [
+          {
+            "at": "2026-11-05T23:15:59.027025Z",
+            "method": "GET",
+            "url": "https://careers.confluent.io/robots.txt",
+            "status": 301
+          },
+          {
+            "at": "2026-11-05T23:15:59.149553Z",
+            "method": "GET",
+            "url": "https://www.ibm.com/robots.txt",
+            "status": 200
+          },
+          {
+            "at": "2026-11-05T23:16:00.202416Z",
+            "method": "GET",
+            "url": "https://www.ibm.com/careers/search?q=confluent",
+            "status": 200
+          },
+          {
+            "at": "2026-11-05T23:16:00.750453Z",
+            "method": "GET",
+            "url": "https://careers.confluent.io/",
+            "status": 301
+          },
+          {
+            "at": "2026-11-05T23:16:01.253279Z",
+            "method": "GET",
+            "url": "https://www.ibm.com/careers/search?q=confluent",
+            "status": 200
+          }
+        ]
+      },
+      "rows": null,
+      "note": "Official careers domain now redirects to IBM search?q=confluent. Shared-board entity boundary is not proven; no replacement token registered."
+    },
+    {
+      "name": "Aurora Innovation",
+      "at": "2026-11-05T23:16:01.629186Z",
+      "endpoint": {
+        "vendor": "greenhouse",
+        "tenant": "aurorainnovation",
+        "site": "",
+        "host": "",
+        "extra": {},
+        "display_name": "Aurora Innovation"
+      },
+      "outcome": "unverified",
+      "requests": [
+        {
+          "at": "2026-11-05T23:16:01.629186Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/robots.txt",
+          "status": 200
+        },
+        {
+          "at": "2026-11-05T23:16:02.682271Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/v1/boards/aurorainnovation/jobs?content=false",
+          "status": 404
+        }
+      ],
+      "career_page": {
+        "url": "https://aurora.tech/careers",
+        "status": 200,
+        "at": "2026-11-05T23:16:04.290680Z",
+        "requests": [
+          {
+            "at": "2026-11-05T23:16:02.764305Z",
+            "method": "GET",
+            "url": "https://aurora.tech/robots.txt",
+            "status": 200
+          },
+          {
+            "at": "2026-11-05T23:16:03.814779Z",
+            "method": "GET",
+            "url": "https://aurora.tech/careers",
+            "status": 200
+          }
+        ]
+      },
+      "rows": null,
+      "note": "Initial Greenhouse token remained404. Later official-page evidence proved the Ashby endpoint in board_migrations; catalog and onboarding plan updated with ownership evidence.",
+      "resolution": {
+        "outcome": "moved_and_fixed",
+        "endpoint": {
+          "vendor": "ashby",
+          "tenant": "aurora-operations-inc",
+          "display_name": "Aurora Innovation"
+        },
+        "at": "2026-11-05T23:25:38.241056Z",
+        "distinct_ids": 90
+      }
+    },
+    {
+      "name": "dbt Labs",
+      "at": "2026-11-05T23:16:04.299169Z",
+      "endpoint": {
+        "vendor": "greenhouse",
+        "tenant": "dbtlabsinc",
+        "site": "",
+        "host": "",
+        "extra": {},
+        "display_name": "dbt Labs"
+      },
+      "outcome": "unverified",
+      "requests": [
+        {
+          "at": "2026-11-05T23:16:04.299169Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/v1/boards/dbtlabsinc/jobs?content=false",
+          "status": 404
+        }
+      ],
+      "career_page": {
+        "url": "https://www.getdbt.com/about-us/careers",
+        "status": 200,
+        "at": "2026-11-05T23:16:06.848843Z",
+        "requests": [
+          {
+            "at": "2026-11-05T23:16:04.397138Z",
+            "method": "GET",
+            "url": "https://www.getdbt.com/robots.txt",
+            "status": 200
+          },
+          {
+            "at": "2026-11-05T23:16:05.447921Z",
+            "method": "GET",
+            "url": "https://www.getdbt.com/careers",
+            "status": 308
+          },
+          {
+            "at": "2026-11-05T23:16:06.499260Z",
+            "method": "GET",
+            "url": "https://www.getdbt.com/about-us/careers",
+            "status": 200
+          }
+        ]
+      },
+      "rows": null,
+      "note": "Official careers page links Fivetran job pages; parent is checking the exact board/entity evidence. No replacement token registered."
+    },
+    {
+      "name": "Hex",
+      "at": "2026-11-05T23:16:06.866776Z",
+      "endpoint": {
+        "vendor": "greenhouse",
+        "tenant": "hextechnologies",
+        "site": "",
+        "host": "",
+        "extra": {},
+        "display_name": "Hex"
+      },
+      "outcome": "unverified",
+      "requests": [
+        {
+          "at": "2026-11-05T23:16:06.866776Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/v1/boards/hextechnologies/jobs?content=false",
+          "status": 404
+        }
+      ],
+      "career_page": {
+        "url": "https://hex.tech/careers/",
+        "status": 200,
+        "at": "2026-11-05T23:16:09.556640Z",
+        "requests": [
+          {
+            "at": "2026-11-05T23:16:06.942426Z",
+            "method": "GET",
+            "url": "https://hex.tech/robots.txt",
+            "status": 200
+          },
+          {
+            "at": "2026-11-05T23:16:07.999430Z",
+            "method": "GET",
+            "url": "https://hex.tech/careers",
+            "status": 308
+          },
+          {
+            "at": "2026-11-05T23:16:09.051620Z",
+            "method": "GET",
+            "url": "https://hex.tech/careers/",
+            "status": 200
+          }
+        ]
+      },
+      "rows": null,
+      "note": "Initial Greenhouse token remained404. Later official-page evidence proved the Ashby endpoint in board_migrations; catalog and onboarding plan updated with ownership evidence.",
+      "resolution": {
+        "outcome": "moved_and_fixed",
+        "endpoint": {
+          "vendor": "ashby",
+          "tenant": "hex",
+          "display_name": "Hex"
+        },
+        "at": "2026-11-05T23:25:39.458431Z",
+        "distinct_ids": 39
+      }
+    },
+    {
+      "name": "ClickHouse",
+      "at": "2026-11-05T23:16:09.562142Z",
+      "endpoint": {
+        "vendor": "greenhouse",
+        "tenant": "clickhouse",
+        "site": "",
+        "host": "",
+        "extra": {},
+        "display_name": "ClickHouse"
+      },
+      "outcome": "unverified",
+      "requests": [
+        {
+          "at": "2026-11-05T23:16:09.562142Z",
+          "method": "GET",
+          "url": "https://boards-api.greenhouse.io/v1/boards/clickhouse/jobs?content=false",
+          "status": 404
+        }
+      ],
+      "career_page": {
+        "url": "https://clickhouse.com/company/careers",
+        "status": 200,
+        "at": "2026-11-05T23:16:10.879447Z",
+        "requests": [
+          {
+            "at": "2026-11-05T23:16:09.640680Z",
+            "method": "GET",
+            "url": "https://clickhouse.com/robots.txt",
+            "status": 200
+          },
+          {
+            "at": "2026-11-05T23:16:10.691549Z",
+            "method": "GET",
+            "url": "https://clickhouse.com/company/careers",
+            "status": 200
+          }
+        ]
+      },
+      "rows": null,
+      "note": "Initial Greenhouse token remained404. Later official-page evidence proved the Ashby endpoint in board_migrations; catalog and onboarding plan updated with ownership evidence.",
+      "resolution": {
+        "outcome": "moved_and_fixed",
+        "endpoint": {
+          "vendor": "ashby",
+          "tenant": "clickhouse",
+          "display_name": "ClickHouse"
+        },
+        "at": "2026-11-05T23:25:40.458974Z",
+        "distinct_ids": 202
+      }
+    }
+  ],
+  "uber_termless_investigation": {
+    "name": "Uber",
+    "at": "2026-11-05T23:16:10.887623Z",
+    "evidence_url": "https://www.uber.com/us/en/careers/list/",
+    "outcome": "blocked",
+    "reason": "jobs.uber.com: HTTP 403 / challenge at 2026-11-05T23:16:12.116980Z",
+    "requests": [
+      {
+        "at": "2026-11-05T23:16:10.888622Z",
+        "method": "GET",
+        "url": "https://www.uber.com/robots.txt",
+        "status": 200
+      },
+      {
+        "at": "2026-11-05T23:16:11.940392Z",
+        "method": "GET",
+        "url": "https://www.uber.com/us/en/careers/list/",
+        "status": 301
+      },
+      {
+        "at": "2026-11-05T23:16:12.116980Z",
+        "method": "GET",
+        "url": "https://jobs.uber.com/robots.txt",
+        "status": 403
+      }
+    ],
+    "note": "Official careers listing redirected to jobs.uber.com; robots fetch answered 403 and probing stopped. No legacy API call was made, so termless API support is unverified and no reader was built."
+  },
+  "board_migrations": [
+    {
+      "name": "Aurora Innovation",
+      "at": "2026-11-05T23:25:38.241056Z",
+      "endpoint": {
+        "vendor": "ashby",
+        "tenant": "aurora-operations-inc",
+        "display_name": "Aurora Innovation"
+      },
+      "rows": 90,
+      "distinct_ids": 90,
+      "us_rows": 90,
+      "truncated": false,
+      "requests": [
+        {
+          "at": "2026-11-05T23:25:38.241056Z",
+          "method": "GET",
+          "url": "https://api.ashbyhq.com/robots.txt",
+          "status": 401,
+          "bytes": 12,
+          "body_file": ".probe\\62ccd430e30aaeb55f89.body"
+        },
+        {
+          "at": "2026-11-05T23:25:39.293769Z",
+          "method": "GET",
+          "url": "https://api.ashbyhq.com/posting-api/job-board/aurora-operations-inc",
+          "status": 200,
+          "bytes": 1517228,
+          "body_file": ".probe\\68cfc6231bfe5da9f213.body"
+        }
+      ]
+    },
+    {
+      "name": "Hex",
+      "at": "2026-11-05T23:25:39.458431Z",
+      "endpoint": {
+        "vendor": "ashby",
+        "tenant": "hex",
+        "display_name": "Hex"
+      },
+      "rows": 39,
+      "distinct_ids": 39,
+      "us_rows": 39,
+      "truncated": false,
+      "requests": [
+        {
+          "at": "2026-11-05T23:25:40.344476Z",
+          "method": "GET",
+          "url": "https://api.ashbyhq.com/posting-api/job-board/hex",
+          "status": 200,
+          "bytes": 523524,
+          "body_file": ".probe\\cafbc34c69e6da0783af.body"
+        }
+      ]
+    },
+    {
+      "name": "ClickHouse",
+      "at": "2026-11-05T23:25:40.458974Z",
+      "endpoint": {
+        "vendor": "ashby",
+        "tenant": "clickhouse",
+        "display_name": "ClickHouse"
+      },
+      "rows": 202,
+      "distinct_ids": 202,
+      "us_rows": 80,
+      "truncated": false,
+      "requests": [
+        {
+          "at": "2026-11-05T23:25:41.396673Z",
+          "method": "GET",
+          "url": "https://api.ashbyhq.com/posting-api/job-board/clickhouse",
+          "status": 200,
+          "bytes": 2535266,
+          "body_file": ".probe\\4cb3c6d6bd2f4fa79d2f.body"
+        }
+      ]
+    }
+  ],
+  "migration_validation_replay": [
+    {
+      "name": "Aurora Innovation",
+      "at": "2026-11-05T23:25:39.293769Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 90,
+      "unique_ids": 90,
+      "duplicate_rows": 0,
+      "requisitions": 90,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+        "200"
+      ],
+      "sample_titles": [
+        "Senior Staff TLM, Security Systems",
+        "Senior Program Manager, Test Execution (Weekends)",
+        "Senior Program Manager, Development Testing Operations (Release Testing)"
+      ],
+      "detail": "Guarded offline replay of the captured public posting API response; no network call.",
+      "member_key": "ashby-aurora-operations-inc"
+    },
+    {
+      "name": "Hex",
+      "at": "2026-11-05T23:25:40.344476Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 39,
+      "unique_ids": 39,
+      "duplicate_rows": 0,
+      "requisitions": 39,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+        "200"
+      ],
+      "sample_titles": [
+        "Sales Engineer, Enterprise",
+        "AI Research Engineer",
+        "Technical Sourcer"
+      ],
+      "detail": "Guarded offline replay of the captured public posting API response; no network call.",
+      "member_key": "ashby-hex"
+    },
+    {
+      "name": "ClickHouse",
+      "at": "2026-11-05T23:25:41.396673Z",
+      "vendor": "ashby",
+      "status": "complete",
+      "source_reported": null,
+      "parsed": 202,
+      "unique_ids": 202,
+      "duplicate_rows": 0,
+      "requisitions": 202,
+      "filtered_non_requisition": 0,
+      "filtered_other_entity": 0,
+      "http_statuses": [
+        "200"
+      ],
+      "sample_titles": [
+        "Senior Cloud Software Engineer - Efficiency Engineering",
+        "Senior Cloud Software Engineer - Efficiency Engineering",
+        "Senior Software Engineer - Integrations - AI/ML"
+      ],
+      "detail": "Guarded offline replay of the captured public posting API response; no network call.",
+      "member_key": "ashby-clickhouse"
+    }
+  ],
+  "ownership_registration": "registration_records uses each proven board checked_at (falling back to legacy RESEARCH_DATE) consistently in ownership evidence, candidate evidence_at and verification_reason; no registration was applied."
+}

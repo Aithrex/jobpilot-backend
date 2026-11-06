@@ -504,6 +504,9 @@ class RipplingProvider(AtsProvider):
 
     def list_jobs(self, endpoint: Endpoint,
                   ctx: FetchContext) -> Iterator[RawJob]:
+        ctx.listing_truncated = True
+        if ctx.should_stop():
+            return
         tenant = (endpoint.tenant or "").strip()
         if not tenant or tenant.lower() in self._RESERVED:
             return
@@ -514,17 +517,27 @@ class RipplingProvider(AtsProvider):
             raise ChallengeError(self.vendor, status)
         if status != 200 or not isinstance(payload, list):
             return
+        jobs: Dict[str, RawJob] = {}
+        places: Dict[str, List[str]] = {}
+        complete = True
         for raw in payload:
             if ctx.should_stop():
                 return
             if not isinstance(raw, dict):
+                complete = False
                 continue
             rid = str(raw.get("uuid") or "").strip()
             title = str(raw.get("name") or "").strip()
             if not rid or not title:
+                complete = False
                 continue
             location = self._label_of(raw.get("workLocation"))
-            yield RawJob(
+            places.setdefault(rid, [])
+            if location and location not in places[rid]:
+                places[rid].append(location)
+            if rid in jobs:
+                continue
+            jobs[rid] = RawJob(
                 source_job_id=rid,
                 title=title[:200],
                 apply_url=str(raw.get("url")
@@ -537,6 +550,21 @@ class RipplingProvider(AtsProvider):
                 detail_url=(f"https://ats.rippling.com/api/v1/board/{tenant}"
                             f"/jobs/{rid}"),
             )
+        # One UUID is one requisition even when the public board repeats it
+        # for each work location (MATS Research, observed 2026-11-05).
+        for rid, job in jobs.items():
+            if ctx.should_stop():
+                return
+            job.location = "; ".join(places[rid])
+            # Parentheses are the board's presentation of "Remote, Country".
+            # Keep the display label above and expose the separated place to
+            # inventory normalization, including Remote (Canada).
+            job.extra["locations"] = [
+                re.sub(r"^Remote\s+\((.+)\)$", r"Remote, \1", place, flags=re.I)
+                for place in places[rid]]
+            job.remote = looks_remote(job.title, job.location)
+            yield job
+        ctx.listing_truncated = not complete
 
     @staticmethod
     def _label_of(value: Any) -> str:
