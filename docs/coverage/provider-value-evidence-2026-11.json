@@ -408,7 +408,7 @@
         }
       ],
       "decision": "Career Site Builder unified JSON support already exists in successfactors._from_unified. All three current sample APIs are robots-prohibited; no new reader is justified and no API bypass was attempted.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "historical_board_measurements": [
         {
           "name": "Wipro",
@@ -585,7 +585,7 @@
       },
       "evidence": [],
       "decision": "Official careers redirect reaches jobs.uber.com, whose robots request returned HTTP403. Stop host; termless capability and inventory remain unknown.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "archive_shape": "Single-employer first-party API; three distinct tenant samples do not apply.",
       "known_employer_count_recorded": 1,
       "known_employer_count_revalidated": 1,
@@ -716,7 +716,7 @@
       },
       "evidence": [],
       "decision": "Current Mphasis URL redirects to SAML authentication. LTIMindtree evidence is historical (54 jobs on a different SuccessFactors board, almost none US); it is not a current RippleHire census. No third official sample is proven. Do not call this not_worth_it.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "historical_board_measurements": [
         {
           "name": "LTIMindtree",
@@ -1019,7 +1019,7 @@
         }
       ],
       "decision": "Three branded public sample boards yielded 20 distinct job links and 11 US-located sample rows. This is below the 300-US gate; three board brands are below the five-employer gate and the forward ownership/eligibility review is incomplete. CloudMasonry is a consultancy candidate and is not automatically eligible. Whole-vendor US inventory and exhaustive tenant count remain unknown. Defer implementation; do not infer not_worth_it from these samples.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "known_employer_count_recorded": 0,
       "known_employer_count_revalidated": 0,
       "archive_samples": [
@@ -1396,7 +1396,7 @@
         }
       ],
       "decision": "A public OXXO USA Zoho shell responded200 but did not expose a measured list in this bounded pass. Current accessibleUSinventory and ownership remain unknown. Do not build yet and do not label not_worth_it.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "known_employer_count_recorded": 0,
       "known_employer_count_revalidated": 0,
       "archive_samples": [
@@ -1523,7 +1523,7 @@
         }
       ],
       "decision": "No current employer-owned sample chain was found in the audited repository evidence or bounded archive results. Common Crawl query paths were robots-refused; CT infrastructure names are not proven employers. Certspotter stopped after HTTP429, so later domains remain unmeasured. Historical counts are retained separately. Do not build yet; do not label not_worth_it while the accessible US inventory remains unknown.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "known_employer_count_recorded": 0,
       "known_employer_count_revalidated": 0,
       "archive_samples": [
@@ -1654,7 +1654,7 @@
       },
       "evidence": [],
       "decision": "One reachable employer board contains 45 US postings, below the 300 threshold. One employer is proven, below five; two more samples and broader known-employer inventory remain unknown. Defer a generic reader without falsely claiming the vendor is not worthwhile.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "known_employer_count_recorded": 1,
       "known_employer_count_revalidated": 1,
       "archive_samples": [
@@ -1859,7 +1859,7 @@
       },
       "evidence": [],
       "decision": "The existing own_site reader returns 98 real Upwind postings without truncation. Ten rows explicitly label US; this is a lower bound, not a full normalized US census. A generic Comeet reader has no measured incremental employer value yet; two additional samples remain unknown.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "historical_board_measurements": [
         {
           "name": "Upwind Security",
@@ -2132,7 +2132,7 @@
         }
       ],
       "decision": "No current employer-owned sample chain was found in the audited repository evidence or bounded archive results. Common Crawl query paths were robots-refused; CT infrastructure names are not proven employers. Certspotter stopped after HTTP429, so later domains remain unmeasured. Historical counts are retained separately. Do not build yet; do not label not_worth_it while the accessible US inventory remains unknown.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "known_employer_count_recorded": 0,
       "known_employer_count_revalidated": 0,
       "archive_samples": [
@@ -2293,7 +2293,7 @@
         }
       ],
       "decision": "No current employer-owned sample chain was found in the audited repository evidence or bounded archive results. Common Crawl query paths were robots-refused; CT infrastructure names are not proven employers. Certspotter stopped after HTTP429, so later domains remain unmeasured. Historical counts are retained separately. Do not build yet; do not label not_worth_it while the accessible US inventory remains unknown.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "known_employer_count_recorded": 0,
       "known_employer_count_revalidated": 0,
       "archive_samples": [
@@ -2411,7 +2411,7 @@
       },
       "evidence": [],
       "decision": "One proven CWS employer advertises217 jobs and the permitted sample contains10 US jobs. The literal listing contract is resolved. One employer and10 accessible sampledUS jobs do not meet the gate; vendor-wide US inventory and two other employer samples remain unknown. Defer a generic reader until further ownership/value evidence.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "archive_shape": "Shared service hostname is not itself a count of customers.",
       "known_employer_count_recorded": 1,
       "known_employer_count_revalidated": 1,
@@ -2578,7 +2578,7 @@
       },
       "evidence": [],
       "decision": "George Mason is currently readable, contradicting the historical detail-page firewall claim. Its 147 advertised jobs are below300 and only30 were sampled. Citadel vendor evidence remains historical and the third sample is unknown; no build decision yet.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "known_employer_count_recorded": 2,
       "known_employer_count_revalidated": 1,
       "archive_samples": [
@@ -2804,7 +2804,7 @@
         }
       ],
       "decision": "Four institution boards are known, below the five-employer gate. Four current robot checks prohibit collection. Search-index totals are not accessible posting counts and were not substituted; reachable US inventory remains unknown.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "known_employer_count_recorded": 4,
       "known_employer_count_revalidated": 4,
       "archive_samples": [
@@ -2990,7 +2990,7 @@
         }
       ],
       "decision": "No current employer-owned sample chain was found in the audited repository evidence or bounded archive results. Common Crawl query paths were robots-refused; CT infrastructure names are not proven employers. Certspotter stopped after HTTP429, so later domains remain unmeasured. Historical counts are retained separately. Do not build yet; do not label not_worth_it while the accessible US inventory remains unknown.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "known_employer_count_recorded": 0,
       "known_employer_count_revalidated": 0,
       "archive_samples": [
@@ -3094,7 +3094,7 @@
       },
       "evidence": [],
       "decision": "Implemented a distinct generic public NLX provider after 650 US location rows proved 300 distinct requisitions. The final registered read completed 2,760 US location GUID rows and 995 distinct requisitions; every row prints Stantec and United States. Burns returned 504 and Southern Company returned a challenge; neither is seeded. Archive tenant counts remain unknown. The actual onboarding probe retains its 400-requisition budget limit.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/42",
       "archive_shape": "Employer-owned .jobs sites share NLX API infrastructure; generic .jobs CT results would not establish customer identities. Current census remains unknown.",
       "known_employer_count_recorded": 2,
       "known_employer_count_revalidated": 3,
@@ -3390,7 +3390,7 @@
         }
       ],
       "decision": "Existing SuccessFactors RMK seed returned75 jobs,19 explicitly US, within a seven-second guarded sample; truncated. Reuse the existing reader. No custom cg-jobstream API request or new provider is needed to establish reachable listings.",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "archive_shape": "Single-employer first-party API; three tenant samples do not apply.",
       "known_employer_count_recorded": 1,
       "known_employer_count_revalidated": 1,

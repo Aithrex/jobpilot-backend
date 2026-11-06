@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "assembled_at_utc": "2026-11-06T00:25:49.085354Z",
+  "assembled_at_utc": "2026-11-06T00:28:25.483253Z",
   "production_access": false,
   "network_access_during_assembly": false,
   "scope": "All73 research employers from the exact150-item requested manifest. Each has a measured, blocked, manual, unsupported or owner-verification outcome.",
@@ -23,7 +23,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "jobs.aa.com: HTTP 403 / challenge at 2026-11-05T22:54:57.460988Z",
       "observations": [
         {
@@ -62,7 +62,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official page links LinkedIn jobs only. Manual handoff; no automated LinkedIn collection.",
       "observations": [
         {
@@ -127,7 +127,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Public JavaScript proved the exact search API, but its robots fetch returned502. No search API request was sent; counts remain unknown.",
       "observations": [
         {
@@ -286,7 +286,7 @@
       "board_total": null,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 33 rows and 27 distinct job IDs. Exact employer-linked endpoint added to career_pages_catalog; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -405,7 +405,7 @@
       "board_total": 23,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 23 rows and 23 distinct job IDs. Exact employer-linked endpoint added to career_pages_catalog; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -528,7 +528,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official page links its Y Combinator jobs page; a first-party supported board contract was not proven. Manual handoff.",
       "observations": [
         {
@@ -587,7 +587,7 @@
       "board_total": 162,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 162 rows and 162 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -682,7 +682,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "A source row already exists in the static catalog. No new member was added and no live result is claimed. Owner must run content and backlink verification against production after review.",
       "observations": [
         {
@@ -734,7 +734,7 @@
       "board_total": null,
       "truncated": true,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official DeepMind link exposes20 job links on the first public Google results page. Existing Google results-paging robots refusal remains; no paging API was exercised and no new member added.",
       "observations": [
         {
@@ -822,7 +822,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official Groq page links the public Gem board, which returned HTTP200. Its served shell has no supported job payload; static.gem.com returned403 and was stopped. The unrelated manifest404 is not the board outcome.",
       "observations": [
         {
@@ -918,7 +918,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "A source row already exists in the static catalog. No new member was added and no live result is claimed. Owner must run content and backlink verification against production after review.",
       "observations": [
         {
@@ -963,7 +963,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "ConnectionError: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
       "observations": [
         {
@@ -1001,7 +1001,7 @@
       "board_total": null,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 49 rows and 48 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds. The former Workday candidate did not validate. The current official /api/getCareersListing proxy proves the Rippling board link; Phase 2 location grouping is needed to merge49 rows into48 IDs.",
       "observations": [
         {
@@ -1143,7 +1143,7 @@
       "board_total": null,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 66 rows and 66 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -1346,7 +1346,7 @@
       "board_total": 152,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 152 rows and 152 distinct job IDs. Exact employer-linked endpoint added to career_pages_catalog; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -1482,7 +1482,7 @@
       "board_total": null,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 25 rows and 25 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -1586,7 +1586,7 @@
       "board_total": 1000,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 1000 rows and 1000 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -1950,7 +1950,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official page links TheNielsenCompany on SmartRecruiters. The public API path is robots-disallowed; no postings request was sent. The served career frontend does not prove an empty board.",
       "observations": [
         {
@@ -2039,7 +2039,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Employer-linked board returned HTTP200 with an Incapsula challenge, so the host was stopped. No usable listing or empty-board claim.",
       "observations": [
         {
@@ -2144,7 +2144,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official board and public script prove the NLX contract, but the exact public search request returned504. No job rows validated; no member seeded.",
       "observations": [
         {
@@ -2290,7 +2290,7 @@
       "board_total": 995,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 995 rows and 995 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -3494,7 +3494,7 @@
       "board_total": 1070,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 1070 rows and 1070 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds. Full read spans90 listing pages; purpose filtering excludes7 non-requisition records, leaving1,063 requisitions. No published detail date was invented.",
       "observations": [
         {
@@ -4100,7 +4100,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "robots_unverified HTTP 202: https://careers.jacobs.com",
       "observations": [
         {
@@ -4182,7 +4182,7 @@
       "board_total": 75,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 75 rows and 75 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -4375,7 +4375,7 @@
       "board_total": null,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 33 rows and 33 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -4542,7 +4542,7 @@
       "board_total": 81,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official page publishes the ClearCompany site identifier and API contract. The response contains81 distinct US jobs. ClearCompany remains a vendor requiring a generic provider; one measured employer/81US jobs is below the build gate. No custom one-employer bypass was added.",
       "observations": [
         {
@@ -4682,7 +4682,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official root links careers.wabtec.com. The observed SmartRecruiters my-applications link is an applicant account route, not a tenant token; listing contract remains unverified.",
       "observations": [
         {
@@ -4801,7 +4801,7 @@
       "board_total": null,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 110 rows and 110 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -4970,7 +4970,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "robots_refusal: https://www.fortinet.com/corporate/careers",
       "observations": [
         {
@@ -5006,7 +5006,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "www.sentinelone.com: HTTP 429 / challenge at 2026-11-05T22:56:37.527959Z",
       "observations": [
         {
@@ -5057,7 +5057,7 @@
       "board_total": 339,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 339 rows and 339 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -5400,7 +5400,7 @@
       "board_total": 570,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 570 rows and 570 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -5667,7 +5667,7 @@
       "board_total": null,
       "truncated": true,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 30 rows and 30 distinct job IDs. Exact employer-linked endpoint added to seed; read is partial. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -5821,7 +5821,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "www.epam.com: HTTP 403 / challenge at 2026-11-05T22:56:52.603212Z",
       "observations": [
         {
@@ -5860,7 +5860,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official career page links the Deel board; it returned HTTP200 after redirect to /klarna. The served template has no supported readable job payload. The earlier media-asset robots refusal is not the board outcome.",
       "observations": [
         {
@@ -5959,7 +5959,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official careers redirects to Cisco’s Splunk page. A company-scoped listing/entity boundary was not proven; do not attribute all Cisco jobs to Splunk.",
       "observations": [
         {
@@ -6034,7 +6034,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "A source row already exists in the static catalog. No new member was added and no live result is claimed. Owner must run content and backlink verification against production after review.",
       "observations": [
         {
@@ -6086,7 +6086,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Published searchManager script names /services/recruiting/v1/jobs, but robots disallows /services/. No API request sent; a swallowed refusal/zero result is not an empty board.",
       "observations": [
         {
@@ -6210,7 +6210,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official career path resolves to x.ai and a shared xAI Greenhouse board. X-specific hiring entity ownership was not proven; no shared-parent attribution.",
       "observations": [
         {
@@ -6276,7 +6276,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "www.blueorigin.com: HTTP 429 / challenge at 2026-11-05T22:57:07.494071Z",
       "observations": [
         {
@@ -6322,7 +6322,7 @@
       "board_total": 251,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 251 rows and 251 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -6472,7 +6472,7 @@
       "board_total": 342,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 342 rows and 342 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -6712,7 +6712,7 @@
       "board_total": 187,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 187 rows and 187 distinct job IDs. Exact employer-linked endpoint added to career_pages_catalog; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -6862,7 +6862,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "robots_refusal: https://careers.take2games.com/_next/static/chunks/app/%5Bslug%5D/page-d4df3d2e64a4cde9.js",
       "observations": [
         {
@@ -6958,7 +6958,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "A source row already exists in the static catalog. No new member was added and no live result is claimed. Owner must run content and backlink verification against production after review.",
       "observations": [
         {
@@ -7003,7 +7003,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "robots_refusal: https://www.valvesoftware.com/en/jobs",
       "observations": [
         {
@@ -7054,7 +7054,7 @@
       "board_total": null,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 12 rows and 12 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -7193,7 +7193,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Public employer pages were read; no supported listing contract was proven from the published links and configuration.",
       "observations": [
         {
@@ -7252,7 +7252,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Public employer pages were read; no supported listing contract was proven from the published links and configuration.",
       "observations": [
         {
@@ -7340,7 +7340,7 @@
       "board_total": null,
       "truncated": false,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 15 rows and 15 distinct job IDs. Exact employer-linked endpoint added to seed; read is exhausted in the observed response chain. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -7451,7 +7451,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official root was rechecked and points into Palo Alto Networks. Protect AI-specific hiring entity ownership on the shared parent board is unresolved.",
       "observations": [
         {
@@ -7527,7 +7527,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "careers.amperecomputing.com: HTTP 403 / challenge at 2026-11-05T22:58:58.421510Z",
       "observations": [
         {
@@ -7573,7 +7573,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "www.marvell.com: HTTP 403 / challenge at 2026-11-05T22:58:58.748161Z",
       "observations": [
         {
@@ -7617,7 +7617,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Official root was rechecked and links /careers, whose observed response was404. Endpoint remains unverified, not empty.",
       "observations": [
         {
@@ -7683,7 +7683,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "A source row already exists in the static catalog. No new member was added and no live result is claimed. Owner must run content and backlink verification against production after review.",
       "observations": [
         {
@@ -7728,7 +7728,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "A source row already exists in the static catalog. No new member was added and no live result is claimed. Owner must run content and backlink verification against production after review.",
       "observations": [
         {
@@ -7773,7 +7773,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "A source row already exists in the static catalog. No new member was added and no live result is claimed. Owner must run content and backlink verification against production after review.",
       "observations": [
         {
@@ -7830,7 +7830,7 @@
       "board_total": 9056,
       "truncated": true,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 1974 rows and 1974 distinct job IDs. Exact employer-linked endpoint added to seed; read is partial. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -8384,7 +8384,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "ReadTimeout: HTTPSConnectionPool(host='www.mckinsey.com', port=443): Read timed out. (read timeout=25)",
       "observations": [
         {
@@ -8422,7 +8422,7 @@
       "board_total": 939,
       "truncated": true,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 100 rows and 100 distinct job IDs. Exact employer-linked endpoint added to seed; read is partial. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -8593,7 +8593,7 @@
       "board_total": 923,
       "truncated": true,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Provider validation returned 692 rows and 692 distinct job IDs. Exact employer-linked endpoint added to seed; read is partial. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -9149,7 +9149,7 @@
       "board_total": null,
       "truncated": true,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "Two published filtered members returned 19 entry-level and 1,120 experienced jobs, with 1,139 distinct IDs across both; the experienced read is partial. The plan registers the primary member; owner backlink verification must establish the second member independently. Public observations only; an exhausted read does not establish the production inventory. US figures are explicit-label lower bounds.",
       "observations": [
         {
@@ -9909,7 +9909,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "robots_refusal: https://careers.walmart.com/us/en/results?searchQuery=All&careerareas=Technology",
       "observations": [
         {
@@ -10133,7 +10133,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "A source row already exists in the static catalog. No new member was added and no live result is claimed. Owner must run content and backlink verification against production after review.",
       "observations": [
         {
@@ -10327,7 +10327,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "www.cummins.com: HTTP 403 / challenge at 2026-11-05T23:00:02.638277Z",
       "observations": [
         {
@@ -10375,7 +10375,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "jobs.adp.com: HTTP 403 / challenge at 2026-11-05T23:00:04.556621Z",
       "observations": [
         {
@@ -10431,7 +10431,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "www.nokia.com: HTTP 403 / challenge at 2026-11-05T23:00:05.092043Z",
       "observations": [
         {
@@ -10467,7 +10467,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "www.mathworks.com: HTTP 403 / challenge at 2026-11-05T23:00:05.230569Z",
       "observations": [
         {
@@ -10503,7 +10503,7 @@
       "board_total": null,
       "truncated": null,
       "branch": "boards/employer-research",
-      "pr": null,
+      "pr": "https://github.com/Aithrex/jobpilot-backend/pull/43",
       "reason": "A source row already exists in the static catalog. No new member was added and no live result is claimed. Owner must run content and backlink verification against production after review.",
       "observations": [
         {
