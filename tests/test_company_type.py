@@ -149,3 +149,30 @@ class TestLevelHint:
         assert level_estimate_of("mid", req) is None
         assert level_estimate_of("unknown", {"jd": {}}) is None
         assert level_estimate_of("unknown", None) is None
+
+
+class TestYearsAside:
+    @pytest.mark.parametrize("text,years", [
+        ("Bachelor's Degree with 2-6 years of experience (additional experience/training may "
+         "substitute for degree).", 2),
+        ("Bachelor's degree (or 4+ years of experience in lieu of a degree).", None),
+        ("Bachelor's degree in relevant field (or 4 years of experience in lieu of degree). "
+         "Requires 2+ years of professional experience.", 2),
+    ])
+    def test_a_degree_aside_never_hides_or_sets_the_years(self, text, years):
+        from services import fit_score
+        assert fit_score._required_years(fit_score._norm(text)) == years
+
+
+class TestMidLevelTitles:
+    @pytest.mark.parametrize("title,level", [
+        ("Mid-Level Test & Evaluation Engineer", "mid"),
+        ("Mid Level Software Engineer", "mid"),
+        ("Intermediate Developer", "mid"),
+        ("Intermediate Care Nurse", None),
+        ("Junior Developer", "entry"),
+        ("Software Engineer", None),
+    ])
+    def test_the_band_said_in_words(self, title, level):
+        from services import fit_score
+        assert fit_score.title_level(title) == level
