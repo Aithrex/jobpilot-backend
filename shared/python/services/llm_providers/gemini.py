@@ -30,10 +30,10 @@ Request shape (single-shot JSON):
         ),
     )
 
-Default models (override via env): 3.8 Flash for FLASH/PREVIEW (fast
-structured extraction and repair), 4 Argon for PRO (tailoring, JD analysis,
-scoring). Gemini 2.5 was retired on 2026-10-20 and there is no GA model named
-"Pro" after it; 4 Argon is Google's frontier GA model.
+Default models (override via env): 3.8 Flash for EVERY tier. Gemini 2.5 was
+retired on 2026-10-20 and there is no GA model named "Pro" after it; the
+owner chose one model for cost (2026-11-10). GEMINI_PRO_MODEL_ID=gemini-4-argon
+moves tailoring, JD analysis and scoring to Google's frontier model.
 
 Privacy: contact details are masked before every call and restored in the
 reply (see pii_mask); GEMINI_PII_MASKING=false turns that off. Quota: when a
@@ -72,7 +72,7 @@ class GeminiProvider(LLMProvider):
 
     Tier strategy mirrors Claude's:
       FLASH   → 3.8 Flash — cheap, fast. Parser, verifiers, classifiers.
-      PRO     → 4 Argon   — tailoring, JD analysis, scoring, intelligence.
+      PRO     → 3.8 Flash — tailoring, JD analysis, scoring, intelligence.
       PREVIEW → 3.8 Flash — JSON repair tier; small outputs, cheap is fine.
 
     Each is independently overridable:
@@ -80,7 +80,7 @@ class GeminiProvider(LLMProvider):
     """
 
     FLASH = _model_id("GEMINI_FLASH_MODEL_ID", "gemini-3.8-flash")
-    PRO = _model_id("GEMINI_PRO_MODEL_ID", "gemini-4-argon")
+    PRO = _model_id("GEMINI_PRO_MODEL_ID", "gemini-3.8-flash")
     PREVIEW = _model_id("GEMINI_PREVIEW_MODEL_ID", "gemini-3.8-flash")
 
     # Per-model output ceilings. Gemini allows far more than Claude (65535 vs
