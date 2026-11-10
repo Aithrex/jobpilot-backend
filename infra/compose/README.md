@@ -129,9 +129,36 @@ Never terminate the box. Sign in to Oracle at least every 60 days.
 
 The app selects its provider with `LLM_PROVIDER` in `stack.env`, currently
 `gemini`. **As of 2026-10-31 there is no working key, so AI features fail.**
-Gemini 2.5 is closed to new users, so a key needs `GEMINI_FLASH_MODEL_ID`,
-`GEMINI_PRO_MODEL_ID` and `GEMINI_PREVIEW_MODEL_ID` too. Calls mask contact
-details by default, and `GEMINI_FALLBACK_MODELS` moves past exhausted models.
+Calls mask contact details by default, and `GEMINI_FALLBACK_MODELS` moves past
+exhausted models.
+
+**Vertex AI (the production path).** Gemini bills to a Google Cloud project
+and authenticates with a service account:
+
+| Setting | Value |
+|---|---|
+| `GEMINI_BACKEND` | `vertex` |
+| `VERTEX_CREDENTIALS_JSON` | `base64 -w0` of the service-account key file (role **Vertex AI User**) |
+| `VERTEX_PROJECT` | optional; defaults to the key's `project_id` |
+| `VERTEX_LOCATION` | `global` (default); current Gemini models are not served from `us-central1` |
+| `GEMINI_FALLBACK_MODELS` | `gemini-3.8-flash`, so PRO calls survive an Argon quota limit |
+
+Models default to `gemini-3.8-flash` (FLASH/PREVIEW) and `gemini-4-argon`
+(PRO); Gemini 2.5 was retired on 2026-10-20. Gemini 3+ take a thinking LEVEL,
+not a budget (`GEMINI_THINKING_LEVEL`, default `LOW`; `MINIMAL` is rejected).
+`render_stack_env.py` sets the first three rows itself when
+`D:\jobpilot-aws-backup\secrets\vertex-sa.json` exists.
+
+Check before and after a deploy, from a laptop with the same values in `.env`:
+`python scripts/check_gemini.py` (credentials, both tiers) then
+`python scripts/check_ai_features.py` (parse, PDF parse, JD analysis, tailoring,
+cover letter, chat; the database is switched off for the run). `scripts/` is
+not in the image, so on the box ask the running worker directly:
+
+```bash
+docker compose --env-file /etc/jobpilot/compose.env exec worker python -c \
+  "from services.claude_client import claude_json, CLAUDE_PRO as m; print(m, claude_json('Return JSON {\"ok\": true}', model=m, max_tokens=64))"
+```
 
 ## Settings
 

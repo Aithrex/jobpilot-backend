@@ -83,6 +83,18 @@ def main() -> None:
     if override.exists() and override.read_text(encoding="utf-8-sig").strip():
         env["GEMINI_API_KEY"] = override.read_text(encoding="utf-8-sig").strip()
 
+    # A Vertex AI service-account key the owner saved by hand moves AI to
+    # Vertex. base64 keeps the key's JSON on one line of stack.env, and the
+    # read-only containers need no file mount.
+    vertex_key = backup / "secrets" / "vertex-sa.json"
+    if vertex_key.exists():
+        info = json.loads(vertex_key.read_text(encoding="utf-8-sig"))
+        if info.get("type") != "service_account":
+            raise SystemExit(f"{vertex_key} is not a service-account key")
+        env["GEMINI_BACKEND"] = "vertex"
+        env["VERTEX_CREDENTIALS_JSON"] = base64.b64encode(json.dumps(info).encode()).decode()
+        env.setdefault("VERTEX_LOCATION", "global")
+
     gen = generated(backup)
     env.update({
         "ENVIRONMENT": "prod",
