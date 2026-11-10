@@ -128,7 +128,8 @@ Never terminate the box. Sign in to Oracle at least every 60 days.
 ## AI
 
 The app selects its provider with `LLM_PROVIDER` in `stack.env`, currently
-`gemini`. **As of 2026-10-31 there is no working key, so AI features fail.**
+`gemini`, on Vertex AI since 2026-11-10 (project `aspirely-502001`, service account
+`jobpilot-ai`, $30/month budget alert, billed postpaid).
 Calls mask contact details by default, and `GEMINI_FALLBACK_MODELS` moves past
 exhausted models.
 
