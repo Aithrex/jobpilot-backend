@@ -9,7 +9,7 @@ Flask API for the **Aspirely** AI career platform (`jobpilot` is the repo/intern
 > **`services/learning/` is now live** at `/api/learning`, because the gateway registers it. Older traffic still uses `resume` at `/api/resume/learning/*`.
 
 ## Commands (run from this directory)
-- `python local.py` — local gateway: runs the four HTTP services as ONE Flask app on port 5000. Health: `GET /api/health`. It omits the prod-only blueprints; production is `services/gateway/wsgi.py`. Needs MongoDB, and `LLM_PROVIDER=gemini` with `GEMINI_API_KEY` for AI actions.
+- `python local.py` — local gateway: runs the four HTTP services as ONE Flask app on port 5000. Health: `GET /api/health`. It omits the prod-only blueprints; production is `services/gateway/wsgi.py`. Needs MongoDB, and `LLM_PROVIDER=gemini` with either `GEMINI_BACKEND=vertex` + `VERTEX_CREDENTIALS_JSON` (production) or `GEMINI_API_KEY` for AI actions. Check with `python scripts/check_gemini.py`, then `python scripts/check_ai_features.py` (real parse/JD/tailor/cover-letter/chat, database switched off).
 - `python scripts/verify.py --fast` — change-focused offline checks (renderer/pagination/selection by default). Pass extra pytest selectors after `--`.
 - `python scripts/verify.py --full` — **the offline test + eval suite** (`PYTHONPATH=shared/python pytest tests evals -q`). Fully deterministic: **mongomock** for Mongo, a **FakeLLM** for Bedrock — no AWS creds, no secrets, no network. This is exactly what `.github/workflows/tests.yml` and the optional pre-push hook run. See [`docs/qa/verification.md`](docs/qa/verification.md).
 - `python scripts/install_pre_push_hook.py` — repository-local pre-push hook (does not change global Git config). CI remains authoritative.

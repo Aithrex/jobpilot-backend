@@ -150,6 +150,20 @@ def test_gemini_moves_to_the_next_model_when_one_is_out_of_quota(monkeypatch):
 
 
 def test_flash_models_get_no_thinking_budget_to_eat_the_output():
+    # Gemini 2.x flash: thinking switched off with a zero budget.
     provider, fake = _gemini(["{}"])
-    provider.json("hi", model="gemini-3.8-flash")
+    provider.json("hi", model="gemini-2.5-flash")
     assert fake.calls[0][2].thinking_config.thinking_budget == 0
+
+
+def test_gemini_3_and_later_get_the_lowest_valid_thinking_level(monkeypatch):
+    # 3.8 Flash and 4 Argon take thinking_level only (Argon 400s on any
+    # budget, and both reject MINIMAL), so LOW is the cheapest valid setting.
+    monkeypatch.delenv("GEMINI_THINKING_LEVEL", raising=False)
+    provider, fake = _gemini(["{}", "{}"])
+    provider.json("hi", model="gemini-3.8-flash")
+    provider.json("hi", model="gemini-4-argon")
+    for call in fake.calls:
+        thinking = call[2].thinking_config
+        assert thinking.thinking_budget is None
+        assert thinking.thinking_level.value == "LOW"

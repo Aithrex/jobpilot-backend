@@ -1,8 +1,18 @@
-"""Gemini provider — Google AI Studio via the `google-genai` SDK.
+"""Gemini provider — Google AI Studio OR Vertex AI via the `google-genai` SDK.
 
 Restored from the pre-migration implementation (portfolio commit 4479492^)
 and adapted to the current `LLMProvider` contract. Interchangeable with
 `ClaudeProvider`: selected by `LLM_PROVIDER=gemini`.
+
+Backend (`GEMINI_BACKEND`): `studio` (default) authenticates with
+GEMINI_API_KEY. `vertex` bills a Google Cloud project and authenticates with
+a service account: VERTEX_CREDENTIALS_JSON holds the key file's JSON (raw or
+base64, so it fits on one line of stack.env and the read-only containers need
+no file mount), VERTEX_PROJECT defaults to the key's project_id, and
+VERTEX_LOCATION defaults to `global` (current Gemini models are served from
+`global` and the `us`/`eu` multi-regions, not from `us-central1`). Without VERTEX_CREDENTIALS_JSON, Application Default
+Credentials are used (GOOGLE_APPLICATION_CREDENTIALS or `gcloud auth
+application-default login`). Request shapes are identical on both backends.
 
 Isolation: this module imports `google.genai` lazily (inside methods), so a
 process running Claude never loads the Gemini SDK, and vice versa. Nothing
@@ -20,19 +30,23 @@ Request shape (single-shot JSON):
         ),
     )
 
-Default models (override via env): 2.5 Flash for FLASH/PREVIEW (fast
-structured extraction and repair), 2.5 Pro for PRO (tailoring, JD analysis,
-scoring).
+Default models (override via env): 3.8 Flash for EVERY tier. Gemini 2.5 was
+retired on 2026-10-20 and there is no GA model named "Pro" after it; the
+owner chose one model for cost (2026-11-10). GEMINI_PRO_MODEL_ID=gemini-4-argon
+moves tailoring, JD analysis and scoring to Google's frontier model.
 
 Privacy: contact details are masked before every call and restored in the
 reply (see pii_mask); GEMINI_PII_MASKING=false turns that off. Quota: when a
 model is out of quota the call moves down GEMINI_FALLBACK_MODELS, because free
 limits are per model.
 """
+import base64
+import binascii
 import json
 import logging
 import os
 import random
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -57,27 +71,29 @@ class GeminiProvider(LLMProvider):
     """Gemini implementation of the shared LLM provider contract.
 
     Tier strategy mirrors Claude's:
-      FLASH   → 2.5 Flash — cheap, fast. Parser, verifiers, classifiers.
-      PRO     → 2.5 Pro   — tailoring, JD analysis, scoring, intelligence.
-      PREVIEW → 2.5 Flash — JSON repair tier; small outputs, cheap is fine.
+      FLASH   → 3.8 Flash — cheap, fast. Parser, verifiers, classifiers.
+      PRO     → 3.8 Flash — tailoring, JD analysis, scoring, intelligence.
+      PREVIEW → 3.8 Flash — JSON repair tier; small outputs, cheap is fine.
 
     Each is independently overridable:
       GEMINI_FLASH_MODEL_ID / GEMINI_PRO_MODEL_ID / GEMINI_PREVIEW_MODEL_ID
     """
 
-    FLASH = _model_id("GEMINI_FLASH_MODEL_ID", "gemini-2.5-flash")
-    PRO = _model_id("GEMINI_PRO_MODEL_ID", "gemini-2.5-pro")
-    PREVIEW = _model_id("GEMINI_PREVIEW_MODEL_ID", "gemini-2.5-flash")
+    FLASH = _model_id("GEMINI_FLASH_MODEL_ID", "gemini-3.8-flash")
+    PRO = _model_id("GEMINI_PRO_MODEL_ID", "gemini-3.8-flash")
+    PREVIEW = _model_id("GEMINI_PREVIEW_MODEL_ID", "gemini-3.8-flash")
 
-    # Per-model output ceilings. Gemini 2.5 allows far more than Claude
-    # (65535 vs Sonnet's 16384), so callers that ask for 24000 — e.g. the
-    # ATS keyword pass in content_augmenter — are served in full here rather
-    # than being clamped. Do NOT copy Claude's ceilings.
+    # Per-model output ceilings. Gemini allows far more than Claude (65535 vs
+    # Sonnet's 16384), so callers that ask for 24000 — e.g. the ATS keyword
+    # pass in content_augmenter — are served in full here rather than being
+    # clamped. Do NOT copy Claude's ceilings. 4 Argon answers at most 32768
+    # tokens per non-streaming segment, and every call here is non-streaming.
     _MAX_OUTPUT_TOKENS = {
         "gemini-2.5-flash": 65535,
         "gemini-2.5-pro": 65535,
         "gemini-2.5-flash-lite": 64000,
         "gemini-3": 65535,
+        "gemini-4": 32768,
     }
     _DEFAULT_MAX_OUTPUT_TOKENS = 8192
 
@@ -91,11 +107,28 @@ class GeminiProvider(LLMProvider):
         return PiiMasker()
 
     @staticmethod
-    def _thinking_config(model: str):
-        """Thinking tokens count against max_output_tokens, so an unset budget
-        can spend the whole allowance and cut a JSON reply in half. Off by
-        default for flash models; GEMINI_THINKING_BUDGET overrides."""
+    def _uses_thinking_level(model: str) -> bool:
+        """Gemini 3 and later are steered by `thinking_level`, and 4 Argon
+        answers 400 to any `thinking_budget`. Gemini 2.x only knows the
+        budget. An ID with no readable major version is treated as new."""
+        m = re.match(r"gemini-(\d+)", model or "")
+        return not m or int(m.group(1)) >= 3
+
+    @classmethod
+    def _thinking_config(cls, model: str):
+        """Thinking tokens count against max_output_tokens, so unbounded
+        thinking can spend the whole allowance and cut a JSON reply in half.
+
+        Gemini 3+: `thinking_level` (GEMINI_THINKING_LEVEL, default LOW).
+        Thinking cannot be switched off there, and MINIMAL is rejected by both
+        3.8 Flash and 4 Argon, so LOW is the cheapest valid setting.
+        Gemini 2.x: off for flash models; GEMINI_THINKING_BUDGET overrides.
+        """
         from google.genai import types
+
+        if cls._uses_thinking_level(model):
+            level = os.getenv("GEMINI_THINKING_LEVEL", "").strip().upper() or "LOW"
+            return types.ThinkingConfig(thinking_level=level)
 
         raw = os.getenv("GEMINI_THINKING_BUDGET", "").strip()
         if not raw and "flash" not in model:
@@ -107,10 +140,81 @@ class GeminiProvider(LLMProvider):
     # Client lifecycle
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def backend() -> str:
+        """`vertex` or `studio`. GOOGLE_GENAI_USE_VERTEXAI, the SDK's own
+        switch, is honoured too so a stock Google setup works unchanged."""
+        from utils.config import _get_config_value
+        raw = (_get_config_value("GEMINI_BACKEND", "") or "").strip().lower()
+        if not raw:
+            sdk = (_get_config_value("GOOGLE_GENAI_USE_VERTEXAI", "") or "").strip().lower()
+            raw = "vertex" if sdk in ("1", "true", "yes") else "studio"
+        if raw not in ("vertex", "studio"):
+            raise RuntimeError(f"GEMINI_BACKEND must be 'vertex' or 'studio', not {raw!r}")
+        return raw
+
+    @staticmethod
+    def _service_account_info(raw: str) -> dict:
+        """The key file's JSON, given either as-is or base64-encoded."""
+        raw = raw.strip()
+        if not raw.startswith("{"):
+            try:
+                raw = base64.b64decode(raw, validate=True).decode("utf-8")
+            except (binascii.Error, UnicodeDecodeError) as e:
+                raise RuntimeError(
+                    "VERTEX_CREDENTIALS_JSON is neither JSON nor base64 JSON"
+                ) from e
+        try:
+            info = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise RuntimeError("VERTEX_CREDENTIALS_JSON is not valid JSON") from e
+        if info.get("type") != "service_account":
+            raise RuntimeError(
+                "VERTEX_CREDENTIALS_JSON must be a service-account key "
+                f"(type=service_account), got type={info.get('type')!r}"
+            )
+        return info
+
+    def _vertex_client(self):
+        from utils.config import _get_config_value
+        project = (_get_config_value("VERTEX_PROJECT", "") or "").strip()
+        location = (_get_config_value("VERTEX_LOCATION", "") or "").strip() or "global"
+        raw = _get_config_value("VERTEX_CREDENTIALS_JSON", "") or ""
+
+        credentials = None
+        if raw.strip():
+            from google.oauth2 import service_account
+            info = self._service_account_info(raw)
+            credentials = service_account.Credentials.from_service_account_info(
+                info, scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+            project = project or info.get("project_id", "")
+        if not project:
+            raise RuntimeError(
+                "GEMINI_BACKEND=vertex needs a project: set VERTEX_PROJECT, or "
+                "VERTEX_CREDENTIALS_JSON to a service-account key that names one."
+            )
+
+        from google import genai
+        try:
+            return genai.Client(
+                vertexai=True, project=project, location=location, credentials=credentials,
+            )
+        except Exception as e:  # google.auth.exceptions.DefaultCredentialsError
+            raise RuntimeError(
+                "GEMINI_BACKEND=vertex but no Google credentials were found. Set "
+                "VERTEX_CREDENTIALS_JSON to the service-account key (base64), or "
+                f"GOOGLE_APPLICATION_CREDENTIALS to its path. ({type(e).__name__})"
+            ) from e
+
     def lazy_client(self):
         """Lazy-load the Gemini client so non-AI requests don't pay the
         cold-start cost of importing the SDK."""
         if self._client is not None:
+            return self._client
+
+        if self.backend() == "vertex":
+            self._client = self._vertex_client()
             return self._client
 
         from utils.config import _get_config_value
@@ -119,7 +223,7 @@ class GeminiProvider(LLMProvider):
             # Fail loudly: silently degrading would look like an AI outage.
             raise RuntimeError(
                 "GEMINI_API_KEY is not configured but LLM_PROVIDER=gemini. "
-                "Set it in .env locally, or in SSM for deployed environments."
+                "Set it, or set GEMINI_BACKEND=vertex with a service account."
             )
 
         from google import genai
@@ -196,6 +300,11 @@ class GeminiProvider(LLMProvider):
         backoff) before surfacing the same error. Retry 429/5xx and transport
         errors; fail fast on 4xx, which will never succeed on retry.
         """
+        # Missing or rejected Google credentials (Vertex) surface at call time
+        # as google-auth errors with no status code; they never fix themselves.
+        if type(exc).__name__ in ("DefaultCredentialsError", "RefreshError"):
+            return False
+
         status = getattr(exc, "code", None) or getattr(exc, "status_code", None)
         if isinstance(status, int):
             return status == 429 or status >= 500
@@ -249,7 +358,9 @@ class GeminiProvider(LLMProvider):
         client = self.lazy_client()
 
         last_error = None
+        attempts = 0
         for attempt in range(max_retries + 1):
+            attempts = attempt + 1
             try:
                 return client.models.generate_content(
                     model=model, contents=contents, config=config,
@@ -266,7 +377,7 @@ class GeminiProvider(LLMProvider):
                 time.sleep(wait)
 
         raise LLMRetriesExhaustedError(
-            f"AI service unavailable after {max_retries + 1} attempts: {last_error}"
+            f"AI service unavailable after {attempts} attempt(s): {last_error}"
         )
 
     # ------------------------------------------------------------------
@@ -519,16 +630,23 @@ class GeminiProvider(LLMProvider):
                     pipeline_log,
                 )
 
-            config = types.GenerateContentConfig(
-                temperature=temperature,
-                max_output_tokens=max_tokens,
-                system_instruction=system_text,
-                tools=[tool_config],
-            )
+            def round_config(for_model: str):
+                # Thinking shares max_tokens with the reply; at 2,800 tokens a
+                # default (MEDIUM) budget can leave nothing for the answer.
+                kwargs: Dict[str, Any] = {
+                    "temperature": temperature,
+                    "max_output_tokens": self._clamp_max_tokens(max_tokens, for_model),
+                    "system_instruction": system_text,
+                    "tools": [tool_config],
+                }
+                thinking = self._thinking_config(for_model)
+                if thinking is not None:
+                    kwargs["thinking_config"] = thinking
+                return types.GenerateContentConfig(**kwargs)
 
             try:
                 response = self._generate(
-                    model=model, contents=contents, config=config, max_retries=1,
+                    model=model, contents=contents, config=round_config(model), max_retries=1,
                 )
             except Exception as e:
                 logger.exception("Orchestrator round %d failed: %s", round_num, e)
@@ -536,7 +654,8 @@ class GeminiProvider(LLMProvider):
                     model = self.PRO
                     try:
                         response = self._generate(
-                            model=model, contents=contents, config=config, max_retries=1,
+                            model=model, contents=contents, config=round_config(model),
+                            max_retries=1,
                         )
                     except Exception as e2:
                         logger.exception("Orchestrator fallback failed: %s", e2)
