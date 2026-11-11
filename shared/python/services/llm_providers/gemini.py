@@ -9,8 +9,9 @@ GEMINI_API_KEY. `vertex` bills a Google Cloud project and authenticates with
 a service account: VERTEX_CREDENTIALS_JSON holds the key file's JSON (raw or
 base64, so it fits on one line of stack.env and the read-only containers need
 no file mount), VERTEX_PROJECT defaults to the key's project_id, and
-VERTEX_LOCATION defaults to `global` (current Gemini models are served from
-`global` and the `us`/`eu` multi-regions, not from `us-central1`). Without VERTEX_CREDENTIALS_JSON, Application Default
+VERTEX_LOCATION defaults to `us` (current Gemini models are served from
+`global` and the `us`/`eu` multi-regions, not from `us-central1`; `us` measured
+about 2x faster than `global` for 10% more, 2026-11-10). Without VERTEX_CREDENTIALS_JSON, Application Default
 Credentials are used (GOOGLE_APPLICATION_CREDENTIALS or `gcloud auth
 application-default login`). Request shapes are identical on both backends.
 
@@ -178,7 +179,7 @@ class GeminiProvider(LLMProvider):
     def _vertex_client(self):
         from utils.config import _get_config_value
         project = (_get_config_value("VERTEX_PROJECT", "") or "").strip()
-        location = (_get_config_value("VERTEX_LOCATION", "") or "").strip() or "global"
+        location = (_get_config_value("VERTEX_LOCATION", "") or "").strip() or "us"
         raw = _get_config_value("VERTEX_CREDENTIALS_JSON", "") or ""
 
         credentials = None

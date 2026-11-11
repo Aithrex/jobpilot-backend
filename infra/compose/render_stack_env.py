@@ -93,7 +93,7 @@ def main() -> None:
             raise SystemExit(f"{vertex_key} is not a service-account key")
         env["GEMINI_BACKEND"] = "vertex"
         env["VERTEX_CREDENTIALS_JSON"] = base64.b64encode(json.dumps(info).encode()).decode()
-        env.setdefault("VERTEX_LOCATION", "global")
+        env.setdefault("VERTEX_LOCATION", "us")
 
     gen = generated(backup)
     env.update({

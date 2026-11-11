@@ -82,7 +82,7 @@ def main():
         else:
             print("⚠️  No VERTEX_CREDENTIALS_JSON — trying Application Default Credentials")
         print(f"VERTEX_PROJECT:  {os.getenv('VERTEX_PROJECT') or '(from the key)'}")
-        print(f"VERTEX_LOCATION: {os.getenv('VERTEX_LOCATION') or 'global'}")
+        print(f"VERTEX_LOCATION: {os.getenv('VERTEX_LOCATION') or 'us'}")
     else:
         api_key = os.getenv("GEMINI_API_KEY", "")
         if not api_key:
@@ -180,7 +180,7 @@ def main():
         elif "not found" in low or "404" in msg:
             print(
                 "→ The model ID doesn't exist or isn't served at this location.\n"
-                "  Vertex serves current Gemini models at VERTEX_LOCATION=global (or us/eu).\n"
+                "  Vertex serves current Gemini models at VERTEX_LOCATION=us (or global/eu).\n"
                 "  Override with GEMINI_FLASH_MODEL_ID / GEMINI_PRO_MODEL_ID in .env."
             )
         elif "thinking" in low:
