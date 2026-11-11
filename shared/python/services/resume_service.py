@@ -794,9 +794,12 @@ def _finalize_tailored_result(
             except Exception as exc:
                 logger.warning("assessment-v2 finalize failed, returning partial v2: %s", exc)
                 result["ats_scores"] = _assess.unavailable_v2_result(reason=str(exc))
+            _attach_screener(svc, result, structured, jd_analysis, fact_store)
             return result
         from services.tailoring_assessment import finalize
-        return finalize(result, jd_analysis, svc.renderer)
+        result = finalize(result, jd_analysis, svc.renderer)
+        _attach_screener(svc, result, structured, jd_analysis, fact_store)
+        return result
     result_contact = result.get("contact", {})
     if result_contact.get("name"):
         from services.resume_parser import ResumeParser as _RP
@@ -827,6 +830,10 @@ def _finalize_tailored_result(
     result = summary_tailor.refresh_summary_if_stale(
         result, structured, jd_analysis, gap_final,
     )
+    # Restore the user's own source bullet for any requirement the source
+    # proves but the tailored text stopped showing. Before verification, so
+    # the restored lines are checked like every other line.
+    result = _apply_visibility_patch(result, structured, jd_analysis)
 
     if job_id:
         svc.update_job_progress(job_id, "verifying", 80)
@@ -854,7 +861,53 @@ def _finalize_tailored_result(
     except Exception as exc:
         logger.warning("content_selection failed; keeping unselected resume: %s", exc)
     _attach_ats_keyword_audit(result, jd_analysis)
+    _attach_screener(svc, result, structured, jd_analysis, fact_store)
     return result
+
+
+def _apply_visibility_patch(
+    result: Dict[str, Any],
+    structured: Dict[str, Any],
+    jd_analysis: Dict[str, Any],
+) -> Dict[str, Any]:
+    """screener_sim.patch_visibility, fail-open. Verbatim source lines only."""
+    try:
+        from services import screener_sim
+        if not screener_sim.patch_enabled() or screener_sim.mode() == "off":
+            return result
+        result, _applied = screener_sim.patch_visibility(result, structured, jd_analysis or {})
+    except Exception as exc:
+        logger.warning("visibility patch failed (fails open): %s", exc)
+    return result
+
+
+def _attach_screener(
+    svc,
+    result: Dict[str, Any],
+    structured: Dict[str, Any],
+    jd_analysis: Dict[str, Any],
+    fact_store: Dict[str, Any] | None = None,
+) -> None:
+    """Attach the employer-side read of the FINAL revision as `screener`.
+
+    Advisory sidecar: never edits content and never fails the job.
+    """
+    try:
+        from services import screener_sim
+        if screener_sim.mode() == "off" or not isinstance(result, dict):
+            return
+        extra: list = []
+        if fact_store:
+            from services.profile_facts import grounding_texts
+            extra = grounding_texts(fact_store)
+        result["screener"] = screener_sim.screen(
+            result, jd_analysis or {},
+            source=structured if isinstance(structured, dict) else None,
+            renderer=getattr(svc, "renderer", None),
+            extra_grounding=extra,
+        )
+    except Exception as exc:
+        logger.warning("screener sidecar failed (fails open): %s", exc)
 
 
 def _jd_text_for_scoring(jd_text: str, jd_analysis: Optional[Dict[str, Any]]) -> str:

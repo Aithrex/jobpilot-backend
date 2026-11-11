@@ -130,6 +130,7 @@ SIDECAR_KEYS = (
     "document_assessment",
     "_diagnostics",
     "_skill_headings",
+    "screener",
 )
 
 
