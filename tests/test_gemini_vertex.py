@@ -74,7 +74,7 @@ def test_anything_but_a_service_account_key_is_refused(raw):
         GeminiProvider._service_account_info(raw)
 
 
-def test_vertex_client_uses_the_keys_project_and_the_global_location(monkeypatch):
+def test_vertex_client_uses_the_keys_project_and_the_us_location(monkeypatch):
     sa = json.dumps(_service_account("aspirely-ai"))
     monkeypatch.setenv("GEMINI_BACKEND", "vertex")
     monkeypatch.setenv("VERTEX_CREDENTIALS_JSON", base64.b64encode(sa.encode()).decode())
@@ -84,7 +84,7 @@ def test_vertex_client_uses_the_keys_project_and_the_global_location(monkeypatch
     api = GeminiProvider().lazy_client()._api_client
     assert api.vertexai is True
     assert api.project == "aspirely-ai"
-    assert api.location == "global"
+    assert api.location == "us"
     assert api._credentials.service_account_email == "jobpilot-ai@aspirely-ai.iam.gserviceaccount.com"
 
 

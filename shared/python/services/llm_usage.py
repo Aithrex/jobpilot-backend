@@ -226,10 +226,10 @@ def flush(timeout: float = 5.0) -> None:
 # Reading it back
 # ---------------------------------------------------------------------------
 
-# USD per 1M tokens. Third-party figures for gemini-3.8-flash at `global`
-# (introductory rate to 2026-12-31); Google's own page is the authority, so
-# override with LLM_PRICE_IN_PER_M / LLM_PRICE_OUT_PER_M. Thinking tokens
-# bill as output.
+# USD per 1M tokens: gemini-3.8-flash standard text on the `us` ("Regional")
+# endpoint, from the Cloud Billing catalogue on 2026-11-10 (`global` is
+# 1.50 / 7.50). Override with LLM_PRICE_IN_PER_M / LLM_PRICE_OUT_PER_M.
+# Thinking tokens bill as output.
 def _price(env: str, default: float) -> float:
     try:
         return float(os.environ.get(env, "") or default)
@@ -240,8 +240,8 @@ def _price(env: str, default: float) -> float:
 def usage_report(db, days: int = 7, by: str = "caller") -> List[Dict[str, Any]]:
     """Totals per `job` or `caller` over the last `days` UTC days, costliest first."""
     since = (datetime.now(timezone.utc) - timedelta(days=max(1, days) - 1)).strftime("%Y-%m-%d")
-    price_in = _price("LLM_PRICE_IN_PER_M", 0.75)
-    price_out = _price("LLM_PRICE_OUT_PER_M", 3.75)
+    price_in = _price("LLM_PRICE_IN_PER_M", 1.65)
+    price_out = _price("LLM_PRICE_OUT_PER_M", 8.25)
     totals: Dict[str, Dict[str, Any]] = {}
     for doc in db[COLLECTION].find({"day": {"$gte": since}}):
         key = doc.get("job", "-") if by == "job" else f"{doc.get('job', '-')} / {doc.get('caller', '?')}"

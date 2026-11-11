@@ -147,7 +147,7 @@ def test_ledger_rows_aggregate_and_report(mock_db):
     rows = llm_usage.usage_report(mock_db, days=3650)
     assert rows[0]["key"] == "tailor / resume_tailor.tailor"
     assert rows[0]["ms_avg"] == 4000
-    assert rows[0]["usd_estimate"] == pytest.approx(2000 / 1e6 * 0.75 + 200 / 1e6 * 3.75, abs=1e-4)
+    assert rows[0]["usd_estimate"] == pytest.approx(2000 / 1e6 * 1.65 + 200 / 1e6 * 8.25, abs=1e-4)
     mock_db[llm_usage.COLLECTION].delete_many({})
 
 

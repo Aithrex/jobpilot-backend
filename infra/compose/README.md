@@ -141,13 +141,27 @@ and authenticates with a service account:
 | `GEMINI_BACKEND` | `vertex` |
 | `VERTEX_CREDENTIALS_JSON` | `base64 -w0` of the service-account key file (role **Vertex AI User**) |
 | `VERTEX_PROJECT` | optional; defaults to the key's `project_id` |
-| `VERTEX_LOCATION` | `global` (default) or `us`; current Gemini models are not served from `us-central1` |
+| `VERTEX_LOCATION` | `us` (default since 2026-11-10) or `global`; current Gemini models are not served from `us-central1` |
 
-**`global` or `us`.** Measured from a laptop on 2026-11-10 with the same
-calls: a median call took 11.9 s on `global` (worst 83 s) and 3.9 s on `us`
-(worst 12 s), and one parse + tailor took about 166 s against 74-104 s.
-Google bills Gemini 3+ on a non-global endpoint at its "non-global" rate,
-reported as about 10% above `global`; check the Vertex pricing page.
+**Why `us`.** Measured from a laptop on 2026-11-10 with the same calls: a
+median call took 11.9 s on `global` (worst 83 s) and 3.9 s on `us` (worst
+12 s), and one parse + tailor took about 166 s against 74-104 s. It costs 10%
+more. Cloud Billing catalogue, 2026-11-10, USD per 1M text tokens for
+`gemini-3.8-flash`:
+
+| | input | output | cached input |
+|---|---|---|---|
+| `global`, standard | 1.50 | 7.50 | 0.15 |
+| `us` ("Regional"), standard | 1.65 | 8.25 | 0.165 |
+| `global` batch / flex / off-peak | 0.75 | 3.75 | 0.075 |
+| `us` batch / flex / off-peak | 0.825 | 4.125 | 0.082 |
+
+Thinking tokens bill as output. Third-party sites quote an introductory $0.75 /
+$3.75 to 2026-12-31; the catalogue lists the standard rate, so plan on it
+until an invoice shows otherwise. Read the SKUs again with
+`curl -H "Authorization: Bearer $(gcloud auth print-access-token)"
+"https://cloudbilling.googleapis.com/v1/services/C7E2-9256-1C43/skus?currencyCode=USD"`
+and filter on `Gemini 3.8 Flash`.
 
 Every tier uses `gemini-3.8-flash` (the owner's choice, for cost); Gemini 2.5
 was retired on 2026-10-20. `GEMINI_PRO_MODEL_ID=gemini-4-argon` moves
@@ -172,7 +186,7 @@ docker compose --env-file /etc/jobpilot/compose.env exec worker python -c \
 input/output/thinking tokens, time) and logs an `llm_usage` line. The write
 runs on a background thread and never delays a call; `LLM_USAGE_LEDGER=off`
 stops it. Read the last 7 days on the box (read-only; USD is an estimate at
-`LLM_PRICE_IN_PER_M` / `LLM_PRICE_OUT_PER_M`, default 0.75 / 3.75):
+`LLM_PRICE_IN_PER_M` / `LLM_PRICE_OUT_PER_M`, default 1.65 / 8.25, the `us` list price):
 
 ```bash
 docker compose --env-file /etc/jobpilot/compose.env exec worker python -c \
