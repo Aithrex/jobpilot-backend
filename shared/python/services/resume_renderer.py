@@ -1107,6 +1107,61 @@ class ResumeRenderer:
             pdf.multi_cell(w, lh, rest, align=align,
                            new_x="LMARGIN", new_y="NEXT")
 
+    def _draw_project_row(self, pdf, proj: Dict[str, Any], name: str, dates: str, *,
+                          body_size: float, line_h: float, w: float, ml: float) -> None:
+        """Project header: bold name, then ' | <link>' (clickable), dates right.
+
+        The link is the one the uploaded résumé shows (services.project_links).
+        When name + link do not fit beside the dates, the link gets its own
+        line under the name. Measurement renders through this same method.
+        """
+        from services.project_links import link_of
+
+        s = self.spec
+        link = link_of(proj)
+        if not link:
+            self._draw_split_row(
+                pdf, name, dates,
+                left_size=s.entry_pt, right_size=body_size, left_style="B",
+                row_h=s.entry_row_h, w=w, ml=ml,
+            )
+            return
+        shown, target = link
+        shown = self._sanitize_text(shown)
+        self._reset_pdf_paint(pdf)
+        self._assert_renderable(name + shown + dates, "project row")
+        sep = " | "
+        gap = s.split_row_gap_mm
+        date_w = 0.0
+        if dates:
+            self._set_font(pdf, "B", body_size, dates)
+            date_w = pdf.get_string_width(dates) + 0.8
+        left_w = w - date_w - (gap if dates else 0.0)
+        self._set_font(pdf, "B", s.entry_pt, name)
+        name_w = pdf.get_string_width(name) + 0.4
+        self._set_font(pdf, "", body_size, sep + shown)
+        link_w = pdf.get_string_width(sep + shown) + 0.4
+        if name and name_w + link_w <= left_w:
+            self._set_font(pdf, "B", s.entry_pt, name)
+            pdf.cell(name_w, s.entry_row_h, name)
+            self._set_font(pdf, "", body_size, sep + shown)
+            pdf.cell(link_w, s.entry_row_h, sep + shown, link=target)
+            if dates:
+                pdf.cell(max(0.0, left_w - name_w - link_w), s.entry_row_h, "")
+                pdf.cell(gap, s.entry_row_h, " ")
+                self._set_font(pdf, "B", body_size, dates)
+                pdf.cell(date_w, s.entry_row_h, dates, align="R", new_x="LMARGIN", new_y="NEXT")
+            else:
+                pdf.ln(s.entry_row_h)
+            return
+        self._draw_split_row(
+            pdf, name, dates,
+            left_size=s.entry_pt, right_size=body_size, left_style="B",
+            row_h=s.entry_row_h, w=w, ml=ml,
+        )
+        self._set_font(pdf, "", body_size, shown)
+        pdf.cell(w, line_h, shown, link=target, new_x="LMARGIN", new_y="NEXT")
+
     def _draw_split_row(self, pdf, left: str, right: str, *,
                         left_size: float, right_size: float, left_style: str,
                         row_h: float, w: float, ml: float,
@@ -1432,10 +1487,9 @@ class ResumeRenderer:
             for i, proj in enumerate(projects):
                 proj_name = sanitize(proj.get("name", ""))
                 proj_dates = sanitize(proj.get("dates", ""))
-                self._draw_split_row(
-                    pdf, proj_name, proj_dates,
-                    left_size=s.entry_pt, right_size=body_size, left_style="B",
-                    row_h=s.entry_row_h, w=w, ml=ml,
+                self._draw_project_row(
+                    pdf, proj, proj_name, proj_dates,
+                    body_size=body_size, line_h=job_title_h, w=w, ml=ml,
                 )
                 proj_bullets = proj.get("bullets") or []
                 for bi, b in enumerate(proj_bullets):
@@ -1978,7 +2032,7 @@ class ResumeRenderer:
             before_pt = (s.min_pre_bullet if is_first else s.min_bullet_gap) * 72 / 25.4
             tight(p, before=before_pt, after=0)
 
-        def header_line(left_bold: str, dates: str):
+        def header_line(left_bold: str, dates: str, link_text: str = ""):
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.LEFT
             if dates:
@@ -1986,6 +2040,9 @@ class ResumeRenderer:
                     usable_w_emu, WD_TAB_ALIGNMENT.RIGHT)
             r1 = p.add_run(left_bold)
             set_run_font(r1, s.entry_pt, bold=True)
+            if link_text:
+                r_link = p.add_run(f" | {link_text}")
+                set_run_font(r_link, body_size)
             if dates:
                 # Leading space before the tab so extraction cannot glue tokens.
                 r2 = p.add_run(f" \t{dates}")
@@ -2065,7 +2122,10 @@ class ResumeRenderer:
         if projects:
             add_section_header(s.heading("projects"))
             for i, proj in enumerate(projects):
-                header_line(proj.get("name", ""), proj.get("dates", ""))
+                from services.project_links import link_of
+                proj_link = link_of(proj)
+                header_line(proj.get("name", ""), proj.get("dates", ""),
+                            link_text=proj_link[0] if proj_link else "")
                 for bi, b in enumerate(proj.get("bullets") or []):
                     add_bullet(b, is_first=(bi == 0))
                 if i < len(projects) - 1:

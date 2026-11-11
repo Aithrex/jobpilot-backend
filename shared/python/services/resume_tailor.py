@@ -656,6 +656,10 @@ class ResumeTailor:
         corrected, report = self._guard.enforce(structured_resume, validated, jd_analysis)
         if report.severity != "clean":
             logger.warning("Regenerate integrity: %s", report.severity)
+        # Links the user typed in the editor survive a regenerate; the guard
+        # alone would reset them to the parsed original's.
+        from services.project_links import carry_current_links
+        carry_current_links(current_tailored, corrected)
 
         # Run the SAME finalize sequence as tailor() so a regenerated résumé is
         # deterministically cleaned the same way — base-skill restore, evidenced

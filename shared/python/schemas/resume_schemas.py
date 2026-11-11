@@ -85,6 +85,9 @@ PARSED_RESUME_SCHEMA = {
         "dates": str,
         "bullets": [str],
         "tech": str,
+        # Repository or demo link the uploaded résumé shows for this project
+        # (services.project_links). Copied from the original by IntegrityGuard.
+        "url": str,
     }],
     # Certifications are extracted ONLY if explicitly present in the resume
     # (the parser prompt forbids fabrication). For users without a certs
