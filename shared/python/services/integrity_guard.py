@@ -322,6 +322,13 @@ class IntegrityGuard:
                     )
                     t_entry[f] = orig_val
 
+        # --- Project links: the original project's URL, or none ---
+        # A model never chooses a link: it is copied from the parsed résumé
+        # (services.project_links), so a rewrite cannot invent or redirect one.
+        from services.project_links import restore_from_original
+        for name in restore_from_original(original, tailored):
+            overwrites.append(f"projects[{name}].url")
+
         # --- Education (matched by institution+degree tuple) ---
         orig_edu = original.get("education", [])
         tail_edu = tailored.get("education", [])

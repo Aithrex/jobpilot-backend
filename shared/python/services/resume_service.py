@@ -1980,6 +1980,13 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                     structured = ResumeParser._backfill_education(structured, raw_text)
                     logger.info("Tailor: backfilled missing education institutions")
 
+                # Résumés parsed before project links existed: fill empty ones
+                # from the stored document text. Never changes a stored link.
+                from services.project_links import attach_project_links
+                structured, _links = attach_project_links(
+                    structured, raw_text, validate_existing=False,
+                )
+
             from services.profile_facts import build_fact_store
             fact_store = build_fact_store(
                 user_email=user_email, structured_resume=structured
@@ -2219,6 +2226,11 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 )
                 if edu_missing:
                     structured = ResumeParser._backfill_education(structured, raw_text)
+
+                from services.project_links import attach_project_links
+                structured, _links = attach_project_links(
+                    structured, raw_text, validate_existing=False,
+                )
 
             # Step 3: PARALLEL — tailor + (optional) project generation.
             # Project generation only runs if the original resume has fewer

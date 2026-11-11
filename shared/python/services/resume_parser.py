@@ -537,6 +537,11 @@ class ResumeParser:
         # Backfill education institution from raw text if missing
         result = self._backfill_education(result, effective_raw_text)
 
+        # Project links the document itself shows (hyperlink targets or URLs
+        # printed in the project's block). Deterministic; no model call.
+        from services.project_links import attach_project_links
+        result, _links = attach_project_links(result, effective_raw_text, extracted_urls or [])
+
         # Clean education fields: strip dates baked into degree, deduplicate segments
         result = self._clean_education_fields(result)
 
