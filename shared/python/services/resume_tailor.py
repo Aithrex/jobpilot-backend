@@ -32,7 +32,7 @@ from schemas.resume_schemas import (
 )
 from services.integrity_guard import IntegrityGuard
 from services.jd_profile import prompt_view
-from utils.llm_safety import redact_pii_for_model, wrap_untrusted, guarded_system
+from utils.llm_safety import redact_pii_for_model, wrap_untrusted, guarded_system, prompt_json
 
 # Trusted instruction anchor. The résumé JSON, JD analysis, and free-text user
 # feedback are untrusted data wrapped in tags below — never instructions.
@@ -196,8 +196,8 @@ class ResumeTailor:
             dict(jd_analysis) if isinstance(jd_analysis, dict) else {}
         )
 
-        jd_json = json.dumps(prompt_view(jd_analysis), indent=2)
-        resume_json = json.dumps(structured_resume, indent=2)
+        jd_json = prompt_json(prompt_view(jd_analysis))
+        resume_json = prompt_json(structured_resume)
 
         # --- Keyword strategy (deterministic gap analysis, pre-AI) ---
         gap = KeywordGapEngine().analyze(structured_resume, jd_analysis)
@@ -500,8 +500,8 @@ class ResumeTailor:
         """
         from services.claude_client import claude_json, CLAUDE_FLASH
 
-        draft_json = json.dumps(strip_sidecar_keys(draft), indent=2)[:9000]
-        jd_json = json.dumps(prompt_view(jd_analysis), indent=2)[:2500]
+        draft_json = prompt_json(strip_sidecar_keys(draft))[:9000]
+        jd_json = prompt_json(prompt_view(jd_analysis))[:2500]
         system = guarded_system(
             "You are a rigorous resume-quality judge. Score the tailored resume "
             "on each dimension 0-100. The resume JSON and job analysis are "
@@ -545,9 +545,9 @@ class ResumeTailor:
         correction-retry prompt shape, but for quality not fabrication)."""
         from services import prompt_rules
 
-        draft_json = json.dumps(strip_sidecar_keys(draft), indent=2)
-        original_json = json.dumps(structured_resume, indent=2)
-        jd_json = json.dumps(prompt_view(jd_analysis), indent=2)
+        draft_json = prompt_json(strip_sidecar_keys(draft))
+        original_json = prompt_json(structured_resume)
+        jd_json = prompt_json(prompt_view(jd_analysis))
         weak = ", ".join(verdict.get("weakest_dimensions") or []) or "overall quality"
         critique = (verdict.get("critique") or "").strip()[:1200]
 
@@ -608,9 +608,9 @@ class ResumeTailor:
         # Sidecar/diagnostic keys (verification verdicts, keyword audits,
         # match gaps) must never leak into the regeneration prompt — they
         # describe the resume, they aren't part of it.
-        current_json = json.dumps(strip_sidecar_keys(current_tailored), indent=2)
-        original_json = json.dumps(structured_resume, indent=2)
-        jd_json = json.dumps(prompt_view(jd_analysis), indent=2)
+        current_json = prompt_json(strip_sidecar_keys(current_tailored))
+        original_json = prompt_json(structured_resume)
+        jd_json = prompt_json(prompt_view(jd_analysis))
 
         # Smart truncation
         current_payload = self._smart_truncate(current_json)
@@ -2688,8 +2688,8 @@ class ResumeTailor:
             for e in original.get("experience", [])
         ]
 
-        corrected_json = json.dumps(corrected, indent=2)[:6000]
-        jd_json = json.dumps(prompt_view(jd_analysis), indent=2)[:3000]
+        corrected_json = prompt_json(corrected)[:6000]
+        jd_json = prompt_json(prompt_view(jd_analysis))[:3000]
 
         # Lazy import avoids a circular import (prompt_rules imports
         # BANNED_PHRASES from this module).
@@ -2722,11 +2722,11 @@ class ResumeTailor:
         data = json.loads(json_str)
         for exp in reversed(data.get("experience", [])):
             bullets = exp.get("bullets", [])
-            while len(bullets) > 2 and len(json.dumps(data, indent=2)) > max_chars:
+            while len(bullets) > 2 and len(prompt_json(data)) > max_chars:
                 bullets.pop()
             exp["bullets"] = bullets
 
-        result = json.dumps(data, indent=2)
+        result = prompt_json(data)
         return result  # Never cut JSON in the middle of a field.
 
     @staticmethod

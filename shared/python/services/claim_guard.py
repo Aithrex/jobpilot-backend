@@ -142,6 +142,18 @@ def _iter_source_texts(structured: Dict[str, Any]) -> List[str]:
     return [t for t in texts if t]
 
 
+def _experience_tenure_years(structured_resume: Dict[str, Any]) -> Set[int]:
+    """Whole years of experience the dates support (floor and nearest)."""
+    try:
+        from services.resume_parser import ResumeParser
+        months = ResumeParser._experience_intervals_months(structured_resume)
+    except Exception:
+        return set()
+    if months <= 0:
+        return set()
+    return {max(1, months // 12), max(1, int(round(months / 12.0)))}
+
+
 def build_grounding_index(
     structured_resume: Dict[str, Any],
     extra_texts: Optional[List[str]] = None,
@@ -169,6 +181,14 @@ def build_grounding_index(
         span = max(year_ints) - min(year_ints)
         for tenure in range(1, max(span, 1) + 2):
             index.years.add(str(tenure))
+    # The span above reads only four-digit years, so "Jun 2023 to Present"
+    # ends in 2023 and a 46-month career tops out at "3 years". The summary
+    # writer cites tenure from the month-exact calculator below ("nearly 4
+    # years"), so the guard rejected every opener the writer was told to
+    # write and the user got the old summary. Accept exactly the figures that
+    # calculator yields, floored and rounded; nothing larger.
+    for tenure in _experience_tenure_years(structured_resume):
+        index.years.add(str(tenure))
 
     index.source_text_lower = build_resume_text(structured_resume).lower()
     return index

@@ -40,6 +40,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from utils.db_connect import DBConnect
+from utils.llm_safety import prompt_json
+from services import llm_usage as _llm_usage
 
 logger = logging.getLogger(__name__)
 
@@ -549,6 +551,7 @@ class ResumeService:
             model=CLAUDE_PRO,
             schema=JD_ANALYSIS_SCHEMA,
             system=guarded_system(instructions),
+            cache="jd_analysis",
         )
         validated = validate_and_coerce(result, JD_ANALYSIS_SCHEMA)
 
@@ -1447,6 +1450,7 @@ def _derive_guest_profile(structured: Dict[str, Any]) -> Dict[str, Any]:
     return profile
 
 
+@_llm_usage.tag_job
 def _process_job(job_id: str, job_type: str, payload: dict):
     """Execute the appropriate pipeline step and store the result in MongoDB."""
     svc = get_resume_service()
@@ -2862,7 +2866,7 @@ def _repair_extraction(raw_text: str, invalid_output: dict, error_msg: str):
         "You are a JSON repair assistant. The following resume extraction output "
         "failed schema validation.\n\n"
         f"VALIDATION ERROR:\n{error_msg}\n\n"
-        f"INVALID OUTPUT:\n{json.dumps(invalid_output, indent=2)[:6000]}\n\n"
+        f"INVALID OUTPUT:\n{prompt_json(invalid_output)[:6000]}\n\n"
         f"ORIGINAL RESUME TEXT:\n{raw_text[:4000]}\n\n"
         "Fix ONLY the validation errors. Do not change any factual content. "
         "Do not invent or infer any information. Return the corrected JSON object "

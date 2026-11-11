@@ -141,7 +141,13 @@ and authenticates with a service account:
 | `GEMINI_BACKEND` | `vertex` |
 | `VERTEX_CREDENTIALS_JSON` | `base64 -w0` of the service-account key file (role **Vertex AI User**) |
 | `VERTEX_PROJECT` | optional; defaults to the key's `project_id` |
-| `VERTEX_LOCATION` | `global` (default); current Gemini models are not served from `us-central1` |
+| `VERTEX_LOCATION` | `global` (default) or `us`; current Gemini models are not served from `us-central1` |
+
+**`global` or `us`.** Measured from a laptop on 2026-11-10 with the same
+calls: a median call took 11.9 s on `global` (worst 83 s) and 3.9 s on `us`
+(worst 12 s), and one parse + tailor took about 166 s against 74-104 s.
+Google bills Gemini 3+ on a non-global endpoint at its "non-global" rate,
+reported as about 10% above `global`; check the Vertex pricing page.
 
 Every tier uses `gemini-3.8-flash` (the owner's choice, for cost); Gemini 2.5
 was retired on 2026-10-20. `GEMINI_PRO_MODEL_ID=gemini-4-argon` moves
@@ -160,6 +166,26 @@ not in the image, so on the box ask the running worker directly:
 docker compose --env-file /etc/jobpilot/compose.env exec worker python -c \
   "from services.claude_client import claude_json, CLAUDE_PRO as m; print(m, claude_json('Return JSON {\"ok\": true}', model=m, max_tokens=64))"
 ```
+
+**What each feature spends.** Every Gemini call adds to `llm_usage_daily`
+(UTC day x async job x calling function x model: calls, failures, cache hits,
+input/output/thinking tokens, time) and logs an `llm_usage` line. The write
+runs on a background thread and never delays a call; `LLM_USAGE_LEDGER=off`
+stops it. Read the last 7 days on the box (read-only; USD is an estimate at
+`LLM_PRICE_IN_PER_M` / `LLM_PRICE_OUT_PER_M`, default 0.75 / 3.75):
+
+```bash
+docker compose --env-file /etc/jobpilot/compose.env exec worker python -c \
+  "from services.llm_usage import print_report; print_report(7)"
+```
+
+Pass `print_report(7, by='job')` for one line per job type.
+
+**JD analysis is cached** in `llm_response_cache` for 7 days, keyed on a hash
+of the exact request (model, thinking level, instructions, the JD as sent,
+schema, limits), so any prompt or model change misses by itself. Only the
+model's raw answer is stored; normalising runs on every hit. It is used only
+for prompts with no user data. `LLM_RESPONSE_CACHE=off` disables it.
 
 ## Settings
 

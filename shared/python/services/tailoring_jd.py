@@ -35,7 +35,7 @@ def extract(text: str) -> dict:
         try:
             result = claude_json(
                 prompt=wrap_untrusted("job_description", redact_pii_for_model(chunk)),
-                model=CLAUDE_PRO, max_tokens=9000, schema=schema,
+                model=CLAUDE_PRO, max_tokens=9000, schema=schema, cache="jd_requirements",
                 system=guarded_system("""Extract this section of a job description. Do not invent missing
 fields. Include requirements with text, exact source_excerpt, kind (skill,
 responsibility, qualification, logistics), priority (required/preferred/unspecified),
