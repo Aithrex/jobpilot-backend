@@ -357,14 +357,22 @@ class GeminiProvider(LLMProvider):
         """Single entry point for every Gemini API call, with retry policy."""
         client = self.lazy_client()
 
+        from services import llm_usage
+
         last_error = None
         attempts = 0
+        started = time.time()
         for attempt in range(max_retries + 1):
             attempts = attempt + 1
             try:
-                return client.models.generate_content(
+                response = client.models.generate_content(
                     model=model, contents=contents, config=config,
                 )
+                llm_usage.record(
+                    model=model, usage=getattr(response, "usage_metadata", None),
+                    seconds=time.time() - started,
+                )
+                return response
             except Exception as e:
                 last_error = e
                 if attempt == max_retries or not self._is_retryable(e):
@@ -376,6 +384,7 @@ class GeminiProvider(LLMProvider):
                 )
                 time.sleep(wait)
 
+        llm_usage.record(model=model, seconds=time.time() - started, ok=False)
         raise LLMRetriesExhaustedError(
             f"AI service unavailable after {attempts} attempt(s): {last_error}"
         )

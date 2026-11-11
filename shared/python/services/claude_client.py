@@ -39,22 +39,41 @@ def claude_json(
     schema: dict = None,
     parts: list = None,
     system: str = None,
+    cache: str = None,
 ) -> dict:
     """Primary entry point used by all service modules.
 
     Routes to the active provider's `json()` implementation. The optional
     `system` puts trusted instructions out of the untrusted-data user
     message (defense in depth against prompt injection).
+
+    `cache="<name>"` serves an identical earlier request from
+    `services.llm_response_cache`. Pass it ONLY when the prompt holds no user
+    data (a JD, not a resume): the answer is shared by everyone who sends the
+    same prompt. Ignored with `parts` (file uploads).
     """
-    return _provider.json(
-        prompt=prompt,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        model=model or _provider.PRO,
-        max_retries=max_retries,
-        schema=schema,
-        parts=parts,
-        system=system,
+    model = model or _provider.PRO
+
+    def call() -> dict:
+        return _provider.json(
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            model=model,
+            max_retries=max_retries,
+            schema=schema,
+            parts=parts,
+            system=system,
+        )
+
+    if not cache or parts:
+        return call()
+    from services import llm_response_cache
+    return llm_response_cache.cached_json(
+        cache, model,
+        {"system": system, "prompt": prompt, "schema": schema,
+         "max_tokens": max_tokens, "temperature": temperature},
+        call,
     )
 
 
