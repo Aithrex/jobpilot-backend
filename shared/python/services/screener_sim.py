@@ -506,8 +506,9 @@ def lens_signals(tailored: Dict[str, Any], pdf_text: Optional[str]) -> Dict[str,
     notes: List[str] = []
     if no_link:
         notes.append(
-            f"{len(no_link)} project(s) have no link. HackerRank's rubric deducts 3-5 points per project "
-            "without a GitHub link or live demo. Add the real repository or demo URL for each one."
+            (f"{len(no_link)} project has no link. " if len(no_link) == 1 else f"{len(no_link)} projects have no link. ")
+            + "HackerRank's rubric deducts 3-5 points per project without a GitHub link or live demo. "
+            "Add the real repository or demo URL in the editor."
         )
     if tutorial:
         notes.append("Tutorial-style project names score low in HackerRank's rubric (0-9 of 30): "
