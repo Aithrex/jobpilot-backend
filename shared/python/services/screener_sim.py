@@ -543,7 +543,8 @@ _SCREEN_SYSTEM = (
     "You screen job applications for one job. You see only the résumé text exactly as an "
     "applicant tracking system extracted it from the PDF. You know nothing else about this "
     "person. Unknown is unknown: never assume a skill, tool, scope or result that is not on "
-    "the page. Every quote you return must be copied exactly from the résumé text."
+    "the page. Every quote you return must be copied exactly from the résumé text. "
+    "In your own notes, do not use em dashes or en dashes."
 )
 
 
@@ -590,6 +591,7 @@ _SCREEN_SCHEMA = {
 def llm_screen(pdf_text: str, criteria: List[Dict[str, Any]], jd: Dict[str, Any], arch: str) -> Dict[str, Any]:
     """One temperature-0 read of the extracted text. Quotes are verified."""
     from services import claude_client
+    from services.copy_finalizer import finalize_text
     from utils.llm_safety import guarded_system
 
     raw = claude_client.claude_json(
@@ -628,14 +630,16 @@ def llm_screen(pdf_text: str, criteria: List[Dict[str, Any]], jd: Dict[str, Any]
         except (TypeError, ValueError):
             score = 0
         rubric[key] = {"score": max(0, min(cap, score)), "max": cap,
-                       "evidence": str(cell.get("evidence") or "")[:300]}
+                       "evidence": finalize_text(str(cell.get("evidence") or "")[:300])}
     level = str(raw.get("apparent_level") or "").strip().lower()
     return {
         "criteria": verdicts,
         "apparent_level": level if level in {"intern", "new_grad", "mid", "senior", "staff_plus"} else "",
-        "six_second_read": str(raw.get("six_second_read") or "")[:400],
-        "reason_to_interview": str(raw.get("reason_to_interview") or "")[:400],
-        "top_concern": str(raw.get("top_concern") or "")[:400],
+        # Screener notes are prose the user reads; punctuation only. Quotes
+        # above are NOT finalized: they must match the page verbatim.
+        "six_second_read": finalize_text(str(raw.get("six_second_read") or "")[:400]),
+        "reason_to_interview": finalize_text(str(raw.get("reason_to_interview") or "")[:400]),
+        "top_concern": finalize_text(str(raw.get("top_concern") or "")[:400]),
         "rubric": rubric,
         "rubric_total": sum(c["score"] for c in rubric.values()),
         "rubric_max": sum(LENS_CATEGORY_MAX.values()),
@@ -719,10 +723,10 @@ def screen(
     warnings: List[str] = []
     page_text = pdf_text if pdf_text else ""
     if page_text and _INJECTION_RE.search(page_text):
-        warnings.append("The résumé contains text addressed to an AI screener. Employers treat this as "
+        warnings.append("The resume contains text addressed to an AI screener. Employers treat this as "
                         "manipulation and drop the application; remove it.")
     if any(r["lost_in_render"] for r in rows):
-        warnings.append("Some requirements are in the résumé data but missing from the PDF text an ATS reads.")
+        warnings.append("Some requirements are in the resume data but missing from the PDF text an ATS reads.")
 
     report: Dict[str, Any] = {
         "version": VERSION,

@@ -81,7 +81,9 @@ BANNED_SYMBOLS_RULE = (
     "  - NEVER write `sub-N` / `sub-Nms` ('sub-100ms', 'sub-second'). Write "
     "'under 100ms' or '100ms'.\n"
     "  - NEVER coin hedging compounds ('near-zero', 'near-100%').\n"
-    "  - NEVER use en-dash `–` or em-dash `—` anywhere — use ASCII hyphen `-`.\n"
+    "  - NEVER use an en dash or an em dash, and never a spaced hyphen (' - ') "
+    "between clauses. Join clauses with a comma or a period; write ranges with 'to' "
+    "('2 to 4 years'). Only the dates field uses an ASCII hyphen.\n"
     "  - Use commas in large bare numbers: '120,000' not '120000'."
 )
 

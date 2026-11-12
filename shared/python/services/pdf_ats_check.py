@@ -317,12 +317,12 @@ def check_pdf_parseability(
     if not contact_name_found:
         warnings.append(f"Candidate name '{name}' did not extract cleanly from PDF.")
     if not contact_email_found and contact.get("email"):
-        warnings.append("Email did not extract cleanly — recruiter can't reply.")
+        warnings.append("Email did not extract cleanly, so a recruiter can't reply.")
     if not contact_phone_found and contact.get("phone"):
         warnings.append("Phone number did not extract cleanly.")
     if not contact_at_top and contact.get("email"):
         warnings.append(
-            "Contact info isn't in the top ~5 lines — many ATSes scan only "
+            "Contact info isn't in the top ~5 lines. Many ATSes scan only "
             "the first ~10% of the document for contact fields."
         )
     if sections_missing:
@@ -333,13 +333,13 @@ def check_pdf_parseability(
     if not sections_in_order and len(sections_found) >= 2:
         warnings.append(
             f"Sections appear out of order in extracted text "
-            f"({' -> '.join(p[0] for p in positions_sorted)}) — ATSes "
+            f"({' -> '.join(p[0] for p in positions_sorted)}). ATSes "
             "expect SUMMARY then EXPERIENCE then SKILLS then EDUCATION."
         )
     if skills_total > 0 and skills_found / skills_total < 0.9:
         warnings.append(
-            f"Only {skills_found}/{skills_total} skills extracted cleanly — "
-            "check for ligature or spacing issues in the PDF."
+            f"Only {skills_found}/{skills_total} skills extracted cleanly. "
+            "Check for ligature or spacing issues in the PDF."
         )
     if dates_total > 0 and dates_parseable < dates_total:
         warnings.append(
@@ -349,8 +349,8 @@ def check_pdf_parseability(
         )
     if not no_glyph_corruption:
         warnings.append(
-            "PDF contains undefined glyph or ligature characters — these "
-            "appear as boxes/garbage in stricter parsers (Taleo, older Workday)."
+            "PDF contains undefined glyph or ligature characters. These "
+            "appear as boxes or garbage in stricter parsers (Taleo, older Workday)."
         )
     if word_join_issues:
         warnings.append(
@@ -360,7 +360,7 @@ def check_pdf_parseability(
     if not single_page and page_count > 1:
         warnings.append(
             f"Resume is {page_count} pages. Most ATSes accept multi-page, "
-            "but recruiter time-on-page averages 6-8 seconds — one page "
+            "but recruiter time-on-page averages 6 to 8 seconds, so one page "
             "is preferred for early-career and IC roles."
         )
 

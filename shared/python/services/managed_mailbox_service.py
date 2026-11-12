@@ -521,14 +521,14 @@ def send_deliverability_probe(user_email: str, *, force: bool = False) -> Dict[s
         out["alias"] = alias
 
         from services.email_service import send_email
-        subject = "Your JobPilot application inbox is live"
+        subject = "Your Aspirely application inbox is live"
         html = (
             "<p>Your dedicated application address is now active:</p>"
             f"<p><strong>{alias}</strong></p>"
-            "<p>JobPilot uses this address when it applies on your behalf, so "
+            "<p>Aspirely uses this address when it applies on your behalf, so "
             "employer confirmations, verification links and recruiter replies "
             "arrive somewhere we can act on automatically. You do not need to "
-            "do anything &mdash; everything shows up in your JobPilot inbox.</p>"
+            "do anything. Everything shows up in your Aspirely inbox.</p>"
         )
         ok = bool(send_email(alias, subject, html))
         _mailboxes().update_one(

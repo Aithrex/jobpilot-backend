@@ -707,14 +707,14 @@ def _notify_matches(user_email: str, rows: List[Dict[str, Any]]) -> bool:
 
         lines = []
         for row in rows[:10]:
-            lines.append("{} — {} ({}% match)".format(
-                str(row.get("company") or "")[:80],
+            lines.append("{} at {} ({}% match)".format(
                 str(row.get("title") or "")[:120],
+                str(row.get("company") or "")[:80],
                 int(row.get("match_score") or 0)))
         text = "We started applications for:\n" + "\n".join("• " + l for l in lines)
         items = "".join("<li>{}</li>".format(_html.escape(l)) for l in lines)
-        subject = ("New match — applying for you" if len(rows) == 1
-                   else f"{len(rows)} new matches — applying for you")
+        subject = ("New match: applying for you" if len(rows) == 1
+                   else f"{len(rows)} new matches: applying for you")
         result = notify.send(user_email, "match_alert", {
             "title": subject,
             "text": text,

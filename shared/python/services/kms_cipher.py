@@ -97,7 +97,7 @@ class KmsEnvelopeCipher:
         key_id = self._key_id or _get_config_value("CREDENTIALS_KMS_KEY_ID", "")
         if not key_id:
             raise KmsCipherError(
-                "CREDENTIALS_KMS_KEY_ID is not configured — the credential "
+                "CREDENTIALS_KMS_KEY_ID is not configured, so the credential "
                 "vault is unavailable in this environment."
             )
         return key_id

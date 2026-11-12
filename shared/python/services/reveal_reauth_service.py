@@ -308,8 +308,8 @@ def _send_code_email(to_email: str, code: str) -> bool:
   login in {app}. It expires in {minutes} minutes and can be used once.</p>
   <p style="font-size:32px;font-weight:700;letter-spacing:8px;margin:24px 0">{code}</p>
   <p style="color:#888;font-size:13px;line-height:1.6">If you didn't ask to see a
-  saved employer password, ignore this email and change your {app} password —
-  someone may have your session.</p>
+  saved employer password, ignore this email and change your {app} password.
+  Someone may have your session.</p>
 </div>"""
     text_body = (
         f"{app} verification code: {code}\n\n"

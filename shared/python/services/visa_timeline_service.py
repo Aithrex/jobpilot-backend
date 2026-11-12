@@ -240,7 +240,7 @@ def compute_timeline(profile: Dict[str, Any], today: Optional[date] = None) -> L
             days_hard = _days_between(file_by, today)
             out.append(Milestone(
                 id="stem_filing_hard_cliff",
-                label="STEM extension — last day to file",
+                label="STEM extension: last day to file",
                 description="USCIS MUST receive your I-765 STEM application before this date or you lose F-1 work authorization.",
                 date=file_by.isoformat(),
                 days_remaining=days_hard,

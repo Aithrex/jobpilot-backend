@@ -81,7 +81,7 @@ def _resolve_ctx(email: str, source: dict, is_admin: bool):
     if requested:
         if not is_admin and not sprint_journey.is_unlocked(email, role_key, difficulty, requested):
             return None, tz, (jsonify({
-                "error": "This chapter is locked — finish the previous one first.",
+                "error": "This chapter is locked. Finish the previous one first.",
                 "locked": True,
             }), 409)
         season_id = requested

@@ -63,7 +63,7 @@ class Channel:
 # Email — the always-available fallback (reuses the existing SES path)
 # ---------------------------------------------------------------------------
 class EmailChannel(Channel):
-    """Reuses ``services.email_service.send_email`` (AWS SES) — NOT reimplemented.
+    """Reuses ``services.email_service.send_email`` — NOT reimplemented.
 
     ``email_service`` is the auth service's local module (``services/auth/
     services/email_service.py``) merged into the ``services`` PEP-420 namespace.
@@ -93,7 +93,14 @@ class EmailChannel(Channel):
             # Lazy: the SES module lives in the auth service's local `services/`
             # (namespace-merged). Reuse it — do not reimplement SES here.
             from services import email_service  # type: ignore
-            return bool(email_service.send_email(to_email, subject, html_body, text_body))
+            from services.notifications.service import EVENT_LIST
+            # Proactive events (digests, alerts, nudges) are list mail and get
+            # the unsubscribe headers + footer; transactional ones
+            # (interview_reminder, application_wall) map to no list and go
+            # out unchanged.
+            list_id = EVENT_LIST.get(event)
+            return bool(email_service.send_email(
+                to_email, subject, html_body, text_body, list_id=list_id))
         except Exception as e:  # ImportError in a Lambda without the auth-local module, or SES error
             logger.warning("[notify:email] send failed for event=%s: %s", event, e)
             return False

@@ -94,8 +94,8 @@ def _repo_name(path: Dict, task_ref: str) -> str:
 def _repo_description(path: Dict, task: Dict) -> str:
     gap = str(path.get("topic") or (path.get("differentiator") or {}).get("gap") or "").strip()
     brief = str(task.get("brief") or "").strip()
-    base = f"Proof-of-work for \"{gap}\"" if gap else "JobPilot learning proof-of-work"
-    return (f"{base} — {brief}" if brief else base)[:340]
+    base = f"Proof-of-work for \"{gap}\"" if gap else "Aspirely learning proof-of-work"
+    return (f"{base}: {brief}" if brief else base)[:340]
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +176,7 @@ def ensure_task_repo(user_email: str, path_id: str, task_ref: str) -> Dict:
             "default_branch": "main",
             "push_instructions": _push_instructions(None, "main", connected=False, repo_name=repo_name),
             "nudges": nudges,
-            "message": "GitHub isn't connected — create the repo yourself with the steps below, "
+            "message": "GitHub isn't connected. Create the repo yourself with the steps below, "
                        "or connect GitHub to have us set it up.",
         }
 
@@ -215,8 +215,8 @@ def ensure_task_repo(user_email: str, path_id: str, task_ref: str) -> Dict:
         "default_branch": default_branch,
         "push_instructions": _push_instructions(repo_url, default_branch, connected=True, repo_name=repo_name),
         "nudges": nudges,
-        "message": ("Created your repo — push your work with the steps below."
-                    if created else "Repo already exists — push your latest work with the steps below."),
+        "message": ("Created your repo. Push your work with the steps below."
+                    if created else "The repo already exists. Push your latest work with the steps below."),
     }
 
 
@@ -243,13 +243,13 @@ def push_nudges(task: Dict) -> List[str]:
     if proof == "github_pr":
         nudges.append("Open the pull request early as a draft and push commits to it, so the "
                       "diff tells the whole story.")
-        nudges.append("Write the PR description as Why / What / Tradeoff — reviewers read that first.")
+        nudges.append("Write the PR description as Why / What / Tradeoff. Reviewers read that first.")
     if any(k in blob for k in ("latency", "p99", "throughput", "benchmark", "performance", "profil")):
         nudges.append("Add a 'Results' section to the README with the before/after numbers and "
                       "how you measured them.")
     if any(k in blob for k in ("endpoint", " api", "route", "rest", "graphql", "http")):
         nudges.append("Include a copy-pasteable curl example showing the request and the exact "
-                      "response — include one error case (e.g. 401 on a missing token).")
+                      "response, plus one error case (e.g. 401 on a missing token).")
     if any(k in blob for k in ("docker", "container", "kubernet", "k8s", "deploy")):
         nudges.append("Commit the Dockerfile/compose and a one-command run so a reviewer goes "
                       "from clone to running in under a minute.")

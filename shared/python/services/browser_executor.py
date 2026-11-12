@@ -220,7 +220,7 @@ _SUPPORTED_FAMILIES = frozenset({GREENHOUSE, LEVER, ASHBY, WORKDAY})
 # be surfaced as an opaque technical failure.
 EXECUTOR_UNSUPPORTED = "executor_unsupported"
 UNSUPPORTED_USER_MESSAGE = (
-    "We can't auto-apply to this employer's system yet — please apply manually."
+    "We can't auto-apply to this employer's system yet, so please apply manually."
 )
 
 # Dry-run / copilot outcome: the form was filled and proof captured, and Submit

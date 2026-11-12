@@ -361,7 +361,7 @@ def _linkedin_candidates(archive: Dict[str, Any]) -> List[Dict[str, Any]]:
         cands.append({
             "fact_id": fid,
             "kind": "position",
-            "display": f"{title} at {company}" + (f" — {desc}" if desc else ""),
+            "display": f"{title} at {company}" + (f": {desc}" if desc else ""),
             "payload": {"display": ground},
         })
 
@@ -422,7 +422,7 @@ def _github_candidates(profile: Dict[str, Any]) -> List[Dict[str, Any]]:
             f"{stars} stars" if stars >= 5 else "",
             desc,
         ) if b]
-        detail = " — ".join([", ".join(bits[:2])] + ([bits[2]] if len(bits) > 2 else [])) if bits else ""
+        detail = "; ".join([", ".join(bits[:2])] + ([bits[2]] if len(bits) > 2 else [])) if bits else ""
         cands.append({
             "fact_id": "gh:repo:" + _sha(name.lower()),
             "kind": "repo",

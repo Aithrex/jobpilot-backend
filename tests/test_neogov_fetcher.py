@@ -160,7 +160,7 @@ def test_the_live_path_shows_the_same_salary_as_the_inventory_path(posted):
     first, so the same job showed a pay band on one and nothing on the other -
     which reads as a bug rather than as a missing field."""
     rows = cps.FETCHERS["neogov"](AGENCY)
-    assert rows[0]["salary"] == "$60.55 - $70.40 an hour"
+    assert rows[0]["salary"] == "$60.55 to $70.40 an hour"
 
 
 def test_no_published_salary_is_an_empty_string_not_a_guess(monkeypatch):

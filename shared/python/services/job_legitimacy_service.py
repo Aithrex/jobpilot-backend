@@ -700,7 +700,7 @@ def assess_job(job: Dict[str, Any]) -> Dict[str, Any]:
     soft = 0
     if any(p in blob for p in GHOST_PHRASES):
         soft += 1; flags.append("evergreen_posting")
-        reasons.append("'Always hiring' / talent-pool language — may not be a specific opening")
+        reasons.append("'Always hiring' or talent-pool language, so this may not be a specific opening")
     if not known_platform:
         if company.lower() in ("", "unknown", "confidential", "n/a", "private"):
             soft += 1; flags.append("undisclosed_company")

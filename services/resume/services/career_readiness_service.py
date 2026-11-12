@@ -27,15 +27,15 @@ WEIGHTS = {"foundation": 0.20, "skills": 0.18, "applications": 0.18, "interview"
 # Weakest dimension → the single next best step + which workspace tab to open.
 _STEP = {
     "foundation": {"label": "Set up your profile", "cta_tab": "my-resumes",
-                   "description": "Upload your résumé and finish onboarding so we can tailor everything to your goal."},
+                   "description": "Upload your resume and finish onboarding so we can tailor everything to your goal."},
     "skills": {"label": "Close a skill gap", "cta_tab": "learning",
                "description": "Pick one missing skill for your target roles and start a short learning path."},
     "applications": {"label": "Tailor & apply to a matched role", "cta_tab": "jobs",
-                     "description": "Tailor your résumé to a strong-match job and apply — quality over quantity beats spray-and-pray."},
+                     "description": "Tailor your resume to a strong-match job and apply. A few careful applications beat many rushed ones."},
     "interview": {"label": "Practice a mock interview", "cta_tab": "interview",
                   "description": "Run one mock interview to get a score and targeted, specific feedback."},
     "growth": {"label": "Start building a skill", "cta_tab": "learning",
-               "description": "Begin a learning path in something you want to master — it counts toward your readiness."},
+               "description": "Begin a learning path in something you want to master. It counts toward your readiness."},
     "proof": {"label": "Show your proof of skill", "cta_tab": "dashboard",
               "description": "Link your GitHub so your real, shipped projects count toward your readiness."},
 }
@@ -83,7 +83,7 @@ def _next_step(dims: List[Dict], target_role) -> Dict:
     step = dict(_STEP.get(weakest["key"], _STEP["foundation"]))
     step["dimension"] = weakest["key"]
     if target_role and weakest["key"] in ("skills", "applications", "interview"):
-        step["description"] = step["description"].rstrip(".") + f" — for {target_role}."
+        step["description"] = step["description"].rstrip(".") + f" Focus on {target_role}."
     return step
 
 
@@ -98,29 +98,29 @@ def _build_plan(ov: Dict, prefs: Dict, proof_linked: bool) -> List[Dict]:
     jobs = ov.get("jobs", {}) or {}
     has_goal = bool(prefs.get("onboarding_complete") and (prefs.get("target_roles") or []))
     return [
-        {"key": "resume", "label": "Upload your résumé", "cta_tab": "my-resumes",
-         "description": "We build everything from your real experience — start here.",
+        {"key": "resume", "label": "Upload your resume", "cta_tab": "my-resumes",
+         "description": "We build everything from your real experience. Start here.",
          "done": bool(resume.get("has_base"))},
         {"key": "goal", "label": "Set your target role", "cta_tab": "profile",
          "description": "Tell us where you're headed so every step is tailored to it.",
          "done": has_goal},
-        {"key": "github", "label": "Prove your skills — link GitHub", "cta_tab": "dashboard",
+        {"key": "github", "label": "Prove your skills: link GitHub", "cta_tab": "dashboard",
          "description": "Your shipped projects are real proof, recognized in your score.",
          "done": bool(proof_linked)},
-        {"key": "tailor", "label": "Tailor your résumé to a role", "cta_tab": "tailor",
-         "description": "Match your résumé to a job — honestly, never fabricated.",
+        {"key": "tailor", "label": "Tailor your resume to a role", "cta_tab": "tailor",
+         "description": "Match your resume to a job honestly. Nothing is ever fabricated.",
          "done": int(apps.get("total", 0) or 0) > 0},
         {"key": "save", "label": "Save 5 matched jobs", "cta_tab": "jobs",
-         "description": "Build a focused shortlist — we screen each one for scams.",
+         "description": "Build a focused shortlist. We screen each one for scams.",
          "done": int(jobs.get("saved", 0) or 0) >= 5},
         {"key": "apply", "label": "Apply to your first role", "cta_tab": "applications",
-         "description": "Quality over quantity — one strong application beats fifty.",
+         "description": "Quality over quantity. One strong application beats fifty.",
          "done": int(apps.get("active", 0) or 0) > 0},
         {"key": "skill", "label": "Build one new skill", "cta_tab": "learning",
-         "description": "Close a gap for your target role — small steps, real progress.",
+         "description": "Close a gap for your target role with small, steady steps.",
          "done": int(learning.get("earned_skills_count", 0) or 0) > 0},
         {"key": "interview", "label": "Practice a mock interview", "cta_tab": "interview",
-         "description": "Get a score and specific feedback — build real confidence.",
+         "description": "Get a score and specific feedback to build real confidence.",
          "done": int(interview.get("attempts", 0) or 0) > 0},
     ]
 
@@ -192,7 +192,7 @@ def compute_readiness(email: str) -> Dict:
         proof = None
     if proof is not None:
         proof_score = _clamp(proof)
-        proof_summary = "GitHub linked — real projects count"
+        proof_summary = "GitHub linked, so real projects count"
     else:
         try:
             # Resume Platform v3: canonical read path (active resume asset).
@@ -202,11 +202,11 @@ def compute_readiness(email: str) -> Dict:
         except Exception:
             nproj = 0
         proof_score = _clamp(min(60, nproj * 20))
-        proof_summary = f"{nproj} résumé project(s) · link GitHub for more" if nproj else "Link GitHub to prove your skills"
+        proof_summary = f"{nproj} resume project(s) · link GitHub for more" if nproj else "Link GitHub to prove your skills"
 
     dims = [
         {"key": "foundation", "label": "Profile foundation", "score": foundation,
-         "summary": "Résumé, goal & skills set up"},
+         "summary": "Resume, goal & skills set up"},
         {"key": "skills", "label": "Skill match", "score": skill_score,
          "summary": f"{have_count} skills · {len(top_gaps)} gap(s) to target"},
         {"key": "applications", "label": "Application momentum", "score": app_score,

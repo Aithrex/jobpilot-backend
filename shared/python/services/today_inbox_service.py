@@ -110,7 +110,7 @@ def _title(company: Any, role: Any, fallback: str) -> str:
     company = (str(company or "")).strip()
     role = (str(role or "")).strip()
     if company and role:
-        return f"{company} — {role}"
+        return f"{role} at {company}"
     return company or role or fallback
 
 
@@ -176,7 +176,7 @@ def _collect_auto_submit(user_email: str) -> List[Tuple[Dict[str, Any], datetime
             out.append(_item(
                 "auto_submit", approval_id,
                 title="Application ready to submit",
-                detail="Reviewed and approved — one tap to submit it for you.",
+                detail="Reviewed and approved. One tap submits it for you.",
                 deep_link=a.get("url") or a.get("application_url") or _LINK_APPLICATIONS,
                 action_label="Submit now",
                 created_at=a.get("approved_at") or a.get("created_at"),

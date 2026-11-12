@@ -230,7 +230,7 @@ def _get_connection(user_email: str) -> Dict[str, Any]:
         raise RuntimeError("LinkedIn is not connected")
     exp = conn.get("expires_at")
     if exp and (exp if getattr(exp, "tzinfo", None) else exp.replace(tzinfo=timezone.utc)) < _now():
-        raise RuntimeError("LinkedIn connection expired — please reconnect")
+        raise RuntimeError("Your LinkedIn connection expired. Please reconnect.")
     return conn
 
 
@@ -247,7 +247,7 @@ def create_post(user_email: str, text: str) -> Dict[str, Any]:
     token = _access_token(conn)
     sub = conn.get("member_sub")
     if not sub:
-        raise RuntimeError("LinkedIn member identity missing — please reconnect")
+        raise RuntimeError("We could not confirm your LinkedIn identity. Please reconnect.")
 
     author = f"urn:li:person:{sub}"
     payload = {

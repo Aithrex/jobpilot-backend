@@ -90,7 +90,7 @@ def _require_verified(user_email: str, path_id: str, task_ref: str) -> Tuple[Dic
     prog = _db().learning_progress.find_one({"user_email": user_email, "path_id": path_id}) or {}
     v = _verification_status(prog, task_ref)
     if str(v.get("status") or "").lower() != "verified":
-        raise ValueError("This task isn't verified yet — only verified, proven work can be posted.")
+        raise ValueError("This task isn't verified yet. Only verified, proven work can be posted.")
     return path, task, prog, v
 
 
@@ -225,7 +225,7 @@ def publish_completion_post(user_email: str, draft_id: str, variant_index: int,
     if path_id and task_ref:
         prog = _db().learning_progress.find_one({"user_email": user_email, "path_id": path_id}) or {}
         if str(_verification_status(prog, task_ref).get("status") or "").lower() != "verified":
-            raise ValueError("This task is no longer verified — refusing to post.")
+            raise ValueError("This task is no longer verified, so it was not posted.")
 
     if mode == "manual":
         _db().post_drafts.update_one(
@@ -254,7 +254,7 @@ def publish_completion_post(user_email: str, draft_id: str, variant_index: int,
         return {
             "mode": "auto", "status": "linkedin_not_connected", "draft_id": draft_id,
             "variant_index": idx, "text": text, "hashtags": hashtags,
-            "message": "Connect LinkedIn to auto-post — until then, here's the draft to post yourself.",
+            "message": "Connect LinkedIn to post automatically. Until then, here's the draft to post yourself.",
         }
 
     # Connected: hold 30 min with a cancel affordance — never a surprise post.
@@ -275,7 +275,7 @@ def publish_completion_post(user_email: str, draft_id: str, variant_index: int,
         "text": text, "schedule_id": schedule_id, "scheduled_for": _iso(scheduled_for),
         "hold_minutes": HOLD_MINUTES,
         "cancel_path": f"/api/resume/learning/posts/{schedule_id}/cancel",
-        "message": f"Scheduled to post in {HOLD_MINUTES} minutes — cancel any time before then.",
+        "message": f"Scheduled to post in {HOLD_MINUTES} minutes. You can cancel any time before then.",
     }
 
 

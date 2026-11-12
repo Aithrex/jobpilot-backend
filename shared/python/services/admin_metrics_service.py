@@ -256,7 +256,7 @@ def ops_health(window_hours: int = 24) -> Dict[str, Any]:
             "calls_total": sum(llm_by_type.values()),
             "note": (
                 "Call-counts only. Real Bedrock cost requires CloudWatch / Cost "
-                "Explorer per model — treat these as a volume proxy, not dollars."
+                "Explorer per model. Treat these as a volume proxy, not dollars."
             ),
         },
     }

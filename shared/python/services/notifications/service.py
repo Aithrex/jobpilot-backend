@@ -72,6 +72,41 @@ EVENTS: Dict[str, Dict[str, Any]] = {
 
 _CONSENT_SCOPE = {"whatsapp": WHATSAPP_CONSENT_SCOPE, "sms": SMS_CONSENT_SCOPE}
 
+# ---------------------------------------------------------------------------
+# Email lists (CAN-SPAM opt-out scope), layered on THIS store.
+#
+# A list is what one unsubscribe link turns off. It lives in the same
+# `notification_prefs` document as the per-event toggles above, so there is
+# one source of truth: `email_lists.<list>` is the list-level subscription and
+# the per-event toggles stay the finer, opt-in choice inside a list.
+#
+#   * Unsubscribing from a list turns its events OFF (after snapshotting them
+#     in `email_lists_restore.<list>`) so the scheduler stops spending on mail
+#     nobody will receive.
+#   * Re-subscribing restores that snapshot, never a blanket "all on".
+#   * Turning an event ON in Settings re-subscribes its list: the latest
+#     explicit choice wins.
+#   * The master `unsubscribed` switch still means "no proactive email at all"
+#     and reads as every list off.
+#
+# Mail that is not driven by an event (auto-apply approvals, the welcome email)
+# names its list at send time; `email_service.send_email(list_id=...)` refuses
+# to send when that list is off.
+# ---------------------------------------------------------------------------
+EMAIL_LISTS = ("job_alerts", "digests", "product_updates", "marketing")
+LIST_EVENTS: Dict[str, tuple] = {
+    "job_alerts": ("match_alert", "saved_search_digest", "application_nudge", "visa_cliff"),
+    "digests": ("daily_digest", "evening_summary"),
+    "product_updates": (),
+    "marketing": (),
+}
+# Marketing is OFF until a user opts in. Aspirely sends no marketing email
+# today, and opt-in is the conservative default under state law.
+LIST_DEFAULTS: Dict[str, bool] = {
+    "job_alerts": True, "digests": True, "product_updates": True, "marketing": False,
+}
+EVENT_LIST: Dict[str, str] = {e: name for name, evs in LIST_EVENTS.items() for e in evs}
+
 
 # --- collection helpers -----------------------------------------------------
 def _db():
@@ -121,6 +156,7 @@ def _default_prefs() -> Dict[str, Any]:
         "events": {k: v["default_on"] for k, v in EVENTS.items()},
         "quiet_hours": {"enabled": True, "start": "22:00", "end": "07:00", "tz": "America/New_York"},
         "proactive_daily_cap": MAX_PROACTIVE_PER_DAY,
+        "email_lists": dict(LIST_DEFAULTS),
     }
 
 
@@ -167,6 +203,13 @@ def _merge_prefs(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, An
     out["quiet_hours"] = qh
     cap = override.get("proactive_daily_cap")
     out["proactive_daily_cap"] = int(cap) if isinstance(cap, int) and 0 <= cap <= 10 else base["proactive_daily_cap"]
+    lists = dict(base.get("email_lists") or LIST_DEFAULTS)
+    stored_lists = override.get("email_lists")
+    if isinstance(stored_lists, dict):
+        for key in EMAIL_LISTS:
+            if isinstance(stored_lists.get(key), bool):
+                lists[key] = stored_lists[key]
+    out["email_lists"] = lists
     return out
 
 
@@ -221,6 +264,13 @@ def set_prefs(user_email: str, prefs: Dict[str, Any]) -> Dict[str, Any]:
         if events:
             clean["events"] = events
 
+    # Turning an event ON is an explicit choice to get that mail, so it
+    # re-subscribes the list the event belongs to (and drops the snapshot an
+    # earlier unsubscribe left). Without this, Settings would show the event on
+    # while send_email kept refusing the list.
+    resubscribe = sorted({EVENT_LIST[e] for e, on in (clean.get("events") or {}).items()
+                          if on and e in EVENT_LIST})
+
     if isinstance(prefs.get("quiet_hours"), dict):
         qh_in = prefs["quiet_hours"]
         qh: Dict[str, Any] = {}
@@ -244,7 +294,17 @@ def set_prefs(user_email: str, prefs: Dict[str, Any]) -> Dict[str, Any]:
 
     clean["user_email"] = email
     clean["updated_at"] = _now()
-    _prefs_col().update_one({"user_email": email}, {"$set": clean}, upsert=True)
+    # `events` is written key by key so a partial body cannot wipe toggles it
+    # did not mention, and so the list re-subscribe below can sit beside it.
+    set_doc = {k: v for k, v in clean.items() if k != "events"}
+    for key, val in (clean.get("events") or {}).items():
+        set_doc[f"events.{key}"] = val
+    update: Dict[str, Any] = {"$set": set_doc}
+    if resubscribe:
+        for name in resubscribe:
+            set_doc[f"email_lists.{name}"] = True
+        update["$unset"] = {f"email_lists_restore.{name}": "" for name in resubscribe}
+    _prefs_col().update_one({"user_email": email}, update, upsert=True)
     return get_prefs(email)
 
 
@@ -259,6 +319,109 @@ def set_unsubscribed(user_email: str, unsubscribed: bool = True) -> Dict[str, An
         upsert=True,
     )
     return get_prefs(email)
+
+
+# ===========================================================================
+# Email lists (see the block comment at EMAIL_LISTS)
+# ===========================================================================
+def email_list_state(user_email: str) -> Dict[str, bool]:
+    """``{list: subscribed}`` for every list. The master unsubscribe reads as
+    every list off. Never raises: a store outage reports the defaults."""
+    prefs = get_prefs(user_email)
+    lists = prefs.get("email_lists") or dict(LIST_DEFAULTS)
+    if prefs.get("unsubscribed"):
+        return {name: False for name in EMAIL_LISTS}
+    return {name: bool(lists.get(name, LIST_DEFAULTS[name])) for name in EMAIL_LISTS}
+
+
+def list_allows(user_email: str, list_id: str) -> bool:
+    """True when ``user_email`` may receive mail on ``list_id`` right now."""
+    if list_id not in EMAIL_LISTS:
+        return False
+    return bool(email_list_state(user_email).get(list_id))
+
+
+def _list_off_update(name: str, prefs: Dict[str, Any], set_doc: Dict[str, Any]) -> None:
+    """Add the writes that turn list ``name`` off: snapshot its events (only
+    when it is currently on, so a repeat unsubscribe cannot overwrite the real
+    snapshot with all-False), then switch them off."""
+    currently_on = bool((prefs.get("email_lists") or {}).get(name, LIST_DEFAULTS[name]))
+    events = prefs.get("events") or {}
+    if currently_on and LIST_EVENTS[name]:
+        set_doc[f"email_lists_restore.{name}"] = {
+            e: bool(events.get(e, EVENTS[e]["default_on"])) for e in LIST_EVENTS[name]
+        }
+    for e in LIST_EVENTS[name]:
+        set_doc[f"events.{e}"] = False
+    set_doc[f"email_lists.{name}"] = False
+
+
+def set_email_lists(user_email: str, changes: Dict[str, bool]) -> Dict[str, bool]:
+    """Apply ``{list: bool}`` changes and return the new :func:`email_list_state`.
+
+    Idempotent: writing a list's current value changes nothing (so a client
+    that echoes the whole object back on every toggle cannot flip events it
+    never touched). Unknown list names raise ``ValueError``.
+    """
+    email = _email(user_email)
+    if not email:
+        raise ValueError("invalid user")
+    changes = changes if isinstance(changes, dict) else {}
+    unknown = [k for k in changes if k not in EMAIL_LISTS]
+    if unknown:
+        raise ValueError("unknown email list")
+
+    try:
+        raw = _prefs_col().find_one({"user_email": email}, {"_id": 0}) or {}
+    except Exception as e:
+        logger.warning("[notify] set_email_lists read failed: %s", type(e).__name__)
+        raise
+    prefs = _merge_prefs(_default_prefs(), raw)
+    restore = raw.get("email_lists_restore") if isinstance(raw.get("email_lists_restore"), dict) else {}
+    state = email_list_state(email)
+
+    set_doc: Dict[str, Any] = {}
+    unset_doc: Dict[str, Any] = {}
+    master_off = bool(prefs.get("unsubscribed"))
+    turning_on = [n for n, v in changes.items() if bool(v) and not state[n]]
+    turning_off = [n for n, v in changes.items() if not bool(v) and state[n]]
+
+    if master_off and turning_on:
+        # Leaving "unsubscribe from everything" for ONE list must not quietly
+        # re-enable the others: convert the master switch into per-list offs.
+        for name in EMAIL_LISTS:
+            if name not in turning_on:
+                _list_off_update(name, prefs, set_doc)
+        set_doc["unsubscribed"] = False
+
+    for name in turning_off:
+        _list_off_update(name, prefs, set_doc)
+
+    for name in turning_on:
+        set_doc[f"email_lists.{name}"] = True
+        snap = restore.get(name) if isinstance(restore.get(name), dict) else None
+        if snap:
+            for e, on in snap.items():
+                if e in LIST_EVENTS[name]:
+                    set_doc[f"events.{e}"] = bool(on)
+        unset_doc[f"email_lists_restore.{name}"] = ""
+        # A master-off conversion above may have queued an off for this list.
+        set_doc.pop(f"email_lists_restore.{name}", None)
+
+    if not set_doc and not unset_doc:
+        return state
+    set_doc["user_email"] = email
+    set_doc["updated_at"] = _now()
+    update: Dict[str, Any] = {"$set": set_doc}
+    if unset_doc:
+        update["$unset"] = unset_doc
+    _prefs_col().update_one({"user_email": email}, update, upsert=True)
+    return email_list_state(email)
+
+
+def unsubscribe_list(user_email: str, list_id: str) -> Dict[str, bool]:
+    """The one-click target: turn one list off. Idempotent."""
+    return set_email_lists(user_email, {list_id: False})
 
 
 _PUSH_HOSTS = (

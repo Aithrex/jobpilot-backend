@@ -119,9 +119,9 @@ def test_a_bare_year_is_not_a_salary():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("raw,expected", [
-    ({"min": 120000, "max": 150000, "currency": "USD"}, "$120,000 - $150,000 a year"),
-    ({"min": 60, "max": 75, "currency": "USD", "interval": "hourly"}, "$60 - $75 an hour"),
-    ({"min": 45000, "max": 55000, "currency": "GBP"}, "£45,000 - £55,000 a year"),
+    ({"min": 120000, "max": 150000, "currency": "USD"}, "$120,000 to $150,000 a year"),
+    ({"min": 60, "max": 75, "currency": "USD", "interval": "hourly"}, "$60 to $75 an hour"),
+    ({"min": 45000, "max": 55000, "currency": "GBP"}, "£45,000 to £55,000 a year"),
     ({"min": 120000, "currency": "USD"}, "$120,000 a year"),
 ])
 def test_display_strings(raw, expected):
@@ -135,13 +135,13 @@ def test_display_of_nothing_is_empty_not_a_phrase():
 
 def test_normalize_attaches_the_display_string():
     got = sal.normalize({"min": 120000, "max": 150000, "currency": "USD"})
-    assert got["display"] == "$120,000 - $150,000 a year"
+    assert got["display"] == "$120,000 to $150,000 a year"
 
 
 @pytest.mark.parametrize("raw,expected", [
     # Cents are all-or-nothing. "$70.4" reads as a typo on a money figure...
     ({"min": 60.55, "max": 70.40, "currency": "USD", "interval": "hourly"},
-     "$60.55 - $70.40 an hour"),
+     "$60.55 to $70.40 an hour"),
     # ...but a whole number should not carry ".00".
     ({"min": 70.0, "currency": "USD", "interval": "hourly"}, "$70 an hour"),
     ({"min": 32.5, "currency": "USD", "interval": "hourly"}, "$32.50 an hour"),

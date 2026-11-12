@@ -28,7 +28,7 @@ def _encryption_key() -> bytes:
     if not raw:
         raise RuntimeError(
             "INTEGRATION_TOKEN_ENCRYPTION_KEY (or GMAIL_TOKEN_ENCRYPTION_KEY) "
-            "is not configured — cannot encrypt writing samples."
+            "is not configured, so writing samples cannot be encrypted."
         )
     if len(raw) == 44 and raw.endswith("="):
         return raw.encode("utf-8")

@@ -397,6 +397,15 @@ def upsert_user(provider: str, identity: Dict) -> Optional[str]:
         {"$setOnInsert": {"user_email": email, "onboarding_complete": False, "created_at": _now()}},
         upsert=True,
     )
+    # A new account on an address erased earlier is a new relationship: drop
+    # the hashed "account deleted" marker (bounce/complaint rows stay).
+    # Clickwrap is not recorded here; the client shows the agreement line and
+    # can PUT /api/auth/privacy {accept_terms_version, age_confirmed}.
+    try:
+        from services import privacy_service
+        privacy_service.on_account_created(email)
+    except Exception as e:
+        logger.warning("%s sign-in: erasure marker clear failed: %s", provider, type(e).__name__)
 
     # Managed application mailbox — AUTO-PROVISION at signup (spec §6), mirroring
     # auth.register. Social sign-in already carries a display name, so the local

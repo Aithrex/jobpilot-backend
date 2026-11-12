@@ -2232,7 +2232,7 @@ def apply_suggestion(user_email: str, suggestion_id: str,
             pass
     try:
         if not _apply_status(user_email, selected_id, selected_status, evidence_ms=evidence_ms):
-            raise RuntimeError("Failed to apply status — record may have been deleted")
+            raise RuntimeError("Could not apply the status. The record may have been deleted.")
         s.update({"record_id": selected_id, "company": (selected.get("jd_analysis") or {}).get("company", ""),
                   "title": (selected.get("jd_analysis") or {}).get("job_title", ""),
                   "applied": True, "applied_at": datetime.now(timezone.utc),

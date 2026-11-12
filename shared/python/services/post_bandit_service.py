@@ -68,7 +68,7 @@ _SCHEDULE_DIMENSIONS = ("hour_bucket",)
 # generated variants actually *express* the sampled archetype.
 _HINTS: Dict[str, Dict[str, str]] = {
     "hook_style": {
-        "question": "Open with a genuine, specific question the reader actually cares about — not rhetorical bait.",
+        "question": "Open with a genuine, specific question the reader actually cares about, not rhetorical bait.",
         "story": "Open in the middle of a concrete moment from the real experience (a scene, not a summary).",
         "result": "Lead with the concrete outcome first, then briefly how it happened.",
         "contrarian": "Open with a specific, defensible contrarian take that is grounded in the real experience.",

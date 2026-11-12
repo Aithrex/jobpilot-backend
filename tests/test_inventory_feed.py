@@ -361,7 +361,7 @@ def test_a_stated_band_reaches_the_card(db):
     _seed_paid("has-pay", comp={"min": 120000, "max": 150000, "currency": "USD"})
     doc = inv.get_posting("career-pages", "has-pay")
     row = feed._row_from_posting(doc, tz_offset=-420)
-    assert row["salary"] == "$120,000 - $150,000 a year"
+    assert row["salary"] == "$120,000 to $150,000 a year"
     assert row["salary_min_annual"] == 120000
     assert row["salary_confidence"] == "structured"
 

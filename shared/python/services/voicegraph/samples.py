@@ -56,18 +56,18 @@ def signal(words: int) -> Dict[str, Any]:
         return {
             "level": "insufficient",
             "ready_for_profile": False,
-            "message": f"Keep going — around {MIN_SIGNAL_WORDS} words lets us learn your voice. You're at {words}.",
+            "message": f"Keep going. Around {MIN_SIGNAL_WORDS} words lets us learn your voice. You're at {words}.",
         }
     if words <= DIMINISHING_WORDS:
         return {
             "level": "good",
             "ready_for_profile": True,
-            "message": f"{words} words — plenty. {SWEET_SPOT_WORDS} is the sweet spot.",
+            "message": f"{words} words is plenty. {SWEET_SPOT_WORDS} is the sweet spot.",
         }
     return {
         "level": "diminishing",
         "ready_for_profile": True,
-        "message": f"{words} words. Past here it's diminishing returns — this is more than enough.",
+        "message": f"{words} words. Past this point there are diminishing returns, and this is more than enough.",
     }
 
 

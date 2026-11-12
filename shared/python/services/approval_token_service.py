@@ -131,7 +131,7 @@ def _secret() -> bytes:
     env = os.getenv("ENVIRONMENT", "development").strip().lower()
     if env != "development":
         raise TokenServiceNotConfigured(
-            "APPROVAL_LINK_SECRET is not configured — refusing to sign/verify links"
+            "APPROVAL_LINK_SECRET is not configured, so approval links cannot be signed or verified"
         )
     global _dev_secret
     if _dev_secret is None:

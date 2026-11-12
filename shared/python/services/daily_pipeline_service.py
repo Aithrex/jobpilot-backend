@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------
 # Defaults (mirror job_pipeline.py)
 # --------------------------------------------------------------------------
+# Data sentinel for "no salary" / "no flags" on a pipeline record. Stored
+# records already carry it, so it stays; every display layer maps it to a
+# word or hides it (frontend: src/lib/displayText.ts isEmptyValue).
+NO_VALUE = "—"
+
 LINKEDIN_ACTOR = "curious_coder~linkedin-jobs-scraper"
 WORKDAY_ACTOR = "fantastic-jobs~workday-jobs-api"
 INDEED_ACTOR = "borderline~indeed-scraper"
@@ -1380,14 +1385,14 @@ def _workday_to_record(j: dict) -> dict:
     location = "; ".join(locs[:3]) if locs else "United States"
 
     salary_raw = j.get("salary_raw")
-    salary = "—"
+    salary = NO_VALUE
     if salary_raw:
         try:
             s = ast.literal_eval(salary_raw) if isinstance(salary_raw, str) else salary_raw
             v = s.get("value") if isinstance(s, dict) else None
             if isinstance(v, dict):
                 lo, hi, cur = v.get("minValue"), v.get("maxValue"), v.get("unitText", "")
-                if lo and hi: salary = f"${int(lo):,}-${int(hi):,} {cur}"
+                if lo and hi: salary = f"${int(lo):,} to ${int(hi):,} {cur}"
                 elif lo:      salary = f"${int(lo):,}+ {cur}"
         except Exception:
             pass

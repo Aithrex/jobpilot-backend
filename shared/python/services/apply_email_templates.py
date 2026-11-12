@@ -33,15 +33,24 @@ APP_NAME = "Aspirely"
 # How long links stay clickable — must match approval_token_service.DEFAULT_TTL_SECONDS.
 _LINK_LIFETIME_HUMAN = "3 days"
 
+# The unsubscribe link, legal name and postal address are appended by
+# `email_service.send_email(list_id=...)`, which `send` below passes, so the
+# templates no longer point people at Settings to opt out (CAN-SPAM forbids
+# making an opt-out depend on signing in).
 _FOOTER_HTML = (
     '<p style="color:#aaa;font-size:12px;margin-top:24px">Buttons in this email are '
-    f'single-use and expire in {_LINK_LIFETIME_HUMAN}. You get these because auto-apply '
-    'is on — change what you get or unsubscribe in Settings &rarr; Notifications.</p>'
+    f'single-use and expire in {_LINK_LIFETIME_HUMAN}. You get these emails because '
+    'auto-apply is on.</p>'
 )
 _FOOTER_TEXT = (
     f"Buttons in this email are single-use and expire in {_LINK_LIFETIME_HUMAN}. "
-    "Change preferences or unsubscribe: Settings -> Notifications."
+    "You get these emails because auto-apply is on."
 )
+
+#: The email list each template belongs to (see notifications.service.EMAIL_LISTS).
+LIST_APPROVAL = "job_alerts"
+LIST_NEEDS_INPUT = "job_alerts"
+LIST_DAILY_SUMMARY = "digests"
 
 
 def _esc(value: Any) -> str:
@@ -75,13 +84,13 @@ def _job_line_html(item: Dict[str, Any], extra_html: str = "") -> str:
     return (
         '<li style="margin:0 0 10px;line-height:1.4">'
         f'<span style="font-weight:600">{_esc(item.get("title") or "Role")}</span>'
-        f' &mdash; {_esc(item.get("company") or "")}{loc}{extra_html}</li>'
+        f' · {_esc(item.get("company") or "")}{loc}{extra_html}</li>'
     )
 
 
 def _job_line_text(item: Dict[str, Any]) -> str:
     loc = f" ({item.get('location')})" if item.get("location") else ""
-    return f"- {item.get('title') or 'Role'} — {item.get('company') or ''}{loc}"
+    return f"• {item.get('title') or 'Role'} · {item.get('company') or ''}{loc}"
 
 
 # ===========================================================================
@@ -99,7 +108,7 @@ def apply_approval_request(matches: List[Dict[str, Any]], *,
     ``approve_all`` / ``review`` / ``skip`` links over this exact batch.
     """
     n = len(matches)
-    subject = f"{n} new job match{'es' if n != 1 else ''} ready to apply — your call"
+    subject = f"{n} new job match{'es' if n != 1 else ''} ready for your approval"
 
     rows = ""
     for m in matches:
@@ -136,7 +145,8 @@ def apply_approval_request(matches: List[Dict[str, Any]], *,
 
     return {"subject": subject,
             "html": _wrap(subject, body),
-            "text": "\n".join(lines)}
+            "text": "\n".join(lines),
+            "list_id": LIST_APPROVAL}
 
 
 # ===========================================================================
@@ -169,7 +179,7 @@ def apply_needs_input(items: List[Dict[str, Any]]) -> Dict[str, str]:
         blocks += (
             '<div style="margin:0 0 20px">'
             f'<p style="margin:0 0 4px;font-weight:600">{_esc(it.get("title") or "Role")}'
-            f' &mdash; {_esc(it.get("company") or "")}</p>'
+            f' · {_esc(it.get("company") or "")}</p>'
             f'{detail}'
             f'{_button(it.get("action_url") or "", it.get("action_label") or "Answer & continue")}'
             '</div>'
@@ -196,7 +206,8 @@ def apply_needs_input(items: List[Dict[str, Any]]) -> Dict[str, str]:
 
     return {"subject": subject,
             "html": _wrap(subject, body),
-            "text": "\n".join(lines)}
+            "text": "\n".join(lines),
+            "list_id": LIST_NEEDS_INPUT}
 
 
 # ===========================================================================
@@ -228,7 +239,7 @@ def apply_daily_summary(submitted: List[Dict[str, Any]],
         for it in needs_you:
             extra = ""
             if it.get("reason"):
-                extra = f' <span style="color:#b45309">&mdash; {_esc(it["reason"])}</span>'
+                extra = f' <span style="color:#b45309">· {_esc(it["reason"])}</span>'
             if it.get("action_url"):
                 extra += (f' &middot; <a href="{_esc(it["action_url"])}" '
                           'style="color:#4f46e5;font-weight:600;text-decoration:none">Resolve</a>')
@@ -241,13 +252,13 @@ def apply_daily_summary(submitted: List[Dict[str, Any]],
     body += f'<p style="margin:24px 0 0">{_button(review_url, "Open your applications")}</p>'
 
     lines = [subject, "", f"Applied for you ({ns}):"]
-    lines += [_job_line_text(m) for m in submitted] or ["- none today"]
+    lines += [_job_line_text(m) for m in submitted] or ["• None today"]
     if needs_you:
         lines += ["", f"Still needs you ({nn}):"]
         for it in needs_you:
             row = _job_line_text(it)
             if it.get("reason"):
-                row += f" — {it['reason']}"
+                row += f": {it['reason']}"
             lines.append(row)
             if it.get("action_url"):
                 lines.append(f"  Resolve: {it['action_url']}")
@@ -255,7 +266,8 @@ def apply_daily_summary(submitted: List[Dict[str, Any]],
 
     return {"subject": subject,
             "html": _wrap(subject, body),
-            "text": "\n".join(lines)}
+            "text": "\n".join(lines),
+            "list_id": LIST_DAILY_SUMMARY}
 
 
 # ===========================================================================
@@ -263,10 +275,15 @@ def apply_daily_summary(submitted: List[Dict[str, Any]],
 # ===========================================================================
 def send(to_email: str, template: Dict[str, str]) -> bool:
     """Send a built template through ``email_service.send_email``. Best-effort,
-    never raises — mirrors the send contract callers already rely on."""
+    never raises — mirrors the send contract callers already rely on.
+
+    Every template here is list mail: it names its ``list_id``, so the send is
+    refused for a recipient who left that list and otherwise carries the
+    RFC 8058 headers and the CAN-SPAM footer."""
     try:
         from services.email_service import send_email
-        return send_email(to_email, template["subject"], template["html"], template["text"])
+        return send_email(to_email, template["subject"], template["html"], template["text"],
+                          list_id=template.get("list_id") or LIST_APPROVAL)
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("apply_email_templates.send failed for %s: %s", to_email, e)
         return False

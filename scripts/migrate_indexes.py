@@ -454,6 +454,16 @@ INDEX_SPECS = [
     ("notification_consents", [("user_email", ASCENDING), ("scope", ASCENDING)],
      {"unique": True, "name": "user_email_scope_unique"}),
 
+    # === Email suppression (bounces, complaints, erased accounts) =========
+    # email_service.send_email runs BOTH lookups on every send:
+    # email_suppression.is_suppressed -> find_one({"email"}) and
+    # privacy_service.is_hash_suppressed -> find_one({"email_hash"}). Hashed
+    # rows carry no `email`, raw rows no `email_hash`, hence sparse.
+    ("email_suppressions", [("email", ASCENDING)],
+     {"name": "email_idx", "sparse": True}),
+    ("email_suppressions", [("email_hash", ASCENDING), ("reason", ASCENDING)],
+     {"name": "email_hash_reason", "sparse": True}),
+
     # === Mail-ingress Track A (§2.4) — unique addresses, dedup + 30d TTL purge.
     ("mail_ingress_addresses", [("user_email", ASCENDING)], {"unique": True, "name": "user_email_unique"}),
     ("mail_ingress_addresses", [("ingress_local", ASCENDING)], {"unique": True, "name": "ingress_local_unique"}),

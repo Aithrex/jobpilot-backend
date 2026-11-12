@@ -739,6 +739,22 @@ def _project_policy(
     return policy
 
 
+def _finalize_punctuation(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Dash punctuation out of every tailored text field, words untouched.
+
+    IntegrityGuard runs the same pass after the primary emit and the augmenter
+    after its own LLM calls, but the summary refresh and the visibility patch
+    run later still. This is the one pass every tailor path (tailor,
+    regenerate, extract_and_tailor, batch, guest) shares. Never fails a job.
+    """
+    try:
+        from services.integrity_guard import IntegrityGuard
+        result, _ = IntegrityGuard().fix_unicode_dashes(result)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("punctuation finalizer skipped: %s", exc)
+    return result
+
+
 def _finalize_tailored_result(
     svc,
     job_id: str,
@@ -759,6 +775,7 @@ def _finalize_tailored_result(
     """
     from services.tailoring_pipeline import is_result
     if is_result(result):
+        result = _finalize_punctuation(result)
         # Layout prep (selection) before read-only assessment on this revision.
         try:
             from services.content_selection import page_budget_for_resume, select_resume_content
@@ -834,6 +851,8 @@ def _finalize_tailored_result(
     # proves but the tailored text stopped showing. Before verification, so
     # the restored lines are checked like every other line.
     result = _apply_visibility_patch(result, structured, jd_analysis)
+    # Last text change before verification, so the sidecar describes it.
+    result = _finalize_punctuation(result)
 
     if job_id:
         svc.update_job_progress(job_id, "verifying", 80)
@@ -1624,11 +1643,12 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             # service sends the LLM only a role + the sender's own facts; the
             # connection's name never enters the prompt (third-party PII boundary).
             from services.referral_finder_service import draft_ask
-            message = draft_ask(
+            from services.copy_finalizer import finalize_text
+            message = finalize_text(draft_ask(
                 payload.get("user_email", ""),
                 payload.get("referral") or {},
                 payload.get("job") or {},
-            )
+            ))
             svc.complete_job(job_id, {"message": message})
 
         elif job_type == "upload_parse":
@@ -2075,8 +2095,9 @@ def _process_job(job_id: str, job_type: str, payload: dict):
 
         elif job_type == "rewrite_bullet_evidence":
             from services.tailoring_pipeline import rewrite_bullet
-            svc.complete_job(job_id, {"rewritten": rewrite_bullet(
-                payload["bullet"], payload.get("job_title", ""), payload.get("jd_keywords", []))})
+            from services.copy_finalizer import finalize_bullet
+            svc.complete_job(job_id, {"rewritten": finalize_bullet(rewrite_bullet(
+                payload["bullet"], payload.get("job_title", ""), payload.get("jd_keywords", [])))})
 
         elif job_type == "regenerate":
             user_email = payload.get("user_email", "")
@@ -2147,6 +2168,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
 
         elif job_type == "cover_letter":
             from services.claude_client import claude_json, CLAUDE_PRO
+            from services.copy_finalizer import NO_DASH_RULE, finalize_text
             from utils.llm_safety import (
                 redact_pii_for_model, wrap_untrusted, guarded_system,
             )
@@ -2200,7 +2222,8 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                 "an experience, skill, employer, or metric the candidate data doesn't "
                 "state. If the JD wants something the candidate lacks, do not claim it.\n"
                 "7. Do NOT use 'I am writing to apply', 'I believe I am a strong "
-                "candidate', 'I am excited to bring my skills'. Be direct and specific.\n\n"
+                "candidate', 'I am excited to bring my skills'. Be direct and specific.\n"
+                f"8. {NO_DASH_RULE}\n\n"
                 'Return JSON: {"cover_letter": "The full cover letter text with paragraph breaks as \\n\\n"}'
             )
 
@@ -2213,7 +2236,9 @@ def _process_job(job_id: str, job_type: str, payload: dict):
                     "fabricate facts the candidate data does not support."
                 ),
             )
-            cover_text = result.get("cover_letter", "")
+            # Punctuation only (no word changes), so the faithfulness check
+            # below reads exactly the words the model wrote.
+            cover_text = finalize_text(result.get("cover_letter", ""))
 
             # Advisory faithfulness check (Phase 4): flag any sentence in the
             # letter that isn't grounded in the candidate's resume. Fails open —

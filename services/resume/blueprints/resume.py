@@ -48,8 +48,8 @@ def _quota_exceeded_response(usage: dict):
             "error": "daily_quota_exceeded",
             "message": (
                 f"You've used all {limit} of your daily tailored resumes. "
-                "We cap this to keep the AI tailoring free for everyone — "
-                "your counter resets at midnight UTC. "
+                "We cap this to keep the AI tailoring free for everyone. "
+                "Your counter resets at midnight UTC. "
                 "Need more for a specific job hunt push? Send us a note "
                 "via the Feedback button and we'll bump your limit."
             ),
@@ -1983,7 +1983,8 @@ def interview_chat(record_id):
             "Respond ONLY as strict JSON: {\"reply\": \"your coach response\"}. "
             "Keep the reply warm, practical, and under 250 words unless the user "
             "asked for more depth. Offer drills, example answers, or STAR templates "
-            "when relevant. No markdown headers; light markdown bullets are fine."
+            "when relevant. No markdown headers; light markdown bullets are fine. "
+            "Do not use em dashes or en dashes; join clauses with a comma or a period."
         )
 
         from services.claude_client import claude_json, CLAUDE_FLASH
@@ -1994,9 +1995,10 @@ def interview_chat(record_id):
             model=CLAUDE_FLASH,
             schema={"reply": str},
         )
-        reply = ((result or {}).get("reply") or "").strip()
+        from services.copy_finalizer import finalize_text
+        reply = finalize_text(((result or {}).get("reply") or "").strip())
         if not reply:
-            reply = "I'm not sure I caught that — could you rephrase?"
+            reply = "I'm not sure I caught that. Could you rephrase?"
 
         now = datetime.utcnow()
         new_history = history + [
@@ -2134,7 +2136,9 @@ def mock_evaluate(record_id):
             )
         except Exception as _cap_err:
             logger.warning("interview attempt capture failed: %s", _cap_err)
-        return jsonify({"evaluation": result}), 200
+        from services.copy_finalizer import finalize_fields
+        # Feedback prose only; scores and keys are untouched.
+        return jsonify({"evaluation": finalize_fields(result)}), 200
     except Exception as e:
         logger.exception("Mock evaluate error: %s", e)
         return jsonify({"error": f"Evaluation failed: {str(e)[:200]}"}), 500
@@ -5056,7 +5060,7 @@ def events_refresh():
     client_ip = get_client_ip(request)
     limiter = get_rate_limiter()
     if limiter.is_rate_limited(f"events_refresh:{client_ip}", max_requests=4, window_seconds=3600):
-        return jsonify({"error": "Refreshed recently — try again later."}), 429
+        return jsonify({"error": "Refreshed recently. Please try again later."}), 429
     import os
     from services.resume_service import get_resume_service, ResumeService
     # Only run the LLM 30% of legitimacy scoring when Bedrock is actually
@@ -5180,7 +5184,7 @@ def github_link():
     from utils.security import get_rate_limiter, get_client_ip
     limiter = get_rate_limiter()
     if limiter.is_rate_limited(f"github_link:{get_client_ip(request)}", max_requests=10, window_seconds=120):
-        return jsonify({"error": "Rate limit exceeded — try again shortly"}), 429
+        return jsonify({"error": "Rate limit exceeded. Please try again shortly."}), 429
     user_email = get_jwt_identity()
     data = request.get_json(silent=True) or {}
     raw = InputSanitizer.sanitize_string(str(data.get("username") or ""), max_length=120)
@@ -5222,7 +5226,7 @@ def linkedin_audit():
     from utils.security import get_rate_limiter, get_client_ip
     limiter = get_rate_limiter()
     if limiter.is_rate_limited(f"linkedin_audit:{get_client_ip(request)}", max_requests=10, window_seconds=120):
-        return jsonify({"error": "Rate limit exceeded — try again shortly"}), 429
+        return jsonify({"error": "Rate limit exceeded. Please try again shortly."}), 429
     user_email = get_jwt_identity()
     data = request.get_json(silent=True) or {}
     url = InputSanitizer.sanitize_string(str(data.get("linkedin_url") or ""), max_length=300)
@@ -5348,7 +5352,7 @@ def connect_github_publish():
     user's skills and publish it to a new public GitHub repo. Returns {repo_url}."""
     limiter = get_rate_limiter()
     if limiter.is_rate_limited(f"connect_gh_publish:{get_client_ip(request)}", max_requests=5, window_seconds=600):
-        return jsonify({"error": "Rate limit exceeded — try again shortly"}), 429
+        return jsonify({"error": "Rate limit exceeded. Please try again shortly."}), 429
     user_email = get_jwt_identity()
     data = request.get_json(silent=True) or {}
     name = InputSanitizer.sanitize_string(str(data.get("name") or ""), max_length=80)
@@ -5380,7 +5384,7 @@ def connect_linkedin_post():
     """Human-approved action: publish a post to the connected LinkedIn account."""
     limiter = get_rate_limiter()
     if limiter.is_rate_limited(f"connect_li_post:{get_client_ip(request)}", max_requests=5, window_seconds=600):
-        return jsonify({"error": "Rate limit exceeded — try again shortly"}), 429
+        return jsonify({"error": "Rate limit exceeded. Please try again shortly."}), 429
     user_email = get_jwt_identity()
     data = request.get_json(silent=True) or {}
     text = InputSanitizer.sanitize_string(str(data.get("text") or ""), max_length=3000)
@@ -5418,14 +5422,14 @@ def _scaffold_project_files(user_email: str, name: str, description: str, kind: 
         logger.warning("scaffold: could not load skills for %s: %s", user_email, e)
 
     skills_line = ", ".join(skills) if skills else "the candidate's core skills"
-    desc = description or f"A starter project scaffolded by JobPilot for {name}."
+    desc = description or f"A starter project scaffolded by Aspirely for {name}."
     is_python = any(s.lower() in ("python", "django", "flask", "fastapi", "pandas") for s in skills) or "python" in kind.lower()
 
     readme = (
         f"# {name}\n\n"
         f"{desc}\n\n"
         "## About\n\n"
-        "This repository was scaffolded via JobPilot's GitHub integration as a "
+        "This repository was scaffolded via Aspirely's GitHub integration as a "
         "starting point. It is intentionally minimal — extend it with your own work.\n\n"
         f"## Relevant skills\n\n{skills_line}\n\n"
         "## Getting started\n\n"

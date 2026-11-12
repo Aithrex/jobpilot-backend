@@ -642,58 +642,54 @@ class IntegrityGuard:
         self,
         tailored: Dict[str, Any],
     ) -> Tuple[Dict[str, Any], List[str]]:
-        """Replace en-dash / em-dash with ASCII hyphen-space in all candidate-
-        facing text fields (summary, experience bullets, project bullets,
-        project names, experience dates, education dates).
+        """Remove dash punctuation from every candidate-facing text field.
 
-        Strategy:
-          - Spaced dash (` – ` / ` — `)        → ` - `
-          - Bare dash inside a compound        → `-`
-          - Collapse multi-space runs introduced by the substitution.
+        Prose (summary, experience and project bullets, project names) goes
+        through ``services.copy_finalizer``: a dash between clauses becomes a
+        comma or a period, a numeric range becomes "to", and a word-joining en
+        dash becomes a hyphen. Earlier this wrote " - " for a spaced dash,
+        which swapped one machine tell for another.
+
+        ``dates`` fields keep the resume convention of an ASCII hyphen
+        ("Jan 2020 - Present"), because date parsers downstream split on it.
+
+        Punctuation only: no word, number or name changes, which is what lets
+        the fact checks above run before this step.
         """
+        from services.copy_finalizer import (
+            finalize_bullet, finalize_date_range, finalize_text,
+        )
+
         substitutions: List[str] = []
 
-        def _strip(text: str) -> str:
-            if not isinstance(text, str) or not text:
-                return text
-            new = text
-            for dash in self._DASH_CHARS:
-                if dash not in new:
-                    continue
-                before = new
-                # Spaced dash → spaced ASCII hyphen (preserve breathing room)
-                new = re.sub(rf"\s+{re.escape(dash)}\s+", " - ", new)
-                # Any remaining bare dash → ASCII hyphen
-                new = new.replace(dash, "-")
-                # Collapse multiple spaces the substitution may have produced
-                new = re.sub(r" {2,}", " ", new).strip()
-                if new != before:
-                    substitutions.append(
-                        f"U+{ord(dash):04X} → '-'"
-                    )
-            return new
+        def _track(before: Any, after: Any, where: str) -> Any:
+            if isinstance(before, str) and before != after:
+                substitutions.append(f"dash punctuation rewritten in {where}")
+            return after
 
         if "summary" in tailored:
-            tailored["summary"] = _strip(tailored["summary"])
+            tailored["summary"] = _track(
+                tailored["summary"], finalize_text(tailored["summary"]), "summary")
 
         for exp in tailored.get("experience", []) or []:
-            exp["bullets"] = [_strip(b) for b in (exp.get("bullets") or [])]
+            exp["bullets"] = [_track(b, finalize_bullet(b), "experience bullet")
+                              for b in (exp.get("bullets") or [])]
             if "dates" in exp:
-                exp["dates"] = _strip(exp["dates"])
+                exp["dates"] = _track(exp["dates"], finalize_date_range(exp["dates"]), "dates")
 
         for proj in tailored.get("projects", []) or []:
-            proj["bullets"] = [_strip(b) for b in (proj.get("bullets") or [])]
+            proj["bullets"] = [_track(b, finalize_bullet(b), "project bullet")
+                               for b in (proj.get("bullets") or [])]
             if "dates" in proj:
-                proj["dates"] = _strip(proj["dates"])
-            # Generated project NAMES can carry an em-dash (e.g. "Toolkit — a
-            # personal library ..."); strip it too so no Unicode dash reaches
-            # the PDF via the name.
+                proj["dates"] = _track(proj["dates"], finalize_date_range(proj["dates"]), "dates")
+            # Generated project NAMES can carry a dash ("Toolkit, a personal
+            # library ..."); a name reads as a label, so it takes a colon.
             if "name" in proj:
-                proj["name"] = _strip(proj["name"])
+                proj["name"] = _track(proj["name"], finalize_text(proj["name"], label=True), "project name")
 
         for edu in tailored.get("education", []) or []:
             if "dates" in edu:
-                edu["dates"] = _strip(edu["dates"])
+                edu["dates"] = _track(edu["dates"], finalize_date_range(edu["dates"]), "dates")
 
         return tailored, substitutions
 

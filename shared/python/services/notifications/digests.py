@@ -110,7 +110,7 @@ def build_daily_digest(user_email: str, top_n: int = TOP_N_MATCHES) -> Dict[str,
             "html": _daily_email_html(title, matches, cta_url, hackathons),
             "text": _daily_email_text(title, matches, cta_url, hackathons),
         },
-        "sms": {"body": _clip(summary_line + f" — {cta_url}", 300)},
+        "sms": {"body": _clip(summary_line + f": {cta_url}", 300)},
         "push": {"title": title, "body": summary_line, "url": cta_url},
         "whatsapp": {"template": "daily_digest", "language": "en_US",
                      "params": [str(count), companies or "new roles"]},
@@ -212,11 +212,11 @@ def _daily_email_html(title: str, matches: List[Dict[str, Any]], cta_url: str,
         rows += (
             '<li style="margin:0 0 10px;line-height:1.4">'
             f'<a href="{link}" style="color:#111;font-weight:600;text-decoration:none">'
-            f'{m.get("title") or "Role"}</a> — {m.get("company") or ""} '
+            f'{m.get("title") or "Role"}</a> · {m.get("company") or ""} '
             f'<span style="color:#888">{m.get("location") or ""}</span> {badge}</li>'
         )
     if not rows:
-        rows = '<li style="color:#666">No new matches today — your saved filters are still watching.</li>'
+        rows = '<li style="color:#666">No new matches today. Your saved filters are still watching.</li>'
 
     hk_html = ""
     if hackathons:
@@ -236,7 +236,7 @@ def _daily_email_html(title: str, matches: List[Dict[str, Any]], cta_url: str,
             f'<h3 style="margin:22px 0 8px">🏆 {n} new vetted hackathon{"s" if n != 1 else ""} this week</h3>'
             f'<ul style="padding-left:18px;margin:0 0 8px">{hk_items}</ul>'
             f'<p style="margin:0 0 20px"><a href="{events_url}" style="color:#4f46e5;'
-            'font-weight:600;text-decoration:none">See all vetted events →</a></p>'
+            'font-weight:600;text-decoration:none">See all vetted events</a></p>'
         )
 
     return (
@@ -246,8 +246,7 @@ def _daily_email_html(title: str, matches: List[Dict[str, Any]], cta_url: str,
         f'{hk_html}'
         f'<p><a href="{cta_url}" style="background:#4f46e5;color:#fff;padding:10px 18px;'
         'border-radius:8px;text-decoration:none;font-weight:600">Open your matches</a></p>'
-        '<p style="color:#aaa;font-size:12px;margin-top:24px">You can change what you get or '
-        'unsubscribe in Settings → Notifications.</p></div>'
+        '</div>'
     )
 
 
@@ -257,21 +256,20 @@ def _daily_email_text(title: str, matches: List[Dict[str, Any]], cta_url: str,
     for m in matches:
         sp = (m.get("sponsorship") or {}).get("band")
         tail = f" [sponsorship: {sp}]" if sp else ""
-        lines.append(f"- {m.get('title')} — {m.get('company')} ({m.get('location')}){tail}")
+        lines.append(f"• {m.get('title')} · {m.get('company')} ({m.get('location')}){tail}")
         if m.get("apply_url"):
             lines.append(f"  {m['apply_url']}")
     if not matches:
-        lines.append("No new matches today — your saved filters are still watching.")
+        lines.append("No new matches today. Your saved filters are still watching.")
     if hackathons:
         n = len(hackathons)
         lines += ["", f"{n} new vetted hackathon{'s' if n != 1 else ''} this week:"]
         for h in hackathons:
-            prize = f" — {h.get('prize_pool')}" if _has_prize(h) else ""
-            lines.append(f"- {h.get('title')} ({h.get('org')}){prize}")
+            prize = f" · {h.get('prize_pool')}" if _has_prize(h) else ""
+            lines.append(f"• {h.get('title')} ({h.get('org')}){prize}")
             if h.get("url"):
                 lines.append(f"  {h['url']}")
-    lines += ["", f"Open your matches: {cta_url}",
-              "", "Change preferences or unsubscribe: Settings → Notifications."]
+    lines += ["", f"Open your matches: {cta_url}"]
     return "\n".join(lines)
 
 
@@ -313,7 +311,7 @@ def build_evening_summary(user_email: str) -> Dict[str, Any]:
             "html": _evening_email_html(title, submitted, moved, learning, opt, cta_url),
             "text": _evening_email_text(title, submitted, moved, learning, opt, cta_url),
         },
-        "sms": {"body": _clip(summary_line + f" — {cta_url}", 300)},
+        "sms": {"body": _clip(summary_line + f": {cta_url}", 300)},
         "push": {"title": title, "body": summary_line, "url": cta_url},
         "whatsapp": {"template": "evening_summary", "language": "en_US",
                      "params": [str(submitted), str(len(moved))]},
@@ -388,7 +386,7 @@ def _opt_clock(user_email: str) -> Optional[Dict[str, Any]]:
 def _evening_email_html(title, submitted, moved, learning, opt, cta_url) -> str:
     parts = [f'<li>Applications submitted today: <b>{submitted}</b></li>']
     if moved:
-        items = "".join(f"<li>{m.get('company')} → {m.get('status')}</li>" for m in moved)
+        items = "".join(f"<li>{m.get('company')}: {m.get('status')}</li>" for m in moved)
         parts.append(f'<li>Status updates:<ul>{items}</ul></li>')
     if learning:
         parts.append(f'<li>Tomorrow: <b>{learning.get("title")}</b></li>')
@@ -403,14 +401,14 @@ def _evening_email_html(title, submitted, moved, learning, opt, cta_url) -> str:
         f'<ul style="padding-left:18px;line-height:1.5">{body}</ul>'
         f'<p><a href="{cta_url}" style="background:#4f46e5;color:#fff;padding:10px 18px;'
         'border-radius:8px;text-decoration:none;font-weight:600">Review your applications</a></p>'
-        '<p style="color:#aaa;font-size:12px;margin-top:24px">Manage these in Settings → Notifications.</p></div>'
+        '</div>'
     )
 
 
 def _evening_email_text(title, submitted, moved, learning, opt, cta_url) -> str:
     lines = [title, "", f"Applications submitted today: {submitted}"]
     for m in moved:
-        lines.append(f"- {m.get('company')} -> {m.get('status')}")
+        lines.append(f"• {m.get('company')}: {m.get('status')}")
     if learning:
         lines.append(f"Tomorrow: {learning.get('title')}")
     if opt and opt.get("days_remaining") is not None:

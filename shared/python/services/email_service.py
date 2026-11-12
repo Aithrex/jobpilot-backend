@@ -12,18 +12,40 @@ If the selected provider isn't configured (missing token/from), or the send
 errors, we DON'T fail the caller — we log the full message (including any reset
 link) to the console so local development works without an email provider.
 Callers must treat send as best-effort.
+
+Transactional vs list mail (CAN-SPAM, RFC 8058), 2026-11-11
+------------------------------------------------------------
+A send WITHOUT ``list_id`` is transactional: password reset, verification
+codes, security notices, account notices, forwarded recruiter mail. It gets no
+unsubscribe header and no marketing footer.
+
+A send WITH ``list_id`` (``job_alerts`` / ``digests`` / ``product_updates`` /
+``marketing``) is list mail. It is refused when the recipient has left that
+list, and otherwise carries:
+  * ``List-Unsubscribe: <https://.../api/auth/email/unsubscribe?t=TOKEN>``
+    (plus ``<mailto:...>`` when EMAIL_UNSUBSCRIBE_MAILTO is set) and
+    ``List-Unsubscribe-Post: List-Unsubscribe=One-Click`` (RFC 8058 section 3.1);
+  * a footer with a tokenized link to the ``/unsubscribe`` page (no sign-in
+    needed, as CAN-SPAM 15 U.S.C. 7704(a)(3) requires), the legal name and the
+    postal address (7704(a)(5)(A)(iii)).
+If no token can be minted (no such account), list mail is NOT sent: commercial
+mail without a working opt-out is the one thing this layer must never emit.
 """
 from __future__ import annotations
 
 import logging
+import sys
 from email.utils import parseaddr
-from typing import Optional
+from typing import Optional, Tuple
 
 from utils.config import _get_config_value
 
 logger = logging.getLogger(__name__)
 
 APP_NAME = "Aspirely"
+
+# Set once the missing-postal-address warning has been logged in this process.
+_postal_warning_logged = False
 
 # ZeptoMail's API host is region-specific (.com default, .eu, .in, .com.au, .jp).
 # Override via ZEPTOMAIL_API_URL if your Mail Agent lives in a non-US DC.
@@ -171,6 +193,7 @@ def send_email(
     from_addr: Optional[str] = None,
     reply_to: Optional[str] = None,
     headers: Optional[dict] = None,
+    list_id: Optional[str] = None,
 ) -> bool:
     """Send an email. Returns True if dispatched via the configured provider,
     False if it fell back to console logging (dev) or failed. Never raises.
@@ -181,7 +204,10 @@ def send_email(
     ``reply_to`` overrides the default Reply-To (pass an empty string to suppress
     it entirely). ``headers`` is a best-effort extra-header map (e.g.
     ``{"X-JP-Forwarded": "1"}`` for the outbound loop marker); the transactional
-    providers below apply what they support."""
+    providers below apply what they support.
+
+    ``list_id`` marks the message as list (non-transactional) mail; see the
+    module docstring. Leave it unset for transactional mail."""
     from_addr = from_addr or _from_address()
     text_body = text_body or _strip_html(html_body)
 
@@ -195,6 +221,22 @@ def send_email(
             return False
     except Exception:
         pass
+
+    # The hashed list outlives account erasure (bounces, complaints and the
+    # "account deleted" marker are kept as a keyed hash, never the address).
+    try:
+        from services import privacy_service
+        if privacy_service.is_hash_suppressed(to_email):
+            logger.info("[email:suppressed-hash] skipping a suppressed recipient")
+            return False
+    except Exception:
+        pass
+
+    if list_id:
+        prepared = _prepare_list_mail(to_email, list_id, html_body, text_body, headers)
+        if prepared is None:
+            return False
+        html_body, text_body, headers = prepared
 
     # Gate on the EFFECTIVE sender (respecting a from_addr override), not just the
     # default EMAIL_FROM_ADDRESS — otherwise a forward from MAIL_FORWARD_FROM would
@@ -255,23 +297,127 @@ def send_email(
 
 
 # ---------------------------------------------------------------------------
+# List mail: opt-out gate, RFC 8058 headers, CAN-SPAM footer
+# ---------------------------------------------------------------------------
+
+def _company_identity() -> Tuple[str, str]:
+    """(legal name, postal address). An empty address is a launch HUMAN GATE:
+    mail still goes out and a warning is logged once per process."""
+    global _postal_warning_logged
+    try:
+        from utils.config import ComplianceConfig
+        name = ComplianceConfig.COMPANY_LEGAL_NAME or APP_NAME
+        address = ComplianceConfig.COMPANY_POSTAL_ADDRESS
+    except Exception:  # pragma: no cover - defensive
+        name, address = APP_NAME, ""
+    if not address and not _postal_warning_logged:
+        _postal_warning_logged = True
+        logger.warning(
+            "[email:compliance] COMPANY_POSTAL_ADDRESS is not set. CAN-SPAM requires a "
+            "valid postal address in every commercial email; set it before launch.")
+    return name, address
+
+
+def _unsubscribe_mailto(list_id: str, token: str) -> str:
+    try:
+        from utils.config import ComplianceConfig
+        box = ComplianceConfig.EMAIL_UNSUBSCRIBE_MAILTO
+    except Exception:  # pragma: no cover - defensive
+        box = ""
+    if not box or "@" not in box:
+        return ""
+    return f"mailto:{box}?subject=unsubscribe%20{list_id}%20{token}"
+
+
+def list_unsubscribe_headers(list_id: str, token: str) -> dict:
+    """The two RFC 8058 headers. The HTTPS URI comes first because RFC 8058
+    section 3.1 requires one; the mailto is an optional fallback for clients
+    that only speak RFC 2369."""
+    from services import privacy_service
+    parts = [f"<{privacy_service.one_click_url(token)}>"]
+    mailto = _unsubscribe_mailto(list_id, token)
+    if mailto:
+        parts.append(f"<{mailto}>")
+    return {
+        "List-Unsubscribe": ", ".join(parts),
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    }
+
+
+def compliance_footer(list_id: str, token: str) -> Tuple[str, str]:
+    """(html, text) footer for list mail: why you got it, a one-step
+    unsubscribe that needs no sign-in, and the sender's legal name and address."""
+    import html as _html
+    from services import privacy_service
+    label = privacy_service.LIST_LABELS.get(list_id, "these emails")
+    page = privacy_service.unsubscribe_page_url(token)
+    name, address = _company_identity()
+    identity = " · ".join(p for p in (name, address) if p)
+    html_footer = (
+        '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
+        'max-width:560px;margin:24px auto 0;color:#888;font-size:12px;line-height:1.6">'
+        f'<p style="margin:0 0 6px">You are receiving this email because you are subscribed '
+        f'to {_html.escape(label)} from {APP_NAME}. '
+        f'<a href="{_html.escape(page, quote=True)}" style="color:#4f46e5">Unsubscribe from '
+        f'{_html.escape(label)}</a>. No sign-in is needed.</p>'
+        f'<p style="margin:0">{_html.escape(identity)}</p>'
+        '</div>'
+    )
+    text_footer = (
+        f"You are receiving this email because you are subscribed to {label} from {APP_NAME}.\n"
+        f"Unsubscribe from {label} (no sign-in needed): {page}\n"
+        f"{identity}"
+    )
+    return html_footer, text_footer
+
+
+def _prepare_list_mail(to_email: str, list_id: str, html_body: str, text_body: str,
+                       headers: Optional[dict]):
+    """Gate + decorate list mail. Returns (html, text, headers), or None when
+    the message must not be sent (left the list, or no opt-out link possible)."""
+    try:
+        from services import privacy_service
+        from services.notifications import service as notify
+        if list_id not in notify.EMAIL_LISTS:
+            logger.error("[email:list] unknown list_id=%s; not sending", list_id)
+            return None
+        if not notify.list_allows(to_email, list_id):
+            logger.info("[email:list-optout] recipient left list=%s; not sending", list_id)
+            return None
+        token = privacy_service.make_unsubscribe_token(to_email, list_id)
+    except Exception as e:
+        logger.warning("[email:list] gate failed for list=%s (%s); not sending",
+                       list_id, type(e).__name__)
+        return None
+    if not token:
+        logger.warning("[email:list] no unsubscribe token for list=%s (no account); not sending",
+                       list_id)
+        return None
+    footer_html, footer_text = compliance_footer(list_id, token)
+    merged = dict(headers or {})
+    merged.update(list_unsubscribe_headers(list_id, token))
+    return f"{html_body}{footer_html}", f"{text_body}\n\n{footer_text}", merged
+
+
+# ---------------------------------------------------------------------------
 # Providers
 # ---------------------------------------------------------------------------
 
-def _send_via_zeptomail(
+def _refuse_real_send_under_test() -> None:
+    """Under pytest, a real transport must never run. `utils.config` loads the
+    repo-local `.env`, which carries the production ZeptoMail token, so a test
+    that reached here would email a real inbox. Tests that observe sends patch
+    `_send_via_zeptomail` / `_send_via_ses` (or `send_email`) instead."""
+    if "pytest" in sys.modules:
+        raise RuntimeError("real email transport refused while pytest is loaded")
+
+
+def _zepto_payload(
     to_email: str, subject: str, html_body: str, text_body: str, from_addr: str,
     *, reply_to: Optional[str] = None, headers: Optional[dict] = None,
-) -> bool:
-    """Send via the ZeptoMail transactional API (HTTPS, token auth). Raises on
-    any HTTP/transport error so the caller's fallback logs the content."""
-    import requests
-
+) -> dict:
+    """The ZeptoMail `POST /v1.1/email` body. Pure, so tests can check it."""
     from_name, from_email = parseaddr(from_addr)
-    token = _zepto_token()
-    # The header value is `Zoho-enczapikey <token>`. Accept either a bare token
-    # or a value the user already prefixed, so paste-in mistakes still work.
-    auth = token if token.lower().startswith("zoho-enczapikey") else f"Zoho-enczapikey {token}"
-
     payload = {
         "from": {"address": from_email or from_addr, "name": from_name or APP_NAME},
         "to": [{"email_address": {"address": to_email}}],
@@ -288,9 +434,33 @@ def _send_via_zeptomail(
     if headers:
         # ZeptoMail's custom-header field is `mime_headers` (NOT `headers` — a top-
         # level `headers` key returns TM_3301 "extra key found ... target:[headers]"
-        # and drops the send). Used for the X-JP-Forwarded outbound loop marker.
-        # Best-effort: only string values.
+        # and drops the send). Used for the X-JP-Forwarded outbound loop marker
+        # and the RFC 8058 List-Unsubscribe / List-Unsubscribe-Post pair.
+        # Docs (https://www.zoho.com/zeptomail/help/api/email-sending.html):
+        # "mime_headers: Custom MIME headers as a flat JSON object of header name
+        # to string value"; reserved headers (Content-Type, From, To, Subject,
+        # Date) cannot be overridden. The page does not list List-Unsubscribe
+        # either way, so a real send must be checked ("Show original") before
+        # launch. Best-effort: only string values.
         payload["mime_headers"] = {str(k): str(v) for k, v in headers.items()}
+    return payload
+
+
+def _send_via_zeptomail(
+    to_email: str, subject: str, html_body: str, text_body: str, from_addr: str,
+    *, reply_to: Optional[str] = None, headers: Optional[dict] = None,
+) -> bool:
+    """Send via the ZeptoMail transactional API (HTTPS, token auth). Raises on
+    any HTTP/transport error so the caller's fallback logs the content."""
+    _refuse_real_send_under_test()
+    import requests
+
+    token = _zepto_token()
+    # The header value is `Zoho-enczapikey <token>`. Accept either a bare token
+    # or a value the user already prefixed, so paste-in mistakes still work.
+    auth = token if token.lower().startswith("zoho-enczapikey") else f"Zoho-enczapikey {token}"
+    payload = _zepto_payload(to_email, subject, html_body, text_body, from_addr,
+                             reply_to=reply_to, headers=headers)
 
     resp = requests.post(
         _zepto_url(),
@@ -318,7 +488,10 @@ def _send_via_ses(
     Custom ``headers`` are not supported by the SES ``send_email`` (non-raw) API
     and are ignored here — the managed-mailbox loop guard enforces on INBOUND
     (``X-JP-Forwarded`` is read on the way in), so the outbound marker is a
-    best-effort belt-and-suspenders only."""
+    best-effort belt-and-suspenders only. The same applies to List-Unsubscribe:
+    list mail that fails over to SES keeps its footer unsubscribe link (the
+    CAN-SPAM opt-out) but loses the RFC 8058 one-click headers."""
+    _refuse_real_send_under_test()
     import boto3  # bundled in the Lambda runtime
 
     client = boto3.client("ses", region_name=_ses_region())
@@ -400,18 +573,21 @@ def send_test(to_email: str, *, ignore_suppression: bool = False) -> dict:
 
 def send_welcome(to_email: str, app_url: str = "") -> bool:
     """Welcome a newly-registered user. Best-effort — the caller must not block
-    signup on the result."""
+    signup on the result.
+
+    List mail (``product_updates``): it introduces the product rather than
+    completing a transaction, so it carries the unsubscribe footer and headers."""
     app_url = (app_url or "https://aspirely.me").rstrip("/")
     subject = f"Welcome to {APP_NAME}"
     html_body = f"""\
 <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:480px;margin:auto;color:#0f172a">
-  <h2 style="margin:0 0 12px">Welcome to {APP_NAME} 👋</h2>
+  <h2 style="margin:0 0 12px">Welcome to {APP_NAME}</h2>
   <p style="color:#444;line-height:1.6">Your account is ready. {APP_NAME} helps you tailor your
-  résumé to each job, track applications, and prep for interviews — built to be honest about your
-  real experience, never to fabricate it.</p>
+  resume to each job, track applications, and prepare for interviews. It is built to be honest
+  about your real experience and never to fabricate it.</p>
   <p style="color:#444;line-height:1.6;margin:14px 0 0">To get started:</p>
   <ol style="color:#444;line-height:1.7;padding-left:20px;margin:6px 0 0">
-    <li>Upload your résumé</li>
+    <li>Upload your resume</li>
     <li>See your best-matched jobs</li>
     <li>Tailor and apply</li>
   </ol>
@@ -419,17 +595,17 @@ def send_welcome(to_email: str, app_url: str = "") -> bool:
     <a href="{app_url}" style="background:#4f46e5;color:#fff;padding:12px 20px;border-radius:8px;
        text-decoration:none;display:inline-block;font-weight:600">Open {APP_NAME}</a>
   </p>
-  <p style="color:#888;font-size:13px;line-height:1.6">Questions? Just reply to this email — it reaches a real person.</p>
+  <p style="color:#888;font-size:13px;line-height:1.6">Questions? Reply to this email and a real person will answer.</p>
 </div>"""
     text_body = (
         f"Welcome to {APP_NAME}\n\n"
         f"Your account is ready. {APP_NAME} helps you tailor your resume to each job, track "
-        f"applications, and prep for interviews.\n\n"
+        f"applications, and prepare for interviews.\n\n"
         f"Get started:\n  1. Upload your resume\n  2. See your best-matched jobs\n  3. Tailor and apply\n\n"
         f"Open {APP_NAME}: {app_url}\n\n"
-        f"Questions? Just reply to this email."
+        f"Questions? Reply to this email."
     )
-    return send_email(to_email, subject, html_body, text_body)
+    return send_email(to_email, subject, html_body, text_body, list_id="product_updates")
 
 
 def _strip_html(html: str) -> str:
