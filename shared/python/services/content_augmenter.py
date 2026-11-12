@@ -237,9 +237,16 @@ class ContentAugmenter:
             logger.info("ContentAugmenter: total pipeline time = %.1fs", time.time() - pipeline_start)
             return tailored
 
+        # Two pages chosen: never pad toward a second full page. The length
+        # exists for the user's real content, not for generated bullets.
+        from services.resume_format import page_budget
+        two_pages = page_budget(tailored) >= 2
+        if two_pages:
+            diag["phase_gated"] = diag.get("phase_gated") or "two_pages_no_padding"
+
         # Phase 2: Expand experience bullets (FLASH model for speed)
         experience = tailored.get("experience", [])
-        if experience:
+        if experience and not two_pages:
             t0 = time.time()
             tailored = self._expand_bullets(tailored, original, jd_analysis, fill)
             fill = self._measure_fill(tailored)
@@ -256,7 +263,7 @@ class ContentAugmenter:
         # Phase 3b: second expansion round. Everything above respects the
         # conservative per-role caps; if the page is still well short, those
         # caps are the binding constraint rather than the candidate's material.
-        if fill < _SECOND_ROUND_FILL and tailored.get("experience"):
+        if fill < _SECOND_ROUND_FILL and tailored.get("experience") and not two_pages:
             t0 = time.time()
             tailored = self._expand_bullets(
                 tailored, original, jd_analysis, fill,
@@ -314,38 +321,42 @@ class ContentAugmenter:
         exactly so the augmenter's fill estimate aligns with the actual PDF.
         Updated to mirror the renderer's tighter base (10pt body, lh=3.4)
         introduced for the reference-matching density."""
-        _, content_h = self.renderer._render_pdf(
+        from services.resume_format import page_budget
+        renderer = getattr(self.renderer, "for_resume", lambda _t: self.renderer)(tailored)
+        _, content_h = renderer._render_pdf(
             tailored,
-            section_gap=self.renderer._MIN_SECTION_GAP,
-            entry_gap=self.renderer._MIN_ENTRY_GAP,
-            post_header=self.renderer._MIN_POST_HEADER,
-            header_gap=self.renderer._MIN_HEADER_GAP,
-            skill_gap=self.renderer._MIN_SKILL_GAP,
+            section_gap=renderer._MIN_SECTION_GAP,
+            entry_gap=renderer._MIN_ENTRY_GAP,
+            post_header=renderer._MIN_POST_HEADER,
+            header_gap=renderer._MIN_HEADER_GAP,
+            skill_gap=renderer._MIN_SKILL_GAP,
             body_size=10.0,
             lh=3.4,
             lh_s=3.2,
             measure_only=True,
         )
-        return content_h / self.renderer._AVAIL_H
+        return content_h / (renderer._AVAIL_H * page_budget(tailored))
 
     def _measure_fill_at_smallest_font(self, tailored: Dict[str, Any]) -> float:
         """Same as _measure_fill but at generate_pdf's smallest auto-shrink
         size (9pt body, 3.2 lh, 3.0 lh_s). overflow_trim should only fire
         if content STILL doesn't fit even at this smallest size — otherwise
         the renderer's auto-shrink handles density."""
-        _, content_h = self.renderer._render_pdf(
+        from services.resume_format import page_budget
+        renderer = getattr(self.renderer, "for_resume", lambda _t: self.renderer)(tailored)
+        _, content_h = renderer._render_pdf(
             tailored,
-            section_gap=self.renderer._MIN_SECTION_GAP,
-            entry_gap=self.renderer._MIN_ENTRY_GAP,
-            post_header=self.renderer._MIN_POST_HEADER,
-            header_gap=self.renderer._MIN_HEADER_GAP,
-            skill_gap=self.renderer._MIN_SKILL_GAP,
+            section_gap=renderer._MIN_SECTION_GAP,
+            entry_gap=renderer._MIN_ENTRY_GAP,
+            post_header=renderer._MIN_POST_HEADER,
+            header_gap=renderer._MIN_HEADER_GAP,
+            skill_gap=renderer._MIN_SKILL_GAP,
             body_size=9.0,
             lh=3.2,
             lh_s=3.0,
             measure_only=True,
         )
-        return content_h / self.renderer._AVAIL_H
+        return content_h / (renderer._AVAIL_H * page_budget(tailored))
 
     # ------------------------------------------------------------------
     # Phase 1: Project generation

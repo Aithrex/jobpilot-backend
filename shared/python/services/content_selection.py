@@ -183,6 +183,18 @@ def page_budget_for_resume(
 
 
 def _measure(renderer, resume: Dict[str, Any]) -> float:
+    """Height at the TIGHTEST setting the renderer may use for this résumé.
+
+    It used to measure at 10pt with 3.10mm leading, tighter than any tier the
+    renderer will draw (its floor is 9pt at 3.61mm), so a résumé "selected to
+    fit one page" measured 264.9mm against 265.7mm available and then needed
+    289.3mm to draw: it spilled onto a second page. Measuring at the floor tier
+    (9pt, or 9.7pt for the comfortable density) makes "fits" mean it fits.
+    """
+    from services.resume_renderer import _body_tier
+    floor = float(getattr(getattr(renderer, "spec", None), "min_body_pt", 9.0) or 9.0)
+    tier = _body_tier(floor)
+    body, lh, lh_s = tier.body_pt, tier.lh, tier.lh_s
     _, height = renderer._render_pdf(
         resume,
         section_gap=renderer._MIN_SECTION_GAP,
@@ -190,7 +202,7 @@ def _measure(renderer, resume: Dict[str, Any]) -> float:
         post_header=renderer._MIN_POST_HEADER,
         header_gap=renderer._MIN_HEADER_GAP,
         skill_gap=renderer._MIN_SKILL_GAP,
-        body_size=10.0, lh=3.10, lh_s=3.08,
+        body_size=body, lh=lh, lh_s=lh_s,
         measure_only=True,
     )
     return height
@@ -465,9 +477,12 @@ def select_resume_content(
     """
     from services.resume_renderer import ResumeRenderer
 
-    renderer = renderer or ResumeRenderer()
     jd = jd_analysis or {}
     prefs = preferences or resume.get("tailoring_preferences") or {}
+    # Measure with the spacing the user chose (comfortable = wider margins and
+    # a higher body floor), so what fits here also fits when rendered.
+    renderer = renderer or ResumeRenderer()
+    renderer = getattr(renderer, "for_preferences", lambda _p: renderer)(prefs)
     working = copy.deepcopy(resume)
     stamp_resume_ids(working)
     source_for_check = copy.deepcopy(working)

@@ -2050,7 +2050,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             past_edits = past_edits_context(user_email)
             result = svc.tailor.tailor(
                 structured, payload["jd_analysis"], fact_store=fact_store,
-                past_edits=past_edits,
+                past_edits=past_edits, preferences=payload.get("preferences"),
             )
             result = _finalize_tailored_result(
                 svc, job_id, result, structured, payload["jd_analysis"],
@@ -2317,7 +2317,7 @@ def _process_job(job_id: str, job_type: str, payload: dict):
             try:
                 future_tailor = executor.submit(
                     svc.tailor.tailor, structured, jd_analysis, fact_store,
-                    past_edits,
+                    past_edits, payload.get("preferences"),
                 )
                 future_projects = None
                 if projects_needed > 0:
