@@ -82,6 +82,33 @@ bash scripts/verify-linux.sh
 
 Requires Docker. Image default: `python:3.12.14-bookworm`.
 
+## One test run per change
+
+The full suite runs once per change, on the pull request:
+
+1. **Pull request:** the suite runs on the tree GitHub would merge and, when it
+   passes, records that tree on the head commit (`tests/tested-tree`).
+2. **Merge to `main`:** the run on the merge commit compares trees. Same tree as
+   a green pull request run means it passes in seconds without re-running. If
+   the pull request's run is still going, it waits for it instead of starting
+   a second one. A different tree (main moved) runs the full suite.
+3. **Deploy** waits for the `main` run on that commit, as before.
+
+The `main` ruleset requires a pull request, a green `Offline tests + evals` check and a branch
+that is up to date with `main`, so a merge cannot land before its tests or on a
+tree they did not see. Merge with auto-merge so it lands the moment the check
+passes:
+
+```bash
+gh pr merge <number> --merge --auto
+```
+
+If `main` moved after the pull request was tested, update the branch first
+(`gh pr update-branch <number>`); that re-tests the new combination once.
+
+The ruleset (both repos) is applied by the owner with
+`bash scripts/apply_main_ruleset.sh`; `--remove` undoes it.
+
 ## Deployment
 
 `deploy.yml` waits for the `tests` workflow **for this commit SHA**. A
