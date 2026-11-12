@@ -254,11 +254,11 @@ def _verify_github_repo(url: str, criteria: List[str], window_start) -> Dict:
     r = _gh_get(f"/repos/{owner}/{repo}")
     if r.status_code == 404:
         return {"status": STATUS_UNVERIFIABLE,
-                "details": f"Repo {owner}/{repo} not found or private — make it public so it can be verified.",
+                "details": f"Repo {owner}/{repo} is missing or private. Make it public so it can be verified.",
                 "specifics": []}
     if r.status_code in (403, 429):
         return {"status": STATUS_UNVERIFIABLE,
-                "details": "GitHub rate limit hit — try again shortly.", "specifics": []}
+                "details": "GitHub rate limit reached. Please try again shortly.", "specifics": []}
     if r.status_code != 200:
         return {"status": STATUS_UNVERIFIABLE, "details": "Couldn't reach GitHub.", "specifics": []}
     repo_json = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
@@ -274,7 +274,7 @@ def _verify_github_repo(url: str, criteria: List[str], window_start) -> Dict:
         if has_any:
             return {"status": STATUS_NEEDS_WORK,
                     "details": (f"The repo exists, but every commit predates when you started this task "
-                                f"({window_iso[:10]}). The point is to BUILD it in the window — push your "
+                                f"({window_iso[:10]}). The point is to build it within the window, so push your "
                                 "work with commits inside it."),
                     "specifics": []}
         return {"status": STATUS_NEEDS_WORK,
@@ -323,7 +323,7 @@ def _verify_github_pr(url: str, criteria: List[str], window_start) -> Dict:
                 "details": f"PR #{number} on {owner}/{repo} not found or private.", "specifics": []}
     if r.status_code in (403, 429):
         return {"status": STATUS_UNVERIFIABLE,
-                "details": "GitHub rate limit hit — try again shortly.", "specifics": []}
+                "details": "GitHub rate limit reached. Please try again shortly.", "specifics": []}
     if r.status_code != 200:
         return {"status": STATUS_UNVERIFIABLE, "details": "Couldn't reach GitHub.", "specifics": []}
     pr = r.json()
@@ -365,7 +365,7 @@ def _verify_deployed_url(url: str, criteria: List[str]) -> Dict:
         return {"status": STATUS_UNVERIFIABLE, "details": body, "specifics": []}
     if status != 200:
         return {"status": STATUS_NEEDS_WORK,
-                "details": f"The URL responded {status}, not 200 — the deployment isn't live/healthy yet.",
+                "details": f"The URL responded {status}, not 200, so the deployment isn't live and healthy yet.",
                 "specifics": []}
     text = _visible_text(body)
     if not text:
@@ -488,7 +488,7 @@ def verify_task(user_email: str, path_id: str, task_ref: str, proof: Dict) -> Di
     except Exception as e:  # never let a verifier crash the async job
         logger.exception("verify_task failed for %s/%s/%s: %s", user_email, path_id, task_ref, e)
         result = {"status": STATUS_UNVERIFIABLE,
-                  "details": "Verification hit an unexpected error — you can retry, or ask for a manual review.",
+                  "details": "Verification hit an unexpected error. You can retry, or ask for a manual review.",
                   "specifics": []}
 
     result.setdefault("specifics", [])

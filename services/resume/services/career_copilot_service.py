@@ -48,7 +48,7 @@ PLAYGROUND_TRACKS: List[Dict[str, Any]] = [
                 "title": "Map the funnel",
                 "type": "theory",
                 "xp": 10,
-                "body": "Define your ICP (role, company size, stage), your proof (1\u20132 assets), and a single CTA. "
+                "body": "Define your ICP (role, company size, stage), your proof (1 or 2 assets), and a single CTA. "
                 "Outreach is a system: research \u2192 note \u2192 connect \u2192 add value \u2192 follow up.",
             },
             {
@@ -56,7 +56,7 @@ PLAYGROUND_TRACKS: List[Dict[str, Any]] = [
                 "type": "practice",
                 "xp": 25,
                 "body": "Write: (1) 80-word cold email, (2) LinkedIn connect note \u2264300 chars, (3) follow-up #48h. "
-                "Use specifics from the company's recent post or product page \u2014 no generic praise.",
+                "Use specifics from the company's recent post or product page, not generic praise.",
             },
             {
                 "title": "Personalization hooks",
@@ -70,7 +70,7 @@ PLAYGROUND_TRACKS: List[Dict[str, Any]] = [
                 "type": "practice",
                 "xp": 20,
                 "body": "List 5 subject lines. Score each for curiosity vs clarity. "
-                "Pick two and role-play the recipient \u2014 which would you open?",
+                "Pick two and role-play the recipient. Which would you open?",
             },
             {
                 "title": "Cadence & limits",
@@ -97,7 +97,7 @@ PLAYGROUND_TRACKS: List[Dict[str, Any]] = [
                 "title": "5-minute high-level",
                 "type": "practice",
                 "xp": 20,
-                "body": "Pick a system you know (e.g. URL shortener, chat). Sketch API + data model in bullets only \u2014 no diagram yet.",
+                "body": "Pick a system you know (e.g. URL shortener, chat). Sketch API + data model in bullets only, with no diagram yet.",
             },
             {
                 "title": "Capacity + bottlenecks",
@@ -166,7 +166,7 @@ PLAYGROUND_TRACKS: List[Dict[str, Any]] = [
                 "title": "Anatomy of STAR",
                 "type": "theory",
                 "xp": 10,
-                "body": "Situation sets context (1\u20132 sentences), Task states YOUR responsibility, "
+                "body": "Situation sets context (1 or 2 sentences), Task states YOUR responsibility, "
                 "Action details the specific steps YOU took, Result quantifies impact. "
                 "Anti-pattern: vague 'we' statements with no metrics.",
             },
@@ -182,7 +182,7 @@ PLAYGROUND_TRACKS: List[Dict[str, Any]] = [
                 "type": "theory",
                 "xp": 10,
                 "body": "Tag each story: leadership, conflict, failure, ambiguity, impact. "
-                "Ensure you cover at least 4 of these \u2014 interviewers rotate through them.",
+                "Ensure you cover at least 4 of these, because interviewers rotate through them.",
             },
             {
                 "title": "Timed delivery drill",
@@ -224,14 +224,14 @@ PLAYGROUND_TRACKS: List[Dict[str, Any]] = [
                 "type": "practice",
                 "xp": 25,
                 "body": "Take the same problem. Identify which pattern applies and re-solve. "
-                "Explain why this pattern reduces complexity \u2014 what redundant work are you eliminating?",
+                "Explain why this pattern reduces complexity. What redundant work are you eliminating?",
             },
             {
                 "title": "Edge cases & testing",
                 "type": "theory",
                 "xp": 10,
                 "body": "Always test: empty input, single element, duplicates, negative values, overflow. "
-                "Walk through your code with 2\u20133 test cases before saying 'done'.",
+                "Walk through your code with 2 or 3 test cases before saying 'done'.",
             },
             {
                 "title": "Communication framework",
@@ -259,7 +259,7 @@ PLAYGROUND_TRACKS: List[Dict[str, Any]] = [
                 "type": "practice",
                 "xp": 20,
                 "body": "Rewrite your headline: [Role] | [Key skill] | [Proof point or mission]. "
-                "About section: 3 paragraphs \u2014 what you do, what you've built, what you're looking for.",
+                "About section: 3 paragraphs covering what you do, what you've built, and what you're looking for.",
             },
             {
                 "title": "Experience as storytelling",
@@ -272,8 +272,8 @@ PLAYGROUND_TRACKS: List[Dict[str, Any]] = [
                 "title": "Content strategy",
                 "type": "theory",
                 "xp": 10,
-                "body": "Post 2\u20133x/week: 1 insight from work, 1 industry take, 1 personal-professional story. "
-                "Engagement beats broadcasting \u2014 comment thoughtfully on 5 posts daily.",
+                "body": "Post 2 or 3 times a week: 1 insight from work, 1 industry take, 1 personal-professional story. "
+                "Engagement beats broadcasting, so comment thoughtfully on 5 posts daily.",
             },
             {
                 "title": "Write your first post",
@@ -329,7 +329,7 @@ PLAYGROUND_TRACKS: List[Dict[str, Any]] = [
                 "type": "practice",
                 "xp": 20,
                 "body": "Role-play the final exchange: 'If you can do [X], I'm ready to sign today.' "
-                "Practice handling 'That's the best we can do' \u2014 silence, then ask about timeline for revisit.",
+                "Practice handling 'That's the best we can do': pause, then ask when it could be revisited.",
             },
         ],
     },
@@ -1029,16 +1029,17 @@ Specialist agents behind the tools:
 - Career strategist: job search, positioning, negotiation framing
 - Resume & JD tailor (analyze_jd, tailor_bullets): line-level tailoring, keywords, impact metrics
 - Interview coach (generate_interview_plan, generate_star_answer, quiz_me, evaluate_answer): behavioral/technical plans, STAR, drills
-- Outreach & GTM (draft_cold_email, draft_linkedin_message, draft_followup): cold email, LinkedIn, follow-ups — always ethical
+- Outreach & GTM (draft_cold_email, draft_linkedin_message, draft_followup): cold email, LinkedIn, follow-ups, always ethical
 - Project & deliverables (scaffold_project, generate_ppt_outline, generate_pdf_onepager): scoping, milestones, presentations, one-pagers
 
 Rules:
 1) Ground every claim about the USER in their resume data. If data is missing, say so and ask for it.
 2) Use tools when the request involves structured generation (emails, plans, analyses, quizzes). For simple conversational replies, respond directly.
 3) Be concise by default; expand on request. Use markdown formatting.
-4) For outreach: always ethical — no spam, no fabricated connections, honest subject lines, respect platform ToS.
+4) For outreach: always ethical. No spam, no fabricated connections, honest subject lines, respect platform ToS.
 5) For deliverables (PPT, PDF, project): return structured JSON that the frontend can render richly.
-6) Match the user's language if clearly not English; otherwise English."""
+6) Match the user's language if clearly not English; otherwise English.
+7) Do not use em dashes or en dashes in anything you write. Join clauses with a comma or a period."""
 
 
 # ---------------------------------------------------------------------------
@@ -1357,6 +1358,10 @@ def run_career_copilot(
         memory_notes=memory_notes,
     )
 
+    # The reply is AI-written prose the user reads or sends; punctuation only.
+    from services.copy_finalizer import finalize_text
+    reply = finalize_text(reply)
+
     if not pipeline_log:
         pipeline_log = [
             {"agent": "strategist", "label": "analyze", "summary": "Analyzed user request and formulated response"},
@@ -1499,13 +1504,13 @@ def _compute_next_best_actions(user_email: str) -> List[Dict[str, Any]]:
     if outreach_count > interview_count and outreach_count > tailor_count:
         actions.append({
             "title": "Start an outreach campaign",
-            "reason": "You've been focused on messaging — let me help you sequence a full campaign.",
+            "reason": "You've been focused on messaging. I can help you sequence a full campaign.",
             "priority": 80,
         })
     elif interview_count > outreach_count:
         actions.append({
             "title": "Run a mock interview drill",
-            "reason": "Practice makes perfect — try a timed STAR answer.",
+            "reason": "Try a timed STAR answer next.",
             "priority": 80,
         })
     else:

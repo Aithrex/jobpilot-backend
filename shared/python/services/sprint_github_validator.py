@@ -241,11 +241,11 @@ def _verify_repo_with_contents(url: str, criteria: List[str], window_start) -> D
     r = lv._gh_get(f"/repos/{owner}/{repo}")
     if r.status_code == 404:
         return {"status": lv.STATUS_UNVERIFIABLE,
-                "details": f"Repo {owner}/{repo} not found or private — make it public so it can be verified.",
+                "details": f"Repo {owner}/{repo} is missing or private. Make it public so it can be verified.",
                 "specifics": []}
     if r.status_code in (403, 429):
         return {"status": lv.STATUS_UNVERIFIABLE,
-                "details": "GitHub rate limit hit — try again shortly.", "specifics": []}
+                "details": "GitHub rate limit reached. Please try again shortly.", "specifics": []}
     if r.status_code != 200:
         return {"status": lv.STATUS_UNVERIFIABLE, "details": "Couldn't reach GitHub.", "specifics": []}
     repo_json = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
@@ -392,7 +392,7 @@ class GithubRepoValidator(Validator):
                 evidence={
                     "reason": "missing_repo_url",
                     "details": ("Add a public GitHub repository URL so this work can be "
-                                "verified — e.g. https://github.com/you/your-repo"),
+                                "verified, for example https://github.com/you/your-repo"),
                 },
                 validator="github_repo",
             )
@@ -409,7 +409,7 @@ class GithubRepoValidator(Validator):
                 method=METHOD,
                 status="failed",
                 evidence={"reason": "verifier_error", "repo_url": url,
-                          "details": "Verification is temporarily unavailable — try again shortly."},
+                          "details": "Verification is temporarily unavailable. Please try again shortly."},
                 validator="github_repo",
             )
 

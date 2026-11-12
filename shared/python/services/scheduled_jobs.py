@@ -61,6 +61,10 @@ def _target_users_for_digest(event_key: str) -> List[str]:
     doc where the event toggle is truthy, email delivery is enabled, and who are
     not unsubscribed qualify. ``event_key`` is an internal literal, never user
     input, so it is safe in the filter (we still restrict it to known keys).
+
+    A user who left the ``digests`` email list (one-click unsubscribe) is
+    excluded too, so the morning pipeline is not run for mail that
+    ``email_service`` would refuse to send.
     """
     if event_key not in _DIGEST_EVENTS:
         return []
@@ -70,6 +74,7 @@ def _target_users_for_digest(event_key: str) -> List[str]:
                 "unsubscribed": {"$ne": True},
                 "channels.email.enabled": True,
                 f"events.{event_key}": True,
+                "email_lists.digests": {"$ne": False},
             },
             {"_id": 0, "user_email": 1},
         )

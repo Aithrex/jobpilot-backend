@@ -120,7 +120,7 @@ STATUS_UNSUPPORTED = "unsupported"                 # ATS/site not supportable
 # The user-facing sentence a row carries when it lands in `unsupported` (spec §4).
 # Stored on the row (in `error`) so every reader — the fold payload, the daily
 # email, the FE card — renders the SAME honest message instead of an error code.
-UNSUPPORTED_MESSAGE = ("We can't auto-apply to this employer's system yet — "
+UNSUPPORTED_MESSAGE = ("We can't auto-apply to this employer's system yet, so "
                        "please apply manually.")
 STATUS_WITHDRAWN = "withdrawn"                      # post-submit user withdrawal
 # Canonical peer of `failed` — a canonical-only label (an OUTPUT of

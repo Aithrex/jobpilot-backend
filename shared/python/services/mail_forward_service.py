@@ -266,7 +266,7 @@ def _sanitized_body(message: Dict[str, Any]) -> str:
     if len(body) > _FORWARD_BODY_MAX_CHARS:
         body = body[:_FORWARD_BODY_MAX_CHARS] + (
             '<p style="color:#94a3b8;font-size:12px">'
-            "[truncated — open it in the app to read the rest]</p>")
+            "[Truncated. Open it in the app to read the rest.]</p>")
     return body
 
 
@@ -560,9 +560,9 @@ def build_forward(
     )
 
     text = (
-        f"{sender or 'An employer'} — update on your application\n\n"
+        f"{sender or 'An employer'} sent an update on your application\n\n"
         f"Subject: {subject}{att_text}\n\n"
-        f"The full message is waiting in your {APP_NAME} inbox — we keep the content "
+        f"The full message is waiting in your {APP_NAME} inbox. We keep the content "
         f"there so your personal inbox stays clean.\n\n"
         f"Read it in {APP_NAME}: {manage_link}\n\n"
         f"Sent to your private application address {alias}."

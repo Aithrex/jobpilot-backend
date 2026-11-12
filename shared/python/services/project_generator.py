@@ -62,11 +62,11 @@ def project_generation_policy(
     if evidence:
         return {
             "allow": True, "evidence_only": True, "years": years,
-            "reason": f"experienced ({years}y) — confirmed GitHub evidence only",
+            "reason": f"experienced ({years}y): confirmed GitHub evidence only",
         }
     return {
         "allow": False, "evidence_only": False, "years": years,
-        "reason": f"experienced ({years}y), no confirmed GitHub evidence — "
+        "reason": f"experienced ({years}y), no confirmed GitHub evidence, so the "
                   "experience section gets the full page",
     }
 

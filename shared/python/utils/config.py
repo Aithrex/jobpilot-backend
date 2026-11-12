@@ -222,3 +222,39 @@ class AppUrlsConfigMeta(type):
 class AppUrlsConfig(object, metaclass=AppUrlsConfigMeta):
     """Shared frontend/backend URL configuration for auth + OAuth flows."""
     pass
+
+
+class ComplianceConfigMeta(type):
+    """US launch compliance settings (CAN-SPAM footer, clickwrap age gate).
+
+    Read on every access, never cached, so a value set in the environment takes
+    effect without a code change. An empty postal address is a HUMAN GATE: mail
+    still goes out and `email_service` logs a warning once per process.
+    """
+
+    @property
+    def MINIMUM_AGE(cls) -> int:
+        raw = _get_config_value('MINIMUM_AGE', '18') or '18'
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            return 18
+        return value if 13 <= value <= 21 else 18
+
+    @property
+    def COMPANY_LEGAL_NAME(cls) -> str:
+        return (_get_config_value('COMPANY_LEGAL_NAME', '') or '').strip()
+
+    @property
+    def COMPANY_POSTAL_ADDRESS(cls) -> str:
+        return (_get_config_value('COMPANY_POSTAL_ADDRESS', '') or '').strip()
+
+    @property
+    def EMAIL_UNSUBSCRIBE_MAILTO(cls) -> str:
+        """Optional mailbox for the `mailto:` half of List-Unsubscribe."""
+        return (_get_config_value('EMAIL_UNSUBSCRIBE_MAILTO', '') or '').strip()
+
+
+class ComplianceConfig(object, metaclass=ComplianceConfigMeta):
+    """Company identity and consent settings used by the compliance surface."""
+    pass

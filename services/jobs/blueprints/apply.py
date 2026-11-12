@@ -64,7 +64,7 @@ def _fill_cap_response(scope: str, limit: int):
             "error": "fill_limit_exceeded",
             "message": (
                 f"You've reached your {scope} autofill limit ({limit}). "
-                "Slow, tailored applications convert — take a short break."
+                "Slower, tailored applications convert better, so take a short break."
             ),
             "usage": {"scope": scope, "limit": limit},
         }),
@@ -123,7 +123,7 @@ def _quota_exceeded_response(usage: dict):
             "error": "daily_quota_exceeded",
             "message": (
                 f"You've used all {limit} of your daily AI generations. "
-                "We cap this to keep it free for everyone — your counter "
+                "We cap this to keep it free for everyone. Your counter "
                 "resets at midnight UTC."
             ),
             "usage": usage,
@@ -1384,7 +1384,7 @@ def approve_link_confirm():
         if (e.payload or {}).get("action") == "review":
             return jsonify({"ok": True, "action": "review", "already_used": True}), 200
         return jsonify({"error": "link_already_used",
-                        "message": "You've already used this link — no further "
+                        "message": "You've already used this link, so no further "
                                    "action was taken."}), 409
     except approval_token_service.ApprovalTokenError as e:
         # Signature/shape/expiry failure (403/503) — a broken link, not a bad JWT.

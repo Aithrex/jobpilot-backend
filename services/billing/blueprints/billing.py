@@ -36,7 +36,7 @@ def upgrade():
     return jsonify({
         "checkout_url": None,
         "requested_tier": tier or None,
-        "message": "Billing is coming soon — your plan hasn't changed.",
+        "message": "Billing is coming soon. Your plan hasn't changed.",
     }), 200
 
 

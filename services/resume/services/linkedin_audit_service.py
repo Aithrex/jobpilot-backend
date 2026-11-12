@@ -25,6 +25,7 @@ def _db():
 def audit(user_email: str, linkedin_url: str = "") -> Dict:
     from services.resume_parser import ResumeParser
     from services.claude_client import claude_json, CLAUDE_FLASH
+    from services.copy_finalizer import finalize_text
     from schemas.resume_schemas import flatten_skills
 
     if linkedin_url:
@@ -39,7 +40,7 @@ def audit(user_email: str, linkedin_url: str = "") -> Dict:
 
     resume = ResumeParser(_db()).ensure_structured_resume(user_email=user_email)
     if not resume or not resume.get("structured"):
-        raise ValueError("Upload a résumé first so we can tailor your LinkedIn audit.")
+        raise ValueError("Upload a resume first so we can tailor your LinkedIn audit.")
     s = resume["structured"]
     contact = s.get("contact") or {}
     name = contact.get("name") or "the candidate"
@@ -53,7 +54,8 @@ def audit(user_email: str, linkedin_url: str = "") -> Dict:
         "résumé data below, produce specific guidance to make their LinkedIn profile "
         f"stand out for: {target_role}. NEVER invent experience, titles, or metrics. "
         "Write a strong headline and an 'About' section in their authentic voice, and "
-        "audit the key profile sections with one concrete action each.\n\n"
+        "audit the key profile sections with one concrete action each. "
+        "Do not use em dashes or en dashes; join clauses with a comma or a period.\n\n"
         f"Name: {name}\nSummary: {summary}\n"
         f"Recent roles: {', '.join([e for e in exp if e.strip(' at')]) or 'n/a'}\n"
         f"Skills: {', '.join(map(str, skills)) or 'n/a'}\n\n"
@@ -67,7 +69,7 @@ def audit(user_email: str, linkedin_url: str = "") -> Dict:
         schema={"score": int, "headline": str, "about": str, "sections": list},
     )
     if not res:
-        raise ValueError("Could not generate the audit — try again.")
+        raise ValueError("Could not generate the audit. Please try again.")
 
     sections = []
     for sec in (res.get("sections") or [])[:8]:
@@ -79,14 +81,14 @@ def audit(user_email: str, linkedin_url: str = "") -> Dict:
         sections.append({
             "name": str(sec.get("name") or "")[:60],
             "status": status,
-            "tip": str(sec.get("tip") or "")[:300],
+            "tip": finalize_text(str(sec.get("tip") or "")[:300]),
         })
 
     return {
         "linkedin_url": linkedin_url or prefs.get("linkedin_url") or contact.get("linkedin") or "",
         "score": max(0, min(100, int(res.get("score") or 0))),
-        "headline": str(res.get("headline") or "")[:200],
-        "about": str(res.get("about") or "")[:1500],
+        "headline": finalize_text(str(res.get("headline") or "")[:200], label=True),
+        "about": finalize_text(str(res.get("about") or "")[:1500]),
         "sections": sections,
         "target_role": target_role,
     }

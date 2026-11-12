@@ -2358,8 +2358,8 @@ def _measured_coverage() -> Dict[str, Any]:
         doc = None
     if not doc:
         return {"available": False,
-                "detail": "no coverage measurement has been stored yet; run "
-                          "`scripts/employer_coverage_report.py --persist`"}
+                "detail": "No coverage measurement has been stored yet. An operator "
+                          "needs to run scripts/employer_coverage_report.py with persist on."}
     out: Dict[str, Any] = {"available": True}
     for field in _MEASURED_FIELDS:
         if field in doc:
@@ -3098,7 +3098,7 @@ def _run_search(req: Dict[str, Any], started: float, *,
                     s["label"] for s in suggestions[:3]) + ".")
         else:
             warnings.append("No postings matched, and no filter is obviously "
-                            "responsible - the inventory may not cover this "
+                            "responsible. The inventory may not cover this "
                             "slice yet. See `coverage`.")
 
     page = kept[:req["page_size"]]
@@ -4238,7 +4238,7 @@ def unapplied_filters(req: Dict[str, Any]) -> List[Dict[str, str]]:
                     "status": FILTER_PARTIAL})
     if req.get("work_authorization_status"):
         out.append({"filter": "work_authorization_status",
-                    "reason": ("reorders the feed (rank_score) — it never "
+                    "reason": ("reorders the feed (rank_score) and never "
                                "removes a posting. Applied only to postings "
                                "that STATE a clearance requirement or a "
                                "sponsorship position; silence is not a no"),
@@ -4286,7 +4286,7 @@ def unapplied_filters(req: Dict[str, Any]) -> List[Dict[str, str]]:
     if req.get("query"):
         out.append({"filter": "query",
                     "reason": ("searches the title, employer, role taxonomy "
-                               "and extracted skills - not the full job "
+                               "and extracted skills, not the full job "
                                "description, which is not held inline"),
                     "status": FILTER_PARTIAL})
     return out

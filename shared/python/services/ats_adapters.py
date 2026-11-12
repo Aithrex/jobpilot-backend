@@ -2963,7 +2963,7 @@ class GenericAdapter(AtsAdapter):
 
     def supported_reason(self) -> Dict[str, Any]:
         return {"supported": False,
-                "reason": "generic fallback — unrecognized ATS; human review/takeover "
+                "reason": "generic fallback for an unrecognized ATS; human review/takeover "
                           "recommended (adapter may prepare answers but will not submit)",
                 "evidence": ["no_known_ats_host"],
                 "recommended_action": "human_review"}

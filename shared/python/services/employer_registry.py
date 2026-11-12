@@ -1113,7 +1113,7 @@ def score_review(*, active_postings: int = 0, core_tech_postings: int = 0,
     positive = bool(reasons)
     if both_domain_keyed:
         score += REVIEW_PENALTY_BOTH_DOMAIN_KEYED
-        reasons.append("both sides are domain-keyed - two verified domains are "
+        reasons.append("both sides are domain-keyed, and two verified domains are "
                        "already a `distinct` verdict")
     if not reasons:
         reasons.append("no postings, no evidence, not strategic")

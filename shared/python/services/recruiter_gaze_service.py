@@ -135,7 +135,7 @@ def compute_gaze(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
     name = _s(contact.get("name"))
     sections.append({
         "key": "contact",
-        "label": f"Name & contact — {name}" if name else "Name & contact",
+        "label": f"Name & contact: {name}" if name else "Name & contact",
         "weight": 1.0,
         "reason": ("First fixation in the F-pattern: the recruiter lands on your name and "
                    "current title before reading anything else."),
@@ -147,7 +147,7 @@ def compute_gaze(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
             "key": "summary",
             "label": "Professional summary",
             "weight": 0.7,
-            "reason": ("Sits high on the page and is read like a headline — glanced at for a "
+            "reason": ("Sits high on the page and is read like a headline, glanced at for a "
                        "one-line positioning, rarely read in full."),
         })
 
@@ -159,16 +159,16 @@ def compute_gaze(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
         company = _s(exp.get("company"))
         who = " @ ".join([p for p in (title, company) if p]) or "Role"
         if i == 0:
-            label = f"Most recent role — {who}"
+            label = f"Most recent role: {who}"
             reason = ("Second-highest fixation after your name: the current/most-recent role is "
                       "what the recruiter reads you AS.")
         elif i == 1:
-            label = f"Previous role — {who}"
+            label = f"Previous role: {who}"
             reason = ("Scanned for a trajectory check, but gets a fraction of the attention your "
                       "current role receives.")
         else:
-            label = f"Earlier role {i + 1} — {who}"
-            reason = ("Deep in the page and below the F-pattern's reach — a glance at the title "
+            label = f"Earlier role {i + 1}: {who}"
+            reason = ("Deep in the page and below the F-pattern's reach, so it gets a glance at the title "
                       "at most.")
         sections.append({"key": f"experience_{i}", "label": label, "weight": _round(weight), "reason": reason})
 
@@ -178,7 +178,7 @@ def compute_gaze(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
             "key": "skills",
             "label": "Skills",
             "weight": 0.5,
-            "reason": ("Scanned as a keyword strip for an instant match/no-match on the role — "
+            "reason": ("Scanned as a keyword strip for an instant match/no-match on the role: "
                        "read fast, not deeply."),
         })
 
@@ -190,13 +190,13 @@ def compute_gaze(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
         weight = max(EDU_FLOOR, EDU_TOP * (EDU_DECAY ** j))
         degree = _s(edu.get("degree"))
         inst = _s(edu.get("institution"))
-        who = " — ".join([p for p in (degree, inst) if p]) or "Education"
+        who = ", ".join([p for p in (degree, inst) if p]) or "Education"
         if not has_experience and j == 0:
             reason = ("With little work history on the page, the recruiter's eye leans on your "
                       "education to place your level.")
         else:
-            reason = "Skimmed for the degree/school line — low priority once experience is present."
-        sections.append({"key": f"education_{j}", "label": f"Education — {who}", "weight": _round(weight), "reason": reason})
+            reason = "Skimmed for the degree/school line. Low priority once experience is present."
+        sections.append({"key": f"education_{j}", "label": f"Education: {who}", "weight": _round(weight), "reason": reason})
 
     # Projects — supporting evidence; elevated slightly for a new grad, low otherwise.
     PROJ_TOP = 0.32 if has_experience else 0.55
@@ -204,9 +204,9 @@ def compute_gaze(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
     for k, proj in enumerate(projects[:_MAX_PROJECTS]):
         weight = max(PROJ_FLOOR, PROJ_TOP * (PROJ_DECAY ** k))
         pname = _s(proj.get("name")) or f"Project {k + 1}"
-        reason = ("Extra proof of what you've built — mostly reached only if the top of the page "
+        reason = ("Extra proof of what you've built, mostly reached only if the top of the page "
                   "already earned a second look.")
-        sections.append({"key": f"project_{k}", "label": f"Project — {pname}", "weight": _round(weight), "reason": reason})
+        sections.append({"key": f"project_{k}", "label": f"Project: {pname}", "weight": _round(weight), "reason": reason})
 
     # Certifications — a bottom-of-page line, barely inside the six-second window.
     if certifications:
@@ -227,7 +227,7 @@ def compute_gaze(structured_resume: Dict[str, Any]) -> Dict[str, Any]:
         "sections": sections,
         "focal_points": focal_points,
         "blind_spots": blind_spots,
-        "note": ("Weights model where a recruiter's eyes actually go in six seconds — top of the "
+        "note": ("Weights model where a recruiter's eyes actually go in six seconds: top of the "
                  "page and your most-recent role dominate; anything low on the page is barely seen."),
     }
 
@@ -424,7 +424,9 @@ def build_six_seconds(user_email: str, fingerprint: str = "") -> Dict[str, Any]:
 
     structured = resume["structured"]
     gaze = compute_gaze(structured)
-    impression = six_second_impression(structured)
+    # The impression is AI-written prose the user reads; punctuation only.
+    from services.copy_finalizer import finalize_fields
+    impression = finalize_fields(six_second_impression(structured))
     result = {"gaze": gaze, "impression": impression}
     _store_six_seconds(user_email, fingerprint or six_seconds_fingerprint(resume), result)
     logger.info("six_seconds: built gaze (%d sections) + impression for %s",

@@ -337,7 +337,7 @@ def create_portal_session(user_email: str) -> Tuple[Dict[str, Any], int]:
     doc = _db().users.find_one({"email": email}, {"stripe_customer_id": 1})
     cid = (doc or {}).get("stripe_customer_id")
     if not cid:
-        return {"error": "no_customer", "message": "No billing account yet — start a checkout first."}, 400
+        return {"error": "no_customer", "message": "No billing account yet. Start a checkout first."}, 400
 
     try:
         sess = sdk.billing_portal.Session.create(customer=cid, return_url=_return_url())

@@ -49,8 +49,8 @@ _FALLBACK_CAREER = [
         "headline": "Quantify your bullets with real numbers",
         "summary": "Recruiters skim fast, so concrete outcomes from your own work "
                    "('cut deploy time from 20 to 8 minutes') read stronger than vague "
-                   "phrases. Use real figures — never invented ones.",
-        "tags": ["Résumé", "Tips"],
+                   "phrases. Use real figures, never invented ones.",
+        "tags": ["Resume", "Tips"],
         "timeAgo": "", "readTime": "2 min read",
     },
     {
@@ -58,7 +58,7 @@ _FALLBACK_CAREER = [
         "category": "tip",
         "headline": "Tailor each application to the role",
         "summary": "Mirror the job description's language where it honestly fits your "
-                   "experience. A focused, relevant application beats a generic one — and "
+                   "experience. A focused, relevant application beats a generic one, and it "
                    "beats firing off dozens of untailored ones.",
         "tags": ["Job search"],
         "timeAgo": "", "readTime": "2 min read",

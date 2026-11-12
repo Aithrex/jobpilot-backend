@@ -37,6 +37,8 @@ reuse flatten_skills / build_resume_text and the claude_json LLM facade.
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from services.copy_finalizer import NO_DASH_RULE, finalize_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -332,7 +334,7 @@ class AnswerGenerator:
             + (f"=== CANDIDATE PROJECTS ===\n{projects_block}\n\n" if projects_block else "")
             + "=== CANDIDATE RESUME ===\n" + wrap_untrusted("candidate_resume", redact_pii_for_model(resume_text[:3500])) + "\n\n"
             + _DISTINCTIVENESS_BLOCK + "\n"
-            f"Tone: {tone}.\n\n"
+            f"Tone: {tone}. {NO_DASH_RULE}\n\n"
             f"Produce {n_variants} DISTINCT answer variants. Each must take a different\n"
             "ANGLE on the same question — e.g. one leads with a specific project, one\n"
             "leads with a technical decision/trade-off, one leads with how the role's\n"
@@ -377,12 +379,13 @@ class AnswerGenerator:
         for v in result.get("variants", []) or []:
             if not isinstance(v, dict):
                 continue
-            answer = str(v.get("answer", "")).strip()
+            # Punctuation only: the answer is submitted as the candidate's words.
+            answer = finalize_text(str(v.get("answer", "")).strip())
             if not answer:
                 continue
             variants.append({
                 "answer": answer,
-                "angle": str(v.get("angle", "")).strip() or "Answer",
+                "angle": finalize_text(str(v.get("angle", "")).strip(), label=True) or "Answer",
             })
             if len(variants) >= n_variants:
                 break

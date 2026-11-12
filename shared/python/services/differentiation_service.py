@@ -373,7 +373,7 @@ def analyze_differentiators(user_email: str) -> Dict:
 
     if not evidence["skills"] and not evidence["resume_text"] and not evidence["target_roles"]:
         raise ValueError(
-            "Not enough profile signal to analyze differentiators — add a resume, "
+            "Not enough profile signal to analyze differentiators. Add a resume, "
             "target roles, or save a few jobs first."
         )
 

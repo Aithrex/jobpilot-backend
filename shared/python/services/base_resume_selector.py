@@ -108,7 +108,7 @@ def _reason(mode: str, filename: str, job_title: str, score: Optional[int], n: i
     label = filename or "your resume"
     title = (job_title or "").strip() or "this role"
     if mode == "single":
-        return f"Using {label} — this is your only parsed resume."
+        return f"Using {label}, your only parsed resume."
     if mode == "pinned":
         if score is None:
             return f"Using {label} (the resume you chose)."

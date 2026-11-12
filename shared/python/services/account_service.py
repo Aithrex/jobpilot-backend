@@ -154,9 +154,53 @@ CASCADE_COLLECTIONS: List[Tuple[str, str]] = [
     ("notification_prefs", "user_email"),
     ("notification_log", "user_email"),
     ("notification_consents", "user_email"),
+    # --- added 2026-11-11 (US launch purge audit): user-keyed stores the
+    #     cascade above had missed. Each was found by grepping every writer. ---
+    ("application_otp_grants", "user_email"),       # application_otp_service
+    ("enrichment_confirmations", "user_email"),     # profile_facts
+    ("tailoring_evidence", "user_email"),           # tailoring_discovery
+    ("resume_assessments", "user_email"),           # assessment_service
+    ("six_seconds_reads", "user_email"),            # recruiter_gaze_service
+    ("parse_streaks", "user_email"),                # user_time / resume routes
+    ("sprint_progress", "user_email"),              # sprint_challenge_service
+    ("sprint_achievements", "user_email"),          # sprint_progress_service
+    ("sprint_submissions", "user_email"),           # sprint_submission_service
+    ("board_requests", "_id"),                      # board_snapshot: _id IS the email
+    ("board_snapshots", "user_email"),              # board_snapshot
+    ("job_match_snapshots", "user_email"),          # claimed guest matches
+    ("tech_feed_saved_searches", "user_email"),     # tech_feed_saved_searches
+    ("tech_feed_alert_deliveries", "user_email"),   # tech_feed_alerts
+    ("tech_feed_feedback", "user_email"),           # tech_feed_feedback
+    ("tech_feed_searches", "user_email"),           # tech_feed_service sessions
+    ("tech_feed_company_requests", "user_email"),   # tech_feed_company_requests
+    ("tech_feed_company_request_audit", "user_email"),
+    # --- managed application mailbox (mail_* stores). Message and attachment
+    #     OBJECTS are deleted first by _purge_mailbox_objects; mail_aliases
+    #     rows are tombstoned, not deleted (see _tombstone_aliases). ---
+    ("managed_mailboxes", "user_email"),
+    ("mail_threads", "user_email"),
+    ("mail_messages", "user_email"),
+    ("mail_attachments", "user_email"),
+    ("mail_commit_tokens", "user_email"),
+    ("mail_forward_verifications", "user_email"),
+    ("mail_forward_counters", "user_email"),
     # --- async job store (excluding the running purge job — see hard_purge) ---
     ("resume_jobs", "user_email"),
 ]
+
+#: Mail stores whose rows point at stored objects. If deleting an object fails,
+#: these rows are KEPT for this run so the idempotent re-run can still find them.
+_MAIL_OBJECT_COLLECTIONS = ("mail_messages", "mail_attachments")
+
+
+def export_only_sources(email: str) -> List[Tuple[str, Dict[str, Any]]]:
+    """User-owned rows the export reads that the generic cascade does not
+    delete by a single key (they are handled by dedicated purge steps)."""
+    return [
+        ("mail_aliases", {"user_email": email}),
+        ("guest_sessions", {"$or": [{"claimed_by": email}, {"claim.email": email}]}),
+        ("email_suppressions", {"email": email}),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +306,14 @@ def hard_purge(email: str, exclude_job_id: Optional[str] = None) -> Dict[str, An
     guest_s3_keys, guest_asset_ids = _purge_claimed_guest_data(db, email, report)
     asset_resume_ids.extend(rid for rid in guest_asset_ids if rid not in asset_resume_ids)
 
+    # 1c. Managed-mailbox objects (raw MIME, text, sanitized HTML, attachment
+    #     bytes) BEFORE their rows go, because the rows hold the object keys.
+    mail_ok = _purge_mailbox_objects(db, email, report)
+
     # 2. Generic Mongo cascade — one delete_many per keyed collection.
     for coll, key in CASCADE_COLLECTIONS:
+        if not mail_ok and coll in _MAIL_OBJECT_COLLECTIONS:
+            continue  # keep the keys so the re-run can retry the object deletes
         try:
             flt: Dict[str, Any] = {key: email}
             if coll == "resume_jobs" and exclude_job_id:
@@ -275,11 +325,16 @@ def hard_purge(email: str, exclude_job_id: Optional[str] = None) -> Dict[str, An
             report["errors"].append(f"{coll}: {e}")
             logger.warning("hard_purge: %s delete failed for %s: %s", coll, _redact(email), e)
 
+    # 2b. Stores that are not a plain delete-by-key.
+    _tombstone_aliases(db, email, report)
+    _purge_alert_failures(db, email, report)
+    _suppress_after_erasure(email, report)
+
     # 3. Purge the user's S3 objects — VERSIONED deletes (the bucket keeps
     #    noncurrent versions; a plain delete only writes a marker): the
     #    {user_id}/ prefix, every resume-assets/{resume_id}/ prefix the user
     #    owned, and the claimed guest sessions' legacy object keys.
-    storage_ok = True
+    storage_ok = mail_ok
     if user_id:
         try:
             report["s3_objects_deleted"] = _purge_s3_objects(user_id)
@@ -411,6 +466,110 @@ def _purge_claimed_guest_data(
         report["errors"].append(f"guest_quota_subjects: {e}")
 
     return legacy_keys, asset_ids
+
+
+# ---------------------------------------------------------------------------
+# Managed mailbox, alert failures, suppression (added 2026-11-11).
+# ---------------------------------------------------------------------------
+def _purge_mailbox_objects(db, email: str, report: Dict[str, Any]) -> bool:
+    """Delete every stored mail object the user owns. Returns False when any
+    delete failed, so the caller keeps the rows (and their keys) for a re-run.
+    Never touches storage when the user has no mail."""
+    keys: List[str] = []
+    try:
+        for m in db.mail_messages.find(
+            {"user_email": email},
+            {"raw_s3_key": 1, "text_s3_key": 1, "safe_html_s3_key": 1},
+        ):
+            keys.extend(k for k in (m.get("raw_s3_key"), m.get("text_s3_key"),
+                                    m.get("safe_html_s3_key")) if k)
+        for a in db.mail_attachments.find({"user_email": email}, {"s3_key": 1}):
+            if a.get("s3_key"):
+                keys.append(a["s3_key"])
+    except Exception as e:
+        report["errors"].append(f"mail_objects_collect: {e}")
+        return False
+    if not keys:
+        return True
+    try:
+        n, errors = _delete_mail_objects(keys)
+    except Exception as e:
+        report["errors"].append(f"mail_objects: {e}")
+        return False
+    report["mail_objects_deleted"] = n
+    if errors:
+        report["errors"].extend(f"mail_object: {e}" for e in errors[:20])
+        return False
+    return True
+
+
+def _delete_mail_objects(keys: List[str]) -> Tuple[int, List[str]]:
+    """Per-object delete in the mail bucket (isolated so tests can patch it)."""
+    from services import mail_store_service
+    bucket = mail_store_service._apply_mail_bucket()
+    if not bucket:
+        logger.warning("mail object purge skipped: APPLY_MAIL_BUCKET unset")
+        return 0, []
+    storage = mail_store_service.get_storage_service()
+    deleted, errors = 0, []
+    for key in keys:
+        try:
+            if storage.delete_object(key, bucket=bucket):
+                deleted += 1
+            else:
+                errors.append(f"{str(key).split('/', 1)[0]}/...: not deleted")
+        except Exception as e:
+            errors.append(f"{str(key).split('/', 1)[0]}/...: {type(e).__name__}")
+    return deleted, errors
+
+
+def _tombstone_aliases(db, email: str, report: Dict[str, Any]) -> None:
+    """Retire the user's managed addresses WITHOUT deleting them.
+
+    ``mail_aliases.local_part`` is unique across every state on purpose: a
+    retired address must never be handed to someone else, or mail meant for
+    the erased user (recruiter replies, verification links) would reach a
+    stranger. So the row stays as an anti-recycle tombstone and everything that
+    links it to a person goes."""
+    try:
+        res = db.mail_aliases.update_many(
+            {"user_email": email},
+            {"$set": {"state": "retired", "retired_at": _now(), "purged_at": _now()},
+             "$unset": {"user_email": "", "correspondent_email": "", "thread_id": "",
+                        "primary_alias": "", "mailbox_id": ""}},
+        )
+        if res.modified_count:
+            report["deleted"]["mail_aliases_tombstoned"] = res.modified_count
+    except Exception as e:
+        report["errors"].append(f"mail_aliases: {e}")
+
+
+def _purge_alert_failures(db, email: str, report: Dict[str, Any]) -> None:
+    """``tech_feed_alert_failures`` keys rows by sha256(email)[:16], not the
+    address, so the generic cascade cannot reach them."""
+    import hashlib
+    try:
+        h = hashlib.sha256(email.encode("utf-8")).hexdigest()[:16]
+        res = db.tech_feed_alert_failures.delete_many({"user_hash": h})
+        if res.deleted_count:
+            report["deleted"]["tech_feed_alert_failures"] = res.deleted_count
+    except Exception as e:
+        report["errors"].append(f"tech_feed_alert_failures: {e}")
+
+
+def _suppress_after_erasure(email: str, report: Dict[str, Any]) -> None:
+    """Keep the promise "a deleted user is never emailed again" without keeping
+    the address: bounce / complaint rows are converted to a keyed hash, and an
+    ``account_deleted`` hashed marker is added. ``email_service.send_email``
+    checks the hash on every send. A new signup on the same address clears
+    only the marker (privacy_service.on_account_created)."""
+    try:
+        from services import privacy_service
+        converted = privacy_service.hash_existing_suppressions(email)
+        privacy_service.suppress_hash(email, privacy_service.REASON_ACCOUNT_DELETED)
+        report["suppression"] = {"hashed": True, "converted": converted}
+    except Exception as e:
+        report["errors"].append(f"email_suppressions: {e}")
 
 
 # ---------------------------------------------------------------------------

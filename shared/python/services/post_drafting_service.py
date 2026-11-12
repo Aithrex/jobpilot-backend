@@ -118,6 +118,7 @@ def draft_post(payload: Dict) -> Dict:
         f"{event_ctx}\n{('Achievement: ' + achievement) if achievement else ''}\n{resume_ctx}\n\n"
         f"{archetype_hint}\n\n"
         f"{integrity}\n\n"
+        "Do not use em dashes or en dashes; join clauses with a comma or a period.\n\n"
         'Return strict JSON: {"variants": [{"angle": "...", "hook": "...", "text": "...", "hashtags": ["..."]}]}'
     )
     res = claude_json(prompt, max_tokens=2500, temperature=0.7, model=CLAUDE_PRO, schema=POST_SCHEMA) or {}
@@ -133,6 +134,9 @@ def draft_post(payload: Dict) -> Dict:
             variants = filtered
     except Exception:
         pass
+    # Punctuation only: the post goes out under the user's name.
+    from services.copy_finalizer import finalize_fields
+    variants = finalize_fields(variants, keys=("angle", "hook", "text"))
     # Tag each variant with the archetype spec so post_metrics can attribute reward.
     if spec:
         for v in variants:

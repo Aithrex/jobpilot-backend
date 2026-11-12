@@ -109,8 +109,8 @@ _PREPARED_STATUSES = frozenset({"prepared"})  # browser_executor.EXECUTOR_PREPAR
 # owns the automated freeze/thaw sweep.
 _WAITING_HUMAN_STATUSES = frozenset({"waiting_human"})
 # User-facing copy for a prepared (never-submitted) run.
-_PREPARED_MESSAGE = ("We filled this application for you but did not submit it — "
-                     "open it to review and send.")
+_PREPARED_MESSAGE = ("We filled this application for you but did not submit it. "
+                     "Open it to review and send.")
 
 
 def _now() -> datetime:
@@ -1914,7 +1914,7 @@ def prepare(application_id: str, user_email: str) -> Dict[str, Any]:
                     application_id)
         ledger.mark_needs_input(
             user_email, application_id,
-            [{"question": "Daily tailoring limit reached — tailoring resumes "
+            [{"question": "Daily tailoring limit reached. Tailoring resumes "
                           "tomorrow or after an upgrade.",
               "kind": "quota", "field_id": "tailor_quota"}])
         return {"status": ledger.STATUS_NEEDS_INPUT, "reason": "tailor_quota_exhausted",
@@ -1934,8 +1934,8 @@ def prepare(application_id: str, user_email: str) -> Dict[str, Any]:
         logger.error("auto_apply prepare %s: tailor/pin failed: %s", application_id, e)
         ledger.mark_needs_input(
             user_email, application_id,
-            [{"question": "We could not tailor your résumé for this role — please "
-                          "retry.", "kind": "prepare_failed", "field_id": "prepare"}])
+            [{"question": "We could not tailor your resume for this role. Please "
+                          "try again.", "kind": "prepare_failed", "field_id": "prepare"}])
         return {"status": ledger.STATUS_NEEDS_INPUT, "reason": "tailor_failed",
                 "error": str(e)[:200], "application_id": application_id}
 

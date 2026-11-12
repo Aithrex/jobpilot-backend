@@ -142,6 +142,29 @@ def _ip_throttled(bucket: str, max_requests: int, window_seconds: int = 600) -> 
     )
 
 
+def _retry_after(window_seconds: int) -> int:
+    """Seconds until the current fixed rate-limit window ends."""
+    import time
+    return max(1, int(window_seconds - (int(time.time()) % window_seconds)))
+
+
+def _rate_limited(retry_after: int, message: str):
+    resp = jsonify({"error": "rate_limited", "retry_after": retry_after, "message": message})
+    resp.headers["Retry-After"] = str(retry_after)
+    return resp, 429
+
+
+def _note_gpc(email: str) -> None:
+    """Record a Global Privacy Control signal (``Sec-GPC: 1``). Best-effort:
+    a privacy-store hiccup must never fail the request carrying the signal."""
+    try:
+        from services import privacy_service
+        if privacy_service.gpc_signal(request.headers):
+            privacy_service.record_gpc(email)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("GPC record failed: %s", type(e).__name__)
+
+
 # ---------------------------------------------------------------------------
 # Email / password
 # ---------------------------------------------------------------------------
@@ -159,6 +182,17 @@ def register():
     ok, msg = User.validate_password(password)
     if not ok:
         return jsonify({"error": msg}), 400
+
+    # Clickwrap (US launch). Both fields are OPTIONAL so OAuth signups and
+    # older clients keep working; an explicit "not old enough" is refused.
+    from services import privacy_service
+    if data.get("age_confirmed") is False:
+        return jsonify({"error": "age_requirement",
+                        "message": privacy_service.age_requirement_message()}), 400
+    try:
+        terms_version = privacy_service.clean_terms_version(data.get("terms_version"))
+    except privacy_service.PrivacyError as e:
+        return jsonify({"error": e.code, "message": e.message}), 400
 
     if _users().find_one({"email": email}, {"_id": 1}):
         return jsonify({"error": "An account with this email already exists"}), 409
@@ -201,6 +235,18 @@ def register():
     except Exception as e:
         logger.error("register failed for %s: %s", email, e)
         return jsonify({"error": "Could not create account"}), 500
+
+    # Clickwrap facts + the erased-address marker. Runs BEFORE the welcome
+    # email: a new account on an address that was erased earlier is a new
+    # relationship, and the marker would otherwise block that email.
+    try:
+        privacy_service.on_account_created(email)
+        privacy_service.record_registration(
+            email, age_confirmed=data.get("age_confirmed") is True or None,
+            terms_version=terms_version)
+    except Exception as e:
+        logger.warning("clickwrap record failed at signup: %s", type(e).__name__)
+    _note_gpc(email)
 
     # Welcome email — best-effort, mirrors the password-reset dispatch. A mail
     # failure (or unconfigured provider in dev) must never break signup.
@@ -272,6 +318,7 @@ def login():
         return invalid
 
     _touch_login(email, fingerprint)
+    _note_gpc(email)
     token = create_access_token(identity=email)
     resp = {"access_token": token, "email": email}
     if user.get("role"):
@@ -346,7 +393,124 @@ def update_preferences():
 @auth_bp.route("/verify", methods=["GET"])
 @jwt_required()
 def verify():
+    _note_gpc(get_jwt_identity())
     return jsonify({"email": get_jwt_identity(), "valid": True}), 200
+
+
+# ---------------------------------------------------------------------------
+# Privacy rights (US launch: CCPA/CPRA, GPC, sensitive data, clickwrap).
+# Thin routes; the logic is services/privacy_service.py. Failures are
+# 400 / 403 / 429, never 401 (the frontend force-logs-out on any 401).
+# ---------------------------------------------------------------------------
+@auth_bp.route("/privacy", methods=["GET"])
+@jwt_required()
+def get_privacy_settings():
+    from services import privacy_service
+    email = get_jwt_identity()
+    _note_gpc(email)
+    return jsonify(privacy_service.get_privacy(email)), 200
+
+
+@auth_bp.route("/privacy", methods=["PUT"])
+@jwt_required()
+def update_privacy_settings():
+    from services import privacy_service
+    email = get_jwt_identity()
+    _note_gpc(email)
+    data = request.get_json(force=True, silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "invalid_request", "message": "Send a JSON object."}), 400
+    user = _users().find_one({"email": email}, {"is_deleted": 1}) or {}
+    if user.get("is_deleted"):
+        return jsonify({"error": "account_closed", "message": "This account has been closed."}), 403
+    try:
+        return jsonify(privacy_service.update_privacy(email, data)), 200
+    except privacy_service.PrivacyError as e:
+        return jsonify({"error": e.code, "message": e.message}), e.status
+    except Exception as e:
+        logger.exception("privacy update failed: %s", type(e).__name__)
+        return jsonify({"error": "privacy_update_failed",
+                        "message": "We could not save your privacy settings. Please try again."}), 500
+
+
+@auth_bp.route("/account/export", methods=["GET"])
+@jwt_required()
+def export_account_data():
+    """Right to know / portability: every user-owned record as one JSON file.
+
+    Streamed (one document in memory at a time). Secrets are never included.
+    Five exports per account per day on the shared limiter."""
+    from flask import Response, stream_with_context
+    from services import privacy_service
+    from utils.security import check_rate_limit
+
+    email = get_jwt_identity()
+    window = privacy_service.EXPORT_WINDOW_SECONDS
+    key = "privacy:export:" + hashlib.sha256(email.encode("utf-8")).hexdigest()[:32]
+    if check_rate_limit(key, max_requests=privacy_service.EXPORT_DAILY_LIMIT,
+                        window_seconds=window):
+        return _rate_limited(_retry_after(window),
+                             "You can download your data 5 times a day. Please try again later.")
+
+    user = _users().find_one({"email": email}, {"is_deleted": 1})
+    if not user:
+        return jsonify({"error": "account_not_found", "message": "Account not found."}), 400
+    if user.get("is_deleted"):
+        return jsonify({"error": "account_closed", "message": "This account has been closed."}), 403
+
+    filename = privacy_service.export_filename()
+    logger.info("data export started for %s", privacy_service.mask_email(email))
+    return Response(
+        stream_with_context(privacy_service.export_stream(email)),
+        mimetype="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# One-click unsubscribe (RFC 8058) + the frontend confirmation page. PUBLIC:
+# no login, by law (CAN-SPAM 15 U.S.C. 7704(a)(3)). The token is the only
+# credential: an HMAC over (email, list), verified in constant time. A GET
+# never changes anything, so link scanners that prefetch the URL are harmless.
+UNSUBSCRIBE_IP_LIMIT = 120
+UNSUBSCRIBE_IP_WINDOW_SECONDS = 600
+
+
+@auth_bp.route("/email/unsubscribe", methods=["GET", "POST"])
+def email_unsubscribe():
+    from services import privacy_service
+    from utils.security import check_rate_limit
+
+    if check_rate_limit(f"auth:unsubscribe:{get_client_ip(request)}",
+                        max_requests=UNSUBSCRIBE_IP_LIMIT,
+                        window_seconds=UNSUBSCRIBE_IP_WINDOW_SECONDS, fail_open=True):
+        return _rate_limited(_retry_after(UNSUBSCRIBE_IP_WINDOW_SECONDS),
+                             "Too many requests. Please try again in a few minutes.")
+
+    token = request.args.get("t") or ""
+    if request.method == "POST" and not token:
+        body = request.get_json(silent=True) if request.is_json else None
+        if isinstance(body, dict):
+            token = body.get("token") or body.get("t") or ""
+        if not token:
+            token = request.form.get("t") or request.form.get("token") or ""
+    invalid = (jsonify({"error": "invalid_token",
+                        "message": "This unsubscribe link is not valid."}), 400)
+    if not isinstance(token, str) or not token:
+        return invalid
+
+    if request.method == "GET":
+        info = privacy_service.describe_token(token)
+        return (jsonify(info), 200) if info else invalid
+
+    # POST: the RFC 8058 body is `List-Unsubscribe=One-Click` (form-encoded);
+    # the frontend page sends JSON {token}. Either way the token decides.
+    try:
+        result = privacy_service.unsubscribe(token)
+    except Exception as e:
+        logger.exception("unsubscribe failed: %s", type(e).__name__)
+        return jsonify({"error": "unsubscribe_failed",
+                        "message": "We could not process this request. Please try again."}), 500
+    return (jsonify(result), 200) if result else invalid
 
 
 @auth_bp.route("/account", methods=["DELETE"])

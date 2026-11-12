@@ -479,7 +479,10 @@ def _process_bullet(item: Dict[str, Any], profile: Optional[Dict[str, Any]],
         return {"text": src, "evidence": {**base_ev, "mode": "passthrough"}}
     # Step 6 — rerank; top candidate is the voice-matched line.
     chosen = _rerank(survivors, profile, w_v)
-    return {"text": chosen, "evidence": {**base_ev, "mode": "voice-matched"}}
+    # Generated text only: verbatim lines above keep the user's own punctuation,
+    # because their evidence records exact character offsets into the sample.
+    from services.copy_finalizer import finalize_bullet
+    return {"text": finalize_bullet(chosen), "evidence": {**base_ev, "mode": "voice-matched"}}
 
 
 def build_authored_resume(user_email: str, style_dial: str = _DEFAULT_DIAL) -> Dict[str, Any]:

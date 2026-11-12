@@ -1808,7 +1808,7 @@ class JobService:
     def _format_apify_salary(raw: Dict[str, Any]) -> str:
         salary_info = raw.get("salaryInfo")
         if isinstance(salary_info, list) and salary_info:
-            return " - ".join(str(item) for item in salary_info if item)
+            return " to ".join(str(item) for item in salary_info if item)
 
         salary_raw = raw.get("salary_raw")
         if isinstance(salary_raw, dict):
@@ -1828,7 +1828,7 @@ class JobService:
         max_salary = _money(raw.get("ai_salary_maxvalue"))
         value = _money(raw.get("ai_salary_value"))
         if min_salary and max_salary:
-            return f"{currency}{min_salary:,.0f} - {currency}{max_salary:,.0f} {unit}".strip()
+            return f"{currency}{min_salary:,.0f} to {currency}{max_salary:,.0f} {unit}".strip()
         if value:
             return f"{currency}{value:,.0f} {unit}".strip()
         return ""

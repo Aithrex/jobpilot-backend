@@ -181,6 +181,7 @@ relationship. If no shared context is given, do not imply one.
 - Politely ask whether they'd be open to referring the sender (or sharing advice \
 about the team), and offer to send the sender's resume. Keep it low-pressure.
 - Do not include the connection's name (a greeting is added separately).
+- Do not use em dashes or en dashes; join clauses with a comma or a period.
 
 Return JSON: {"message": "<the body>"}.
 """

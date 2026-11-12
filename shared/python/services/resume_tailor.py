@@ -755,7 +755,7 @@ class ResumeTailor:
         ]
         if dropped:
             raise ValueError(
-                "Tailoring produced an incomplete résumé (the AI response was "
+                "Tailoring produced an incomplete resume (the AI response was "
                 f"cut off before finishing: missing {', '.join(dropped)}). "
                 "Please try again."
             )
@@ -1011,7 +1011,7 @@ class ResumeTailor:
         """
         if (original.get("summary") or "").strip() and not (tailored.get("summary") or "").strip():
             raise ValueError(
-                "Tailoring produced an incomplete résumé (the AI response was "
+                "Tailoring produced an incomplete resume (the AI response was "
                 "cut off before finishing: missing summary). Please try again."
             )
 
@@ -2317,9 +2317,9 @@ class ResumeTailor:
             "       - Use commas in large bare numbers when not using K/M: '120,000' not '120000'.\n"
             "       - NEVER use en-dash `–` (U+2013) or em-dash `—` (U+2014) anywhere in\n"
             "         the resume — not in dates, not in bullet text, not in the summary. Use ASCII\n"
-            "         hyphen `-` for ranges ('August 2025 - Present') and comma or semicolon\n"
-            "         mid-sentence. These Unicode dashes are AI tells; real candidates type ASCII\n"
-            "         `-`.\n"
+            "         hyphen `-` only in the dates field ('August 2025 - Present'). In bullets\n"
+            "         and the summary, join clauses with a comma or a period (never ' - ') and\n"
+            "         write ranges with 'to' ('2 to 4 years'). Dashes are AI tells.\n"
             "    5. HONEST QUANTIFICATION MENU — when a bullet describes real impact but the source\n"
             "       has no number, quantify a dimension that IS grounded in the source instead of\n"
             "       inventing one:\n"
@@ -2761,7 +2761,7 @@ class ResumeTailor:
             if not kws:
                 return ""
             return (
-                "\nMARKET SIGNAL (advisory) — for this role, these JD keywords "
+                "\nMARKET SIGNAL (advisory): for this role, these JD keywords "
                 "correlate with stronger ATS outcomes across many resumes. If the "
                 "candidate GENUINELY has them, make sure they appear with usage "
                 "context; if not, do NOT add them (honesty rules still apply): "

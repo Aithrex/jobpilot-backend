@@ -60,6 +60,8 @@ Use concise sentences and readable length, not a fixed character or technology q
 Preserve the user's requested exclusions and wording locks. Never refill whitespace
 with invented projects or accomplishments. Skills listed without work context may
 stay in Skills, but cannot establish use at an employer. Return only requested patches.
+Do not use em dashes or en dashes. Join clauses with a comma or a period, and write
+ranges with "to" ("2 to 4 years").
 """
 
 REVIEW_RULES = """Assess ONLY the visible resume against the job description. Do not assume

@@ -14,6 +14,7 @@ import logging
 from typing import Dict, List, Optional
 
 from services.claude_client import claude_json, CLAUDE_FLASH
+from services.copy_finalizer import finalize_text
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +68,12 @@ def ask(question: str, ticket: Optional[Dict] = None, role_label: str = "",
 Mentee's question: {question}
 
 Respond as the mentor. Return STRICT JSON with:
-- answer: your guidance (markdown ok, hints not full solutions)
+- answer: your guidance (markdown ok, hints not full solutions; no em dashes or en dashes)
 - followups: 0-3 short suggested next questions the mentee might ask"""
 
     result = claude_json(prompt=prompt, model=CLAUDE_FLASH, max_tokens=1200, temperature=0.4, schema=ANSWER_SCHEMA)
     result = result or {}
     return {
-        "answer": (result.get("answer") or "Let's break this down — what have you tried so far, and where exactly does it break?").strip(),
-        "followups": [str(f).strip() for f in (result.get("followups") or []) if str(f).strip()][:3],
+        "answer": finalize_text((result.get("answer") or "Let's break this down. What have you tried so far, and where exactly does it break?").strip()),
+        "followups": [finalize_text(str(f).strip()) for f in (result.get("followups") or []) if str(f).strip()][:3],
     }

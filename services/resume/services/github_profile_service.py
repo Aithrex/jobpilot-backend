@@ -86,7 +86,7 @@ def analyze(raw_username: str) -> Dict:
     if pr.status_code == 404:
         raise ValueError(f"GitHub user '{login}' not found")
     if pr.status_code in (403, 429):
-        raise RuntimeError("GitHub rate limit reached — try again shortly")
+        raise RuntimeError("GitHub rate limit reached. Please try again shortly.")
     if pr.status_code != 200:
         raise RuntimeError("Couldn't reach GitHub")
     prof = pr.json()

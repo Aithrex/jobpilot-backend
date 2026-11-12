@@ -272,8 +272,8 @@ def _setup_steps(ingress_address: str) -> List[str]:
         "Paste the provided search string into the filter's search box, then click 'Create filter'.",
         f"Check 'Forward it to' and select {ingress_address}. If it isn't listed, add it first "
         "under Settings → Forwarding and POP/IMAP → Add a forwarding address.",
-        "Gmail sends a confirmation code to that address to verify forwarding — it will arrive "
-        "at your JobPilot inbox; we surface the code so you can confirm in one click.",
+        "Gmail sends a confirmation code to that address to verify forwarding. It will arrive "
+        "in your Aspirely inbox, and we surface the code so you can confirm in one click.",
         "Also tick 'Also apply filter to matching conversations' to backfill recent mail, "
         "then Save.",
     ]

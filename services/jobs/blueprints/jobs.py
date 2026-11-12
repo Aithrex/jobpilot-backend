@@ -385,7 +385,7 @@ def draft_outreach_route():
     client_ip = get_client_ip(request)
     limiter = get_rate_limiter()
     if limiter.is_rate_limited(f"draft_outreach:{client_ip}", max_requests=20, window_seconds=60):
-        return jsonify({"error": "Rate limit exceeded — try again in a minute"}), 429
+        return jsonify({"error": "Rate limit exceeded. Please try again in a minute."}), 429
 
     data = request.get_json(silent=True) or {}
     company = InputSanitizer.sanitize_string(str(data.get("company") or ""), max_length=200).strip()
@@ -447,6 +447,7 @@ def draft_outreach_route():
             "  - Sentence 3: Ask for a 15-minute conversation.\n"
             "  - Optional sentence 4: Brief mention of attaching tailored resume.\n"
             "  - Do NOT use phrases like 'I am writing to express my interest' or 'I came across this position'.\n"
+            "  - Do not use em dashes or en dashes; join clauses with a comma or a period.\n"
             "  - Do NOT mention visa / sponsorship — the candidate handles that signal separately.\n"
             "  - Subject line must be short (≤60 chars), specific, and not start with 'Re:' or 'Fwd:'.\n\n"
             'Return JSON: { "subject": "...", "body": "..." }. No markdown, no commentary.'
@@ -459,12 +460,14 @@ def draft_outreach_route():
             schema={"subject": str, "body": str},
             max_tokens=800,
         )
-        subject = str((result or {}).get("subject") or "").strip()
-        body = str((result or {}).get("body") or "").strip()
+        from services.copy_finalizer import finalize_text
+        # Punctuation only, so the message still says exactly what the model wrote.
+        subject = finalize_text(str((result or {}).get("subject") or "").strip(), label=True)
+        body = finalize_text(str((result or {}).get("body") or "").strip())
         if not subject:
-            subject = f"{candidate_name} — interest in {title} at {company}"
+            subject = f"{candidate_name}: interest in {title} at {company}"
         if not body:
-            return jsonify({"error": "Draft generation failed — retry"}), 500
+            return jsonify({"error": "Draft generation failed. Please try again."}), 500
         return jsonify({"subject": subject[:120], "body": body[:1800]}), 200
     except Exception as e:
         logger.error(f"draft-outreach error: {e}")
@@ -1504,7 +1507,7 @@ def trust_check():
     client_ip = get_client_ip(request)
     limiter = get_rate_limiter()
     if limiter.is_rate_limited(f"jobs_trust:{client_ip}", max_requests=20, window_seconds=60):
-        return jsonify({"error": "Rate limit exceeded — try again in a minute"}), 429
+        return jsonify({"error": "Rate limit exceeded. Please try again in a minute."}), 429
 
     data = request.get_json(silent=True) or {}
     job = data.get("job")
@@ -2070,7 +2073,7 @@ def guest_matches():
                         "global": True,
                         "message": (
                             "We've hit today's platform-wide limit for free guest "
-                            "job matching. Sign up (free) to continue — or try "
+                            "job matching. Sign up (free) to continue, or try "
                             "again tomorrow."
                         ),
                     }),

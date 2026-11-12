@@ -3350,7 +3350,7 @@ def _score_role(reqs: Dict[str, Any], prof: Dict[str, Any], job_title: str,
     if tier == "unknown":
         detail = detail or "Role family could not be determined from either side."
     elif tier == "exact_specialty":
-        detail = f"Same specialty as your background - {align.get('matched')}."
+        detail = f"Same specialty as your background: {align.get('matched')}."
     align = dict(align)
     align["overlap_tokens"] = sorted(overlap)[:6]
     align["effective_weight"] = round(weight, 3)

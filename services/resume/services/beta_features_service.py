@@ -75,8 +75,8 @@ def build_morning_brief(user_email: str) -> Dict[str, Any]:
     if counts["interview_pipeline"] > 0:
         lines.append(
             f"🎯 You have {counts['interview_pipeline']} interview"
-            f"{'s' if counts['interview_pipeline'] != 1 else ''} in flight — "
-            "prep behavioral + technical for each."
+            f"{'s' if counts['interview_pipeline'] != 1 else ''} in flight. "
+            "Prepare behavioral and technical answers for each."
         )
     if counts["stale"] > 0:
         oldest_n = min(3, counts["stale"])
@@ -88,7 +88,7 @@ def build_morning_brief(user_email: str) -> Dict[str, Any]:
             f"✉️ Follow up on {counts['stale']} silent application"
             f"{'s' if counts['stale'] != 1 else ''}"
             + (f" ({sample})" if sample else "")
-            + " — use the Needs Follow-Up panel."
+            + ". Use the Needs Follow-Up panel."
         )
     if counts["saved_not_applied"] > 0:
         lines.append(
@@ -97,13 +97,13 @@ def build_morning_brief(user_email: str) -> Dict[str, Any]:
         )
     if counts["applied_today"] >= 5:
         lines.append(
-            f"✅ You've applied to {counts['applied_today']} today — strong cadence. "
+            f"✅ You've applied to {counts['applied_today']} today. Strong cadence. "
             "Pace yourself; quality matters past 5/day."
         )
     elif counts["applied_today"] > 0:
         lines.append(
             f"💪 {counts['applied_today']} app{'s' if counts['applied_today'] != 1 else ''} "
-            "in already today — keep pushing toward your daily goal."
+            "in already today. Keep going toward your daily goal."
         )
     else:
         lines.append(
@@ -113,8 +113,8 @@ def build_morning_brief(user_email: str) -> Dict[str, Any]:
     if counts["offers"] > 0:
         lines.append(
             f"🎉 {counts['offers']} active offer"
-            f"{'s' if counts['offers'] != 1 else ''} on your board — "
-            "compare carefully and review the Visa Timeline tab for start-date implications."
+            f"{'s' if counts['offers'] != 1 else ''} on your board. "
+            "Compare carefully and review the Visa Timeline tab for start-date implications."
         )
 
     # LLM-generated headline (Flash, single field) with deterministic fallback
@@ -147,7 +147,7 @@ def build_morning_brief(user_email: str) -> Dict[str, Any]:
     if not headline:
         # Deterministic fallback — picks the most urgent thread.
         if counts["interview_pipeline"] > 0:
-            headline = "Interviews are the priority — prep for the ones in flight."
+            headline = "Interviews are the priority. Prepare for the ones in flight."
         elif counts["stale"] > 0:
             headline = f"You owe {counts['stale']} follow-up{'s' if counts['stale'] != 1 else ''}. Send them first."
         elif counts["applied_today"] == 0:
@@ -155,7 +155,7 @@ def build_morning_brief(user_email: str) -> Dict[str, Any]:
         elif counts["saved_not_applied"] > 0:
             headline = f"Drain the {counts['saved_not_applied']} saved roles waiting on a tailored submission."
         else:
-            headline = "Strong cadence — keep going, you're building momentum."
+            headline = "Strong cadence. Keep going; you're building momentum."
 
     return {
         "ok": True,
@@ -190,7 +190,7 @@ def find_similar_roles(
 
     seed_jd_text = (seed_jd_text or "").strip()
     if not seed_jd_text or len(seed_jd_text) < 80:
-        return {"ok": False, "error": "Seed JD text is too short — paste a real posting."}
+        return {"ok": False, "error": "The job description is too short. Paste the full posting."}
 
     # Step 1: extract skill signature
     seed_tokens: List[str] = []

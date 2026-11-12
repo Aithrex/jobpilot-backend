@@ -52,7 +52,7 @@ def _stale_applications(email) -> List[Dict]:
             company = (r.get("jd_analysis") or {}).get("company") or "this role"
             out.append({
                 "id": f"stale:{r.get('record_id')}", "type": "followup", "icon": "clock",
-                "title": f"Follow up on {company}", "subtitle": f"No movement in a week — a nudge keeps you top of mind.",
+                "title": f"Follow up on {company}", "subtitle": "No movement in a week. A short follow-up keeps you top of mind.",
                 "cta": "Open applications", "tab": "applications", "priority": 90,
             })
     return out[:3]

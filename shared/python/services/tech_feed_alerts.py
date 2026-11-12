@@ -124,6 +124,11 @@ def evaluate_search(row: Dict[str, Any], *, now: Optional[datetime] = None,
         if prefs.get("unsubscribed"):
             stats["suppressed"] += 1
             return {"status": "unsubscribed", **stats}
+        # Saved-search alerts ride the `job_alerts` email list; a one-click
+        # unsubscribe from it stops them before any search is spent.
+        if (prefs.get("email_lists") or {}).get(notify.EVENT_LIST.get(EVENT, "job_alerts")) is False:
+            stats["suppressed"] += 1
+            return {"status": "unsubscribed", **stats}
         events = prefs.get("events") or {}
         if events.get(EVENT) is False:
             stats["suppressed"] += 1
@@ -209,13 +214,16 @@ def evaluate_search(row: Dict[str, Any], *, now: Optional[datetime] = None,
 
 
 def _digest_payload(name: str, jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    lines = [f"{j.get('title')} — {j.get('company')}" for j in jobs]
+    import html as _html
+    lines = [f"{j.get('title')} · {j.get('company')}" for j in jobs]
     body = "New roles matching \"%s\":\n\n%s" % (name, "\n".join(lines))
     return {
         "email": {
             "subject": f"{len(jobs)} new roles for {name}",
             "text": body,
-            "html": "<p>" + body.replace("\n", "<br>") + "</p>",
+            # Titles and company names come from scraped postings and the
+            # search name from the user: escape before they enter our HTML.
+            "html": "<p>" + _html.escape(body).replace("\n", "<br>") + "</p>",
         },
         "jobs": jobs,
         "search_name": name,

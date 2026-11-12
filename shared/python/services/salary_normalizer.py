@@ -280,7 +280,7 @@ def display(comp: Optional[Dict[str, Any]]) -> str:
 
     lo, hi = fmt(comp.get("min")), fmt(comp.get("max"))
     if lo and hi and lo != hi:
-        return f"{lo} - {hi} {period}".strip()
+        return f"{lo} to {hi} {period}".strip()
     return f"{lo or hi} {period}".strip()
 
 
